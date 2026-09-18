@@ -1,9 +1,16 @@
-# living_lights_ambient.yaml — Layer 2d ambient L/R switches.
+# living_lights_ambient.yaml - Layer 2d ambient L/R switches.
 #
 # The two ambient smart switches stay ON day and night, and turn OFF only
 # during a movie, while away, or while the house is asleep. They are on/off
-# only (no brightness) — so they are NOT part of the confidence ramp; they
+# only (no brightness) - so they are NOT part of the confidence ramp; they
 # moved here out of the sofa pilot.
+#
+# "During a movie" is binary_sensor.living_lights_tv_playing (generated in
+# living_lights_observability.yaml): one predicate shared by every package,
+# with the unavailable-blip delay_off and the belief fail-safe inside it.
+# This file no longer reads media_player.lg_tv directly - lg_tv reads
+# unavailable when the TV is off and blips unavailable while it is on, so
+# a raw state test cut the strips on blips and disagreed with the pilots.
 #
 # Gated like the pilots: inert until living_lights_enabled = on,
 # living_lights_shadow = off, and living_lights_travel_mode = off.
@@ -20,7 +27,7 @@ automation:
     triggers:
       - trigger: state
         entity_id:
-          - media_player.lg_tv
+          - binary_sensor.living_lights_tv_playing
           - input_boolean.user_at_home
           - input_boolean.living_lights_asleep
           - input_boolean.living_lights_travel_mode
@@ -40,7 +47,7 @@ automation:
       - if:
           - condition: template
             value_template: >-
-              {{ states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown']
+              {{ is_state('binary_sensor.living_lights_tv_playing', 'on')
                  or is_state('input_boolean.user_at_home', 'off')
                  or is_state('input_boolean.living_lights_asleep', 'on') }}
         then:

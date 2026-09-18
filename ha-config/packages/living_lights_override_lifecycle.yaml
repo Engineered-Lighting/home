@@ -1,4 +1,4 @@
-# living_lights_override_lifecycle.yaml — HAND-WRITTEN (not generated).
+# living_lights_override_lifecycle.yaml - HAND-WRITTEN (not generated).
 #
 # Owns the lifecycle of explicit presence-overrides written by the
 # set_presence_override tool (functions/living_lights.py) and by the
@@ -33,9 +33,9 @@ input_boolean:
     icon: mdi:white-balance-sunny
 
 automation:
-  # ── Override lifecycle: ease an override back to automatic only once
+  # -- Override lifecycle: ease an override back to automatic only once
   #    BOTH (a) min-hold has elapsed AND (b) the zone has read vacant for
-  #    the grace window. Pinned overrides are skipped. ────────────────────
+  #    the grace window. Pinned overrides are skipped. --------------------
   - alias: "Living Lights — override lifecycle (min-hold + ease-back)"
     id: living_lights_override_lifecycle
     mode: single
@@ -94,9 +94,9 @@ automation:
                   (min-hold elapsed and zone vacant past grace)
                 entity_id: "input_text.living_lights_override_text_{{ repeat.item }}"
 
-  # ── Asleep failsafe: a stuck-on asleep dims everything to 30% AND
+  # -- Asleep failsafe: a stuck-on asleep dims everything to 30% AND
   #    bypasses the manual cooldown, so explicit commands stop sticking.
-  #    Force it off after 12h continuous as a stuck-state guard. ──────────
+  #    Force it off after 12h continuous as a stuck-state guard. ----------
   - alias: "Living Lights — asleep failsafe (never stuck > 12h)"
     id: living_lights_asleep_failsafe
     mode: single
@@ -116,10 +116,11 @@ automation:
           message: "asleep failsafe — forced OFF after 12h continuous (stuck-state guard)"
           entity_id: input_boolean.living_lights_asleep
 
-  # ── Wake-up latch (adaptive): waking in the morning (asleep on→off
-  #    during the morning window) counts as "Marcelo woke up" even if the
-  #    presence-2min latch missed it. Complements the generated latch and
-  #    drives the good-morning greeting. ──────────────────────────────────
+  # -- Wake-up latch (adaptive): waking in the morning (asleep on->off
+  #    during the morning window, with the house occupied for 2 min) counts
+  #    as "Marcelo woke up" even if the presence-2min latch missed it.
+  #    Complements the generated latch and drives the good-morning
+  #    greeting. -----------------------------------------------------------
   - alias: "Living Lights — woke up (asleep cleared in the morning)"
     id: living_lights_woke_up_on_wake
     mode: single
@@ -137,6 +138,15 @@ automation:
       - condition: state
         entity_id: input_boolean.user_at_home
         state: "on"
+      # Story S: the asleep latch can also be cleared by the ungated backstop
+      # or a presence flip with nobody up. Only count it as a wake-up once
+      # the house has genuinely been occupied for 2 min (any_occupied on,
+      # by its last_changed); a missing sensor never latches.
+      - condition: template
+        value_template: >-
+          {% set occ = states.binary_sensor.living_lights_any_occupied %}
+          {{ occ is not none and occ.state == 'on'
+             and (now() - occ.last_changed).total_seconds() >= 120 }}
     actions:
       - action: input_boolean.turn_on
         target:

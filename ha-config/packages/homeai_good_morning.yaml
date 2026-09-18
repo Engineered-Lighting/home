@@ -1,11 +1,11 @@
-# homeai_good_morning.yaml — HAND-WRITTEN (not generated).
+# homeai_good_morning.yaml - HAND-WRITTEN (not generated).
 #
 # Adaptive morning wake-up: when the system infers "Marcelo just woke up"
-# (input_boolean.living_lights_woke_up_today latches OFF→ON — set by the
+# (input_boolean.living_lights_woke_up_today latches OFF->ON - set by the
 # presence-2min morning latch, the HA-restart catch-up, the 05:00/08:00
 # resume, or the asleep-cleared-in-morning path in
 # living_lights_override_lifecycle.yaml), greet him and energize the main
-# living areas — independent of the rigid 08:00 working-hours clock.
+# living areas - independent of the rigid 08:00 working-hours clock.
 #
 # Both halves are individually killable:
 #   input_boolean.living_lights_morning_greeting_enabled
@@ -13,11 +13,22 @@
 #
 # Energize reuses the presence-override path (writes override_text), so
 # the brightness is held by the override-lifecycle automation and eases
-# back to automatic after the min-hold + vacancy grace — it does not fight
+# back to automatic after the min-hold + vacancy grace - it does not fight
 # the ambient engine.
 #
+# The override text is an input_text, and Home Assistant caps every
+# input_text at 255 characters: a longer set_value is refused and the
+# energize silently never lands (that is what happened with the old
+# eleven-key payload, about 315 characters). The payload is therefore the
+# six keys its readers actually use - the pilot override branch reads
+# brightness_pct, the lifecycle automation reads pinned / hold_until /
+# vacancy_grace_s, and the sim probes command_id - about 150 characters
+# even with a far-future timestamp. The colour temperature is not carried
+# (the pilots apply the house colour curve to an override); it is recorded
+# on the logbook line instead.
+#
 # NOTE: verify the Voice PE satellite entity_id below matches this
-# install (Settings → Devices → Voice PE → assist_satellite entity). If it
+# install (Settings -> Devices -> Voice PE -> assist_satellite entity). If it
 # differs, the announce step no-ops (continue_on_error) but the event +
 # energize still fire.
 #
@@ -69,19 +80,15 @@ automation:
                   target:
                     entity_id: "input_text.living_lights_override_text_{{ repeat.item }}"
                   data:
+                    # Six keys only (255-char input_text ceiling, see header).
                     value: >-
                       {{ {
                         'command_id': 'morning-' ~ (now().timestamp() | int),
                         'brightness_pct': 90,
-                        'color_temp_kelvin': 3000,
-                        'started_at': now().isoformat(),
                         'hold_until': as_datetime(now().timestamp() + 2400).isoformat(),
-                        'min_hold_min': 40,
                         'vacancy_grace_s': 300,
-                        'source': 'auto',
-                        'prompt': 'good morning energize',
-                        'remote': true,
-                        'pinned': false
+                        'pinned': false,
+                        'source': 'auto'
                       } | to_json }}
       # 2) Speak the greeting on the Voice PE puck (best-effort).
       - if:
@@ -104,5 +111,8 @@ automation:
       - action: logbook.log
         data:
           name: "HomeAI"
-          message: "Good morning — greeted Marcelo and energized the main living areas."
+          message: >-
+            Good morning - greeted Marcelo and energized the main living areas
+            (override 90% for 40 min, then eased back once vacant; colour
+            3000 K requested, the pilots apply the house colour curve).
           entity_id: input_boolean.living_lights_woke_up_today

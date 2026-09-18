@@ -35,6 +35,14 @@ input_boolean:
   living_lights_actuate_from_belief_changes:
     name: "Living Lights — actuate from belief changes"
     icon: mdi:lightbulb-on-outline
+  living_lights_asleep_from_estimator:
+    name: "Living Lights - asleep from estimator"
+    icon: mdi:sleep
+    initial: false
+  living_lights_typesafe_egress_enabled:
+    name: "Living Lights - TypeSafe egress enabled"
+    icon: mdi:cloud-lock
+    initial: false
   living_lights_gaming_enabled:
     name: "Living Lights — gaming mode (Steam-driven)"
     icon: mdi:gamepad-variant
@@ -165,6 +173,11 @@ input_text:
     max: 32
     initial: all
     icon: mdi:target
+  living_lights_asleep_writer:
+    name: "Living Lights - asleep writer"
+    max: 32
+    initial: ""
+    icon: mdi:pencil-lock
   living_lights_override_text_dining_left:
     name: "dining_left presence override payload"
     max: 255
@@ -373,9 +386,27 @@ input_number:
     min: 0
     max: 100
     step: 5
-    initial: 8
+    initial: 0
     unit_of_measurement: '%'
     icon: mdi:television
+    mode: slider
+  living_lights_tv_vacant_floor_pct:
+    name: "Living Lights - TV-on vacant floor, non-watch zones (%)"
+    min: 0
+    max: 100
+    step: 1
+    initial: 0
+    unit_of_measurement: '%'
+    icon: mdi:television-off
+    mode: slider
+  living_lights_tv_route_pct:
+    name: "Living Lights - TV-on route light, non-watch zones (%)"
+    min: 0
+    max: 100
+    step: 1
+    initial: 30
+    unit_of_measurement: '%'
+    icon: mdi:walk
     mode: slider
   living_lights_gaming_dim_pct:
     name: "Living Lights — gaming LR dim target (%)"
@@ -768,6 +799,84 @@ template:
              and is_state('input_boolean.living_lights_woke_up_today', 'on')
              and is_weekday
              and in_window }}
+
+  - trigger:
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id:
+          - sensor.lighting_publisher_heartbeat
+      - platform: time_pattern
+        minutes: "/1"
+    binary_sensor:
+      - name: "Living Lights publisher fresh"
+        unique_id: living_lights_publisher_fresh
+        icon: mdi:heart-pulse
+        state: >
+          {% set hb = as_datetime(states('sensor.lighting_publisher_heartbeat'), none) %}
+          {% if hb is none or hb.tzinfo is none %}{{ false }}
+          {% else %}{{ ((now() - hb).total_seconds() | abs) <= 180 }}
+          {% endif %}
+        attributes:
+          heartbeat: "{{ states('sensor.lighting_publisher_heartbeat') }}"
+          age_s: >
+            {% set hb = as_datetime(states('sensor.lighting_publisher_heartbeat'), none) %}
+            {% if hb is none or hb.tzinfo is none %}none
+            {% else %}{{ (now() - hb).total_seconds() | round(0) | int }}
+            {% endif %}
+
+  - trigger:
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id:
+          - media_player.lg_tv
+          - binary_sensor.living_lights_tv_watching
+          - binary_sensor.living_lights_publisher_fresh
+          - input_boolean.living_lights_actuate_from_belief_changes
+          - binary_sensor.living_room_sofa_person_occupancy_stable
+      - platform: time_pattern
+        minutes: "/1"
+    binary_sensor:
+      - name: "Living Lights TV playing"
+        unique_id: living_lights_tv_playing
+        icon: mdi:television-play
+        delay_off: >
+          {{ 90 if states('media_player.lg_tv') in ['unavailable', 'unknown'] else 0 }}
+        state: >
+          {# TV off states: 'off', 'standby', 'unavailable', 'unknown' (tools/living_lights_tv_states.py). #}
+          {% set lg_tv = states('media_player.lg_tv') %}
+          {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+          {% set fresh = is_state('binary_sensor.living_lights_publisher_fresh', 'on') %}
+          {% set tv_watching = states('binary_sensor.living_lights_tv_watching') %}
+          {% set sofa_stable_on = is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') %}
+          {% set belief_live = belief and fresh %}
+          {% set bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on' %}
+          {% set tv_seen_on = lg_tv not in ['off', 'standby', 'unavailable', 'unknown'] or bridged %}
+          {% set tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on) %}
+          {{ tv_playing }}
+        attributes:
+          lg_tv: "{{ states('media_player.lg_tv') }}"
+          reason: >
+            {% set lg_tv = states('media_player.lg_tv') %}
+            {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {% set fresh = is_state('binary_sensor.living_lights_publisher_fresh', 'on') %}
+            {% set tv_watching = states('binary_sensor.living_lights_tv_watching') %}
+            {% set sofa_stable_on = is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') %}
+            {% set belief_live = belief and fresh %}
+            {% set bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on' %}
+            {% set tv_seen_on = lg_tv not in ['off', 'standby', 'unavailable', 'unknown'] or bridged %}
+            {% set tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on) %}
+            {% if not tv_seen_on and lg_tv in ['unavailable', 'unknown'] and belief_live %}unavailable_not_watching
+            {% elif not tv_seen_on and lg_tv in ['unavailable', 'unknown'] %}unavailable
+            {% elif not tv_seen_on %}tv_off
+            {% elif bridged %}belief_bridges_unavailable
+            {% elif not belief %}legacy
+            {% elif not fresh %}publisher_stale
+            {% elif tv_watching != 'off' %}belief_watching
+            {% elif sofa_stable_on %}sofa_occupied
+            {% else %}belief_unattended
+            {% endif %}
 
   - trigger:
       - platform: homeassistant
@@ -1269,10 +1378,27 @@ template:
           - input_text.living_lights_override_text_whole_dining_room
           - input_text.living_lights_override_text_whole_kitchen
           - binary_sensor.living_lights_is_night_safe
-          - media_player.lg_tv
+          - binary_sensor.living_lights_tv_playing
           - input_boolean.user_at_home
           - input_boolean.living_lights_asleep
           - input_boolean.living_lights_actuate_from_belief_changes
+          - binary_sensor.living_lights_tv_watching
+          - binary_sensor.living_lights_publisher_fresh
+          - sensor.dining_room_dining_left_activity
+          - sensor.dining_room_dining_right_activity
+          - sensor.kitchen_sink_activity
+          - sensor.kitchen_island_left_activity
+          - sensor.kitchen_island_right_activity
+          - sensor.living_room_sofa_activity
+          - sensor.living_room_front_left_activity
+          - sensor.living_room_weights_activity
+          - sensor.living_room_office_activity
+          - sensor.living_room_front_door_activity
+          - sensor.living_room_whole_living_room_activity
+          - sensor.workshop_workshop_zone_activity
+          - sensor.driveway_e28_activity
+          - sensor.dining_room_whole_dining_room_activity
+          - sensor.kitchen_whole_kitchen_activity
           - input_boolean.living_lights_anticipated_enabled
           - binary_sensor.anticipated_dining_room
           - binary_sensor.anticipated_driveway
@@ -1289,6 +1415,8 @@ template:
           - input_number.living_lights_ramp_initial_pct
           - input_number.living_lights_asleep_cap_pct
           - input_number.living_lights_movie_dim_pct
+          - input_number.living_lights_tv_vacant_floor_pct
+          - input_number.living_lights_tv_route_pct
           - input_number.living_lights_gaming_dim_pct
           - input_number.living_lights_asleep_ct_k
           - input_number.living_lights_gaming_ct_k
@@ -1321,7 +1449,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -1341,7 +1469,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -1364,7 +1495,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -1388,13 +1522,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -1406,8 +1540,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -1424,7 +1558,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -1478,7 +1612,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -1498,7 +1632,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -1521,7 +1658,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -1545,13 +1685,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -1563,8 +1703,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -1581,7 +1721,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -1635,7 +1775,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -1655,7 +1795,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -1678,7 +1821,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -1702,13 +1848,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -1720,8 +1866,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -1738,7 +1884,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -1792,7 +1938,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -1812,7 +1958,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -1835,7 +1984,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -1859,13 +2011,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -1877,8 +2029,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -1895,7 +2047,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -1949,7 +2101,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -1969,7 +2121,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -1992,7 +2147,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -2016,13 +2174,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -2034,8 +2192,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -2052,7 +2210,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -2106,7 +2264,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_living_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -2126,7 +2284,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -2149,7 +2310,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -2179,7 +2343,7 @@ template:
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -2210,7 +2374,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -2264,7 +2428,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_living_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -2284,7 +2448,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -2307,7 +2474,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -2337,7 +2507,7 @@ template:
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -2368,7 +2538,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -2422,7 +2592,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_living_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -2442,7 +2612,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -2465,7 +2638,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -2495,7 +2671,7 @@ template:
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -2526,7 +2702,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -2580,7 +2756,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_living_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -2600,7 +2776,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -2623,7 +2802,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -2653,7 +2835,7 @@ template:
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -2684,7 +2866,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -2738,7 +2920,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_living_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -2758,7 +2940,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -2781,7 +2966,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -2811,7 +2999,7 @@ template:
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -2842,7 +3030,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -2896,7 +3084,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_living_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -2916,7 +3104,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -2939,7 +3130,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -2969,7 +3163,7 @@ template:
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -3000,7 +3194,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -3054,7 +3248,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_workshop %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -3074,7 +3268,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -3097,7 +3294,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -3121,13 +3321,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_workshop %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -3139,8 +3339,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -3157,7 +3357,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -3211,7 +3411,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_driveway %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -3231,7 +3431,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -3254,7 +3457,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -3278,13 +3484,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_driveway %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -3296,8 +3502,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -3314,7 +3520,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -3368,7 +3574,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -3388,7 +3594,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -3411,7 +3620,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -3435,13 +3647,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -3453,8 +3665,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -3471,7 +3683,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -3525,7 +3737,7 @@ template:
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
           {% if manual %}manual_override
@@ -3545,7 +3757,10 @@ template:
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -3568,7 +3783,10 @@ template:
             {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
-            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(0) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(0) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(30) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -3592,13 +3810,13 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -3610,8 +3828,8 @@ template:
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% elif tv_playing and dwell < 300000 %}{{ [tv_route_pct, cap, profile_max] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -3628,7 +3846,7 @@ template:
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('binary_sensor.living_lights_tv_playing', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -4042,33 +4260,152 @@ automation:
       - condition: template
         value_template: >-
           {{ (now() - states.input_boolean.living_lights_asleep.last_changed).total_seconds() > 2700 }}
+      - condition: template
+        value_template: "{{ not (is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') and is_state('input_boolean.living_lights_asleep_from_estimator', 'on') and states('sensor.living_lights_asleep_estimator') in ['likely_asleep', 'awake', 'away'] and is_state('binary_sensor.living_lights_publisher_fresh', 'on')) }}"
     actions:
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.living_lights_asleep
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.living_lights_asleep_writer
+        data:
+          value: "legacy_on"
   - alias: "Living Lights — asleep OFF (genuinely up / midday backstop)"
     id: living_lights_asleep_off
     mode: single
     triggers:
       - trigger: state
+        id: occupancy
         entity_id: binary_sensor.living_lights_any_occupied
         to: "on"
         for:
           minutes: 10
       - trigger: state
+        id: midday
         entity_id: sensor.living_lights_profile
         to: midday
       - trigger: state
+        id: presence
         entity_id: input_boolean.user_at_home
         to: "on"
     conditions:
       - condition: state
         entity_id: input_boolean.living_lights_asleep
         state: "on"
+      - condition: template
+        value_template: "{{ not (is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') and is_state('input_boolean.living_lights_asleep_from_estimator', 'on') and states('sensor.living_lights_asleep_estimator') in ['likely_asleep', 'awake', 'away'] and is_state('binary_sensor.living_lights_publisher_fresh', 'on')) }}"
+      - condition: or
+        conditions:
+          - condition: trigger
+            id: occupancy
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: midday
+              - condition: state
+                entity_id: binary_sensor.living_lights_any_occupied
+                state: "on"
+                for:
+                  minutes: 2
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: presence
+              - condition: template
+                value_template: >-
+                  {% set ns = namespace(arrived=false) %}
+                  {% for obj in expand(['binary_sensor.front_door_person_occupancy', 'binary_sensor.living_room_person_occupancy']) %}
+                    {% if obj.state == 'on' and (now() - obj.last_changed).total_seconds() <= 60 %}
+                      {% set ns.arrived = true %}
+                    {% endif %}
+                  {% endfor %}
+                  {{ ns.arrived }}
     actions:
       - action: input_boolean.turn_off
         target:
           entity_id: input_boolean.living_lights_asleep
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.living_lights_asleep_writer
+        data:
+          value: "legacy_off:{{ trigger.id }}"
+  - alias: "Living Lights - asleep hard backstop (30 min occupied after 06:00)"
+    id: living_lights_asleep_hard_backstop
+    mode: single
+    triggers:
+      - trigger: state
+        id: occupied
+        entity_id: binary_sensor.living_lights_any_occupied
+        to: "on"
+        for:
+          minutes: 30
+      - trigger: time
+        id: six
+        at: "06:00:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_asleep
+        state: "on"
+      - condition: time
+        after: "06:00:00"
+      - condition: or
+        conditions:
+          - condition: trigger
+            id: occupied
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: six
+              - condition: state
+                entity_id: binary_sensor.living_lights_any_occupied
+                state: "on"
+                for:
+                  minutes: 30
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.living_lights_asleep
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.living_lights_asleep_writer
+        data:
+          value: "hard_backstop"
+  - alias: "Living Lights - asleep mirror (estimator)"
+    id: living_lights_asleep_mirror
+    mode: queued
+    max: 5
+    triggers:
+      - trigger: state
+        id: latch
+        entity_id: sensor.living_lights_asleep_estimator
+        to: likely_asleep
+      - trigger: state
+        id: clear
+        entity_id: sensor.living_lights_asleep_estimator
+        to:
+          - awake
+          - away
+    conditions:
+      - condition: template
+        value_template: "{{ is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') and is_state('input_boolean.living_lights_asleep_from_estimator', 'on') and states('sensor.living_lights_asleep_estimator') in ['likely_asleep', 'awake', 'away'] and is_state('binary_sensor.living_lights_publisher_fresh', 'on') }}"
+    actions:
+      - if:
+          - condition: trigger
+            id: latch
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.living_lights_asleep
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.living_lights_asleep
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.living_lights_asleep_writer
+        data:
+          value: "mirror:{{ trigger.to_state.state }}"
   - alias: "Living Lights — articulate manual override via LLM"
     id: living_lights_articulate_override
     mode: queued
@@ -4240,7 +4577,7 @@ automation:
           new_value: "{{ trigger.to_state.state | float(0) }}"
           delta: "{{ (trigger.to_state.state | float(0)) - (trigger.from_state.state | float(0)) }}"
           profile: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"

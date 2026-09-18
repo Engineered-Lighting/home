@@ -13,12 +13,20 @@ Inert until explicitly activated.
 Layer 2 — the confidence ramp. Each pilot is `mode: restart` so the ramp is
 interruptible:
   - present       -> a fast reaction to ramp_initial_pct, then a slow
-                     continuous ramp to predicted_brightness_pct;
-  - pass_through  -> a quick path light (raises only, never dims);
+                     continuous ramp to predicted_brightness_pct
+                     (turn_off when the prediction is exactly 0);
+  - pass_through  -> a quick path light (raises only, never dims;
+                     issues nothing when the prediction is 0);
   - vacant        -> ease down to the idle baseline (turn_off when 0);
   - away          -> turn every target off;
-  - presence_override -> apply the override JSON brightness;
-  - default (night_safe / other) -> turn on at predicted_brightness_pct.
+  - presence_override -> apply the override JSON brightness (turn-on only;
+                     the override lifecycle depends on this);
+  - default (night_safe / other) -> turn on at predicted_brightness_pct
+                     (turn_off when the prediction is exactly 0).
+Story T (2026-09-17): `predicted_bri` reads the classifier attribute with
+`| int(-1)`, so a missing attribute (classifier unavailable, attribute not
+yet published) is distinguishable from a genuine 0. Negative issues no light
+call at all; 0 turns the zone off (the TV floor); positive keeps the calls.
 Colour temperature: Adaptive Lighting (Layer 1) still owns the global
 curve, but each pilot's `light.turn_on` data block now ALSO writes
 `color_temp_kelvin` sourced from the zone's classifier
@@ -286,7 +294,9 @@ automation:
           # Read the classifier state directly — not trigger.to_state — so the
           # pilot is correct whichever trigger fired (state / attribute / shadow).
           new_state: "{{ states('@@SENSOR_ID@@') }}"
-          predicted_bri: "{{ state_attr('@@SENSOR_ID@@', 'predicted_brightness_pct') | int(0) }}"
+          # -1 when the attribute is absent: distinguishable from a real 0
+          # (story T). Every branch below checks the sign before acting.
+          predicted_bri: "{{ state_attr('@@SENSOR_ID@@', 'predicted_brightness_pct') | int(-1) }}"
           ramp_initial: "{{ state_attr('@@SENSOR_ID@@', 'ramp_initial_pct') | int(0) }}"
           safe_initial: "{{ [ramp_initial, predicted_bri] | min }}"
       - if:
@@ -313,13 +323,15 @@ automation:
                     value_template: "{{ new_state == 'presence_override' }}"
                 sequence:
 @@OVERRIDE_ACTIONS@@
-              # present — the confidence ramp (fast reaction, then slow ramp).
+              # present - the confidence ramp (fast reaction, then slow ramp);
+              # turn_off when predicted is exactly 0, nothing when absent.
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'present' }}"
                 sequence:
 @@PRESENT_ACTIONS@@
-              # pass_through — a quick path light (raises only).
+              # pass_through - a quick path light (raises only; nothing
+              # when predicted is 0 or absent).
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'pass_through' }}"
@@ -336,7 +348,8 @@ automation:
                     value_template: "{{ new_state == 'anticipated' }}"
                 sequence:
 @@ANTICIPATED_ACTIONS@@
-            # default — night_safe and any other non-vacant state.
+            # default - night_safe and any other non-vacant state;
+            # turn_off when predicted is exactly 0, nothing when absent.
             default:
 @@DEFAULT_ACTIONS@@
 """
@@ -442,6 +455,32 @@ def _manual_cooldown_gate_template(sensor_id, slug, stable_entity, indent) -> st
     return "\n".join(lines)
 
 
+def _turn_off_block(light_entity_ids, transition, indent) -> str:
+    """Per-entity `light.turn_off` with a transition and never a ct line."""
+    return _per_entity_action_block(
+        "light.turn_off", light_entity_ids,
+        ["transition: " + str(transition)], indent)
+
+
+def _if_predicted(test, body, indent) -> str:
+    """Wrap `body` (already rendered with its dashes at `indent + 4`) in an
+    `- if:` whose only condition is `predicted_bri <test>`. Story T: the
+    present, pass_through, anticipated and default branches all decide by
+    the sign of the prediction: `< 0` (attribute absent) issues nothing,
+    `== 0` turns off, `> 0` runs the branch's turn_on calls."""
+    i = " " * indent
+    i2 = " " * (indent + 2)
+    i4 = " " * (indent + 4)
+    i6 = " " * (indent + 6)
+    return "\n".join([
+        i + "- if:",
+        i4 + "- condition: template",
+        i6 + 'value_template: "{{ predicted_bri ' + test + ' }}"',
+        i2 + "then:",
+        body,
+    ])
+
+
 def _floor_or_off(eid, ct_line, indent) -> str:
     """`if predicted_bri > 0` -> turn_on at the floor, else turn_off. The
     `- if:` dash sits at column `indent`. `ct_line` is injected on the
@@ -507,11 +546,26 @@ def _vacant_block(light_targets, this_zone, co_map, ct_line, indent) -> str:
 
 
 def _present_block(light_entity_ids, ct_line, indent, sensor_id, slug, stable_entity) -> str:
-    """The confidence ramp: a conditional fast call (skipped when the zone
-    is already bright — idempotent re-trigger), a delay, then the slow ramp
-    to the target. `mode: restart` makes the whole thing interruptible.
-    Both the fast and slow ramps carry `ct_line` so each call re-pins the
-    house ct."""
+    """The present branch, decided by the sign of `predicted_bri`:
+    `== 0` turns every target off over the slow-ramp transition (the TV
+    floor); `> 0` runs the confidence ramp; `< 0` (attribute absent)
+    issues nothing. The confidence ramp: a conditional fast call (skipped
+    when the zone is already bright - idempotent re-trigger, and never
+    when the prediction is at or below 0), a delay, then the slow ramp to
+    the target. `mode: restart` makes the whole thing interruptible. Both
+    the fast and slow ramps carry `ct_line` so each call re-pins the house
+    ct."""
+    off = _if_predicted(
+        "== 0", _turn_off_block(light_entity_ids, RAMP_SLOW_S, indent + 4), indent)
+    ramp = _if_predicted(
+        "> 0",
+        _present_ramp(light_entity_ids, ct_line, indent + 4, sensor_id, slug, stable_entity),
+        indent)
+    return off + "\n" + ramp
+
+
+def _present_ramp(light_entity_ids, ct_line, indent, sensor_id, slug, stable_entity) -> str:
+    """The confidence ramp body of the present branch (predicted_bri > 0)."""
     i = " " * indent
     i2 = " " * (indent + 2)
     i4 = " " * (indent + 4)
@@ -559,6 +613,18 @@ def _pass_block(light_entity_ids, ct_line, indent) -> str:
     """pass_through — a quick path light. Per-entity, raises only (never dims
     a light already brighter). `ct_line` injected so each per-entity call
     also re-pins the house ct."""
+    return _if_predicted(
+        "> 0", _raise_only_calls(light_entity_ids, ct_line, PASS_TRANSITION_S, indent + 4),
+        indent)
+
+
+def _raise_only_calls(light_entity_ids, ct_line, transition, indent) -> str:
+    """Per-entity `max(predicted, current)` turn_on calls. Callers wrap these
+    in `_if_predicted("> 0", ...)`: with the prediction at 0 (or absent, -1)
+    and the light off, `[predicted_bri, 0] | max` renders `brightness_pct: 0`,
+    which Home Assistant's light.turn_on turns into a turn_off command
+    (light/__init__.py: brightness 0 -> async_handle_light_off_service), so
+    an unguarded raise-only call is a bridge command rather than a no-op."""
     i = " " * indent
     i2 = " " * (indent + 2)
     i4 = " " * (indent + 4)
@@ -573,7 +639,7 @@ def _pass_block(light_entity_ids, ct_line, indent) -> str:
                  "(state_attr('" + e + "', 'brightness') | float(0)) / 2.55]"
                  ' | max | round(0) | int }}"',
             i4 + ct_line,
-            i4 + "transition: " + str(PASS_TRANSITION_S),
+            i4 + "transition: " + str(transition),
         ]))
     return "\n".join(blocks)
 
@@ -586,24 +652,12 @@ def _anticipated_block(light_entity_ids, ct_line, indent) -> str:
     pass_through's 0.3 s flash. The killswitch
     input_boolean.living_lights_anticipated_enabled lives in the classifier
     upstream — when OFF the state never reaches `anticipated`, so this branch
-    is unreachable. `ct_line` re-pins the house ct on each pre-warm call."""
-    i = " " * indent
-    i2 = " " * (indent + 2)
-    i4 = " " * (indent + 4)
-    blocks = []
-    for e in light_entity_ids:
-        blocks.append("\n".join([
-            i + "- action: light.turn_on",
-            i2 + "target:",
-            i4 + "entity_id: " + e,
-            i2 + "data:",
-            i4 + 'brightness_pct: "{{ [predicted_bri, '
-                 "(state_attr('" + e + "', 'brightness') | float(0)) / 2.55]"
-                 ' | max | round(0) | int }}"',
-            i4 + ct_line,
-            i4 + "transition: " + str(ANTICIPATED_TRANSITION_S),
-        ]))
-    return "\n".join(blocks)
+    is unreachable. `ct_line` re-pins the house ct on each pre-warm call.
+    Guarded on `predicted_bri > 0` like pass_through (see
+    `_raise_only_calls`)."""
+    return _if_predicted(
+        "> 0", _raise_only_calls(light_entity_ids, ct_line, ANTICIPATED_TRANSITION_S, indent + 4),
+        indent)
 
 
 def _override_block(slug, light_entity_ids, ct_line, indent) -> str:
@@ -630,6 +684,23 @@ def _override_block(slug, light_entity_ids, ct_line, indent) -> str:
     return vars_block + "\n" + turn_on
 
 
+def _default_block(light_entity_ids, ct_line, indent) -> str:
+    """The default branch (night_safe and any other non-vacant state):
+    `== 0` turns every target off, `> 0` turns on at the prediction,
+    `< 0` (attribute absent) issues nothing."""
+    off = _if_predicted(
+        "== 0", _turn_off_block(light_entity_ids, DEFAULT_TRANSITION_S, indent + 4), indent)
+    on = _if_predicted(
+        "> 0",
+        _per_entity_action_block(
+            "light.turn_on", light_entity_ids,
+            ['brightness_pct: "{{ [predicted_bri, 1] | max }}"',
+             ct_line,
+             "transition: " + str(DEFAULT_TRANSITION_S)], indent + 4),
+        indent)
+    return off + "\n" + on
+
+
 def emit_actuator(slug: str, targets: list, *, omit_ct_zones: set[str] | None = None) -> str:
     camera = ZONE_CAMERA[slug]
     sensor_id = f"sensor.{camera}_{slug}_lighting_state"
@@ -653,11 +724,7 @@ def emit_actuator(slug: str, targets: list, *, omit_ct_zones: set[str] | None = 
     present_actions = _present_block(light_entity_ids, ct_line, 18, sensor_id, slug, stable_entity)
     pass_actions = _pass_block(light_entity_ids, ct_line, 18)
     anticipated_actions = _anticipated_block(light_entity_ids, ct_line, 18)
-    default_actions = _per_entity_action_block(
-        "light.turn_on", light_entity_ids,
-        ['brightness_pct: "{{ [predicted_bri, 1] | max }}"',
-         ct_line,
-         "transition: " + str(DEFAULT_TRANSITION_S)], 14)
+    default_actions = _default_block(light_entity_ids, ct_line, 14)
 
     return (_TEMPLATE
             .replace("@@SENSOR_ID@@", sensor_id)
@@ -1102,7 +1169,7 @@ def _emit_activity_automation(light_entity, owning_zones, camera) -> str:
 {per_zone_scalars}
           shadow_mode: "{{{{ is_state('input_boolean.living_lights_shadow', 'on') }}}}"
           profile_state: "{{{{ states('sensor.living_lights_profile') }}}}"
-          tv_playing: "{{{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}}}"
+          tv_playing: "{{{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}}}"
           sonos_playing: "{{{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}}}"
           gaming_active: "{{{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}}}"
           working_hours_active: "{{{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}}}"
@@ -1201,7 +1268,7 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
 {per_zone_scalars}
           shadow_mode: "{{{{ is_state('input_boolean.living_lights_shadow', 'on') }}}}"
           profile_state: "{{{{ states('sensor.living_lights_profile') }}}}"
-          tv_playing: "{{{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}}}"
+          tv_playing: "{{{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}}}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream

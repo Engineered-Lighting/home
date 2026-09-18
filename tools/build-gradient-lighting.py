@@ -13,7 +13,10 @@ and bakes them into a generated HA package:
   - a per-light gradient template sensor (the Gaussian falloff, baked
     centroids),
   - the gradient actuator automation (shadow-gated, additive — it layers
-    per-light brightness over the existing sofa pilot's uniform output),
+    per-light brightness over the existing sofa pilot's uniform output;
+    story T: it only runs while the sofa base level is above 0, and the
+    5 % per-light floor applies only then, so a zone the pilot has turned
+    off for the TV is never relit by the gradient),
   - a per-light gradient-decision logger.
 
 ADDITIVE: this does not touch build-living-lights-actuators.py or the 9
@@ -172,6 +175,11 @@ automation:
         state:
           - present
           - pass_through
+      # Story T: the gradient layers over the pilot's base level; when the
+      # pilot's prediction is 0 (the TV floor) or absent, the pilot has
+      # turned the zone off and the gradient must not relight it.
+      - condition: template
+        value_template: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_brightness_pct') | int(0) > 0 }}"
       # Manual-touch cooldown gate (R5-aligned, vacant-15-min semantics). Reads
       # input_datetime directly. State-bypass + sentinel-aware — matches the
       # pilot's cooldown gate exactly. Until 2026-09-17 this gate also
@@ -208,6 +216,7 @@ automation:
     actions:
       - variables:
           grad_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}"
+          grad_base: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_brightness_pct') | int(0) }}"
 @@ACTUATOR_ACTIONS@@
   # Per-light gradient-decision logger — shadow-mode visibility. Reuses the
   # shell_command from living_lights_shadow.yaml.
@@ -273,10 +282,14 @@ def build_yaml(cents, dw, dh):
         actuator.append('        target:')
         actuator.append('          entity_id: ' + eid)
         actuator.append('        data:')
+        # The 5 % per-light floor keeps a far light visibly on while the
+        # base is above 0; with the base at 0 there is no floor (the
+        # actuator is gated on base > 0 above, so this renders 0 only in
+        # a template preview, never in a service call).
         actuator.append(
-            "          brightness_pct: \"{{ [ state_attr("
+            "          brightness_pct: \"{{ ([ state_attr("
             "'sensor.living_room_sofa_gradient', '" + s
-            + "_pct') | int(5), 5 ] | max }}\"")
+            + "_pct') | int(0), 5 ] | max) if grad_base > 0 else 0 }}\"")
         actuator.append('          color_temp_kelvin: "{{ grad_ct }}"')
         actuator.append('          transition: 0.8')
 

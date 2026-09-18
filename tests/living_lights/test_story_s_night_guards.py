@@ -118,10 +118,27 @@ class AsleepLatchTests(unittest.TestCase):
         # the tick trigger is still there: the duration check is what gates it.
         self.assertTrue(any(t.get("trigger") == "time_pattern" for t in self.on["triggers"]))
 
-    def test_asleep_off_triggers_are_unchanged_in_this_step(self):
+    def test_asleep_off_triggers_keep_their_entities_and_carry_ids(self):
+        # M2 (story S residuals): the three triggers are unchanged but now
+        # carry ids so the OFF conditions can be judged per trigger, and both
+        # legacy automations are gated on `not estimate_live` (the estimator
+        # mirror owns the latch while it is live). Detailed shape checks live
+        # in test_story_t_generator.py.
         off = self.autos["living_lights_asleep_off"]
         self.assertEqual([t.get("entity_id") for t in off["triggers"]],
                          [ANY_OCCUPIED, "sensor.living_lights_profile", "input_boolean.user_at_home"])
+        self.assertEqual([t.get("id") for t in off["triggers"]], ["occupancy", "midday", "presence"])
+        gates = {auto_id: [c["value_template"] for c in self.autos[auto_id]["conditions"]
+                           if c.get("condition") == "template" and "asleep_from_estimator" in c["value_template"]]
+                 for auto_id in ("living_lights_asleep_on", "living_lights_asleep_off")}
+        self.assertEqual(len(gates["living_lights_asleep_on"]), 1)
+        self.assertEqual(gates["living_lights_asleep_on"], gates["living_lights_asleep_off"])
+
+    def test_new_asleep_writers_exist(self):
+        # M2: an ungated hard backstop and the estimator mirror join the pair.
+        for auto_id in ("living_lights_asleep_hard_backstop", "living_lights_asleep_mirror"):
+            with self.subTest(auto_id):
+                self.assertIn(auto_id, self.autos)
 
     def test_morning_latch_waits_for_the_house_to_be_awake(self):
         for auto_id in ("living_lights_working_hours_morning_latch",

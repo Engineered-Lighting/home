@@ -23,12 +23,33 @@ Layer 2 (the approved Adaptive Lighting + Living Lights activation plan):
   - night_safe is now keyed on input_boolean.homeai_sleep ONLY (the clock
     no longer masks occupancy — the overnight cap + asleep cover that);
   - a reserved V-JEPA 2 activity seam (ACTIVITY_PROFILES, default-off).
+
+M2 (2026-09-17, story T and story S hooks):
+  - binary_sensor.living_lights_tv_playing is the ONE TV predicate: the
+    lg_tv state through the shared TV_OFF_STATES vocabulary, a hold through
+    unavailable blips, and the belief fail-safe (a belief may darken or
+    route, never brighten an occupied sofa; a stale publisher means the
+    legacy rule);
+  - binary_sensor.living_lights_publisher_fresh from the publisher heartbeat;
+  - non-watch zones get a vacant floor and a route light while the TV plays;
+  - the legacy asleep automations are gated on `not estimate_live`, get
+    trigger ids and a writer record; a hard backstop and an estimator mirror
+    automation are added;
+  - `--mirror-output` also writes living_lights_mqtt_mirror.yaml, the
+    retained local-MQTT mirror the belief publisher reads instead of holding
+    a Home Assistant token. It is written only when the flag is given so a
+    drift test regenerating the observability file leaves the mirror alone.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+# The one definition of "the TV is off", shared with every other generator.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from living_lights_tv_states import TV_OFF_JINJA, TV_OFF_STATES  # noqa: E402
 
 # Zone definitions. Add/remove here.
 ZONES: dict = {
@@ -69,8 +90,29 @@ ANTICIPATED_PCT = 50
 # after the raw MQTT topic goes off gives the lights a clean stretch to settle
 # back to the vacant floor instead of bouncing between anticipated and vacant.
 ANTICIPATED_DECAY_S = 12
-# Movie modifier.
-MOVIE_DIM_PCT = 8
+# Movie modifier. 0 since M2 (2026-09-17): every living-room zone goes dark
+# while the TV plays; the pilots turn a light off when its target is 0. The
+# owner raises input_number.living_lights_movie_dim_pct live to keep a glow.
+MOVIE_DIM_PCT = 0
+# Non-watch zones while the TV plays (M2, story T):
+#   - vacant: input_number.living_lights_tv_vacant_floor_pct (default 0, the
+#     house goes dark by default; the owner can raise it);
+#   - present / pass_through: the route light, min(tv_route_pct, cap,
+#     profile max_brightness_pct) so an errand to the sink or the dining
+#     table is lit at 30 % (8 % overnight) and never at the present ramp;
+#   - a dwell longer than TV_ROUTE_MAX_DWELL_MS releases the route branch so
+#     forty minutes of cooking gets the normal present target (plan M2
+#     acceptance T2 holds with the belief toggle off).
+TV_VACANT_FLOOR_PCT = 0
+TV_ROUTE_PCT = 30
+TV_ROUTE_MAX_DWELL_MS = 5 * 60 * 1000
+# binary_sensor.living_lights_tv_playing keeps ON this long after lg_tv reads
+# unavailable/unknown (the LG integration blips while playing); an explicit
+# off/standby releases at once. Set from the recorder's blip lengths.
+TV_UNAVAILABLE_HOLD_S = 90
+# The belief publisher's heartbeat is fresh when its ISO time is within this
+# many seconds of now(); missing/unknown/unavailable/unparsable means stale.
+PUBLISHER_FRESH_S = 180
 # Zones where presence is treated as "person is here to watch / be quiet" —
 # during TV, the brightness template short-circuits to MOVIE_DIM_PCT regardless
 # of the classifier state (vacant / pass_through / present / anticipated).
@@ -89,6 +131,56 @@ MOVIE_WATCH_ZONES = {
 # lapses, silently disabling movie mode. The LG TV reports a dependable
 # on/off and is the actual living-room screen, so movie mode follows it.
 MOVIE_MEDIA_PLAYER = "media_player.lg_tv"
+# Since M2 only binary_sensor.living_lights_tv_playing (and the MQTT mirror)
+# read MOVIE_MEDIA_PLAYER; every classifier predicate reads the sensor.
+TV_PLAYING_SENSOR = "binary_sensor.living_lights_tv_playing"
+TV_WATCHING_BELIEF = "binary_sensor.living_lights_tv_watching"
+PUBLISHER_FRESH_SENSOR = "binary_sensor.living_lights_publisher_fresh"
+PUBLISHER_HEARTBEAT = "sensor.lighting_publisher_heartbeat"
+BELIEF_TOGGLE = "input_boolean.living_lights_actuate_from_belief_changes"
+SOFA_STABLE_SENSOR = "binary_sensor.living_room_sofa_person_occupancy_stable"
+ASLEEP_ESTIMATOR = "sensor.living_lights_asleep_estimator"
+ASLEEP_FROM_ESTIMATOR_TOGGLE = "input_boolean.living_lights_asleep_from_estimator"
+ASLEEP_WRITER = "input_text.living_lights_asleep_writer"
+
+# Story S (M2): the estimator is live when both toggles are on, the estimator
+# reports a real state and the publisher heartbeat is fresh. One expression,
+# rendered into both legacy asleep automations (as `not estimate_live`) and
+# into the mirror automation (as `estimate_live`), so the two can never
+# disagree about who owns the latch.
+ESTIMATE_LIVE_EXPR = (
+    "is_state('" + BELIEF_TOGGLE + "', 'on')"
+    " and is_state('" + ASLEEP_FROM_ESTIMATOR_TOGGLE + "', 'on')"
+    " and states('" + ASLEEP_ESTIMATOR + "') in ['likely_asleep', 'awake', 'away']"
+    " and is_state('" + PUBLISHER_FRESH_SENSOR + "', 'on')"
+)
+LEGACY_ASLEEP_GATE = "{{ not (" + ESTIMATE_LIVE_EXPR + ") }}"
+ESTIMATE_LIVE_GATE = "{{ " + ESTIMATE_LIVE_EXPR + " }}"
+
+# Entities mirrored to local MQTT by living_lights_mqtt_mirror.yaml (M2): what
+# the belief publisher reads instead of holding a Home Assistant token.
+MIRROR_ATTRIBUTE_SUBSET: dict = {
+    "media_player.lg_tv": ["source", "media_title", "media_content_type"],
+    "sensor.living_lights_profile": ["tod_factor", "max_brightness_pct", "tod_color_warm"],
+}
+# Zones that own a light carry input_text.living_lights_zone_<slug>_last_command_id
+# (the last explicit brighten command, written by the actuators generator's
+# manual-detection package). test_story_t_generator.py checks this list
+# against living_lights_manual_detection.yaml.
+LAST_COMMAND_ZONES = (
+    "dining_left", "dining_right", "front_door", "front_left", "island_left",
+    "island_right", "office", "sink", "sofa", "weights",
+)
+MIRROR_ENTITIES = [
+    MOVIE_MEDIA_PLAYER,
+    "input_boolean.user_at_home",
+    "input_boolean.living_lights_asleep",
+    "sensor.living_lights_profile",
+    BELIEF_TOGGLE,
+    "input_boolean.living_lights_typesafe_egress_enabled",
+    ASLEEP_FROM_ESTIMATOR_TOGGLE,
+] + [f"input_text.living_lights_zone_{slug}_last_command_id" for slug in LAST_COMMAND_ZONES]
+MIRROR_TOPIC_PREFIX = "living_lights/mirror"
 
 # Gaming modifier — Steam-driven ambience. When the HA `steam_online`
 # integration's `game` attribute is populated AND the master toggle is on,
@@ -237,6 +329,19 @@ def emit_input_boolean() -> str:
              '  living_lights_actuate_from_belief_changes:',
              '    name: "Living Lights — actuate from belief changes"',
              "    icon: mdi:lightbulb-on-outline",
+             # Story S (M2): the estimator may own the asleep latch only when
+             # this is on too. `initial: false` on purpose: a restart drops
+             # back to the legacy latch until the owner opts in again.
+             '  living_lights_asleep_from_estimator:',
+             '    name: "Living Lights - asleep from estimator"',
+             "    icon: mdi:sleep",
+             "    initial: false",
+             # TypeSafe egress kill switch, mirrored to MQTT for the publisher's
+             # gate. Off by default and off after every restart.
+             '  living_lights_typesafe_egress_enabled:',
+             '    name: "Living Lights - TypeSafe egress enabled"',
+             "    icon: mdi:cloud-lock",
+             "    initial: false",
              '  living_lights_gaming_enabled:',
              '    name: "Living Lights — gaming mode (Steam-driven)"',
              "    icon: mdi:gamepad-variant",
@@ -292,6 +397,14 @@ def emit_input_text() -> str:
     lines.append("    max: 32")
     lines.append("    initial: all")
     lines.append("    icon: mdi:target")
+    # Story S (M2): every writer of input_boolean.living_lights_asleep records
+    # its name here (legacy_on, legacy_off:<trigger id>, hard_backstop,
+    # mirror:<estimator state>) so a night post-mortem can attribute the latch.
+    lines.append("  living_lights_asleep_writer:")
+    lines.append('    name: "Living Lights - asleep writer"')
+    lines.append("    max: 32")
+    lines.append('    initial: ""')
+    lines.append("    icon: mdi:pencil-lock")
     for slug in ZONES:
         lines.append(f"  living_lights_override_text_{slug}:")
         lines.append(f'    name: "{slug} presence override payload"')
@@ -419,6 +532,21 @@ def emit_input_number() -> str:
         f"    initial: {MOVIE_DIM_PCT}",
         "    unit_of_measurement: '%'",
         "    icon: mdi:television",
+        "    mode: slider",
+        # Story T (M2): non-watch zones while the TV plays.
+        "  living_lights_tv_vacant_floor_pct:",
+        '    name: "Living Lights - TV-on vacant floor, non-watch zones (%)"',
+        "    min: 0", "    max: 100", "    step: 1",
+        f"    initial: {TV_VACANT_FLOOR_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:television-off",
+        "    mode: slider",
+        "  living_lights_tv_route_pct:",
+        '    name: "Living Lights - TV-on route light, non-watch zones (%)"',
+        "    min: 0", "    max: 100", "    step: 1",
+        f"    initial: {TV_ROUTE_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:walk",
         "    mode: slider",
         "  living_lights_gaming_dim_pct:",
         '    name: "Living Lights — gaming LR dim target (%)"',
@@ -568,9 +696,9 @@ def _present_target(is_watch: bool,
     activity seam (belief-gated). Default fallback: RAMP_TARGET_PCT,
     cap-clamped, floored at `floor`.
 
-    `floor`, `cap`, `tv_playing`, `gaming_active`, `working_hours_active`,
-    `working_hours_present_pct`, `belief`, `activity` are all in scope where
-    this splices in. Activity targets are prescriptive — they are cap-clamped
+    `floor`, `cap`, `profile_max`, `dwell`, `tv_playing`, `tv_route_pct`,
+    `gaming_active`, `working_hours_active`, `working_hours_present_pct`,
+    `belief`, `activity` are all in scope where this splices in. Activity targets are prescriptive: they are cap-clamped
     only, free to go below the floor (e.g. napping). Gaming targets are also
     free to go below the floor (e.g. office=0, LR=3 even during the day
     when floor>3). Working-hours intentionally dominates TV: a user watching
@@ -599,6 +727,13 @@ def _present_target(is_watch: bool,
     for act, pct in ACTIVITY_PROFILES.items():
         branches.append("{% elif belief and activity == '" + act + "' %}"
                         + "{{ [" + str(pct) + ", cap] | min }}")
+    if not is_watch:
+        # Story T route light (M2): a non-watch zone occupied while the TV
+        # plays is lit at the route level, capped by the asleep cap and the
+        # profile's overnight max (8 %). Released after TV_ROUTE_MAX_DWELL_MS
+        # of dwell (someone cooking, not passing) to the normal target.
+        branches.append("{% elif tv_playing and dwell < " + str(TV_ROUTE_MAX_DWELL_MS)
+                        + " %}{{ [tv_route_pct, cap, profile_max] | min }}")
     # ramp_target_pct read from input_number with literal fallback in
     # the variables block; cap-clamped + floor-anchored.
     branches.append("{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}")
@@ -629,7 +764,7 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
              gates the whole feature — OFF disables anticipation everywhere
              without touching the rest of the state machine. #}
           {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-          {% set anti_tv = states('@@MOVIE_MP@@') not in ['off', 'unavailable', 'unknown'] %}
+          {% set anti_tv = is_state('@@TV_PLAYING@@', 'on') %}
           {% set anti_obj = states.binary_sensor.anticipated_@@CAM@@ %}
           {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < @@ANTI_DECAY@@)) %}
           {% if manual %}manual_override
@@ -649,7 +784,10 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
             {% set has_override = override_raw not in ['', 'unknown', 'unavailable', None] %}
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing = states('@@MOVIE_MP@@') not in ['off', 'unavailable', 'unknown'] %}
+            {# One TV predicate for every package: binary_sensor.living_lights_tv_playing
+               (the lg_tv state, the unavailable hold and the belief fail-safe
+               live there, not here). #}
+            {% set tv_playing = is_state('@@TV_PLAYING@@', 'on') %}
             {# Gaming modifier — populated only when (a) master toggle is on
                AND (b) Steam's `game` attribute reports a running game. Defensive
                guards cover the three "no value" cases HA might surface. #}
@@ -673,6 +811,9 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
             {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(@@RAMP_TARGET@@) %}
             {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(@@ASLEEP_CAP@@) %}
             {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(@@MOVIE_DIM@@) %}
+            {% set tv_vacant_floor_pct = states('input_number.living_lights_tv_vacant_floor_pct') | int(@@TV_VACANT_FLOOR@@) %}
+            {% set tv_route_pct = states('input_number.living_lights_tv_route_pct') | int(@@TV_ROUTE@@) %}
+            {% set profile_max = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
             {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(@@GAMING_DIM@@) %}
             {# House-wide bias knobs (additive, applied AFTER the cascade,
                clamped at cap and at 0). Scope gated by input_text:
@@ -696,13 +837,13 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@working_hours_floor_pct if working_hours_active else @@TV_FLOOR@@ if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
                guard against dimming a manually-set light). #}
             {% set anti_kill = is_state('input_boolean.living_lights_anticipated_enabled', 'on') %}
-            {% set anti_tv = states('@@MOVIE_MP@@') not in ['off', 'unavailable', 'unknown'] %}
+            {% set anti_tv = tv_playing %}
             {% set anti_obj = states.binary_sensor.anticipated_@@CAM@@ %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < @@ANTI_DECAY@@)) %}
             {# Capture the cascade output to a string via {% set %}...{% endset %},
@@ -714,7 +855,7 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
             {% elif night %}8
             @@WATCH_TV_BRANCH@@{% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [@@ANTICIPATED_PCT@@, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [@@PASS_PCT@@, cap] | min] | max }}
+            {% elif dwell < 2000 and speed >= 1.0 %}@@PASS_BRANCH@@
             {% else %}@@PRESENT_TARGET@@{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
@@ -732,7 +873,7 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
                priority matches the brightness cascade: asleep > gaming >
                working_hours > tv > ToD. #}
             {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
-            {% set tv_playing_state = states('@@MOVIE_MP@@') not in ['off', 'unavailable', 'unknown'] %}
+            {% set tv_playing_state = is_state('@@TV_PLAYING@@', 'on') %}
             {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                          and state_attr('@@GAMING_SENSOR@@', 'game')
                                              not in [none, '', 'unavailable', 'unknown'] %}
@@ -764,6 +905,113 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
           speed_mps: "{{ states('@@AVG_SPEED@@') | float(0) }}"
           last_manual_at: >
             {{ states('input_datetime.living_lights_zone_@@SLUG@@_last_manual_at') }}"""
+
+
+def emit_publisher_fresh_sensor() -> str:
+    """binary_sensor.living_lights_publisher_fresh: on while the belief
+    publisher's heartbeat (an ISO time it republishes every minute) is within
+    PUBLISHER_FRESH_S of now(). Missing, unknown, unavailable, unparsable or
+    naive (no timezone) means off. Re-evaluated every minute so a dead
+    publisher is noticed without any classifier reading the heartbeat."""
+    return f"""  - trigger:
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id:
+          - {PUBLISHER_HEARTBEAT}
+      - platform: time_pattern
+        minutes: "/1"
+    binary_sensor:
+      - name: "Living Lights publisher fresh"
+        unique_id: living_lights_publisher_fresh
+        icon: mdi:heart-pulse
+        state: >
+          {{% set hb = as_datetime(states('{PUBLISHER_HEARTBEAT}'), none) %}}
+          {{% if hb is none or hb.tzinfo is none %}}{{{{ false }}}}
+          {{% else %}}{{{{ ((now() - hb).total_seconds() | abs) <= {PUBLISHER_FRESH_S} }}}}
+          {{% endif %}}
+        attributes:
+          heartbeat: "{{{{ states('{PUBLISHER_HEARTBEAT}') }}}}"
+          age_s: >
+            {{% set hb = as_datetime(states('{PUBLISHER_HEARTBEAT}'), none) %}}
+            {{% if hb is none or hb.tzinfo is none %}}none
+            {{% else %}}{{{{ (now() - hb).total_seconds() | round(0) | int }}}}
+            {{% endif %}}"""
+
+
+def _tv_playing_vars(indent: int) -> str:
+    """The variable block shared by the tv_playing state and its reason
+    attribute (one rule, rendered twice), at the given YAML indent."""
+    pad = "\n" + " " * indent
+    return pad.join([
+        f"{{% set lg_tv = states('{MOVIE_MEDIA_PLAYER}') %}}",
+        f"{{% set belief = is_state('{BELIEF_TOGGLE}', 'on') %}}",
+        f"{{% set fresh = is_state('{PUBLISHER_FRESH_SENSOR}', 'on') %}}",
+        f"{{% set tv_watching = states('{TV_WATCHING_BELIEF}') %}}",
+        f"{{% set sofa_stable_on = is_state('{SOFA_STABLE_SENSOR}', 'on') %}}",
+        "{% set belief_live = belief and fresh %}",
+        "{% set bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on' %}",
+        f"{{% set tv_seen_on = lg_tv not in {TV_OFF_JINJA} or bridged %}}",
+        "{% set tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on) %}",
+    ])
+
+
+def emit_tv_playing_sensor() -> str:
+    """binary_sensor.living_lights_tv_playing: the one TV predicate.
+
+    tv_seen_on  = lg_tv not in TV_OFF_STATES, or (lg_tv unavailable/unknown
+                  and the belief is live and tv_watching is on);
+    tv_playing  = tv_seen_on and (belief toggle off, or publisher stale, or
+                  tv_watching != off, or the sofa stable sensor on).
+    So: the belief toggle off or a stale heartbeat is exactly the legacy
+    rule; a live belief may bridge an unavailable blip (keep dark) or
+    declare the TV unattended (route/normal light) but never while the sofa
+    is occupied; no belief can invent a TV that reads off or standby.
+    `delay_off` holds the ON state TV_UNAVAILABLE_HOLD_S after lg_tv reads
+    unavailable/unknown (a blip); an explicit off/standby releases at once
+    (the delay template renders 0). The heartbeat is not a trigger: the
+    1-minute time_pattern re-evaluates the publisher_fresh dependency.
+    Attributes: `reason` names the branch (tv_off, unavailable (held by the
+    delay if it was on), unavailable_not_watching, belief_bridges_unavailable,
+    legacy, publisher_stale, belief_watching, sofa_occupied,
+    belief_unattended) and `lg_tv` the raw media player state."""
+    off_states = "', '".join(TV_OFF_STATES)
+    return f"""  - trigger:
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id:
+          - {MOVIE_MEDIA_PLAYER}
+          - {TV_WATCHING_BELIEF}
+          - {PUBLISHER_FRESH_SENSOR}
+          - {BELIEF_TOGGLE}
+          - {SOFA_STABLE_SENSOR}
+      - platform: time_pattern
+        minutes: "/1"
+    binary_sensor:
+      - name: "Living Lights TV playing"
+        unique_id: living_lights_tv_playing
+        icon: mdi:television-play
+        delay_off: >
+          {{{{ {TV_UNAVAILABLE_HOLD_S} if states('{MOVIE_MEDIA_PLAYER}') in ['unavailable', 'unknown'] else 0 }}}}
+        state: >
+          {{# TV off states: '{off_states}' (tools/living_lights_tv_states.py). #}}
+          {_tv_playing_vars(10)}
+          {{{{ tv_playing }}}}
+        attributes:
+          lg_tv: "{{{{ states('{MOVIE_MEDIA_PLAYER}') }}}}"
+          reason: >
+            {_tv_playing_vars(12)}
+            {{% if not tv_seen_on and lg_tv in ['unavailable', 'unknown'] and belief_live %}}unavailable_not_watching
+            {{% elif not tv_seen_on and lg_tv in ['unavailable', 'unknown'] %}}unavailable
+            {{% elif not tv_seen_on %}}tv_off
+            {{% elif bridged %}}belief_bridges_unavailable
+            {{% elif not belief %}}legacy
+            {{% elif not fresh %}}publisher_stale
+            {{% elif tv_watching != 'off' %}}belief_watching
+            {{% elif sofa_stable_on %}}sofa_occupied
+            {{% else %}}belief_unattended
+            {{% endif %}}"""
 
 
 def emit_template() -> str:
@@ -905,6 +1153,9 @@ def emit_template() -> str:
              and is_weekday
              and in_window }}""")
 
+    parts.append(emit_publisher_fresh_sensor())
+    parts.append(emit_tv_playing_sensor())
+
     # Per-zone dwell sensors (one trigger block per camera batch)
     occupancy_entity_ids = [_slug_to_entity_id(s) for s in ZONES]
     dwell_block_triggers = """  - trigger:
@@ -1007,13 +1258,23 @@ def emit_template() -> str:
         classifier_trigger_entities.append(
             f"input_text.living_lights_override_text_{slug}")
     classifier_trigger_entities.append("binary_sensor.living_lights_is_night_safe")
-    # TV state -> classifier re-eval so the movie modifier applies.
-    classifier_trigger_entities.append(MOVIE_MEDIA_PLAYER)
+    # TV -> classifier re-eval so the movie modifier applies. Since M2 the
+    # classifier reads binary_sensor.living_lights_tv_playing (which is the
+    # only template reading media_player.lg_tv), so that sensor is the
+    # trigger, not the media player.
+    classifier_trigger_entities.append(TV_PLAYING_SENSOR)
     # Layer 2 — away / asleep / V-JEPA 2 belief toggle re-eval the classifier.
     classifier_trigger_entities.append("input_boolean.user_at_home")
     classifier_trigger_entities.append("input_boolean.living_lights_asleep")
-    classifier_trigger_entities.append(
-        "input_boolean.living_lights_actuate_from_belief_changes")
+    classifier_trigger_entities.append(BELIEF_TOGGLE)
+    # Belief entities (M2): the tv_watching belief, the publisher freshness
+    # and the 15 per-zone activity sensors re-evaluate the classifier the
+    # moment they change. The heartbeat itself is NOT a trigger: it changes
+    # every minute and only publisher_fresh (a 1-minute sensor) reads it.
+    classifier_trigger_entities.append(TV_WATCHING_BELIEF)
+    classifier_trigger_entities.append(PUBLISHER_FRESH_SENSOR)
+    for slug, meta in ZONES.items():
+        classifier_trigger_entities.append(f"sensor.{meta['camera']}_{slug}_activity")
     # Phase 4 anticipation: classifier re-evals when killswitch toggles OR
     # any anticipated_<room> sensor flips. One sensor per camera/room — the
     # anticipator publishes binary_sensor.anticipated_<camera_name>.
@@ -1035,6 +1296,8 @@ def emit_template() -> str:
         "living_lights_ramp_initial_pct",
         "living_lights_asleep_cap_pct",
         "living_lights_movie_dim_pct",
+        "living_lights_tv_vacant_floor_pct",
+        "living_lights_tv_route_pct",
         "living_lights_gaming_dim_pct",
         # Per-modifier CT overrides — drag a slider, classifier re-evals.
         "living_lights_asleep_ct_k",
@@ -1090,6 +1353,14 @@ def emit_template() -> str:
             else "gaming_dim_pct if gaming_active else " if slug in GAMING_DIM_ZONES
             else ""
         )
+        # pass_through: watch zones never reach this branch while the TV
+        # plays (the @@WATCH_TV_BRANCH@@ short-circuit comes first); a
+        # non-watch zone crossed during a film gets the route level.
+        pass_pct = "{{ [floor, [" + str(PASS_PCT) + ", cap] | min] | max }}"
+        pass_branch = (
+            pass_pct if slug in MOVIE_WATCH_ZONES
+            else "{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, ["
+            + str(PASS_PCT) + ", cap] | min] | max) }}")
         sensor_yaml = (_CLASSIFIER_SENSOR
                        .replace("@@CAM_TITLE@@", cam_title)
                        .replace("@@SLUG_TITLE@@", slug_title)
@@ -1100,7 +1371,13 @@ def emit_template() -> str:
                        .replace("@@AVG_SPEED@@", avg_speed_id)
                        .replace("@@ACTIVITY_ENTITY@@", activity_entity)
                        .replace("@@MOVIE_DIM@@", str(MOVIE_DIM_PCT))
-                       .replace("@@MOVIE_MP@@", MOVIE_MEDIA_PLAYER)
+                       .replace("@@TV_PLAYING@@", TV_PLAYING_SENSOR)
+                       .replace("@@TV_VACANT_FLOOR@@", str(TV_VACANT_FLOOR_PCT))
+                       .replace("@@TV_ROUTE@@", str(TV_ROUTE_PCT))
+                       .replace("@@TV_FLOOR@@",
+                                "movie_dim_pct" if slug in MOVIE_WATCH_ZONES
+                                else "tv_vacant_floor_pct")
+                       .replace("@@PASS_BRANCH@@", pass_branch)
                        .replace("@@GAMING_SENSOR@@", GAMING_SENSOR)
                        .replace("@@GAMING_FLOOR@@", gaming_floor)
                        .replace("@@GAMING_DIM@@", str(GAMING_DIM_PCT))
@@ -1117,7 +1394,6 @@ def emit_template() -> str:
                            "@@WATCH_TV_BRANCH@@",
                            "{% elif tv_playing %}{{ floor }}\n            "
                            if slug in MOVIE_WATCH_ZONES else "")
-                       .replace("@@PASS_PCT@@", str(PASS_PCT))
                        .replace("@@RAMP_INITIAL@@", str(RAMP_INITIAL_PCT))
                        .replace("@@ASLEEP_CAP@@", str(ASLEEP_CAP_PCT))
                        .replace("@@PRESENT_TARGET@@", present_target))
@@ -1182,6 +1458,20 @@ def emit_mqtt() -> str:
           {{{{ states('{prior_sensor}') | float(0) }}}}
         {{% endif %}}''')
     return "\n".join(lines) + "\n"
+
+
+def _asleep_writer_lines(writer: str, indent: int = 6) -> list[str]:
+    """Action lines recording `writer` in input_text.living_lights_asleep_writer
+    (max 32 chars): legacy_on, legacy_off:<trigger id>, hard_backstop,
+    mirror:<estimator state>."""
+    pad = " " * indent
+    return [
+        f"{pad}- action: input_text.set_value",
+        f"{pad}  target:",
+        f"{pad}    entity_id: {ASLEEP_WRITER}",
+        f"{pad}  data:",
+        f'{pad}    value: "{writer}"',
+    ]
 
 
 def emit_automations() -> str:
@@ -1271,34 +1561,154 @@ def emit_automations() -> str:
         "        value_template: >-",
         "          {{ (now() - states.input_boolean.living_lights_asleep.last_changed).total_seconds() > "
         + str(ASLEEP_REARM_MINUTES * 60) + " }}",
+        # Story S (M2): while the estimator is live the mirror automation is
+        # the only writer of the latch. Identical string in asleep OFF.
+        "      - condition: template",
+        "        value_template: \"" + LEGACY_ASLEEP_GATE + "\"",
         "    actions:",
         "      - action: input_boolean.turn_on",
         "        target:",
         "          entity_id: input_boolean.living_lights_asleep",
+        *_asleep_writer_lines("legacy_on"),
         # ── Asleep OFF: sustained activity (genuinely up) or midday backstop ──
         '  - alias: "Living Lights — asleep OFF (genuinely up / midday backstop)"',
         "    id: living_lights_asleep_off",
         "    mode: single",
         "    triggers:",
         "      - trigger: state",
+        "        id: occupancy",
         "        entity_id: binary_sensor.living_lights_any_occupied",
         '        to: "on"',
         "        for:",
         f"          minutes: {ASLEEP_WAKE_MINUTES}",
         "      - trigger: state",
+        "        id: midday",
         "        entity_id: sensor.living_lights_profile",
         "        to: midday",
         "      - trigger: state",
+        "        id: presence",
         "        entity_id: input_boolean.user_at_home",
         '        to: "on"',
         "    conditions:",
         "      - condition: state",
         "        entity_id: input_boolean.living_lights_asleep",
         '        state: "on"',
+        # Story S (M2): same gate string as asleep ON.
+        "      - condition: template",
+        "        value_template: \"" + LEGACY_ASLEEP_GATE + "\"",
+        # Per-trigger credibility (story S residuals, M2): the 13:00 tick
+        # only clears the latch when the house has actually been occupied
+        # for 2 min; a presence reconnect at 03:00 only counts as an arrival
+        # when a person was seen at the front door or in the living room
+        # within the last 60 s. The 10-minute occupancy trigger is unchanged.
+        "      - condition: or",
+        "        conditions:",
+        "          - condition: trigger",
+        "            id: occupancy",
+        "          - condition: and",
+        "            conditions:",
+        "              - condition: trigger",
+        "                id: midday",
+        "              - condition: state",
+        "                entity_id: binary_sensor.living_lights_any_occupied",
+        '                state: "on"',
+        "                for:",
+        "                  minutes: 2",
+        "          - condition: and",
+        "            conditions:",
+        "              - condition: trigger",
+        "                id: presence",
+        "              - condition: template",
+        "                value_template: >-",
+        "                  {% set ns = namespace(arrived=false) %}",
+        "                  {% for obj in expand(['binary_sensor.front_door_person_occupancy', 'binary_sensor.living_room_person_occupancy']) %}",
+        "                    {% if obj.state == 'on' and (now() - obj.last_changed).total_seconds() <= 60 %}",
+        "                      {% set ns.arrived = true %}",
+        "                    {% endif %}",
+        "                  {% endfor %}",
+        "                  {{ ns.arrived }}",
         "    actions:",
         "      - action: input_boolean.turn_off",
         "        target:",
         "          entity_id: input_boolean.living_lights_asleep",
+        *_asleep_writer_lines("legacy_off:{{ trigger.id }}"),
+        # -- Asleep hard backstop (M2): ungated. 30 min of any_occupied after
+        # 06:00 clears the latch whoever owns it (estimator live or not). The
+        # 06:00 time trigger covers a hold that started before six; only that
+        # path re-checks the 30-minute hold (a state condition with `for`
+        # evaluated at the state trigger's own boundary instant refuses it).
+        '  - alias: "Living Lights - asleep hard backstop (30 min occupied after 06:00)"',
+        "    id: living_lights_asleep_hard_backstop",
+        "    mode: single",
+        "    triggers:",
+        "      - trigger: state",
+        "        id: occupied",
+        "        entity_id: binary_sensor.living_lights_any_occupied",
+        '        to: "on"',
+        "        for:",
+        "          minutes: 30",
+        "      - trigger: time",
+        "        id: six",
+        '        at: "06:00:00"',
+        "    conditions:",
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_asleep",
+        '        state: "on"',
+        "      - condition: time",
+        '        after: "06:00:00"',
+        "      - condition: or",
+        "        conditions:",
+        "          - condition: trigger",
+        "            id: occupied",
+        "          - condition: and",
+        "            conditions:",
+        "              - condition: trigger",
+        "                id: six",
+        "              - condition: state",
+        "                entity_id: binary_sensor.living_lights_any_occupied",
+        '                state: "on"',
+        "                for:",
+        "                  minutes: 30",
+        "    actions:",
+        "      - action: input_boolean.turn_off",
+        "        target:",
+        "          entity_id: input_boolean.living_lights_asleep",
+        *_asleep_writer_lines("hard_backstop"),
+        # -- Asleep mirror (M2): the only writer while the estimator is live.
+        # likely_asleep latches, awake or away clears; anything else (unknown,
+        # unavailable, a future state) is ignored and, because estimate_live
+        # requires one of the three, hands the latch back to the legacy pair.
+        '  - alias: "Living Lights - asleep mirror (estimator)"',
+        "    id: living_lights_asleep_mirror",
+        "    mode: queued",
+        "    max: 5",
+        "    triggers:",
+        "      - trigger: state",
+        "        id: latch",
+        f"        entity_id: {ASLEEP_ESTIMATOR}",
+        "        to: likely_asleep",
+        "      - trigger: state",
+        "        id: clear",
+        f"        entity_id: {ASLEEP_ESTIMATOR}",
+        "        to:",
+        "          - awake",
+        "          - away",
+        "    conditions:",
+        "      - condition: template",
+        "        value_template: \"" + ESTIMATE_LIVE_GATE + "\"",
+        "    actions:",
+        "      - if:",
+        "          - condition: trigger",
+        "            id: latch",
+        "        then:",
+        "          - action: input_boolean.turn_on",
+        "            target:",
+        "              entity_id: input_boolean.living_lights_asleep",
+        "        else:",
+        "          - action: input_boolean.turn_off",
+        "            target:",
+        "              entity_id: input_boolean.living_lights_asleep",
+        *_asleep_writer_lines("mirror:{{ trigger.to_state.state }}"),
         # ── LLM articulation of manual overrides (opt-in, default OFF) ──
         # Listens for living_lights_override_detected. When the user has
         # opted in (input_boolean.living_lights_articulate_overrides = on),
@@ -1525,7 +1935,7 @@ def emit_automations() -> str:
         "          new_value: \"{{ trigger.to_state.state | float(0) }}\"",
         "          delta: \"{{ (trigger.to_state.state | float(0)) - (trigger.from_state.state | float(0)) }}\"",
         "          profile: \"{{ states('sensor.living_lights_profile') }}\"",
-        "          tv_playing: \"{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}\"",
+        "          tv_playing: \"{{ is_state('" + TV_PLAYING_SENSOR + "', 'on') }}\"",
         "          gaming_active: \"{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}\"",
         "          working_hours_active: \"{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}\"",
         "          asleep: \"{{ is_state('input_boolean.living_lights_asleep', 'on') }}\"",
@@ -1664,10 +2074,101 @@ def emit_automations() -> str:
     return "\n".join(lines) + "\n"
 
 
+MIRROR_HEADER = """# living_lights_mqtt_mirror.yaml - GENERATED by tools/build-living-lights-yaml.py --mirror-output
+#
+# DO NOT EDIT BY HAND. Edit MIRROR_ENTITIES / MIRROR_ATTRIBUTE_SUBSET in
+# build-living-lights-yaml.py and re-run with --mirror-output to regenerate.
+#
+# Mirrors the Home Assistant state the lighting belief publisher needs onto
+# the LOCAL Mosquitto broker as retained JSON, so the publisher runs with no
+# Home Assistant token: one topic per entity,
+#   living_lights/mirror/<entity_id with dots replaced by slashes>
+#   payload {entity_id, state, changed_at (ISO), attributes (subset)}
+# republished on every state change, at Home Assistant start and once a
+# minute, plus living_lights/mirror/heartbeat (the ISO time, once a minute)
+# so the publisher can tell a silent broker from a silent house.
+# Nothing here leaves the house: mqtt.publish only, no other action.
+#
+# Rollback: remove this file + reload automations; clear the retained topics
+# with `mosquitto_pub -r -n -t <topic>` if a stale mirror must not linger.
+"""
+
+
+def _mirror_payload_template(obj_expr: str) -> str:
+    """Jinja rendering the mirror payload for the state object `obj_expr`."""
+    subset_items = ", ".join(
+        "'" + eid + "': [" + ", ".join("'" + a + "'" for a in attrs) + "]"
+        for eid, attrs in MIRROR_ATTRIBUTE_SUBSET.items())
+    return (
+        "{% set obj = " + obj_expr + " %}"
+        "{% set subset = {" + subset_items + "} %}"
+        "{% set ns = namespace(attrs={}) %}"
+        "{% for key in subset.get(obj.entity_id, []) %}"
+        "{% if key in obj.attributes %}"
+        "{% set ns.attrs = dict(ns.attrs, **{key: obj.attributes[key]}) %}"
+        "{% endif %}"
+        "{% endfor %}"
+        "{{ {'entity_id': obj.entity_id, 'state': obj.state, "
+        "'changed_at': obj.last_changed.isoformat(), 'attributes': ns.attrs} | to_json }}")
+
+
+def emit_mirror_package() -> str:
+    """living_lights_mqtt_mirror.yaml: the retained local-MQTT mirror."""
+    lines = [MIRROR_HEADER, "automation:",
+             '  - alias: "Living Lights - MQTT mirror on state change"',
+             "    id: living_lights_mqtt_mirror_change",
+             "    mode: queued",
+             "    max: 50",
+             "    triggers:",
+             "      - trigger: state",
+             "        entity_id:"]
+    lines += [f"          - {eid}" for eid in MIRROR_ENTITIES]
+    # `to:` with no value: every state change, but not attribute-only changes.
+    lines += ["        to:",
+              "    actions:",
+              "      - action: mqtt.publish",
+              "        data:",
+              '          topic: "' + MIRROR_TOPIC_PREFIX + "/{{ trigger.entity_id | replace('.', '/') }}\"",
+              "          retain: true",
+              "          payload: >-",
+              "            " + _mirror_payload_template("trigger.to_state"),
+              '  - alias: "Living Lights - MQTT mirror republish and heartbeat"',
+              "    id: living_lights_mqtt_mirror_republish",
+              "    mode: single",
+              "    triggers:",
+              "      - trigger: homeassistant",
+              "        event: start",
+              "      - trigger: time_pattern",
+              '        minutes: "/1"',
+              "    actions:",
+              "      - repeat:",
+              "          for_each: >-",
+              "            {{ expand(["]
+    lines += [f"                '{eid}'," for eid in MIRROR_ENTITIES]
+    lines += ["              ]) | map(attribute='entity_id') | list }}",
+              "          sequence:",
+              "            - action: mqtt.publish",
+              "              data:",
+              '                topic: "' + MIRROR_TOPIC_PREFIX + "/{{ repeat.item | replace('.', '/') }}\"",
+              "                retain: true",
+              "                payload: >-",
+              "                  " + _mirror_payload_template("expand([repeat.item]) | first"),
+              "      - action: mqtt.publish",
+              "        data:",
+              f'          topic: "{MIRROR_TOPIC_PREFIX}/heartbeat"',
+              "          retain: true",
+              '          payload: "{{ now().isoformat() }}"']
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--output", default="ha-config/packages/living_lights_observability.yaml",
                     help="Output file path (relative to repo root)")
+    ap.add_argument("--mirror-output", default=None,
+                    help="Also write the MQTT mirror package here (e.g. "
+                         "ha-config/packages/living_lights_mqtt_mirror.yaml); "
+                         "not written when omitted")
     ap.add_argument("--zones", action="store_true",
                     help="List zone slugs and exit")
     args = ap.parse_args()
@@ -1692,6 +2193,12 @@ def main() -> int:
     text = "\n".join(parts)
     out_path.write_text(text, encoding="utf-8")
     print(f"wrote {out_path}: {len(text)} chars, {text.count(chr(10))} lines, {len(ZONES)} zones")
+    if args.mirror_output:
+        mirror_path = Path(args.mirror_output)
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        mirror_text = emit_mirror_package()
+        mirror_path.write_text(mirror_text, encoding="utf-8")
+        print(f"wrote {mirror_path}: {len(mirror_text)} chars, {len(MIRROR_ENTITIES)} mirrored entities")
     return 0
 
 

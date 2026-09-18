@@ -138,6 +138,11 @@ automation:
         state:
           - present
           - pass_through
+      # Story T: the gradient layers over the pilot's base level; when the
+      # pilot's prediction is 0 (the TV floor) or absent, the pilot has
+      # turned the zone off and the gradient must not relight it.
+      - condition: template
+        value_template: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_brightness_pct') | int(0) > 0 }}"
       # Manual-touch cooldown gate (R5-aligned, vacant-15-min semantics). Reads
       # input_datetime directly. State-bypass + sentinel-aware — matches the
       # pilot's cooldown gate exactly. Until 2026-09-17 this gate also
@@ -174,32 +179,33 @@ automation:
     actions:
       - variables:
           grad_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}"
+          grad_base: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_brightness_pct') | int(0) }}"
       - action: light.turn_on
         target:
           entity_id: light.front_left
         data:
-          brightness_pct: "{{ [ state_attr('sensor.living_room_sofa_gradient', 'front_left_pct') | int(5), 5 ] | max }}"
+          brightness_pct: "{{ ([ state_attr('sensor.living_room_sofa_gradient', 'front_left_pct') | int(0), 5 ] | max) if grad_base > 0 else 0 }}"
           color_temp_kelvin: "{{ grad_ct }}"
           transition: 0.8
       - action: light.turn_on
         target:
           entity_id: light.front_right
         data:
-          brightness_pct: "{{ [ state_attr('sensor.living_room_sofa_gradient', 'front_right_pct') | int(5), 5 ] | max }}"
+          brightness_pct: "{{ ([ state_attr('sensor.living_room_sofa_gradient', 'front_right_pct') | int(0), 5 ] | max) if grad_base > 0 else 0 }}"
           color_temp_kelvin: "{{ grad_ct }}"
           transition: 0.8
       - action: light.turn_on
         target:
           entity_id: light.rear_left
         data:
-          brightness_pct: "{{ [ state_attr('sensor.living_room_sofa_gradient', 'rear_left_pct') | int(5), 5 ] | max }}"
+          brightness_pct: "{{ ([ state_attr('sensor.living_room_sofa_gradient', 'rear_left_pct') | int(0), 5 ] | max) if grad_base > 0 else 0 }}"
           color_temp_kelvin: "{{ grad_ct }}"
           transition: 0.8
       - action: light.turn_on
         target:
           entity_id: light.rear_right
         data:
-          brightness_pct: "{{ [ state_attr('sensor.living_room_sofa_gradient', 'rear_right_pct') | int(5), 5 ] | max }}"
+          brightness_pct: "{{ ([ state_attr('sensor.living_room_sofa_gradient', 'rear_right_pct') | int(0), 5 ] | max) if grad_base > 0 else 0 }}"
           color_temp_kelvin: "{{ grad_ct }}"
           transition: 0.8
   # Per-light gradient-decision logger — shadow-mode visibility. Reuses the

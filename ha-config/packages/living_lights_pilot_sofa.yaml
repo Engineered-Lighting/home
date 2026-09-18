@@ -128,7 +128,9 @@ automation:
           # Read the classifier state directly — not trigger.to_state — so the
           # pilot is correct whichever trigger fired (state / attribute / shadow).
           new_state: "{{ states('sensor.living_room_sofa_lighting_state') }}"
-          predicted_bri: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_brightness_pct') | int(0) }}"
+          # -1 when the attribute is absent: distinguishable from a real 0
+          # (story T). Every branch below checks the sign before acting.
+          predicted_bri: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_brightness_pct') | int(-1) }}"
           ramp_initial: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'ramp_initial_pct') | int(0) }}"
           safe_initial: "{{ [ramp_initial, predicted_bri] | min }}"
       - if:
@@ -294,129 +296,163 @@ automation:
                       brightness_pct: "{{ [ov_bri, 1] | max }}"
                       color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
                       transition: 0.8
-              # present — the confidence ramp (fast reaction, then slow ramp).
+              # present - the confidence ramp (fast reaction, then slow ramp);
+              # turn_off when predicted is exactly 0, nothing when absent.
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'present' }}"
                 sequence:
-                  - variables:
-                      zone_max_bri: "{{ [(state_attr('light.front_left', 'brightness') | float(0)) / 2.55, (state_attr('light.front_right', 'brightness') | float(0)) / 2.55, (state_attr('light.rear_left', 'brightness') | float(0)) / 2.55, (state_attr('light.rear_right', 'brightness') | float(0)) / 2.55] | max }}"
                   - if:
                       - condition: template
-                        value_template: "{{ zone_max_bri < safe_initial }}"
+                        value_template: "{{ predicted_bri == 0 }}"
+                    then:
+                      - action: light.turn_off
+                        target:
+                          entity_id: light.front_left
+                        data:
+                          transition: 10.0
+                      - action: light.turn_off
+                        target:
+                          entity_id: light.front_right
+                        data:
+                          transition: 10.0
+                      - action: light.turn_off
+                        target:
+                          entity_id: light.rear_left
+                        data:
+                          transition: 10.0
+                      - action: light.turn_off
+                        target:
+                          entity_id: light.rear_right
+                        data:
+                          transition: 10.0
+                  - if:
+                      - condition: template
+                        value_template: "{{ predicted_bri > 0 }}"
+                    then:
+                      - variables:
+                          zone_max_bri: "{{ [(state_attr('light.front_left', 'brightness') | float(0)) / 2.55, (state_attr('light.front_right', 'brightness') | float(0)) / 2.55, (state_attr('light.rear_left', 'brightness') | float(0)) / 2.55, (state_attr('light.rear_right', 'brightness') | float(0)) / 2.55] | max }}"
+                      - if:
+                          - condition: template
+                            value_template: "{{ zone_max_bri < safe_initial }}"
+                        then:
+                          - action: light.turn_on
+                            target:
+                              entity_id: light.front_left
+                            data:
+                              brightness_pct: "{{ [safe_initial, 1] | max }}"
+                              color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                              transition: 2.0
+                          - action: light.turn_on
+                            target:
+                              entity_id: light.front_right
+                            data:
+                              brightness_pct: "{{ [safe_initial, 1] | max }}"
+                              color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                              transition: 2.0
+                          - action: light.turn_on
+                            target:
+                              entity_id: light.rear_left
+                            data:
+                              brightness_pct: "{{ [safe_initial, 1] | max }}"
+                              color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                              transition: 2.0
+                          - action: light.turn_on
+                            target:
+                              entity_id: light.rear_right
+                            data:
+                              brightness_pct: "{{ [safe_initial, 1] | max }}"
+                              color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                              transition: 2.0
+                          - delay:
+                              seconds: 2.0
+                      - condition: template
+                        value_template: >-
+                          {% set state = states('sensor.living_room_sofa_lighting_state') %}
+                          {% if state not in ['vacant', 'present', 'pass_through', 'asleep'] %}true
+                          {% else %}
+                            {% set lm = states('input_datetime.living_lights_zone_sofa_last_manual_at') %}
+                            {% if not lm or lm in ['unknown', 'unavailable', 'none', ''] %}true
+                            {% else %}
+                              {% set manual_dt = as_datetime(lm | string) | as_local %}
+                              {% if manual_dt.year < 2000 %}true
+                              {% else %}
+                                {% set stable_obj = states.binary_sensor.living_room_sofa_person_occupancy_stable %}
+                                {% if stable_obj is none %}true
+                                {% elif stable_obj.state == 'on' %}false
+                                {% else %}
+                                  {% set leave_time = stable_obj.last_changed %}
+                                  {{ (now() - ([manual_dt, leave_time] | max)).total_seconds() > 900 }}
+                                {% endif %}
+                              {% endif %}
+                            {% endif %}
+                          {% endif %}
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.front_left
+                        data:
+                          brightness_pct: "{{ [predicted_bri, 1] | max }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 10.0
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.front_right
+                        data:
+                          brightness_pct: "{{ [predicted_bri, 1] | max }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 10.0
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.rear_left
+                        data:
+                          brightness_pct: "{{ [predicted_bri, 1] | max }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 10.0
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.rear_right
+                        data:
+                          brightness_pct: "{{ [predicted_bri, 1] | max }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 10.0
+              # pass_through - a quick path light (raises only; nothing
+              # when predicted is 0 or absent).
+              - conditions:
+                  - condition: template
+                    value_template: "{{ new_state == 'pass_through' }}"
+                sequence:
+                  - if:
+                      - condition: template
+                        value_template: "{{ predicted_bri > 0 }}"
                     then:
                       - action: light.turn_on
                         target:
                           entity_id: light.front_left
                         data:
-                          brightness_pct: "{{ [safe_initial, 1] | max }}"
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.front_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
                           color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                          transition: 2.0
+                          transition: 0.3
                       - action: light.turn_on
                         target:
                           entity_id: light.front_right
                         data:
-                          brightness_pct: "{{ [safe_initial, 1] | max }}"
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.front_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
                           color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                          transition: 2.0
+                          transition: 0.3
                       - action: light.turn_on
                         target:
                           entity_id: light.rear_left
                         data:
-                          brightness_pct: "{{ [safe_initial, 1] | max }}"
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
                           color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                          transition: 2.0
+                          transition: 0.3
                       - action: light.turn_on
                         target:
                           entity_id: light.rear_right
                         data:
-                          brightness_pct: "{{ [safe_initial, 1] | max }}"
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
                           color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                          transition: 2.0
-                      - delay:
-                          seconds: 2.0
-                  - condition: template
-                    value_template: >-
-                      {% set state = states('sensor.living_room_sofa_lighting_state') %}
-                      {% if state not in ['vacant', 'present', 'pass_through', 'asleep'] %}true
-                      {% else %}
-                        {% set lm = states('input_datetime.living_lights_zone_sofa_last_manual_at') %}
-                        {% if not lm or lm in ['unknown', 'unavailable', 'none', ''] %}true
-                        {% else %}
-                          {% set manual_dt = as_datetime(lm | string) | as_local %}
-                          {% if manual_dt.year < 2000 %}true
-                          {% else %}
-                            {% set stable_obj = states.binary_sensor.living_room_sofa_person_occupancy_stable %}
-                            {% if stable_obj is none %}true
-                            {% elif stable_obj.state == 'on' %}false
-                            {% else %}
-                              {% set leave_time = stable_obj.last_changed %}
-                              {{ (now() - ([manual_dt, leave_time] | max)).total_seconds() > 900 }}
-                            {% endif %}
-                          {% endif %}
-                        {% endif %}
-                      {% endif %}
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.front_left
-                    data:
-                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 10.0
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.front_right
-                    data:
-                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 10.0
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.rear_left
-                    data:
-                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 10.0
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.rear_right
-                    data:
-                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 10.0
-              # pass_through — a quick path light (raises only).
-              - conditions:
-                  - condition: template
-                    value_template: "{{ new_state == 'pass_through' }}"
-                sequence:
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.front_left
-                    data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.front_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 0.3
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.front_right
-                    data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.front_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 0.3
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.rear_left
-                    data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 0.3
-                  - action: light.turn_on
-                    target:
-                      entity_id: light.rear_right
-                    data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
-                      color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                      transition: 0.3
+                          transition: 0.3
               # anticipated — pre-warm for a person walking TOWARD this room
               # (Phase 4). Raises only (never dims a light already brighter)
               # over a 1.5 s perceptual ramp. The classifier-side kill switch
@@ -427,61 +463,94 @@ automation:
                   - condition: template
                     value_template: "{{ new_state == 'anticipated' }}"
                 sequence:
+                  - if:
+                      - condition: template
+                        value_template: "{{ predicted_bri > 0 }}"
+                    then:
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.front_left
+                        data:
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.front_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 1.5
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.front_right
+                        data:
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.front_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 1.5
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.rear_left
+                        data:
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 1.5
+                      - action: light.turn_on
+                        target:
+                          entity_id: light.rear_right
+                        data:
+                          brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                          color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
+                          transition: 1.5
+            # default - night_safe and any other non-vacant state;
+            # turn_off when predicted is exactly 0, nothing when absent.
+            default:
+              - if:
+                  - condition: template
+                    value_template: "{{ predicted_bri == 0 }}"
+                then:
+                  - action: light.turn_off
+                    target:
+                      entity_id: light.front_left
+                    data:
+                      transition: 1.5
+                  - action: light.turn_off
+                    target:
+                      entity_id: light.front_right
+                    data:
+                      transition: 1.5
+                  - action: light.turn_off
+                    target:
+                      entity_id: light.rear_left
+                    data:
+                      transition: 1.5
+                  - action: light.turn_off
+                    target:
+                      entity_id: light.rear_right
+                    data:
+                      transition: 1.5
+              - if:
+                  - condition: template
+                    value_template: "{{ predicted_bri > 0 }}"
+                then:
                   - action: light.turn_on
                     target:
                       entity_id: light.front_left
                     data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.front_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
                       color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
                       transition: 1.5
                   - action: light.turn_on
                     target:
                       entity_id: light.front_right
                     data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.front_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
                       color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
                       transition: 1.5
                   - action: light.turn_on
                     target:
                       entity_id: light.rear_left
                     data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_left', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
                       color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
                       transition: 1.5
                   - action: light.turn_on
                     target:
                       entity_id: light.rear_right
                     data:
-                      brightness_pct: "{{ [predicted_bri, (state_attr('light.rear_right', 'brightness') | float(0)) / 2.55] | max | round(0) | int }}"
+                      brightness_pct: "{{ [predicted_bri, 1] | max }}"
                       color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
                       transition: 1.5
-            # default — night_safe and any other non-vacant state.
-            default:
-              - action: light.turn_on
-                target:
-                  entity_id: light.front_left
-                data:
-                  brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                  color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                  transition: 1.5
-              - action: light.turn_on
-                target:
-                  entity_id: light.front_right
-                data:
-                  brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                  color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                  transition: 1.5
-              - action: light.turn_on
-                target:
-                  entity_id: light.rear_left
-                data:
-                  brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                  color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                  transition: 1.5
-              - action: light.turn_on
-                target:
-                  entity_id: light.rear_right
-                data:
-                  brightness_pct: "{{ [predicted_bri, 1] | max }}"
-                  color_temp_kelvin: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(state_attr('switch.home_adaptive_lighting_home', 'color_temp_kelvin') | int(2700)) }}"
-                  transition: 1.5

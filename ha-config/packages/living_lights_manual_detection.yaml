@@ -1341,7 +1341,7 @@ automation:
           pred_dining_left_ct: "{{ state_attr('sensor.dining_room_dining_left_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -1574,7 +1574,7 @@ automation:
           pred_dining_right_ct: "{{ state_attr('sensor.dining_room_dining_right_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -1859,7 +1859,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -2106,7 +2106,7 @@ automation:
           pred_sink_ct: "{{ state_attr('sensor.kitchen_sink_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -2339,7 +2339,7 @@ automation:
           pred_island_left_ct: "{{ state_attr('sensor.kitchen_island_left_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -2572,7 +2572,7 @@ automation:
           pred_island_right_ct: "{{ state_attr('sensor.kitchen_island_right_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -2805,7 +2805,7 @@ automation:
           pred_office_ct: "{{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -3068,7 +3068,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -3338,7 +3338,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -3586,7 +3586,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           # M22a-aligned: gaming context dimension. Mirrors the classifier's
           # `gaming_active` truth so override_event.context records the
           # gaming state at the moment the user touched a light. Downstream
@@ -3832,7 +3832,7 @@ automation:
           pred_dining_left_ct: "{{ state_attr('sensor.dining_room_dining_left_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -4008,7 +4008,7 @@ automation:
           pred_dining_right_ct: "{{ state_attr('sensor.dining_room_dining_right_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -4192,7 +4192,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -4370,7 +4370,7 @@ automation:
           pred_sink_ct: "{{ state_attr('sensor.kitchen_sink_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -4546,7 +4546,7 @@ automation:
           pred_island_left_ct: "{{ state_attr('sensor.kitchen_island_left_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -4722,7 +4722,7 @@ automation:
           pred_island_right_ct: "{{ state_attr('sensor.kitchen_island_right_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -4898,7 +4898,7 @@ automation:
           pred_office_ct: "{{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -5078,7 +5078,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -5259,7 +5259,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
@@ -5436,7 +5436,7 @@ automation:
           pred_sofa_ct: "{{ state_attr('sensor.living_room_sofa_lighting_state', 'predicted_color_temp_kelvin') | int(0) }}"
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
-          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          tv_playing: "{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}"
           sonos_playing: "{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}"
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"

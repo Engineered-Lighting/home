@@ -444,7 +444,7 @@ def emit_capture_automations(zones) -> str:
           tod_state: "{{{{ states('sensor.living_lights_profile') }}}}"
           shadow_mode: "{{{{ is_state('input_boolean.living_lights_shadow', 'on') }}}}"
           primary_state: "{{{{ states('{primary_sensor}') }}}}"
-          tv_playing: "{{{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}}}"
+          tv_playing: "{{{{ is_state('binary_sensor.living_lights_tv_playing', 'on') }}}}"
           # Steam-driven gaming context (M22a-aligned). Captured into the
           # pending_preference context so downstream learning can later
           # distinguish "user preferred X while gaming" from "user preferred X

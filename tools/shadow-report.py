@@ -144,6 +144,20 @@ def read_jsonl(path: pathlib.Path) -> tuple[list[dict], list[str]]:
     return rows, malformed
 
 
+def journal_files_present(directory: pathlib.Path) -> int:
+    """How many journal files the directory holds, whatever the range.
+
+    A range with no record is two different things. Asking about a day the
+    publisher was not running is an ordinary empty answer. A directory holding
+    no journal file at all means the publisher never wrote one, and since the
+    journal never raises on I/O failure, that is the only way a directory the
+    container cannot write ever announces itself.
+    """
+    if not directory.is_dir():
+        return 0
+    return len(list(directory.glob(JOURNAL_GLOB)))
+
+
 def read_journals(directory: pathlib.Path, since: dt.date | None,
                   until: dt.date | None) -> tuple[list[dict], list[str], list[str]]:
     """Every journal record in the date range, oldest first, plus bad lines."""
@@ -389,6 +403,8 @@ def render(report: dict) -> str:
     lines.append(f"unexplained latches: {report['unexplained_latches']} "
                  f"(the acceptance bar is zero over seven nights)")
     lines.append(f"inconclusive latches: {report['inconclusive_latches']}")
+    if report["records"] == 0:
+        lines.append("No journal record in this range, so nothing here was measured.")
     if report["inconclusive"]:
         lines.append("This run proves nothing: no person row was read, so no latch was "
                      "scored.")
@@ -409,6 +425,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"recorder entity to compare against (default {LEGACY_LATCH_ENTITY})")
     parser.add_argument("--assume-person", action="store_true",
                         help="treat unlabelled Frigate rows as person evidence")
+    parser.add_argument("--no-journal", action="store_true",
+                        help="acknowledge that the journal is empty for this range; "
+                             "the report then states plainly that it measured nothing")
     parser.add_argument("--no-evidence", action="store_true",
                         help="acknowledge a run with no person evidence: every latch is "
                              "scored inconclusive and the run proves nothing")
@@ -443,6 +462,20 @@ def main(argv: list[str] | None = None) -> int:
                               "--no-evidence to acknowledge an unscored run)")
         records, files, bad = read_journals(pathlib.Path(args.journal_dir), since, until)
         malformed.extend(bad)
+        # A journal that wrote nothing reads exactly like a week with nothing
+        # to report, and the old exit code said so: zero unexplained latches,
+        # exit 0, "the acceptance bar is zero over seven nights" -- from a
+        # directory the publisher had never been able to write. The journal
+        # never raises on I/O failure by design, so this is the only place the
+        # failure can surface. It is refused the same way empty person
+        # evidence already is.
+        if not journal_files_present(pathlib.Path(args.journal_dir)) and not args.no_journal:
+            raise ReportError(
+                f"{args.journal_dir} holds no journal file at all; the publisher "
+                "writes one record a tick and never raises when it cannot, so this "
+                "usually means the directory is not writable by the container's uid "
+                "-- a week that wrote nothing is not a week that went well (pass "
+                "--no-journal to acknowledge an empty run)")
         people: list[dict] = []
         for name in args.frigate_jsonl:
             path = pathlib.Path(name)

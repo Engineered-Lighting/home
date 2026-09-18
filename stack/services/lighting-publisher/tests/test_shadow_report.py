@@ -361,6 +361,46 @@ class ShadowReportTest(unittest.TestCase):
         self.assertEqual(report["evidence_sources"], 2)
         self.assertEqual(report["frigate_person_rows"], 2)
 
+    def test_a_journal_directory_that_never_wrote_is_refused(self):
+        """The signature of a container that could not write its volume.
+
+        The journal never raises on I/O failure, by design: a full disk must
+        not stop the house being lit. So an empty directory is the only way
+        that failure ever announces itself, and the old report answered it
+        with zero unexplained latches, exit 0, and the line about the
+        acceptance bar being zero over seven nights.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = pathlib.Path(tmp) / "journal"
+            empty.mkdir()
+            code, out, err = self.run_tool("--journal-dir", str(empty),
+                                           "--frigate-jsonl",
+                                           self.evidence(LATCH_OFFSET_S - 300))
+        self.assertEqual(code, tool.EXIT_USAGE, out)
+        self.assertIn("no journal file at all", err)
+        self.assertIn("writable by the container", err)
+
+    def test_an_empty_journal_can_be_acknowledged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = pathlib.Path(tmp) / "journal"
+            empty.mkdir()
+            code, out, err = self.run_tool("--journal-dir", str(empty), "--no-journal",
+                                           "--frigate-jsonl",
+                                           self.evidence(LATCH_OFFSET_S - 300))
+        self.assertEqual(code, tool.EXIT_OK, err)
+        self.assertIn("No journal record in this range", out)
+
+    def test_a_range_outside_the_night_is_not_the_same_as_a_dead_journal(self):
+        """Asking about a day the publisher was not running is an ordinary
+        empty answer; the directory still holds the week's files."""
+        day = dt.date.fromisoformat(self.files[0][len("decisions-"):-len(".jsonl")])
+        after = (day + dt.timedelta(days=1)).isoformat()
+        code, out, err = self.run_tool("--journal-dir", str(self.night),
+                                       "--frigate-jsonl", self.evidence(LATCH_OFFSET_S - 300),
+                                       "--since", after)
+        self.assertEqual(code, tool.EXIT_OK, err)
+        self.assertIn("No journal record in this range", out)
+
     def test_a_range_outside_the_night_scores_no_latch(self):
         day = dt.date.fromisoformat(self.files[0][len("decisions-"):-len(".jsonl")])
         after = (day + dt.timedelta(days=1)).isoformat()

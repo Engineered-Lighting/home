@@ -299,6 +299,8 @@ The generated JSON contains the full registry; this markdown lists the non-doc e
 - Spatial model lights discovered: 16
 - Predictive Lighting MQTT publish topic families discovered: 5
 - Predictive Lighting MQTT subscription topic families discovered: 3
+- Lighting Publisher MQTT publish topic families discovered: 8
+- Lighting Publisher MQTT subscription topic families discovered: 4
 - Stack supervisor endpoints discovered: 12
 
 ### Slash Commands
@@ -444,20 +446,40 @@ Subscription topic families:
 - `predictive-lighting/debug/track/+` - payload debug JSON; qos `0`; self-subscription for eval_logger capture
 - `predictive-lighting/anticipated/+` - payload `ON` / `OFF`; qos `0`; self-subscription for eval_logger capture
 
+### Lighting Publisher MQTT Topics
+
+Publish topic families (`[_shadow]` is present only while `PUBLISHER_MODE=shadow`):
+
+- `living_lights/publisher/availability[_shadow]` - payload `online` / `offline`; retain `true`; qos `0`; availability + Last Will and Testament, registered before connect
+- `homeassistant/<component>/<object_id>/config` - payload HA MQTT discovery JSON (empty payload removes the entity); retain `true`; qos `0`; discovery for tv_watching, the asleep estimator, per-zone activity and the heartbeat; republished every 600s
+- `living_lights/publisher/living_lights_tv_watching[_shadow]/state` - payload `ON` / `OFF` / `None` (unknown while health is down); retain `true`; qos `0`; story T: binary_sensor.living_lights_tv_watching
+- `living_lights/publisher/living_lights_tv_watching[_shadow]/attributes` - payload JSON: state_machine, p_attention, since, request_id; retain `true`; qos `0`; story T attributes
+- `living_lights/publisher/living_lights_asleep_estimator[_shadow]/state` - payload `likely_asleep` / `awake` / `away` / `unknown`; retain `true`; qos `0`; story S: sensor.living_lights_asleep_estimator
+- `living_lights/publisher/living_lights_asleep_estimator[_shadow]/attributes` - payload JSON: since, reassert, evidence; retain `true`; qos `0`; story S evidence
+- `living_lights/publisher/<camera>_<zone>_activity[_shadow]/state` - payload `cooking` / `eating` / `idle` / `unknown`; retain `true`; qos `0`; per-zone activity sensors (kitchen and dining zones only leave idle)
+- `living_lights/publisher/lighting_publisher_heartbeat[_shadow]/state` - payload ISO 8601 timestamp; retain `true`; qos `0`; proof of life every 60s; it stops while health is down, and binary_sensor.living_lights_publisher_fresh goes off 180s later
+
+Subscription topic families:
+
+- `living_lights/mirror/#` - payload JSON: entity_id, state, changed_at, attributes (retained, one topic per entity); qos `0`; the Home Assistant mirror: the publisher holds no HA token
+- `living_lights/mirror/heartbeat` - payload ISO 8601 timestamp; qos `0`; mirror freshness: a silent house is told from a silent broker
+- `frigate/<camera>/person` - payload person count; qos `0`; per-camera person evidence for the asleep estimator
+- `frigate/<camera>/<zone>/person` - payload person count; qos `0`; per-zone occupancy for the TV machine and the activity sensors
+
 ### Stack Supervisor Endpoints
 
-- `GET /healthz` - status `200`; auth `none`; confirm `none`; unauthenticated liveness probe; source `stack/services/supervisor/main.py:667`
-- `GET /api/stack/status` - status `200`; auth `STACK_TOKEN`; confirm `none`; aggregate stack and service status; source `stack/services/supervisor/main.py:677`
-- `GET /api/stack/tasks` - status `200`; auth `STACK_TOKEN`; confirm `none`; recent stack-control task summaries; source `stack/services/supervisor/main.py:683`
-- `POST /api/stack/start` - status `202`; auth `STACK_TOKEN`; confirm `none`; start the default AI stack; source `stack/services/supervisor/main.py:705`
-- `POST /api/stack/restart` - status `202`; auth `STACK_TOKEN`; confirm `none`; restart the default AI stack; source `stack/services/supervisor/main.py:715`
-- `GET /api/stack/logs/stream` - status `200`; auth `STACK_TOKEN`; confirm `none`; SSE stream for stack-control task logs; source `stack/services/supervisor/main.py:725`
-- `POST /api/stack/stop` - status `202`; auth `STACK_TOKEN`; confirm `stop-ai-stack`; stop the default AI stack; source `stack/services/supervisor/main.py:812`
-- `GET /api/services/{service}/logs` - status `200`; auth `STACK_TOKEN`; confirm `none`; tail allowlisted service or supervisor logs; source `stack/services/supervisor/main.py:853`
-- `POST /api/services/{service}/restart` - status `202`; auth `STACK_TOKEN`; confirm `none`; restart one allowlisted compose service; source `stack/services/supervisor/main.py:877`
-- `POST /api/services/{service}/stop` - status `202`; auth `STACK_TOKEN`; confirm `stop-<service-confirm>`; stop one allowlisted compose service; source `stack/services/supervisor/main.py:893`
-- `POST /api/stack/free-gpu` - status `202`; auth `STACK_TOKEN`; confirm `free-gpu`; stop GPU-heavy services; source `stack/services/supervisor/main.py:915`
-- `POST /api/stack/free_gpu` - status `202`; auth `STACK_TOKEN`; confirm `free-gpu`; compatibility alias for free-gpu; source `stack/services/supervisor/main.py:916`
+- `GET /healthz` - status `200`; auth `none`; confirm `none`; unauthenticated liveness probe; source `stack/services/supervisor/main.py:678`
+- `GET /api/stack/status` - status `200`; auth `STACK_TOKEN`; confirm `none`; aggregate stack and service status; source `stack/services/supervisor/main.py:688`
+- `GET /api/stack/tasks` - status `200`; auth `STACK_TOKEN`; confirm `none`; recent stack-control task summaries; source `stack/services/supervisor/main.py:694`
+- `POST /api/stack/start` - status `202`; auth `STACK_TOKEN`; confirm `none`; start the default AI stack; source `stack/services/supervisor/main.py:716`
+- `POST /api/stack/restart` - status `202`; auth `STACK_TOKEN`; confirm `none`; restart the default AI stack; source `stack/services/supervisor/main.py:726`
+- `GET /api/stack/logs/stream` - status `200`; auth `STACK_TOKEN`; confirm `none`; SSE stream for stack-control task logs; source `stack/services/supervisor/main.py:736`
+- `POST /api/stack/stop` - status `202`; auth `STACK_TOKEN`; confirm `stop-ai-stack`; stop the default AI stack; source `stack/services/supervisor/main.py:823`
+- `GET /api/services/{service}/logs` - status `200`; auth `STACK_TOKEN`; confirm `none`; tail allowlisted service or supervisor logs; source `stack/services/supervisor/main.py:864`
+- `POST /api/services/{service}/restart` - status `202`; auth `STACK_TOKEN`; confirm `none`; restart one allowlisted compose service; source `stack/services/supervisor/main.py:888`
+- `POST /api/services/{service}/stop` - status `202`; auth `STACK_TOKEN`; confirm `stop-<service-confirm>`; stop one allowlisted compose service; source `stack/services/supervisor/main.py:904`
+- `POST /api/stack/free-gpu` - status `202`; auth `STACK_TOKEN`; confirm `free-gpu`; stop GPU-heavy services; source `stack/services/supervisor/main.py:926`
+- `POST /api/stack/free_gpu` - status `202`; auth `STACK_TOKEN`; confirm `free-gpu`; compatibility alias for free-gpu; source `stack/services/supervisor/main.py:927`
 
 ### Home Assistant Views
 

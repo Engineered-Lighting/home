@@ -756,6 +756,123 @@ def extract_predictive_lighting_mqtt_topics() -> dict[str, Any]:
     }
 
 
+def extract_lighting_publisher_mqtt_topics() -> dict[str, Any]:
+    """Topic families of the Living Lights belief publisher, from its source.
+
+    Everything is derived from the constants in
+    stack/services/lighting-publisher: the mirror and Frigate topics it
+    subscribes to, and the discovery, state, attribute, availability and
+    heartbeat topics it publishes. PUBLISHER_MODE=shadow appends `_shadow` to
+    every object id, so the topics below carry that suffix in shadow mode.
+    """
+    service = REPO / "stack" / "services" / "lighting-publisher" / "lighting_publisher"
+    discovery = _python_literal_assignments(service / "publish" / "discovery.py")
+    mirror = _python_literal_assignments(service / "inputs" / "mirror.py")
+    stories = _python_literal_assignments(service / "stories.py")
+    if not discovery or not mirror:
+        return {}
+    base = str(discovery.get("TOPIC_BASE", "living_lights/publisher"))
+    prefix = str(discovery.get("DISCOVERY_PREFIX", "homeassistant"))
+    suffix = str(discovery.get("SHADOW_SUFFIX", "_shadow"))
+    heartbeat_s = stories.get("HEARTBEAT_S", 60)
+    publish_topics = [
+        {
+            "topic": f"{base}/availability[{suffix}]",
+            "payload": "`online` / `offline`",
+            "retain": "true",
+            "qos": "0",
+            "purpose": "availability + Last Will and Testament, registered before connect",
+        },
+        {
+            "topic": f"{prefix}/<component>/<object_id>/config",
+            "payload": "HA MQTT discovery JSON (empty payload removes the entity)",
+            "retain": "true",
+            "qos": "0",
+            "purpose": "discovery for tv_watching, the asleep estimator, per-zone activity and the heartbeat; republished every 600s",
+        },
+        {
+            "topic": f"{base}/living_lights_tv_watching[{suffix}]/state",
+            "payload": "`ON` / `OFF` / `None` (unknown while health is down)",
+            "retain": "true",
+            "qos": "0",
+            "purpose": "story T: binary_sensor.living_lights_tv_watching",
+        },
+        {
+            "topic": f"{base}/living_lights_tv_watching[{suffix}]/attributes",
+            "payload": "JSON: state_machine, p_attention, since, request_id",
+            "retain": "true",
+            "qos": "0",
+            "purpose": "story T attributes",
+        },
+        {
+            "topic": f"{base}/living_lights_asleep_estimator[{suffix}]/state",
+            "payload": "`likely_asleep` / `awake` / `away` / `unknown`",
+            "retain": "true",
+            "qos": "0",
+            "purpose": "story S: sensor.living_lights_asleep_estimator",
+        },
+        {
+            "topic": f"{base}/living_lights_asleep_estimator[{suffix}]/attributes",
+            "payload": "JSON: since, reassert, evidence",
+            "retain": "true",
+            "qos": "0",
+            "purpose": "story S evidence",
+        },
+        {
+            "topic": f"{base}/<camera>_<zone>_activity[{suffix}]/state",
+            "payload": "`cooking` / `eating` / `idle` / `unknown`",
+            "retain": "true",
+            "qos": "0",
+            "purpose": "per-zone activity sensors (kitchen and dining zones only leave idle)",
+        },
+        {
+            "topic": f"{base}/lighting_publisher_heartbeat[{suffix}]/state",
+            "payload": "ISO 8601 timestamp",
+            "retain": "true",
+            "qos": "0",
+            "purpose": f"proof of life every {heartbeat_s}s; it stops while health is down, and binary_sensor.living_lights_publisher_fresh goes off 180s later",
+        },
+    ]
+    subscribe_topics = [
+        {
+            "topic": str(mirror.get("MIRROR_TOPIC", "living_lights/mirror/#")),
+            "payload": "JSON: entity_id, state, changed_at, attributes (retained, one topic per entity)",
+            "qos": "0",
+            "purpose": "the Home Assistant mirror: the publisher holds no HA token",
+        },
+        {
+            "topic": str(mirror.get("MIRROR_HEARTBEAT_TOPIC", "living_lights/mirror/heartbeat")),
+            "payload": "ISO 8601 timestamp",
+            "qos": "0",
+            "purpose": "mirror freshness: a silent house is told from a silent broker",
+        },
+        {
+            "topic": "frigate/<camera>/person",
+            "payload": "person count",
+            "qos": "0",
+            "purpose": "per-camera person evidence for the asleep estimator",
+        },
+        {
+            "topic": "frigate/<camera>/<zone>/person",
+            "payload": "person count",
+            "qos": "0",
+            "purpose": "per-zone occupancy for the TV machine and the activity sensors",
+        },
+    ]
+    return {
+        "constants": {
+            "TOPIC_BASE": base,
+            "DISCOVERY_PREFIX": prefix,
+            "SHADOW_SUFFIX": suffix,
+            "MIRROR_TOPIC": mirror.get("MIRROR_TOPIC"),
+            "MIRROR_HEARTBEAT_TOPIC": mirror.get("MIRROR_HEARTBEAT_TOPIC"),
+            "HEARTBEAT_S": heartbeat_s,
+        },
+        "publish_topics": publish_topics,
+        "subscribe_topics": subscribe_topics,
+    }
+
+
 def build_audit() -> dict[str, Any]:
     qa = parse_qa_features()
     raw_doc_entries = parse_doc_scenarios()
@@ -785,6 +902,7 @@ def build_audit() -> dict[str, Any]:
         "agent_tools": extract_agent_tools(),
         "spatial_model": extract_spatial_model_inventory(),
         "predictive_lighting_mqtt": extract_predictive_lighting_mqtt_topics(),
+        "lighting_publisher_mqtt": extract_lighting_publisher_mqtt_topics(),
         "stack_supervisor_endpoints": extract_stack_supervisor_endpoints(),
     }
     warnings = []
@@ -876,6 +994,7 @@ def write_markdown(audit: dict[str, Any]) -> str:
     inv = audit["inventory"]
     spatial = inv.get("spatial_model") or {}
     mqtt_topics = inv.get("predictive_lighting_mqtt") or {}
+    publisher_topics = inv.get("lighting_publisher_mqtt") or {}
     supervisor_endpoints = inv.get("stack_supervisor_endpoints") or []
     entries = audit["entries"]
     scenario_evidence = audit.get("scenario_evidence", {})
@@ -968,6 +1087,8 @@ def write_markdown(audit: dict[str, Any]) -> str:
         f"- Spatial model lights discovered: {spatial.get('light_count', 0)}",
         f"- Predictive Lighting MQTT publish topic families discovered: {len(mqtt_topics.get('publish_topics', []))}",
         f"- Predictive Lighting MQTT subscription topic families discovered: {len(mqtt_topics.get('subscribe_topics', []))}",
+        f"- Lighting Publisher MQTT publish topic families discovered: {len(publisher_topics.get('publish_topics', []))}",
+        f"- Lighting Publisher MQTT subscription topic families discovered: {len(publisher_topics.get('subscribe_topics', []))}",
         f"- Stack supervisor endpoints discovered: {len(supervisor_endpoints)}",
         "",
         "### Slash Commands",
@@ -1081,6 +1202,33 @@ def write_markdown(audit: dict[str, Any]) -> str:
             "",
         ])
         for item in mqtt_topics["subscribe_topics"]:
+            lines.append(
+                f"- `{item['topic']}` - payload {item['payload']}; "
+                f"qos `{item['qos']}`; {item['purpose']}"
+            )
+    else:
+        lines.append("_none_")
+    lines.extend([
+        "",
+        "### Lighting Publisher MQTT Topics",
+        "",
+    ])
+    if publisher_topics:
+        lines.extend([
+            "Publish topic families (`[_shadow]` is present only while `PUBLISHER_MODE=shadow`):",
+            "",
+        ])
+        for item in publisher_topics["publish_topics"]:
+            lines.append(
+                f"- `{item['topic']}` - payload {item['payload']}; "
+                f"retain `{item['retain']}`; qos `{item['qos']}`; {item['purpose']}"
+            )
+        lines.extend([
+            "",
+            "Subscription topic families:",
+            "",
+        ])
+        for item in publisher_topics["subscribe_topics"]:
             lines.append(
                 f"- `{item['topic']}` - payload {item['payload']}; "
                 f"qos `{item['qos']}`; {item['purpose']}"

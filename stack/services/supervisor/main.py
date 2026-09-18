@@ -76,6 +76,10 @@ SERVICES: list[dict] = [
     {"name": "vision-sidecar",   "container": "hav-vision-sidecar",   "probe_kind": "http", "probe": "http://localhost:8091/healthz"},
     {"name": "metrics-sidecar",  "container": "hav-metrics-sidecar",  "probe_kind": "http", "probe": "http://localhost:8092/healthz"},
     {"name": "intelligence",     "container": "hav-intelligence",     "probe_kind": "http", "probe": "http://localhost:8095/healthz"},
+    # The Living Lights belief publisher. /healthz is loopback-only by
+    # construction: the container refuses to start (exit 78) if its port is
+    # published anywhere else, so this probe is the only way to read it.
+    {"name": "lighting-publisher", "container": "hav-lighting-publisher", "probe_kind": "http", "probe": "http://localhost:8105/healthz"},
 ]
 
 SERVICE_ACTIONS: dict[str, dict] = {
@@ -120,6 +124,11 @@ SERVICE_ACTIONS: dict[str, dict] = {
         "container": "hav-intelligence",
         "confirm": "intelligence",
     },
+    "lighting-publisher": {
+        "compose": "lighting-publisher",
+        "container": "hav-lighting-publisher",
+        "confirm": "lighting-publisher",
+    },
 }
 
 SERVICE_ALIASES = {
@@ -129,6 +138,8 @@ SERVICE_ALIASES = {
     "parakeet": "wyoming-parakeet",
     "vision": "vision-sidecar",
     "metrics": "metrics-sidecar",
+    "lighting": "lighting-publisher",
+    "publisher": "lighting-publisher",
 }
 
 

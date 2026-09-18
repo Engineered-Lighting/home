@@ -1,0 +1,28 @@
+{
+  "schema": "living-lights-zones/v1",
+  "comment": "Zone-to-camera map for the publisher (copied from tools/lighting-sim/harness.py ZONE_CAMERA, publisher cameras only). Frigate topics are frigate/<camera>/<zone>/person. A zone in `dominates` masks the listed zones while it is occupied: a person on the sofa overlaps the front_left polygon and must not count there. Activity beliefs are published only for zones on `activity_cameras`; every other zone is idle in this milestone.",
+  "cameras": ["dining_room", "kitchen", "living_room"],
+  "zones": {
+    "dining_left": "dining_room",
+    "dining_right": "dining_room",
+    "whole_dining_room": "dining_room",
+    "sink": "kitchen",
+    "island_left": "kitchen",
+    "island_right": "kitchen",
+    "whole_kitchen": "kitchen",
+    "sofa": "living_room",
+    "front_left": "living_room",
+    "weights": "living_room",
+    "office": "living_room",
+    "front_door": "living_room",
+    "whole_living_room": "living_room"
+  },
+  "dominates": {
+    "sofa": ["front_left"]
+  },
+  "watch_zones": ["sofa", "front_left", "weights", "office", "front_door", "whole_living_room"],
+  "activity_cameras": ["kitchen", "dining_room"],
+  "living_room_camera": "living_room",
+  "sofa_zone": "sofa",
+  "front_door_zone": "front_door"
+}

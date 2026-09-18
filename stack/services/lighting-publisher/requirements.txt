@@ -1,0 +1,12 @@
+# The publisher's only runtime dependency: the MQTT client.
+#
+# paho-mqtt 2.x is what the predictive-lighting add-on already runs against
+# this broker (addons/predictive-lighting/Dockerfile pins "paho-mqtt>=2.1"),
+# so the callback API version 2 signatures match. Pinned exactly here because
+# a container that reads the house's cameras does not float its dependencies.
+paho-mqtt==2.1.0
+
+# Everything else is the standard library on purpose: urllib for the observer
+# poll and the health probe, http.server for /healthz, json for every payload.
+# No HTTP framework, no Home Assistant client, no TypeSafe SDK -- M4 sends
+# nothing outside the house.

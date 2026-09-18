@@ -1,4 +1,4 @@
-"""Offline tests for tools/public_story_eval.py (ladder level 1 runner).
+"""Offline tests for tools/public_story_eval.py (ladder levels 1 and 2).
 
 Run: python3 -m unittest tests/living_lights/test_public_story_eval.py -v
 
@@ -171,10 +171,17 @@ class DryRunTest(unittest.TestCase):
             argv[argv.index("--out") + 1] = str(Path(tmp) / "elsewhere")
             self.assertEqual(h.main(argv), pse.EXIT_REFUSED)
 
-    def test_level_two_refused(self):
+    def test_level_two_rows_must_name_an_observation(self):
+        # level-1 rows are not level-2 rows: the runner says so per line, before any packet
         with tempfile.TemporaryDirectory() as tmp:
             h = Harness(Path(tmp))
-            self.assertEqual(h.main(h.argv("dry", "--level", "2")), pse.EXIT_REFUSED)
+            self.assertEqual(h.main(h.argv("dry", "--level", "2")), pse.EXIT_USAGE)
+
+    def test_unimplemented_level_is_rejected_by_the_parser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = Harness(Path(tmp))
+            with self.assertRaises(SystemExit):
+                h.main(h.argv("dry", "--level", "3"))
 
 
 class ScoringMathTest(unittest.TestCase):
@@ -668,6 +675,348 @@ class PacketFailureTest(unittest.TestCase):
             self.assertEqual(receipt["packet_failures"][0]["row_id"], "leak")
             self.assertNotIn("19:25", json.dumps(receipt))
             self.assertNotIn("19:25", (h.root / "leak" / "packets.jsonl").read_text())
+
+
+# -- level 2 -------------------------------------------------------------------
+def _dimensions(**pairs):
+    """``{name: {status, description, frames}}`` from ``name=(status, description)``."""
+    return {name: {"status": status, "description": description, "frames": [0, 3]}
+            for name, (status, description) in pairs.items()}
+
+
+def _observation(posture, activities, dimensions, summary="A short free narrative of the window."):
+    """One typed observation in the shape ``semantic()`` returns."""
+    return {"posture": posture, "activities": list(activities), "summary": summary,
+            "dimensions": dimensions, "context": {}, "meaningful": True,
+            "signature": json.dumps([posture, list(activities)], sort_keys=True)}
+
+
+OBSERVATIONS = {
+    # living_room: seated and still in front of a lit screen
+    "v1.json": _observation("sitting", ["watching_tv"], _dimensions(
+        posture=("visible", "The person is seated upright on the couch, facing the lit screen."),
+        motion=("visible", "Almost no movement across the window beyond small shifts of the head."),
+        location=("visible", "On the couch in the middle of the room."),
+        interaction=("uncertain", "A remote may be resting on the armrest."),
+        transition=("not_assessed", "No transition was assessed in this window."),
+        visibility=("visible", "The view is clear and the whole body is in frame."))),
+    # kitchen: standing at the counter, handling a pan
+    "v2.json": _observation("standing", ["cooking"], _dimensions(
+        posture=("visible", "The person stands square to the counter with both arms raised."),
+        motion=("visible", "Repeated arm movement over the hob, the body otherwise planted."),
+        location=("visible", "At the counter beside the hob."),
+        interaction=("visible", "Hands are on a pan handle and a wooden spoon."),
+        visibility=("visible", "Clear view of the upper body, legs out of frame."))),
+    # other_room: horizontal and motionless
+    "v3.json": _observation("lying_down", ["sleeping"], _dimensions(
+        posture=("visible", "The person is horizontal on the mattress with the head on a pillow."),
+        motion=("visible", "No movement at all for the whole window."),
+        location=("visible", "On the mattress against the far wall."),
+        visibility=("occluded", "A quilt covers most of the body."))),
+}
+
+VISUAL_ROWS = [
+    {"id": "v1", "scene": "Living room", "observation": "v1.json",
+     "description": "A person watches television from the couch and does not get up.",
+     "native_classes": [{"class_id": "c132", "class_name": "Watching television"}],
+     "selected_for": ["tv_attention"],
+     "targets": {"tv_attention": "positive", "eating": "negative", "food_prep": "unobserved",
+                 "settling": "negative", "rest_state": "negative"}},
+    {"id": "v2", "scene": "Kitchen", "observation": "v2.json",
+     "description": "A person cooks food on a stove and stirs a pan.",
+     "native_classes": [{"class_id": "c147", "class_name": "Someone is cooking something"}],
+     "selected_for": ["food_prep"],
+     "targets": {"tv_attention": "negative", "eating": "negative", "food_prep": "positive",
+                 "settling": "unobserved", "rest_state": "negative"}},
+    {"id": "v3", "scene": "Bedroom", "observation": "v3.json",
+     "description": "A person lies on a bed without moving.",
+     "native_classes": [{"class_id": "c134", "class_name": "Lying on a bed"}],
+     "selected_for": ["rest_state"],
+     "targets": {"tv_attention": "unobserved", "eating": "negative", "food_prep": "negative",
+                 "settling": "positive", "rest_state": "positive"}},
+]
+
+
+class VisualHarness(Harness):
+    """A level-2 eval root: rows that name rich-observation files next to them."""
+
+    def __init__(self, tmp: Path, rows=None, observations=None, **kwargs):
+        super().__init__(tmp, **kwargs)
+        self.observations = tmp / "observations"
+        self.observations.mkdir()
+        for name, observation in (OBSERVATIONS if observations is None else observations).items():
+            self.write_observation(name, observation)
+        self.write_rows(VISUAL_ROWS if rows is None else rows)
+
+    def write_observation(self, name, observation):
+        (self.observations / name).write_text(json.dumps(observation), encoding="utf-8")
+
+    def write_rows(self, rows):
+        self.rows.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    def argv(self, out: str, *extra):
+        return super().argv(out, "--level", "2", "--observations", str(self.observations), *extra)
+
+    def packets(self, out: str):
+        return [json.loads(line) for line in (self.root / out / "packets.jsonl").read_text().splitlines()]
+
+
+class LevelTwoPacketTest(unittest.TestCase):
+    def test_packet_is_built_from_the_observation_alone(self):
+        row = pse.parse_row(VISUAL_ROWS[0], 1, pse.LEVEL_VISUAL)
+        packet, provenance = pse.build_observation_packet(row, OBSERVATIONS["v1.json"])
+        camera = packet["cameras"]["living_room"]
+        # dimension descriptions in DIMENSION_ORDER, not_assessed dropped, uncertain prefixed
+        self.assertEqual(camera["claims"], [
+            "The person is seated upright on the couch, facing the lit screen.",
+            "Almost no movement across the window beyond small shifts of the head.",
+            "On the couch in the middle of the room.",
+            "uncertain: A remote may be resting on the armrest.",
+            "The view is clear and the whole body is in frame."])
+        # posture and activities are the account
+        self.assertEqual(camera["account"], "posture sitting; activity hypotheses watching_tv")
+        self.assertTrue(provenance["account"])
+        self.assertEqual(provenance["claims"], 5)
+        # the dataset caption and the free summary are not in the packet
+        blob = json.dumps(packet)
+        self.assertNotIn("watches television", blob)
+        self.assertNotIn("free narrative", blob)
+        self.assertEqual(packet["devices"]["media"],
+                         [{"role": "tv", "state": "playing", "source_kind": "unknown", "age_s": 0}])
+        self.assertEqual(camera["people"], [])
+
+    def test_summary_only_with_the_flag(self):
+        row = pse.parse_row(VISUAL_ROWS[1], 1, pse.LEVEL_VISUAL)
+        packet, _ = pse.build_observation_packet(row, OBSERVATIONS["v2.json"], with_summary=True)
+        self.assertEqual(packet["cameras"]["kitchen"]["claims"][0],
+                         "A short free narrative of the window.")
+
+    def test_observation_without_claim_text_is_refused(self):
+        row = pse.parse_row(VISUAL_ROWS[0], 1, pse.LEVEL_VISUAL)
+        empty = _observation(None, [], _dimensions(
+            posture=("not_assessed", "Nothing was assessed."),
+            motion=("not_assessed", "Nothing was assessed.")))
+        with self.assertRaises(pse.ObservationError):
+            pse.build_observation_packet(row, empty)
+
+    def test_inline_observation_and_nested_key(self):
+        row = pse.parse_row({**VISUAL_ROWS[0], "observation": OBSERVATIONS["v1.json"]}, 1, pse.LEVEL_VISUAL)
+        inline, digest = pse.load_observation(row, None, Path("/nonexistent"))
+        self.assertEqual(inline["posture"], "sitting")
+        self.assertEqual(len(digest), 64)
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp) / "n.json"
+            nested.write_text(json.dumps({"schema": "x", "observation": OBSERVATIONS["v1.json"]}), encoding="utf-8")
+            row = pse.parse_row({**VISUAL_ROWS[0], "observation": "n.json"}, 1, pse.LEVEL_VISUAL)
+            loaded, nested_digest = pse.load_observation(row, None, Path(tmp))
+            self.assertEqual(loaded, inline)
+            self.assertEqual(nested_digest, digest)
+
+    def test_cache_key_separates_levels_and_observations(self):
+        base = pse.cache_key("rowdigest", "qdigest", MODEL)
+        self.assertEqual(base, pse.cache_key("rowdigest", "qdigest", MODEL, pse.LEVEL_TEXT))
+        two = pse.cache_key("rowdigest", "qdigest", MODEL, pse.LEVEL_VISUAL, "obs-a")
+        other = pse.cache_key("rowdigest", "qdigest", MODEL, pse.LEVEL_VISUAL, "obs-b")
+        self.assertNotIn(base, (two, other))
+        self.assertNotEqual(two, other)
+        # a level-2 row with no observation digest is still not a level-1 key
+        self.assertNotEqual(base, pse.cache_key("rowdigest", "qdigest", MODEL, pse.LEVEL_VISUAL))
+
+
+class DatasetVocabularyTest(unittest.TestCase):
+    def test_vocabulary_terms_of_a_row(self):
+        row = pse.parse_row(VISUAL_ROWS[1], 1, pse.LEVEL_VISUAL)
+        vocabulary = pse.dataset_vocabulary(row)
+        self.assertIn("someone is cooking something", vocabulary["phrases"])
+        self.assertIn("cooking something", vocabulary["phrases"])       # generic subject stripped
+        self.assertIn("a person cooks food on a stove and stirs a pan", vocabulary["phrases"])
+        self.assertIn("tv attention", vocabulary["phrases"])            # multi-word question ids
+        self.assertIn("c147", vocabulary["tokens"])
+        self.assertIn("unobserved", vocabulary["tokens"])
+        self.assertNotIn("cooking", vocabulary["tokens"])               # ordinary English, not by default
+        strict = pse.dataset_vocabulary(row, strict=True)["tokens"]
+        self.assertIn("eating", strict)                                 # single-word question id
+        self.assertNotIn("cooking", strict)                             # an observer taxonomy label
+        tv_row = pse.parse_row(VISUAL_ROWS[0], 1, pse.LEVEL_VISUAL)
+        self.assertIn("television", pse.dataset_vocabulary(tv_row, strict=True)["tokens"])
+
+    def test_a_class_name_equal_to_a_taxonomy_label_is_not_a_term(self):
+        # the manifests name their classes after the observer's own vocabulary;
+        # "watching tv" in an account is the publisher's word, not a leak
+        raw = {**VISUAL_ROWS[0], "description": "",
+               "native_classes": [{"class_id": "ia-07", "class_name": "watching tv"}]}
+        row = pse.parse_row(raw, 1, pse.LEVEL_VISUAL)
+        vocabulary = pse.dataset_vocabulary(row, strict=True)
+        self.assertNotIn("watching tv", vocabulary["phrases"])
+        self.assertIn("ia 07", vocabulary["phrases"])                   # a multi-word id is a phrase
+        packet, _ = pse.build_observation_packet(row, OBSERVATIONS["v1.json"])
+        self.assertEqual(packet["cameras"]["living_room"]["account"],
+                         "posture sitting; activity hypotheses watching_tv")
+        pse.assert_no_dataset_vocabulary(packet, vocabulary, pse.STRUCTURAL_STRINGS | {row.camera})
+
+    def test_clean_packet_passes_and_a_leaking_one_is_refused(self):
+        row = pse.parse_row(VISUAL_ROWS[1], 1, pse.LEVEL_VISUAL)
+        skip = pse.STRUCTURAL_STRINGS | {row.camera}
+        clean, _ = pse.build_observation_packet(row, OBSERVATIONS["v2.json"])
+        pse.assert_no_dataset_vocabulary(clean, pse.dataset_vocabulary(row), skip)
+        leaking = _observation("standing", ["cooking"], _dimensions(
+            posture=("visible", "Someone is cooking something at the counter."),
+            motion=("visible", "Repeated arm movement over the hob.")))
+        packet, _ = pse.build_observation_packet(row, leaking)
+        with self.assertRaises(pse.DatasetVocabularyError) as caught:
+            pse.assert_no_dataset_vocabulary(packet, pse.dataset_vocabulary(row), skip)
+        self.assertIn("claims[0]", str(caught.exception))
+        self.assertNotIn("cooking", str(caught.exception))   # the path and the kind, never the term
+
+    def test_class_id_and_target_word_are_refused(self):
+        row = pse.parse_row(VISUAL_ROWS[1], 1, pse.LEVEL_VISUAL)
+        skip = pse.STRUCTURAL_STRINGS | {row.camera}
+        for description in ("The window is labelled c147 in the manifest.",
+                            "The target for this window is positive."):
+            packet, _ = pse.build_observation_packet(row, _observation(
+                "standing", [], _dimensions(posture=("visible", description))))
+            with self.assertRaises(pse.DatasetVocabularyError):
+                pse.assert_no_dataset_vocabulary(packet, pse.dataset_vocabulary(row), skip)
+
+    def test_camera_name_is_not_read_as_a_class_word(self):
+        # strict mode turns "kitchen" into a class word; the camera the question
+        # names is the runner's own string, not dataset text
+        raw = {**VISUAL_ROWS[1], "native_classes": [{"class_id": "c147", "class_name": "Cooking in the kitchen"}]}
+        row = pse.parse_row(raw, 1, pse.LEVEL_VISUAL)
+        packet, _ = pse.build_observation_packet(row, _observation(
+            "standing", [], _dimensions(posture=("visible", "The person stands at the counter."))))
+        pse.assert_no_dataset_vocabulary(packet, pse.dataset_vocabulary(row, strict=True),
+                                         pse.STRUCTURAL_STRINGS | {row.camera})
+
+
+class LevelTwoRunTest(unittest.TestCase):
+    def test_dry_run_builds_every_packet_and_makes_no_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp))
+            self.assertEqual(h.main(h.argv("dry")), 0)          # no transport: the factory asserts
+            receipt = h.receipt("dry")
+            self.assertEqual(receipt["level"], 2)
+            self.assertFalse(receipt["executed"])
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["counts"]["rows"], 3)
+            self.assertEqual(receipt["counts"]["packets_built"], 3)
+            self.assertEqual(receipt["counts"]["would_be_calls"], 3)
+            self.assertEqual(receipt["counts"]["calls_made"], 0)
+            self.assertEqual(receipt["counts"]["observations_missing"], 0)
+            self.assertEqual(receipt["counts"]["vocabulary_refusals"], 0)
+            self.assertEqual(receipt["counts"]["tv_rows"], 1)
+            self.assertTrue(receipt["gate"]["preflight"]["allowed"])
+            self.assertEqual(receipt["level2"]["strict_vocabulary"], False)
+            self.assertFalse((h.root / "dry" / "answers.jsonl").exists())
+            packets = h.packets("dry")
+            self.assertEqual([p["camera"] for p in packets], ["living_room", "kitchen", "other_room"])
+            self.assertTrue(all(p["account"] for p in packets))
+            self.assertTrue(all(len(p["observation_digest"]) == 64 for p in packets))
+            # no dataset caption anywhere in the packets file
+            body = (h.root / "dry" / "packets.jsonl").read_text()
+            for row in VISUAL_ROWS:
+                self.assertNotIn(row["description"], body)
+
+    def test_missing_observation_is_one_refused_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = VISUAL_ROWS + [{**VISUAL_ROWS[0], "id": "v4", "observation": "gone.json"}]
+            h = VisualHarness(Path(tmp), rows=rows)
+            self.assertEqual(h.main(h.argv("miss")), 0)          # reported, not aborted
+            receipt = h.receipt("miss")
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["counts"]["packets_built"], 3)
+            self.assertEqual(receipt["counts"]["packets_failed"], 1)
+            self.assertEqual(receipt["counts"]["observations_missing"], 1)
+            failure = receipt["packet_failures"][0]
+            self.assertEqual(failure["row_id"], "v4")
+            self.assertEqual(failure["error"], "ObservationError")
+            self.assertIn("gone.json", failure["detail"])
+
+    def test_leaking_row_is_refused_and_the_others_still_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            observations = dict(OBSERVATIONS)
+            observations["v2.json"] = _observation("standing", ["cooking"], _dimensions(
+                posture=("visible", "Someone is cooking something at the counter.")))
+            h = VisualHarness(Path(tmp), observations=observations)
+            self.assertEqual(h.main(h.argv("leak")), 0)
+            receipt = h.receipt("leak")
+            self.assertEqual(receipt["counts"]["packets_built"], 2)
+            self.assertEqual(receipt["counts"]["vocabulary_refusals"], 1)
+            failure = receipt["packet_failures"][0]
+            self.assertEqual(failure["error"], "DatasetVocabularyError")
+            self.assertEqual(failure["row_id"], "v2")
+            self.assertNotIn("cooking", json.dumps(receipt["packet_failures"]))
+
+    def test_execute_scores_unobserved_targets_consequences_and_calibration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp))
+            transport = FakeTransport()
+            argv = h.argv("run1", "--execute", "--max-calls", "10", "--model", MODEL)
+            self.assertEqual(h.main(argv, transport=transport), 0)
+            self.assertEqual(transport.calls, 3)
+            receipt = h.receipt("run1")
+            self.assertEqual(receipt["level"], 2)
+            self.assertEqual(receipt["rows_scored"], 3)
+            table = receipt["table"]
+            # unobserved targets are ignored for their question and counted
+            self.assertEqual(table["food_prep"]["unobserved"], 1)
+            self.assertEqual(table["food_prep"]["observed"], 2)
+            self.assertEqual(table["tv_attention"]["unobserved"], 1)
+            self.assertEqual(table["settling"]["unobserved"], 1)
+            # these rows carry negatives, so every question is judged on precision and recall
+            self.assertEqual(receipt["metrics"]["tv_attention"], "precision_recall")
+            self.assertEqual(table["tv_attention"]["metric"], "precision_recall")
+            # consequence flags
+            consequences = receipt["consequences"]
+            self.assertEqual(consequences["labels"], {"active": 2, "inactive": 1, "unknown": 0})
+            apriori = consequences["by_threshold"]["apriori"]
+            self.assertEqual(apriori["disruptive_brightening"]["eligible"], 1)
+            self.assertEqual(apriori["darkness"]["eligible"], 2)
+            self.assertEqual(apriori["disruptive_brightening"]["n"], 0)
+            self.assertEqual(apriori["darkness"]["n"], 0)
+            # calibration bins: ten of them, with n, per question
+            bins = receipt["calibration"]["eating"]["bins"]
+            self.assertEqual(len(bins), pse.CALIBRATION_BINS)
+            self.assertEqual(sum(b["n"] for b in bins), receipt["calibration"]["eating"]["observed"])
+            # P(yes) 0.05, 0.1 and 0.2 land in the first three bins, one each
+            self.assertEqual([b["n"] for b in bins[:3]], [1, 1, 1])
+            self.assertEqual([b["positives"] for b in bins[:3]], [0, 0, 0])
+            self.assertAlmostEqual(bins[0]["mean_p"], 0.05)
+            scores = (h.root / "run1" / "scores.md").read_text(encoding="utf-8")
+            self.assertIn("# Public story eval, level 2", scores)
+            self.assertIn("## Consequences", scores)
+            self.assertIn("## Calibration", scores)
+
+    def test_rerun_into_a_fresh_out_hits_the_level_two_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp))
+            first = FakeTransport()
+            self.assertEqual(h.main(h.argv("run1", "--execute", "--max-calls", "10", "--model", MODEL),
+                                    transport=first), 0)
+            self.assertEqual(first.calls, 3)
+            second = FakeTransport()
+            self.assertEqual(h.main(h.argv("run2", "--execute", "--max-calls", "10", "--model", MODEL),
+                                    transport=second), 0)
+            self.assertEqual(second.calls, 0)
+            self.assertEqual(h.receipt("run2")["counts"]["cache_hits"], 3)
+            # a level-1 run over the same cache shares nothing with it
+            self.assertEqual(h.receipt("run1")["counts"]["cache_hits"], 0)
+
+    def test_consequence_flags_fire_on_the_beliefs(self):
+        beliefs = pse.reduce_mod.reduce_answers(ANSWERS["living_room"])
+        low = {qid: 0.9 for qid in pse.questions_mod.QUESTION_IDS}
+        self.assertEqual(pse.consequence_outcomes(beliefs, low), {"brighten": False, "darken": False})
+        loose = {qid: 0.2 for qid in pse.questions_mod.QUESTION_IDS}
+        self.assertEqual(pse.consequence_outcomes(beliefs, loose), {"brighten": True, "darken": False})
+        settled = pse.reduce_mod.reduce_answers(ANSWERS["other_room"])
+        self.assertTrue(pse.consequence_outcomes(settled, {"settling": 0.5})["darken"])
+
+    def test_label_activity_reads_three_way_targets(self):
+        self.assertEqual(pse.label_activity({"tv_attention": True}), "active")
+        self.assertEqual(pse.label_activity({"settling": False}), "active")
+        self.assertEqual(pse.label_activity({"eating": False, "food_prep": False}), "inactive")
+        self.assertEqual(pse.label_activity({"rest_state": True}), "inactive")
+        self.assertEqual(pse.label_activity({qid: None for qid in pse.questions_mod.QUESTION_IDS}), "unknown")
 
 
 if __name__ == "__main__":

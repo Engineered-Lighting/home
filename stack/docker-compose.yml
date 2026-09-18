@@ -451,6 +451,76 @@ services:
         max-file: "3"
 
   # =========================================================
+  # Living Lights belief publisher (plan rev 5, milestone M4 -- shadow).
+  # Runs story T (the television machine behind
+  # binary_sensor.living_lights_tv_watching) and story S (the asleep
+  # estimator) and publishes them over MQTT discovery.
+  #
+  # It holds NO Home Assistant token: every Home Assistant fact reaches it
+  # through the retained MQTT mirror (living_lights/mirror/...) published by
+  # ha-config/packages/living_lights_mqtt_mirror.yaml, and everything else
+  # from Frigate's person topics and the observer's HTTP API.
+  #
+  # PUBLISHER_MODE=shadow suffixes every object id with _shadow, so no
+  # generated Home Assistant template reads it and the house keeps its legacy
+  # path. Switch to live only after the shadow nights in docs/RUNBOOK.md.
+  # =========================================================
+  lighting-publisher:
+    build:
+      context: ./services/lighting-publisher
+    image: home-ai-voice/lighting-publisher:local
+    container_name: hav-lighting-publisher
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+    ports:
+      # 8105: /healthz only (the three freshness flags and the mode). The
+      # process exits 78 if this address is not loopback.
+      - "${LIGHTING_PUBLISHER_BIND_ADDR:-127.0.0.1}:${LIGHTING_PUBLISHER_PORT:-8105}:8105"
+    volumes:
+      # The decision journal: daily JSONL, 30-day rotation, owned by 10001.
+      # The only writable mount; everything else is read-only.
+      - ${LIGHTING_PUBLISHER_DATA_HOST_DIR:-/opt/home-ai-voice/data/lighting-publisher}:/data
+      - ${LIGHTING_PUBLISHER_MQTT_PASSWORD_FILE:-/etc/home-ai-voice/secrets/lighting_publisher_mqtt_password}:/run/secrets/lighting_publisher_mqtt_password:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      PUBLISHER_MODE: ${PUBLISHER_MODE:-shadow}
+      # The Mosquitto add-on on the Home Assistant box, with an ACL login of
+      # its own (not a Home Assistant user). The password is a file, never an
+      # environment value.
+      MQTT_HOST: ${LIGHTING_PUBLISHER_MQTT_HOST:-192.168.0.125}
+      MQTT_PORT: ${LIGHTING_PUBLISHER_MQTT_PORT:-1883}
+      MQTT_USERNAME: ${LIGHTING_PUBLISHER_MQTT_USERNAME:-lighting_publisher}
+      MQTT_PASSWORD_FILE: /run/secrets/lighting_publisher_mqtt_password
+      OBSERVER_URL: ${OBSERVER_URL:-http://192.168.0.100:8767}
+      JOURNAL_DIR: /data
+      JOURNAL_RETENTION_DAYS: ${LIGHTING_PUBLISHER_JOURNAL_RETENTION_DAYS:-30}
+      # Inside the container's own namespace; the host side is the loopback
+      # publication above, which the process verifies before it starts.
+      BIND_HOST: 0.0.0.0
+      PUBLISH_BIND_ADDR: ${LIGHTING_PUBLISHER_BIND_ADDR:-127.0.0.1}
+      PORT: "8105"
+      # Local hours decide story S's night window.
+      TZ: ${TZ:-America/Los_Angeles}
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8105/healthz').read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================================================
   # EXPERIMENTAL — full-duplex speech-to-speech sidecar.
   # =========================================================
   # Side-by-side experiment running Kyutai Moshi alongside the

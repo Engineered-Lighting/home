@@ -190,7 +190,7 @@ The "AI compute" — all heavy inference + media servers, none of which run on H
 - **stack-supervisor** systemd unit (`hav-stack-supervisor.service`, :8093) — HTTP control plane the Home app uses to start/stop/restart the stack. Not in docker-compose so it survives `stack.sh down`. See `docs/RUNBOOK.md` for `STACK_TOKEN` setup.
 - **GPU utilization observation point**: `nvidia-smi`, or `curl http://192.168.0.100:8092/metrics | jq` for the structured snapshot used by the Home app.
 
-The default `docker compose up -d` brings up 8 default Docker Compose services: vLLM, Parakeet, Kokoro, Chatterbox, wyoming-kokoro, vision-sidecar, metrics-sidecar, and intelligence. The `s2s` profile adds 2 `s2s` profile services. ~40 GB VRAM resident at idle, leaving ~56 GB headroom for V-JEPA-2 or extra experiments.
+The default `docker compose up -d` brings up 9 default Docker Compose services: vLLM, Parakeet, Kokoro, Chatterbox, wyoming-kokoro, vision-sidecar, metrics-sidecar, intelligence, and lighting-publisher. The `s2s` profile adds 2 `s2s` profile services. ~40 GB VRAM resident at idle, leaving ~56 GB headroom for V-JEPA-2 or extra experiments.
 
 ### 4c. Other devices
 
@@ -418,6 +418,7 @@ Inventory of the in-tree markdown files. The right-hand column flags whether the
 
 Source-derived inventories now covered by generated QA evidence:
 - The `predictive-lighting` add-on's MQTT topic schema is source-derived in [`docs/qa/home-app-feature-audit.md#predictive-lighting-mqtt-topics`](qa/home-app-feature-audit.md#predictive-lighting-mqtt-topics); the current add-on exposes 5 predictive-lighting MQTT publish topic families and 3 predictive-lighting MQTT subscription topic families.
+- The Living Lights belief publisher's MQTT topic schema is source-derived in [`docs/qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics`](qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics); the publisher exposes 8 lighting-publisher MQTT publish topic families and 4 lighting-publisher MQTT subscription topic families, and holds no Home Assistant token.
 - The local `spatial_model.json` schema/inventory is source-derived in [`docs/qa/home-app-feature-audit.md#spatial-model-schema`](qa/home-app-feature-audit.md#spatial-model-schema); the current repo copy is schema 2 with 4 spatial model cameras and 16 spatial model lights. `camera_edges` and `zone_to_room` are absent from the local repo copy and still require deployed-copy re-sync for anticipator lookahead and zone-to-room normalization.
 - The Extended OpenAI Conversation tool catalog is source-derived in [`docs/qa/home-app-feature-audit.md#extended-openai-agent-tools`](qa/home-app-feature-audit.md#extended-openai-agent-tools); the current backend registry exposes 23 Extended OpenAI agent tools from `DEFAULT_CONF_FUNCTION_TOOLS`.
 - The stack-supervisor endpoint reference is source-derived in [`docs/qa/home-app-feature-audit.md#stack-supervisor-endpoints`](qa/home-app-feature-audit.md#stack-supervisor-endpoints); the current supervisor exposes 12 stack-supervisor endpoints, with `/healthz` unauthenticated and every `/api/*` route bearer-token gated by `STACK_TOKEN`.
@@ -573,6 +574,26 @@ HA is the canonical home-state surface. Everything in this system either feeds H
   - `frigate/events` (primary Frigate event stream)
   - `predictive-lighting/debug/track/+` (self-subscription for eval logging)
   - `predictive-lighting/anticipated/+` (self-subscription for eval logging)
+
+  The Living Lights belief publisher (`hav-lighting-publisher`, compose) is the
+  second MQTT writer. Its source-derived topic schema is generated in
+  [`docs/qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics`](qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics):
+  8 lighting-publisher MQTT publish topic families and 4 lighting-publisher MQTT
+  subscription topic families. In short, it publishes:
+  - `living_lights/publisher/<object_id>/state` and `/attributes` (retain=true) for
+    `binary_sensor.living_lights_tv_watching`, `sensor.living_lights_asleep_estimator`,
+    `sensor.<camera>_<zone>_activity` and `sensor.lighting_publisher_heartbeat`
+  - `living_lights/publisher/availability` (LWT, registered before connect)
+  - `homeassistant/<component>/<object_id>/config` (MQTT discovery, republished every 10 min)
+
+  and subscribes to:
+  - `living_lights/mirror/#` plus `living_lights/mirror/heartbeat` (the Home Assistant
+    mirror published by `ha-config/packages/living_lights_mqtt_mirror.yaml`; this is the
+    only way the publisher learns Home Assistant state, and why it needs no HA token)
+  - `frigate/<camera>/person` and `frigate/<camera>/<zone>/person` (person counts)
+
+  With `PUBLISHER_MODE=shadow` every object id and unique id carries a `_shadow`
+  suffix, the heartbeat included, so no generated template reads it.
 
 ### 9c. Areas / rooms
 
@@ -803,6 +824,7 @@ The source of truth for the AI stack's compose services is `stack/docker-compose
 | `vision-sidecar` | `hav-vision-sidecar` | `default` | Camera frame grabber and multimodal reasoning proxy. |
 | `metrics-sidecar` | `hav-metrics-sidecar` | `default` | LLM proxy, conversation SSE, and telemetry sidecar. |
 | `intelligence` | `hav-intelligence` | `default` | Home Intelligence read-only memory/evidence API. |
+| `lighting-publisher` | `hav-lighting-publisher` | `default` | Living Lights belief publisher: the story T and story S state machines, published over MQTT discovery. Holds no Home Assistant token. |
 | `s2s-model` | `hav-s2s-model` | `s2s` | Retired/experimental full-duplex speech-to-speech model. |
 | `personaplex-bridge` | `hav-personaplex-bridge` | `s2s` | Retired/experimental Home app WebSocket to S2S/HA bridge. |
 

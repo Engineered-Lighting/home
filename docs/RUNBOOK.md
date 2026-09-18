@@ -61,6 +61,7 @@ It just SSHes into the AI box (via the `hav-ubuntu` alias in
 | `vision-sidecar` | `hav-vision-sidecar` | `default` | 8091 | Camera-image description and visual reasoning |
 | `metrics-sidecar` | `hav-metrics-sidecar` | `default` | 8000/8092 | LLM proxy, chat-tee SSE, and telemetry |
 | `intelligence` | `hav-intelligence` | `default` | 8095 | Home Intelligence read-only memory/evidence API |
+| `lighting-publisher` | `hav-lighting-publisher` | `default` | 8105 | Living Lights belief publisher: story T and story S over MQTT, no HA token |
 | `s2s-model` | `hav-s2s-model` | `s2s` | 8998 | Retired/experimental full-duplex speech-to-speech model |
 | `personaplex-bridge` | `hav-personaplex-bridge` | `s2s` | 8094 | Retired/experimental Home app WebSocket to S2S/HA bridge |
 | `stack-supervisor` | `_systemd, not docker_` | `host` | 8093 | HTTP control plane for the stack |
@@ -194,6 +195,117 @@ stops — read first when investigating.
 | `429 rate-limited` in DevTools console               | Auth-failure lockout: wrong token tried ≥5 times; wait 60 s + fix the token          |
 | Stack actually up but `ai stack` chip says `partial` | Check `docker ps` — one of the default compose services may have exited; `stack.sh status` |
 | Want to disable the supervisor entirely              | `sudo systemctl disable --now hav-stack-supervisor` — stack.sh still works as before |
+
+## Living Lights belief publisher (shadow)
+
+`hav-lighting-publisher` runs the two lighting stories as state machines and
+publishes them to Home Assistant over MQTT discovery:
+
+| Entity | What it says |
+|---|---|
+| `binary_sensor.living_lights_tv_watching` | story T, attributes `state_machine`, `p_attention`, `since`, `request_id` |
+| `sensor.living_lights_asleep_estimator` | story S: `likely_asleep` / `awake` / `away` |
+| `sensor.<camera>_<zone>_activity` | `cooking` / `eating` / `idle` per zone |
+| `sensor.lighting_publisher_heartbeat` | proof of life every 60 s |
+
+It holds **no Home Assistant token**. Home Assistant state reaches it only
+through the retained MQTT mirror published by
+`ha-config/packages/living_lights_mqtt_mirror.yaml`; everything else comes
+from `frigate/<camera>/person`, `frigate/<camera>/<zone>/person` and the
+observer's HTTP API. The full topic schema is source-derived in
+[`docs/qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics`](qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics).
+
+**Shadow versus live.** `PUBLISHER_MODE=shadow` (the default) appends
+`_shadow` to every object id and unique id, the heartbeat included. Nothing
+generated in Home Assistant reads a `_shadow` entity, so
+`binary_sensor.living_lights_publisher_fresh` stays off and the legacy
+lighting path keeps the house. Only after the shadow nights are clean does
+`PUBLISHER_MODE=live` drop the suffix.
+
+### One-time host preparation
+
+```bash
+# Journal volume, owned by the container's uid.
+sudo install -d -o 10001 -g 10001 -m 0755 /opt/home-ai-voice/data/lighting-publisher
+
+# Broker login: a Mosquitto add-on user with an ACL for this publisher only
+# (NOT a Home Assistant user). Write the password without shell history:
+sudo install -d -m 0750 /etc/home-ai-voice/secrets
+sudo install -m 0640 -o root -g 10001 /dev/null \
+    /etc/home-ai-voice/secrets/lighting_publisher_mqtt_password
+sudo tee /etc/home-ai-voice/secrets/lighting_publisher_mqtt_password >/dev/null
+# (type the password, then ctrl-D; it never appears in the process list)
+```
+
+The ACL the publisher needs: read `living_lights/mirror/#` and
+`frigate/#`, write `living_lights/publisher/#` and
+`homeassistant/+/+/config`.
+
+### Bring it up
+
+```bash
+cd /opt/home/stack
+cp docker-compose.yml docker-compose.yml.bak-$(date +%Y%m%d%H%M%S)
+bash scripts/stack.sh up            # or: docker compose up -d lighting-publisher
+curl -fsS http://localhost:8105/healthz | python3 -m json.tool
+```
+
+`/healthz` answers with the three freshness flags and the mode:
+
+```json
+{"ok": true, "mode": "shadow", "mirror_fresh": true,
+ "observer_fresh": true, "mqtt_up": true, "reasons": []}
+```
+
+`ok: false` names its reasons (`mirror_stale`, `observer_stale`, `mqtt_down`).
+While it is false the heartbeat stops and every belief is published as
+unknown, which is the designed failure: Home Assistant's `publisher_fresh`
+sensor goes off after 180 s and the legacy path takes over.
+
+### Read the shadow nights
+
+Every decision is journaled as JSONL under
+`/opt/home-ai-voice/data/lighting-publisher/decisions-<date>.jsonl`, one file
+per day, kept 30 days. Score a night against raw Frigate rather than the
+estimator's own rule:
+
+```bash
+python3 tools/shadow-report.py \
+    --journal-dir /opt/home-ai-voice/data/lighting-publisher \
+    --frigate-jsonl /share/predictive-lighting/transitions.jsonl \
+    --since 2026-09-18 --until 2026-09-25
+```
+
+The receipt lists every `likely_asleep` latch with the Frigate person
+evidence in the preceding 15 minutes. The acceptance bar is zero unexplained
+latches over seven nights.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Container exits immediately with code 78 | `LIGHTING_PUBLISHER_BIND_ADDR` (or `BIND_HOST`) is not loopback. `/healthz` is never published on the LAN. |
+| `/healthz` says `mirror_never_seen` | The mirror package is not deployed or the ACL denies `living_lights/mirror/#`. Check with `mosquitto_sub -t 'living_lights/mirror/heartbeat' -C 1`. |
+| `/healthz` says `observer_stale` | The observer user unit is down; see the observer notes below and `systemctl --user status`. |
+| `/healthz` says `mqtt_down` | Wrong broker host, wrong login, or the password file is unreadable by uid 10001. |
+| Entities missing in Home Assistant | Discovery is retained and republished every 10 min; check `mosquitto_sub -t 'homeassistant/+/+/config' -v`. |
+| Journal empty | The volume is not owned by 10001; `/healthz` reports `journal.errors`. |
+
+### Rollback
+
+```bash
+docker compose stop lighting-publisher
+# Empty the retained discovery topics so Home Assistant drops the entities:
+for t in $(mosquitto_sub -h 192.168.0.125 -u "$MQTT_USER" -P "$MQTT_PASS" \
+             -t 'homeassistant/+/+/config' -W 2 -v | awk '/living_lights|lighting_publisher/ {print $1}' | sort -u); do
+  mosquitto_pub -h 192.168.0.125 -u "$MQTT_USER" -P "$MQTT_PASS" -r -n -t "$t"
+done
+cp docker-compose.yml.bak-<ts> docker-compose.yml
+```
+
+Stopping the container alone is already safe: the last will publishes
+`offline`, the heartbeat stops, and Home Assistant falls back to the legacy
+path within 180 s.
 
 ## External reasoning provider
 

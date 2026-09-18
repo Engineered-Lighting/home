@@ -16,7 +16,7 @@ STACK_DIR="${STACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$STACK_DIR"
 
 CMD="${1:-up}"
-SERVICES=(vllm wyoming-parakeet kokoro-tts wyoming-kokoro vision-sidecar metrics-sidecar)
+SERVICES=(vllm wyoming-parakeet kokoro-tts wyoming-kokoro vision-sidecar metrics-sidecar lighting-publisher)
 
 c_green() { printf '\033[32m%s\033[0m\n' "$*"; }
 c_red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -78,6 +78,15 @@ smoke_test() {
     c_green "  metrics-sidecar /healthz: OK"
   else
     c_red "  metrics-sidecar /healthz: FAIL"; ok=0
+  fi
+
+  # Living Lights belief publisher - /healthz carries the three freshness
+  # flags (mirror, observer, MQTT) and the mode. Loopback only by design: the
+  # container exits 78 if its port is published anywhere else.
+  if curl -fsS -m 5 http://localhost:8105/healthz >/dev/null 2>&1; then
+    c_green "  lighting-publisher /healthz: OK"
+  else
+    c_red "  lighting-publisher /healthz: FAIL"; ok=0
   fi
 
   # Wyoming Parakeet TCP

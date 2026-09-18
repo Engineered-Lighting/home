@@ -38,6 +38,7 @@ stack/
     ├── stt/                # Wyoming Parakeet wrapper
     ├── tts/                # Kokoro-FastAPI + wyoming_openai bridge
     ├── vision/             # camera-snapshot description (Ollama qwen3-vl)
+    ├── lighting-publisher/  # Living Lights belief publisher - port 8105
     └── metrics-sidecar/    # this repo's contribution — port 8092
 ```
 
@@ -80,11 +81,37 @@ guide, including recovery recipes and Home Assistant configuration.
 | wyoming-kokoro   | 10301 | wyoming_openai bridge → Kokoro      |
 | vision-sidecar   |  8091 | Camera image description            |
 | metrics-sidecar  |  8092 | Telemetry for the Home desktop app  |
+| lighting-publisher | 8105 | Living Lights belief publisher (`/healthz` only) |
 
 Sensitive model, vision, metrics/chat-proxy, and S2S bridge ports bind to
 `127.0.0.1` by default. Set their explicit `*_BIND_ADDR` variables only to a
 reviewed host address protected by the host firewall. The separate Agent Core
 publishes neither PostgreSQL nor its application roles.
+
+## lighting-publisher in particular
+
+The Living Lights belief publisher (plan rev 5, milestone M4). It runs two
+state machines and publishes them to Home Assistant over MQTT discovery:
+
+- story T: `binary_sensor.living_lights_tv_watching`, with the attributes
+  `state_machine`, `p_attention`, `since` and `request_id`;
+- story S: `sensor.living_lights_asleep_estimator`;
+- per-zone `sensor.<camera>_<zone>_activity`;
+- `sensor.lighting_publisher_heartbeat`, every 60 s.
+
+It holds **no Home Assistant token**. Everything it knows about Home Assistant
+arrives on the retained MQTT mirror that
+`ha-config/packages/living_lights_mqtt_mirror.yaml` publishes; everything else
+comes from Frigate's person topics and the observer's HTTP API. When the
+mirror is stale, the observer is stale or MQTT is down, the heartbeat stops
+and every belief is published as unknown, so Home Assistant's
+`binary_sensor.living_lights_publisher_fresh` goes off after 180 s and the
+legacy lighting path keeps the house.
+
+`PUBLISHER_MODE=shadow` (the default) appends `_shadow` to every object id and
+unique id, the heartbeat included, so a shadow run changes nothing in Home
+Assistant. See `services/lighting-publisher/README.md` for the entity and
+topic list and `../docs/RUNBOOK.md` for the deploy and rollback steps.
 
 ## metrics-sidecar in particular
 

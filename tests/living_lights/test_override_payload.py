@@ -244,24 +244,11 @@ class TvPlayingGateTests(unittest.TestCase):
         self.assertNotIn("media_player.lg_tv", yaml.safe_dump(seq))
 
 
-class WakeUpLatchTests(unittest.TestCase):
-    def test_woke_up_on_wake_requires_two_minutes_of_occupancy(self):
-        autos = _automations(yaml.safe_load(LIFECYCLE.read_text(encoding="utf-8")))
-        auto = autos["living_lights_woke_up_on_wake"]
-        self.assertEqual([(t.get("entity_id"), t.get("from"), t.get("to")) for t in auto["triggers"]],
-                         [(ASLEEP, "on", "off")])
-        states = [(c.get("entity_id"), c.get("state")) for c in auto["conditions"]
-                  if c.get("condition") == "state"]
-        self.assertIn(("input_boolean.living_lights_woke_up_today", "off"), states)
-        self.assertIn(("input_boolean.user_at_home", "on"), states)
-        occ = [c["value_template"] for c in auto["conditions"]
-               if c.get("condition") == "template" and ANY_OCCUPIED in c["value_template"]]
-        self.assertEqual(len(occ), 1)
-        template = occ[0]
-        self.assertIn(f"states.{ANY_OCCUPIED}", template)
-        self.assertIn("occ is not none", template)
-        self.assertIn("occ.state == 'on'", template)
-        self.assertIn("(now() - occ.last_changed).total_seconds() >= 120", template)
+# The wake-up latch moved on after this file was written: the M2 round-2
+# change made `living_lights_woke_up_on_wake` fire on fifteen minutes of
+# sustained occupancy instead of on the asleep latch clearing, so a ten-minute
+# night excursion can no longer energize the house. Its tests live in
+# tests/living_lights/test_wake_up_latch.py; nothing is asserted here.
 
 
 class TemplateSyntaxTests(unittest.TestCase):

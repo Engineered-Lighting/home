@@ -119,15 +119,29 @@ class AsleepLatchTests(unittest.TestCase):
         self.assertTrue(any(t.get("trigger") == "time_pattern" for t in self.on["triggers"]))
 
     def test_asleep_off_triggers_keep_their_entities_and_carry_ids(self):
-        # M2 (story S residuals): the three triggers are unchanged but now
-        # carry ids so the OFF conditions can be judged per trigger, and both
-        # legacy automations are gated on `not estimate_live` (the estimator
-        # mirror owns the latch while it is live). Detailed shape checks live
-        # in test_story_t_generator.py.
+        # M2 (story S residuals): the three original triggers are unchanged
+        # but carry ids so the OFF conditions can be judged per trigger; a
+        # fourth trigger `arrival` (front-door occupancy turning on, credible
+        # only when user_at_home turned on within 60 s) makes the order in
+        # which the phone and the door camera report irrelevant; both legacy
+        # automations are gated on `not estimate_live` (the estimator mirror
+        # owns the latch while it is live). Detailed shape checks live in
+        # test_story_t_generator.py.
         off = self.autos["living_lights_asleep_off"]
+        self.assertEqual(len(off["triggers"]), 4)
         self.assertEqual([t.get("entity_id") for t in off["triggers"]],
-                         [ANY_OCCUPIED, "sensor.living_lights_profile", "input_boolean.user_at_home"])
-        self.assertEqual([t.get("id") for t in off["triggers"]], ["occupancy", "midday", "presence"])
+                         [ANY_OCCUPIED, "sensor.living_lights_profile", "input_boolean.user_at_home",
+                          "binary_sensor.front_door_person_occupancy"])
+        self.assertEqual([t.get("id") for t in off["triggers"]], ["occupancy", "midday", "presence", "arrival"])
+        self.assertTrue(all(t.get("trigger") == "state" for t in off["triggers"]))
+        # every OFF path still requires the latch to be on and passes through
+        # the per-trigger credibility `or`, which names all four ids.
+        self.assertIn((ASLEEP, "on"), _state_conditions(off["conditions"]))
+        either = next(c for c in off["conditions"] if c.get("condition") == "or")
+        self.assertEqual(sorted(yaml.safe_dump(either).count(f"id: {i}") for i in ("occupancy", "midday", "presence", "arrival")),
+                         [1, 1, 1, 1])
+        writer = [a for a in off["actions"] if a.get("action") == "input_text.set_value"]
+        self.assertEqual(writer[0]["data"]["value"], "legacy_off:{{ trigger.id }}")
         gates = {auto_id: [c["value_template"] for c in self.autos[auto_id]["conditions"]
                            if c.get("condition") == "template" and "asleep_from_estimator" in c["value_template"]]
                  for auto_id in ("living_lights_asleep_on", "living_lights_asleep_off")}

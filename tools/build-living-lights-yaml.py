@@ -32,6 +32,14 @@ M2 (2026-09-17, story T and story S hooks):
     legacy rule);
   - binary_sensor.living_lights_publisher_fresh from the publisher heartbeat;
   - non-watch zones get a vacant floor and a route light while the TV plays;
+  - round 2 (2026-09-17 22:30): (a) tv_seen_on also holds while lg_tv reads
+    unavailable after an on state and the sofa's stable occupancy is on, for
+    at most TV_UNAVAILABLE_SOFA_HOLD_S (the sensor remembers the transition
+    in its own attributes); (b) the movie dim in a watch zone applies only
+    while watching is happening (sofa stable on, or the tv_watching belief on
+    and live), otherwise the zone takes the non-watch branches; (c) the
+    asleep-OFF automation gets a fourth trigger `arrival` (front-door
+    occupancy with user_at_home turned on within 60 s);
   - the legacy asleep automations are gated on `not estimate_live`, get
     trigger ids and a writer record; a hard backstop and an estimator mirror
     automation are added;
@@ -110,6 +118,17 @@ TV_ROUTE_MAX_DWELL_MS = 5 * 60 * 1000
 # unavailable/unknown (the LG integration blips while playing); an explicit
 # off/standby releases at once. Set from the recorder's blip lengths.
 TV_UNAVAILABLE_HOLD_S = 90
+# Refinement (a), M2 round 2: while lg_tv reads unavailable/unknown AFTER an
+# on state and binary_sensor.living_room_sofa_person_occupancy_stable is on,
+# tv_seen_on keeps holding for at most this long since the transition (the
+# LG integration has blipped for 12 minutes mid-film; the 90 s delay_off
+# cannot cover that without also delaying every real TV-off). The sensor
+# keeps the transition time in its own `unavailable_since` attribute (read
+# back through `this.attributes`), so the rule survives a restart within
+# reason. Accepted cost: a viewer who stays seated after a real TV-off (lg_tv
+# reads unavailable when the set is off) sits in the dark for up to 30 min;
+# the belief publisher removes that cost later (tv_watching off releases).
+TV_UNAVAILABLE_SOFA_HOLD_S = 1800
 # The belief publisher's heartbeat is fresh when its ISO time is within this
 # many seconds of now(); missing/unknown/unavailable/unparsable means stale.
 PUBLISHER_FRESH_S = 180
@@ -692,11 +711,13 @@ def _present_target(is_watch: bool,
     on), the present target rises to `working_hours_present_pct` (default 95)
     house-wide so the desk + surrounds stay bright + responsive. Cap-clamped
     so per-bulb max calibration is respected (R-WH-4). Movie mode falls in
-    next: a watch zone dims to floor while the TV plays. Then the V-JEPA 2
+    next: a watch zone dims to floor while watching is happening (the TV
+    plays and the sofa is occupied or the live belief says watching); with
+    the sofa empty and no belief it keeps its present target. Then the V-JEPA 2
     activity seam (belief-gated). Default fallback: RAMP_TARGET_PCT,
     cap-clamped, floored at `floor`.
 
-    `floor`, `cap`, `profile_max`, `dwell`, `tv_playing`, `tv_route_pct`,
+    `floor`, `cap`, `profile_max`, `dwell`, `tv_playing`, `watching_happening`, `tv_route_pct`,
     `gaming_active`, `working_hours_active`, `working_hours_present_pct`,
     `belief`, `activity` are all in scope where this splices in. Activity targets are prescriptive: they are cap-clamped
     only, free to go below the floor (e.g. napping). Gaming targets are also
@@ -723,7 +744,10 @@ def _present_target(is_watch: bool,
                     + "{{ [working_hours_present_pct, cap] | min }}")
     opened = True
     if is_watch:
-        branches.append("{% elif tv_playing %}{{ movie_dim_pct }}")
+        # Refinement (b): only while watching is happening (the classifier's
+        # @@WATCH_TV_BRANCH@@ short-circuit catches this first; the branch
+        # here keeps the cascade honest if that short-circuit ever moves).
+        branches.append("{% elif watching_happening %}{{ movie_dim_pct }}")
     for act, pct in ACTIVITY_PROFILES.items():
         branches.append("{% elif belief and activity == '" + act + "' %}"
                         + "{{ [" + str(pct) + ", cap] | min }}")
@@ -822,6 +846,16 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', '@@SLUG@@'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('@@SOFA_STABLE@@', 'on') or (belief and is_state('@@PUBLISHER_FRESH@@', 'on') and is_state('@@TV_WATCHING@@', 'on'))) %}
             {% set activity = states('@@ACTIVITY_ENTITY@@') %}
             {% set stable_obj = states.@@STABLE_ENTITY@@ %}
             {% set stable = states('@@STABLE_ENTITY@@') %}
@@ -837,7 +871,7 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@working_hours_floor_pct if working_hours_active else @@TV_FLOOR@@ if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@working_hours_floor_pct if working_hours_active else @@TV_FLOOR@@(working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -951,7 +985,14 @@ def _tv_playing_vars(indent: int) -> str:
         f"{{% set sofa_stable_on = is_state('{SOFA_STABLE_SENSOR}', 'on') %}}",
         "{% set belief_live = belief and fresh %}",
         "{% set bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on' %}",
-        f"{{% set tv_seen_on = lg_tv not in {TV_OFF_JINJA} or bridged %}}",
+        "{# Refinement (a): the sensor's own previous render (this.attributes,",
+        "   restored across a restart) remembers the lg_tv state it last saw and",
+        "   when lg_tv went unavailable/unknown from an on state. #}",
+        "{% set prev = this.attributes if this is defined else {} %}",
+        "{% set prev_lg_tv = prev.get('lg_tv') %}",
+        f"{{% set unavailable_since = (now() if (prev_lg_tv is not none and prev_lg_tv not in {TV_OFF_JINJA}) else as_datetime(prev.get('unavailable_since'), none)) if lg_tv in ['unavailable', 'unknown'] else none %}}",
+        f"{{% set sofa_hold = unavailable_since is not none and sofa_stable_on and (now() - unavailable_since).total_seconds() <= {TV_UNAVAILABLE_SOFA_HOLD_S} %}}",
+        f"{{% set tv_seen_on = lg_tv not in {TV_OFF_JINJA} or bridged or sofa_hold %}}",
         "{% set tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on) %}",
     ])
 
@@ -960,7 +1001,10 @@ def emit_tv_playing_sensor() -> str:
     """binary_sensor.living_lights_tv_playing: the one TV predicate.
 
     tv_seen_on  = lg_tv not in TV_OFF_STATES, or (lg_tv unavailable/unknown
-                  and the belief is live and tv_watching is on);
+                  and the belief is live and tv_watching is on), or (lg_tv
+                  unavailable/unknown after an on state, the sofa stable
+                  sensor on, at most TV_UNAVAILABLE_SOFA_HOLD_S since the
+                  transition: refinement (a), the sofa hold);
     tv_playing  = tv_seen_on and (belief toggle off, or publisher stale, or
                   tv_watching != off, or the sofa stable sensor on).
     So: the belief toggle off or a stale heartbeat is exactly the legacy
@@ -970,11 +1014,22 @@ def emit_tv_playing_sensor() -> str:
     `delay_off` holds the ON state TV_UNAVAILABLE_HOLD_S after lg_tv reads
     unavailable/unknown (a blip); an explicit off/standby releases at once
     (the delay template renders 0). The heartbeat is not a trigger: the
-    1-minute time_pattern re-evaluates the publisher_fresh dependency.
+    1-minute time_pattern re-evaluates the publisher_fresh dependency and
+    ends the sofa hold.
+    The sofa hold reads the sensor's own previous attributes (`this`): `lg_tv`
+    says whether the set was on before the transition and `unavailable_since`
+    is the transition time, carried forward while lg_tv stays unavailable and
+    cleared on any other state. Both are restored after a restart, so a hold
+    survives one within reason. Accepted cost: a viewer who stays seated after
+    a real TV-off (lg_tv reads unavailable when the set is off) sits in the
+    dark for up to TV_UNAVAILABLE_SOFA_HOLD_S; the belief publisher removes
+    that cost later.
     Attributes: `reason` names the branch (tv_off, unavailable (held by the
     delay if it was on), unavailable_not_watching, belief_bridges_unavailable,
-    legacy, publisher_stale, belief_watching, sofa_occupied,
-    belief_unattended) and `lg_tv` the raw media player state."""
+    sofa_holds_unavailable, legacy, publisher_stale, belief_watching,
+    sofa_occupied, belief_unattended), `lg_tv` the raw media player state and
+    `unavailable_since` the ISO time lg_tv went unavailable from an on state
+    (none otherwise)."""
     off_states = "', '".join(TV_OFF_STATES)
     return f"""  - trigger:
       - platform: homeassistant
@@ -995,17 +1050,27 @@ def emit_tv_playing_sensor() -> str:
         delay_off: >
           {{{{ {TV_UNAVAILABLE_HOLD_S} if states('{MOVIE_MEDIA_PLAYER}') in ['unavailable', 'unknown'] else 0 }}}}
         state: >
-          {{# TV off states: '{off_states}' (tools/living_lights_tv_states.py). #}}
+          {{# TV off states: '{off_states}' (tools/living_lights_tv_states.py).
+             Sofa hold (refinement (a)): lg_tv unavailable/unknown after an on
+             state with the sofa stable sensor on keeps tv_seen_on for at most
+             {TV_UNAVAILABLE_SOFA_HOLD_S} s since the transition, remembered in this
+             sensor's own unavailable_since attribute. Accepted cost: a viewer
+             who stays seated after a real TV-off sits in the dark for up to
+             {TV_UNAVAILABLE_SOFA_HOLD_S // 60} min; the belief publisher removes that later. #}}
           {_tv_playing_vars(10)}
           {{{{ tv_playing }}}}
         attributes:
           lg_tv: "{{{{ states('{MOVIE_MEDIA_PLAYER}') }}}}"
+          unavailable_since: >
+            {_tv_playing_vars(12)}
+            {{{{ unavailable_since.isoformat() if unavailable_since is not none else none }}}}
           reason: >
             {_tv_playing_vars(12)}
             {{% if not tv_seen_on and lg_tv in ['unavailable', 'unknown'] and belief_live %}}unavailable_not_watching
             {{% elif not tv_seen_on and lg_tv in ['unavailable', 'unknown'] %}}unavailable
             {{% elif not tv_seen_on %}}tv_off
             {{% elif bridged %}}belief_bridges_unavailable
+            {{% elif sofa_hold %}}sofa_holds_unavailable
             {{% elif not belief %}}legacy
             {{% elif not fresh %}}publisher_stale
             {{% elif tv_watching != 'off' %}}belief_watching
@@ -1353,14 +1418,19 @@ def emit_template() -> str:
             else "gaming_dim_pct if gaming_active else " if slug in GAMING_DIM_ZONES
             else ""
         )
-        # pass_through: watch zones never reach this branch while the TV
-        # plays (the @@WATCH_TV_BRANCH@@ short-circuit comes first); a
-        # non-watch zone crossed during a film gets the route level.
-        pass_pct = "{{ [floor, [" + str(PASS_PCT) + ", cap] | min] | max }}"
+        # pass_through: a zone crossed while the TV plays gets the route
+        # level. A watch zone only reaches this branch when watching is not
+        # happening (the @@WATCH_TV_BRANCH@@ short-circuit comes first), so
+        # the branch is the same for every zone (refinement (b)).
         pass_branch = (
-            pass_pct if slug in MOVIE_WATCH_ZONES
-            else "{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, ["
+            "{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, ["
             + str(PASS_PCT) + ", cap] | min] | max) }}")
+        # Vacant floor while the TV plays: a watch zone dims to movie_dim_pct
+        # only while watching is happening and otherwise, like a non-watch
+        # zone, takes tv_vacant_floor_pct (refinement (b)).
+        tv_floor = (
+            "movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else "
+            if slug in MOVIE_WATCH_ZONES else "tv_vacant_floor_pct if tv_playing else ")
         sensor_yaml = (_CLASSIFIER_SENSOR
                        .replace("@@CAM_TITLE@@", cam_title)
                        .replace("@@SLUG_TITLE@@", slug_title)
@@ -1372,11 +1442,12 @@ def emit_template() -> str:
                        .replace("@@ACTIVITY_ENTITY@@", activity_entity)
                        .replace("@@MOVIE_DIM@@", str(MOVIE_DIM_PCT))
                        .replace("@@TV_PLAYING@@", TV_PLAYING_SENSOR)
+                       .replace("@@SOFA_STABLE@@", SOFA_STABLE_SENSOR)
+                       .replace("@@PUBLISHER_FRESH@@", PUBLISHER_FRESH_SENSOR)
+                       .replace("@@TV_WATCHING@@", TV_WATCHING_BELIEF)
                        .replace("@@TV_VACANT_FLOOR@@", str(TV_VACANT_FLOOR_PCT))
                        .replace("@@TV_ROUTE@@", str(TV_ROUTE_PCT))
-                       .replace("@@TV_FLOOR@@",
-                                "movie_dim_pct" if slug in MOVIE_WATCH_ZONES
-                                else "tv_vacant_floor_pct")
+                       .replace("@@TV_FLOOR@@", tv_floor)
                        .replace("@@PASS_BRANCH@@", pass_branch)
                        .replace("@@GAMING_SENSOR@@", GAMING_SENSOR)
                        .replace("@@GAMING_FLOOR@@", gaming_floor)
@@ -1392,7 +1463,7 @@ def emit_template() -> str:
                        .replace("@@ANTI_DECAY@@", str(ANTICIPATED_DECAY_S))
                        .replace(
                            "@@WATCH_TV_BRANCH@@",
-                           "{% elif tv_playing %}{{ floor }}\n            "
+                           "{% elif watching_happening %}{{ floor }}\n            "
                            if slug in MOVIE_WATCH_ZONES else "")
                        .replace("@@RAMP_INITIAL@@", str(RAMP_INITIAL_PCT))
                        .replace("@@ASLEEP_CAP@@", str(ASLEEP_CAP_PCT))
@@ -1462,8 +1533,8 @@ def emit_mqtt() -> str:
 
 def _asleep_writer_lines(writer: str, indent: int = 6) -> list[str]:
     """Action lines recording `writer` in input_text.living_lights_asleep_writer
-    (max 32 chars): legacy_on, legacy_off:<trigger id>, hard_backstop,
-    mirror:<estimator state>."""
+    (max 32 chars): legacy_on, legacy_off:<trigger id> (occupancy, midday,
+    presence, arrival), hard_backstop, mirror:<estimator state>."""
     pad = " " * indent
     return [
         f"{pad}- action: input_text.set_value",
@@ -1589,6 +1660,13 @@ def emit_automations() -> str:
         "        id: presence",
         "        entity_id: input_boolean.user_at_home",
         '        to: "on"',
+        # M2 round 2 (c): the door camera may see the person AFTER the phone
+        # reconnects; this trigger judges the same 60 s window from the door's
+        # side so the order in which the two report does not matter.
+        "      - trigger: state",
+        "        id: arrival",
+        "        entity_id: binary_sensor.front_door_person_occupancy",
+        '        to: "on"',
         "    conditions:",
         "      - condition: state",
         "        entity_id: input_boolean.living_lights_asleep",
@@ -1600,7 +1678,10 @@ def emit_automations() -> str:
         # only clears the latch when the house has actually been occupied
         # for 2 min; a presence reconnect at 03:00 only counts as an arrival
         # when a person was seen at the front door or in the living room
-        # within the last 60 s. The 10-minute occupancy trigger is unchanged.
+        # within the last 60 s; a front-door sighting only counts as an
+        # arrival when user_at_home turned on within the last 60 s (the same
+        # window judged from the other side). The 10-minute occupancy trigger
+        # is unchanged.
         "      - condition: or",
         "        conditions:",
         "          - condition: trigger",
@@ -1627,6 +1708,14 @@ def emit_automations() -> str:
         "                    {% endif %}",
         "                  {% endfor %}",
         "                  {{ ns.arrived }}",
+        "          - condition: and",
+        "            conditions:",
+        "              - condition: trigger",
+        "                id: arrival",
+        "              - condition: template",
+        "                value_template: >-",
+        "                  {% set home = states.input_boolean.user_at_home %}",
+        "                  {{ home is not none and home.state == 'on' and (now() - home.last_changed).total_seconds() <= 60 }}",
         "    actions:",
         "      - action: input_boolean.turn_off",
         "        target:",

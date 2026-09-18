@@ -17,7 +17,18 @@ defaults to 0); kitchen and dining zones get a new vacant floor
 (`living_lights_tv_vacant_floor_pct`, default 0) and a route light while
 occupied (`living_lights_tv_route_pct`, default 30, 8 overnight), released after
 five minutes of dwell. The belief entities (`tv_watching`, `publisher_fresh`,
-the 15 activity sensors) are classifier triggers. A generated
+the 15 activity sensors) are classifier triggers. Two refinements from the
+first simulation round: the TV sensor also keeps playing while the LG TV reads
+`unavailable` after having been on and someone is seated on the sofa, for at
+most 30 minutes since the drop (it remembers the drop time in its own
+`unavailable_since` attribute, so a restart does not lose it); the accepted
+cost is that a viewer who stays seated after a real TV-off sits in the dark
+for up to 30 minutes until the belief publisher takes that over. And the
+living-room movie dim now applies only while watching is happening (someone
+on the sofa, or a live `tv_watching` belief); with the sofa empty a
+living-room zone behaves like any other zone while the TV plays (its present
+target when occupied, the route light on a pass, the vacant floor otherwise).
+A generated
 `living_lights_mqtt_mirror.yaml` republishes the TV, presence, the asleep
 latch, the profile, the three toggles and the last command helpers as retained
 local MQTT topics with a heartbeat, so the publisher needs no Home Assistant

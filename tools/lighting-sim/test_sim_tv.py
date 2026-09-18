@@ -29,8 +29,17 @@ Assertion gates:
   under that gate these scenarios only report;
 * LL_SIM_ASSERT_TARGET=1 asserts the plan's milestone M2 acceptance for
   each scenario (dont-implement-anything-yet-zippy-thunder.md, "M2 ...
-  Acceptance"). It is expected to FAIL on today's packages; the failures
-  are the M1 baseline of today's defects, as numbers in the reports.
+  Acceptance"), both toggles: T3 every living-room light at the vacant
+  target (0 %, dark by default) with nobody there; T4 the office at its
+  present target with the sofa empty; T7 from the heartbeat's death on,
+  digests identical to toggle-off; T8 zero brightenings and zero strip
+  turn-ons during both blips; T9 and T10 the front-door and office zones
+  at 0 % while the sofa is occupied; S9b the latch clears within 10 min of
+  03:00 whichever of the door and the phone reports first; S10 no override
+  write and no floor before the first occupancy; S12 zero override writes
+  and no light above 30 % between 05:00 and 06:00. On the M1 packages
+  these FAIL; the failures are the baseline of the defects, as numbers in
+  the reports.
 """
 from __future__ import annotations
 
@@ -68,8 +77,9 @@ WOKE = "input_boolean.living_lights_woke_up_today"
 SOFA_ACTIVITY = "sensor.living_room_sofa_activity"
 INPUT_TEXT_MAX = 255
 OVERRIDE_TEXT_PREFIX = "input_text.living_lights_override_text_"
-MOVIE_DIM_PCT = 8          # today's input_number.living_lights_movie_dim_pct default
-ROUTE_PCT = 30             # M2's input_number.living_lights_tv_route_pct default
+MOVIE_DIM_PCT = 0          # M2's input_number.living_lights_movie_dim_pct default (dark)
+TV_VACANT_FLOOR_PCT = 0    # M2's input_number.living_lights_tv_vacant_floor_pct default (dark)
+S12_MAX_PCT = 30           # the most a light may show during the S12 excursion window
 BASE = dt.date(2026, 9, 13)      # a Sunday
 WEEKDAY = dt.date(2026, 9, 15)   # a Tuesday (working-hours logic is weekday-only)
 VARIANTS = ("belief_off", "belief_on")
@@ -232,6 +242,26 @@ def living_room_lit(lights: dict) -> dict:
     return {k: v for k, v in lights.items() if k in LIVING_ROOM_LIGHTS}
 
 
+def lit_between(r: dict, a: dt.datetime, b: dt.datetime, above_pct: int = 0) -> list[dict]:
+    """Per-minute snapshot rows in [a, b) with any light above `above_pct`
+    (from the report's normalised snapshot digest: [t, [[light, pct], ...], strips])."""
+    rows = []
+    for row in r["snapshot_digest"]:
+        t = parse_t(row[0])
+        if a <= t < b:
+            over = {light: pct for light, pct in row[1] if pct > above_pct}
+            if over:
+                rows.append({"t": row[0][11:19], "lights": over})
+    return rows
+
+
+def calls_between(rows: list[dict], windows: list[tuple[dt.datetime, dt.datetime]],
+                  tail_s: int = 0) -> list[dict]:
+    """Rows whose `t` falls inside any window (plus `tail_s` after its end)."""
+    return [row for row in rows
+            if any(a <= parse_t(row["t"]) < b + dt.timedelta(seconds=tail_s) for a, b in windows)]
+
+
 # ----- story T evenings -----
 def watch(day: dt.date, tv_on: str = "20:00", sofa_from: str = "20:05", sofa_to: str = "23:30",
           tv_off: str | None = "23:30") -> Timeline:
@@ -300,10 +330,13 @@ async def test_t3_tv_on_nobody(sim, variant):
     snaps = await run(holder, tl)
     r = report("T3_tv_on_nobody", variant, holder, tl, snaps, hours=("19:59", "20:05", "21:00", "22:00", "22:30"))
     if ASSERT_TARGET:
-        # Nobody is watching: the vacant room must not sit at the movie dim.
-        for hhmm in ("21:00", "22:00"):
-            dimmed = {k: v for k, v in living_room_lit(lit(r, hhmm)).items() if v == MOVIE_DIM_PCT}
-            assert not dimmed, f"living room held at the movie dim at {hhmm}: {dimmed}"
+        # Nobody is in the room while the TV plays: every living-room light
+        # sits at the vacant target, which under M2 is the tv_vacant_floor
+        # (0 by default, so off). A light above the floor is a defect
+        # whichever branch put it there (movie dim, route, present target).
+        above = {k: v for k, v in living_room_lit(lit(r, "21:00")).items() if v > TV_VACANT_FLOOR_PCT}
+        assert not above, (f"living room above the vacant target ({TV_VACANT_FLOOR_PCT} %) at 21:00 "
+                           f"with nobody there: {above}")
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -320,6 +353,9 @@ async def test_t4_laptop_at_desk(sim, variant):
     snaps = await run(holder, tl)
     r = report("T4_laptop_at_desk", variant, holder, tl, snaps, hours=("20:05", "20:12", "20:30", "20:45", "21:30"))
     if ASSERT_TARGET:
+        # The sofa is empty and no belief says watching: a watch zone behaves
+        # like a non-watch zone (plan refinement b), so the desk gets its
+        # present target, not the movie dim.
         office = lit(r, "20:30").get("light.office", 0)
         assert office >= 50, f"office at the desk with the TV on and nobody on the sofa: {office} % ({lit(r, '20:30')})"
 
@@ -410,13 +446,25 @@ async def test_t8_tv_unavailable_blips(sim, variant):
     snaps = await run(holder, tl)
     r = report("T8_tv_unavailable_blips", variant, holder, tl, snaps, hours=("20:29", "20:31", "20:33", "21:29", "21:31", "21:41", "21:43"))
     sw = holder.lights.switches.calls
-    r["ambient_on_calls_in_blips"] = [c["t"] for c in sw if c["service"] == "turn_on"
-                                      and any(a <= parse_t(c["t"]) < b + dt.timedelta(seconds=120) for a, b in blips)]
+    strip_on = [{"t": c["t"]} for c in sw if c["service"] == "turn_on"]
+    # Each blip plus 120 s after it: a brightening or a strip turn-on that a
+    # blip caused lands inside that tail (delay_off, the oracle's grace and
+    # the pilots' ticks are all shorter).
+    r["ambient_on_calls_in_blips"] = [c["t"] for c in calls_between(strip_on, blips, tail_s=120)]
+    r["brighten_in_blips"] = calls_between(r["brighten_while_watching"], blips, tail_s=120)
+    r["brighten_in_blips_by_blip"] = {f"{a.strftime('%H:%M:%S')}-{b.strftime('%H:%M:%S')}":
+                                      len(calls_between(r["brighten_while_watching"], [(a, b)], tail_s=120))
+                                      for a, b in blips}
     (REPORT_DIR / f"T8_tv_unavailable_blips-{variant}.json").write_text(json.dumps(r, indent=1, default=str) + "\n")
     if ASSERT_TARGET:
+        # Both blips (30 s and 12 min), both toggles: zero brightenings and
+        # zero strip turn-ons. The 12 min blip outlives delay_off (90 s) and
+        # the oracle's grace (600 s); the sofa's stable occupancy is what
+        # must keep tv_seen_on (plan refinement a).
+        assert not r["brighten_in_blips"], f"brightened during a blip: {r['brighten_in_blips']}"
+        assert not r["ambient_on_calls_in_blips"], f"strip turn-on during a blip: {r['ambient_on_calls_in_blips']}"
         assert not r["brighten_while_watching"], r["brighten_while_watching"]
         assert r["unavailable_flicker"] == 0, r["unavailable_flicker_detail"]
-        assert not r["ambient_on_calls_in_blips"], r["ambient_on_calls_in_blips"]
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -430,9 +478,12 @@ async def test_t9_front_door_during_film(sim, variant):
     snaps = await run(holder, tl)
     r = report("T9_front_door_during_film", variant, holder, tl, snaps, hours=("20:59", "21:01", "21:02", "21:05", "22:00"))
     if ASSERT_TARGET:
+        # The sofa is occupied, so watching is happening and the front-door
+        # zone (a watch zone) holds the movie dim: 0 %, i.e. off. Nothing in
+        # the living room may brighten for the pass.
         fr = lit(r, "21:01").get("light.front_right", 0)
-        assert 0 < fr <= ROUTE_PCT, f"front_right during a front-door pass: {fr} % ({lit(r, '21:01')})"
-        assert not r["brighten_while_watching"] or all(b["to_pct"] <= ROUTE_PCT for b in r["brighten_while_watching"]), r["brighten_while_watching"]
+        assert fr == MOVIE_DIM_PCT, f"front_right during a front-door pass while the sofa is occupied: {fr} % ({lit(r, '21:01')})"
+        assert not r["brighten_while_watching"], r["brighten_while_watching"]
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -448,8 +499,11 @@ async def test_t10_office_while_other_watches(sim, variant):
     snaps = await run(holder, tl)
     r = report("T10_office_while_other_watches", variant, holder, tl, snaps, hours=("20:59", "21:02", "21:15", "21:32", "22:00"))
     if ASSERT_TARGET:
+        # One person watches from the sofa: the office (a watch zone) holds
+        # the movie dim, 0 %, even with someone at the desk.
         office = lit(r, "21:15").get("light.office", 0)
-        assert 0 < office <= ROUTE_PCT, f"office while another person watches: {office} % ({lit(r, '21:15')})"
+        assert office == MOVIE_DIM_PCT, f"office while another person watches from the sofa: {office} % ({lit(r, '21:15')})"
+        assert not r["brighten_while_watching"], r["brighten_while_watching"]
 
 
 # ----- story S extras -----
@@ -499,20 +553,37 @@ async def test_s9_presence_reconnect(sim, variant):
         assert not between(r["latch_off"], at(BASE, "02:00", 1), at(BASE, "07:00", 1)), r["latch_off"]
 
 
+S9B_ORDERS = {
+    # door camera reports 30 s before the phone reconnects (the presence
+    # trigger sees a fresh front-door sighting)
+    "door_first": ("02:59:30", "03:00:00"),
+    # phone reconnects 30 s before the door camera sees the person (the
+    # arrival trigger sees a fresh user_at_home)
+    "phone_first": ("03:00:30", "03:00:00"),
+}
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
-async def test_s9b_real_arrival(sim, variant):
-    """Asleep; presence drops at 02:20 and returns at 03:00 with the front
-    door occupied 03:00-03:02 (a credible arrival)."""
+@pytest.mark.parametrize("order", sorted(S9B_ORDERS))
+async def test_s9b_real_arrival(sim, order, variant):
+    """Asleep; presence drops at 02:20 and returns at about 03:00 with the
+    front door occupied for 2 min (a credible arrival). The phone and the door
+    camera report 30 s apart in either order; the latch must clear within 10
+    min of 03:00 whichever reports first."""
+    door_at, phone_at = S9B_ORDERS[order]
     tl = evening_then_bed(BASE)
     tl.at(at(BASE, "02:20", 1), "input_boolean.user_at_home", "off")
     tl.at(at(BASE, "02:20", 1), "person.engineeredlighting", "not_home")
-    tl.at(at(BASE, "03:00", 1), "input_boolean.user_at_home", "on")
-    tl.at(at(BASE, "03:00", 1), "person.engineeredlighting", "home")
-    tl.occupy("front_door", at(BASE, "03:00", 1), at(BASE, "03:02", 1))
-    r = await run_night(sim, "S9b_real_arrival", variant, tl, BASE, hours=("02:30", "03:01", "03:05", "03:15", "05:00"))
+    tl.at(at(BASE, phone_at, 1), "input_boolean.user_at_home", "on")
+    tl.at(at(BASE, phone_at, 1), "person.engineeredlighting", "home")
+    tl.occupy("front_door", at(BASE, door_at, 1), at(BASE, door_at, 1) + dt.timedelta(minutes=2))
+    r = await run_night(sim, f"S9b_real_arrival_{order}", variant, tl, BASE,
+                        hours=("02:30", "03:01", "03:05", "03:15", "05:00"),
+                        extra={"order": order, "door_at": door_at, "phone_at": phone_at})
     if ASSERT_TARGET:
-        clears = between(r["latch_off"], at(BASE, "03:00", 1), at(BASE, "03:10", 1))
-        assert clears, f"a real arrival must clear the latch within 10 min: {r['latch_off']}"
+        clears = between(r["latch_off"], at(BASE, "02:59", 1), at(BASE, "03:10", 1))
+        assert clears, (f"a real arrival ({order}: door {door_at}, phone {phone_at}) must clear the latch "
+                        f"within 10 min of 03:00: {r['latch_off']} writers {r['latch_writers']}")
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -559,9 +630,21 @@ async def test_s12_kitchen_excursion_0500(sim, variant):
     tl = evening_then_bed(BASE)
     tl.occupy("sink", at(BASE, "05:00", 1), at(BASE, "05:10", 1))
     r = await run_night(sim, "S12_kitchen_excursion_0500", variant, tl, BASE, hours=("04:59", "05:02", "05:11", "05:15", "06:00", "07:00"))
+    a, b = at(BASE, "05:00", 1), at(BASE, "06:00", 1)
+    r["override_text_writes_0500_0600"] = [w for w in r["override_text_writes_detail"] if a <= parse_t(w["t"]) < b]
+    r["lights_above_30_0500_0600"] = lit_between(r, a, b, above_pct=S12_MAX_PCT)
+    (REPORT_DIR / f"S12_kitchen_excursion_0500-{variant}.json").write_text(json.dumps(r, indent=1, default=str) + "\n")
     if ASSERT_TARGET:
+        # No energize: zero override writes and no light above 30 % between
+        # 05:00 and 06:00 (the excursion, its aftermath and the walk back to
+        # bed). Nobody is up before the 07:30 kitchen, so no write may land
+        # before 07:00 either.
+        assert not r["override_text_writes_0500_0600"], \
+            f"a 10-minute excursion must not energize the house: {r['override_text_writes_0500_0600']}"
+        assert not r["lights_above_30_0500_0600"], \
+            f"a light above {S12_MAX_PCT} % during the 05:00-06:00 excursion window: {r['lights_above_30_0500_0600'][:5]}"
         early = [w for w in r["override_text_writes_detail"] if parse_t(w["t"]) < at(BASE, "07:00", 1)]
-        assert not early, f"a 10-minute excursion must not energize the house: {early}"
+        assert not early, f"an override write before anyone was up: {early}"
 
 
 @pytest.mark.parametrize("variant", VARIANTS)

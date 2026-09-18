@@ -2,7 +2,11 @@
 """Print the story S simulation comparison: old packages vs new packages vs
 what the recorder saw, one row per scenario or recorded night.
 
-    python3 tools/lighting-sim/compare.py [--reports DIR] [--labels old,new] [--md OUT.md]
+    python3 tools/lighting-sim/compare.py [--reports DIR] [--labels old,new,m2] [--md OUT.md]
+
+Only night reports (those with the latch metrics: false_latches, latch_on,
+turn_ons_00_08, ...) take part; a label directory that also holds evening,
+story T or S9-S13 reports from test_sim_tv.py is fine, those are skipped.
 """
 from __future__ import annotations
 
@@ -13,10 +17,25 @@ import pathlib
 DEFAULT_REPORTS = pathlib.Path.home() / "vjepa-home" / "experiments" / "lighting-sim" / "reports"
 
 
+NIGHT_KEYS = ("false_latches", "latch_on", "turn_ons_00_08", "turn_ons_00_08_while_asleep", "lights_on_at_0300")
+
+
+def is_night_report(doc: object) -> bool:
+    """A story S night report (test_sim.py) carries the latch metrics; the
+    evening, story T and S9-S13 reports in the same label directory
+    (test_sim_tv.py, analyze_evening.py) do not and are skipped."""
+    return isinstance(doc, dict) and all(key in doc for key in NIGHT_KEYS)
+
+
 def load(reports: pathlib.Path, label: str) -> dict[str, dict]:
     out = {}
     for path in sorted((reports / label).glob("*.json")):
-        out[path.stem] = json.loads(path.read_text())
+        try:
+            doc = json.loads(path.read_text())
+        except ValueError:
+            continue
+        if is_night_report(doc):
+            out[path.stem] = doc
     return out
 
 

@@ -222,13 +222,40 @@ class TvPlayingSensorTests(unittest.TestCase):
         from living_lights_tv_states import TV_OFF_JINJA  # noqa: E402 (tools on sys.path below)
         _block, sensor = _binary_sensor(self.obs, "living_lights_tv_playing")
         state = sensor["state"]
-        self.assertIn(f"lg_tv not in {TV_OFF_JINJA} or bridged", state)
+        self.assertIn(f"lg_tv not in {TV_OFF_JINJA} or bridged or sofa_hold", state)
         self.assertIn("bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on'", state)
         self.assertIn("tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on)", state)
         self.assertIn(f"is_state('{PUBLISHER_FRESH}', 'on')", state)
         self.assertIn(f"is_state('{SOFA_STABLE}', 'on')", state)
         self.assertEqual(sensor["attributes"]["lg_tv"], f"{{{{ states('{LG_TV}') }}}}")
         self.assertIn("reason", sensor["attributes"])
+
+    def test_sofa_hold_reads_the_sensors_own_previous_render(self):
+        """Refinement (a): lg_tv unavailable after an on state with the sofa
+        stable sensor on keeps tv_seen_on for at most 30 min since the
+        transition, which the sensor remembers in its own attribute."""
+        from living_lights_tv_states import TV_OFF_JINJA
+        _block, sensor = _binary_sensor(self.obs, "living_lights_tv_playing")
+        self.assertEqual(self.gen.TV_UNAVAILABLE_SOFA_HOLD_S, 1800)
+        state = sensor["state"]
+        since = sensor["attributes"]["unavailable_since"]
+        reason = sensor["attributes"]["reason"]
+        for tpl in (state, since, reason):
+            self.assertIn("{% set prev = this.attributes if this is defined else {} %}", tpl)
+            self.assertIn("{% set prev_lg_tv = prev.get('lg_tv') %}", tpl)
+            self.assertIn("{% set unavailable_since = (now() if (prev_lg_tv is not none and prev_lg_tv not in "
+                          + TV_OFF_JINJA + ") else as_datetime(prev.get('unavailable_since'), none))"
+                          " if lg_tv in ['unavailable', 'unknown'] else none %}", tpl)
+            self.assertIn("{% set sofa_hold = unavailable_since is not none and sofa_stable_on and "
+                          "(now() - unavailable_since).total_seconds() <= "
+                          + str(self.gen.TV_UNAVAILABLE_SOFA_HOLD_S) + " %}", tpl)
+        self.assertIn("{{ unavailable_since.isoformat() if unavailable_since is not none else none }}", since)
+        self.assertIn("{% elif sofa_hold %}sofa_holds_unavailable", reason)
+        # the hold never invents a TV: it is a term of tv_seen_on only
+        self.assertLess(reason.index("{% elif bridged %}"), reason.index("{% elif sofa_hold %}"))
+        # the accepted cost is documented on the sensor itself
+        self.assertIn("stays seated after a real TV-off", state)
+        self.assertIn("30 min", state)
 
     def test_publisher_fresh_sensor(self):
         block, sensor = _binary_sensor(self.obs, "living_lights_publisher_fresh")
@@ -305,6 +332,10 @@ class RouteAndFloorTests(unittest.TestCase):
             with self.subTest(zone=slug):
                 self.assertIn("tv_vacant_floor_pct if tv_playing else", bri)
                 self.assertNotIn("movie_dim_pct if tv_playing", bri)
+                self.assertNotIn("movie_dim_pct if watching_happening", bri)
+                # the shared variable is defined once and never gates anything here
+                self.assertEqual(bri.count("watching_happening"), 1)
+                self.assertNotIn("{% elif watching_happening %}", bri)
                 self.assertIn("{% elif tv_playing and dwell < " + str(self.gen.TV_ROUTE_MAX_DWELL_MS) + " %}" + route, bri)
                 self.assertIn("{% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else", bri)
                 self.assertNotIn("{% elif tv_playing %}{{ floor }}", bri)
@@ -313,15 +344,37 @@ class RouteAndFloorTests(unittest.TestCase):
                 self.assertLess(bri.index("activity == 'napping'"), bri.index(route))
                 self.assertLess(bri.index(route), bri.index("{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}"))
 
-    def test_watch_zones_are_unchanged(self):
+    def test_watch_zones_dim_only_while_watching_happening(self):
+        """Refinement (b): one variable, computed once per render, gates the
+        movie dim; with the sofa empty and no live belief a watch zone takes
+        the non-watch branches (present target when occupied, route level
+        on a pass, tv_vacant_floor when vacant)."""
+        definition = ("{% set watching_happening = tv_playing and (is_state('" + SOFA_STABLE + "', 'on')"
+                      " or (belief and is_state('" + PUBLISHER_FRESH + "', 'on')"
+                      " and is_state('" + TV_WATCHING + "', 'on'))) %}")
+        short_circuit = "{% elif watching_happening %}{{ floor }}"
+        route = "{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else"
         for slug in self.gen.MOVIE_WATCH_ZONES:
             bri = self.by_slug[slug]["attributes"]["predicted_brightness_pct"]
             with self.subTest(zone=slug):
-                self.assertIn("movie_dim_pct if tv_playing else", bri)
-                self.assertIn("{% elif tv_playing %}{{ floor }}", bri)
-                self.assertIn("{% elif tv_playing %}{{ movie_dim_pct }}", bri)
-                self.assertNotIn("tv_route_pct, cap, profile_max", bri)
-                self.assertNotIn("tv_vacant_floor_pct if tv_playing", bri)
+                self.assertEqual(bri.count(definition), 1)
+                self.assertLess(bri.index("{% set belief = "), bri.index(definition))
+                self.assertLess(bri.index("{% set tv_playing = "), bri.index(definition))
+                # the dim: short-circuit, floor line and present target all read the variable
+                self.assertIn(short_circuit, bri)
+                self.assertNotIn("{% elif tv_playing %}{{ floor }}", bri)
+                self.assertIn("movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else", bri)
+                self.assertNotIn("movie_dim_pct if tv_playing", bri)
+                self.assertIn("{% elif watching_happening %}{{ movie_dim_pct }}", bri)
+                self.assertNotIn("{% elif tv_playing %}{{ movie_dim_pct }}", bri)
+                # the short-circuit precedes the vacant / pass / present branches
+                self.assertLess(bri.index(short_circuit), bri.index("{% elif stable == 'off' %}{{ floor }}"))
+                # not watching: route level on a pass, present target when occupied
+                self.assertIn("{% elif dwell < 2000 and speed >= 1.0 %}" + route, bri)
+                self.assertNotIn("{% elif tv_playing and dwell <", bri)
+                self.assertIn("{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}", bri)
+                # everything the dim reads is a classifier trigger
+                self.assertEqual(bri.count("{{ floor }}"), 2)
 
     def test_front_left_generator_rule_is_absent(self):
         for auto in self.obs["automation"]:
@@ -357,10 +410,13 @@ class StorySHooksTests(unittest.TestCase):
             self.assertIn(term, gate)
 
     def test_asleep_off_trigger_ids_and_credibility(self):
-        self.assertEqual([t["id"] for t in self.off["triggers"]], ["occupancy", "midday", "presence"])
+        self.assertEqual([t["id"] for t in self.off["triggers"]], ["occupancy", "midday", "presence", "arrival"])
         self.assertEqual([t["entity_id"] for t in self.off["triggers"]],
                          ["binary_sensor.living_lights_any_occupied", "sensor.living_lights_profile",
-                          "input_boolean.user_at_home"])
+                          "input_boolean.user_at_home", "binary_sensor.front_door_person_occupancy"])
+        self.assertEqual(self.off["triggers"][2]["to"], "on")
+        self.assertEqual(self.off["triggers"][3]["to"], "on")
+        self.assertNotIn("for", self.off["triggers"][3])
         self.assertEqual(self.off["triggers"][0]["for"], {"minutes": self.gen.ASLEEP_WAKE_MINUTES})
         either = next(c for c in self.off["conditions"] if c.get("condition") == "or")
         by_id = {}
@@ -370,7 +426,7 @@ class StorySHooksTests(unittest.TestCase):
             else:
                 inner = branch["conditions"]
                 by_id[inner[0]["id"]] = inner[1:]
-        self.assertEqual(set(by_id), {"occupancy", "midday", "presence"})
+        self.assertEqual(set(by_id), {"occupancy", "midday", "presence", "arrival"})
         self.assertEqual(by_id["occupancy"], [])
         self.assertEqual(by_id["midday"], [{"condition": "state",
                                             "entity_id": "binary_sensor.living_lights_any_occupied",
@@ -379,6 +435,14 @@ class StorySHooksTests(unittest.TestCase):
         self.assertIn("binary_sensor.front_door_person_occupancy", presence)
         self.assertIn("binary_sensor.living_room_person_occupancy", presence)
         self.assertIn("obj.state == 'on' and (now() - obj.last_changed).total_seconds() <= 60", presence)
+        # M2 round 2 (c): the door may report after the phone; the same 60 s
+        # window is judged from the door's side.
+        self.assertEqual(len(by_id["arrival"]), 1)
+        self.assertEqual(by_id["arrival"][0]["condition"], "template")
+        arrival = by_id["arrival"][0]["value_template"]
+        self.assertIn("{% set home = states.input_boolean.user_at_home %}", arrival)
+        self.assertIn("home is not none and home.state == 'on' and (now() - home.last_changed).total_seconds() <= 60", arrival)
+        self.assertNotIn("front_door", arrival)
 
     def test_hard_backstop_is_ungated(self):
         backstop = self.autos["living_lights_asleep_hard_backstop"]
@@ -429,7 +493,7 @@ class StorySHooksTests(unittest.TestCase):
                 self.assertEqual(_writer_values(self.autos[auto_id]), values)
         # rendered names fit the 32-char helper
         for name in ("legacy_on", "legacy_off:occupancy", "legacy_off:midday", "legacy_off:presence",
-                     "hard_backstop", "mirror:likely_asleep", "mirror:awake", "mirror:away"):
+                     "legacy_off:arrival", "hard_backstop", "mirror:likely_asleep", "mirror:awake", "mirror:away"):
             self.assertLessEqual(len(name), 32)
         # nothing else in the package writes the latch
         self.assertEqual({a["id"] for a in self.obs["automation"] if _writes_latch(a)}, set(expect))

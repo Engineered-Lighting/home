@@ -116,37 +116,46 @@ automation:
           message: "asleep failsafe — forced OFF after 12h continuous (stuck-state guard)"
           entity_id: input_boolean.living_lights_asleep
 
-  # -- Wake-up latch (adaptive): waking in the morning (asleep on->off
-  #    during the morning window, with the house occupied for 2 min) counts
-  #    as "Marcelo woke up" even if the presence-2min latch missed it.
-  #    Complements the generated latch and drives the good-morning
-  #    greeting. -----------------------------------------------------------
-  - alias: "Living Lights — woke up (asleep cleared in the morning)"
+  # -- Wake-up latch (adaptive): the house being up for 15 minutes inside
+  #    the morning window counts as "Marcelo woke up" even if the
+  #    presence-2min latch missed it. Complements the generated latch and
+  #    drives the good-morning greeting.
+  #
+  #    Story S / M2 (S12): this used to trigger on the asleep latch clearing
+  #    (on -> off) with any_occupied on for 2 min. That is the wrong signal:
+  #    a 10-minute night excursion (kitchen at 05:00, back to bed) clears the
+  #    latch through the generated 10-minute occupancy rule in
+  #    living_lights_asleep_off, the 2-min condition then passes trivially,
+  #    woke_up_today latches and good-morning energizes five zones at 90 %
+  #    while the person is walking back to bed. The trigger is now
+  #    any_occupied ON for 15 minutes with the latch OFF: an excursion that
+  #    lasts 10 minutes never reaches the 15-minute hold, so it must not
+  #    energize the house, and a real wake keeps the house occupied past it.
+  #    The `for` restarts whenever any_occupied flaps, and a missing sensor
+  #    never fires a state trigger, so nothing latches on a blip. ----------
+  - alias: "Living Lights - woke up (house up 15 min in the morning)"
     id: living_lights_woke_up_on_wake
     mode: single
     triggers:
       - trigger: state
-        entity_id: input_boolean.living_lights_asleep
-        from: "on"
-        to: "off"
+        entity_id: binary_sensor.living_lights_any_occupied
+        to: "on"
+        for:
+          minutes: 15
     conditions:
-      - condition: template
-        value_template: "{{ 4.5 <= (now().hour + now().minute / 60) < 11.0 }}"
+      # The latch is off: the house is not (still) asleep. A wake that
+      # cleared the latch at minute 10 of occupancy passes here at 15.
+      - condition: state
+        entity_id: input_boolean.living_lights_asleep
+        state: "off"
       - condition: state
         entity_id: input_boolean.living_lights_woke_up_today
         state: "off"
       - condition: state
         entity_id: input_boolean.user_at_home
         state: "on"
-      # Story S: the asleep latch can also be cleared by the ungated backstop
-      # or a presence flip with nobody up. Only count it as a wake-up once
-      # the house has genuinely been occupied for 2 min (any_occupied on,
-      # by its last_changed); a missing sensor never latches.
       - condition: template
-        value_template: >-
-          {% set occ = states.binary_sensor.living_lights_any_occupied %}
-          {{ occ is not none and occ.state == 'on'
-             and (now() - occ.last_changed).total_seconds() >= 120 }}
+        value_template: "{{ 4.5 <= (now().hour + now().minute / 60) < 11.0 }}"
     actions:
       - action: input_boolean.turn_on
         target:
@@ -154,5 +163,5 @@ automation:
       - action: logbook.log
         data:
           name: "Living Lights morning"
-          message: "woke_up_today latched (asleep cleared during the morning window)"
+          message: "woke_up_today latched (house up 15 min during the morning window)"
           entity_id: input_boolean.living_lights_woke_up_today

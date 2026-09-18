@@ -844,7 +844,13 @@ template:
         delay_off: >
           {{ 90 if states('media_player.lg_tv') in ['unavailable', 'unknown'] else 0 }}
         state: >
-          {# TV off states: 'off', 'standby', 'unavailable', 'unknown' (tools/living_lights_tv_states.py). #}
+          {# TV off states: 'off', 'standby', 'unavailable', 'unknown' (tools/living_lights_tv_states.py).
+             Sofa hold (refinement (a)): lg_tv unavailable/unknown after an on
+             state with the sofa stable sensor on keeps tv_seen_on for at most
+             1800 s since the transition, remembered in this
+             sensor's own unavailable_since attribute. Accepted cost: a viewer
+             who stays seated after a real TV-off sits in the dark for up to
+             30 min; the belief publisher removes that later. #}
           {% set lg_tv = states('media_player.lg_tv') %}
           {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
           {% set fresh = is_state('binary_sensor.living_lights_publisher_fresh', 'on') %}
@@ -852,11 +858,36 @@ template:
           {% set sofa_stable_on = is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') %}
           {% set belief_live = belief and fresh %}
           {% set bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on' %}
-          {% set tv_seen_on = lg_tv not in ['off', 'standby', 'unavailable', 'unknown'] or bridged %}
+          {# Refinement (a): the sensor's own previous render (this.attributes,
+             restored across a restart) remembers the lg_tv state it last saw and
+             when lg_tv went unavailable/unknown from an on state. #}
+          {% set prev = this.attributes if this is defined else {} %}
+          {% set prev_lg_tv = prev.get('lg_tv') %}
+          {% set unavailable_since = (now() if (prev_lg_tv is not none and prev_lg_tv not in ['off', 'standby', 'unavailable', 'unknown']) else as_datetime(prev.get('unavailable_since'), none)) if lg_tv in ['unavailable', 'unknown'] else none %}
+          {% set sofa_hold = unavailable_since is not none and sofa_stable_on and (now() - unavailable_since).total_seconds() <= 1800 %}
+          {% set tv_seen_on = lg_tv not in ['off', 'standby', 'unavailable', 'unknown'] or bridged or sofa_hold %}
           {% set tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on) %}
           {{ tv_playing }}
         attributes:
           lg_tv: "{{ states('media_player.lg_tv') }}"
+          unavailable_since: >
+            {% set lg_tv = states('media_player.lg_tv') %}
+            {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {% set fresh = is_state('binary_sensor.living_lights_publisher_fresh', 'on') %}
+            {% set tv_watching = states('binary_sensor.living_lights_tv_watching') %}
+            {% set sofa_stable_on = is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') %}
+            {% set belief_live = belief and fresh %}
+            {% set bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on' %}
+            {# Refinement (a): the sensor's own previous render (this.attributes,
+               restored across a restart) remembers the lg_tv state it last saw and
+               when lg_tv went unavailable/unknown from an on state. #}
+            {% set prev = this.attributes if this is defined else {} %}
+            {% set prev_lg_tv = prev.get('lg_tv') %}
+            {% set unavailable_since = (now() if (prev_lg_tv is not none and prev_lg_tv not in ['off', 'standby', 'unavailable', 'unknown']) else as_datetime(prev.get('unavailable_since'), none)) if lg_tv in ['unavailable', 'unknown'] else none %}
+            {% set sofa_hold = unavailable_since is not none and sofa_stable_on and (now() - unavailable_since).total_seconds() <= 1800 %}
+            {% set tv_seen_on = lg_tv not in ['off', 'standby', 'unavailable', 'unknown'] or bridged or sofa_hold %}
+            {% set tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on) %}
+            {{ unavailable_since.isoformat() if unavailable_since is not none else none }}
           reason: >
             {% set lg_tv = states('media_player.lg_tv') %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
@@ -865,12 +896,20 @@ template:
             {% set sofa_stable_on = is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') %}
             {% set belief_live = belief and fresh %}
             {% set bridged = lg_tv in ['unavailable', 'unknown'] and belief_live and tv_watching == 'on' %}
-            {% set tv_seen_on = lg_tv not in ['off', 'standby', 'unavailable', 'unknown'] or bridged %}
+            {# Refinement (a): the sensor's own previous render (this.attributes,
+               restored across a restart) remembers the lg_tv state it last saw and
+               when lg_tv went unavailable/unknown from an on state. #}
+            {% set prev = this.attributes if this is defined else {} %}
+            {% set prev_lg_tv = prev.get('lg_tv') %}
+            {% set unavailable_since = (now() if (prev_lg_tv is not none and prev_lg_tv not in ['off', 'standby', 'unavailable', 'unknown']) else as_datetime(prev.get('unavailable_since'), none)) if lg_tv in ['unavailable', 'unknown'] else none %}
+            {% set sofa_hold = unavailable_since is not none and sofa_stable_on and (now() - unavailable_since).total_seconds() <= 1800 %}
+            {% set tv_seen_on = lg_tv not in ['off', 'standby', 'unavailable', 'unknown'] or bridged or sofa_hold %}
             {% set tv_playing = tv_seen_on and (not belief or not fresh or tv_watching != 'off' or sofa_stable_on) %}
             {% if not tv_seen_on and lg_tv in ['unavailable', 'unknown'] and belief_live %}unavailable_not_watching
             {% elif not tv_seen_on and lg_tv in ['unavailable', 'unknown'] %}unavailable
             {% elif not tv_seen_on %}tv_off
             {% elif bridged %}belief_bridges_unavailable
+            {% elif sofa_hold %}sofa_holds_unavailable
             {% elif not belief %}legacy
             {% elif not fresh %}publisher_stale
             {% elif tv_watching != 'off' %}belief_watching
@@ -1507,6 +1546,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'dining_left'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.dining_room_dining_left_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_dining_left_person_occupancy_stable %}
             {% set stable = states('binary_sensor.dining_room_dining_left_person_occupancy_stable') %}
@@ -1670,6 +1719,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'dining_right'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.dining_room_dining_right_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_dining_right_person_occupancy_stable %}
             {% set stable = states('binary_sensor.dining_room_dining_right_person_occupancy_stable') %}
@@ -1833,6 +1892,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'sink'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.kitchen_sink_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_sink_person_occupancy_stable %}
             {% set stable = states('binary_sensor.kitchen_sink_person_occupancy_stable') %}
@@ -1996,6 +2065,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'island_left'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.kitchen_island_left_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_island_left_person_occupancy_stable %}
             {% set stable = states('binary_sensor.kitchen_island_left_person_occupancy_stable') %}
@@ -2159,6 +2238,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'island_right'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.kitchen_island_right_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_island_right_person_occupancy_stable %}
             {% set stable = states('binary_sensor.kitchen_island_right_person_occupancy_stable') %}
@@ -2322,6 +2411,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'sofa'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.living_room_sofa_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_sofa_person_occupancy_stable %}
             {% set stable = states('binary_sensor.living_room_sofa_person_occupancy_stable') %}
@@ -2337,7 +2436,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2353,11 +2452,11 @@ template:
             {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
-            {% elif tv_playing %}{{ floor }}
+            {% elif watching_happening %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif watching_happening %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -2486,6 +2585,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'front_left'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.living_room_front_left_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_front_left_person_occupancy_stable %}
             {% set stable = states('binary_sensor.living_room_front_left_person_occupancy_stable') %}
@@ -2501,7 +2610,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2517,11 +2626,11 @@ template:
             {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
-            {% elif tv_playing %}{{ floor }}
+            {% elif watching_happening %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif watching_happening %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -2650,6 +2759,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'weights'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.living_room_weights_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_weights_person_occupancy_stable %}
             {% set stable = states('binary_sensor.living_room_weights_person_occupancy_stable') %}
@@ -2665,7 +2784,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2681,11 +2800,11 @@ template:
             {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
-            {% elif tv_playing %}{{ floor }}
+            {% elif watching_happening %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif watching_happening %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -2814,6 +2933,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'office'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.living_room_office_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_office_person_occupancy_stable %}
             {% set stable = states('binary_sensor.living_room_office_person_occupancy_stable') %}
@@ -2829,7 +2958,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (0 if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (0 if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2845,11 +2974,11 @@ template:
             {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
-            {% elif tv_playing %}{{ floor }}
+            {% elif watching_happening %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}0{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if gaming_active %}0{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif watching_happening %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -2978,6 +3107,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'front_door'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.living_room_front_door_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_front_door_person_occupancy_stable %}
             {% set stable = states('binary_sensor.living_room_front_door_person_occupancy_stable') %}
@@ -2993,7 +3132,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -3009,11 +3148,11 @@ template:
             {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
-            {% elif tv_playing %}{{ floor }}
+            {% elif watching_happening %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif watching_happening %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -3142,6 +3281,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'whole_living_room'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.living_room_whole_living_room_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_whole_living_room_person_occupancy_stable %}
             {% set stable = states('binary_sensor.living_room_whole_living_room_person_occupancy_stable') %}
@@ -3157,7 +3306,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if watching_happening else tv_vacant_floor_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -3173,11 +3322,11 @@ template:
             {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
-            {% elif tv_playing %}{{ floor }}
+            {% elif watching_happening %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
-            {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% elif dwell < 2000 and speed >= 1.0 %}{{ ([tv_route_pct, cap, profile_max] | min) if tv_playing else ([floor, [55, cap] | min] | max) }}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif watching_happening %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
             {% endset %}
             {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
             {{ [[0, final_bri] | max, cap] | min }}
@@ -3306,6 +3455,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'workshop_zone'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.workshop_workshop_zone_activity') %}
             {% set stable_obj = states.binary_sensor.workshop_workshop_zone_person_occupancy_stable %}
             {% set stable = states('binary_sensor.workshop_workshop_zone_person_occupancy_stable') %}
@@ -3469,6 +3628,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'e28'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.driveway_e28_activity') %}
             {% set stable_obj = states.binary_sensor.driveway_e28_person_occupancy_stable %}
             {% set stable = states('binary_sensor.driveway_e28_person_occupancy_stable') %}
@@ -3632,6 +3801,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'whole_dining_room'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.dining_room_whole_dining_room_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_whole_dining_room_person_occupancy_stable %}
             {% set stable = states('binary_sensor.dining_room_whole_dining_room_person_occupancy_stable') %}
@@ -3795,6 +3974,16 @@ template:
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', 'whole_kitchen'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
+            {# Refinement (b), M2 round 2: the movie dim in a watch zone applies
+               only while watching is happening: the TV plays and either the
+               sofa's stable occupancy is on or the tv_watching belief is on
+               and live (toggle on, publisher fresh). One variable, computed
+               once per render, gates the watch-zone short-circuit, the floor
+               line and the present target; a watch zone with the sofa empty
+               and no live belief takes the non-watch branches (present target
+               when occupied, route level on a pass, tv_vacant_floor when
+               vacant). Non-watch zones never read it. #}
+            {% set watching_happening = tv_playing and (is_state('binary_sensor.living_room_sofa_person_occupancy_stable', 'on') or (belief and is_state('binary_sensor.living_lights_publisher_fresh', 'on') and is_state('binary_sensor.living_lights_tv_watching', 'on'))) %}
             {% set activity = states('sensor.kitchen_whole_kitchen_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_whole_kitchen_person_occupancy_stable %}
             {% set stable = states('binary_sensor.kitchen_whole_kitchen_person_occupancy_stable') %}
@@ -4289,6 +4478,10 @@ automation:
         id: presence
         entity_id: input_boolean.user_at_home
         to: "on"
+      - trigger: state
+        id: arrival
+        entity_id: binary_sensor.front_door_person_occupancy
+        to: "on"
     conditions:
       - condition: state
         entity_id: input_boolean.living_lights_asleep
@@ -4321,6 +4514,14 @@ automation:
                     {% endif %}
                   {% endfor %}
                   {{ ns.arrived }}
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: arrival
+              - condition: template
+                value_template: >-
+                  {% set home = states.input_boolean.user_at_home %}
+                  {{ home is not none and home.state == 'on' and (now() - home.last_changed).total_seconds() <= 60 }}
     actions:
       - action: input_boolean.turn_off
         target:

@@ -34,6 +34,29 @@ import sys
 import tempfile
 from pathlib import Path
 
+# ---------------------------------------------------------------- latch writers
+LATCH_ENTITY = "input_boolean.living_lights_asleep"
+LATCH_WRITER_ENTITY = "input_text.living_lights_asleep_writer"
+FROM_ESTIMATOR_ENTITY = "input_boolean.living_lights_asleep_from_estimator"
+WRITER_WINDOW_S = 30
+"""How long after a latch transition the writer helper may still name it.
+
+Every automation that flips the latch writes the helper in the same action
+block, so the helper moves within a tick. A window wider than that would let
+the PREVIOUS transition's writer be read as this one's, which is the one
+mistake that would make the attribution lie rather than merely say nothing."""
+
+PUBLISHER_WRITERS = ("mirror",)
+"""Writer prefixes that mean the belief publisher, through the mirror
+automation that is its only path to the latch."""
+ALLOWED_WHILE_LIVE = ("mirror", "manual", "hard_backstop")
+"""While the estimator is live, these three are the only writers the plan
+permits: the mirror automation, a person, and the ungated hard backstop.
+Anything else is a legacy automation that should have been gated off."""
+
+DEFAULT_HA_URL = "http://homeassistant.local:8123"
+DEFAULT_ENV_FILE = "/opt/home-ai-voice/.env"
+
 DEFAULT_DB = "/opt/home-ai-voice/intelligence-data/intelligence.sqlite"
 DEFAULT_MEMORY_SNAPSHOT = "/srv/data/vjepa-home-snapshots/2026-09-17/memory.sqlite3"
 DEFAULT_OUT_ROOT = Path("/home/marcelo-lima/vjepa-home/operations")
@@ -92,6 +115,89 @@ def writer_class(ha_context_json, source_hint, command_id):
     if source_hint == "automation_or_script":
         return "automation_by_hint"
     return "unattributed"
+
+
+def writer_family(value):
+    """The writer's family: the part before the colon, lower-cased.
+
+    The helper holds ``legacy_off:presence``, ``mirror:likely_asleep`` and the
+    like, so the family is what a rule is written against and the tail is
+    evidence.
+    """
+    text = (value or "").strip().lower()
+    if not text or text in ("unknown", "unavailable", "none"):
+        return None
+    return text.split(":", 1)[0]
+
+
+def latch_transitions(latch_rows, writer_rows, live_rows, window_s=WRITER_WINDOW_S):
+    """Every on/off transition of the latch, with the writer that claimed it.
+
+    ``*_rows`` are recorder history rows, ``{"t", "state"}``, oldest first.
+    The writer is the helper's first value at or within ``window_s`` after the
+    transition; automations write it in the same action block as the flip. A
+    transition with no such value is ``unattributed`` rather than guessed at.
+    """
+    out = []
+    previous = None
+    gaps = 0
+    for row in latch_rows:
+        state = (row.get("state") or "").lower()
+        if state not in ("on", "off"):
+            if state in ("unknown", "unavailable"):
+                # A Home Assistant restart takes the helper unavailable and
+                # restores it. A value that differs across that gap is the
+                # restore, not a write, and attributing it would be guesswork;
+                # the count is reported so the omission is never silent.
+                previous = None
+                gaps += 1
+            continue
+        if previous is not None and state != previous:
+            when = row["t"]
+            claimed = [w for w in writer_rows
+                       if 0 <= (w["t"] - when).total_seconds() <= window_s]
+            value = claimed[0]["state"] if claimed else None
+            live = None
+            for candidate in live_rows:
+                if candidate["t"] <= when:
+                    live = (candidate.get("state") or "").lower() == "on"
+                else:
+                    break
+            out.append({
+                "at": when.isoformat(),
+                "to": state,
+                "writer": (value or "unattributed"),
+                "writer_family": writer_family(value) or "unattributed",
+                "estimator_live": live,
+            })
+        previous = state
+    if gaps and out:
+        out[0].setdefault("_gaps", gaps)
+    return out
+
+
+def latch_summary(transitions, availability_gaps=0):
+    """Counts, and the violations the definition of done names."""
+    families = collections.Counter(t["writer_family"] for t in transitions)
+    clears = [t for t in transitions if t["to"] == "off"]
+    live = [t for t in transitions if t["estimator_live"]]
+    forbidden = [t for t in live if t["writer_family"] not in ALLOWED_WHILE_LIVE]
+    return {
+        "transitions": len(transitions),
+        "latches": sum(1 for t in transitions if t["to"] == "on"),
+        "clears": len(clears),
+        "by_writer_family": dict(sorted(families.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "clears_by_writer": dict(sorted(
+            collections.Counter(t["writer"] for t in clears).items(),
+            key=lambda kv: (-kv[1], kv[0]))),
+        "written_by_the_publisher": sum(
+            1 for t in transitions if t["writer_family"] in PUBLISHER_WRITERS),
+        "while_estimator_live": len(live),
+        "forbidden_while_live": len(forbidden),
+        "forbidden_detail": forbidden[:20],
+        "unattributed": sum(1 for t in transitions if t["writer_family"] == "unattributed"),
+        "availability_gaps": availability_gaps,
+    }
 
 
 def parse_ts(value):
@@ -292,6 +398,43 @@ def render_markdown(summary, since, until, night_start, night_end):
         for k, v in summary[key].items():
             lines.append(f"| {k} | {v} |")
         lines.append("")
+    latch = summary.get("latch")
+    if latch:
+        lines.append("## Who wrote the asleep latch")
+        lines.append("")
+        if not latch.get("available"):
+            lines.append(f"Not attributed: {latch.get('reason')}")
+            lines.append("")
+        else:
+            lines.append(f"{latch['transitions']} transitions "
+                         f"({latch['latches']} latches, {latch['clears']} clears), "
+                         f"attributed from the writer helper within "
+                         f"{latch['writer_window_s']} s of each flip.")
+            lines.append("")
+            lines.append("| writer family | count |")
+            lines.append("|---|---|")
+            for k, v in latch["by_writer_family"].items():
+                lines.append(f"| {k} | {v} |")
+            lines.append("")
+            if latch["clears_by_writer"]:
+                lines.append("| clear written by | count |")
+                lines.append("|---|---|")
+                for k, v in latch["clears_by_writer"].items():
+                    lines.append(f"| {k} | {v} |")
+                lines.append("")
+            lines.append(f"- Written by the belief publisher: {latch['written_by_the_publisher']}")
+            lines.append(f"- While the estimator was live: {latch['while_estimator_live']}")
+            lines.append(f"- Forbidden while live (not the mirror, a person or the hard "
+                         f"backstop): **{latch['forbidden_while_live']}** "
+                         "(the acceptance bar is zero)")
+            lines.append(f"- Unattributed (no writer value within the window): "
+                         f"{latch['unattributed']}")
+            if latch.get("availability_gaps"):
+                lines.append(f"- Restarts the latch went unavailable across: "
+                             f"{latch['availability_gaps']}. A value that differs "
+                             "across one of those is the restore, not a write, and is "
+                             "not counted as a transition.")
+            lines.append("")
     lines.append("## Derived indicators")
     lines.append("")
     lines.append(f"- Vacant-night floor (20 %) turn-ons while the asleep flag was off: {summary['vacant_floor_while_not_asleep']}")
@@ -348,6 +491,35 @@ def self_test():
     print("self-test ok")
 
 
+def read_latch_history(ha_url, env_file, start, end):
+    """Latch, writer and toggle history from the recorder.
+
+    The HTTP client, the token read and the scrubber come from
+    ``tools/tv-evening-postmortem.py`` rather than being written twice: it is
+    GET-only, refuses redirects, registers no proxy, and never prints the
+    token. Returns ``(rows_by_entity, error)``; a failure is reported, never
+    raised, because the ledger half of this report stands on its own.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "tv_postmortem", str(Path(__file__).resolve().parent / "tv-evening-postmortem.py"))
+    if spec is None or spec.loader is None:
+        return {}, "cannot import tv-evening-postmortem.py"
+    pm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pm)
+    token = pm.read_token(env_file)
+    if not token:
+        return {}, f"no HA_TOKEN in {env_file}"
+    entities = [LATCH_ENTITY, LATCH_WRITER_ENTITY, FROM_ESTIMATOR_ENTITY]
+    try:
+        getter = pm.http_getter(ha_url, token)
+        payload = getter(pm.history_path(start, end, entities, minimal=True))
+    except Exception as exc:  # noqa: BLE001 - the ledger half must still report
+        return {}, pm.scrub(f"recorder query failed: {type(exc).__name__}", (token,))
+    hist = pm.parse_history(payload)
+    return {entity: hist.get(entity, []) for entity in entities}, None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", default=DEFAULT_DB)
@@ -357,6 +529,11 @@ def main():
     parser.add_argument("--night-start", default="00:00")
     parser.add_argument("--night-end", default="08:00")
     parser.add_argument("--out", default=None, help="report directory; default operations/night-postmortem-<date>/")
+    parser.add_argument("--ha-url", default=DEFAULT_HA_URL,
+                        help="Home Assistant base URL, for the latch-writer attribution")
+    parser.add_argument("--env-file", default=DEFAULT_ENV_FILE, help="file holding HA_TOKEN")
+    parser.add_argument("--no-latch", action="store_true",
+                        help="skip the latch-writer attribution (no recorder query)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -372,6 +549,25 @@ def main():
     memory_conn = open_ro(args.memory_db) if args.memory_db and Path(args.memory_db).exists() else None
     result = analyze(conn, memory_conn, args.since, until, night_start, night_end)
     summary = summarize(result, night_end)
+    if args.no_latch:
+        summary["latch"] = {"available": False, "reason": "skipped with --no-latch"}
+    else:
+        start_at = parse_ts(args.since) or dt.datetime.fromisoformat(args.since + "T00:00:00").astimezone()
+        end_at = parse_ts(until) or dt.datetime.now().astimezone()
+        rows, error = read_latch_history(args.ha_url, args.env_file, start_at, end_at)
+        if error:
+            summary["latch"] = {"available": False, "reason": error}
+        else:
+            transitions = latch_transitions(rows.get(LATCH_ENTITY, []),
+                                            rows.get(LATCH_WRITER_ENTITY, []),
+                                            rows.get(FROM_ESTIMATOR_ENTITY, []))
+            gaps = sum(1 for row in rows.get(LATCH_ENTITY, [])
+                       if (row.get("state") or "").lower() in ("unknown", "unavailable"))
+            summary["latch"] = {"available": True, "reason": None,
+                                "writer_window_s": WRITER_WINDOW_S,
+                                **latch_summary(transitions, gaps)}
+            (out / "latch-transitions.jsonl").write_text(
+                "".join(json.dumps(t) + "\n" for t in transitions))
     summary["inputs"] = {"db": args.db, "memory_db": args.memory_db if memory_conn else None, "since": args.since, "until": until,
                          "night_window": [args.night_start, args.night_end], "raw_rows_in_range": result["raw_rows"], "physical_changes_in_range": result["physical_changes"]}
     (out / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in result["events"]))

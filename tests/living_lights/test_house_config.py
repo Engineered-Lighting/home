@@ -1,0 +1,141 @@
+"""The generator holds no house.
+
+Every name that belongs to one building lives in ``ha-config/house.json``, so
+a different house is a different file rather than a different copy of the
+generator. These tests hold two things: that extracting the vocabulary changed
+no byte of the deployed package, and that a genuinely different house produces
+a complete one.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import yaml
+
+REPO = Path(__file__).resolve().parents[2]
+GENERATOR = REPO / "tools" / "build-living-lights-yaml.py"
+LA_HOUSE = REPO / "ha-config" / "house.json"
+OFFICE_HOUSE = REPO / "ha-config" / "house.victoria-office.example.json"
+DEPLOYED = REPO / "ha-config" / "packages" / "living_lights_observability.yaml"
+
+LA_NAMES = ("sofa", "island_left", "island_right", "dining_left", "dining_right",
+            "front_left", "rear_left", "rear_right", "weights", "workshop", "e28")
+
+
+def generate(house: Path, out: Path, mirror: Path | None = None) -> str:
+    env = dict(os.environ, LIVING_LIGHTS_HOUSE=str(house))
+    argv = [sys.executable, str(GENERATOR), "--output", str(out)]
+    if mirror is not None:
+        argv += ["--mirror-output", str(mirror)]
+    subprocess.run(argv, check=True, capture_output=True, env=env, cwd=REPO)
+    return out.read_text(encoding="utf-8")
+
+
+class ExtractionChangedNothing(unittest.TestCase):
+    def test_this_house_regenerates_byte_for_byte(self):
+        """The whole point of the refactor: the deployed package is untouched."""
+        with tempfile.TemporaryDirectory() as tmp:
+            produced = generate(LA_HOUSE, Path(tmp) / "obs.yaml")
+        self.assertEqual(produced, DEPLOYED.read_text(encoding="utf-8"),
+                         "extracting the vocabulary must not change the deployed package")
+
+
+class ADifferentHouseGenerates(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.text = generate(OFFICE_HOUSE, Path(self.tmp.name) / "obs.yaml",
+                             Path(self.tmp.name) / "mirror.yaml")
+        self.doc = yaml.safe_load(self.text)
+
+    def test_it_is_a_complete_valid_package(self):
+        self.assertIn("automation", self.doc)
+        self.assertIn("template", self.doc)
+        self.assertGreater(len(self.doc["automation"]), 5)
+
+    def test_no_light_from_the_other_house_appears(self):
+        """A light id that belongs to another building is the leak that matters:
+        it names a real entity somewhere, so it actuates something."""
+        office = json.loads(OFFICE_HOUSE.read_text())
+        for light in json.loads(LA_HOUSE.read_text())["dimmable_lights"]:
+            if light in office["dimmable_lights"]:
+                continue
+            with self.subTest(light=light):
+                # Whole entity id: light.office is a prefix of light.office_desk,
+                # which is a legitimate office light rather than a leak.
+                found = re.search(re.escape(light) + r"(?![A-Za-z0-9_])", self.text)
+                self.assertIsNone(found, f"{light} leaked into another house's package")
+
+    def test_the_office_zones_are_the_ones_generated(self):
+        office = json.loads(OFFICE_HOUSE.read_text())
+        for zone in office["zones"]:
+            with self.subTest(zone=zone):
+                self.assertIn(zone, self.text)
+
+
+class TheHouseFileIsValidated(unittest.TestCase):
+    """Every mistake a house file can carry is silent downstream.
+
+    A zone that is not a Frigate zone renders "off" in the template, the
+    classifier reads the room as vacant for ever, and the light never
+    responds. Nothing raises and the YAML is valid, so the check has to happen
+    here.
+    """
+
+    def bad(self, **changes):
+        doc = json.loads(LA_HOUSE.read_text())
+        for key, value in changes.items():
+            if "." in key:
+                outer, inner = key.split(".", 1)
+                doc[outer] = dict(doc[outer]); doc[outer][inner] = value
+            else:
+                doc[key] = value
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "house.json"
+            path.write_text(json.dumps(doc))
+            env = dict(os.environ, LIVING_LIGHTS_HOUSE=str(path))
+            done = subprocess.run(
+                [sys.executable, str(GENERATOR), "--output", str(Path(tmp) / "o.yaml")],
+                capture_output=True, env=env, cwd=REPO, text=True)
+        return done
+
+    def test_a_living_room_camera_that_no_zone_names_is_refused(self):
+        done = self.bad(**{"rooms.living_room_camera": "conservatory"})
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("living_room_camera", done.stderr)
+
+    def test_a_sofa_zone_that_is_not_a_zone_is_refused(self):
+        done = self.bad(**{"rooms.sofa_zone": "chaise"})
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("sofa_zone", done.stderr)
+
+    def test_a_sofa_on_another_camera_is_refused(self):
+        done = self.bad(**{"rooms.sofa_zone": "sink"})
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("same room", done.stderr)
+
+    def test_a_zone_set_naming_an_unknown_zone_is_refused(self):
+        doc = json.loads(LA_HOUSE.read_text())
+        sets = dict(doc["zone_sets"]); sets["gaming_dim"] = ["nowhere"]
+        done = self.bad(zone_sets=sets)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("gaming_dim", done.stderr)
+
+    def test_a_house_with_no_zones_is_refused(self):
+        done = self.bad(zones={})
+        self.assertNotEqual(done.returncode, 0)
+
+    def test_a_wrong_schema_is_refused(self):
+        done = self.bad(schema="something-else/v9")
+        self.assertNotEqual(done.returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,138 @@
+{
+  "schema": "living-lights-house/v1",
+  "name": "la",
+  "comment": "The vocabulary of ONE house: its zones, which camera sees each, and the handful of entities and zone sets the stories name directly. Everything else the generator emits is derived from this. A different house is a different file, not a different generator. Written 2026-09-18 by extracting the constants the generator already held, so this file reproduces the deployed packages byte for byte. dimmable_lights is the set the colour-temperature sweep walks; it is the one place a light entity id appears in this generator.",
+  "zones": {
+    "dining_left": {
+      "camera": "dining_room",
+      "vacant_pct": 15
+    },
+    "dining_right": {
+      "camera": "dining_room",
+      "vacant_pct": 15
+    },
+    "sink": {
+      "camera": "kitchen",
+      "vacant_pct": 26
+    },
+    "island_left": {
+      "camera": "kitchen",
+      "vacant_pct": 25
+    },
+    "island_right": {
+      "camera": "kitchen",
+      "vacant_pct": 15
+    },
+    "sofa": {
+      "camera": "living_room",
+      "vacant_pct": 20
+    },
+    "front_left": {
+      "camera": "living_room",
+      "vacant_pct": 20
+    },
+    "weights": {
+      "camera": "living_room",
+      "vacant_pct": 18
+    },
+    "office": {
+      "camera": "living_room",
+      "vacant_pct": 25
+    },
+    "front_door": {
+      "camera": "living_room",
+      "vacant_pct": 22
+    },
+    "whole_living_room": {
+      "camera": "living_room",
+      "vacant_pct": 18
+    },
+    "workshop_zone": {
+      "camera": "workshop",
+      "vacant_pct": 18
+    },
+    "e28": {
+      "camera": "driveway",
+      "vacant_pct": 8
+    },
+    "whole_dining_room": {
+      "camera": "dining_room",
+      "vacant_pct": 15
+    },
+    "whole_kitchen": {
+      "camera": "kitchen",
+      "vacant_pct": 20
+    }
+  },
+  "rooms": {
+    "living_room_camera": "living_room",
+    "sofa_zone": "sofa",
+    "front_door_zone": "front_door",
+    "kitchen_camera": "kitchen"
+  },
+  "entities": {
+    "movie_media_player": "media_player.lg_tv",
+    "gaming_sensor": "sensor.steam_steam_76561198136331341"
+  },
+  "zone_sets": {
+    "last_command": [
+      "dining_left",
+      "dining_right",
+      "front_door",
+      "front_left",
+      "island_left",
+      "island_right",
+      "office",
+      "sink",
+      "sofa",
+      "weights"
+    ],
+    "gaming_off": [
+      "office"
+    ],
+    "gaming_dim": [
+      "front_door",
+      "front_left",
+      "sofa",
+      "weights"
+    ],
+    "kitchen_person_fallback": [
+      "island_left",
+      "island_right",
+      "sink",
+      "whole_kitchen"
+    ]
+  },
+  "asleep_quiet_blockers": [
+    "binary_sensor.living_room_person_occupancy",
+    "binary_sensor.kitchen_person_occupancy",
+    "binary_sensor.dining_room_person_occupancy",
+    "binary_sensor.workshop_person_occupancy",
+    "binary_sensor.whole_living_room_person_occupancy",
+    "binary_sensor.whole_kitchen_person_occupancy",
+    "binary_sensor.whole_dining_room_person_occupancy",
+    "binary_sensor.workshop_zone_person_occupancy"
+  ],
+  "mirror_attribute_subset": {
+    "media_player.lg_tv": [
+      "source",
+      "media_title",
+      "media_content_type"
+    ],
+    "sensor.living_lights_profile": [
+      "tod_factor",
+      "max_brightness_pct",
+      "tod_color_warm"
+    ]
+  },
+  "dimmable_lights": [
+    "light.office",
+    "light.front_left",
+    "light.front_right",
+    "light.rear_left",
+    "light.rear_right",
+    "light.sink",
+    "light.island_left",
+    "light.island_right"
+  ]
+}

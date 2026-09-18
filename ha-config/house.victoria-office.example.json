@@ -1,0 +1,55 @@
+{
+  "schema": "living-lights-house/v1",
+  "name": "victoria-office",
+  "comment": "A worked example of a second house: one camera, two zones, one desk. It exists to prove that the generator has no house in it, and to be the starting point for the Victoria setup. The television story has nothing to watch in an office; living_room_camera and sofa_zone still have to name real things, because every downstream template reads them.",
+  "zones": {
+    "desk": {
+      "camera": "office",
+      "vacant_pct": 20
+    },
+    "doorway": {
+      "camera": "office",
+      "vacant_pct": 15
+    },
+    "whole_office": {
+      "camera": "office",
+      "vacant_pct": 18
+    }
+  },
+  "rooms": {
+    "living_room_camera": "office",
+    "sofa_zone": "desk",
+    "front_door_zone": "doorway",
+    "kitchen_camera": "office"
+  },
+  "entities": {
+    "movie_media_player": "media_player.office_display",
+    "gaming_sensor": "sensor.steam_placeholder"
+  },
+  "zone_sets": {
+    "last_command": [
+      "desk",
+      "doorway"
+    ],
+    "gaming_off": [],
+    "gaming_dim": [
+      "desk"
+    ],
+    "kitchen_person_fallback": []
+  },
+  "asleep_quiet_blockers": [
+    "binary_sensor.office_person_occupancy",
+    "binary_sensor.whole_office_person_occupancy"
+  ],
+  "mirror_attribute_subset": {
+    "sensor.living_lights_profile": [
+      "tod_factor",
+      "max_brightness_pct",
+      "tod_color_warm"
+    ]
+  },
+  "dimmable_lights": [
+    "light.office_desk",
+    "light.office_ceiling"
+  ]
+}

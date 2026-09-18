@@ -52,6 +52,9 @@ M2 (2026-09-17, story T and story S hooks):
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import pathlib
 import sys
 from pathlib import Path
 
@@ -60,26 +63,59 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from living_lights_tv_states import TV_OFF_JINJA, TV_OFF_STATES  # noqa: E402
 
 # Zone definitions. Add/remove here.
-ZONES: dict = {
-    # Phase 0a (5 zones — kitchen + dining)
-    "dining_left":   {"camera": "dining_room", "vacant_pct": 15},
-    "dining_right":  {"camera": "dining_room", "vacant_pct": 15},
-    "sink":          {"camera": "kitchen",     "vacant_pct": 26},
-    "island_left":   {"camera": "kitchen",     "vacant_pct": 25},
-    "island_right":  {"camera": "kitchen",     "vacant_pct": 15},
+HOUSE_PATH = pathlib.Path(
+    os.environ.get("LIVING_LIGHTS_HOUSE",
+                   str(pathlib.Path(__file__).resolve().parents[1] / "ha-config" / "house.json")))
+HOUSE_SCHEMA = "living-lights-house/v1"
 
-    # Phase 0c (10 more zones — living_room + workshop + driveway + whole-rooms)
-    "sofa":              {"camera": "living_room", "vacant_pct": 20},
-    "front_left":        {"camera": "living_room", "vacant_pct": 20},
-    "weights":           {"camera": "living_room", "vacant_pct": 18},
-    "office":            {"camera": "living_room", "vacant_pct": 25},
-    "front_door":        {"camera": "living_room", "vacant_pct": 22},
-    "whole_living_room": {"camera": "living_room", "vacant_pct": 18},
-    "workshop_zone":     {"camera": "workshop",    "vacant_pct": 18},
-    "e28":               {"camera": "driveway",    "vacant_pct": 8},  # outdoor
-    "whole_dining_room": {"camera": "dining_room", "vacant_pct": 15},
-    "whole_kitchen":     {"camera": "kitchen",     "vacant_pct": 20},
-}
+
+def load_house(path: pathlib.Path = None) -> dict:
+    """The vocabulary of one house: zones, rooms, entities, zone sets.
+
+    This used to be a dozen module constants, which is why a different house
+    meant a different copy of this file. It is data now, and the generator is
+    the same everywhere. ``LIVING_LIGHTS_HOUSE`` points at another one.
+
+    The file is validated here rather than trusted, because every mistake it
+    can carry is silent downstream: a zone that is not a Frigate zone produces
+    a template whose else-branch renders "off", so the classifier reads the
+    room as vacant for ever and the light simply never responds. Nothing
+    raises, nothing logs, and the package is valid YAML.
+    """
+    target = pathlib.Path(path) if path is not None else HOUSE_PATH
+    data = json.loads(target.read_text(encoding="utf-8"))
+    if data.get("schema") != HOUSE_SCHEMA:
+        raise SystemExit(f"{target}: schema is {data.get('schema')!r}, expected {HOUSE_SCHEMA!r}")
+    zones = data["zones"]
+    if not zones:
+        raise SystemExit(f"{target}: a house needs at least one zone")
+    cameras = {meta["camera"] for meta in zones.values()}
+    rooms = data["rooms"]
+    if rooms["living_room_camera"] not in cameras:
+        raise SystemExit(
+            f"{target}: living_room_camera {rooms['living_room_camera']!r} is not a camera "
+            f"any zone names; the television story is watched on that camera, so a name "
+            f"that is not there means the room is never occupied")
+    for key in ("sofa_zone", "front_door_zone"):
+        if rooms[key] not in zones:
+            raise SystemExit(f"{target}: {key} {rooms[key]!r} is not one of the zones")
+    if zones[rooms["sofa_zone"]]["camera"] != rooms["living_room_camera"]:
+        raise SystemExit(
+            f"{target}: sofa_zone {rooms['sofa_zone']!r} is on camera "
+            f"{zones[rooms['sofa_zone']]['camera']!r} but living_room_camera is "
+            f"{rooms['living_room_camera']!r}; they have to be the same room")
+    for name, members in data["zone_sets"].items():
+        unknown = [z for z in members if z not in zones]
+        if unknown:
+            raise SystemExit(f"{target}: zone_sets.{name} names unknown zones {unknown}")
+    return data
+
+
+HOUSE = load_house()
+HOUSE_ROOMS = HOUSE["rooms"]
+HOUSE_ZONE_SETS = HOUSE["zone_sets"]
+
+ZONES: dict = {slug: dict(meta) for slug, meta in HOUSE["zones"].items()}
 
 # ───────────────────────── Layer 2 tuning constants ───────────────────────
 # Vacant idle baseline — flat, by time-of-day bucket (not ToD-scaled).
@@ -142,14 +178,15 @@ PUBLISHER_FRESH_S = 180
 # zones are added/removed: every zone on the living_room camera is a watch
 # zone (the TV is in the living room).
 MOVIE_WATCH_ZONES = {
-    slug for slug, meta in ZONES.items() if meta["camera"] == "living_room"
+    slug for slug, meta in ZONES.items()
+    if meta["camera"] == HOUSE_ROOMS["living_room_camera"]
 }
 # Entity whose state means "a movie is on" -> movie modifier active.
 # Was media_player.living_room_2 (the apple_tv integration), but that entity
 # is unreliable: it drops to `unknown` whenever the Apple TV connection
 # lapses, silently disabling movie mode. The LG TV reports a dependable
 # on/off and is the actual living-room screen, so movie mode follows it.
-MOVIE_MEDIA_PLAYER = "media_player.lg_tv"
+MOVIE_MEDIA_PLAYER = HOUSE["entities"]["movie_media_player"]
 # Since M2 only binary_sensor.living_lights_tv_playing (and the MQTT mirror)
 # read MOVIE_MEDIA_PLAYER; every classifier predicate reads the sensor.
 TV_PLAYING_SENSOR = "binary_sensor.living_lights_tv_playing"
@@ -157,7 +194,8 @@ TV_WATCHING_BELIEF = "binary_sensor.living_lights_tv_watching"
 PUBLISHER_FRESH_SENSOR = "binary_sensor.living_lights_publisher_fresh"
 PUBLISHER_HEARTBEAT = "sensor.lighting_publisher_heartbeat"
 BELIEF_TOGGLE = "input_boolean.living_lights_actuate_from_belief_changes"
-SOFA_STABLE_SENSOR = "binary_sensor.living_room_sofa_person_occupancy_stable"
+SOFA_STABLE_SENSOR = (f"binary_sensor.{HOUSE_ROOMS['living_room_camera']}_"
+                      f"{HOUSE_ROOMS['sofa_zone']}_person_occupancy_stable")
 ASLEEP_ESTIMATOR = "sensor.living_lights_asleep_estimator"
 ASLEEP_FROM_ESTIMATOR_TOGGLE = "input_boolean.living_lights_asleep_from_estimator"
 ASLEEP_WRITER = "input_text.living_lights_asleep_writer"
@@ -179,17 +217,13 @@ ESTIMATE_LIVE_GATE = "{{ " + ESTIMATE_LIVE_EXPR + " }}"
 # Entities mirrored to local MQTT by living_lights_mqtt_mirror.yaml (M2): what
 # the belief publisher reads instead of holding a Home Assistant token.
 MIRROR_ATTRIBUTE_SUBSET: dict = {
-    "media_player.lg_tv": ["source", "media_title", "media_content_type"],
-    "sensor.living_lights_profile": ["tod_factor", "max_brightness_pct", "tod_color_warm"],
+    key: list(value) for key, value in HOUSE["mirror_attribute_subset"].items()
 }
 # Zones that own a light carry input_text.living_lights_zone_<slug>_last_command_id
 # (the last explicit brighten command, written by the actuators generator's
 # manual-detection package). test_story_t_generator.py checks this list
 # against living_lights_manual_detection.yaml.
-LAST_COMMAND_ZONES = (
-    "dining_left", "dining_right", "front_door", "front_left", "island_left",
-    "island_right", "office", "sink", "sofa", "weights",
-)
+LAST_COMMAND_ZONES = tuple(HOUSE_ZONE_SETS["last_command"])
 MIRROR_ENTITIES = [
     MOVIE_MEDIA_PLAYER,
     "input_boolean.user_at_home",
@@ -214,13 +248,14 @@ MIRROR_TOPIC_PREFIX = "living_lights/mirror"
 # Office goes fully off; LR watch zones go to GAMING_DIM_PCT (= 3).
 # Asleep, away, manual_override, and presence_override still win over gaming.
 GAMING_DIM_PCT = 3
-GAMING_OFF_ZONES = {"office"}
-GAMING_DIM_ZONES = {"sofa", "front_left", "weights", "front_door"}
+GAMING_OFF_ZONES = set(HOUSE_ZONE_SETS["gaming_off"])
+GAMING_DIM_ZONES = set(HOUSE_ZONE_SETS["gaming_dim"])
 # Entity id is the format HA's `steam_online` integration creates:
 # `sensor.steam_<unique_id>` where unique_id is itself `steam_<steamid64>`
 # (yielding the double "steam" prefix in the entity id). Confirmed via
 # core.entity_registry post-integration setup on 2026-05-27.
-GAMING_SENSOR = "sensor.steam_steam_76561198136331341"
+GAMING_SENSOR = HOUSE["entities"]["gaming_sensor"]
+DIMMABLE_LIGHTS = list(HOUSE.get("dimmable_lights", []))
 
 # Working-hours modifier — weekday 08:00-18:00 brightness boost. When the
 # user is genuinely awake (`woke_up_today` latched) AND it's a weekday
@@ -257,27 +292,13 @@ STABLE_OCCUPANCY_HOLD_SECONDS = 90
 # a person, and over 2026-09-02..16 the latch fired on only 5 of 15 nights,
 # leaving every vacant zone at the 20 % night floor. Person occupancy is the
 # credible-person signal; motion belongs to the classifier, not the latch.
-ASLEEP_QUIET_BLOCKERS = [
-    "binary_sensor.living_room_person_occupancy",
-    "binary_sensor.kitchen_person_occupancy",
-    "binary_sensor.dining_room_person_occupancy",
-    "binary_sensor.workshop_person_occupancy",
-    "binary_sensor.whole_living_room_person_occupancy",
-    "binary_sensor.whole_kitchen_person_occupancy",
-    "binary_sensor.whole_dining_room_person_occupancy",
-    "binary_sensor.workshop_zone_person_occupancy",
-]
+ASLEEP_QUIET_BLOCKERS = list(HOUSE["asleep_quiet_blockers"])
 
 # Frigate sometimes keeps the camera-level person sensor alive while the
 # tighter kitchen zone polygons flicker or briefly miss a stationary person.
 # Use that person-only camera signal as a kitchen fallback. Avoid
 # kitchen_all_occupancy here: it includes objects such as cups/bottles.
-KITCHEN_PERSON_FALLBACK_ZONES = {
-    "sink",
-    "island_left",
-    "island_right",
-    "whole_kitchen",
-}
+KITCHEN_PERSON_FALLBACK_ZONES = set(HOUSE_ZONE_SETS["kitchen_person_fallback"])
 
 # V-JEPA 2 activity layer — reserved seam (the plan's forward-compatible
 # section). Each activity maps to a ramp target (pct, pre-ToD-scale) that the
@@ -1550,6 +1571,24 @@ def _asleep_writer_lines(writer: str, indent: int = 6) -> list[str]:
     ]
 
 
+def _expand_lights_lines(lights: list, per_line: int = 3) -> list:
+    """The ``{{ expand([...]) }}`` opening of the colour-temperature sweep.
+
+    Wrapped three entity ids to a line and aligned under the bracket, which is
+    how it was written by hand before the list moved into the house file. The
+    layout is reproduced exactly so that extracting the vocabulary changes no
+    byte of the deployed package; a house with fewer lights simply gets fewer
+    lines.
+    """
+    quoted = [repr(str(light)) for light in lights]
+    rows = [quoted[i:i + per_line] for i in range(0, len(quoted), per_line)] or [[]]
+    out = ["            {{ expand([" + ", ".join(rows[0]) + ("," if len(rows) > 1 else "])")]
+    for index, row in enumerate(rows[1:], start=1):
+        tail = "," if index < len(rows) - 1 else "])"
+        out.append("                       " + ", ".join(row) + tail)
+    return out
+
+
 def emit_automations() -> str:
     """The package's single `automation:` block: the asleep ON/OFF
     automations.
@@ -2114,9 +2153,7 @@ def emit_automations() -> str:
         "    actions:",
         "      - variables:",
         "          lit_lights: >-",
-        "            {{ expand(['light.office', 'light.front_left', 'light.front_right',",
-        "                       'light.rear_left', 'light.rear_right', 'light.sink',",
-        "                       'light.island_left', 'light.island_right'])",
+        *_expand_lights_lines(DIMMABLE_LIGHTS),
         "               | selectattr('state', 'eq', 'on') | map(attribute='entity_id') | list }}",
         "      - if:",
         "          - condition: template",

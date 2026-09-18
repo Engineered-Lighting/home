@@ -37,6 +37,35 @@ AVAILABILITY_OFFLINE = "offline"
 DISCOVERY_REPUBLISH_S = 600
 UNIQUE_PREFIX = "lighting_publisher_"
 
+DEVICE_IDENTIFIER = "lighting_publisher"
+DEVICE_NAME = "Lighting publisher"
+DEVICE_MANUFACTURER = "home-lighting"
+DEVICE_MODEL = "belief publisher"
+
+
+def device_block(shadow: bool) -> dict:
+    """The Home Assistant device every published entity belongs to.
+
+    Without one, sixteen entities arrive loose in the registry and removing
+    them means deleting sixteen things by hand; with one they group under a
+    single device the owner can find, inspect and delete in a single action,
+    which is what the M4 rollback asks for. The shadow run gets its own device
+    so a shadow entity can never be mistaken for a live one, and so the two
+    can be removed independently.
+
+    Like ``unique_id``, this is settled cheaply only before anything is
+    published: a device's identifiers are its registry key, and changing them
+    afterwards leaves the old device behind holding the entities' history,
+    their area and any customisation.
+    """
+    suffix = SHADOW_SUFFIX if shadow else ""
+    return {
+        "identifiers": [DEVICE_IDENTIFIER + suffix],
+        "name": DEVICE_NAME + (" (shadow)" if shadow else ""),
+        "manufacturer": DEVICE_MANUFACTURER,
+        "model": DEVICE_MODEL + (" (shadow)" if shadow else ""),
+    }
+
 TV_OBJECT_ID = "living_lights_tv_watching"
 ASLEEP_OBJECT_ID = "living_lights_asleep_estimator"
 HEARTBEAT_OBJECT_ID = "lighting_publisher_heartbeat"
@@ -62,6 +91,7 @@ class Entity:
     discovery_topic: str
     attributes_topic: str | None = None
     extra: dict = field(default_factory=dict)
+    device: dict = field(default_factory=dict)
 
     @property
     def unique_id(self) -> str:
@@ -95,6 +125,8 @@ class Entity:
         }
         if self.attributes_topic:
             payload["json_attributes_topic"] = self.attributes_topic
+        if self.device:
+            payload["device"] = dict(self.device)
         payload.update(self.extra)
         return payload
 
@@ -156,6 +188,8 @@ def build_entities(zones: ZoneMap, shadow: bool, topic_base: str = TOPIC_BASE,
     base = topic_base.rstrip("/")
     availability = f"{base}/availability{suffix}"
 
+    device = device_block(shadow)
+
     def make(key: str, component: str, object_id: str, name: str,
              attributes: bool = False, extra: dict | None = None) -> Entity:
         return Entity(
@@ -163,7 +197,7 @@ def build_entities(zones: ZoneMap, shadow: bool, topic_base: str = TOPIC_BASE,
             state_topic=f"{base}/{object_id}/state",
             attributes_topic=f"{base}/{object_id}/attributes" if attributes else None,
             discovery_topic=f"{discovery_prefix}/{component}/{object_id}/config",
-            extra=dict(extra or {}))
+            extra=dict(extra or {}), device=device)
 
     tv = make("tv_watching", "binary_sensor", TV_OBJECT_ID + suffix,
               "Living Lights TV watching" + tag, attributes=True,

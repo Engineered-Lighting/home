@@ -135,6 +135,35 @@ class DiscoveryPayloadTest(NoSocketTest):
         self.assertEqual(payload["payload_on"], "ON")
         self.assertEqual(payload["payload_off"], "OFF")
 
+    def test_every_entity_belongs_to_one_device_per_mode(self):
+        """Sixteen loose entities are sixteen things to delete by hand.
+
+        Grouping them under one device gives the owner a single thing to find,
+        inspect and remove, which is what the M4 rollback asks for. Like a
+        unique id, a device's identifiers are its registry key: settling them
+        before anything is published costs nothing and cannot be done cheaply
+        afterwards.
+        """
+        for shadow in (False, True):
+            with self.subTest(shadow=shadow):
+                entities = build_entities(self.zones, shadow=shadow)
+                devices = set()
+                for entity in entities.all():
+                    device = entity.discovery_payload(entities.availability_topic)["device"]
+                    self.assertEqual(device["manufacturer"], "home-lighting")
+                    devices.add(tuple(device["identifiers"]))
+                self.assertEqual(len(devices), 1, "one device for the whole mode")
+
+    def test_the_two_modes_are_different_devices(self):
+        """A shadow entity must never be mistaken for a live one, and the two
+        have to be removable independently."""
+        live = build_entities(self.zones, shadow=False)
+        shadow = build_entities(self.zones, shadow=True)
+        live_id = live.tv.discovery_payload(live.availability_topic)["device"]["identifiers"]
+        shadow_id = shadow.tv.discovery_payload(shadow.availability_topic)["device"]["identifiers"]
+        self.assertEqual(live_id, ["lighting_publisher"])
+        self.assertEqual(shadow_id, ["lighting_publisher_shadow"])
+
     def test_heartbeat_is_a_timestamp_sensor_without_attributes(self):
         entities = build_entities(self.zones, shadow=False)
         payload = json.loads(dict(entities.discovery_messages())[entities.heartbeat.discovery_topic])

@@ -37,11 +37,14 @@ the a-priori threshold; ``rest_state`` has negatives (locomotion rows) and
 is judged on precision and recall at its a-priori threshold. The table still
 reports agreement and all four counts at every threshold.
 
-LEVEL 2 (``--level 2``, plan M5). The rows are the visual windows of the v4
-public manifest: the level-1 ``rows.jsonl`` shape plus the record's
-``native_classes`` and ``targets``, and one more field naming the
-rich-observation JSON the observer's batch runner wrote for that window
-(``observation``: a path, or the typed observation inline). The packet is built
+LEVEL 2 (``--level 2``, plan M5). The rows are the observer batch's own
+output, taken as it is written: every selection field of a visual window (id,
+dataset, split, native_partition, native_classes, targets, stratum, group_id,
+subject_id, media, sample_times_s, digest) plus ``observation``, the
+cache-relative path of the rich-observation JSON that batch wrote for the
+window, and ``observation_model``. ``--observations`` is the cache root those
+paths resolve against; an absolute path and an inline observation are both
+still accepted. The packet is built
 from that typed observation (the ``semantic()`` result: posture, activities,
 summary, dimensions with a per-dimension status and description, context)
 exactly as the belief publisher will at M6, and from nothing else:
@@ -70,9 +73,18 @@ class-name phrases and their generic-subject remainders, the exporter's
 ``assert_no_dataset_vocabulary`` refuses the row when any of them appears in
 any key or string of the packet. Structural strings the runner itself writes
 (the schema constant, the camera name, the coverage, zone and media enums) are
-exempt, and so is a dataset term that is simply one of the observer's own
-taxonomy labels (``TAXONOMY_TERMS``): the account is built from that closed
-set, so such a term cannot tell a leak from the publisher's own vocabulary.
+exempt. A dataset term that is simply one of the observer's own taxonomy
+labels (``TAXONOMY_TERMS``) is exempt PER FIELD, not per run: the manifests
+name many classes after the observer's own posture and activity words
+(``watching tv``, ``eating``, ``walking``, ``cooking``), and dropping such a
+term everywhere stood the class-name check down on the whole of exactly the
+strata the acceptance thresholds name. The camera's ``account`` is the one
+field this runner fills from that closed vocabulary, so the exemption applies
+to ``$.cameras.*.account`` alone (``ACCOUNT_PATH_RE``); the claims are the
+model's free text and keep the full check. How many rows had any term exempted
+and which terms they were is recorded in ``run.json``
+(``counts.vocabulary_exempt_rows``, ``level2.vocabulary_exempt_terms``), so a
+reader of ``scores.md`` can see how much of the guard stood down.
 ``--strict-vocabulary`` additionally refuses every content word of a
 class name and the single-word question ids (``eating``, ``settling``); those
 are ordinary English that an honest observation may use, so they are off by
@@ -88,9 +100,26 @@ anything where an activity belief would raise a light (``P(tv_attention >= 1)``,
 Calibration bins report n, the mean predicted probability and the observed
 positive rate per decile per question. Both are computed at every level.
 
+Coverage. Every refusal shrinks the denominator the acceptance ratios are
+computed over, so the table reports, per question, the rows selected for it (a
+target that is not ``unobserved``), the rows actually scored and the ratio
+between them, and ``scores.md`` carries both columns. ``--min-coverage F``
+fails the run (status ``coverage_below_minimum``, exit 3, receipt and scores
+still written) when any question with a selection falls below ``F``: a recall
+of 1.0 over a tenth of the rows is not the number the gate means. A dry run
+scores nothing by construction, so it records the floor as unchecked rather
+than failing on it.
+
 A missing, unreadable or empty rich observation is one refused row in
 ``counts.observations_missing`` and ``packet_failures``, never an aborted run,
-and so is a row whose packet carries dataset vocabulary.
+and so is a row whose packet carries dataset vocabulary. A row that names no
+observation at all is one of those refusals too (also counted in
+``counts.observations_unnamed``), because the observer's batch runner writes a
+line per selected window whether or not it observed that window, and a partly
+observed selection must be reported rather than refused. A relative
+observation path that resolves outside ``--observations`` is refused the same
+way: a rows file is data and may not name a file outside the directory the
+operator pointed the run at.
 
 Dry run is the default: it builds and validates every packet, runs the gate
 check, counts would-be calls and bytes, writes ``run.json`` with
@@ -142,13 +171,18 @@ Row contract (one JSON object per line; unknown keys are ignored):
                  yes/no/unobserved and positive/negative are accepted, and a
                  mapping {"value": ..., "k": <level>} sets the Score cutoff
                  for that row
-    observation  string or object, level 2 only (aliases: rich_observation,
-                 observation_path, observation_file); the batch runner's
-                 rich-observation JSON as a path (absolute, or relative to
-                 ``--observations`` and otherwise to the rows file's
-                 directory), or the typed observation inline. The file holds
-                 the typed observation at its top level or under
-                 ``observation``, ``semantic`` or ``rich_observation``.
+    observation  string or object, level 2 only, optional (aliases:
+                 rich_observation, observation_path, observation_file); the
+                 batch runner's rich-observation JSON as a path (relative to
+                 ``--observations``, which is the runner's cache root, and
+                 otherwise to the rows file's directory; an absolute path is
+                 taken as given), or the typed observation inline. The file
+                 holds the typed observation at its top level or under
+                 ``observation``, ``semantic`` or ``rich_observation``. A row
+                 without one is one refused row, never a refused file.
+    observation_model
+                 string, level 2 only, optional; the model the batch runner
+                 observed the window with, recorded in the receipt
     selected_for list of question ids the exporter selected the row for,
                  optional; part of the level-2 dataset vocabulary
 
@@ -293,6 +327,7 @@ MAX_RECORDED_FAILURES = 50
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
+STATUS_COVERAGE = "coverage_below_minimum"
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_REFUSED = 3
@@ -418,6 +453,9 @@ class Row:
     class_ids: tuple = ()
     class_names: tuple = ()
     selected_for: tuple = ()
+    # The observer's batch runner names the model it observed the window with;
+    # kept for the receipt so a run says which observations it read.
+    observation_model: str = ""
 
 
 _TRUE_WORDS = {"yes", "true", "pos", "positive", "1"}
@@ -566,8 +604,17 @@ def split_claims(text: str, limit: int = packet_mod.TEXT_CAP, max_claims: int = 
     return claims[:max_claims]
 
 
-def observation_field(raw: Mapping[str, Any], line_no: int, level: int) -> tuple[str, dict | None]:
-    """(path reference, inline observation) for a level-2 row; ("", None) below it."""
+def observation_field(raw: Mapping[str, Any], level: int) -> tuple[str, dict | None]:
+    """(path reference, inline observation) for a level-2 row; ("", None) below it.
+
+    A row naming no observation is NOT a parse error. The observer's batch
+    runner writes one line per selected window whether or not that window was
+    observed (a capped batch stops early, a call can fail), so a level-2 run
+    over a partly observed selection must report the gap rather than refuse the
+    whole file: ``load_observation`` turns the empty reference into one
+    ``ObservationError`` for that row alone, counted in
+    ``counts.observations_missing`` and ``counts.observations_unnamed``.
+    """
     if level != LEVEL_VISUAL:
         return "", None
     for key in OBSERVATION_REF_KEYS:
@@ -576,7 +623,7 @@ def observation_field(raw: Mapping[str, Any], line_no: int, level: int) -> tuple
             return "", dict(value)
         if isinstance(value, str) and value.strip():
             return value.strip(), None
-    raise ValueError(f"line {line_no}: level 2 row names no rich observation")
+    return "", None
 
 
 def parse_row(raw: Mapping[str, Any], line_no: int, level: int = LEVEL) -> Row:
@@ -612,12 +659,14 @@ def parse_row(raw: Mapping[str, Any], line_no: int, level: int = LEVEL) -> Row:
     scene = _scene_name(raw.get("scene", raw.get("camera")))
     tv_present = television_present(raw, allow_tv_token=level == LEVEL_VISUAL)
     camera, reason = camera_for_row(scene, tv_present, targets)
-    observation_ref, observation_inline = observation_field(raw, line_no, level)
+    observation_ref, observation_inline = observation_field(raw, level)
+    observation_model = raw.get("observation_model")
     class_ids, class_names = class_terms(raw.get("classes", raw.get("native_classes", raw.get("actions"))))
     selected_for = tuple(str(q) for q in (raw.get("selected_for") or []) if isinstance(q, str) and q.strip())
     return Row(str(row_id) if row_id is not None else "", description, camera, tv_present,
                scene, reason, targets, cutoffs, observation_ref, observation_inline,
-               class_ids, class_names, selected_for)
+               class_ids, class_names, selected_for,
+               observation_model=str(observation_model).strip() if isinstance(observation_model, str) else "")
 
 
 def load_rows(path: Path, level: int = LEVEL) -> list[Row]:
@@ -691,9 +740,29 @@ class DatasetVocabularyError(ValueError):
 
 
 def resolve_observation_path(ref: str, observations_root: Path | None, rows_dir: Path) -> Path:
-    """An absolute reference as given; a relative one below --observations, else the rows file."""
+    """An absolute reference as given; a relative one below --observations, else the rows file.
+
+    The observer's batch runner files an observation at ``<key[:2]>/<key>.json``
+    under its cache root and writes that cache-relative path into the row, so a
+    relative reference is the normal form and the root is ``--observations``.
+    A relative reference that resolves outside that root (``..`` segments, or a
+    symlink pointing away) is refused with an ``ObservationError``: a rows file
+    is data, and data may not name a file outside the directory the operator
+    pointed the run at.
+    """
     path = Path(ref)
-    return path if path.is_absolute() else (observations_root or rows_dir) / path
+    if path.is_absolute():
+        return path
+    root = observations_root or rows_dir
+    try:
+        resolved = (root / path).resolve()
+        base = root.resolve()
+    except OSError as exc:
+        raise ObservationError(
+            f"rich observation path unresolvable ({type(exc).__name__}): {ref}") from exc
+    if resolved != base and base not in resolved.parents:
+        raise ObservationError(f"rich observation path escapes the observation root: {ref}")
+    return resolved
 
 
 def load_observation(row: Row, observations_root: Path | None, rows_dir: Path) -> tuple[dict, str]:
@@ -819,47 +888,89 @@ def normalise_term(text: str) -> str:
     return " ".join(_WORD_RE.findall(leak_guard.normalise_text(str(text)).lower()))
 
 
+def _contains_words(words: list[str], phrase_words: list[str]) -> bool:
+    """True when ``phrase_words`` appears as a run of whole words in ``words``.
+
+    Both sides come through :func:`normalise_term`, so this is a word-sequence
+    search rather than a substring search: the phrase "watching tv" matches
+    "is watching tv now" and not "watching tvs", and no phrase can be found
+    inside the middle of a longer word.
+    """
+    if not phrase_words or len(phrase_words) > len(words):
+        return False
+    first = phrase_words[0]
+    span = len(phrase_words)
+    for index, word in enumerate(words):
+        if word == first and words[index:index + span] == phrase_words:
+            return True
+    return False
+
+
 TAXONOMY_TERMS: frozenset = frozenset(
     term for term in (normalise_term(word) for word in OBSERVER_POSTURES + OBSERVER_ACTIVITIES) if term)
 
 
 def dataset_vocabulary(row: Row, strict: bool = False) -> dict:
-    """The row's label terms as ``{"phrases": [...], "tokens": [...]}``.
+    """The row's label terms as phrases, tokens and the subset exempt on the account.
 
     A phrase matches anywhere inside a normalised packet string; a token
-    matches only as a whole word. The default terms are distinctive: class ids,
-    whole class names and their generic-subject remainders, the exporter's
+    matches only as a whole word. The terms are distinctive: class ids, whole
+    class names and their generic-subject remainders, the exporter's
     ``selected_for`` ids, the multi-word question ids, the three target words
-    and the caption; a term equal to one of the observer's taxonomy labels
-    (``TAXONOMY_TERMS``) is dropped, because the account is built from that
-    closed set. ``strict`` adds every content word of a class name and the
+    and the caption. ``strict`` adds every content word of a class name and the
     single-word question ids (``eating``, ``settling``), which are ordinary
     English an honest observation may legitimately use.
+
+    A term equal to one of the observer's taxonomy labels (``TAXONOMY_TERMS``)
+    is NOT dropped from the check; it is listed in ``exempt_phrases`` /
+    ``exempt_tokens`` and exempted only where the packet field is built from
+    that closed vocabulary, which is the camera's ``account`` alone (see
+    ``ACCOUNT_PATH_RE``). The manifests name many classes after the observer's
+    own posture and activity words, so dropping such a term globally disarmed
+    the class-name check on every row of exactly the strata the acceptance
+    thresholds name; the claims are free text from the model and keep the full
+    check. A word split out of an exempt phrase is exempt on the account too,
+    or strict mode would refuse the account the runner itself wrote.
     """
     phrases: set[str] = set()
     tokens: set[str] = set()
+    exempt_phrases: set[str] = set()
+    exempt_tokens: set[str] = set()
     for class_id in row.class_ids:
         term = normalise_term(class_id)
-        if not term or term in TAXONOMY_TERMS:
+        if not term:
             continue
         # A dataset that does not use Charades' one-word ids can carry a
         # multi-word one, and a term with a space can only match as a phrase.
         (phrases if " " in term else tokens).add(term)
+        if term in TAXONOMY_TERMS:
+            (exempt_phrases if " " in term else exempt_tokens).add(term)
     for name in row.class_names:
         phrase = normalise_term(name)
-        if not phrase or phrase in TAXONOMY_TERMS:
+        if not phrase:
             continue
-        phrases.add(phrase)
+        # A one-word class name is a word, not a phrase: matched as a raw
+        # substring it fires on ordinary English that merely contains it
+        # ("eating" inside "seating", "tv" inside "tvs"). Single words go to
+        # the token set, which matches whole words, exactly as a one-word
+        # class id already does above.
+        (phrases if " " in phrase else tokens).add(phrase)
+        name_exempt = phrase in TAXONOMY_TERMS
+        if name_exempt:
+            (exempt_phrases if " " in phrase else exempt_tokens).add(phrase)
         for subject in GENERIC_SUBJECTS:
             if phrase.startswith(subject):
                 remainder = phrase[len(subject):].strip()
-                if remainder and remainder not in TAXONOMY_TERMS:
+                if remainder:
                     phrases.add(remainder)
+                    if remainder in TAXONOMY_TERMS:
+                        exempt_phrases.add(remainder)
                 break
         if strict:
-            tokens.update(word for word in phrase.split()
-                          if len(word) >= MIN_STRICT_WORD_LEN and word not in GENERIC_WORDS
-                          and word not in TAXONOMY_TERMS)
+            words = {word for word in phrase.split()
+                     if len(word) >= MIN_STRICT_WORD_LEN and word not in GENERIC_WORDS}
+            tokens.update(words)
+            exempt_tokens.update(word for word in words if name_exempt or word in TAXONOMY_TERMS)
     for question_id in tuple(questions_mod.QUESTION_IDS) + tuple(row.selected_for):
         normalised = normalise_term(question_id)
         if not normalised:
@@ -872,7 +983,19 @@ def dataset_vocabulary(row: Row, strict: bool = False) -> dict:
     caption = normalise_term(row.description)
     if caption:
         phrases.add(caption)
-    return {"phrases": sorted(p for p in phrases if p), "tokens": sorted(t for t in tokens if t)}
+    return {"phrases": sorted(p for p in phrases if p), "tokens": sorted(t for t in tokens if t),
+            "exempt_phrases": sorted(p for p in exempt_phrases if p),
+            "exempt_tokens": sorted(t for t in exempt_tokens if t)}
+
+
+def vocabulary_exemptions(vocabulary: Mapping[str, Any]) -> list:
+    """The terms this row's vocabulary exempts on the account, phrases and tokens together."""
+    return sorted(set(vocabulary.get("exempt_phrases") or ()) | set(vocabulary.get("exempt_tokens") or ()))
+
+
+# ``$.cameras.<name>.account`` and anything under it: the only packet field
+# this runner fills from the observer's closed posture and activity vocabulary.
+ACCOUNT_PATH_RE = re.compile(r"^\$\.cameras\.[^.\[]+\.account(?:[.\[]|$)")
 
 
 def packet_strings(node: Any, path: str = "$"):
@@ -903,19 +1026,34 @@ def assert_no_dataset_vocabulary(packet: Mapping[str, Any], vocabulary: Mapping[
     so a receipt carrying it says what leaked without repeating the label.
     ``skip`` holds the structural strings the runner writes from constants (the
     camera name is added by the caller).
+
+    The exemption is per field, not per run: on the camera's ``account``, which
+    this runner writes from the observer's closed posture and activity
+    vocabulary, the vocabulary's ``exempt_*`` terms are dropped; everywhere
+    else (the claims above all, which are the model's free text) every term is
+    checked, so a class name the manifest happens to share with a taxonomy
+    label still catches a leak into a claim.
     """
     phrases = tuple(vocabulary.get("phrases") or ())
     tokens = frozenset(vocabulary.get("tokens") or ())
+    exempt_phrases = frozenset(vocabulary.get("exempt_phrases") or ())
+    exempt_tokens = frozenset(vocabulary.get("exempt_tokens") or ())
+    account_phrases = tuple(phrase for phrase in phrases if phrase not in exempt_phrases)
+    account_tokens = tokens - exempt_tokens
     for path, value in packet_strings(packet):
         if value in skip:
             continue
         normalised = normalise_term(value)
         if not normalised:
             continue
-        if tokens.intersection(normalised.split()):
+        on_account = bool(ACCOUNT_PATH_RE.match(path))
+        active_tokens = account_tokens if on_account else tokens
+        active_phrases = account_phrases if on_account else phrases
+        words = normalised.split()
+        if active_tokens.intersection(words):
             raise DatasetVocabularyError(f"{path}: dataset vocabulary (token)")
-        for phrase in phrases:
-            if phrase in normalised:
+        for phrase in active_phrases:
+            if _contains_words(words, phrase.split()):
                 raise DatasetVocabularyError(f"{path}: dataset vocabulary (phrase)")
 
 
@@ -1146,9 +1284,30 @@ def calibration_table(scored: list[Mapping[str, Any]], bins: int = CALIBRATION_B
     return table
 
 
+def coverage_ratios(scored: list[Mapping[str, Any]], selected: Mapping[str, int]) -> dict:
+    """Per question: rows selected, rows scored and the ratio between them.
+
+    A row selected for a question is one whose target for it is not
+    ``unobserved``; a row scored for it is one that survived packet building,
+    the leak guard, the vocabulary guard, the call and the reduction. Refusals
+    shrink the denominator the acceptance ratios are computed over, and a
+    recall of 1.0 over a tenth of the rows is not the number the gate means,
+    so the loss is reported per question and ``--min-coverage`` can fail on it.
+    ``coverage`` is None where nothing was selected for the question.
+    """
+    table: dict = {}
+    for qid in questions_mod.QUESTION_IDS:
+        total = int(selected.get(qid, 0))
+        got = sum(1 for item in scored if item["targets"].get(qid) is not None and qid in item["p"])
+        table[qid] = {"selected": total, "scored": got,
+                      "coverage": round(got / total, 4) if total else None}
+    return table
+
+
 def score_table(scored: list[Mapping[str, Any]], thresholds: tuple[float, ...],
                 apriori: Mapping[str, float] = APRIORI_THRESHOLDS,
-                metrics: Mapping[str, str] | None = None) -> dict:
+                metrics: Mapping[str, str] | None = None,
+                coverage: Mapping[str, Mapping[str, Any]] | None = None) -> dict:
     """The sensitivity table: per question, per threshold, agreement, recall, precision and counts.
 
     ``scored`` items carry ``targets`` (question id -> True/False/None),
@@ -1178,11 +1337,14 @@ def score_table(scored: list[Mapping[str, Any]], thresholds: tuple[float, ...],
                 by_scene[scene] = {"observed": len(per_scene[scene]),
                                    "positives": sum(1 for t, _ in per_scene[scene] if t),
                                    **_cell(per_scene[scene], prior)}
+        cell = (coverage or {}).get(qid) or {}
         table[qid] = {
             "metric": (metrics or LEVEL1_METRIC).get(qid),
             "observed": len(observed),
             "positives": sum(1 for t, _ in observed if t),
             "unobserved": unobserved,
+            "selected": cell.get("selected"),
+            "coverage": cell.get("coverage"),
             "apriori_threshold": prior,
             "by_threshold": by_threshold,
             "by_scene": by_scene,
@@ -1214,9 +1376,13 @@ def render_scores(table: Mapping[str, Any], thresholds: tuple[float, ...], cutof
                      "they carry negatives. Agreement equals recall where there are no negatives. The "
                      "metric column below says which applies to each question.")
     lines.append("")
-    lines.append("| question | metric | compared | observed | positives | unobserved | a-priori "
-                 "| recall@a-priori | precision@a-priori | agreement@a-priori | best | agreement@best |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("Coverage is the rows scored for a question over the rows selected for it (a target "
+                 "that is not unobserved); a refused packet, a refused call or a failed reduction "
+                 "shrinks it, and --min-coverage fails the run when a question falls below a floor.")
+    lines.append("")
+    lines.append("| question | metric | compared | selected | observed | coverage | positives | unobserved "
+                 "| a-priori | recall@a-priori | precision@a-priori | agreement@a-priori | best | agreement@best |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for qid, entry in table.items():
         compared = "P(yes)" if questions_mod.question_by_id(qid).primitive == questions_mod.NOUL \
             else f"P(level >= {cutoffs.get(qid)})"
@@ -1227,7 +1393,10 @@ def render_scores(table: Mapping[str, Any], thresholds: tuple[float, ...], cutof
         for key, cell in entry["by_threshold"].items():
             if cell["agreement"] is not None and (best_agreement is None or cell["agreement"] > best_agreement):
                 best_key, best_agreement = key, cell["agreement"]
-        lines.append(f"| {qid} | {entry.get('metric') or 'n/a'} | {compared} | {entry['observed']} | {entry['positives']} "
+        selected = entry.get("selected")
+        lines.append(f"| {qid} | {entry.get('metric') or 'n/a'} | {compared} "
+                     f"| {'n/a' if selected is None else selected} | {entry['observed']} "
+                     f"| {_fmt(entry.get('coverage'))} | {entry['positives']} "
                      f"| {entry['unobserved']} | {prior_key or 'n/a'} | {_fmt(prior_cell.get('recall'))} "
                      f"| {_fmt(prior_cell.get('precision'))} | {_fmt(prior_cell.get('agreement'))} "
                      f"| {best_key or 'n/a'} | {_fmt(best_agreement)} |")
@@ -1349,6 +1518,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cutoffs", type=parse_cutoffs, default=dict(DEFAULT_CUTOFFS),
                    help="Score cutoffs, e.g. tv_attention=2,food_prep=2,settling=1,rest_state=2")
     p.add_argument("--cache", type=Path, default=None, help="answer cache directory (default <eval root>/cache)")
+    p.add_argument("--min-coverage", type=float, default=None,
+                   help="fail the run when a question's coverage (rows scored over rows selected for "
+                        "it) falls below this fraction, for example 0.9")
     p.add_argument("--split-long", action="store_true",
                    help="split a description over the 240-character cap into several claims instead of truncating")
     p.add_argument("--eval-root", type=Path, default=EVAL_ROOT, help=argparse.SUPPRESS)
@@ -1413,6 +1585,9 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
     execute = bool(args.execute)
     if execute and (args.max_calls is None or args.max_calls < 1):
         raise EvalError("--execute needs --max-calls N (N >= 1)")
+    min_coverage = args.min_coverage
+    if min_coverage is not None and not 0.0 <= min_coverage <= 1.0:
+        raise EvalError("--min-coverage is a fraction between 0 and 1")
     _check_out(args.out, args.eval_root, execute)
     cache_dir = args.cache or (args.eval_root / "cache")
     _check_below(cache_dir, args.eval_root, "--cache")
@@ -1436,19 +1611,36 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
     truncated = 0
     claims_truncated = 0
     observations_missing = 0
+    observations_unnamed = 0
     vocabulary_refusals = 0
+    vocabulary_exempt_rows = 0
+    exempt_terms: set = set()
+    observation_models: set = set()
     for index, row in enumerate(rows):
         cut = description_truncated(row.description) if level == LEVEL_TEXT else False
         truncated += int(cut and not args.split_long)
         observation_digest = None
+        vocabulary: dict = {}
+        if level == LEVEL_VISUAL:
+            # Measured over the selection, not over the surviving packets: the
+            # receipt says how much of the class-name guard the account
+            # exemption stood down, whatever each row went on to do.
+            vocabulary = dataset_vocabulary(row, args.strict_vocabulary)
+            exempt = vocabulary_exemptions(vocabulary)
+            if exempt:
+                vocabulary_exempt_rows += 1
+                exempt_terms.update(exempt)
+            if row.observation_model:
+                observation_models.add(row.observation_model)
+            if not row.observation_ref and row.observation_inline is None:
+                observations_unnamed += 1
         try:
             if level == LEVEL_VISUAL:
                 observation, observation_digest = load_observation(row, args.observations, rows_dir)
                 pkt, provenance = build_observation_packet(row, observation, args.with_summary)
                 claims_truncated += provenance["claims_truncated"]
                 leak_guard.assert_clean(pkt, username, roster_path=args.roster)
-                assert_no_dataset_vocabulary(pkt, dataset_vocabulary(row, args.strict_vocabulary),
-                                             STRUCTURAL_STRINGS | {row.camera})
+                assert_no_dataset_vocabulary(pkt, vocabulary, STRUCTURAL_STRINGS | {row.camera})
             else:
                 pkt = build_row_packet(row, args.split_long)
                 leak_guard.assert_clean(pkt, username, roster_path=args.roster)
@@ -1485,7 +1677,8 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
         "rows": len(rows), "packets_built": len(built), "packets_failed": len(rows) - len(built),
         "descriptions_truncated": truncated, "tv_rows": sum(1 for item in built if item["row"].tv_present),
         "claims_truncated": claims_truncated, "observations_missing": observations_missing,
-        "vocabulary_refusals": vocabulary_refusals,
+        "observations_unnamed": observations_unnamed,
+        "vocabulary_refusals": vocabulary_refusals, "vocabulary_exempt_rows": vocabulary_exempt_rows,
         "cache_hits": 0, "would_be_calls": 0, "calls_made": 0, "calls_failed": 0, "not_asked": 0,
         "gate_denied": 0, "bytes_would_send": 0, "input_tokens": 0, "output_tokens": 0,
     }
@@ -1610,15 +1803,38 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
         scored.append({"row_id": item["row_id"], "scene": item["row"].scene, "targets": item["row"].targets,
                        "p": probabilities, "beliefs": beliefs, "label": label_activity(item["row"].targets)})
     metrics = dict(LEVEL1_METRIC) if level == LEVEL_TEXT else derived_metrics(scored)
-    table = score_table(scored, thresholds, APRIORI_THRESHOLDS, metrics) if scored else None
+    selected_counts = {qid: sum(1 for row in rows if row.targets.get(qid) is not None)
+                       for qid in questions_mod.QUESTION_IDS}
+    coverage = coverage_ratios(scored, selected_counts)
+    table = score_table(scored, thresholds, APRIORI_THRESHOLDS, metrics, coverage) if scored else None
     consequences = consequence_table(scored, thresholds) if scored else None
     calibration = calibration_table(scored) if scored else None
     models_seen = sorted({r.model for r in answered.values()})
 
+    # A dry run asks nothing and therefore scores nothing, so its coverage is
+    # 0 by construction: the floor is checked on the run whose numbers the
+    # acceptance gate reads, and the receipt says which of the two happened.
+    below_coverage: list = []
+    coverage_check = None
+    if min_coverage is not None and not execute:
+        coverage_check = {"min_coverage": min_coverage, "checked": False, "below": [],
+                          "note": "a dry run scores no rows; the floor is checked on an executing run"}
+    elif min_coverage is not None:
+        below_coverage = sorted(qid for qid, cell in coverage.items()
+                                if cell["coverage"] is not None and cell["coverage"] < min_coverage)
+        coverage_check = {"min_coverage": min_coverage, "checked": True, "below": below_coverage,
+                          "passed": not below_coverage}
+        if below_coverage and status == "complete":
+            status = STATUS_COVERAGE
+            stop_reason = ("coverage below --min-coverage "
+                           f"{min_coverage:g} for: " + ", ".join(below_coverage))
+
     if table is not None:
         header = [f"executed: {execute}", f"level: {level}",
                   f"model: {model} (answered by: {', '.join(models_seen) or 'n/a'})",
-                  f"rows scored: {len(scored)} of {len(rows)}", f"cutoffs: {canonical(args.cutoffs)}"]
+                  f"rows scored: {len(scored)} of {len(rows)}", f"cutoffs: {canonical(args.cutoffs)}",
+                  f"min coverage: {'n/a' if min_coverage is None else format(min_coverage, 'g')}"
+                  + (f" (below it: {', '.join(below_coverage)})" if below_coverage else "")]
         write_private(args.out / "scores.md",
                       render_scores(table, thresholds, args.cutoffs, APRIORI_THRESHOLDS, header,
                                     level, consequences, calibration))
@@ -1649,9 +1865,14 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
             "observations_root": str(args.observations) if args.observations else None,
             "strict_vocabulary": bool(args.strict_vocabulary),
             "with_summary": bool(args.with_summary),
+            "observation_models": sorted(observation_models),
+            "vocabulary_exempt_terms": sorted(exempt_terms),
+            "account_path": ACCOUNT_PATH_RE.pattern,
             "dimension_order": list(DIMENSION_ORDER),
             "claim_statuses": list(CLAIM_STATUSES),
         } if level == LEVEL_VISUAL else None,
+        "coverage": coverage,
+        "coverage_check": coverage_check,
         "camera_policy": {**CAMERA_POLICY, **camera_counts},
         "call_policy": {"sdk_max_retries": MAX_RETRIES, "retry_budget_s": RETRY_BUDGET_S,
                         "call_timeout_s": CALL_TIMEOUT_S, "max_consecutive_errors": MAX_CONSECUTIVE_ERRORS,
@@ -1677,7 +1898,9 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
                   "cache_dir": str(cache.directory)},
     }
     write_private(args.out / "run.json", json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-    return EXIT_OK if status == "complete" else EXIT_ABORTED
+    if status == "complete":
+        return EXIT_OK
+    return EXIT_REFUSED if status == STATUS_COVERAGE else EXIT_ABORTED
 
 
 def main(argv: list[str] | None = None, *, env: Mapping[str, str] | None = None,

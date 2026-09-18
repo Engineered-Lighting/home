@@ -171,11 +171,21 @@ class DryRunTest(unittest.TestCase):
             argv[argv.index("--out") + 1] = str(Path(tmp) / "elsewhere")
             self.assertEqual(h.main(argv), pse.EXIT_REFUSED)
 
-    def test_level_two_rows_must_name_an_observation(self):
-        # level-1 rows are not level-2 rows: the runner says so per line, before any packet
+    def test_level_two_rows_without_an_observation_are_refused_one_by_one(self):
+        # level-1 rows carry no observation: every row is refused and counted,
+        # and the file is still read to the end (a partly observed selection is
+        # the normal case while the observer's batch is still running)
         with tempfile.TemporaryDirectory() as tmp:
             h = Harness(Path(tmp))
-            self.assertEqual(h.main(h.argv("dry", "--level", "2")), pse.EXIT_USAGE)
+            self.assertEqual(h.main(h.argv("dry", "--level", "2")), 0)
+            receipt = h.receipt("dry")
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["counts"]["rows"], 3)
+            self.assertEqual(receipt["counts"]["packets_built"], 0)
+            self.assertEqual(receipt["counts"]["observations_missing"], 3)
+            self.assertEqual(receipt["counts"]["observations_unnamed"], 3)
+            self.assertEqual([f["error"] for f in receipt["packet_failures"]],
+                             ["ObservationError"] * 3)
 
     def test_unimplemented_level_is_rejected_by_the_parser(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -749,7 +759,9 @@ class VisualHarness(Harness):
         self.write_rows(VISUAL_ROWS if rows is None else rows)
 
     def write_observation(self, name, observation):
-        (self.observations / name).write_text(json.dumps(observation), encoding="utf-8")
+        path = self.observations / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(observation), encoding="utf-8")
 
     def write_rows(self, rows):
         self.rows.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
@@ -834,25 +846,57 @@ class DatasetVocabularyTest(unittest.TestCase):
         self.assertIn("c147", vocabulary["tokens"])
         self.assertIn("unobserved", vocabulary["tokens"])
         self.assertNotIn("cooking", vocabulary["tokens"])               # ordinary English, not by default
-        strict = pse.dataset_vocabulary(row, strict=True)["tokens"]
-        self.assertIn("eating", strict)                                 # single-word question id
-        self.assertNotIn("cooking", strict)                             # an observer taxonomy label
+        strict = pse.dataset_vocabulary(row, strict=True)
+        self.assertIn("eating", strict["tokens"])                       # single-word question id
+        # an observer taxonomy label is still a term; it is only exempt on the account
+        self.assertIn("cooking", strict["tokens"])
+        self.assertIn("cooking", strict["exempt_tokens"])
+        self.assertNotIn("eating", strict["exempt_tokens"])
         tv_row = pse.parse_row(VISUAL_ROWS[0], 1, pse.LEVEL_VISUAL)
         self.assertIn("television", pse.dataset_vocabulary(tv_row, strict=True)["tokens"])
 
-    def test_a_class_name_equal_to_a_taxonomy_label_is_not_a_term(self):
+    def test_a_class_name_equal_to_a_taxonomy_label_is_exempt_on_the_account_only(self):
         # the manifests name their classes after the observer's own vocabulary;
-        # "watching tv" in an account is the publisher's word, not a leak
+        # "watching tv" in an account is the publisher's word, not a leak, but
+        # the same words in a claim are the model echoing the label
         raw = {**VISUAL_ROWS[0], "description": "",
                "native_classes": [{"class_id": "ia-07", "class_name": "watching tv"}]}
         row = pse.parse_row(raw, 1, pse.LEVEL_VISUAL)
         vocabulary = pse.dataset_vocabulary(row, strict=True)
-        self.assertNotIn("watching tv", vocabulary["phrases"])
+        self.assertIn("watching tv", vocabulary["phrases"])             # checked, not dropped
+        self.assertIn("watching tv", vocabulary["exempt_phrases"])      # except on the account
+        self.assertIn("watching", vocabulary["exempt_tokens"])          # its strict word too
+        self.assertIn("watching tv", pse.vocabulary_exemptions(vocabulary))
         self.assertIn("ia 07", vocabulary["phrases"])                   # a multi-word id is a phrase
+        skip = pse.STRUCTURAL_STRINGS | {row.camera}
         packet, _ = pse.build_observation_packet(row, OBSERVATIONS["v1.json"])
         self.assertEqual(packet["cameras"]["living_room"]["account"],
                          "posture sitting; activity hypotheses watching_tv")
-        pse.assert_no_dataset_vocabulary(packet, vocabulary, pse.STRUCTURAL_STRINGS | {row.camera})
+        pse.assert_no_dataset_vocabulary(packet, vocabulary, skip)
+        # the same term in a claim is refused, which is what the global
+        # exemption used to let through on a third of the real rows
+        leaking, _ = pse.build_observation_packet(row, _observation("sitting", ["watching_tv"], _dimensions(
+            posture=("visible", "The person is watching tv from the couch."))))
+        with self.assertRaises(pse.DatasetVocabularyError) as caught:
+            pse.assert_no_dataset_vocabulary(leaking, vocabulary, skip)
+        self.assertIn("claims[0]", str(caught.exception))
+        self.assertNotIn("watching", str(caught.exception))
+
+    def test_account_exemption_does_not_reach_the_target_words_or_the_caption(self):
+        raw = {**VISUAL_ROWS[0], "native_classes": [{"class_id": "ia-07", "class_name": "eating"}]}
+        row = pse.parse_row(raw, 1, pse.LEVEL_VISUAL)
+        vocabulary = pse.dataset_vocabulary(row)
+        # "eating" is one word, so it is exempt as a token: a one-word class
+        # name matched as a raw substring fires on ordinary English that only
+        # contains it ("eating" inside "seating"), which refused honest
+        # observations before. What matters is that the term is exempt on the
+        # account and nowhere else, whichever set carries it.
+        self.assertEqual(vocabulary["exempt_phrases"], [])
+        self.assertIn("eating", vocabulary["exempt_tokens"])
+        self.assertIn("eating", vocabulary["tokens"])
+        for word in pse.TARGET_WORDS:
+            self.assertNotIn(word, vocabulary["exempt_tokens"])
+        self.assertNotIn(pse.normalise_term(row.description), vocabulary["exempt_phrases"])
 
     def test_clean_packet_passes_and_a_leaking_one_is_refused(self):
         row = pse.parse_row(VISUAL_ROWS[1], 1, pse.LEVEL_VISUAL)
@@ -1017,6 +1061,258 @@ class LevelTwoRunTest(unittest.TestCase):
         self.assertEqual(pse.label_activity({"eating": False, "food_prep": False}), "inactive")
         self.assertEqual(pse.label_activity({"rest_state": True}), "inactive")
         self.assertEqual(pse.label_activity({qid: None for qid in pse.questions_mod.QUESTION_IDS}), "unknown")
+
+
+# -- the observer batch's own rows ---------------------------------------------
+# One line per selected window, in the shape the observer's batch runner
+# writes: every selection field, plus the cache-relative path of the rich
+# observation it filed for that window and the model it used. The batch files
+# an observation at <key[:2]>/<key>.json under its cache root, and --observations
+# is that root, so the reference below has the same shape as a produced one.
+OBSERVER_ROW_FIELDS = ("id", "dataset", "split", "native_partition", "native_classes", "targets",
+                       "stratum", "group_id", "subject_id", "media", "sample_times_s", "digest",
+                       "observation", "observation_model")
+OBSERVATION_MODEL = "an-observation-model"
+OBSERVER_CACHE_REFS = {"w1": "1f/1f9c00.json", "w2": "2a/2a4d10.json", "w3": "3b/3b7e20.json"}
+
+
+def _observer_row(tag, observation, class_name, scene, stratum, targets, **extra):
+    """One produced row; ``observation`` is whatever reference the test needs."""
+    row = {
+        "id": f"public:window:{tag}",
+        "dataset": "public_a",
+        "split": "development",
+        "native_partition": "train",
+        "native_classes": [{"class_id": f"public_a/activity:{class_name}", "class_name": class_name,
+                            "start_s": 0.0, "end_s": 1.766667}],
+        "targets": targets,
+        "stratum": stratum,
+        "group_id": f"public_a:session:{tag}",
+        "subject_id": f"public_a:subject:{tag}",
+        "media": {"kind": "file", "path": f"/nonexistent/{tag}.mp4", "sha256": "0" * 64},
+        "sample_times_s": [3.1, 3.37, 3.6, 3.87, 4.1, 4.37, 4.6, 4.87],
+        "digest": (tag * 32)[:64],
+        "scene": scene,
+        "selected_for": [stratum],
+        "status": "cached",
+        "frame_count": 8,
+        "length_s": 1.766667,
+        "observation": observation,
+        "observation_model": OBSERVATION_MODEL,
+    }
+    row.update(extra)
+    return row
+
+
+# The three strata carry class names the manifests take from the observer's own
+# taxonomy, which is the case the per-field exemption exists for. No row has a
+# description: the produced rows carry none.
+OBSERVER_ROWS = [
+    _observer_row("w1", OBSERVER_CACHE_REFS["w1"], "watching tv", "Living room", "public_a_tv",
+                  {"tv_attention": "positive", "eating": "negative", "food_prep": "unobserved",
+                   "settling": "negative", "rest_state": "negative"}),
+    _observer_row("w2", OBSERVER_CACHE_REFS["w2"], "cooking", "Kitchen", "public_a_cooking",
+                  {"tv_attention": "negative", "eating": "negative", "food_prep": "positive",
+                   "settling": "unobserved", "rest_state": "negative"}),
+    _observer_row("w3", OBSERVER_CACHE_REFS["w3"], "sleeping", "Bedroom", "public_a_rest",
+                  {"tv_attention": "unobserved", "eating": "negative", "food_prep": "negative",
+                   "settling": "positive", "rest_state": "positive"}),
+]
+OBSERVER_OBSERVATIONS = {OBSERVER_CACHE_REFS["w1"]: OBSERVATIONS["v1.json"],
+                         OBSERVER_CACHE_REFS["w2"]: OBSERVATIONS["v2.json"],
+                         OBSERVER_CACHE_REFS["w3"]: OBSERVATIONS["v3.json"]}
+
+
+class ObserverRowHandoffTest(unittest.TestCase):
+    """The two halves join: a produced row runs through --level 2 unchanged."""
+
+    def test_the_fixture_carries_every_contract_field(self):
+        for row in OBSERVER_ROWS:
+            for field in OBSERVER_ROW_FIELDS:
+                self.assertIn(field, row)
+
+    def test_cache_relative_observation_resolves_under_the_observations_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp), rows=OBSERVER_ROWS, observations=OBSERVER_OBSERVATIONS)
+            self.assertEqual(h.main(h.argv("dry")), 0)
+            receipt = h.receipt("dry")
+            self.assertEqual(receipt["counts"]["packets_built"], 3)
+            self.assertEqual(receipt["counts"]["observations_missing"], 0)
+            self.assertEqual(receipt["counts"]["observations_unnamed"], 0)
+            self.assertEqual(receipt["counts"]["vocabulary_refusals"], 0)
+            self.assertEqual(receipt["level2"]["observation_models"], [OBSERVATION_MODEL])
+            packets = h.packets("dry")
+            self.assertEqual([p["row_id"] for p in packets],
+                             [row["id"] for row in OBSERVER_ROWS])
+            self.assertEqual([p["camera"] for p in packets], ["living_room", "kitchen", "other_room"])
+            self.assertTrue(all(len(p["observation_digest"]) == 64 for p in packets))
+
+    def test_absolute_and_inline_references_still_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            absolute = Path(tmp) / "elsewhere" / "obs.json"
+            absolute.parent.mkdir()
+            absolute.write_text(json.dumps(OBSERVATIONS["v1.json"]), encoding="utf-8")
+            rows = [_observer_row("w1", str(absolute), "watching tv", "Living room", "public_a_tv",
+                                  dict(OBSERVER_ROWS[0]["targets"])),
+                    _observer_row("w2", OBSERVATIONS["v2.json"], "cooking", "Kitchen", "public_a_cooking",
+                                  dict(OBSERVER_ROWS[1]["targets"]))]
+            h = VisualHarness(Path(tmp), rows=rows, observations=OBSERVER_OBSERVATIONS)
+            self.assertEqual(h.main(h.argv("dry")), 0)
+            self.assertEqual(h.receipt("dry")["counts"]["packets_built"], 2)
+
+    def test_a_reference_escaping_the_observations_root_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cache"
+            (root / "1f").mkdir(parents=True)
+            (root / "1f" / "in.json").write_text(json.dumps(OBSERVATIONS["v1.json"]), encoding="utf-8")
+            outside = Path(tmp) / "outside.json"
+            outside.write_text(json.dumps(OBSERVATIONS["v1.json"]), encoding="utf-8")
+            inside = pse.resolve_observation_path("1f/in.json", root, Path(tmp))
+            self.assertEqual(inside, root / "1f" / "in.json")
+            for ref in ("../outside.json", "1f/../../outside.json"):
+                with self.assertRaises(pse.ObservationError) as caught:
+                    pse.resolve_observation_path(ref, root, Path(tmp))
+                self.assertIn("escapes", str(caught.exception))
+
+    def test_an_escaping_row_is_one_refused_row_in_a_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = list(OBSERVER_ROWS) + [_observer_row(
+                "w4", "../outside.json", "walking", "Hallway", "public_a_walk",
+                {"tv_attention": "unobserved", "eating": "negative", "food_prep": "negative",
+                 "settling": "unobserved", "rest_state": "negative"})]
+            h = VisualHarness(Path(tmp), rows=rows, observations=OBSERVER_OBSERVATIONS)
+            # a real file one directory above the root: the refusal is containment, not absence
+            (h.observations.parent / "outside.json").write_text(
+                json.dumps(OBSERVATIONS["v1.json"]), encoding="utf-8")
+            self.assertEqual(h.main(h.argv("esc")), 0)
+            receipt = h.receipt("esc")
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["counts"]["packets_built"], 3)
+            self.assertEqual(receipt["counts"]["observations_missing"], 1)
+            self.assertEqual(receipt["packet_failures"][0]["row_id"], "public:window:w4")
+            self.assertIn("escapes", receipt["packet_failures"][0]["detail"])
+
+    def test_an_unobserved_row_is_counted_and_never_aborts_the_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pending = dict(OBSERVER_ROWS[2])
+            pending.pop("observation")
+            rows = OBSERVER_ROWS[:2] + [pending]
+            h = VisualHarness(Path(tmp), rows=rows, observations=OBSERVER_OBSERVATIONS)
+            self.assertEqual(h.main(h.argv("part")), 0)
+            receipt = h.receipt("part")
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["counts"]["packets_built"], 2)
+            self.assertEqual(receipt["counts"]["observations_unnamed"], 1)
+            self.assertEqual(receipt["counts"]["observations_missing"], 1)
+            self.assertEqual(receipt["packet_failures"][0]["row_id"], "public:window:w3")
+
+    def test_the_account_exemption_is_measured_over_the_selection(self):
+        # every one of these rows is named after a taxonomy term, which is the
+        # 37 per cent case: the receipt says so and names the terms
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp), rows=OBSERVER_ROWS, observations=OBSERVER_OBSERVATIONS)
+            self.assertEqual(h.main(h.argv("dry")), 0)
+            receipt = h.receipt("dry")
+            self.assertEqual(receipt["counts"]["vocabulary_exempt_rows"], 3)
+            self.assertEqual(receipt["level2"]["vocabulary_exempt_terms"],
+                             ["cooking", "sleeping", "watching tv"])
+            self.assertIn("account", receipt["level2"]["account_path"])
+
+    def test_a_claim_echoing_the_class_name_is_still_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            observations = dict(OBSERVER_OBSERVATIONS)
+            observations[OBSERVER_CACHE_REFS["w2"]] = _observation("standing", ["cooking"], _dimensions(
+                posture=("visible", "The person is cooking at the hob.")))
+            h = VisualHarness(Path(tmp), rows=OBSERVER_ROWS, observations=observations)
+            self.assertEqual(h.main(h.argv("leak")), 0)
+            receipt = h.receipt("leak")
+            self.assertEqual(receipt["counts"]["vocabulary_refusals"], 1)
+            self.assertEqual(receipt["counts"]["packets_built"], 2)
+            failure = receipt["packet_failures"][0]
+            self.assertEqual(failure["row_id"], "public:window:w2")
+            self.assertEqual(failure["error"], "DatasetVocabularyError")
+            self.assertNotIn("cooking", json.dumps(receipt["packet_failures"]))
+
+
+class CoverageTest(unittest.TestCase):
+    """Refusals shrink the denominator; the receipt reports it and a floor can fail on it."""
+
+    def test_coverage_counts_scored_over_selected(self):
+        scored = [{"targets": {"eating": True, "settling": None}, "p": {"eating": 0.9, "settling": 0.1}}]
+        selected = {"eating": 4, "settling": 2, "tv_attention": 0}
+        coverage = pse.coverage_ratios(scored, selected)
+        self.assertEqual(coverage["eating"], {"selected": 4, "scored": 1, "coverage": 0.25})
+        self.assertEqual(coverage["settling"], {"selected": 2, "scored": 0, "coverage": 0.0})
+        self.assertIsNone(coverage["tv_attention"]["coverage"])       # nothing selected, nothing to miss
+
+    def test_table_and_scores_report_coverage_after_a_refusal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            observations = dict(OBSERVATIONS)
+            observations["v2.json"] = _observation("standing", ["cooking"], _dimensions(
+                posture=("visible", "Someone is cooking something at the counter.")))
+            h = VisualHarness(Path(tmp), observations=observations)
+            argv = h.argv("run1", "--execute", "--max-calls", "10", "--model", MODEL)
+            self.assertEqual(h.main(argv, transport=FakeTransport()), 0)
+            receipt = h.receipt("run1")
+            self.assertEqual(receipt["counts"]["vocabulary_refusals"], 1)
+            coverage = receipt["coverage"]
+            self.assertEqual(coverage["tv_attention"], {"selected": 2, "scored": 1, "coverage": 0.5})
+            self.assertEqual(coverage["food_prep"], {"selected": 2, "scored": 1, "coverage": 0.5})
+            self.assertEqual(coverage["settling"], {"selected": 2, "scored": 2, "coverage": 1.0})
+            self.assertEqual(receipt["table"]["tv_attention"]["selected"], 2)
+            self.assertEqual(receipt["table"]["tv_attention"]["coverage"], 0.5)
+            self.assertIsNone(receipt["coverage_check"])
+            scores = (h.root / "run1" / "scores.md").read_text(encoding="utf-8")
+            header = [line for line in scores.splitlines() if line.startswith("| question |")][0]
+            self.assertIn("selected", header)
+            self.assertIn("coverage", header)
+            row = [line for line in scores.splitlines() if line.startswith("| tv_attention |")][0]
+            self.assertIn("0.500", row)
+
+    def test_min_coverage_fails_the_run_and_still_writes_the_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            observations = dict(OBSERVATIONS)
+            observations["v2.json"] = _observation("standing", ["cooking"], _dimensions(
+                posture=("visible", "Someone is cooking something at the counter.")))
+            h = VisualHarness(Path(tmp), observations=observations)
+            argv = h.argv("low", "--execute", "--max-calls", "10", "--model", MODEL,
+                          "--min-coverage", "0.9")
+            self.assertEqual(h.main(argv, transport=FakeTransport()), pse.EXIT_REFUSED)
+            receipt = h.receipt("low")
+            self.assertEqual(receipt["status"], "coverage_below_minimum")
+            self.assertIn("min-coverage", receipt["stop_reason"])
+            check = receipt["coverage_check"]
+            self.assertTrue(check["checked"])
+            self.assertFalse(check["passed"])
+            self.assertEqual(check["min_coverage"], 0.9)
+            self.assertEqual(check["below"], ["eating", "food_prep", "rest_state", "tv_attention"])
+            self.assertTrue((h.root / "low" / "scores.md").exists())
+            self.assertIn("min coverage: 0.9", (h.root / "low" / "scores.md").read_text(encoding="utf-8"))
+
+    def test_a_met_floor_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp))
+            argv = h.argv("ok", "--execute", "--max-calls", "10", "--model", MODEL,
+                          "--min-coverage", "1.0")
+            self.assertEqual(h.main(argv, transport=FakeTransport()), 0)
+            receipt = h.receipt("ok")
+            self.assertEqual(receipt["status"], "complete")
+            self.assertTrue(receipt["coverage_check"]["passed"])
+            self.assertEqual(receipt["coverage_check"]["below"], [])
+
+    def test_a_dry_run_records_the_floor_as_unchecked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp))
+            self.assertEqual(h.main(h.argv("dry", "--min-coverage", "0.9")), 0)
+            check = h.receipt("dry")["coverage_check"]
+            self.assertFalse(check["checked"])
+            self.assertEqual(check["below"], [])
+
+    def test_a_floor_outside_zero_to_one_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp))
+            self.assertEqual(h.main(h.argv("bad", "--min-coverage", "1.5")), pse.EXIT_REFUSED)
+
 
 
 if __name__ == "__main__":

@@ -280,11 +280,18 @@ The receipt lists every `likely_asleep` latch with the Frigate person
 evidence in the preceding 15 minutes. The acceptance bar is zero unexplained
 latches over seven nights.
 
+A run with no person evidence, or whose evidence files contained no person
+row, exits 2 by design: scoring a latch against nothing proves nothing, and
+a forgotten argument must not read as a clean week. `--no-evidence`
+acknowledges an unscored run, which then reports every latch as
+inconclusive and proves nothing either. The journal's file day follows the
+publisher's configured timezone, so `--since` and `--until` are local dates.
+
 ### Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Container exits immediately with code 78 | `LIGHTING_PUBLISHER_BIND_ADDR` (or `BIND_HOST`) is not loopback. `/healthz` is never published on the LAN. |
+| Container exits immediately with code 78 | `BIND_HOST` inside the container is not loopback; the host side is fixed at 127.0.0.1 in the compose file. `/healthz` is never published on the LAN. |
 | `/healthz` says `mirror_never_seen` | The mirror package is not deployed or the ACL denies `living_lights/mirror/#`. Check with `mosquitto_sub -t 'living_lights/mirror/heartbeat' -C 1`. |
 | `/healthz` says `observer_stale` | The observer user unit is down; see the observer notes below and `systemctl --user status`. |
 | `/healthz` says `mqtt_down` | Wrong broker host, wrong login, or the password file is unreadable by uid 10001. |

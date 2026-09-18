@@ -20,3 +20,5 @@ name in `input_text.living_lights_asleep_writer`. New helpers
 `living_lights_asleep_from_estimator` and `living_lights_typesafe_egress_enabled`
 default off and reset to off on every restart. Same deploy and rollback as
 the story T change; nothing changes until the toggles are turned on.
+
+The publisher's heartbeat entity carries a corrected `unique_id`: it was double-prefixed. A `unique_id` is Home Assistant's entity-registry key, so changing it after a first publish would orphan the old entry and create a duplicate; it is safe now only because the publisher has never published.

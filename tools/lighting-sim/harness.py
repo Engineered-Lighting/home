@@ -40,8 +40,11 @@ LIGHTS = ["light.office", "light.front_left", "light.front_right", "light.rear_l
           "light.dining_room_lights", "light.dining_room", "light.outdoor_light",
           "light.ambient_light_left_mss110_main_channel", "light.ambient_light_right_mss110_main_channel"]
 MOCKED_SERVICES = [("logbook", "log"), ("conversation", "process"), ("assist_satellite", "announce"),
-                   ("switch", "turn_on"), ("switch", "turn_off"), ("media_player", "media_pause"),
+                   ("media_player", "media_pause"), ("mqtt", "publish"),
                    ("notify", "notify"), ("notify", "mobile_app_iphone"), ("homeassistant", "update_entity")]
+TV_OFF_STATES = ("off", "standby", "unavailable", "unknown")   # what the generator will treat as TV off
+HEARTBEAT = "sensor.lighting_publisher_heartbeat"
+TV_WATCHING = "binary_sensor.living_lights_tv_watching"
 # Production-like toggle values. Unknown toggles keep the package initial.
 TOGGLES_ON = ["input_boolean.living_lights_enabled", "input_boolean.living_lights_gradient_enabled",
               "input_boolean.user_at_home", "input_boolean.living_lights_working_hours_enabled",
@@ -107,9 +110,11 @@ class FakeLights:
                 attrs["brightness"] = call.data["brightness"]
             if "color_temp_kelvin" in call.data:
                 attrs["color_temp_kelvin"] = call.data["color_temp_kelvin"]
-            self.hass.states.async_set(entity_id, "on", attrs)
+            # Home Assistant semantics: turn_on with brightness 0 turns the light off.
+            to_state = "off" if attrs.get("brightness", 1) == 0 else "on"
+            self.hass.states.async_set(entity_id, to_state, attrs)
             self.calls.append({"t": now.isoformat(), "service": "turn_on", "entity": entity_id,
-                               "from": prev_state, "brightness_pct": pct,
+                               "from": prev_state, "to": to_state, "brightness_pct": pct,
                                "color_temp_kelvin": call.data.get("color_temp_kelvin"),
                                "transition": call.data.get("transition"),
                                "context_id": call.context.id,
@@ -122,7 +127,7 @@ class FakeLights:
             attrs = dict(prev.attributes) if prev else {}
             self.hass.states.async_set(entity_id, "off", attrs)
             self.calls.append({"t": now.isoformat(), "service": "turn_off", "entity": entity_id,
-                               "from": prev.state if prev else "off", "brightness_pct": 0,
+                               "from": prev.state if prev else "off", "to": "off", "brightness_pct": 0,
                                "context_id": call.context.id,
                                "context_parent": call.context.parent_id})
 
@@ -134,12 +139,41 @@ class FakeLights:
                 self.hass.states.async_set(light, "off", {})
 
 
+class FakeSwitches:
+    """Records switch.turn_on / turn_off (the ambient strips) and mirrors state."""
+
+    def __init__(self, hass: HomeAssistant):
+        self.hass = hass
+        self.calls: list[dict[str, Any]] = []
+
+    async def _handle(self, call: ServiceCall, to_state: str) -> None:
+        now = dt_util.now()
+        for entity_id in FakeLights._targets(call):
+            prev = self.hass.states.get(entity_id)
+            self.hass.states.async_set(entity_id, to_state, dict(prev.attributes) if prev else {})
+            self.calls.append({"t": now.isoformat(), "service": f"turn_{to_state}", "entity": entity_id,
+                               "from": prev.state if prev else "off", "to": to_state,
+                               "context_id": call.context.id, "context_parent": call.context.parent_id})
+
+    async def turn_on(self, call: ServiceCall) -> None:
+        await self._handle(call, "on")
+
+    async def turn_off(self, call: ServiceCall) -> None:
+        await self._handle(call, "off")
+
+    def install(self) -> None:
+        self.hass.services.async_register("switch", "turn_on", self.turn_on)
+        self.hass.services.async_register("switch", "turn_off", self.turn_off)
+
+
 class Recorder:
     """Keeps every state change of the entities the report cares about."""
 
     WATCH_PREFIXES = ("input_boolean.living_lights_asleep", "input_boolean.living_lights_woke_up_today",
                       "binary_sensor.living_lights_any_occupied", "sensor.living_lights_profile",
-                      "input_text.living_lights_override_text_")
+                      "input_text.living_lights_override_text_", "binary_sensor.living_lights_tv_playing",
+                      "binary_sensor.living_lights_tv_watching", "binary_sensor.living_lights_publisher_fresh",
+                      "sensor.living_lights_asleep_estimator", "media_player.lg_tv")
 
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
@@ -197,6 +231,9 @@ async def setup_sim(hass: HomeAssistant, packages_root: pathlib.Path,
             async_mock_service(hass, domain, name)
     lights = FakeLights(hass)
     lights.install()
+    switches = FakeSwitches(hass)
+    switches.install()
+    lights.switches = switches          # one handle for the tests; call lists stay separate
     for entity_id, state in (initial_inputs or {}).items():
         if not entity_id.startswith("input_"):
             set_input(hass, entity_id, state)
@@ -249,9 +286,19 @@ def set_input(hass: HomeAssistant, entity_id: str, state: str, attributes: dict 
     hass.states.async_set(entity_id, state, attrs)
 
 
+async def set_number(hass: HomeAssistant, entity_id: str, value: float) -> None:
+    """Set an input_number helper through its service (as a slider drag would)."""
+    if hass.states.get(entity_id) is None:
+        return
+    await hass.services.async_call("input_number", "set_value",
+                                   {"entity_id": entity_id, "value": value}, blocking=True)
+
+
 async def apply_input(hass: HomeAssistant, entity_id: str, state: str) -> None:
     if entity_id.startswith("input_boolean."):
         await set_toggle(hass, entity_id, state == "on")
+    elif entity_id.startswith("input_number."):
+        await set_number(hass, entity_id, float(state))
     else:
         set_input(hass, entity_id, state)
 
@@ -278,13 +325,20 @@ class Timeline:
         self.start, self.end = start, end
         self.initial = {**default_inputs(), **(initial or {})}
         self.events: list[tuple[dt.datetime, str, str]] = []
+        # Publisher heartbeat: off by default (legacy house). publisher() turns it
+        # on; dead_from stops it, which is how "publisher dead" scenarios look.
+        self.heartbeat = False
+        self.heartbeat_dead_from: dt.datetime | None = None
 
-    def at(self, when: dt.datetime | str, entity_id: str, state: str) -> "Timeline":
+    def _when(self, when: dt.datetime | str) -> dt.datetime:
         if isinstance(when, str):
             when = dt.datetime.fromisoformat(when)
         if when.tzinfo is None:
             when = when.replace(tzinfo=self.start.tzinfo)
-        self.events.append((when, entity_id, state))
+        return when
+
+    def at(self, when: dt.datetime | str, entity_id: str, state: str) -> "Timeline":
+        self.events.append((self._when(when), entity_id, state))
         return self
 
     def occupy(self, zone: str, start: dt.datetime, end: dt.datetime) -> "Timeline":
@@ -294,6 +348,80 @@ class Timeline:
                     f"binary_sensor.{cam}_motion"):
             self.at(start, ent, "on")
             self.at(end, ent, "off")
+        return self
+
+    def tv(self, when: dt.datetime | str, state: str) -> "Timeline":
+        """media_player.lg_tv state: on, playing, paused, standby, off, unavailable, unknown."""
+        return self.at(when, "media_player.lg_tv", state)
+
+    def belief(self, when: dt.datetime | str, entity_id: str, state: str) -> "Timeline":
+        """A belief entity as the publisher would publish it (fed as plain state,
+        because the sim drops the mqtt domain): binary_sensor.living_lights_tv_watching,
+        sensor.<camera>_<zone>_activity, sensor.living_lights_asleep_estimator."""
+        return self.at(when, entity_id, state)
+
+    def publisher(self, alive: bool = True, dead_from: dt.datetime | str | None = None) -> "Timeline":
+        """Refresh sensor.lighting_publisher_heartbeat every minute (until dead_from)."""
+        self.heartbeat = alive
+        self.heartbeat_dead_from = self._when(dead_from) if dead_from else None
+        return self
+
+    def derive_tv_watching(self, *, grace_s: int = 600, hold_s: int = 1800) -> "Timeline":
+        """Level-0 oracle for the belief the publisher will compute from Jev.
+
+        tv_watching is ON while the TV is on (state not in TV_OFF_STATES) and
+        the sofa is occupied, or was occupied within `hold_s` (the AWAY_HOLD:
+        an errand keeps the room dark). It also turns on when the TV comes on
+        within `grace_s` after the sofa was last occupied. It is OFF otherwise
+        (TV off, or nobody on the sofa for longer than the hold). Appends the
+        belief edges to this timeline; scenarios that need a different belief
+        add their own edges after calling this.
+        """
+        tv = self.initial.get("media_player.lg_tv", "off")
+        sofa = self.initial.get("binary_sensor.sofa_person_occupancy", "off") == "on"
+        sofa_last_off: dt.datetime | None = None
+        events = sorted(self.events, key=lambda e: e[0])
+        marks = sorted({e[0] for e in events} | {self.start})
+        # evaluation instants: every input edge plus the hold/grace expiries
+        extra = []
+        for when, ent, st in events:
+            if ent == "binary_sensor.sofa_person_occupancy" and st == "off":
+                extra.append(when + dt.timedelta(seconds=hold_s))
+                extra.append(when + dt.timedelta(seconds=grace_s))
+        instants = sorted(set(marks) | set(extra))
+        state = "off"
+        derived: list[tuple[dt.datetime, str]] = []
+        idx = 0
+        for t in instants:
+            while idx < len(events) and events[idx][0] <= t:
+                _, ent, st = events[idx]
+                if ent == "media_player.lg_tv":
+                    tv = st
+                elif ent == "binary_sensor.sofa_person_occupancy":
+                    was = sofa
+                    sofa = st == "on"
+                    if was and not sofa:
+                        sofa_last_off = t
+                idx += 1
+            tv_on = tv not in TV_OFF_STATES
+            since_off = ((t - sofa_last_off).total_seconds()
+                         if (not sofa and sofa_last_off is not None) else None)
+            if tv_on and sofa:
+                watching = True                                   # WATCHING
+            elif tv_on and since_off is not None:
+                watching = since_off <= (hold_s if state == "on" else grace_s)   # AWAY_HOLD / late TV-on
+            else:
+                watching = False                                  # TV off, or nobody near the sofa
+            new = "on" if watching else "off"
+            if new != state:
+                derived.append((t, new))
+                state = new
+        for t, st in derived:
+            if t == self.start:
+                self.initial[TV_WATCHING] = st
+            else:
+                self.at(t, TV_WATCHING, st)
+        self.initial.setdefault(TV_WATCHING, "off")
         return self
 
 
@@ -318,6 +446,8 @@ async def run_timeline(hass: HomeAssistant, freezer, timeline: Timeline, *, step
             await apply_input(hass, entity_id, state)
         elif hass.states.get(entity_id) is None:
             set_input(hass, entity_id, state)
+    if timeline.heartbeat:
+        set_input(hass, HEARTBEAT, timeline.start.isoformat())
     await settle(hass)
     events = sorted(timeline.events, key=lambda e: e[0])
     snapshots: list[dict[str, Any]] = []
@@ -343,6 +473,9 @@ async def run_timeline(hass: HomeAssistant, freezer, timeline: Timeline, *, step
         await settle(hass)
         now = target
         if now >= next_minute:
+            if timeline.heartbeat and (timeline.heartbeat_dead_from is None or now < timeline.heartbeat_dead_from):
+                set_input(hass, HEARTBEAT, now.isoformat())
+                await settle(hass)
             snapshots.append(snapshot(hass))
             if minute_hook:
                 minute_hook(hass, now)
@@ -362,11 +495,16 @@ def snapshot(hass: HomeAssistant) -> dict[str, Any]:
         st = hass.states.get(light)
         if st is not None and st.state == "on":
             lit[light] = round(st.attributes.get("brightness", 0) * 100 / 255)
+    def state_of(entity_id: str):
+        st = hass.states.get(entity_id)
+        return st.state if st is not None else None
+
+    switches_on = sorted(s.entity_id for s in hass.states.async_all("switch") if s.state == "on")
     return {"t": dt_util.now().isoformat(),
-            "asleep": (hass.states.get("input_boolean.living_lights_asleep") or {}).state
-            if hass.states.get("input_boolean.living_lights_asleep") else None,
-            "any_occupied": (hass.states.get("binary_sensor.living_lights_any_occupied").state
-                             if hass.states.get("binary_sensor.living_lights_any_occupied") else None),
-            "profile": hass.states.get("sensor.living_lights_profile").state
-            if hass.states.get("sensor.living_lights_profile") else None,
-            "lights_on": lit}
+            "asleep": state_of("input_boolean.living_lights_asleep"),
+            "any_occupied": state_of("binary_sensor.living_lights_any_occupied"),
+            "profile": state_of("sensor.living_lights_profile"),
+            "tv": state_of("media_player.lg_tv"),
+            "tv_playing": state_of("binary_sensor.living_lights_tv_playing"),
+            "tv_watching": state_of(TV_WATCHING),
+            "lights_on": lit, "switches_on": switches_on}

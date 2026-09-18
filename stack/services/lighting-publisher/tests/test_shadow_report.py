@@ -367,6 +367,25 @@ class ShadowReportTest(unittest.TestCase):
         self.assertEqual(report["evidence_sources"], 2)
         self.assertEqual(report["frigate_person_rows"], 2)
 
+    def test_days_are_counted_in_the_zone_the_journal_names_its_files_by(self):
+        """The journal writes UTC timestamps and names its files by the local
+        date, on purpose: one file is one night.
+
+        Counting days by the UTC date lines up with neither. West of Greenwich
+        a local evening lands on the next UTC day, so one local day counts as
+        two and the departure day inherits the previous evening's occupancy.
+        """
+        import datetime as dtm
+        evening = dtm.datetime(2026, 9, 18, 22, 30, tzinfo=dtm.timezone.utc)  # 15:30 local
+        late = dtm.datetime(2026, 9, 19, 5, 30, tzinfo=dtm.timezone.utc)      # 22:30 the same local day
+        tz = tool.ZoneInfo("America/Los_Angeles")
+        self.assertEqual(tool.local_date(evening, tz), tool.local_date(late, tz),
+                         "both instants are the same local day")
+        self.assertNotEqual(evening.date(), late.date(),
+                            "and they are different UTC days, which is the trap")
+        covered = tool.days_in_range([{"t": evening.isoformat()}, {"t": late.isoformat()}], tz)
+        self.assertEqual(len(covered), 1)
+
     def test_a_week_nobody_was_home_is_refused(self):
         """A perfect score earned by an empty house is not evidence.
 

@@ -52,6 +52,7 @@ import datetime as dt
 import json
 import pathlib
 import sys
+from zoneinfo import ZoneInfo
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -297,7 +298,22 @@ def state_at(rows: list[dict], when: dt.datetime) -> str | None:
     return found
 
 
-def occupied_days(people: list[dict]) -> set:
+DEFAULT_TZ = "America/Los_Angeles"
+
+
+def local_date(when: dt.datetime, tz) -> dt.date:
+    """The LOCAL date of an instant.
+
+    The journal writes its timestamps in UTC and names its files by the local
+    date, on purpose: one file is one night. Counting days by the UTC date
+    would not line up with either. West of Greenwich a local evening lands on
+    the next UTC day, so a single local day would count as two and the
+    departure day would inherit the previous evening's occupancy.
+    """
+    return when.astimezone(tz).date()
+
+
+def occupied_days(people: list[dict], tz) -> set:
     """The local dates on which any person was seen at all.
 
     A latch scores ``explained`` when no person was near it, which is the right
@@ -306,16 +322,16 @@ def occupied_days(people: list[dict]) -> set:
     anywhere in it is a day the household was away, and a night inside it
     tests nothing about sleeping.
     """
-    return {row["at"].date() for row in people}
+    return {local_date(row["at"], tz) for row in people}
 
 
-def days_in_range(records: list[dict]) -> set:
+def days_in_range(records: list[dict], tz) -> set:
     """The local dates the journal actually covers."""
     out = set()
     for row in records:
         when = row_time(row)
         if when is not None:
-            out.add(when.date())
+            out.add(local_date(when, tz))
     return out
 
 
@@ -328,7 +344,7 @@ def verdict_for(scored: bool, seen: list[dict]) -> str:
 
 def build_report(records: list[dict], people: list[dict], recorder: list[dict],
                  window_min: int, files: list[str], evidence_sources: int,
-                 malformed: list[str]) -> dict:
+                 malformed: list[str], tz=None) -> dict:
     """The receipt: every latch, its evidence, and the run's counters."""
     window_s = window_min * 60
     # Scored means person evidence actually arrived. A file that parsed to no
@@ -357,8 +373,9 @@ def build_report(records: list[dict], people: list[dict], recorder: list[dict],
                      if isinstance(record.get("tv"), dict) and record["tv"].get("changed"))
     unexplained = [row for row in rows if row["verdict"] == VERDICT_UNEXPLAINED]
     inconclusive = [row for row in rows if row["verdict"] == VERDICT_INCONCLUSIVE]
-    covered = days_in_range(records)
-    occupied = occupied_days(people) & covered
+    zone = tz or ZoneInfo(DEFAULT_TZ)
+    covered = days_in_range(records, zone)
+    occupied = occupied_days(people, zone) & covered
     empty = sorted(d.isoformat() for d in (covered - occupied))
     return {
         "schema": "lighting-shadow-report/v1",
@@ -372,6 +389,7 @@ def build_report(records: list[dict], people: list[dict], recorder: list[dict],
         "exits": [{"at": item["at"].isoformat(timespec="seconds"), "to": item["to"],
                    "reason": item["reason"]} for item in exits(records)],
         "evidence_sources": evidence_sources,
+        "timezone": str(zone),
         "days_covered": len(covered),
         "days_occupied": len(occupied),
         "days_empty": empty,
@@ -461,6 +479,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"recorder entity to compare against (default {LEGACY_LATCH_ENTITY})")
     parser.add_argument("--assume-person", action="store_true",
                         help="treat unlabelled Frigate rows as person evidence")
+    parser.add_argument("--timezone", default=DEFAULT_TZ,
+                        help="the zone the journal names its files by; day counts use it "
+                             "because the timestamps inside are UTC")
     parser.add_argument("--allow-empty-house", action="store_true",
                         help="report a range in which nobody was seen on any day; useful "
                              "only as a negative control, never towards the seven nights")
@@ -543,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"shadow-report: {exc}", file=sys.stderr)
         return EXIT_USAGE
     report = build_report(records, people, recorder, args.window_min, files,
-                          len(args.frigate_jsonl), malformed)
+                          len(args.frigate_jsonl), malformed, ZoneInfo(args.timezone))
     print(json.dumps(report, indent=2) if args.json else render(report))
     if report["unexplained_latches"]:
         return EXIT_UNEXPLAINED

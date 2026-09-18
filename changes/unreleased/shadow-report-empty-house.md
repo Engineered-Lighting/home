@@ -20,3 +20,13 @@ Found by auditing what a house move does to the experiment, with the household
 travelling the day after the shadow run began. It is the same defect shape this
 plan has caught four times already, and this time the calendar was about to
 walk into it rather than a bug.
+
+## Days are counted in local time
+
+The journal writes its timestamps in UTC and names its files by the local date,
+on purpose, so that one file is one night. The day counting added above used
+the UTC date, which lines up with neither: west of Greenwich a local evening
+lands on the next UTC day, so a single local day counted as two and the
+departure day inherited the previous evening's occupancy credit. That is the
+same mistake the journal itself was fixed for. Day counts now convert to the
+zone the files are named by, and `--timezone` sets it.

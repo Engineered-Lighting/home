@@ -5,7 +5,7 @@
       "coverage": {"status": "fresh", "age_s": 4},
       "occupancy": {"zones": {"sofa": "occupied", "front_left": "clear", "weights": "clear", "office": "clear", "front_door": "clear", "whole_living_room": "occupied"}},
       "people": [{"track": "p1", "position": "sofa", "posture": "reclined", "activities": ["watching screen"]}],
-      "claims": ["One person reclined on the sofa facing the screen, still, blanket over legs.", "activity hypothesis: watching screen"],
+      "claims": ["One person reclined on the sofa facing the screen, still, blanket over legs.", "activity hypothesis: watching screen", "Only the floor lamp gives light. Sofa still occupied."],
       "account": "The person settled on the sofa a while ago and has not moved much since; the screen is playing.",
       "objects": {"person_adjacent": ["remote", "blanket"]}
     },

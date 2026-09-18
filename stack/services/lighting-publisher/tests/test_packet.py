@@ -72,7 +72,7 @@ class PacketBuilderTest(unittest.TestCase):
         packet["cameras"]["living_room"]["entity_id"] = "camera.living_room"
         with self.assertRaises(pk.PacketError) as ctx:
             pk.validate_packet(packet)
-        self.assertIn("$.cameras.living_room.entity_id", str(ctx.exception))
+        self.assertEqual(str(ctx.exception), "$.cameras.<key#0>.<key#6>: key not allowed")
         packet = pk.build_packet(sample_cameras(), [], 45)
         packet["clock"] = "23:59"
         with self.assertRaises(pk.PacketError):
@@ -100,7 +100,7 @@ class PacketBuilderTest(unittest.TestCase):
             "entity id in media role": dict(cameras={"lr": plain_camera()}, media=[{"role": "media_player.living_room_tv"}]),
             "iso timestamp in claim": dict(cameras={"lr": plain_camera(claims=["seen at 2026-09-17T19:25:00"])}),
             "time of day in claim": dict(cameras={"lr": plain_camera(claims=["wall clock reads 19:25"])}),
-            "slashed date in summary": dict(cameras={"lr": plain_camera(semantic={"summary": "overlay reads 09/17/2026"})}),
+            "numeric date in summary": dict(cameras={"lr": plain_camera(semantic={"summary": "overlay reads 09/17/2026"})}),
             "phone number in account": dict(cameras={"lr": plain_camera(semantic={"context": {"cognitive_account": "call 555-123-4567"}})}),
             "hostname in object": dict(cameras={"lr": plain_camera(person_adjacent=["nas.local"])}),
             "zero width split entity id": dict(cameras={"lr": plain_camera(claims=["light.\u200bsofa_lamp is on"])}),
@@ -116,6 +116,83 @@ class PacketBuilderTest(unittest.TestCase):
                 self.assertIn("leak pattern", message)
                 for secret in ("sofa_lamp", "living_room_tv", "sofa_occ", "2026", "19:25", "555", "nas.local", "caf"):
                     self.assertNotIn(secret, message, label)
+
+    def test_builder_refuses_whitespace_split_entity_ids(self):
+        cases = {
+            "newline after dot in claim": dict(cameras={"lr": plain_camera(claims=["light.\nsofa_lamp is on"])}),
+            "space after dot in claim": dict(cameras={"lr": plain_camera(claims=["light. sofa_lamp is on"])}),
+            "space before dot in claim": dict(cameras={"lr": plain_camera(claims=["light .sofa_lamp is on"])}),
+            "newline after dot in zone key": dict(cameras={"lr": plain_camera(zones={"light.\nsofa_lamp": "occupied"})}),
+            "newline after dot in camera key": dict(cameras={"light.\nliving_room": plain_camera()}),
+            "space after dot in media role": dict(cameras={"lr": plain_camera()}, media=[{"role": "media_player. living_room_tv"}]),
+        }
+        for label, kwargs in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(pk.PacketError) as ctx:
+                    pk.build_packet(**kwargs)
+                message = str(ctx.exception)
+                self.assertIn("leak pattern (ha_entity_id)", message)
+                for secret in ("sofa_lamp", "living_room", "light"):
+                    self.assertNotIn(secret, message, label)
+        packet = pk.build_packet({"lr": plain_camera(claims=["Turned off the light. Sofa is empty."])})
+        self.assertEqual(packet["cameras"]["lr"]["claims"][-1], "Turned off the light. Sofa is empty.")
+
+    def test_builder_refuses_osd_dates_and_spoken_clocks(self):
+        cases = {
+            "ymd overlay": ["overlay 2026/09/17"], "dotted two digit year": ["overlay 17.9.26"],
+            "dashed two digit year": ["17-9-26"], "month name": ["calendar shows 17 Sep 2026"],
+            "month first": ["calendar shows September 17th"], "pm clock": ["clock shows 7pm"],
+            "spaced pm clock": ["clock shows 7 pm"], "h clock": ["at 19h25"], "military clock": ["1925 hours"],
+        }
+        for label, claims in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(pk.PacketError) as ctx:
+                    pk.build_packet({"lr": plain_camera(claims=claims)})
+                message = str(ctx.exception)
+                self.assertIn("leak pattern", message)
+                for secret in ("2026", "17", "Sep", "7", "19", "25"):
+                    self.assertNotIn(secret, message, label)
+        packet = pk.build_packet({"lr": plain_camera(claims=["1 may be asleep, 2 on the sofa"])})
+        self.assertEqual(packet["cameras"]["lr"]["claims"][-1], "1 may be asleep, 2 on the sofa")
+
+    def test_builder_refuses_extended_entity_domains(self):
+        for text in ("group.living_room_lights", "sun.sun", "timer.evening", "remote.living_room",
+                     "input_datetime.bedtime", "frigate.living_room", "assist_satellite.living_room"):
+            with self.subTest(text=text):
+                with self.assertRaises(pk.PacketError) as ctx:
+                    pk.build_packet({"lr": plain_camera()}, [{"role": text}])
+                self.assertIn("leak pattern", str(ctx.exception))
+                self.assertNotIn("living_room", str(ctx.exception))
+
+    def test_error_paths_never_echo_untrusted_keys(self):
+        name = "Marisol Quintero"
+        messages = []
+        expectations = (
+            (lambda: pk.build_packet({name: plain_camera(zones={"binary_sensor.sofa": "occupied"})}),
+             "$.cameras.<key#0>.occupancy.zones.<key#0>: leak pattern (ha_entity_id)"),
+            (lambda: pk.build_packet({name: plain_camera(claims=["seen at 19:25"])}),
+             "$.cameras.<key#0>.claims[0]: leak pattern (time_of_day)"),
+            (lambda: pk.build_packet({name + "x" * 30: plain_camera(), name + "x" * 40: plain_camera()}),
+             "$.cameras: name collision after capping (entries 0 and 1)"),
+            (lambda: pk.build_packet({"lr": plain_camera(zones={name + "x" * 30: "clear", name + "x" * 40: "occupied"})}),
+             "$.cameras.<key#0>.occupancy.zones: name collision after capping (entries 0 and 1)"),
+            (lambda: pk.build_packet({name: "not a mapping"}),
+             "$.cameras.<key#0>: camera input must be a mapping"),
+            (lambda: pk.validate_packet({"schema": pk.PACKET_SCHEMA, "cameras": {"lr": {(name + " ") * 40: "x"}}}),
+             "$.cameras.<key#0>.<key#0>: key not allowed"),
+            (lambda: pk.validate_packet({"schema": pk.PACKET_SCHEMA, "cameras": {name: {"coverage": {"status": {"x": 1}}}}}),
+             "$.cameras.<key#0>.coverage.status: object where a scalar or list was expected"),
+        )
+        for index, (action, expected) in enumerate(expectations):
+            with self.subTest(index=index):
+                with self.assertRaises(pk.PacketError) as ctx:
+                    action()
+                self.assertEqual(str(ctx.exception), expected)
+                messages.append(str(ctx.exception))
+        for message in messages:
+            self.assertNotIn("Marisol", message)
+            self.assertNotIn("Quintero", message)
+            self.assertLess(len(message), 100)
 
     def test_leaking_key_never_echoed_in_error(self):
         with self.assertRaises(pk.PacketError) as ctx:

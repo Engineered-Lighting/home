@@ -17,7 +17,11 @@ in ``ALLOWED_KEYS`` (enforced recursively, lists only where the schema says
 list); every key and scalar is run through the leak guard's roster-free
 patterns (entity ids, addresses, hostnames, URLs, tokens, model names, digit
 runs, dates, times of day, format and non-ASCII characters) and a hit raises
-``PacketError`` naming the path, never the text; free text is NFKC-normalised,
+``PacketError`` naming the path, never the text. Error paths name schema keys
+only: a camera or zone name, and any key that is not in the allow-list, is
+reported by its position (``<key#N>``), so no caller-supplied key text is ever
+echoed, whether or not the builder can recognise it as sensitive (it cannot
+see the roster). Free text is NFKC-normalised,
 stripped of format characters and capped at ``TEXT_CAP`` characters; ages are
 integer seconds and an age above ``AGE_CAP_S`` (a day) raises, so an epoch
 passed by mistake is a caller error, not a day-old belief. Cameras, zones,
@@ -259,9 +263,13 @@ def build_media(entries: Iterable[Mapping[str, Any]] | None) -> list[dict]:
     return out
 
 
-def _camera_path(index: int, name: str) -> str:
-    """Error-message path for a camera; a leaking name is replaced by its index."""
-    return f"$.cameras.<key#{index}>" if leak_guard.scan_text(name) else f"$.cameras.{name}"
+def _camera_path(index: int) -> str:
+    """Error-message path for a camera: always positional, never the name.
+
+    The builder cannot tell a harmless camera name from a household name (it
+    has no roster), so the name is never echoed; the caller has the index.
+    """
+    return f"$.cameras.<key#{index}>"
 
 
 def build_packet(cameras: Mapping[str, Mapping[str, Any]],
@@ -273,7 +281,7 @@ def build_packet(cameras: Mapping[str, Mapping[str, Any]],
     names = _capped_names(cameras.keys(), "$.cameras", MAX_CAMERAS)
     packet = {
         "schema": PACKET_SCHEMA,
-        "cameras": {name: build_camera(camera, _camera_path(index, name))
+        "cameras": {name: build_camera(camera, _camera_path(index))
                     for index, (name, camera) in enumerate(zip(names, cameras.values()))},
         "devices": {"media": build_media(media)},
         "quiet": {"credible_activity_age_s": clamp_age(credible_activity_age_s)},
@@ -316,14 +324,15 @@ def _validate(node: Any, spec: Any, path: str, schema_path: str) -> None:
     for index, (key, value) in enumerate(node.items()):
         if not isinstance(key, str):
             raise PacketError(f"{path}: non-string key")
-        _check_leaks(key, f"{path}.<key#{index}>")
+        placeholder = f"{path}.<key#{index}>"
+        _check_leaks(key, placeholder)
         if key in spec:
-            child, segment = spec[key], key
+            child, segment, child_path = spec[key], key, f"{path}.{key}"
         elif ANY in spec:
-            child, segment = spec[ANY], ANY
+            child, segment, child_path = spec[ANY], ANY, placeholder
         else:
-            raise PacketError(f"{path}.{key}: key not allowed")
-        _validate(value, child, f"{path}.{key}", f"{schema_path}.{segment}")
+            raise PacketError(f"{placeholder}: key not allowed")
+        _validate(value, child, child_path, f"{schema_path}.{segment}")
 
 
 def _check_list_cap(node: list, path: str, schema_path: str) -> None:
@@ -349,7 +358,8 @@ def _validate_scalar(value: Any, path: str) -> None:
 
 def validate_packet(packet: Mapping[str, Any]) -> None:
     """Raise PacketError unless every key is allowed, every value is bounded and
-    nothing matches a leak pattern. Error messages carry the path only."""
+    nothing matches a leak pattern. Error messages carry the path only, with
+    wildcard (camera, zone) and unknown keys replaced by ``<key#N>``."""
     if not isinstance(packet, Mapping):
         raise PacketError("$: packet must be an object")
     if packet.get("schema") != PACKET_SCHEMA:

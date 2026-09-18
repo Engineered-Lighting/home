@@ -88,11 +88,41 @@ def load_zones(path: str | pathlib.Path | None = None) -> ZoneMap:
     activity_cameras = tuple(data.get("activity_cameras", ("kitchen", "dining_room")))
     if any(c not in cameras for c in activity_cameras):
         raise ValueError("activity_cameras names an unknown camera")
+
+    # The three keys the stories actually rest on, and the only three that used
+    # to fall back silently to this house's names. A file that omits them, or
+    # names a room this house has and another does not, loaded clean: /healthz
+    # stayed ok, the heartbeat kept beating, and living_room_occupied,
+    # sofa_stable and front_door_occupied were False for ever. Story T would
+    # never reach WATCHING, the estimator would never see an arrival, and every
+    # AWAY_HOLD would expire to UNATTENDED. Nothing anywhere would say why.
+    living_room_camera = data.get("living_room_camera", "living_room")
+    if living_room_camera not in cameras:
+        raise ValueError(
+            f"living_room_camera is {living_room_camera!r}, which is not one of "
+            f"{list(cameras)}; story T is watched on that camera, so a name that is "
+            "not there means the room is never occupied")
+    sofa_zone = data.get("sofa_zone", "sofa")
+    if sofa_zone not in zones:
+        raise ValueError(
+            f"sofa_zone is {sofa_zone!r}, which is not one of the zones; the sofa guard "
+            "is what makes UNATTENDED unreachable while somebody is sitting there, so a "
+            "name that is not there disables it silently")
+    if zones[sofa_zone] != living_room_camera:
+        raise ValueError(
+            f"sofa_zone {sofa_zone!r} is on camera {zones[sofa_zone]!r} but "
+            f"living_room_camera is {living_room_camera!r}; they have to be the same room")
+    front_door_zone = data.get("front_door_zone", "front_door")
+    if front_door_zone not in zones:
+        raise ValueError(
+            f"front_door_zone is {front_door_zone!r}, which is not one of the zones; a "
+            "credible arrival is door occupancy near the phone coming home, so a name "
+            "that is not there means no arrival is ever credible")
     return ZoneMap(zones=dict(zones), cameras=cameras, dominates=dominates,
                    activity_cameras=activity_cameras,
-                   living_room_camera=data.get("living_room_camera", "living_room"),
-                   sofa_zone=data.get("sofa_zone", "sofa"),
-                   front_door_zone=data.get("front_door_zone", "front_door"))
+                   living_room_camera=living_room_camera,
+                   sofa_zone=sofa_zone,
+                   front_door_zone=front_door_zone)
 
 
 class ActivityTracker:

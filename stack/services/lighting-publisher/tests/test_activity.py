@@ -58,6 +58,58 @@ class ZoneMapTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_zones(bad)
 
+    def test_the_three_story_keys_must_name_things_that_exist(self):
+        """The keys the stories rest on used to fall back to this house's names.
+
+        A zone map from a different house that omits them, or names a room it
+        does not have, loaded clean: health stayed ok, the heartbeat kept
+        beating, and the living room, the sofa and the front door were simply
+        never occupied. Story T would never reach WATCHING and the estimator
+        would never see an arrival, with nothing anywhere saying why.
+        """
+        base = {"schema": "living-lights-zones/v1", "cameras": ["office"],
+                "zones": {"desk": "office"}}
+        cases = {
+            "living_room_camera names a camera that is not there": {
+                **base, "living_room_camera": "living_room", "sofa_zone": "desk",
+                "front_door_zone": "desk"},
+            "sofa_zone names a zone that is not there": {
+                **base, "living_room_camera": "office", "sofa_zone": "sofa",
+                "front_door_zone": "desk"},
+            "front_door_zone names a zone that is not there": {
+                **base, "living_room_camera": "office", "sofa_zone": "desk",
+                "front_door_zone": "front_door"},
+            "the sofa is on a different camera from the living room": {
+                "schema": "living-lights-zones/v1", "cameras": ["office", "hall"],
+                "zones": {"desk": "office", "mat": "hall"},
+                "living_room_camera": "office", "sofa_zone": "mat",
+                "front_door_zone": "desk"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "zones.json"
+            for why, doc in cases.items():
+                with self.subTest(why=why):
+                    path.write_text(json.dumps(doc))
+                    with self.assertRaises(ValueError):
+                        load_zones(path)
+
+    def test_a_single_room_map_is_accepted(self):
+        """One camera and one zone is a legitimate map: an office, say.
+
+        The validation must refuse names that do not exist, not refuse small
+        houses.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "zones.json"
+            path.write_text(json.dumps({
+                "schema": "living-lights-zones/v1", "cameras": ["office"],
+                "zones": {"desk": "office"}, "activity_cameras": [],
+                "living_room_camera": "office", "sofa_zone": "desk",
+                "front_door_zone": "desk"}))
+            zones = load_zones(path)
+        self.assertEqual(zones.living_room_camera, "office")
+        self.assertEqual(zones.sofa_zone, "desk")
+
     def test_shadow_entity_ids(self):
         zones = load_zones()
         self.assertEqual(activity_entities(zones, shadow=True)["sink"], "kitchen_sink_activity_shadow")

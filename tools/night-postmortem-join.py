@@ -68,14 +68,25 @@ def signature(brightness):
 
 
 def writer_class(ha_context_json, source_hint, command_id):
+    """Who wrote this light change.
+
+    A person's own command is excluded from the defect count, so the test for
+    one has to be the evidence that a person was there: Home Assistant's
+    context ``user_id``. A ``command_id`` says only that the change came
+    through the override channel, which an automation also uses -- the
+    good-morning energize writes one -- so testing it first let an automation
+    launder itself into ``explicit_command`` and out of the count. The user
+    check therefore comes first, and an override command with no user behind
+    it is named as such and stays counted.
+    """
     try:
         context = json.loads(ha_context_json or "{}")
     except ValueError:
         context = {}
-    if command_id:
-        return "explicit_command"
     if context.get("user_id"):
-        return "user"
+        return "explicit_command" if command_id else "user"
+    if command_id:
+        return "explicit_command_automation"
     if context.get("parent_id"):
         return "automation"
     if source_hint == "automation_or_script":
@@ -289,7 +300,7 @@ def render_markdown(summary, since, until, night_start, night_end):
     lines.append(f"- Followed by any off within 60 s (includes writer oscillation): {summary['followed_by_any_off_within_60s']}")
     lines.append(f"- Events with observer memory rows within 2 min for corroboration: {summary['memory_corroboration_available']}")
     lines.append("")
-    lines.append("Writer classes: `automation` = HA context has a parent_id; `user` = HA context has a user_id; `explicit_command` = a command id; `automation_by_hint` = no context but the ledger's source hint says automation; `unattributed` = bridge, physical switch or unknown.")
+    lines.append("Writer classes: `automation` = HA context has a parent_id; `user` = HA context has a user_id; `explicit_command` = a command id written with a user behind it; `explicit_command_automation` = a command id with no user, which is an automation using the override channel and stays in the defect count; `automation_by_hint` = no context but the ledger's source hint says automation; `unattributed` = bridge, physical switch or unknown.")
     return "\n".join(lines) + "\n"
 
 

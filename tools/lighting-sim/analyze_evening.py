@@ -137,6 +137,38 @@ def in_intervals(t: dt.datetime, intervals: list[Interval]) -> bool:
     return any(a <= t < b for a, b in intervals)
 
 
+def coalesce(intervals: list[Interval], gap_s: float) -> list[Interval]:
+    """Merge intervals separated by less than `gap_s` seconds.
+
+    A stable-occupancy sensor flickers: one visit to the kitchen can arrive as
+    four intervals a few seconds apart, which turns one errand into four in
+    every denominator that counts errands. Merging first means a 90 % bar is
+    a statement about visits, not about sensor chatter. Shared with
+    ``tools/tv-evening-postmortem.py`` so the two tools cannot drift.
+    """
+    out: list[Interval] = []
+    for a, b in sorted(intervals):
+        if out and (a - out[-1][1]).total_seconds() < gap_s:
+            if b > out[-1][1]:
+                out[-1] = (out[-1][0], b)
+            continue
+        out.append((a, b))
+    return out
+
+
+def errand_eligible(watching: list[Interval], hold_s: float = None) -> list[Interval]:
+    """When an errand may open: inside a watching episode, or within the
+    oracle's AWAY_HOLD after one ended.
+
+    Someone who gets up as the credits roll is still on an errand from the
+    film. This is the single definition of the errand denominator; the live
+    post-mortem imports it rather than restating it, because the same evening
+    scored by the two tools has to produce the same number.
+    """
+    hold = ERRAND_HOLD_S if hold_s is None else hold_s
+    return coalesce([(a, b + dt.timedelta(seconds=hold)) for a, b in watching], 0)
+
+
 def watching_intervals(initial: dict[str, str], events: Iterable[tuple], start: dt.datetime,
                        end: dt.datetime, source: str | None = None) -> tuple[list[Interval], str]:
     """Watching episodes and their source ("belief" or "timeline"). `source`
@@ -287,14 +319,21 @@ def route_metrics(calls: list[dict], initial: dict[str, str], events: Iterable[t
                   route_pct: int = DEFAULT_ROUTE_PCT, hold_s: int = ERRAND_HOLD_S) -> list[dict]:
     """One row per errand: an errand zone's occupancy interval that begins
     inside a watching episode or within `hold_s` after one ended (a
-    timeline-derived episode ends the moment the sofa empties)."""
+    timeline-derived episode ends the moment the sofa empties).
+
+    Occupancy intervals in the same zone closer together than the turn-off bar
+    are one errand, not several: a stable-occupancy sensor that flickers must
+    not multiply the denominator. ``errand_eligible`` and ``coalesce`` are
+    shared with ``tools/tv-evening-postmortem.py``, which scores the real
+    house, so the two cannot drift apart on what an errand is.
+    """
     events = list(events)
-    held = [(a, b + dt.timedelta(seconds=hold_s)) for a, b in watching]
+    held = errand_eligible(watching, hold_s)
     out = []
     for zone in ERRAND_ZONES:
         lights = set(ZONE_LIGHTS[zone])
         changes = level_changes(calls, lights)
-        for a, b in zone_intervals(initial, events, zone, start, end):
+        for a, b in coalesce(zone_intervals(initial, events, zone, start, end), ROUTE_SLACK_S):
             if not in_intervals(a, held):
                 continue
             # The first turn_on at or after the occupancy edge that raised the

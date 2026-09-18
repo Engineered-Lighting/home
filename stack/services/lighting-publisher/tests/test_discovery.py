@@ -14,7 +14,7 @@ from unittest import mock
 from lighting_publisher.activity import load_zones
 from lighting_publisher.journal import FILE_PREFIX, Journal
 from lighting_publisher.publish.discovery import (AVAILABILITY_OFFLINE, AVAILABILITY_ONLINE,
-                                                  SHADOW_SUFFIX, build_entities)
+                                                  SHADOW_SUFFIX, UNIQUE_PREFIX, build_entities)
 from lighting_publisher.publish.state import StatePublisher
 
 T0 = dt.datetime(2026, 9, 17, 22, 0, tzinfo=dt.timezone.utc)
@@ -80,6 +80,32 @@ class EntitySetTest(NoSocketTest):
         live_discovery = {topic for topic, _ in live.discovery_messages()}
         shadow_discovery = {topic for topic, _ in shadow.discovery_messages()}
         self.assertEqual(live_discovery & shadow_discovery, set())
+
+    def test_unique_ids_are_pinned_for_the_life_of_the_registry(self):
+        """A unique_id is Home Assistant's entity-registry key.
+
+        Changing one after an entity has been published orphans the old
+        registry entry and registers a duplicate beside it, so these eight
+        strings are fixed from the first deploy on. The heartbeat's object id
+        already carries ``UNIQUE_PREFIX``; it must not carry it twice.
+        """
+        live = build_entities(self.zones, shadow=False)
+        shadow = build_entities(self.zones, shadow=True)
+        self.assertEqual(live.heartbeat.unique_id, "lighting_publisher_heartbeat")
+        self.assertEqual(live.tv.unique_id, "lighting_publisher_living_lights_tv_watching")
+        self.assertEqual(live.asleep.unique_id, "lighting_publisher_living_lights_asleep_estimator")
+        self.assertEqual(live.activity["sofa"].unique_id,
+                         "lighting_publisher_living_room_sofa_activity")
+        self.assertEqual(shadow.heartbeat.unique_id, "lighting_publisher_heartbeat_shadow")
+        self.assertEqual(shadow.tv.unique_id, "lighting_publisher_living_lights_tv_watching_shadow")
+        self.assertEqual(shadow.asleep.unique_id,
+                         "lighting_publisher_living_lights_asleep_estimator_shadow")
+        self.assertEqual(shadow.activity["sofa"].unique_id,
+                         "lighting_publisher_living_room_sofa_activity_shadow")
+        for entities in (live, shadow):
+            for entity in entities.all():
+                self.assertFalse(entity.unique_id.startswith(UNIQUE_PREFIX + UNIQUE_PREFIX),
+                                 entity.key)
 
     def test_unique_ids_are_unique(self):
         for shadow in (False, True):
@@ -181,21 +207,21 @@ class JournalTest(NoSocketTest):
         self.dir = pathlib.Path(self.tmp.name)
 
     def test_daily_file_named_for_the_record(self):
-        journal = Journal(self.dir)
+        journal = Journal(self.dir, tz=dt.timezone.utc)
         self.assertTrue(journal.write({"event": "decision"}, T0))
         path = self.dir / f"{FILE_PREFIX}-2026-09-17.jsonl"
         self.assertTrue(path.exists())
         self.assertEqual(json.loads(path.read_text(encoding="ascii"))["event"], "decision")
 
     def test_a_new_day_opens_a_new_file(self):
-        journal = Journal(self.dir)
+        journal = Journal(self.dir, tz=dt.timezone.utc)
         journal.write({"n": 1}, T0)
         journal.write({"n": 2}, T0 + dt.timedelta(days=1))
         names = sorted(p.name for p in self.dir.iterdir())
         self.assertEqual(names, [f"{FILE_PREFIX}-2026-09-17.jsonl", f"{FILE_PREFIX}-2026-09-18.jsonl"])
 
     def test_rotation_removes_files_older_than_thirty_days(self):
-        journal = Journal(self.dir, retention_days=30)
+        journal = Journal(self.dir, retention_days=30, tz=dt.timezone.utc)
         old = self.dir / f"{FILE_PREFIX}-2026-08-01.jsonl"
         keep = self.dir / f"{FILE_PREFIX}-2026-09-01.jsonl"
         stranger = self.dir / "notes.txt"
@@ -205,6 +231,39 @@ class JournalTest(NoSocketTest):
         self.assertEqual(removed, [old.name])
         self.assertTrue(keep.exists())
         self.assertTrue(stranger.exists())
+
+    def test_the_file_is_named_for_the_local_night_not_the_utc_day(self):
+        """One file is one local night, because one report is one local night.
+
+        At UTC-7 a decision made at 22:00 on the local evening of the 17th is
+        2026-09-18T05:00Z. Naming the file by the UTC day would file that
+        evening under the 18th, so a shadow report asked for the 17th would
+        miss it and a report asked for the 18th would open with the tail of
+        the 17th. Both decisions below are the same local night and belong in
+        the same file.
+        """
+        west = dt.timezone(dt.timedelta(hours=-7))
+        journal = Journal(self.dir, tz=west)
+        evening = dt.datetime(2026, 9, 18, 5, 0, tzinfo=dt.timezone.utc)   # 22:00 local, 17th
+        small_hours = dt.datetime(2026, 9, 18, 8, 30, tzinfo=dt.timezone.utc)  # 01:30 local, 18th
+        self.assertTrue(journal.write({"n": 1}, evening))
+        self.assertTrue(journal.write({"n": 2}, small_hours))
+        names = sorted(p.name for p in self.dir.iterdir())
+        self.assertEqual(names, [f"{FILE_PREFIX}-2026-09-17.jsonl", f"{FILE_PREFIX}-2026-09-18.jsonl"])
+        self.assertEqual(journal.day_of(evening), dt.date(2026, 9, 17))
+        self.assertEqual(journal.day_of(small_hours), dt.date(2026, 9, 18))
+
+    def test_rotation_counts_local_days_too(self):
+        west = dt.timezone(dt.timedelta(hours=-7))
+        journal = Journal(self.dir, retention_days=30, tz=west)
+        # 2026-09-18T05:00Z is still the 17th locally, so the cutoff is 08-18.
+        edge = self.dir / f"{FILE_PREFIX}-2026-08-18.jsonl"
+        stale = self.dir / f"{FILE_PREFIX}-2026-08-17.jsonl"
+        for path in (edge, stale):
+            path.write_text("{}\n", encoding="ascii")
+        removed = journal.rotate(dt.datetime(2026, 9, 18, 5, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(removed, [stale.name])
+        self.assertTrue(edge.exists())
 
     def test_a_write_failure_is_counted_not_raised(self):
         journal = Journal(self.dir / "missing" / "deeper")

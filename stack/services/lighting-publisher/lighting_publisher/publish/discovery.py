@@ -65,6 +65,21 @@ class Entity:
 
     @property
     def unique_id(self) -> str:
+        """``UNIQUE_PREFIX`` once, never twice.
+
+        ``HEARTBEAT_OBJECT_ID`` already begins with the prefix, so prefixing
+        unconditionally read ``lighting_publisher_lighting_publisher_
+        heartbeat``. This is settled now because a ``unique_id`` is the Home
+        Assistant entity-registry key: changing it after an entity has been
+        published orphans the old registry entry (its customisations, its
+        area, its history) and registers a duplicate beside it. Nothing has
+        been published yet, so the rename costs nothing today and could not
+        be made cheaply ever again. ``test_discovery`` pins eight exact ids --
+        the heartbeat, the TV, the asleep estimator and one activity sensor,
+        in both modes -- so they cannot drift again.
+        """
+        if self.object_id.startswith(UNIQUE_PREFIX):
+            return self.object_id
         return UNIQUE_PREFIX + self.object_id
 
     def discovery_payload(self, availability_topic: str) -> dict:

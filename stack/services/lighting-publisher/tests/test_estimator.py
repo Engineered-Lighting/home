@@ -102,6 +102,29 @@ def first(est: AsleepEstimator, to: str) -> dt.datetime | None:
     return None
 
 
+def latches(est: AsleepEstimator) -> list[dt.datetime]:
+    """Every moment the estimator entered ``likely_asleep``."""
+    return [dt.datetime.fromisoformat(e["t"]) for e in est.journal
+            if e["event"] == "transition" and e["to"] == LIKELY_ASLEEP]
+
+
+def asleep_intervals(decisions) -> list[tuple[dt.datetime, dt.datetime]]:
+    """The [first tick, last tick] of each run of ``likely_asleep``."""
+    spans: list[tuple[dt.datetime, dt.datetime]] = []
+    opened: dt.datetime | None = None
+    previous: dt.datetime | None = None
+    for t, d in decisions:
+        if d.state == LIKELY_ASLEEP and opened is None:
+            opened = t
+        elif d.state != LIKELY_ASLEEP and opened is not None:
+            spans.append((opened, previous))
+            opened = None
+        previous = t
+    if opened is not None and previous is not None:
+        spans.append((opened, previous))
+    return spans
+
+
 def states_between(decisions, a, b) -> set:
     return {d.state for t, d in decisions if a <= t <= b}
 
@@ -282,6 +305,52 @@ class S9bArrivalClears(unittest.TestCase):
         self.assertIn((at("03:00:30", 1).isoformat(timespec="seconds"), LIKELY_ASLEEP, AWAKE, "arrival"), transitions(est))
 
 
+class S14RearmAfterTheLatchClears(unittest.TestCase):
+    """The legacy ``living_lights_asleep_on`` re-arm, which the publisher shadows.
+
+    The automation refuses to set the latch unless the latch helper has been
+    unchanged for 45 minutes, so a ten-minute night trip that clears the latch
+    is followed by 45 quiet minutes before a new one, not 15. Without this the
+    publisher latches the house asleep in windows where the legacy path
+    refuses to, and the shadow report blames the estimator for the extra latch.
+    """
+
+    def _night(self) -> Night:
+        n = evening_then_bed()          # latches at 00:11
+        n.occupy("sink", at("00:20", 1), at("00:30", 1))   # WAKE_S of occupancy
+        return n
+
+    def test_a_latch_inside_the_window_is_refused_and_recorded(self):
+        est = AsleepEstimator()
+        d = self._night().run(est)
+        self.assertIn((at("00:30", 1).isoformat(timespec="seconds"), LIKELY_ASLEEP, AWAKE, "occupancy"),
+                      transitions(est))
+        # 15 quiet minutes are up at 00:45; everything but the re-arm agrees.
+        refused = [x for t, x in d if t == at("00:45", 1)][0]
+        self.assertEqual(refused.state, AWAKE)
+        self.assertEqual(refused.evidence["latch_refused"], "rearm")
+        self.assertEqual(refused.evidence["rearm_age_s"], 15 * 60)
+        self.assertGreaterEqual(refused.evidence["quiet_s"], stories.IDLE_S)
+        self.assertEqual(states_between(d, at("00:30", 1), at("01:14:30", 1)), {AWAKE})
+
+    def test_a_latch_after_the_window_is_allowed(self):
+        est = AsleepEstimator()
+        d = self._night().run(est)
+        self.assertEqual(latches(est), [at("00:11", 1), at("01:15", 1)])
+        allowed = [x for t, x in d if t == at("01:15", 1)][0]
+        self.assertNotIn("latch_refused", allowed.evidence)
+        self.assertEqual(allowed.evidence["rearm_age_s"], stories.REARM_S)
+        self.assertEqual(stories.REARM_S, 45 * 60)
+
+    def test_the_manual_flip_is_never_refused_by_the_re_arm(self):
+        n = self._night()
+        # A person sets the latch by hand ten minutes into the re-arm window.
+        n.at(at("00:40", 1), "latch", (True, "manual"))
+        est = AsleepEstimator()
+        d = n.run(est)
+        self.assertEqual(states_between(d, at("00:40", 1), at("01:24:30", 1)), {LIKELY_ASLEEP})
+
+
 class S13ManualHonored(unittest.TestCase):
     def test_manual_clear_holds_45_minutes_then_rules_resume(self):
         n = evening_then_bed()
@@ -325,9 +394,37 @@ class ReassertFlag(unittest.TestCase):
 
 
 class RecordedNights(unittest.TestCase):
-    """Replay ``living-lights-sim-night/v1`` files; skip without LL_PUB_FIXTURES."""
+    """Replay ``living-lights-sim-night/v1`` files; skip without LL_PUB_FIXTURES.
 
-    ALLOWED_EXITS = {"occupancy", "arrival", "wake_command", "brighten_command", "manual"}
+    ``LL_PUB_FIXTURES`` names the recorded nights (household data, never in the
+    repository). The simulator's verdict for the same nights lives beside them
+    in ``../reports/new/night_<date>.json``; ``LL_PUB_SIM_REPORTS`` overrides
+    that location.
+    """
+
+    ALLOWED_EXITS = frozenset({"occupancy", "arrival", "wake_command", "brighten_command", "manual"})
+    """Exact reasons, not prefixes. ``departure_<why>`` is allowed by its
+    prefix below; a reconnect, a 09:00 backstop or a bare tick is not, and
+    must fail."""
+
+    DEPARTURE_PREFIX = "departure_"
+
+    LATCH_TOLERANCE_S = 5 * 60
+    """How far a publisher latch may sit from the simulator's and still count
+    as the same decision. One replay tick is 60 s."""
+
+    LATCH_INTERVAL_TOLERANCE_S = 45 * 60
+    """How much earlier a run of ``likely_asleep`` may have opened and still
+    count as covering a simulator latch, and only on a night whose simulator
+    latched before midnight. It is the legacy rule's re-arm window, which is
+    what delays the simulator's second latch on such a night while the
+    publisher, blind to the first, has no re-arm clock at all."""
+
+    MAX_INTERVAL_ONLY = 1
+    """How many simulator latches may be met by the interval rule instead of a
+    latch of the publisher's own. Measured at 1 (2026-09-12 01:14, where the
+    publisher had latched at 00:36 and made no new transition). Pinned so the
+    licence cannot widen unnoticed."""
 
     @staticmethod
     def fixture_files() -> list[pathlib.Path]:
@@ -335,6 +432,17 @@ class RecordedNights(unittest.TestCase):
         if not root:
             return []
         return sorted(pathlib.Path(root).glob("*.json"))
+
+    @staticmethod
+    def report_dir() -> pathlib.Path | None:
+        """Where ``tools/lighting-sim`` wrote its verdict for the same nights."""
+        override = os.environ.get("LL_PUB_SIM_REPORTS")
+        if override:
+            return pathlib.Path(override)
+        root = os.environ.get("LL_PUB_FIXTURES")
+        if not root:
+            return None
+        return pathlib.Path(root).parent / "reports" / "new"
 
     @staticmethod
     def replay(night: dict) -> tuple[AsleepEstimator, list]:
@@ -367,25 +475,132 @@ class RecordedNights(unittest.TestCase):
             now += dt.timedelta(seconds=60)
         return est, decisions
 
-    def test_recorded_nights(self):
+    def nights(self) -> list[tuple[pathlib.Path, dict]]:
         files = self.fixture_files()
         if not files:
             self.skipTest("LL_PUB_FIXTURES unset; recorded nights live outside the repo")
-        summary = []
+        loaded = []
         for path in files:
             with open(path, "r", encoding="utf-8") as handle:
                 night = json.load(handle)
             self.assertEqual(night.get("schema"), "living-lights-sim-night/v1", path.name)
-            est, decisions = self.replay(night)
-            exits = [e for e in est.journal if e["event"] == "transition" and e["from"] == LIKELY_ASLEEP]
+            loaded.append((path, night))
+        return loaded
+
+    def test_every_exit_from_the_latch_has_an_allowed_reason(self):
+        """Match the whole reason.
+
+        Matching ``reason.split("_")[0]`` compared ``wake`` and ``brighten``
+        against an allow-list holding ``wake_command`` and ``brighten_command``,
+        so those two legitimate exits could never pass, while every other
+        reason was matched on its first token only -- ``departure_anything``,
+        but equally a hypothetical ``tick_backstop`` against a ``tick`` entry.
+        """
+        for path, night in self.nights():
+            est, _ = self.replay(night)
+            exits = [e for e in est.journal
+                     if e["event"] == "transition" and e["from"] == LIKELY_ASLEEP]
             for e in exits:
-                self.assertIn(e["reason"].split("_")[0], self.ALLOWED_EXITS | {"departure"}, (path.name, e))
-            latched = first(est, LIKELY_ASLEEP)
-            recorded = night.get("actual", {}).get("asleep_transitions", [])
-            summary.append({"night": night.get("night"), "first_latch": latched.isoformat() if latched else None,
-                            "exits": [(e["t"], e["reason"]) for e in exits],
-                            "recorded_transitions": len(recorded)})
-        print(json.dumps(summary, indent=1))
+                reason = e["reason"]
+                allowed = reason in self.ALLOWED_EXITS or reason.startswith(self.DEPARTURE_PREFIX)
+                self.assertTrue(allowed, (path.name, reason))
+
+    def test_recorded_night_latches_match_the_simulator(self):
+        """The M4 acceptance bar, asserted.
+
+        Every simulator latch these fixtures can express is matched by a
+        publisher latch within ``LATCH_TOLERANCE_S``, or falls inside a run of
+        ``likely_asleep`` the publisher had already entered (on one night the
+        publisher was asleep before the simulator was and made no new
+        transition there; an interval that already covers the moment is the
+        same decision, reached earlier).
+
+        Expressible means at or after 00:00 local. The fixtures carry Frigate
+        occupancy, the television and the phone, but no
+        ``sensor.living_lights_profile`` and no observer presence, and the
+        legacy night window opens at 22:30 only through that profile sensor.
+        The publisher's own window therefore cannot open before midnight on
+        these fixtures, so a pre-midnight simulator latch is not a
+        disagreement the replay can measure: those are counted and reported,
+        never asserted on. Regenerating the fixtures with the profile sensor
+        would make the [22:30, 00:00) band expressible and is the way to widen
+        this bar honestly.
+        """
+        reports = self.report_dir()
+        nights = self.nights()
+        if reports is None or not reports.is_dir():
+            self.skipTest("simulator reports not found; set LL_PUB_SIM_REPORTS")
+        checked = 0
+        misses: list[str] = []
+        unexpressible: list[str] = []
+        interval_only: list[str] = []
+        for path, night in nights:
+            label = night.get("night")
+            report_path = reports / f"night_{label}.json"
+            self.assertTrue(report_path.is_file(),
+                            f"no simulator report for {label} at {reports}")
+            with open(report_path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+            start = dt.datetime.fromisoformat(night["start"])
+            midnight = start.replace(hour=0, minute=0, second=0, microsecond=0)
+            while midnight <= start:
+                midnight += dt.timedelta(days=1)
+            est, decisions = self.replay(night)
+            published = latches(est)
+            spans = asleep_intervals(decisions)
+            stamps = [dt.datetime.fromisoformat(s) for s in report.get("latch_on", [])]
+            pre_midnight = [w for w in stamps if w < midnight]
+            for when in stamps:
+                if when < midnight:
+                    unexpressible.append(f"{label} {when.strftime('%H:%M')}")
+                    continue
+                checked += 1
+                gaps = [abs((p - when).total_seconds()) for p in published]
+                nearest = min(gaps) if gaps else None
+                if nearest is not None and nearest <= self.LATCH_TOLERANCE_S:
+                    continue
+                # A simulator latch can also be met by a run of `likely_asleep`
+                # the publisher was already in, but only where the fixture is
+                # demonstrably the reason. On a night whose simulator latched
+                # before midnight, the legacy rule's forty-five minute re-arm
+                # governs when it may latch again; the publisher never saw that
+                # first latch (the window needs the profile sensor the fixture
+                # lacks), so it has no re-arm clock and settles earlier. On
+                # 2026-09-12 that is exactly what happens: the simulator latched
+                # 23:58, cleared, was held off until 01:14, while the publisher
+                # latched at 00:36 and was still asleep. Allowing that costs
+                # nothing in safety, since the publisher had the house darker
+                # sooner. Unbounded, though, the same licence would pass a
+                # publisher that latches at the first quiet minute and never
+                # wakes, so it applies only on a night with an unexpressible
+                # latch, only from a run that opened after it, and only inside
+                # the re-arm window.
+                covering = [a for a, b in spans if a <= when <= b
+                            and pre_midnight and a > max(pre_midnight)
+                            and (when - a).total_seconds() <= self.LATCH_INTERVAL_TOLERANCE_S]
+                if covering:
+                    interval_only.append(
+                        f"{label} {when.strftime('%H:%M')} (publisher asleep since "
+                        f"{max(covering).strftime('%H:%M')}, no re-arm clock)")
+                    continue
+                misses.append(
+                    f"{label}: simulator latched {when.strftime('%H:%M')}, publisher "
+                    + ("never latched and was awake there"
+                       if nearest is None
+                       else f"nearest latch {nearest / 60:.1f} min away"))
+        print(f"recorded nights: {checked} expressible simulator latches checked, "
+              f"{len(unexpressible)} pre-midnight latches not expressible by these "
+              f"fixtures (no sensor.living_lights_profile, so the legacy 22:30 window "
+              f"cannot open): {unexpressible}")
+        self.assertGreater(checked, 0, "no expressible simulator latch to check")
+        self.assertEqual(misses, [], "\n".join(misses))
+        self.assertLessEqual(
+            len(interval_only), self.MAX_INTERVAL_ONLY,
+            "more simulator latches were met by an already-open run than the "
+            f"measured {self.MAX_INTERVAL_ONLY}: {interval_only}. Either the "
+            "estimator started latching earlier than the legacy rule, or the "
+            "interval licence is being leaned on; both need a look, not a "
+            "raised ceiling.")
 
 
 if __name__ == "__main__":

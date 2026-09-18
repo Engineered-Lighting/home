@@ -1069,9 +1069,14 @@ class LevelTwoRunTest(unittest.TestCase):
 # observation it filed for that window and the model it used. The batch files
 # an observation at <key[:2]>/<key>.json under its cache root, and --observations
 # is that root, so the reference below has the same shape as a produced one.
+# The batch runner's handoff adds three fields to the selection row, not two:
+# ``observation_status`` says whether the file named is real (observed, cached)
+# or only planned by a dry run, and the contract paragraph in its docstring
+# lists all three.
+OBSERVER_ADDED_FIELDS = ("observation", "observation_model", "observation_status")
 OBSERVER_ROW_FIELDS = ("id", "dataset", "split", "native_partition", "native_classes", "targets",
                        "stratum", "group_id", "subject_id", "media", "sample_times_s", "digest",
-                       "observation", "observation_model")
+                       *OBSERVER_ADDED_FIELDS)
 OBSERVATION_MODEL = "an-observation-model"
 OBSERVER_CACHE_REFS = {"w1": "1f/1f9c00.json", "w2": "2a/2a4d10.json", "w3": "3b/3b7e20.json"}
 
@@ -1099,6 +1104,7 @@ def _observer_row(tag, observation, class_name, scene, stratum, targets, **extra
         "length_s": 1.766667,
         "observation": observation,
         "observation_model": OBSERVATION_MODEL,
+        "observation_status": "observed",
     }
     row.update(extra)
     return row
@@ -1130,6 +1136,9 @@ class ObserverRowHandoffTest(unittest.TestCase):
         for row in OBSERVER_ROWS:
             for field in OBSERVER_ROW_FIELDS:
                 self.assertIn(field, row)
+            # three added fields, the count the batch runner's docstring states
+            self.assertEqual(len(OBSERVER_ADDED_FIELDS), 3)
+            self.assertTrue(set(OBSERVER_ADDED_FIELDS) <= set(row))
 
     def test_cache_relative_observation_resolves_under_the_observations_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1147,18 +1156,50 @@ class ObserverRowHandoffTest(unittest.TestCase):
             self.assertEqual([p["camera"] for p in packets], ["living_room", "kitchen", "other_room"])
             self.assertTrue(all(len(p["observation_digest"]) == 64 for p in packets))
 
-    def test_absolute_and_inline_references_still_work(self):
+    def test_an_inline_observation_still_works(self):
         with tempfile.TemporaryDirectory() as tmp:
-            absolute = Path(tmp) / "elsewhere" / "obs.json"
-            absolute.parent.mkdir()
-            absolute.write_text(json.dumps(OBSERVATIONS["v1.json"]), encoding="utf-8")
-            rows = [_observer_row("w1", str(absolute), "watching tv", "Living room", "public_a_tv",
-                                  dict(OBSERVER_ROWS[0]["targets"])),
-                    _observer_row("w2", OBSERVATIONS["v2.json"], "cooking", "Kitchen", "public_a_cooking",
-                                  dict(OBSERVER_ROWS[1]["targets"]))]
+            rows = [_observer_row("w1", OBSERVATIONS["v1.json"], "watching tv", "Living room",
+                                  "public_a_tv", dict(OBSERVER_ROWS[0]["targets"])),
+                    _observer_row("w2", OBSERVER_CACHE_REFS["w2"], "cooking", "Kitchen",
+                                  "public_a_cooking", dict(OBSERVER_ROWS[1]["targets"]))]
             h = VisualHarness(Path(tmp), rows=rows, observations=OBSERVER_OBSERVATIONS)
             self.assertEqual(h.main(h.argv("dry")), 0)
             self.assertEqual(h.receipt("dry")["counts"]["packets_built"], 2)
+
+    def test_an_absolute_reference_is_contained_by_the_observations_root_too(self):
+        # a rows file is data: containment cannot be sidestepped by writing the
+        # reference absolutely, which the trusted producer never does
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp), rows=OBSERVER_ROWS, observations=OBSERVER_OBSERVATIONS)
+            inside = h.observations / OBSERVER_CACHE_REFS["w1"]
+            outside = Path(tmp) / "elsewhere" / "obs.json"
+            outside.parent.mkdir()
+            outside.write_text(json.dumps(OBSERVATIONS["v1.json"]), encoding="utf-8")
+            self.assertEqual(pse.resolve_observation_path(str(inside), h.observations, Path(tmp)),
+                             inside.resolve())
+            with self.assertRaises(pse.ObservationError) as caught:
+                pse.resolve_observation_path(str(outside), h.observations, Path(tmp))
+            self.assertIn("escapes", str(caught.exception))
+            # with no --observations there is no root to contain it: unchanged
+            self.assertEqual(pse.resolve_observation_path(str(outside), None, Path(tmp)), outside)
+
+    def test_an_absolute_reference_outside_the_root_is_one_refused_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "elsewhere" / "obs.json"
+            outside.parent.mkdir()
+            outside.write_text(json.dumps(OBSERVATIONS["v1.json"]), encoding="utf-8")
+            rows = list(OBSERVER_ROWS) + [_observer_row(
+                "w4", str(outside), "walking", "Hallway", "public_a_walk",
+                {"tv_attention": "unobserved", "eating": "negative", "food_prep": "negative",
+                 "settling": "unobserved", "rest_state": "negative"})]
+            h = VisualHarness(Path(tmp), rows=rows, observations=OBSERVER_OBSERVATIONS)
+            self.assertEqual(h.main(h.argv("abs")), 0)
+            receipt = h.receipt("abs")
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["counts"]["packets_built"], 3)
+            self.assertEqual(receipt["counts"]["observations_missing"], 1)
+            self.assertEqual(receipt["packet_failures"][0]["row_id"], "public:window:w4")
+            self.assertIn("escapes", receipt["packet_failures"][0]["detail"])
 
     def test_a_reference_escaping_the_observations_root_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1232,6 +1273,73 @@ class ObserverRowHandoffTest(unittest.TestCase):
             self.assertEqual(failure["row_id"], "public:window:w2")
             self.assertEqual(failure["error"], "DatasetVocabularyError")
             self.assertNotIn("cooking", json.dumps(receipt["packet_failures"]))
+
+
+def _cache_entry(row, observation):
+    """One observation as the batch runner files it: the join keys are carried."""
+    return {**observation, "schema": "home-v2-rich-observation-batch/v1", "valid": True,
+            "id": row["id"], "window_digest": row["digest"], "model": row["observation_model"]}
+
+
+def _entries_for(rows):
+    return {row["observation"]: _cache_entry(row, OBSERVER_OBSERVATIONS[row["observation"]])
+            for row in rows}
+
+
+class ObservationJoinTest(unittest.TestCase):
+    """The observation a row names must be the observation of that window."""
+
+    def test_a_matching_entry_is_compared_on_all_three_fields(self):
+        row = pse.parse_row(OBSERVER_ROWS[0], 1, pse.LEVEL_VISUAL)
+        self.assertEqual(row.window_digest, OBSERVER_ROWS[0]["digest"])
+        entry = _cache_entry(OBSERVER_ROWS[0], OBSERVATIONS["v1.json"])
+        self.assertEqual(pse.assert_observation_belongs(row, entry),
+                         ("id", "window_digest", "model"))
+
+    def test_each_identity_field_refuses_on_its_own(self):
+        row = pse.parse_row(OBSERVER_ROWS[0], 1, pse.LEVEL_VISUAL)
+        for key, wrong in (("id", "public:window:somewhere-else"), ("window_digest", "f" * 64),
+                           ("model", "a-different-model")):
+            entry = {**_cache_entry(OBSERVER_ROWS[0], OBSERVATIONS["v1.json"]), key: wrong}
+            with self.assertRaises(pse.ObservationMismatchError) as caught:
+                pse.assert_observation_belongs(row, entry)
+            self.assertIsInstance(caught.exception, pse.ObservationError)
+            self.assertIn(key, str(caught.exception))
+            self.assertIn(row.row_id, str(caught.exception))
+
+    def test_a_payload_carrying_no_identity_fields_is_left_unchecked(self):
+        # an inline observation, or any payload written without the join keys
+        row = pse.parse_row(OBSERVER_ROWS[0], 1, pse.LEVEL_VISUAL)
+        self.assertEqual(pse.assert_observation_belongs(row, OBSERVATIONS["v1.json"]), ())
+
+    def test_a_correctly_paired_run_builds_every_packet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = VisualHarness(Path(tmp), rows=OBSERVER_ROWS, observations=_entries_for(OBSERVER_ROWS))
+            self.assertEqual(h.main(h.argv("join")), 0)
+            counts = h.receipt("join")["counts"]
+            self.assertEqual(counts["packets_built"], 3)
+            self.assertEqual(counts["observations_mismatched"], 0)
+            self.assertEqual(counts["observations_missing"], 0)
+
+    def test_a_mispaired_row_is_refused_and_counted_on_its_own(self):
+        # w2 is made to point at w3's cache entry: without the check, one
+        # window's observation would be scored against another's targets
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = [dict(row) for row in OBSERVER_ROWS]
+            rows[1]["observation"] = OBSERVER_CACHE_REFS["w3"]
+            h = VisualHarness(Path(tmp), rows=rows, observations=_entries_for(OBSERVER_ROWS))
+            self.assertEqual(h.main(h.argv("pair")), 0)
+            receipt = h.receipt("pair")
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(receipt["counts"]["packets_built"], 2)
+            self.assertEqual(receipt["counts"]["observations_mismatched"], 1)
+            self.assertEqual(receipt["counts"]["observations_missing"], 0)
+            failure = receipt["packet_failures"][0]
+            self.assertEqual(failure["row_id"], "public:window:w2")
+            self.assertEqual(failure["error"], "ObservationMismatchError")
+            self.assertIn("another window", failure["detail"])
+            self.assertEqual([p["row_id"] for p in h.packets("pair")],
+                             ["public:window:w1", "public:window:w3"])
 
 
 class CoverageTest(unittest.TestCase):

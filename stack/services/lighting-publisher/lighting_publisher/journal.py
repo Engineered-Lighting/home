@@ -1,10 +1,16 @@
 """The publisher's decision journal: one JSONL file per day, kept 30 days.
 
 Every tick's decision (and every refusal to decide) is appended as one JSON
-object per line to ``<dir>/decisions-YYYY-MM-DD.jsonl``. The date comes from
-the timestamp the caller passes, so the journal is as deterministic as the
-machines are. Files older than ``RETENTION_DAYS`` are deleted when the day
-rolls over and once at startup.
+object per line to ``<dir>/decisions-YYYY-MM-DD.jsonl``. The date is the
+*local* date of the timestamp the caller passes, in ``tz`` (the system zone
+when none is given, which in the container is ``TZ``). It has to be local:
+every night the estimator and the shadow report reason about is a local
+night that starts in the evening, and a UTC-named file would cut it in half
+-- west of Greenwich a 17:00-23:59 local evening lands in the *next* UTC day,
+so ``shadow-report.py --since <local date>`` would drop that evening and pick
+up the previous one's. Naming the file by the local date makes one file one
+night. Files older than ``RETENTION_DAYS`` are deleted when the day rolls
+over and once at startup.
 
 The journal is best effort on purpose: the container's only writable mount is
 the journal volume, and a full disk, a read-only remount or a permission
@@ -34,9 +40,10 @@ class Journal:
     """Append-only daily JSONL with retention. Never raises on I/O failure."""
 
     def __init__(self, directory: str | os.PathLike | None, retention_days: int = RETENTION_DAYS,
-                 enabled: bool = True) -> None:
+                 enabled: bool = True, tz: dt.tzinfo | None = None) -> None:
         self.directory = pathlib.Path(directory) if directory is not None else None
         self.retention_days = int(retention_days)
+        self.tz = tz
         self.enabled = bool(enabled and self.directory is not None)
         self.writes = 0
         self.errors = 0
@@ -45,6 +52,14 @@ class Journal:
         self._current_day: dt.date | None = None
 
     # --- paths ---------------------------------------------------------------
+
+    def day_of(self, now: dt.datetime) -> dt.date:
+        """The local day a record stamped ``now`` belongs to.
+
+        ``astimezone(None)`` is the system zone, which is what the container
+        sets from ``TZ`` and what the estimator's local hours already use.
+        """
+        return now.astimezone(self.tz).date()
 
     def path_for(self, day: dt.date) -> pathlib.Path:
         """The file a record stamped on ``day`` belongs in."""
@@ -71,7 +86,7 @@ class Journal:
         """Append one record; rotate first when the day changed. Never raises."""
         if not self.enabled:
             return False
-        day = now.date()
+        day = self.day_of(now)
         if day != self._current_day:
             self._current_day = day
             self.rotate(now)
@@ -96,7 +111,7 @@ class Journal:
         """Delete journals older than the retention window. Never raises."""
         if not self.enabled:
             return []
-        cutoff = now.date() - dt.timedelta(days=self.retention_days)
+        cutoff = self.day_of(now) - dt.timedelta(days=self.retention_days)
         removed: list[str] = []
         try:
             names = sorted(os.listdir(self.directory))

@@ -365,8 +365,18 @@ class Publisher:
         that was asleep still is); the TV machine starts at TV_OFF and
         re-derives within a tick or two from the live TV state.
         """
+        left_asleep_at = self.estimator._left_asleep_at
         self.estimator = AsleepEstimator(journal=self.estimator.journal,
                                          initial=self.estimator.state)
+        # The re-arm stamp must survive the rebuild. Every other clock restarts
+        # because silence is not evidence, which is fail-closed; this one is the
+        # opposite, because forgetting when the latch last cleared lets the
+        # house latch again inside the forty-five minutes the legacy automation
+        # refuses. Home Assistant's own rule reads the boolean's last_changed,
+        # which outlives a publisher restart entirely, so dropping it here would
+        # make the shadow diverge from the thing it shadows on the most routine
+        # event there is, a broker flap.
+        self.estimator._left_asleep_at = left_asleep_at
         self.tv = TvMachine(journal=self.tv.journal)
         log("health recovered: machine clocks restarted")
 
@@ -467,7 +477,7 @@ class Publisher:
                 and (now - self._last_heartbeat_at).total_seconds() < HEARTBEAT_S):
             return False
         self.client.publish(self.entities.heartbeat.state_topic,
-                            now.astimezone().isoformat(timespec="seconds"), qos=0, retain=True)
+                            self.local_time(now).isoformat(timespec="seconds"), qos=0, retain=True)
         self._last_heartbeat_at = now
         return True
 
@@ -564,7 +574,11 @@ def run(config: Config, clock: Callable[[], dt.datetime] | None = None) -> int:
     clock = clock or (lambda: dt.datetime.now(dt.timezone.utc))
     zones = load_zones(config.zones_path)
     observer = ObserverClient(config.observer_url)
-    journal = Journal(config.journal_dir, config.journal_retention_days)
+    # The journal's file day must be the publisher's configured zone, not the
+    # machine's: the report filters a range by the file name, so a mismatch
+    # silently drops a night and still exits clean.
+    journal = Journal(config.journal_dir, config.journal_retention_days,
+                      tz=Publisher._load_timezone(config.timezone))
     client = build_mqtt_client(config)
     publisher = Publisher(config, client, observer, zones, journal=journal, clock=clock)
 

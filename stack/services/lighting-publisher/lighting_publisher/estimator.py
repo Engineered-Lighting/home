@@ -33,6 +33,13 @@ latch (writer ``manual``) is followed for ``REARM_S`` (45 min). The decision
 carries ``reassert`` when it disagrees with the mirrored latch so the caller
 can republish.
 
+Once ``likely_asleep`` is left, for any reason, it cannot be re-entered for
+``REARM_S`` (45 min): the legacy automation's unconditional re-arm, which the
+publisher shadows so the two paths cannot disagree about a wake-up. A latch
+refused only by the re-arm records ``latch_refused = rearm`` in the evidence,
+with ``rearm_age_s`` saying how long ago the latch was left; a manual flip is
+never refused by it.
+
 ``likely_asleep`` is never entered once the household is up for the day:
 credible occupancy sustained ``MORNING_UP_S`` inside the morning window (the
 legacy ``woke up`` automation's rule). A guest on the sofa who steps off
@@ -55,9 +62,9 @@ from typing import Mapping
 
 from .stories import (ARRIVAL_DOOR_WINDOW_S, BRIGHTEN_QUIET_S, DEPARTURE_CONFIRM_S,
                       DEPARTURE_DOOR_WINDOW_S, IDLE_S, MANUAL_FLIP_HONORED_S, MANUAL_WRITERS,
-                      MORNING_UP_S, OVERNIGHT_PROFILE, P_TV_ATTENTION_EQ0, TV_ATTENTION_QUIET_S,
-                      TV_ON_STATES, WAKE_S, elapsed_at_least, in_morning_window, in_night_window,
-                      iso, seconds_between)
+                      MORNING_UP_S, OVERNIGHT_PROFILE, P_TV_ATTENTION_EQ0, REARM_S,
+                      TV_ATTENTION_QUIET_S, TV_ON_STATES, WAKE_S, elapsed_at_least,
+                      in_morning_window, in_night_window, iso, seconds_between)
 
 LIKELY_ASLEEP = "likely_asleep"
 AWAKE = "awake"
@@ -144,6 +151,7 @@ class AsleepEstimator:
         self._morning_occupied_since: dt.datetime | None = None
         self._up_for_the_day = False
         self._manual_key: tuple | None = None
+        self._left_asleep_at: dt.datetime | None = None
         self._departure_at: dt.datetime | None = None
         self._arrival_at: dt.datetime | None = None
         self._last_door_on: dt.datetime | None = None
@@ -278,6 +286,9 @@ class AsleepEstimator:
     def _transition(self, now: dt.datetime, to: str, reason: str, evidence: dict) -> None:
         self.journal.append({"t": iso(now), "event": "transition", "from": self.state, "to": to,
                              "reason": reason, "evidence": dict(evidence)})
+        if self.state == LIKELY_ASLEEP and to != LIKELY_ASLEEP:
+            # Leaving the latch, by any door, starts the REARM_S guard.
+            self._left_asleep_at = now
         self.state, self.since = to, now
 
     def update(self, now: dt.datetime, inputs: EstimatorInputs) -> AsleepDecision:
@@ -307,6 +318,7 @@ class AsleepEstimator:
             "brighten_age_s": brighten_age, "user_at_home": inputs.user_at_home,
             "departure": departure, "arrival": iso(arrival), "manual_hold": manual,
             "up_for_the_day": self._up_for_the_day,
+            "rearm_age_s": seconds_between(self._left_asleep_at, now),
             "latch_on": inputs.latch_on, "latch_writer": inputs.latch_writer,
         }
         if tv_rule == "legacy":
@@ -375,4 +387,12 @@ class AsleepEstimator:
         brighten_quiet = brighten_age is None or brighten_age >= BRIGHTEN_QUIET_S
         if (window and not self._up_for_the_day and not credible_now and quiet_long
                 and tv_ok and brighten_quiet):
-            self._transition(now, LIKELY_ASLEEP, "quiet_window", evidence)
+            if self._rearmed(now):
+                self._transition(now, LIKELY_ASLEEP, "quiet_window", evidence)
+            else:
+                # Everything else agrees; only the legacy re-arm says no.
+                evidence["latch_refused"] = "rearm"
+
+    def _rearmed(self, now: dt.datetime) -> bool:
+        """True when ``REARM_S`` has passed since ``likely_asleep`` was left."""
+        return self._left_asleep_at is None or elapsed_at_least(self._left_asleep_at, now, REARM_S)

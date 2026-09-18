@@ -583,11 +583,12 @@ HA is the canonical home-state surface. Everything in this system either feeds H
   - `living_lights/publisher/<object_id>/state` and `/attributes` (retain=true) for
     `binary_sensor.living_lights_tv_watching`, `sensor.living_lights_asleep_estimator`,
     `sensor.<camera>_<zone>_activity` and `sensor.lighting_publisher_heartbeat`
-  - `living_lights/publisher/availability` (LWT, registered before connect)
+  - `living_lights/publisher/availability[_shadow]` (LWT, registered before connect)
   - `homeassistant/<component>/<object_id>/config` (MQTT discovery, republished every 10 min)
 
   and subscribes to:
-  - `living_lights/mirror/#` plus `living_lights/mirror/heartbeat` (the Home Assistant
+  - `living_lights/mirror/#`, which carries `living_lights/mirror/heartbeat`, the
+    mirror-freshness beat -- one `subscribe` call, not two (the Home Assistant
     mirror published by `ha-config/packages/living_lights_mqtt_mirror.yaml`; this is the
     only way the publisher learns Home Assistant state, and why it needs no HA token)
   - `frigate/<camera>/person` and `frigate/<camera>/<zone>/person` (person counts)

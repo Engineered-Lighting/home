@@ -43,8 +43,9 @@ dataset, split, native_partition, native_classes, targets, stratum, group_id,
 subject_id, media, sample_times_s, digest) plus ``observation``, the
 cache-relative path of the rich-observation JSON that batch wrote for the
 window, and ``observation_model``. ``--observations`` is the cache root those
-paths resolve against; an absolute path and an inline observation are both
-still accepted. The packet is built
+paths resolve against and inside which every reference must resolve, written
+relative or absolute; an inline observation is still accepted. The packet is
+built
 from that typed observation (the ``semantic()`` result: posture, activities,
 summary, dimensions with a per-dimension status and description, context)
 exactly as the belief publisher will at M6, and from nothing else:
@@ -116,10 +117,18 @@ and so is a row whose packet carries dataset vocabulary. A row that names no
 observation at all is one of those refusals too (also counted in
 ``counts.observations_unnamed``), because the observer's batch runner writes a
 line per selected window whether or not it observed that window, and a partly
-observed selection must be reported rather than refused. A relative
-observation path that resolves outside ``--observations`` is refused the same
-way: a rows file is data and may not name a file outside the directory the
-operator pointed the run at.
+observed selection must be reported rather than refused. An observation path
+that resolves outside ``--observations`` is refused the same way, written
+relative or absolute: a rows file is data and may not name a file outside the
+directory the operator pointed the run at.
+
+The join itself is checked, not assumed. The batch runner writes ``id``,
+``window_digest`` and ``model`` into every cache entry; when the entry carries
+them and the row carries its counterpart, they must agree, or the row is
+refused as an ``ObservationMismatchError`` counted on its own in
+``counts.observations_mismatched``. A rows file paired with the wrong cache
+root scores one window's observation against another window's targets, and
+that has to be loud rather than merely wrong.
 
 Dry run is the default: it builds and validates every packet, runs the gate
 check, counts would-be calls and bytes, writes ``run.json`` with
@@ -456,6 +465,9 @@ class Row:
     # The observer's batch runner names the model it observed the window with;
     # kept for the receipt so a run says which observations it read.
     observation_model: str = ""
+    # The selection's digest of the window, carried so ``load_observation`` can
+    # check that the cache entry it read is this window's and not another's.
+    window_digest: str = ""
 
 
 _TRUE_WORDS = {"yes", "true", "pos", "positive", "1"}
@@ -661,12 +673,14 @@ def parse_row(raw: Mapping[str, Any], line_no: int, level: int = LEVEL) -> Row:
     camera, reason = camera_for_row(scene, tv_present, targets)
     observation_ref, observation_inline = observation_field(raw, level)
     observation_model = raw.get("observation_model")
+    window_digest = raw.get("digest")
     class_ids, class_names = class_terms(raw.get("classes", raw.get("native_classes", raw.get("actions"))))
     selected_for = tuple(str(q) for q in (raw.get("selected_for") or []) if isinstance(q, str) and q.strip())
     return Row(str(row_id) if row_id is not None else "", description, camera, tv_present,
                scene, reason, targets, cutoffs, observation_ref, observation_inline,
                class_ids, class_names, selected_for,
-               observation_model=str(observation_model).strip() if isinstance(observation_model, str) else "")
+               observation_model=str(observation_model).strip() if isinstance(observation_model, str) else "",
+               window_digest=str(window_digest).strip() if isinstance(window_digest, str) else "")
 
 
 def load_rows(path: Path, level: int = LEVEL) -> list[Row]:
@@ -735,23 +749,69 @@ class ObservationError(ValueError):
     """
 
 
+class ObservationMismatchError(ObservationError):
+    """The observation loaded for a row describes a different window.
+
+    The batch runner writes ``id``, ``window_digest`` and ``model`` into every
+    cache entry so that the join can be checked on this side; a mismatch means
+    the rows file and the cache root were paired wrongly. It refuses the one
+    row like any other ``ObservationError`` and is counted on its own in
+    ``counts.observations_mismatched``, because scoring one window's
+    observation against another window's targets is worse than not scoring it.
+    """
+
+
 class DatasetVocabularyError(ValueError):
     """A dataset label, class name, class id or caption reached the packet."""
 
 
+# The cache entry's identity field and the row field it must equal.
+OBSERVATION_IDENTITY = (("id", "row_id"), ("window_digest", "window_digest"),
+                        ("model", "observation_model"))
+
+
+def assert_observation_belongs(row: "Row", payload: Mapping[str, Any]) -> tuple:
+    """Refuse an observation whose identity fields disagree with the row's.
+
+    A field is compared only when the payload carries it AND the row carries
+    its counterpart, so an inline observation, or any payload written without
+    the batch runner's identity fields, keeps today's behaviour. Returns the
+    names of the fields actually compared, so a caller can tell a checked join
+    from an unchecked one.
+    """
+    checked = []
+    for key, attribute in OBSERVATION_IDENTITY:
+        theirs = payload.get(key)
+        ours = getattr(row, attribute, "")
+        if not isinstance(theirs, str) or not theirs.strip() or not ours:
+            continue
+        checked.append(key)
+        if theirs.strip() != ours:
+            raise ObservationMismatchError(
+                f"rich observation belongs to another window ({key} mismatch): "
+                f"row {row.row_id or '?'}")
+    return tuple(checked)
+
+
 def resolve_observation_path(ref: str, observations_root: Path | None, rows_dir: Path) -> Path:
-    """An absolute reference as given; a relative one below --observations, else the rows file.
+    """The reference resolved below --observations, which must contain it.
 
     The observer's batch runner files an observation at ``<key[:2]>/<key>.json``
     under its cache root and writes that cache-relative path into the row, so a
     relative reference is the normal form and the root is ``--observations``.
-    A relative reference that resolves outside that root (``..`` segments, or a
-    symlink pointing away) is refused with an ``ObservationError``: a rows file
-    is data, and data may not name a file outside the directory the operator
-    pointed the run at.
+    Containment is checked for every reference, relative or absolute: one that
+    resolves outside the root (``..`` segments, a symlink pointing away, or an
+    absolute path naming some other readable file on the host) is refused with
+    an ``ObservationError``. A rows file is data, and data may not name a file
+    outside the directory the operator pointed the run at -- an absolute
+    reference least of all, because the trusted producer never writes one.
+
+    Without ``--observations`` there is no such directory: a relative reference
+    then resolves below the rows file and is contained by it, and an absolute
+    one is taken as given, which is the single-file local debugging case.
     """
     path = Path(ref)
-    if path.is_absolute():
+    if path.is_absolute() and observations_root is None:
         return path
     root = observations_root or rows_dir
     try:
@@ -771,7 +831,10 @@ def load_observation(row: Row, observations_root: Path | None, rows_dir: Path) -
     The batch runner's file may hold the observation at its top level or under
     ``observation``, ``semantic`` or ``rich_observation``; a row may also carry
     it inline. Every failure is an ``ObservationError`` naming the row's own
-    reference, so one missing file is one refused row.
+    reference, so one missing file is one refused row; a payload whose ``id``,
+    ``window_digest`` or ``model`` contradicts the row is one refused row too
+    (``ObservationMismatchError``), so a rows file paired with the wrong cache
+    root cannot be scored in silence.
     """
     if row.observation_inline is not None:
         payload: Any = row.observation_inline
@@ -790,6 +853,7 @@ def load_observation(row: Row, observations_root: Path | None, rows_dir: Path) -
             raise ObservationError(f"rich observation is not JSON: {row.observation_ref}") from exc
     if not isinstance(payload, Mapping):
         raise ObservationError("rich observation is not an object")
+    assert_observation_belongs(row, payload)
     observation: Mapping[str, Any] = payload
     if "dimensions" not in payload:
         for key in OBSERVATION_KEYS:
@@ -1612,6 +1676,7 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
     claims_truncated = 0
     observations_missing = 0
     observations_unnamed = 0
+    observations_mismatched = 0
     vocabulary_refusals = 0
     vocabulary_exempt_rows = 0
     exempt_terms: set = set()
@@ -1648,7 +1713,9 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
                               "claims_truncated": 0}
         except (packet_mod.PacketError, leak_guard.LeakError,
                 ObservationError, DatasetVocabularyError) as exc:
-            observations_missing += int(isinstance(exc, ObservationError))
+            mispaired = isinstance(exc, ObservationMismatchError)
+            observations_mismatched += int(mispaired)
+            observations_missing += int(isinstance(exc, ObservationError) and not mispaired)
             vocabulary_refusals += int(isinstance(exc, DatasetVocabularyError))
             if len(failures) < MAX_RECORDED_FAILURES:
                 failures.append({"row_index": index, "row_id": row.row_id, "error": type(exc).__name__, "detail": str(exc)})
@@ -1678,6 +1745,7 @@ def run(args: argparse.Namespace, env: Mapping[str, str], transport_factory: Cal
         "descriptions_truncated": truncated, "tv_rows": sum(1 for item in built if item["row"].tv_present),
         "claims_truncated": claims_truncated, "observations_missing": observations_missing,
         "observations_unnamed": observations_unnamed,
+        "observations_mismatched": observations_mismatched,
         "vocabulary_refusals": vocabulary_refusals, "vocabulary_exempt_rows": vocabulary_exempt_rows,
         "cache_hits": 0, "would_be_calls": 0, "calls_made": 0, "calls_failed": 0, "not_asked": 0,
         "gate_denied": 0, "bytes_would_send": 0, "input_tokens": 0, "output_tokens": 0,

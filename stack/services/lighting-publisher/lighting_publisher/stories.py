@@ -115,7 +115,17 @@ the idle window and not ``WAKE_S``), while a guest who is on camera all
 night and leaves at 07:00 has plainly not just gone to bed."""
 
 REARM_S = 45 * 60
-"""After a manual flip of the latch the estimator follows it this long."""
+"""The re-arm. Once ``likely_asleep`` has been left -- for any reason, manual
+or automatic -- no new ``likely_asleep`` until this has passed. It is the
+legacy ``living_lights_asleep_on`` automation's unconditional 45-minute guard
+(``now() - input_boolean.living_lights_asleep.last_changed > 2700``), which
+the publisher shadows: without it a ten-minute kitchen trip that clears the
+latch would be followed by a fresh latch fifteen quiet minutes later, and the
+legacy path refuses exactly that. The refusal is recorded in the decision
+evidence as ``latch_refused: rearm``.
+
+The same number is how long a manual flip of the latch is honoured, so a
+manual clear holds the house awake and re-arms it over the identical window."""
 MANUAL_FLIP_HONORED_S = REARM_S
 MANUAL_WRITERS = ("manual",)
 """``input_text.living_lights_asleep_writer`` values that mean a person

@@ -26,6 +26,12 @@ Usage:
 
     python3 tools/shadow-report.py --journal-dir ... --json     # machine form
 
+Person evidence is mandatory. Scoring a latch against nothing proves nothing,
+so a run that read no person row -- no ``--frigate-jsonl`` at all, or files
+that carried none -- is a usage error unless ``--no-evidence`` is passed to
+acknowledge it. Such a run scores every latch ``inconclusive``, never
+``explained``, and says so in both the rendered and the JSON form.
+
 Row shapes accepted (both files are read leniently, one JSON object per line):
 
 - Frigate evidence: any row carrying a time (``t``, ``ts``, ``time``,
@@ -58,6 +64,16 @@ LABEL_KEYS = ("label", "object", "object_type")
 CAMERA_KEYS = ("camera", "camera_name", "source")
 LATCH_STATE = "likely_asleep"
 LEGACY_LATCH_ENTITY = "input_boolean.living_lights_asleep"
+
+VERDICT_EXPLAINED = "explained"
+VERDICT_UNEXPLAINED = "unexplained"
+VERDICT_INCONCLUSIVE = "inconclusive"
+"""A latch is only *explained* when evidence was scored against it. With no
+person evidence at all the honest verdict is neither -- the run measured
+nothing -- so it is ``inconclusive`` and the reader is told how many."""
+
+MALFORMED_SHOWN = 10
+"""How many ``file:line`` locations of unreadable lines the receipt names."""
 
 
 class ReportError(RuntimeError):
@@ -101,31 +117,42 @@ def row_time(row: dict) -> dt.datetime | None:
     return None
 
 
-def read_jsonl(path: pathlib.Path) -> list[dict]:
-    """Read a JSONL file, skipping blank and unparsable lines."""
+def read_jsonl(path: pathlib.Path) -> tuple[list[dict], list[str]]:
+    """Read a JSONL file; return its objects and one note per unreadable line.
+
+    A malformed line is never fatal -- a half-written last line is ordinary in
+    a journal a live process is appending to -- but it is never silent either:
+    the caller counts them into the receipt, so a reader can tell the scored
+    records from all the records.
+    """
     rows: list[dict] = []
+    malformed: list[str] = []
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
+        for number, line in enumerate(handle, start=1):
             line = line.strip()
             if not line:
                 continue
             try:
                 row = json.loads(line)
             except ValueError:
+                malformed.append(f"{path.name}:{number}")
                 continue
             if isinstance(row, dict):
                 rows.append(row)
-    return rows
+            else:
+                malformed.append(f"{path.name}:{number}")
+    return rows, malformed
 
 
 def read_journals(directory: pathlib.Path, since: dt.date | None,
-                  until: dt.date | None) -> tuple[list[dict], list[str]]:
-    """Every journal record in the date range, oldest first."""
+                  until: dt.date | None) -> tuple[list[dict], list[str], list[str]]:
+    """Every journal record in the date range, oldest first, plus bad lines."""
     if not directory.is_dir():
         raise ReportError(f"journal directory not found: {directory}")
     files = sorted(directory.glob(JOURNAL_GLOB))
     used: list[str] = []
     rows: list[dict] = []
+    malformed: list[str] = []
     for path in files:
         stamp = path.stem.split("-", 1)[-1]
         try:
@@ -137,15 +164,19 @@ def read_journals(directory: pathlib.Path, since: dt.date | None,
         if until is not None and day > until:
             continue
         used.append(path.name)
-        rows.extend(read_jsonl(path))
+        read, bad = read_jsonl(path)
+        rows.extend(read)
+        malformed.extend(bad)
     rows.sort(key=lambda row: row.get("t") or "")
-    return rows, used
+    return rows, used, malformed
 
 
-def read_person_evidence(path: pathlib.Path, assume_person: bool) -> list[dict]:
+def read_person_evidence(path: pathlib.Path,
+                         assume_person: bool) -> tuple[list[dict], list[str]]:
     """Frigate rows that are evidence of a person, with a usable time."""
     out: list[dict] = []
-    for row in read_jsonl(path):
+    rows, malformed = read_jsonl(path)
+    for row in rows:
         when = row_time(row)
         if when is None:
             continue
@@ -167,13 +198,14 @@ def read_person_evidence(path: pathlib.Path, assume_person: bool) -> list[dict]:
                 break
         out.append({"at": when, "camera": camera or "unknown"})
     out.sort(key=lambda item: item["at"])
-    return out
+    return out, malformed
 
 
-def read_recorder(path: pathlib.Path, entity_id: str) -> list[dict]:
+def read_recorder(path: pathlib.Path, entity_id: str) -> tuple[list[dict], list[str]]:
     """Recorder rows for one entity, oldest first."""
     out: list[dict] = []
-    for row in read_jsonl(path):
+    rows, malformed = read_jsonl(path)
+    for row in rows:
         if row.get("entity_id") != entity_id:
             continue
         when = row_time(row)
@@ -182,7 +214,7 @@ def read_recorder(path: pathlib.Path, entity_id: str) -> list[dict]:
             continue
         out.append({"at": when, "state": state})
     out.sort(key=lambda item: item["at"])
-    return out
+    return out, malformed
 
 
 # -- scoring ------------------------------------------------------------------
@@ -251,13 +283,26 @@ def state_at(rows: list[dict], when: dt.datetime) -> str | None:
     return found
 
 
+def verdict_for(scored: bool, seen: list[dict]) -> str:
+    """Explained, unexplained -- or inconclusive when nothing was scored."""
+    if not scored:
+        return VERDICT_INCONCLUSIVE
+    return VERDICT_UNEXPLAINED if seen else VERDICT_EXPLAINED
+
+
 def build_report(records: list[dict], people: list[dict], recorder: list[dict],
-                 window_min: int, files: list[str]) -> dict:
+                 window_min: int, files: list[str], evidence_sources: int,
+                 malformed: list[str]) -> dict:
     """The receipt: every latch, its evidence, and the run's counters."""
     window_s = window_min * 60
+    # Scored means person evidence actually arrived. A file that parsed to no
+    # person row proves exactly as much as no file at all, so the count of
+    # files is not the test: the rows are.
+    scored = bool(people)
     rows = []
     for latch in latches(records):
         seen = people_in_window(people, latch["at"], window_s)
+        verdict = verdict_for(scored, seen)
         rows.append({
             "at": latch["at"].isoformat(timespec="seconds"),
             "from": latch["from"],
@@ -267,13 +312,15 @@ def build_report(records: list[dict], people: list[dict], recorder: list[dict],
             "cameras": sorted({item["camera"] for item in seen}),
             "last_person_at": (seen[-1]["at"].isoformat(timespec="seconds") if seen else None),
             "legacy_latch": state_at(recorder, latch["at"]) if recorder else None,
-            "explained": not seen,
+            "verdict": verdict,
+            "explained": verdict == VERDICT_EXPLAINED,
         })
     gated = sum(1 for record in records if record.get("event") == "gated")
     decisions = sum(1 for record in records if record.get("event") == "decision")
     tv_changes = sum(1 for record in records
                      if isinstance(record.get("tv"), dict) and record["tv"].get("changed"))
-    unexplained = [row for row in rows if not row["explained"]]
+    unexplained = [row for row in rows if row["verdict"] == VERDICT_UNEXPLAINED]
+    inconclusive = [row for row in rows if row["verdict"] == VERDICT_INCONCLUSIVE]
     return {
         "schema": "lighting-shadow-report/v1",
         "window_min": window_min,
@@ -285,8 +332,13 @@ def build_report(records: list[dict], people: list[dict], recorder: list[dict],
         "latches": rows,
         "exits": [{"at": item["at"].isoformat(timespec="seconds"), "to": item["to"],
                    "reason": item["reason"]} for item in exits(records)],
+        "evidence_sources": evidence_sources,
+        "inconclusive": not scored,
         "frigate_person_rows": len(people),
         "unexplained_latches": len(unexplained),
+        "inconclusive_latches": len(inconclusive),
+        "malformed_lines": len(malformed),
+        "malformed_where": malformed[:MALFORMED_SHOWN],
     }
 
 
@@ -296,19 +348,31 @@ def render(report: dict) -> str:
     lines.append(f"journal files : {len(report['journal_files'])}")
     lines.append(f"records       : {report['records']} "
                  f"({report['decisions']} decisions, {report['gated_ticks']} gated)")
+    lines.append(f"evidence files: {report['evidence_sources']}")
     lines.append(f"frigate rows  : {report['frigate_person_rows']} person observations")
     lines.append(f"tv transitions: {report['tv_transitions']}")
     lines.append(f"latches       : {len(report['latches'])}")
     lines.append(f"exits         : {len(report['exits'])}")
     lines.append(f"window        : {report['window_min']} min before each latch")
+    if report["malformed_lines"]:
+        where = ", ".join(report["malformed_where"])
+        more = "" if report["malformed_lines"] <= len(report["malformed_where"]) else ", ..."
+        lines.append(f"malformed     : {report['malformed_lines']} unreadable lines "
+                     f"({where}{more})")
+    if report["inconclusive"]:
+        lines.append("evidence      : NOTHING SCORED -- no person row was read "
+                     "(--no-evidence)")
     lines.append("")
     if not report["latches"]:
         lines.append("No likely_asleep latch in this range.")
     for row in report["latches"]:
-        verdict = "explained" if row["explained"] else "UNEXPLAINED"
+        verdict = (VERDICT_EXPLAINED if row["verdict"] == VERDICT_EXPLAINED
+                   else row["verdict"].upper())
         lines.append(f"- {row['at']}  {verdict}")
         lines.append(f"    quiet_s={row['quiet_s']}  from={row['from']}  mode={row['mode']}")
-        if row["frigate_people_in_window"]:
+        if row["verdict"] == VERDICT_INCONCLUSIVE:
+            lines.append("    frigate: no person evidence was read, so nothing was checked")
+        elif row["frigate_people_in_window"]:
             lines.append(f"    frigate: {row['frigate_people_in_window']} person rows "
                          f"on {', '.join(row['cameras'])}, last at {row['last_person_at']}")
         else:
@@ -324,6 +388,10 @@ def render(report: dict) -> str:
         lines.append("")
     lines.append(f"unexplained latches: {report['unexplained_latches']} "
                  f"(the acceptance bar is zero over seven nights)")
+    lines.append(f"inconclusive latches: {report['inconclusive_latches']}")
+    if report["inconclusive"]:
+        lines.append("This run proves nothing: no person row was read, so no latch was "
+                     "scored.")
     return "\n".join(lines)
 
 
@@ -341,6 +409,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"recorder entity to compare against (default {LEGACY_LATCH_ENTITY})")
     parser.add_argument("--assume-person", action="store_true",
                         help="treat unlabelled Frigate rows as person evidence")
+    parser.add_argument("--no-evidence", action="store_true",
+                        help="acknowledge a run with no person evidence: every latch is "
+                             "scored inconclusive and the run proves nothing")
     parser.add_argument("--since", help="first journal day, YYYY-MM-DD")
     parser.add_argument("--until", help="last journal day, YYYY-MM-DD")
     parser.add_argument("--window-min", type=int, default=DEFAULT_WINDOW_MIN,
@@ -360,29 +431,47 @@ def as_date(value: str | None, label: str) -> dt.date | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    malformed: list[str] = []
     try:
         since = as_date(args.since, "since")
         until = as_date(args.until, "until")
         if args.window_min <= 0:
             raise ReportError("--window-min must be positive")
-        records, files = read_journals(pathlib.Path(args.journal_dir), since, until)
+        if not args.frigate_jsonl and not args.no_evidence:
+            raise ReportError("no person evidence supplied; scoring a latch against "
+                              "nothing proves nothing (pass --frigate-jsonl, or "
+                              "--no-evidence to acknowledge an unscored run)")
+        records, files, bad = read_journals(pathlib.Path(args.journal_dir), since, until)
+        malformed.extend(bad)
         people: list[dict] = []
         for name in args.frigate_jsonl:
             path = pathlib.Path(name)
             if not path.is_file():
                 raise ReportError(f"frigate evidence not found: {path}")
-            people.extend(read_person_evidence(path, args.assume_person))
+            found, bad = read_person_evidence(path, args.assume_person)
+            people.extend(found)
+            malformed.extend(bad)
         people.sort(key=lambda item: item["at"])
+        if not people and not args.no_evidence:
+            # A wrong file, a filtered-out label or an empty export reads
+            # exactly like a forgotten argument, and must fail the same way.
+            raise ReportError(
+                f"person evidence is empty: {len(args.frigate_jsonl)} file(s) read and "
+                "no person row in any of them; scoring a latch against nothing proves "
+                "nothing (pass --assume-person for an unlabelled export, or "
+                "--no-evidence to acknowledge an unscored run)")
         recorder: list[dict] = []
         if args.recorder_jsonl:
             path = pathlib.Path(args.recorder_jsonl)
             if not path.is_file():
                 raise ReportError(f"recorder export not found: {path}")
-            recorder = read_recorder(path, args.recorder_entity)
+            recorder, bad = read_recorder(path, args.recorder_entity)
+            malformed.extend(bad)
     except ReportError as exc:
         print(f"shadow-report: {exc}", file=sys.stderr)
         return EXIT_USAGE
-    report = build_report(records, people, recorder, args.window_min, files)
+    report = build_report(records, people, recorder, args.window_min, files,
+                          len(args.frigate_jsonl), malformed)
     print(json.dumps(report, indent=2) if args.json else render(report))
     return EXIT_UNEXPLAINED if report["unexplained_latches"] else EXIT_OK
 

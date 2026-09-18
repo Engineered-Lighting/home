@@ -264,6 +264,91 @@ class FakeTransport:
 
 
 class ObserverTest(NoSocketTest):
+    def test_the_live_payload_shape_is_read_from_latest(self):
+        """The shape this observer actually serves.
+
+        Its ``cameras`` map carries stream health and an inference gate, not
+        presence; the detector results live under ``latest.<camera>.<worker>``.
+        Reading only ``cameras`` gave three cameras and zero readings against
+        the live observer, so the corroboration the night guard rests on would
+        never have been satisfied.
+        """
+        payload = {
+            "now": 1789752758.9,
+            "cameras": {
+                "living_room": {"frame_age": 0.4, "health": "ok",
+                                "inference_gate": {"occupancy": "occupied",
+                                                   "reason": "person detected by Frigate"}},
+                "kitchen": {"frame_age": 0.5, "health": "ok",
+                            "inference_gate": {"occupancy": "vacant"}},
+            },
+            "latest": {
+                "living_room": {"objects": {"valid": True, "total_people": 1, "people": [{}]},
+                                "rtmw": {"valid": True, "people": []}},
+                "kitchen": {"objects": {"valid": True, "total_people": 0, "people": []}},
+            },
+        }
+        reading = parse_reading(payload, T0)
+        self.assertEqual(reading.cameras_read, 2)
+        self.assertTrue(reading.track_in("living_room"))
+        self.assertEqual(reading.cameras["living_room"].people, 1)
+        self.assertFalse(reading.track_in("kitchen"))
+        self.assertEqual(reading.cameras["kitchen"].people, 0)
+
+    def test_the_frigate_derived_inference_gate_is_never_read(self):
+        """Corroboration has to come from something other than Frigate.
+
+        ``inference_gate.occupancy`` is the one field that says "occupied" in
+        words, and on this house its own reason is "person detected by
+        Frigate". Reading it would make the observer agree with Frigate by
+        construction, so a stuck Frigate zone would read as confirmed by vision
+        and the night guard would rest on one sensor while appearing to rest on
+        two.
+        """
+        payload = {
+            "cameras": {"living_room": {"inference_gate": {"occupancy": "occupied",
+                                                           "reason": "person detected by Frigate"}}},
+            "latest": {"living_room": {"objects": {"valid": True, "total_people": 0, "people": []}}},
+        }
+        reading = parse_reading(payload, T0)
+        self.assertFalse(reading.track_in("living_room"))
+        self.assertEqual(reading.cameras["living_room"].people, 0)
+
+    def test_a_worker_that_produced_no_result_is_passed_over(self):
+        """valid false is "no answer", which is not "nobody there"."""
+        payload = {"latest": {"living_room": {
+            "objects": {"valid": False, "total_people": 0, "people": []},
+            "rtmw": {"valid": True, "people": [{}, {}]}}}}
+        reading = parse_reading(payload, T0)
+        self.assertTrue(reading.track_in("living_room"))
+        self.assertEqual(reading.cameras["living_room"].people, 2)
+
+    def test_a_camera_with_no_usable_worker_has_no_reading(self):
+        payload = {"latest": {"living_room": {"objects": {"valid": False}}}}
+        reading = parse_reading(payload, T0)
+        self.assertEqual(reading.cameras_read, 0)
+        self.assertIsNone(reading.present("living_room"))
+
+    def test_the_documented_flat_shapes_still_parse(self):
+        """Another observer, or a fixture, may send presence directly."""
+        for payload in ({"cameras": {"living_room": {"person_present": True}}},
+                        {"cameras": {"living_room": 2}},
+                        {"cameras": {"living_room": [{}, {}]}},
+                        {"state": {"cameras": {"living_room": {"people": [{}]}}}}):
+            with self.subTest(payload=payload):
+                self.assertTrue(parse_reading(payload, T0).track_in("living_room"))
+
+    def test_the_size_cap_fits_the_observers_whole_state(self):
+        """The observer serves its entire state, images included.
+
+        Measured at 717 KiB on 2026-09-18, against a 256 KiB cap that made
+        every poll fail. There is no narrower endpoint and no query parameter
+        that trims it, so the cap has to fit it.
+        """
+        from lighting_publisher.inputs.observer import MAX_BYTES
+        self.assertGreaterEqual(MAX_BYTES, 1024 * 1024,
+                                "a cap under a megabyte fails every poll against this observer")
+
     def test_url_validation_refuses_anything_but_http(self):
         for bad in ("", "file:///etc/passwd", "ftp://host/x", "not a url", "http:///nohost"):
             with self.assertRaises(ValueError):

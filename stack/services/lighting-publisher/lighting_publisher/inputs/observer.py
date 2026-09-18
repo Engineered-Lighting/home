@@ -35,12 +35,42 @@ from typing import Mapping
 DEFAULT_OBSERVER_URL = "http://192.168.0.100:8767"
 DEFAULT_STATE_PATH = "/api/state"
 DEFAULT_TIMEOUT_S = 3.0
-MAX_BYTES = 256 * 1024
+MAX_BYTES = 4 * 1024 * 1024
+"""The observer's ``/api/state`` is its whole state, and it is large: measured
+at 717 KiB on 2026-09-18, of which 558 KiB is the base64 ``pose_image`` of each
+worker's last frame. At the old 256 KiB cap every single poll failed, which
+would have left the observer permanently stale, the publisher permanently
+unhealthy and every belief ``unknown`` for the whole shadow week.
+
+The observer serves no narrower endpoint and honours no query parameter that
+trims the body, so the cap is raised to fit it with headroom rather than the
+body being trimmed. The cost is about 150 KB/s and one 717 KiB JSON parse every
+five seconds. The images are decoded and dropped in the same breath: nothing
+but counts survives into ``ObserverReading``, and the publisher neither logs
+nor forwards a payload. A narrow presence endpoint on the observer is the right
+fix and is an observer change, which needs the owner's window because it
+restarts live inference."""
 USER_AGENT = "lighting-publisher/0.1"
 
 PRESENCE_BOOL_KEYS = ("person_present", "present", "occupied", "has_person", "person")
 PRESENCE_COUNT_KEYS = ("person_count", "people_count", "persons", "people", "tracks", "count")
 CAMERA_CONTAINER_KEYS = ("cameras", "by_camera", "camera_state")
+
+LATEST_KEY = "latest"
+DETECTOR_WORKERS = ("objects", "rtmw", "jepa")
+"""The workers whose people lists are read, most trusted first.
+
+``objects`` is the YOLOX full-scene scan and carries ``total_people``; ``rtmw``
+is the pose detector; ``jepa`` carries V-JEPA's tracks. All three look at the
+frame themselves.
+
+``cameras.<name>.inference_gate.occupancy`` is deliberately NOT read, although
+it is the one field in the payload that says "occupied" in words. Its own
+``reason`` on this house is "person detected by Frigate": it is derived from
+Frigate, and the estimator asks the observer to CORROBORATE Frigate. Reading it
+would make that corroboration agree with Frigate by construction, so a stuck
+Frigate zone would read as confirmed by vision and the night guard would rest
+on one sensor while appearing to rest on two."""
 
 
 class ObserverError(RuntimeError):
@@ -150,15 +180,55 @@ def _coerce_camera(value: object) -> ObserverCamera:
     return ObserverCamera()
 
 
+def _camera_from_latest(workers: object) -> ObserverCamera:
+    """Read one camera from ``latest.<camera>``: {worker: {..., people: [...]}}.
+
+    The first worker in ``DETECTOR_WORKERS`` with a valid result and a people
+    list wins. ``valid`` false is a worker that did not produce a result this
+    window, which is not evidence that nobody is there, so it is passed over
+    rather than read as empty.
+    """
+    if not isinstance(workers, dict):
+        return ObserverCamera()
+    for name in DETECTOR_WORKERS:
+        body = workers.get(name)
+        if not isinstance(body, dict) or body.get("valid") is False:
+            continue
+        total = body.get("total_people")
+        if isinstance(total, bool):
+            total = None
+        if isinstance(total, (int, float)):
+            return ObserverCamera(present=total > 0, people=int(total))
+        people = body.get("people")
+        if isinstance(people, list):
+            return ObserverCamera(present=len(people) > 0, people=len(people))
+    return ObserverCamera()
+
+
 def parse_reading(data: object, now: dt.datetime) -> ObserverReading:
-    """Build a reading from the decoded body; unknown shapes read as empty."""
+    """Build a reading from the decoded body; unknown shapes read as empty.
+
+    The observer this publisher runs against puts its per-camera detector
+    results under ``latest``, and its ``cameras`` map carries stream health and
+    an inference gate rather than presence, so ``latest`` is read first. The
+    documented flat shapes are still accepted underneath, because they are what
+    the unit tests and any other observer would send.
+    """
     payload = data
-    if isinstance(payload, dict) and not any(k in payload for k in CAMERA_CONTAINER_KEYS):
+    if isinstance(payload, dict) and not any(
+            k in payload for k in CAMERA_CONTAINER_KEYS + (LATEST_KEY,)):
         inner = payload.get("state")
         if isinstance(inner, dict):
             payload = inner
     cameras: dict[str, ObserverCamera] = {}
     if isinstance(payload, dict):
+        latest = payload.get(LATEST_KEY)
+        if isinstance(latest, dict):
+            for name, workers in latest.items():
+                if isinstance(name, str):
+                    reading = _camera_from_latest(workers)
+                    if reading.has_reading:
+                        cameras[name] = reading
         container = None
         for key in CAMERA_CONTAINER_KEYS:
             candidate = payload.get(key)
@@ -167,7 +237,7 @@ def parse_reading(data: object, now: dt.datetime) -> ObserverReading:
                 break
         if container is not None:
             for name, value in container.items():
-                if isinstance(name, str):
+                if isinstance(name, str) and name not in cameras:
                     cameras[name] = _coerce_camera(value)
     read = sum(1 for camera in cameras.values() if camera.has_reading)
     return ObserverReading(at=now, cameras=cameras, cameras_read=read)

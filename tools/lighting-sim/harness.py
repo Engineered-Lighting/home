@@ -112,6 +112,7 @@ class FakeLights:
                                "from": prev_state, "brightness_pct": pct,
                                "color_temp_kelvin": call.data.get("color_temp_kelvin"),
                                "transition": call.data.get("transition"),
+                               "context_id": call.context.id,
                                "context_parent": call.context.parent_id})
 
     async def turn_off(self, call: ServiceCall) -> None:
@@ -122,6 +123,7 @@ class FakeLights:
             self.hass.states.async_set(entity_id, "off", attrs)
             self.calls.append({"t": now.isoformat(), "service": "turn_off", "entity": entity_id,
                                "from": prev.state if prev else "off", "brightness_pct": 0,
+                               "context_id": call.context.id,
                                "context_parent": call.context.parent_id})
 
     def install(self) -> None:
@@ -143,7 +145,19 @@ class Recorder:
         self.hass = hass
         self.changes: list[dict[str, Any]] = []
         self.classifier: list[dict[str, Any]] = []
+        self.context_owner: dict[str, str] = {}   # context id -> automation/script entity
         hass.bus.async_listen("state_changed", self._on_change)
+        hass.bus.async_listen("automation_triggered", self._on_automation)
+        hass.bus.async_listen("script_started", self._on_script)
+
+    def _on_automation(self, event) -> None:
+        self.context_owner[event.context.id] = event.data.get("entity_id", "automation.?")
+
+    def _on_script(self, event) -> None:
+        self.context_owner[event.context.id] = event.data.get("entity_id", "script.?")
+
+    def owner_of(self, context_id: str | None, parent_id: str | None) -> str | None:
+        return self.context_owner.get(context_id) or self.context_owner.get(parent_id)
 
     def _on_change(self, event) -> None:
         entity_id = event.data["entity_id"]

@@ -10,6 +10,7 @@ packages are run for the comparison column and are expected to fail them).
 """
 from __future__ import annotations
 
+import collections
 import datetime as dt
 import json
 import os
@@ -169,7 +170,13 @@ def analyze(name: str, holder, timeline: Timeline, snapshots, extra: dict | None
         "false_latches": false_latches,
         "woke_up_today_at": woke, "morning_energize_writes": len(energize),
         "turn_ons_00_08": len(turn_ons), "turn_ons_00_08_while_asleep": len(turn_ons_asleep),
-        "turn_ons_00_08_detail": [{"t": c["t"][11:19], "light": c["entity"], "pct": c["brightness_pct"]} for c in turn_ons],
+        "turn_ons_00_08_detail": [{"t": c["t"][11:19], "light": c["entity"], "pct": c["brightness_pct"],
+                                   "asleep": asleep_at(dt.datetime.fromisoformat(c["t"])),
+                                   "zone_occupied": c["entity"] in lights_of_occupied_zones(dt.datetime.fromisoformat(c["t"])),
+                                   "by": holder.recorder.owner_of(c.get("context_id"), c.get("context_parent"))}
+                                  for c in turn_ons],
+        "empty_while_asleep_by_automation": dict(collections.Counter(
+            holder.recorder.owner_of(c.get("context_id"), c.get("context_parent")) or "unknown" for c in turn_ons_asleep)),
         "lights_on_at_0300": lights_at("03:00"), "lights_on_at_0500": lights_at("05:00"),
         "lights_on_at_0700": lights_at("07:00"),
         "light_calls_total": len(holder.lights.calls),

@@ -51,7 +51,26 @@ Output: ha-config/packages/living_lights_pilot_<slug>.yaml per zone.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 from pathlib import Path
+
+
+def _load_house() -> dict:
+    """The house this generator is building for.
+
+    Shared with build-living-lights-yaml.py rather than duplicated: the zone
+    map used to exist in both files with nothing checking they agreed, which
+    is the kind of drift that shows up as a zone that is generated, deployed,
+    enabled and silently does nothing.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_ll_yaml", str(Path(__file__).resolve().parent / "build-living-lights-yaml.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.HOUSE
+
+
+HOUSE = _load_house()
 
 # ───────────────────────── ramp / transition constants ───────────────────
 RAMP_FAST_S = 2.0           # fast-reaction ramp (floor -> ramp_initial)
@@ -104,62 +123,16 @@ def _ct_data_line(camera: str, slug: str, *, inject: bool = True) -> str:
 # Per-zone light targets. Sourced from Addendum 33 Audit #B.
 # Each target is a (domain, entity_id, supports_color) tuple.
 # For zones with no known light, value is None — skip generation.
+if "actuators" not in HOUSE:
+    raise SystemExit(
+        "the house file has no 'actuators' block, so there is nothing to say which "
+        "light each zone switches; see ha-config/house.json for the shape")
 LIGHT_TARGETS: dict = {
-    "dining_left":  [("light", "light.dining_table_left", True)],
-    "dining_right": [("light", "light.dining_table_right", True)],
-    "front_door":   [("light", "light.front_right", True)],
-    "sink":         [("light", "light.sink", True)],
-    "island_left":  [("light", "light.island_left", True)],
-    "island_right": [("light", "light.island_right", True)],
-    "office": [
-        ("light", "light.office", True),
-        # NEON-PLUG-REMOVED 2026-05-19 (Addendum 34 Step 0): the
-        # smart_plug_mini_mss110 drives a NEON LIGHT whose driver has a
-        # limited power-cycle lifetime. Kept manually controlled — not in
-        # the new layer's path.
-    ],
-    "weights": [
-        ("light", "light.front_right", True),
-        ("light", "light.rear_right", True),
-    ],
-    "front_left": [("light", "light.front_left", True)],
-
-    # Sofa zone — the 4 dimmable lights over/around the sofa. The 2 ambient
-    # smart switches moved to ha-config/packages/living_lights_ambient.yaml
-    # (Layer 2d) — they are on/off only and follow movie/away/asleep, not
-    # the confidence ramp.
-    # rear_right is ALSO targeted by the weights zone — the co-controller
-    # vacant guard prevents the two zones fighting.
-    "sofa": [
-        ("light", "light.front_left",  True),
-        ("light", "light.front_right", True),
-        ("light", "light.rear_left",   True),
-        ("light", "light.rear_right",  True),
-    ],
-    "whole_living_room": None,
-    "whole_dining_room": None,
-    "whole_kitchen":     None,
-    "workshop_zone":     None,
-    "e28":               None,
+    zone: (None if targets is None else [tuple(t) for t in targets])
+    for zone, targets in HOUSE["actuators"]["light_targets"].items()
 }
 
-ZONE_CAMERA: dict = {
-    "dining_left":   "dining_room",
-    "dining_right":  "dining_room",
-    "sink":          "kitchen",
-    "island_left":   "kitchen",
-    "island_right":  "kitchen",
-    "sofa":              "living_room",
-    "front_left":        "living_room",
-    "weights":           "living_room",
-    "office":            "living_room",
-    "front_door":        "living_room",
-    "whole_living_room": "living_room",
-    "workshop_zone":     "workshop",
-    "e28":               "driveway",
-    "whole_dining_room": "dining_room",
-    "whole_kitchen":     "kitchen",
-}
+ZONE_CAMERA: dict = {zone: meta["camera"] for zone, meta in HOUSE["zones"].items()}
 
 
 # @@TOKEN@@ placeholders are substituted by str.replace — Jinja {% %} / {{ }}
@@ -380,28 +353,8 @@ CO_CONTROLLERS = _build_co_controllers_map()
 # not actuator targets themselves, but their state changes still express user
 # intent and must arm a manual hold before the per-zone pilots can revert them.
 AGGREGATE_LIGHT_CONTROLLERS = {
-    "light.kitchen": [
-        ("sink", "kitchen"),
-        ("island_left", "kitchen"),
-        ("island_right", "kitchen"),
-    ],
-    "light.kitchen_lights": [
-        ("sink", "kitchen"),
-        ("island_left", "kitchen"),
-        ("island_right", "kitchen"),
-    ],
-    "light.dining_room": [
-        ("dining_left", "dining_room"),
-        ("dining_right", "dining_room"),
-    ],
-    "light.dining_room_lights": [
-        ("dining_left", "dining_room"),
-        ("dining_right", "dining_room"),
-    ],
-    "light.living_room_lights": [
-        ("sofa", "living_room"),
-        ("office", "living_room"),
-    ],
+    controller: [tuple(pair) for pair in pairs]
+    for controller, pairs in HOUSE["actuators"]["aggregate_light_controllers"].items()
 }
 
 
@@ -752,12 +705,7 @@ def emit_actuator(slug: str, targets: list, *, omit_ct_zones: set[str] | None = 
 # Lights targeted by the sofa zone get an additional gradient-match branch so
 # the gradient layer's divergent per-light brightness doesn't false-positive
 # as a manual touch. Key in sensor.living_room_sofa_gradient attributes.
-SOFA_GRADIENT_KEYS = {
-    "light.front_left":  "front_left_pct",
-    "light.front_right": "front_right_pct",
-    "light.rear_left":   "rear_left_pct",
-    "light.rear_right":  "rear_right_pct",
-}
+SOFA_GRADIENT_KEYS = dict(HOUSE["actuators"]["sofa_gradient_keys"])
 
 # Match tolerance (percentage points). Real manual touches are typically 30-80
 # pp off predicted; in-flight ramp truncations are 10-15 pp off.

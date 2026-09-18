@@ -104,6 +104,11 @@ def load_house(path: pathlib.Path = None) -> dict:
             f"{target}: sofa_zone {rooms['sofa_zone']!r} is on camera "
             f"{zones[rooms['sofa_zone']]['camera']!r} but living_room_camera is "
             f"{rooms['living_room_camera']!r}; they have to be the same room")
+    actuators = data.get("actuators")
+    if actuators is not None:
+        unknown = [z for z in actuators.get("light_targets", {}) if z not in zones]
+        if unknown:
+            raise SystemExit(f"{target}: actuators.light_targets names unknown zones {unknown}")
     for name, members in data["zone_sets"].items():
         unknown = [z for z in members if z not in zones]
         if unknown:

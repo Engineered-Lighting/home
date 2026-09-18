@@ -304,8 +304,13 @@ class GeneratorDriftTests(unittest.TestCase):
             scratch = Path(tmp)
             (scratch / "tools").mkdir()
             (scratch / "ha-config" / "packages").mkdir(parents=True)
-            for name in ("build-living-lights-learning.py", "build-living-lights-actuators.py"):
+            for name in ("build-living-lights-learning.py", "build-living-lights-actuators.py",
+                         "build-living-lights-yaml.py", "living_lights_tv_states.py"):
                 shutil.copy(TOOLS / name, scratch / "tools" / name)
+            # The generators read the house from data now, so the scratch tree
+            # needs it too; without it they would build a different building.
+            shutil.copy(TOOLS.parent / "ha-config" / "house.json",
+                        scratch / "ha-config" / "house.json")
             subprocess.run([sys.executable, str(scratch / "tools" / "build-living-lights-learning.py"),
                             "--apply"], check=True, capture_output=True)
             produced = (scratch / "ha-config" / "packages" / "living_lights_learning.yaml")

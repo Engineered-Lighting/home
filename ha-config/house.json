@@ -1,7 +1,7 @@
 {
   "schema": "living-lights-house/v1",
   "name": "la",
-  "comment": "The vocabulary of ONE house: its zones, which camera sees each, and the handful of entities and zone sets the stories name directly. Everything else the generator emits is derived from this. A different house is a different file, not a different generator. Written 2026-09-18 by extracting the constants the generator already held, so this file reproduces the deployed packages byte for byte. dimmable_lights is the set the colour-temperature sweep walks; it is the one place a light entity id appears in this generator.",
+  "comment": "The vocabulary of ONE house: its zones, which camera sees each, and the handful of entities and zone sets the stories name directly. Everything else the generator emits is derived from this. A different house is a different file, not a different generator. Written 2026-09-18 by extracting the constants the generator already held, so this file reproduces the deployed packages byte for byte. dimmable_lights is the set the colour-temperature sweep walks; it is the one place a light entity id appears in this generator. actuators holds what each zone actually switches: the light targets, the aggregate controllers a voice command names, and the sofa gradient keys.",
   "zones": {
     "dining_left": {
       "camera": "dining_room",
@@ -134,5 +134,171 @@
     "light.sink",
     "light.island_left",
     "light.island_right"
-  ]
+  ],
+  "actuators": {
+    "comment": "light_targets maps a zone to what it switches, as [domain, entity, dimmable]. A zone with null drives no light: the whole-room zones and the outdoor ones are watched but never actuated.",
+    "light_targets": {
+      "dining_left": [
+        [
+          "light",
+          "light.dining_table_left",
+          true
+        ]
+      ],
+      "dining_right": [
+        [
+          "light",
+          "light.dining_table_right",
+          true
+        ]
+      ],
+      "front_door": [
+        [
+          "light",
+          "light.front_right",
+          true
+        ]
+      ],
+      "sink": [
+        [
+          "light",
+          "light.sink",
+          true
+        ]
+      ],
+      "island_left": [
+        [
+          "light",
+          "light.island_left",
+          true
+        ]
+      ],
+      "island_right": [
+        [
+          "light",
+          "light.island_right",
+          true
+        ]
+      ],
+      "office": [
+        [
+          "light",
+          "light.office",
+          true
+        ]
+      ],
+      "weights": [
+        [
+          "light",
+          "light.front_right",
+          true
+        ],
+        [
+          "light",
+          "light.rear_right",
+          true
+        ]
+      ],
+      "front_left": [
+        [
+          "light",
+          "light.front_left",
+          true
+        ]
+      ],
+      "sofa": [
+        [
+          "light",
+          "light.front_left",
+          true
+        ],
+        [
+          "light",
+          "light.front_right",
+          true
+        ],
+        [
+          "light",
+          "light.rear_left",
+          true
+        ],
+        [
+          "light",
+          "light.rear_right",
+          true
+        ]
+      ],
+      "whole_living_room": null,
+      "whole_dining_room": null,
+      "whole_kitchen": null,
+      "workshop_zone": null,
+      "e28": null
+    },
+    "aggregate_light_controllers": {
+      "light.kitchen": [
+        [
+          "sink",
+          "kitchen"
+        ],
+        [
+          "island_left",
+          "kitchen"
+        ],
+        [
+          "island_right",
+          "kitchen"
+        ]
+      ],
+      "light.kitchen_lights": [
+        [
+          "sink",
+          "kitchen"
+        ],
+        [
+          "island_left",
+          "kitchen"
+        ],
+        [
+          "island_right",
+          "kitchen"
+        ]
+      ],
+      "light.dining_room": [
+        [
+          "dining_left",
+          "dining_room"
+        ],
+        [
+          "dining_right",
+          "dining_room"
+        ]
+      ],
+      "light.dining_room_lights": [
+        [
+          "dining_left",
+          "dining_room"
+        ],
+        [
+          "dining_right",
+          "dining_room"
+        ]
+      ],
+      "light.living_room_lights": [
+        [
+          "sofa",
+          "living_room"
+        ],
+        [
+          "office",
+          "living_room"
+        ]
+      ]
+    },
+    "sofa_gradient_keys": {
+      "light.front_left": "front_left_pct",
+      "light.front_right": "front_right_pct",
+      "light.rear_left": "rear_left_pct",
+      "light.rear_right": "rear_right_pct"
+    }
+  }
 }

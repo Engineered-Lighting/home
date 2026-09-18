@@ -51,5 +51,27 @@
   "dimmable_lights": [
     "light.office_desk",
     "light.office_ceiling"
-  ]
+  ],
+  "actuators": {
+    "comment": "Two lights: the desk lamp and the ceiling. The doorway zone is watched but drives nothing, which is what a null means.",
+    "light_targets": {
+      "desk": [
+        [
+          "light",
+          "light.office_desk",
+          true
+        ]
+      ],
+      "doorway": null,
+      "whole_office": [
+        [
+          "light",
+          "light.office_ceiling",
+          true
+        ]
+      ]
+    },
+    "aggregate_light_controllers": {},
+    "sofa_gradient_keys": {}
+  }
 }

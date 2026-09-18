@@ -30,6 +30,13 @@ zone, a house with no zones, and a wrong schema.
 camera and three zones, and a test generates it: a complete valid package with
 fourteen automations and not one light entity from this building.
 
-Still house-specific and not yet extracted: the actuator generator's light
-targets, the hand-drawn spatial model, and the simulator's two copies of the
-zone map. Those are the next files to do the same to.
+The actuator generator followed the same way. Its light targets, its copy of
+the zone map, the aggregate controllers a voice command names and the sofa
+gradient keys all live in the house file now, and it imports the house rather
+than holding a second copy. That duplicate map was exactly the kind of drift
+that shows up as a zone which is generated, deployed, enabled and silently does
+nothing. Both generators build the worked office house; both leave this one
+byte for byte unchanged, verified after a real write.
+
+Still house-specific and not yet extracted: the hand-drawn spatial model, which
+only redrawing can replace, and the simulator's two copies of the zone map.

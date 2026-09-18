@@ -80,6 +80,39 @@ class ADifferentHouseGenerates(unittest.TestCase):
                 self.assertIn(zone, self.text)
 
 
+class TheActuatorsFollowTheSameHouse(unittest.TestCase):
+    """The zone map used to exist in both generators with nothing checking they
+    agreed, which shows up as a zone that is generated, deployed, enabled and
+    silently does nothing."""
+
+    ACTUATORS = REPO / "tools" / "build-living-lights-actuators.py"
+
+    def run_for(self, house: Path):
+        env = dict(os.environ, LIVING_LIGHTS_HOUSE=str(house))
+        return subprocess.run([sys.executable, str(self.ACTUATORS)],
+                              capture_output=True, env=env, cwd=REPO, text=True)
+
+    def test_this_house_builds_its_ten_actuators(self):
+        done = self.run_for(LA_HOUSE)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("10 actuators built", done.stdout)
+
+    def test_the_office_builds_its_own(self):
+        done = self.run_for(OFFICE_HOUSE)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("2 actuators built", done.stdout)
+
+    def test_a_house_without_actuators_says_so(self):
+        doc = json.loads(LA_HOUSE.read_text())
+        doc.pop("actuators")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "house.json"
+            path.write_text(json.dumps(doc))
+            done = self.run_for(path)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("actuators", done.stderr)
+
+
 class TheHouseFileIsValidated(unittest.TestCase):
     """Every mistake a house file can carry is silent downstream.
 

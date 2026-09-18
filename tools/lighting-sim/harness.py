@@ -108,10 +108,16 @@ class FakeLights:
                 attrs["brightness"] = round(float(pct) * 255 / 100)
             elif "brightness" in call.data:
                 attrs["brightness"] = call.data["brightness"]
+                pct = round(float(call.data["brightness"]) * 100 / 255)
+            elif attrs.get("brightness", 0) == 0:
+                # A bare turn_on (no level) on a light that was off at level 0
+                # comes up at full, as Home Assistant restores no zero level.
+                attrs["brightness"] = 255
             if "color_temp_kelvin" in call.data:
                 attrs["color_temp_kelvin"] = call.data["color_temp_kelvin"]
-            # Home Assistant semantics: turn_on with brightness 0 turns the light off.
-            to_state = "off" if attrs.get("brightness", 1) == 0 else "on"
+            # Home Assistant semantics: turn_on with brightness 0 turns the light
+            # off; decided from the level in THIS call, never from stale attributes.
+            to_state = "off" if (pct is not None and float(pct) == 0) else "on"
             self.hass.states.async_set(entity_id, to_state, attrs)
             self.calls.append({"t": now.isoformat(), "service": "turn_on", "entity": entity_id,
                                "from": prev_state, "to": to_state, "brightness_pct": pct,

@@ -135,34 +135,33 @@ class DiscoveryPayloadTest(NoSocketTest):
         self.assertEqual(payload["payload_on"], "ON")
         self.assertEqual(payload["payload_off"], "OFF")
 
-    def test_every_entity_belongs_to_one_device_per_mode(self):
-        """Sixteen loose entities are sixteen things to delete by hand.
+    def test_no_entity_carries_a_device_block(self):
+        """Proven on the live house, not a style choice.
 
-        Grouping them under one device gives the owner a single thing to find,
-        inspect and remove, which is what the M4 rollback asks for. Like a
-        unique id, a device's identifiers are its registry key: settling them
-        before anything is published costs nothing and cannot be done cheaply
-        afterwards.
+        A discovery config carrying a ``device`` makes Home Assistant build the
+        entity id as <device name slug>_<object_id>. Published with one on
+        2026-09-18, the estimator registered as
+        ``sensor.lighting_publisher_shadow_living_lights_asleep_estimator_shadow``
+        rather than ``sensor.living_lights_asleep_estimator_shadow``.
+
+        The generator's asleep-mirror automation watches
+        ``sensor.living_lights_asleep_estimator`` by name and is the
+        publisher's only path to the latch, so a prefixed id is an id nothing
+        reads: the live publisher would have spent the week writing to a sensor
+        no automation was watching. Grouping sixteen entities for easier
+        removal is a convenience; being read at all is not.
         """
         for shadow in (False, True):
             with self.subTest(shadow=shadow):
                 entities = build_entities(self.zones, shadow=shadow)
-                devices = set()
                 for entity in entities.all():
-                    device = entity.discovery_payload(entities.availability_topic)["device"]
-                    self.assertEqual(device["manufacturer"], "home-lighting")
-                    devices.add(tuple(device["identifiers"]))
-                self.assertEqual(len(devices), 1, "one device for the whole mode")
+                    payload = entity.discovery_payload(entities.availability_topic)
+                    self.assertNotIn("device", payload, entity.object_id)
 
-    def test_the_two_modes_are_different_devices(self):
-        """A shadow entity must never be mistaken for a live one, and the two
-        have to be removable independently."""
-        live = build_entities(self.zones, shadow=False)
-        shadow = build_entities(self.zones, shadow=True)
-        live_id = live.tv.discovery_payload(live.availability_topic)["device"]["identifiers"]
-        shadow_id = shadow.tv.discovery_payload(shadow.availability_topic)["device"]["identifiers"]
-        self.assertEqual(live_id, ["lighting_publisher"])
-        self.assertEqual(shadow_id, ["lighting_publisher_shadow"])
+    def test_the_object_id_is_the_entity_id_home_assistant_must_use(self):
+        entities = build_entities(self.zones, shadow=False)
+        self.assertEqual(entities.asleep.object_id, "living_lights_asleep_estimator")
+        self.assertEqual(entities.tv.object_id, "living_lights_tv_watching")
 
     def test_heartbeat_is_a_timestamp_sensor_without_attributes(self):
         entities = build_entities(self.zones, shadow=False)

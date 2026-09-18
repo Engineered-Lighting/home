@@ -211,3 +211,47 @@ class NoToolKeepsItsOwnCopy(unittest.TestCase):
                 self.assertTrue(
                     "house.py" in text or "build-living-lights-yaml.py" in text,
                     f"{name} does not read the shared house from anywhere")
+
+
+class TheDrawingMustMatchTheCameras(unittest.TestCase):
+    """The gradient divides Frigate box pixels by the camera's detect size.
+
+    Draw the model at one size and run the camera at another and every centroid
+    is scaled by the wrong factor. The result is still a coordinate between
+    zero and one, so nothing looks wrong: the sofa gradient simply lights the
+    wrong bulb. Nothing reconciled the two files until now.
+    """
+
+    GRADIENT = REPO / "tools" / "build-gradient-lighting.py"
+    SPATIAL = REPO / "ha-config" / "spatial_model.json"
+
+    def test_the_house_records_what_frigate_runs(self):
+        house = json.loads(LA_HOUSE.read_text())
+        self.assertIn("camera_detect", house)
+        for camera, size in house["camera_detect"].items():
+            with self.subTest(camera=camera):
+                self.assertGreater(size["detect_w"], 0)
+                self.assertGreater(size["detect_h"], 0)
+
+    def test_the_spatial_model_agrees_with_it_today(self):
+        house = json.loads(LA_HOUSE.read_text())["camera_detect"]
+        model = json.loads(self.SPATIAL.read_text())["cameras"]
+        for camera, drawn in model.items():
+            if camera not in house:
+                continue
+            with self.subTest(camera=camera):
+                self.assertEqual((drawn["detect_w"], drawn["detect_h"]),
+                                 (house[camera]["detect_w"], house[camera]["detect_h"]))
+
+    def test_a_mismatched_drawing_is_refused(self):
+        house = json.loads(LA_HOUSE.read_text())
+        camera = "living_room"
+        house["camera_detect"][camera] = {"detect_w": 960, "detect_h": 540}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "house.json"
+            path.write_text(json.dumps(house))
+            env = dict(os.environ, LIVING_LIGHTS_HOUSE=str(path))
+            done = subprocess.run([sys.executable, str(self.GRADIENT)],
+                                  capture_output=True, env=env, cwd=REPO, text=True)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("wrong bulb", done.stderr)

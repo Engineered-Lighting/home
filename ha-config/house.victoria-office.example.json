@@ -74,5 +74,11 @@
     "aggregate_light_controllers": {},
     "sofa_gradient_keys": {},
     "ambient_lights": []
+  },
+  "camera_detect": {
+    "office": {
+      "detect_w": 1280,
+      "detect_h": 720
+    }
   }
 }

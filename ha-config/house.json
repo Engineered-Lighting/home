@@ -1,7 +1,7 @@
 {
   "schema": "living-lights-house/v1",
   "name": "la",
-  "comment": "The vocabulary of ONE house: its zones, which camera sees each, and the handful of entities and zone sets the stories name directly. Everything else the generator emits is derived from this. A different house is a different file, not a different generator. Written 2026-09-18 by extracting the constants the generator already held, so this file reproduces the deployed packages byte for byte. dimmable_lights is the set the colour-temperature sweep walks; it is the one place a light entity id appears in this generator. actuators holds what each zone actually switches: the light targets, the aggregate controllers a voice command names, and the sofa gradient keys.",
+  "comment": "The vocabulary of ONE house: its zones, which camera sees each, and the handful of entities and zone sets the stories name directly. Everything else the generator emits is derived from this. A different house is a different file, not a different generator. Written 2026-09-18 by extracting the constants the generator already held, so this file reproduces the deployed packages byte for byte. dimmable_lights is the set the colour-temperature sweep walks; it is the one place a light entity id appears in this generator. actuators holds what each zone actually switches: the light targets, the aggregate controllers a voice command names, and the sofa gradient keys. camera_detect is what Frigate actually runs each camera at, read from its own config on 2026-09-18; the gradient maths divides box pixels by it, so a spatial model drawn at a different size lands the sofa gradient on the wrong light with coordinates that still look valid.",
   "zones": {
     "dining_left": {
       "camera": "dining_room",
@@ -305,5 +305,27 @@
       "light.ambient_light_right_mss110_main_channel",
       "light.outdoor_light"
     ]
+  },
+  "camera_detect": {
+    "dining_room": {
+      "detect_w": 1280,
+      "detect_h": 720
+    },
+    "driveway": {
+      "detect_w": 1280,
+      "detect_h": 720
+    },
+    "kitchen": {
+      "detect_w": 1280,
+      "detect_h": 720
+    },
+    "living_room": {
+      "detect_w": 1280,
+      "detect_h": 720
+    },
+    "workshop": {
+      "detect_w": 1280,
+      "detect_h": 720
+    }
   }
 }

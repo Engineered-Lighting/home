@@ -242,12 +242,39 @@ def slug(eid):
     return eid.split(".", 1)[1]
 
 
+def _load_house():
+    """The house file, for the camera sizes the drawing has to match."""
+    import importlib.util
+    import pathlib as _p
+    spec = importlib.util.spec_from_file_location(
+        "_ll_house", str(_p.Path(__file__).resolve().parent / "house.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_HOUSE = _load_house()
+
+
 def load_centroids():
     model = json.loads(SPATIAL.read_text(encoding="utf-8"))
     lights = model.get("lights", {})
     cam = (model.get("cameras", {}) or {}).get(CAMERA, {})
-    dw = cam.get("detect_w", 1280)
-    dh = cam.get("detect_h", 720)
+    dw = cam.get("detect_w")
+    dh = cam.get("detect_h")
+    if dw is None or dh is None:
+        raise SystemExit(
+            f"{SPATIAL}: camera {CAMERA!r} declares no detect_w/detect_h. The gradient "
+            "divides Frigate box pixels by them, so guessing a default produces "
+            "coordinates that still look valid and land on the wrong light.")
+    expected = (_HOUSE.HOUSE.get("camera_detect") or {}).get(CAMERA)
+    if expected and (expected.get("detect_w"), expected.get("detect_h")) != (dw, dh):
+        raise SystemExit(
+            f"{SPATIAL}: camera {CAMERA!r} was drawn at {dw}x{dh} but the house file says "
+            f"Frigate runs it at {expected['detect_w']}x{expected['detect_h']}. Every "
+            "centroid would be scaled by the wrong factor, which yields coordinates in "
+            "range and a sofa gradient that lights the wrong bulb. Redraw the model at "
+            "the live size, or correct camera_detect if Frigate changed.")
     cents = {}
     for eid in SOFA_LIGHTS:
         rec = lights.get(eid) or {}

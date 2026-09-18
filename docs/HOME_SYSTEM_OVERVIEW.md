@@ -591,7 +591,7 @@ HA is the canonical home-state surface. Everything in this system either feeds H
     mirror-freshness beat -- one `subscribe` call, not two (the Home Assistant
     mirror published by `ha-config/packages/living_lights_mqtt_mirror.yaml`; this is the
     only way the publisher learns Home Assistant state, and why it needs no HA token)
-  - `frigate/<camera>/person` and `frigate/<camera>/<zone>/person` (person counts)
+  - `frigate/<camera>/person` and `frigate/<zone>/person` (person counts; Frigate names zones globally, so a zone is not nested under its camera)
 
   With `PUBLISHER_MODE=shadow` every object id and unique id carries a `_shadow`
   suffix, the heartbeat included, so no generated template reads it.

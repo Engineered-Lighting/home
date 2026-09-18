@@ -211,7 +211,7 @@ publishes them to Home Assistant over MQTT discovery:
 It holds **no Home Assistant token**. Home Assistant state reaches it only
 through the retained MQTT mirror published by
 `ha-config/packages/living_lights_mqtt_mirror.yaml`; everything else comes
-from `frigate/<camera>/person`, `frigate/<camera>/<zone>/person` and the
+from `frigate/<camera>/person`, `frigate/<zone>/person` and the
 observer's HTTP API. The full topic schema is source-derived in
 [`docs/qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics`](qa/home-app-feature-audit.md#lighting-publisher-mqtt-topics).
 

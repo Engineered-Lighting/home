@@ -10,7 +10,7 @@ import json
 import unittest
 from unittest import mock
 
-from lighting_publisher.activity import load_zones
+from lighting_publisher.activity import ZoneMap, load_zones
 from lighting_publisher.inputs.mirror import (MIRROR_HEARTBEAT_TOPIC, STABLE_OCCUPANCY_HOLD_S,
                                               FrigateState, MirrorState, parse_time)
 from lighting_publisher.inputs.observer import (ObserverClient, ObserverError, ObserverReading,
@@ -159,6 +159,57 @@ class FrigateTest(NoSocketTest):
         self.assertEqual(set(occupancy), set(self.zones.zones))
         self.assertTrue(occupancy["sofa"])
         self.assertFalse(occupancy["sink"])
+
+    def test_a_zone_arrives_at_two_segments_because_frigate_names_zones_globally(self):
+        """The shape the house actually publishes.
+
+        Frigate 0.17.2 does not namespace a zone under its camera: the sofa's
+        person count is ``frigate/sofa/person``. Every test below this one was
+        written against ``frigate/living_room/sofa/person``, which Frigate
+        never sends, so the publisher read no zone occupancy at all from the
+        live broker and the sofa guard that makes UNATTENDED unreachable could
+        never have held.
+        """
+        self.assertEqual(self.frigate.apply("frigate/sofa/person", b"1", s(0)), "zone")
+        self.assertTrue(self.frigate.zone_occupied("sofa"))
+        self.assertTrue(self.frigate.sofa_stable(s(1)))
+
+    def test_two_segment_zone_names_keep_frigates_own_capitalisation(self):
+        for topic, zone in (("frigate/Whole_Living_Room/person", "whole_living_room"),
+                            ("frigate/Front_Door/person", "front_door"),
+                            ("frigate/Dining_Left/person", "dining_left"),
+                            ("frigate/Island_Right/person", "island_right")):
+            with self.subTest(topic=topic):
+                frigate = FrigateState(self.zones)
+                self.assertEqual(frigate.apply(topic, b"1", s(0)), "zone")
+                self.assertTrue(frigate.zone_occupied(zone))
+
+    def test_every_living_room_zone_frigate_publishes_reaches_the_map(self):
+        """The living-room zones as Frigate spells them on this house."""
+        for topic in ("frigate/sofa/person", "frigate/front_left/person",
+                      "frigate/weights/person", "frigate/office/person",
+                      "frigate/Front_Door/person", "frigate/Whole_Living_Room/person"):
+            with self.subTest(topic=topic):
+                frigate = FrigateState(self.zones)
+                self.assertEqual(frigate.apply(topic, b"1", s(0)), "zone")
+                self.assertTrue(frigate.living_room_occupied())
+
+    def test_a_camera_name_wins_over_a_zone_of_the_same_name(self):
+        """Disjoint today; the rule keeps a camera added later out of a zone."""
+        zones = ZoneMap(zones={**dict(self.zones.zones), "kitchen": "kitchen"},
+                        cameras=self.zones.cameras, dominates=self.zones.dominates)
+        frigate = FrigateState(zones)
+        self.assertEqual(frigate.apply("frigate/kitchen/person", b"1", s(0)), "camera")
+        self.assertTrue(frigate.camera_person("kitchen"))
+        self.assertFalse(frigate.zone_occupied("kitchen"))
+
+    def test_a_two_segment_name_that_is_neither_is_ignored(self):
+        for topic in ("frigate/e28/person", "frigate/workshop_zone/person",
+                      "frigate/nursery/person"):
+            with self.subTest(topic=topic):
+                self.assertIsNone(self.frigate.apply(topic, b"1", s(0)))
+        self.assertEqual(self.frigate.ignored, 3)
+        self.assertEqual(self.frigate.messages, 0)
 
     def test_zone_names_are_matched_case_insensitively(self):
         self.assertEqual(self.frigate.apply("frigate/living_room/Front_Door/person", b"1", s(0)),

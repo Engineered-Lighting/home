@@ -12,7 +12,8 @@ accepted, not only today's list, so a later mirror addition (the asleep
 writer, for one) needs no code change here.
 
 ``FrigateState`` reads ``frigate/<camera>/person`` (a person count per camera)
-and ``frigate/<camera>/<zone>/person`` (a person count per zone). Only the
+and ``frigate/<zone>/person`` (a person count per zone: Frigate names zones
+globally, so a zone count is NOT nested under its camera). Only the
 cameras named in ``config/zones.json`` count: a person on the driveway is not
 somebody in the house. Zone names are matched case-insensitively because
 Frigate's configured names are capitalised where Home Assistant's slugs are
@@ -43,6 +44,16 @@ FRIGATE_BASE = "frigate"
 FRIGATE_CAMERA_TOPIC = "frigate/+/person"
 FRIGATE_ZONE_TOPIC = "frigate/+/+/person"
 FRIGATE_PERSON_TOPICS = (FRIGATE_CAMERA_TOPIC, FRIGATE_ZONE_TOPIC)
+"""Frigate names zones globally rather than under their camera, so a zone
+count arrives on the two-segment pattern, with exactly the shape of a camera
+count: ``frigate/sofa/person``, not ``frigate/living_room/sofa/person``.
+Verified against Frigate 0.17.2 on this house, where five minutes of live
+traffic carried person counts for cameras and zones alike at two segments and
+not one message at four. ``FRIGATE_CAMERA_TOPIC`` therefore subscribes to both
+and ``FrigateState.apply`` tells them apart by name. The four-segment pattern
+is kept subscribed so a Frigate that does namespace zones, or a fixture
+written that way, still feeds the publisher; the names of these three
+constants are load-bearing for the QA registry audit and do not change."""
 
 STABLE_OCCUPANCY_HOLD_S = 90
 """The generator's ``STABLE_OCCUPANCY_HOLD_SECONDS``
@@ -295,12 +306,34 @@ class FrigateState:
     # --- ingest ---------------------------------------------------------------
 
     def apply(self, topic: str, payload: object, now: dt.datetime) -> str | None:
-        """Take one Frigate message. Returns ``camera``, ``zone`` or None."""
+        """Take one Frigate message. Returns ``camera``, ``zone`` or None.
+
+        A two-segment person topic names either a camera or a zone, because
+        Frigate publishes zone counts globally (see ``FRIGATE_ZONE_TOPIC``). A
+        camera name wins: the two sets are disjoint in this house, so the rule
+        costs nothing today and keeps a camera added later from being read as
+        somebody on the sofa. Zone names are matched without case, since
+        Frigate keeps the capitalisation the zone was drawn with
+        (``Whole_Living_Room``) and the zone map is written in lower case.
+        """
         parts = topic.split("/")
         if len(parts) < 3 or parts[0] != FRIGATE_BASE or parts[-1] != "person":
             return None
-        camera = parts[1]
-        if camera not in self.zones.cameras:
+        name = parts[1]
+        if len(parts) == 3:
+            if name in self.zones.cameras:
+                kind, key = "camera", name
+            else:
+                kind, key = "zone", self._zone_by_lower.get(name.lower())
+        elif len(parts) == 4:
+            kind = "zone"
+            key = self._zone_by_lower.get(parts[2].lower())
+            if key is not None and (name not in self.zones.cameras
+                                    or self.zones.camera_of(key) != name):
+                key = None
+        else:
+            kind, key = "zone", None
+        if key is None:
             self.ignored += 1
             return None
         text = _decode(payload)
@@ -314,16 +347,9 @@ class FrigateState:
             return None
         self.messages += 1
         self.last_message_at = now
-        if len(parts) == 3:
-            return self._store(self._camera_count, self._camera_changed, camera, count, now, "camera")
-        if len(parts) == 4:
-            zone = self._zone_by_lower.get(parts[2].lower())
-            if zone is None or self.zones.camera_of(zone) != camera:
-                self.ignored += 1
-                return None
-            return self._store(self._zone_count, self._zone_changed, zone, count, now, "zone")
-        self.ignored += 1
-        return None
+        if kind == "camera":
+            return self._store(self._camera_count, self._camera_changed, key, count, now, "camera")
+        return self._store(self._zone_count, self._zone_changed, key, count, now, "zone")
 
     def _store(self, counts: dict, changed: dict, key: str, count: int,
                now: dt.datetime, kind: str) -> str:

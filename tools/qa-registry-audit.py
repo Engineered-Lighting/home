@@ -853,7 +853,7 @@ def extract_lighting_publisher_mqtt_topics() -> dict[str, Any]:
             "purpose": "per-camera person evidence for the asleep estimator",
         },
         {
-            "topic": "frigate/<camera>/<zone>/person",
+            "topic": "frigate/<zone>/person",
             "payload": "person count",
             "qos": "0",
             "purpose": "per-zone occupancy for the TV machine and the activity sensors",

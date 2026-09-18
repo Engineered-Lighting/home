@@ -61,7 +61,7 @@ one. Home Assistant state arrives only on the retained mirror
 (`living_lights/mirror/<domain>/<object_id>`, plus
 `living_lights/mirror/heartbeat` once a minute) published by
 `ha-config/packages/living_lights_mqtt_mirror.yaml`. Person evidence arrives on
-`frigate/<camera>/person` and `frigate/<camera>/<zone>/person`, for the three
+`frigate/<camera>/person` and `frigate/<zone>/person`, for the three
 cameras in `config/zones.json` only -- somebody on the driveway is not somebody
 in the house. Typed presence is polled from `OBSERVER_URL` every 5 s.
 

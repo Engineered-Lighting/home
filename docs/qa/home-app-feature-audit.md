@@ -464,7 +464,7 @@ Subscription topic families:
 - `living_lights/mirror/#` - payload JSON: entity_id, state, changed_at, attributes (retained, one topic per entity); qos `0`; the Home Assistant mirror: the publisher holds no HA token
 - `living_lights/mirror/heartbeat` - payload ISO 8601 timestamp; qos `0`; mirror freshness: a silent house is told from a silent broker
 - `frigate/<camera>/person` - payload person count; qos `0`; per-camera person evidence for the asleep estimator
-- `frigate/<camera>/<zone>/person` - payload person count; qos `0`; per-zone occupancy for the TV machine and the activity sensors
+- `frigate/<zone>/person` - payload person count; qos `0`; per-zone occupancy for the TV machine and the activity sensors. Frigate names zones globally, so this is not nested under the camera
 
 ### Stack Supervisor Endpoints
 

@@ -1,7 +1,11 @@
 {
   "schema": "living-lights-zones/v1",
-  "comment": "Zone-to-camera map for the publisher (copied from tools/lighting-sim/harness.py ZONE_CAMERA, publisher cameras only). Frigate topics are frigate/<camera>/<zone>/person. A zone in `dominates` masks the listed zones while it is occupied: a person on the sofa overlaps the front_left polygon and must not count there. Activity beliefs are published only for zones on `activity_cameras`; every other zone is idle in this milestone.",
-  "cameras": ["dining_room", "kitchen", "living_room"],
+  "comment": "Zone-to-camera map for the publisher (copied from tools/lighting-sim/harness.py ZONE_CAMERA, publisher cameras only). Frigate topics are frigate/<camera>/person and frigate/<zone>/person: a zone count is published under the zone's own globally unique name, not nested under its camera, and keeps the capitalisation the zone was drawn with, so the names here are matched without case. A zone in `dominates` masks the listed zones while it is occupied: a person on the sofa overlaps the front_left polygon and must not count there. Activity beliefs are published only for zones on `activity_cameras`; every other zone is idle in this milestone.",
+  "cameras": [
+    "dining_room",
+    "kitchen",
+    "living_room"
+  ],
   "zones": {
     "dining_left": "dining_room",
     "dining_right": "dining_room",
@@ -18,10 +22,22 @@
     "whole_living_room": "living_room"
   },
   "dominates": {
-    "sofa": ["front_left"]
+    "sofa": [
+      "front_left"
+    ]
   },
-  "watch_zones": ["sofa", "front_left", "weights", "office", "front_door", "whole_living_room"],
-  "activity_cameras": ["kitchen", "dining_room"],
+  "watch_zones": [
+    "sofa",
+    "front_left",
+    "weights",
+    "office",
+    "front_door",
+    "whole_living_room"
+  ],
+  "activity_cameras": [
+    "kitchen",
+    "dining_room"
+  ],
   "living_room_camera": "living_room",
   "sofa_zone": "sofa",
   "front_door_zone": "front_door"

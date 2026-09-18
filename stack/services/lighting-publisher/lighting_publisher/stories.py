@@ -38,12 +38,29 @@ MIN_FLIP_INTERVAL_S = 8
 
 # --- story T: the television machine ---------------------------------------
 
-TV_ON_STATES = ("on", "playing", "paused")
-"""``media_player.lg_tv`` states that mean the screen is on."""
+TV_ON_STATES = ("on", "playing", "paused", "buffering", "idle")
+"""Television states that mean the screen is on.
+
+This list must match ``tools/living_lights_tv_states.py``, which the generated
+packages are built from; ``tests/living_lights/test_tv_state_vocabulary.py``
+holds the two together. They had drifted: ``buffering`` and ``idle`` were on
+for the packages and unknown to this machine, so a television that reported
+either was read here as a possibly dropped connection and held its previous
+state for the ten-minute grace, while the house was already dimming for a
+film. ``idle`` matters most, being what an Apple TV, a Chromecast and a Roku
+all report while powered on and not playing."""
 
 TV_OFF_STATES = ("off", "standby")
-"""States that mean the screen is affirmatively off. ``unavailable`` and
-``unknown`` are neither: they enter the unavailable grace."""
+"""States that mean the screen is affirmatively off.
+
+Deliberately NOT the generator's list, which also carries ``unavailable`` and
+``unknown``. A template has to decide immediately and treats those as off; this
+machine has a grace window and can afford to wait, so they are neither on nor
+off here. The test that pins the two vocabularies together knows about this one
+exception and checks it stays exactly that."""
+
+TV_GRACE_STATES = ("unavailable", "unknown")
+"""On the generator's off list, but handled here by the unavailable grace."""
 
 TV_UNAVAILABLE_GRACE_S = 600
 """``lg_tv`` reads ``unavailable`` in blips while on; the machine keeps its

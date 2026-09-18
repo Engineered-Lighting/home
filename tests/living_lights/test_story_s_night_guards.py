@@ -85,6 +85,74 @@ class GeneratorDriftTests(unittest.TestCase):
                          "regenerate ha-config/packages/living_lights_gradient.yaml")
 
 
+class ManualLatchFlipTests(unittest.TestCase):
+    """A person who clears the latch by hand must not be argued with.
+
+    The publisher's estimator honours a hand flip for forty-five minutes and
+    reads ``input_text.living_lights_asleep_writer`` to know one happened. Two
+    things had to be true for that to work and neither was: something has to
+    write ``manual`` (every other writer is an automation naming itself, and a
+    person toggling the latch in the Home Assistant UI named nobody, so the
+    helper still held whichever automation wrote last), and the helper has to
+    reach the publisher through the MQTT mirror. Without both, the estimator
+    read a stale name, its manual hold could never fire, and it re-asserted
+    the latch against the person who had just cleared it.
+    """
+
+    MIRROR = PACKAGES / "living_lights_mqtt_mirror.yaml"
+
+    def setUp(self):
+        self.autos = _automations(yaml.safe_load(OBS.read_text(encoding="utf-8")))
+        self.auto = self.autos["living_lights_asleep_manual_writer"]
+
+    def test_it_triggers_on_the_latch_itself(self):
+        triggers = self.auto["triggers"]
+        self.assertEqual(len(triggers), 1)
+        self.assertEqual(triggers[0]["entity_id"], "input_boolean.living_lights_asleep")
+        self.assertEqual(sorted(triggers[0]["to"]), ["off", "on"])
+
+    def test_only_a_change_a_person_caused_counts(self):
+        """Home Assistant's context is the evidence: a state change a person
+        caused carries a user_id, one an automation caused does not."""
+        templates = _templates(self.auto["conditions"])
+        self.assertTrue(templates, "the automation must be gated on a template")
+        joined = " ".join(templates)
+        self.assertIn("context.user_id", joined)
+        self.assertIn("is not none", joined)
+
+    def test_it_writes_manual_and_touches_nothing_else(self):
+        actions = self.auto["actions"]
+        self.assertEqual(len(actions), 1, "one write, so it can never loop")
+        action = actions[0]
+        self.assertEqual(action["action"], "input_text.set_value")
+        self.assertEqual(action["target"]["entity_id"],
+                         "input_text.living_lights_asleep_writer")
+        self.assertEqual(action["data"]["value"], "manual")
+        self.assertNotIn("input_boolean", yaml.safe_dump(actions),
+                         "writing the latch here would loop")
+
+    def test_the_writer_helper_reaches_the_publisher_through_the_mirror(self):
+        text = self.MIRROR.read_text(encoding="utf-8")
+        self.assertIn("input_text.living_lights_asleep_writer", text,
+                      "the publisher cannot read a helper the mirror does not publish")
+
+    def test_the_generator_and_the_publisher_agree_on_the_word(self):
+        """One literal in the generator, one constant in the publisher.
+
+        They are in different trees and nothing else would catch them drifting
+        apart; if they did, a hand flip would be recorded and then ignored.
+        """
+        import sys
+        service = REPO / "stack" / "services" / "lighting-publisher"
+        sys.path.insert(0, str(service))
+        try:
+            from lighting_publisher.stories import MANUAL_WRITERS
+        finally:
+            sys.path.remove(str(service))
+        written = self.auto["actions"][0]["data"]["value"]
+        self.assertIn(written.lower(), [w.lower() for w in MANUAL_WRITERS])
+
+
 class AsleepLatchTests(unittest.TestCase):
     def setUp(self):
         self.autos = _automations(yaml.safe_load(OBS.read_text(encoding="utf-8")))

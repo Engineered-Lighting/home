@@ -198,7 +198,12 @@ MIRROR_ENTITIES = [
     BELIEF_TOGGLE,
     "input_boolean.living_lights_typesafe_egress_enabled",
     ASLEEP_FROM_ESTIMATOR_TOGGLE,
+    ASLEEP_WRITER,
 ] + [f"input_text.living_lights_zone_{slug}_last_command_id" for slug in LAST_COMMAND_ZONES]
+# ASLEEP_WRITER is mirrored because the belief publisher's estimator honours a
+# hand flip of the latch for forty-five minutes and the writer is how it knows
+# one happened. Without it the publisher reads None, its manual hold can never
+# fire, and it re-asserts the latch against the person who just cleared it.
 MIRROR_TOPIC_PREFIX = "living_lights/mirror"
 
 # Gaming modifier — Steam-driven ambience. When the HA `steam_online`
@@ -1763,6 +1768,34 @@ def emit_automations() -> str:
         "        target:",
         "          entity_id: input_boolean.living_lights_asleep",
         *_asleep_writer_lines("hard_backstop"),
+        # -- A hand flip of the latch, recorded so the publisher can honour it.
+        # Every other writer here is an automation naming itself. A person
+        # toggling the latch in the Home Assistant UI names nobody, and the
+        # helper would still hold whichever automation wrote last, so the
+        # publisher's estimator would read that stale name, never see
+        # "manual", and re-assert the latch against the person who just
+        # cleared it. Home Assistant's own context is the evidence: a state
+        # change a person caused carries a user_id, one an automation caused
+        # does not. This writes the helper only and never touches the latch,
+        # so it cannot loop.
+        '  - alias: "Living Lights - record a hand flip of the asleep latch"',
+        "    id: living_lights_asleep_manual_writer",
+        "    mode: queued",
+        "    max: 5",
+        "    triggers:",
+        "      - trigger: state",
+        "        entity_id: input_boolean.living_lights_asleep",
+        "        to:",
+        "          - \"on\"",
+        "          - \"off\"",
+        "    conditions:",
+        "      - condition: template",
+        "        value_template: >-",
+        "          {{ trigger.to_state is not none",
+        "             and trigger.to_state.context is not none",
+        "             and trigger.to_state.context.user_id is not none }}",
+        "    actions:",
+        *_asleep_writer_lines("manual", indent=6),
         # -- Asleep mirror (M2): the only writer while the estimator is live.
         # likely_asleep latches, awake or away clears; anything else (unknown,
         # unavailable, a future state) is ignored and, because estimate_live

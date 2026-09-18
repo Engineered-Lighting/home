@@ -31,6 +31,7 @@ automation:
           - input_boolean.living_lights_actuate_from_belief_changes
           - input_boolean.living_lights_typesafe_egress_enabled
           - input_boolean.living_lights_asleep_from_estimator
+          - input_text.living_lights_asleep_writer
           - input_text.living_lights_zone_dining_left_last_command_id
           - input_text.living_lights_zone_dining_right_last_command_id
           - input_text.living_lights_zone_front_door_last_command_id
@@ -68,6 +69,7 @@ automation:
                 'input_boolean.living_lights_actuate_from_belief_changes',
                 'input_boolean.living_lights_typesafe_egress_enabled',
                 'input_boolean.living_lights_asleep_from_estimator',
+                'input_text.living_lights_asleep_writer',
                 'input_text.living_lights_zone_dining_left_last_command_id',
                 'input_text.living_lights_zone_dining_right_last_command_id',
                 'input_text.living_lights_zone_front_door_last_command_id',

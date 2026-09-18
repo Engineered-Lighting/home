@@ -4572,6 +4572,28 @@ automation:
           entity_id: input_text.living_lights_asleep_writer
         data:
           value: "hard_backstop"
+  - alias: "Living Lights - record a hand flip of the asleep latch"
+    id: living_lights_asleep_manual_writer
+    mode: queued
+    max: 5
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.living_lights_asleep
+        to:
+          - "on"
+          - "off"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state is not none
+             and trigger.to_state.context is not none
+             and trigger.to_state.context.user_id is not none }}
+    actions:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.living_lights_asleep_writer
+        data:
+          value: "manual"
   - alias: "Living Lights - asleep mirror (estimator)"
     id: living_lights_asleep_mirror
     mode: queued

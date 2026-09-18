@@ -226,7 +226,13 @@ lighting path keeps the house. Only after the shadow nights are clean does
 
 ```bash
 # Journal volume, owned by the container's uid.
-sudo install -d -o 10001 -g 10001 -m 0755 /opt/home-ai-voice/data/lighting-publisher
+sudo install -d -o 10001 -g 1000 -m 0750 /opt/home-ai-voice/data/lighting-publisher
+# uid 10001 is the container, gid 1000 the owner: the publisher writes, you read.
+# 0750, not 0755: the journal records which zones held a person minute by
+# minute, which is household data and has no business being world-readable.
+# Get this wrong and nothing breaks loudly -- the journal never raises, so a
+# directory the container cannot write costs a silent week. The publisher now
+# probes it at startup and logs a warning naming the directory.
 
 # Broker login: a Mosquitto add-on user with an ACL for this publisher only
 # (NOT a Home Assistant user). Write the password without shell history:

@@ -249,6 +249,38 @@ class JournalTest(NoSocketTest):
         names = sorted(p.name for p in self.dir.iterdir())
         self.assertEqual(names, [f"{FILE_PREFIX}-2026-09-17.jsonl", f"{FILE_PREFIX}-2026-09-18.jsonl"])
 
+    def test_the_startup_probe_is_silent_when_the_journal_works(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = Journal(tmp, 30)
+            self.assertIsNone(journal.probe(dt.datetime(2026, 9, 18, 12, tzinfo=dt.timezone.utc)))
+            self.assertEqual(journal.writes, 1)
+
+    def test_the_startup_probe_names_a_journal_it_cannot_write(self):
+        """Seven nights of silent permission errors look exactly like seven
+        nights of a publisher that never reached a decision.
+
+        The journal never raises, which is right: a full disk must not stop
+        the house being lit. The probe is how anyone finds out, on the first
+        night rather than after the seventh. The usual cause is a volume
+        directory created by root while the process runs as uid 10001.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            closed = pathlib.Path(tmp) / "closed"
+            closed.mkdir()
+            closed.chmod(0o500)
+            try:
+                journal = Journal(closed / "inner", 30)
+                reason = journal.probe(dt.datetime(2026, 9, 18, 12, tzinfo=dt.timezone.utc))
+                self.assertIsNotNone(reason)
+                self.assertGreaterEqual(journal.errors, 1)
+                self.assertEqual(journal.writes, 0)
+            finally:
+                closed.chmod(0o700)
+
+    def test_a_disabled_journal_has_nothing_to_report(self):
+        journal = Journal(None, 30, enabled=False)
+        self.assertIsNone(journal.probe(dt.datetime(2026, 9, 18, 12, tzinfo=dt.timezone.utc)))
+
     def test_rotation_removes_files_older_than_thirty_days(self):
         journal = Journal(self.dir, retention_days=30, tz=dt.timezone.utc)
         old = self.dir / f"{FILE_PREFIX}-2026-08-01.jsonl"

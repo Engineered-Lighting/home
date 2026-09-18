@@ -136,6 +136,28 @@ class Journal:
         self.removed.extend(removed)
         return removed
 
+    def probe(self, now: dt.datetime) -> str | None:
+        """Write one startup record and report why it failed, if it did.
+
+        The journal never raises, which is right: a full disk must not stop
+        the house being lit. But nothing then NOTICES, and the journal is the
+        whole evidence of a shadow week -- seven nights of silent permission
+        errors look exactly like seven nights of a publisher that never
+        reached a decision. The caller logs what this returns, so the failure
+        is seen on the first night instead of after the seventh.
+
+        Returns None when the journal is disabled or the write succeeded, and
+        a short reason otherwise. Never raises.
+        """
+        if not self.enabled:
+            return None
+        before = self.errors
+        self.write({"t": now.isoformat(timespec="seconds"), "event": "startup",
+                    "journal": str(self.directory)}, now)
+        if self.errors == before:
+            return None
+        return self.last_error or "the journal could not be written"
+
     def as_dict(self) -> dict:
         """What ``/healthz`` reports about the journal."""
         return {"enabled": self.enabled, "writes": self.writes, "errors": self.errors,

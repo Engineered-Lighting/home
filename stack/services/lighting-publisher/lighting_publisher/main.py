@@ -601,6 +601,15 @@ def run(config: Config, clock: Callable[[], dt.datetime] | None = None) -> int:
     signal.signal(signal.SIGINT, _stop)
 
     journal.rotate(clock())
+    # The journal never raises, so a directory the container cannot write --
+    # the usual cause being a volume created by root while the process runs as
+    # 10001 -- would cost a whole shadow week in silence. Say so once, loudly,
+    # at startup.
+    failure = journal.probe(clock())
+    if failure:
+        log(f"WARNING journal is not writable at {config.journal_dir} ({failure}); "
+            "the publisher will run and publish, but this week's evidence will be "
+            "empty -- fix the directory's ownership and restart")
     client.connect_async(config.mqtt_host, config.mqtt_port, config.mqtt_keepalive)
     client.loop_start()
     try:

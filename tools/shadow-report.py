@@ -297,6 +297,28 @@ def state_at(rows: list[dict], when: dt.datetime) -> str | None:
     return found
 
 
+def occupied_days(people: list[dict]) -> set:
+    """The local dates on which any person was seen at all.
+
+    A latch scores ``explained`` when no person was near it, which is the right
+    answer for a house someone has gone to sleep in and the right answer for a
+    house nobody is in. The two are told apart here: a day with no person row
+    anywhere in it is a day the household was away, and a night inside it
+    tests nothing about sleeping.
+    """
+    return {row["at"].date() for row in people}
+
+
+def days_in_range(records: list[dict]) -> set:
+    """The local dates the journal actually covers."""
+    out = set()
+    for row in records:
+        when = row_time(row)
+        if when is not None:
+            out.add(when.date())
+    return out
+
+
 def verdict_for(scored: bool, seen: list[dict]) -> str:
     """Explained, unexplained -- or inconclusive when nothing was scored."""
     if not scored:
@@ -335,6 +357,9 @@ def build_report(records: list[dict], people: list[dict], recorder: list[dict],
                      if isinstance(record.get("tv"), dict) and record["tv"].get("changed"))
     unexplained = [row for row in rows if row["verdict"] == VERDICT_UNEXPLAINED]
     inconclusive = [row for row in rows if row["verdict"] == VERDICT_INCONCLUSIVE]
+    covered = days_in_range(records)
+    occupied = occupied_days(people) & covered
+    empty = sorted(d.isoformat() for d in (covered - occupied))
     return {
         "schema": "lighting-shadow-report/v1",
         "window_min": window_min,
@@ -347,6 +372,9 @@ def build_report(records: list[dict], people: list[dict], recorder: list[dict],
         "exits": [{"at": item["at"].isoformat(timespec="seconds"), "to": item["to"],
                    "reason": item["reason"]} for item in exits(records)],
         "evidence_sources": evidence_sources,
+        "days_covered": len(covered),
+        "days_occupied": len(occupied),
+        "days_empty": empty,
         "inconclusive": not scored,
         "frigate_person_rows": len(people),
         "unexplained_latches": len(unexplained),
@@ -400,8 +428,16 @@ def render(report: dict) -> str:
         for row in report["exits"]:
             lines.append(f"- {row['at']} -> {row['to']} ({row['reason']})")
         lines.append("")
+    lines.append(f"days covered: {report['days_covered']}, of which "
+                 f"{report['days_occupied']} had anybody in the house")
+    if report["days_empty"]:
+        shown = ", ".join(report["days_empty"][:7])
+        more = "" if len(report["days_empty"]) <= 7 else f", and {len(report['days_empty']) - 7} more"
+        lines.append(f"days with nobody seen at all: {shown}{more}. A night in an empty "
+                     "house tests nothing about sleeping, and a latch in one is explained "
+                     "by the household being away. These do not count towards the seven.")
     lines.append(f"unexplained latches: {report['unexplained_latches']} "
-                 f"(the acceptance bar is zero over seven nights)")
+                 f"(the acceptance bar is zero over seven OCCUPIED nights)")
     lines.append(f"inconclusive latches: {report['inconclusive_latches']}")
     if report["records"] == 0:
         lines.append("No journal record in this range, so nothing here was measured.")
@@ -425,6 +461,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"recorder entity to compare against (default {LEGACY_LATCH_ENTITY})")
     parser.add_argument("--assume-person", action="store_true",
                         help="treat unlabelled Frigate rows as person evidence")
+    parser.add_argument("--allow-empty-house", action="store_true",
+                        help="report a range in which nobody was seen on any day; useful "
+                             "only as a negative control, never towards the seven nights")
     parser.add_argument("--no-journal", action="store_true",
                         help="acknowledge that the journal is empty for this range; "
                              "the report then states plainly that it measured nothing")
@@ -506,7 +545,19 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(records, people, recorder, args.window_min, files,
                           len(args.frigate_jsonl), malformed)
     print(json.dumps(report, indent=2) if args.json else render(report))
-    return EXIT_UNEXPLAINED if report["unexplained_latches"] else EXIT_OK
+    if report["unexplained_latches"]:
+        return EXIT_UNEXPLAINED
+    # Zero unexplained latches across a week nobody was home is a perfect score
+    # earned by an empty house. The journal exists and is full, so the
+    # empty-directory refusal does not see it; this does.
+    if (report["days_covered"] and not report["inconclusive"]
+            and report["days_occupied"] == 0 and not args.allow_empty_house):
+        print("shadow-report: nobody was seen in the house on any day in this range, so "
+              "no night here tests sleeping and no evening tests the television; a clean "
+              "score from an empty house is not evidence (pass --allow-empty-house to "
+              "read it anyway, as a negative control)", file=sys.stderr)
+        return EXIT_USAGE
+    return EXIT_OK
 
 
 if __name__ == "__main__":

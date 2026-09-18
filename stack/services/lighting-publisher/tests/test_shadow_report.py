@@ -181,10 +181,16 @@ class ShadowReportTest(unittest.TestCase):
     # --- helpers --------------------------------------------------------------
 
     def evidence(self, *offsets_s: int, label: str = "person",
-                 name: str = "frigate.jsonl") -> str:
-        """A raw Frigate export with one person row per offset."""
-        path = self.here / name
-        rows = [json.dumps({"t": stamp(offset), "camera": CAMERA, "label": label})
+                 name: str = "frigate.jsonl", days_before: int = 0) -> str:
+        """A raw Frigate export with one person row per offset.
+
+        ``days_before`` shifts every row that many days earlier, which is how a
+        test makes person evidence that exists but lands on no day the journal
+        covers: the shape of a household that travelled.
+        """
+        path = self.here / (name if not days_before else f"far-{name}")
+        shift = days_before * 86400
+        rows = [json.dumps({"t": stamp(offset - shift), "camera": CAMERA, "label": label})
                 for offset in offsets_s]
         path.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="ascii")
         return str(path)
@@ -360,6 +366,37 @@ class ShadowReportTest(unittest.TestCase):
         self.assertEqual(code, tool.EXIT_UNEXPLAINED)
         self.assertEqual(report["evidence_sources"], 2)
         self.assertEqual(report["frigate_person_rows"], 2)
+
+    def test_a_week_nobody_was_home_is_refused(self):
+        """A perfect score earned by an empty house is not evidence.
+
+        This is the shape the calendar was about to walk into: the household
+        travels, the journal fills normally every tick, the house is quiet from
+        the first minute of every night, and every latch scores explained
+        because no person was near it. The empty-directory refusal cannot see
+        it, because the directory is full.
+        """
+        far = self.evidence(LATCH_OFFSET_S - 300, days_before=400)
+        code, out, err = self.run_tool("--journal-dir", str(self.night),
+                                       "--frigate-jsonl", far)
+        self.assertEqual(code, tool.EXIT_USAGE, out)
+        self.assertIn("nobody was seen in the house", err)
+
+    def test_an_empty_house_can_be_read_as_a_negative_control(self):
+        far = self.evidence(LATCH_OFFSET_S - 300, days_before=400)
+        code, out, err = self.run_tool("--journal-dir", str(self.night),
+                                       "--frigate-jsonl", far, "--allow-empty-house")
+        self.assertEqual(code, tool.EXIT_OK, err)
+        self.assertIn("had anybody in the house", out)
+        self.assertIn("do not count towards the seven", out)
+
+    def test_an_occupied_day_is_counted_and_reported(self):
+        code, out, err = self.run_tool("--journal-dir", str(self.night),
+                                       "--frigate-jsonl", self.evidence(LATCH_OFFSET_S - 300),
+                                       "--json")
+        report = json.loads(out)
+        self.assertGreaterEqual(report["days_occupied"], 1)
+        self.assertEqual(report["days_empty"], [])
 
     def test_a_journal_directory_that_never_wrote_is_refused(self):
         """The signature of a container that could not write its volume.

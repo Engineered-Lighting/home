@@ -119,8 +119,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     if not domain_data.get(DATA_VIEW_REGISTERED):
         hass.http.register_view(HomeAgentWhoAmIView())
         domain_data[DATA_VIEW_REGISTERED] = True
-    settings = config.get(DOMAIN) or {}
-    if "lighting" in settings and not domain_data.get("lighting_registered"):
+    settings = config.get(DOMAIN)
+    if isinstance(settings, dict) and "lighting" in settings and not domain_data.get("lighting_registered"):
         try:
             policy = LightingPolicy.from_config(settings["lighting"])
             ledger = await hass.async_add_executor_job(LightingLedger, policy.ledger_path)
@@ -147,10 +147,15 @@ def _light_state(hass: HomeAssistant, entity_id: str) -> dict[str, Any] | None:
     state = hass.states.get(entity_id)
     if state is None:
         return None
+    attributes = state.attributes
     return {
         "state": state.state,
-        "brightness": state.attributes.get("brightness"),
-        "name": state.attributes.get("friendly_name"),
+        "brightness": attributes.get("brightness"),
+        "name": attributes.get("friendly_name"),
+        "supported_color_modes": list(attributes.get("supported_color_modes") or ()),
+        # Group markers; the lighting module refuses groups.
+        "entity_id": list(attributes.get("entity_id") or ()),
+        "is_hue_group": bool(attributes.get("is_hue_group")),
     }
 
 

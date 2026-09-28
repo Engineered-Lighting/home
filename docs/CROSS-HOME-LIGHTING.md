@@ -8,7 +8,9 @@ homes, and nothing moves until they confirm the exact change in the chat.
 ## Rules
 
 - Only `light.*` entities on each home's allowlist, and only on, off or
-  brightness 1–100 %. No scenes, scripts, groups, locks or other domains.
+  brightness 1–100 % (brightness only on dimmable lights). No scenes, scripts,
+  locks or other domains. Light groups are refused, even if allowlisted: a
+  group would switch member lights that are not on the list.
 - The owner confirms a frozen proposal. It fixes the site, entity and operation
   for each light, the allowlist revision, the authorization generation and a
   60-second expiry.
@@ -39,15 +41,23 @@ POST /api/home_agent_edge/lighting/v1/outcome     the recorded result of one ope
 - **Allowlist revision.** The endpoint hashes the site and its sorted allowlist.
   An execute built against a different revision is refused
   (`allowlist_changed`).
-- **Idempotency.** Execution is keyed on `(request_id, operation_index)` in a
-  SQLite ledger that the component owns.
-  - The ledger records `dispatching` before the service call.
-  - A success is recorded as `succeeded`.
-  - An unavailable light is recorded as `failed`, with no call made.
-  - An error, timeout or interruption after the call is recorded as
-    `indeterminate`.
-  - A repeated key returns the record without calling again. The same key with
-    different content is a conflict.
+- **Expiry.** A proposal lasts 60 s. The endpoint accepts `expires_at` up to
+  120 s ahead to absorb clock skew between hosts.
+- **Idempotency and outcomes.** Execution is keyed on
+  `(request_id, operation_index)` in a SQLite ledger that the component owns.
+  Once accepted, an operation runs to completion even if the caller
+  disconnects. Statuses:
+  - `dispatching`: recorded before the service call; still in progress.
+  - `succeeded`: the call returned **and** the light's state then showed the
+    change (for brightness, within 2 %) within 3 s.
+  - `failed`: the light was unavailable, so no call was made.
+  - `indeterminate`: an error, timeout or interruption after the call, or the
+    state never showed the change. It is never resent.
+  - `absent`: an outcome lookup found no execute. This is final: the key is
+    recorded, and a later execute with it is refused (`request_withdrawn`).
+
+  A repeated key returns the record without calling again. The same key with
+  different content is a conflict.
 
 Configuration, on each home:
 

@@ -8,13 +8,17 @@ narrow boundary on the Home Assistant side:
   the exact body) and carries an ``issued_at`` within a short skew window. The
   secret authorizes nothing else: it is not a Home Assistant token.
 * Only ``light.*`` entities in the configured allowlist, and only on, off or a
-  bounded brightness. No scenes, scripts, groups or other domains.
+  bounded brightness (on dimmable lights). No scenes, scripts or other domains.
+  Light groups are refused, so one allowlisted entity never switches others.
 * The allowlist has a revision. A request built against another revision is
   refused, so a proposal never acts on a list the owner did not review.
 * Execution is idempotent per ``(request_id, operation_index)``. The record is
-  written as ``dispatching`` before the service call. A crash or an ambiguous
-  call leaves it ``indeterminate`` and it is never sent again; callers look the
-  outcome up instead of retrying.
+  written as ``dispatching`` before the service call and reports ``succeeded``
+  only once the light's state shows the change. A crash, an error or an
+  unconfirmed state leaves it ``indeterminate`` and it is never sent again;
+  callers look the outcome up instead of retrying. Looking up an operation that
+  never arrived records it as ``absent``, which is final: a late execute for
+  that key is refused.
 
 The pure logic here has no Home Assistant imports so it can be tested alone.
 """
@@ -36,14 +40,23 @@ from typing import Any, Awaitable, Callable, Mapping
 SITES = ("echo", "victoria")
 ENTITY = re.compile(r"^light\.[a-z0-9_]{1,64}$")
 SECRET = re.compile(r"^[0-9a-f]{64}$")
+SIGNATURE = re.compile(r"^[0-9a-f]{64}$")
 UUID = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 OPERATIONS = ("on", "off", "brightness")
 MAX_BODY = 2048
 MAX_ENTITIES = 64
 MAX_OPERATIONS = 16
 SKEW_MS = 60_000
+# Proposals expire after 60 s; the extra minute absorbs clock skew between hosts.
 MAX_EXPIRY_MS = 120_000
 CALL_TIMEOUT_S = 10.0
+VERIFY_S = 3.0
+VERIFY_STEP_S = 0.2
+BRIGHTNESS_TOLERANCE = 2
+MAX_SEEN = 4096
+TOMBSTONE = "absent"
+# Home Assistant color modes that include a brightness channel.
+DIMMABLE_MODES = frozenset({"brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white"})
 SIGNATURE_HEADER = "X-Home-Agent-Lighting-Signature"
 SIGNATURE_CONTEXT = b"home-agent-lighting:v1\n"
 DEFAULT_LEDGER_PATH = "/config/.storage/home_agent_edge_lighting.sqlite"
@@ -118,44 +131,71 @@ class LightingLedger:
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.execute("""CREATE TABLE IF NOT EXISTS lighting_dispatch (
             request_id TEXT NOT NULL, operation_index INTEGER NOT NULL, digest TEXT NOT NULL,
-            state TEXT NOT NULL CHECK (state IN ('dispatching','succeeded','failed','indeterminate')),
+            state TEXT NOT NULL CHECK (state IN ('dispatching','succeeded','failed','indeterminate','absent')),
             updated_at INTEGER NOT NULL, PRIMARY KEY (request_id, operation_index))""")
         # Anything still dispatching was interrupted mid-call: its effect is unknown.
         self._db.execute("UPDATE lighting_dispatch SET state='indeterminate' WHERE state='dispatching'")
 
-    def reserve(self, request_id: str, index: int, digest: str, now: int) -> str | None:
-        """Claim a new dispatch. Returns None when claimed, else the recorded state."""
+    def _transaction(self, work: Callable[[], Any]) -> Any:
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                row = self._db.execute("SELECT digest,state FROM lighting_dispatch WHERE request_id=? AND operation_index=?",
-                                       (request_id, index)).fetchone()
-                if row is None:
-                    self._db.execute("INSERT INTO lighting_dispatch VALUES (?,?,?,'dispatching',?)",
-                                     (request_id, index, digest, now))
-                    self._db.execute("DELETE FROM lighting_dispatch WHERE updated_at < ?", (now - LEDGER_RETENTION_MS,))
-                    self._db.execute("COMMIT")
-                    return None
+                result = work()
                 self._db.execute("COMMIT")
+                return result
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
+
+    def _row(self, request_id: str, index: int) -> tuple[str, str] | None:
+        return self._db.execute("SELECT digest,state FROM lighting_dispatch WHERE request_id=? AND operation_index=?",
+                                (request_id, index)).fetchone()
+
+    def reserve(self, request_id: str, index: int, digest: str, now: int) -> str | None:
+        """Claim a new dispatch. Returns None when claimed, else the recorded state."""
+        def work() -> tuple[str, str] | None:
+            row = self._row(request_id, index)
+            if row is None:
+                self._db.execute("INSERT INTO lighting_dispatch VALUES (?,?,?,'dispatching',?)",
+                                 (request_id, index, digest, now))
+                self._db.execute("DELETE FROM lighting_dispatch WHERE updated_at < ?", (now - LEDGER_RETENTION_MS,))
+            return row
+        row = self._transaction(work)
+        if row is None:
+            return None
+        if row[1] == TOMBSTONE:
+            raise LightingRejected(409, "request_withdrawn")
         if row[0] != digest:
             raise LightingRejected(409, "request_conflict")
         return row[1]
 
-    def complete(self, request_id: str, index: int, state: str, now: int) -> None:
+    def complete(self, request_id: str, index: int, state: str, now: int) -> str:
+        """Record the result of a claimed dispatch and return the stored state."""
         if state not in ("succeeded", "failed", "indeterminate"):
             raise ValueError("invalid dispatch state")
-        with self._lock:
+
+        def work() -> str:
             self._db.execute("UPDATE lighting_dispatch SET state=?,updated_at=? WHERE request_id=? AND operation_index=? "
                              "AND state='dispatching'", (state, now, request_id, index))
+            row = self._row(request_id, index)
+            return row[1] if row else "indeterminate"
+        return self._transaction(work)
 
-    def lookup(self, request_id: str, index: int) -> str:
+    def settle(self, request_id: str, index: int, now: int) -> str:
+        """Return the recorded state. An unknown key is recorded as absent for good."""
+        def work() -> str:
+            row = self._row(request_id, index)
+            if row is not None:
+                return row[1]
+            self._db.execute("INSERT INTO lighting_dispatch VALUES (?,?,?,?,?)",
+                             (request_id, index, TOMBSTONE, TOMBSTONE, now))
+            return TOMBSTONE
+        return self._transaction(work)
+
+    def lookup(self, request_id: str, index: int) -> str | None:
         with self._lock:
-            row = self._db.execute("SELECT state FROM lighting_dispatch WHERE request_id=? AND operation_index=?",
-                                   (request_id, index)).fetchone()
-        return row[0] if row else "absent"
+            row = self._row(request_id, index)
+        return row[1] if row else None
 
     def close(self) -> None:
         with self._lock:
@@ -178,32 +218,52 @@ class LightingEndpoint:
         if len(body) > MAX_BODY:
             raise LightingRejected(413, "body_too_large")
         expected = sign(self._policy.secret, path, body)
-        if not isinstance(signature, str) or not hmac.compare_digest(signature, expected):
+        if (not isinstance(signature, str) or not SIGNATURE.fullmatch(signature)
+                or not hmac.compare_digest(signature.encode(), expected.encode())):
             raise LightingRejected(401, "signature_invalid")
         try:
             value = json.loads(body.decode("utf-8"), object_pairs_hook=_no_duplicates)
         except (ValueError, UnicodeDecodeError) as exc:
             raise LightingRejected(400, "invalid_request") from exc
         now = self._now()
-        if (not isinstance(value, dict) or set(value) != keys or value.get("version") != 1
-                or value.get("site_id") != self._policy.site_id or type(value.get("issued_at")) is not int
-                or abs(now - value["issued_at"]) > SKEW_MS):
+        if (not isinstance(value, dict) or set(value) != keys or type(value.get("version")) is not int
+                or value["version"] != 1 or value.get("site_id") != self._policy.site_id
+                or type(value.get("issued_at")) is not int or abs(now - value["issued_at"]) > SKEW_MS):
             raise LightingRejected(400, "invalid_request")
-        # Reject an exact replay of a signed request inside the skew window.
-        self._seen = {k: t for k, t in self._seen.items() if t > now - 2 * SKEW_MS}
-        if expected in self._seen or len(self._seen) >= 4096:
+        # Refuse an exact replay for as long as its issue time is still accepted.
+        self._seen = {k: issued for k, issued in self._seen.items() if issued + SKEW_MS >= now}
+        if expected in self._seen:
             raise LightingRejected(409, "replayed_request")
-        self._seen[expected] = now
+        if len(self._seen) >= MAX_SEEN:
+            raise LightingRejected(503, "replay_cache_full")
+        self._seen[expected] = value["issued_at"]
         return value
 
     def _light(self, entity_id: str) -> dict[str, Any]:
-        state = self._states(entity_id)
-        if not state or state.get("state") not in ("on", "off"):
-            return {"entity_id": entity_id, "name": (state or {}).get("name") or entity_id, "state": "unavailable",
-                    "brightness_pct": None}
+        state = self._states(entity_id) or {}
+        name = state.get("name") or entity_id
+        dimmable = bool(DIMMABLE_MODES.intersection(state.get("supported_color_modes") or ()))
+        # Light groups (group platform, Hue rooms and zones) switch member lights
+        # that are not on the allowlist, so they are never actuated.
+        if state.get("entity_id") or state.get("is_hue_group"):
+            return {"entity_id": entity_id, "name": name, "state": "unsupported", "brightness_pct": None,
+                    "dimmable": False}
+        if state.get("state") not in ("on", "off"):
+            return {"entity_id": entity_id, "name": name, "state": "unavailable", "brightness_pct": None,
+                    "dimmable": dimmable}
         raw = state.get("brightness")
         pct = round(raw * 100 / 255) if isinstance(raw, (int, float)) and state["state"] == "on" else None
-        return {"entity_id": entity_id, "name": state.get("name") or entity_id, "state": state["state"], "brightness_pct": pct}
+        return {"entity_id": entity_id, "name": name, "state": state["state"], "brightness_pct": pct,
+                "dimmable": dimmable}
+
+    def _applied(self, entity_id: str, operation: str, brightness: int | None) -> bool:
+        light = self._light(entity_id)
+        if operation == "off":
+            return light["state"] == "off"
+        if operation == "on":
+            return light["state"] == "on"
+        return (light["state"] == "on" and light["brightness_pct"] is not None
+                and abs(light["brightness_pct"] - brightness) <= BRIGHTNESS_TOLERANCE)
 
     async def inventory(self, body: bytes, signature: str | None) -> dict[str, Any]:
         self._authenticate(INVENTORY_URL, body, signature, INVENTORY_KEYS)
@@ -213,7 +273,7 @@ class LightingEndpoint:
     async def outcome(self, body: bytes, signature: str | None) -> dict[str, Any]:
         value = self._authenticate(OUTCOME_URL, body, signature, OUTCOME_KEYS)
         request_id, index = _operation_key(value)
-        state = await self._run(self._ledger.lookup, request_id, index)
+        state = await self._run(self._ledger.settle, request_id, index, self._now())
         return {"version": 1, "request_id": request_id, "operation_index": index, "status": state}
 
     async def execute(self, body: bytes, signature: str | None) -> dict[str, Any]:
@@ -228,37 +288,58 @@ class LightingEndpoint:
             raise LightingRejected(409, "allowlist_changed")
         if type(value["expires_at"]) is not int or not now < value["expires_at"] <= now + MAX_EXPIRY_MS:
             raise LightingRejected(409, "request_expired")
+        light = self._light(entity)
+        if light["state"] == "unsupported":
+            raise LightingRejected(400, "operation_not_allowed")
+        if operation == "brightness" and not light["dimmable"]:
+            raise LightingRejected(400, "operation_not_supported")
         digest = hashlib.sha256(json.dumps({k: value[k] for k in sorted(EXECUTE_KEYS - {"issued_at"})},
                                            separators=(",", ":")).encode()).hexdigest()
+        # Once accepted, finish and record the operation even if the caller disconnects.
+        task = asyncio.ensure_future(self._dispatch(request_id, index, digest, entity, operation, brightness, now))
+        task.add_done_callback(lambda done: done.cancelled() or done.exception())
+        state = await asyncio.shield(task)
+        return {"version": 1, "request_id": request_id, "operation_index": index, "status": state}
+
+    async def _dispatch(self, request_id: str, index: int, digest: str, entity: str, operation: str,
+                        brightness: int | None, now: int) -> str:
         prior = await self._run(self._ledger.reserve, request_id, index, digest, now)
         if prior is not None:
             # Already dispatched once: report the record, never send it again.
-            return {"version": 1, "request_id": request_id, "operation_index": index, "status": prior}
+            return prior
         if self._light(entity)["state"] == "unavailable":
-            state = "failed"
-        else:
-            service = "turn_off" if operation == "off" else "turn_on"
-            data: dict[str, Any] = {"entity_id": entity}
-            if operation == "brightness":
-                data["brightness_pct"] = brightness
-            try:
-                await asyncio.wait_for(self._call(service, data), CALL_TIMEOUT_S)
-                state = "succeeded"
-            except asyncio.CancelledError:
-                await self._run(self._ledger.complete, request_id, index, "indeterminate", self._now())
-                raise
-            except Exception:
-                # Timeout or error after the call was attempted: Home Assistant may
-                # still have applied it, so the outcome is unknown, not failed.
-                state = "indeterminate"
-        await self._run(self._ledger.complete, request_id, index, state, self._now())
-        return {"version": 1, "request_id": request_id, "operation_index": index, "status": state}
+            return await self._run(self._ledger.complete, request_id, index, "failed", self._now())
+        service = "turn_off" if operation == "off" else "turn_on"
+        data: dict[str, Any] = {"entity_id": entity}
+        if operation == "brightness":
+            data["brightness_pct"] = brightness
+        try:
+            await asyncio.wait_for(self._call(service, data), CALL_TIMEOUT_S)
+            # A returned service call is not proof: skipped or unacknowledged
+            # devices still return. Report success only once the state shows it.
+            state = "indeterminate"
+            deadline = time.monotonic() + VERIFY_S
+            while True:
+                if self._applied(entity, operation, brightness):
+                    state = "succeeded"
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(VERIFY_STEP_S)
+        except asyncio.CancelledError:
+            await self._run(self._ledger.complete, request_id, index, "indeterminate", self._now())
+            raise
+        except Exception:
+            # Timeout or error after the call was attempted: Home Assistant may
+            # still have applied it, so the outcome is unknown, not failed.
+            state = "indeterminate"
+        return await self._run(self._ledger.complete, request_id, index, state, self._now())
 
 
 def _operation_key(value: Mapping[str, Any]) -> tuple[str, int]:
     request_id, index = value.get("request_id"), value.get("operation_index")
-    if not isinstance(request_id, str) or not UUID.fullmatch(request_id) or type(index) is not int \
-            or not 0 <= index < MAX_OPERATIONS:
+    if (not isinstance(request_id, str) or not UUID.fullmatch(request_id) or type(index) is not int
+            or not 0 <= index < MAX_OPERATIONS):
         raise LightingRejected(400, "invalid_request")
     return request_id, index
 

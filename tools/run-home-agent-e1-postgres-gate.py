@@ -4373,7 +4373,8 @@ def _run_edge_source_contracts(state: GateState) -> None:
             "-eu",
             "-c",
             "python ha-config/home_agent_edge/test_edge.py && "
-            "python ha-config/home_agent_edge/test_transport.py",
+            "python ha-config/home_agent_edge/test_transport.py && "
+            "python ha-config/home_agent_edge/test_lighting.py",
         ),
         label="HA Edge standalone source contracts",
         timeout=300,

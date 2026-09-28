@@ -39,6 +39,17 @@ from .const import (
     WHOAMI_URL,
 )
 from .crypto import EncryptedEnvelopeCodec
+from .lighting import (
+    EXECUTE_URL,
+    INVENTORY_URL,
+    MAX_BODY,
+    OUTCOME_URL,
+    SIGNATURE_HEADER,
+    LightingEndpoint,
+    LightingLedger,
+    LightingPolicy,
+    LightingRejected,
+)
 from .model import EdgePolicy
 from .outbox import EdgeOutbox
 from .runtime import CorePrivacyPolicyUnavailable, EdgeRuntime
@@ -71,13 +82,76 @@ class HomeAgentWhoAmIView(HomeAssistantView):
         )
 
 
+class HomeAgentLightingView(HomeAssistantView):
+    """One signed lighting operation. Home Assistant auth is not used: the
+    per-home lighting secret authenticates the caller and authorizes only
+    allowlisted lights, so it is never an HA token."""
+
+    requires_auth = False
+
+    def __init__(self, url: str, operation: str, endpoint: LightingEndpoint) -> None:
+        self.url = url
+        self.name = f"api:home_agent_edge:lighting:{operation}"
+        self._operation = getattr(endpoint, operation)
+
+    async def post(self, request: Any) -> Any:
+        if request.content_length is not None and request.content_length > MAX_BODY:
+            return self.json({"error": "body_too_large"}, status_code=413)
+        try:
+            body = b""
+            while len(body) <= MAX_BODY:
+                chunk = await request.content.read(MAX_BODY + 1 - len(body))
+                if not chunk:
+                    break
+                body += chunk
+            result = await self._operation(body, request.headers.get(SIGNATURE_HEADER))
+        except LightingRejected as rejected:
+            return self.json({"error": rejected.code}, status_code=rejected.status)
+        except Exception as exc:  # fail closed without echoing details
+            _LOGGER.error("Home Agent lighting request failed: %s", type(exc).__name__)
+            return self.json({"error": "lighting_unavailable"}, status_code=503)
+        return self.json(result)
+
+
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-    """Register the authenticated identity view once."""
+    """Register the authenticated identity view once, and lighting if configured."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     if not domain_data.get(DATA_VIEW_REGISTERED):
         hass.http.register_view(HomeAgentWhoAmIView())
         domain_data[DATA_VIEW_REGISTERED] = True
+    settings = config.get(DOMAIN) or {}
+    if "lighting" in settings and not domain_data.get("lighting_registered"):
+        try:
+            policy = LightingPolicy.from_config(settings["lighting"])
+            ledger = await hass.async_add_executor_job(LightingLedger, policy.ledger_path)
+        except Exception as exc:
+            # A bad lighting block disables lighting only; identity keeps working.
+            _LOGGER.error("Home Agent lighting disabled: %s", type(exc).__name__)
+            return True
+        endpoint = LightingEndpoint(
+            policy,
+            ledger,
+            states=lambda entity_id: _light_state(hass, entity_id),
+            call_service=lambda service, data: hass.services.async_call(
+                "light", service, data, blocking=True
+            ),
+            run=hass.async_add_executor_job,
+        )
+        for url, operation in ((INVENTORY_URL, "inventory"), (EXECUTE_URL, "execute"), (OUTCOME_URL, "outcome")):
+            hass.http.register_view(HomeAgentLightingView(url, operation, endpoint))
+        domain_data["lighting_registered"] = True
     return True
+
+
+def _light_state(hass: HomeAssistant, entity_id: str) -> dict[str, Any] | None:
+    state = hass.states.get(entity_id)
+    if state is None:
+        return None
+    return {
+        "state": state.state,
+        "brightness": state.attributes.get("brightness"),
+        "name": state.attributes.get("friendly_name"),
+    }
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

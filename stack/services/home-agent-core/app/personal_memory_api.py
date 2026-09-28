@@ -14,6 +14,8 @@ from .errors import DomainError
 from .personal_memory_contract import PreferenceProposalRequest, PreferenceConfirmation
 from .personal_memory_service import PersonalMemoryService
 from .personal_memory_storage import restore_preference_record
+from .personal_memory_consent import SharingOperation, SharingConfirmation
+from .personal_memory_consent_service import PreferenceConsentService
 
 PREFIX = "/internal/personal-memory/v1/"
 
@@ -37,10 +39,13 @@ def _unique(pairs):
     return result
 
 
-def create_personal_memory_ingress(*, binding=None, service=None):
+def create_personal_memory_ingress(*, binding=None, service=None, consent=None):
     if ((binding is None)!=(service is None) or binding is not None and
         (type(binding) is not PersonalMemoryBinding or type(service) is not PersonalMemoryService)):
         raise TypeError("complete governed preference ingress required")
+    if consent is not None and (type(consent) is not PreferenceConsentService or
+            binding is None or binding.issuer_id != "home-assistant:echo"):
+        raise TypeError("separately provisioned Echo consent service required")
     app = FastAPI(docs_url=None,redoc_url=None,openapi_url=None)
     active = 0
 
@@ -50,9 +55,11 @@ def create_personal_memory_ingress(*, binding=None, service=None):
     @app.post(PREFIX+"{operation}")
     async def handle(operation: str, request: Request):
         nonlocal active
-        if operation not in ("read","propose","confirm","outcome"):
+        sharing = operation in ("sharing-propose", "sharing-confirm", "sharing-outcome")
+        if operation not in ("read","propose","confirm","outcome") and not sharing:
             return reply(404,{"error":"not_found"})
         if binding is None: return reply(503,{"error":"personal_memory_disabled"})
+        if sharing and consent is None: return reply(503,{"error":"preference_sharing_disabled"})
         if request.scope.get("scheme")!="https": return reply(403,{"error":"secure_transport_required"})
         if request.headers.get("origin") is not None or request.headers.get("cookie") is not None:
             return reply(403,{"error":"service_transport_required"})
@@ -88,7 +95,15 @@ def create_personal_memory_ingress(*, binding=None, service=None):
                     not re.fullmatch(r"[a-f0-9]{64}",commitment)):
                     raise ValueError("invalid session")
                 session=dict(issuer_id=binding.issuer_id,subject=subject,session_commitment=commitment)
-                if operation=="read":
+                if sharing:
+                    supplied=value["request"]
+                    if type(supplied) is not dict: raise ValueError("invalid sharing request")
+                    raw=supplied.get("operation_id")
+                    if type(raw) is not str or len(raw)!=36 or str(UUID(raw))!=raw:
+                        raise ValueError("invalid sharing operation")
+                    model=SharingConfirmation if operation=="sharing-confirm" else SharingOperation
+                    parsed=model.model_validate({**supplied,"operation_id":UUID(raw)})
+                elif operation=="read":
                     if value["request"]!={}: raise ValueError("read has no caller-selected scope")
                     parsed=None
                 else:
@@ -100,7 +115,10 @@ def create_personal_memory_ingress(*, binding=None, service=None):
                     if type(raw) is not str or len(raw)!=36 or str(UUID(raw))!=raw: raise ValueError("invalid gesture")
                     gesture=UUID(raw)
                 dispatched=True
-                if operation=="read": result=await service.read(session)
+                if sharing:
+                    action=operation.removeprefix("sharing-")
+                    result=await getattr(consent,action)(session,parsed if action=="confirm" else parsed.operation_id)
+                elif operation=="read": result=await service.read(session)
                 elif operation=="confirm": result=await service.confirm(session,parsed,gesture_id=gesture)
                 else: result=await getattr(service,operation)(session,parsed)
                 return reply(200,{"version":1,"result":result})

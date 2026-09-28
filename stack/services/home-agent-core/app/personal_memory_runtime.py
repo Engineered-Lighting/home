@@ -17,17 +17,29 @@ REVISION = "0047_personal_pref_authority_v1"
 
 
 def compose_personal_memory_ingress(core_application, *, binding, review_key):
+    if type(binding) is not PersonalMemoryBinding:
+        raise ValueError("separately provisioned preference binding required")
+    service = build_personal_memory_service(core_application, review_key=review_key)
+    return create_personal_memory_ingress(binding=binding, service=service)
+
+
+def build_personal_memory_service(core_application, *, review_key):
+    admission = private_core_admission(core_application)
+    settings, store = core_application.state.settings, core_application.state.store
+    storage = PersonalMemoryStorage(PreferenceReviewCommitment(review_key),
+        policy_digest=settings.policy_digest, policy_version=settings.policy_version)
+    return PersonalMemoryService(store=store, storage=storage, admission=admission)
+
+
+def private_core_admission(core_application):
     state = core_application.state
     settings, store, database = state.settings, state.store, state.database
-    if (type(binding) is not PersonalMemoryBinding or not isinstance(store, CoreStore)
+    if (not isinstance(store, CoreStore)
         or store.database is not database or store.settings is not settings
         or database.engine.url.username != "home_agent_api"
         or settings.role != "api" or settings.rollout_mode not in ("shadow", "canary")
         or settings.readiness_migration != REVISION):
         raise ValueError("separately provisioned preference API runtime required")
-    storage = PersonalMemoryStorage(PreferenceReviewCommitment(review_key),
-        policy_digest=settings.policy_digest, policy_version=settings.policy_version)
-
     async def admit():
         # Inspect live state on every transaction and again before delivery;
         # startup success is not a permanent restore or rollout authorization.
@@ -51,5 +63,4 @@ def compose_personal_memory_ingress(core_application, *, binding, review_key):
         if not outbox.ready or not resources["ready"]:
             raise OptionalWorkSuspendedError("preference resources unavailable")
 
-    service = PersonalMemoryService(store=store, storage=storage, admission=admit)
-    return create_personal_memory_ingress(binding=binding, service=service)
+    return admit

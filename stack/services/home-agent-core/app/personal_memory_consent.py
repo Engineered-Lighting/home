@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .crypto import canonical_json
 from .personal_memory_contract import Contract, SOURCE
@@ -44,6 +44,13 @@ class SharingAuthority(Contract):
     victoria_write: SourceRevision
     valid_until: datetime
 
+    @field_validator("valid_until", mode="before")
+    @classmethod
+    def wire_timestamp(cls, value, info):
+        if info.mode == "json" and type(value) is str:
+            return datetime.fromisoformat(value)
+        return value
+
     @model_validator(mode="after")
     def canonical(self):
         if (self.subject.strip() != self.subject or any(ord(c) < 32 or ord(c) == 127 for c in self.subject)
@@ -52,9 +59,12 @@ class SharingAuthority(Contract):
         return self
 
 
-class SharingConfirmation(Contract):
+class SharingOperation(Contract):
     version: Literal[1] = 1
     operation_id: UUID
+
+
+class SharingConfirmation(SharingOperation):
     reviewed_digest: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
 
 
@@ -67,6 +77,20 @@ class SharingReview(Contract):
     grants_expire_at: datetime
     expires_at: datetime
     reviewed_digest: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
+
+    @field_validator("grants_expire_at", "expires_at", mode="before")
+    @classmethod
+    def wire_timestamp(cls, value, info):
+        if info.mode == "json" and type(value) is str:
+            return datetime.fromisoformat(value)
+        return value
+
+    @field_validator("grants_expire_at", "expires_at")
+    @classmethod
+    def aware_timestamp(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("aware sharing timestamp required")
+        return value
 
 
 class SharingReviewCommitment:

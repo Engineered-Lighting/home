@@ -394,6 +394,18 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
     invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
     assert invocation["url_environment"][runner.E5N_OWNER_DATABASE_ENV if stage == "preference_authority" else url_env] == clone_name
     if stage == "preference_authority":
+        if not failure:
+            executed = {node for name, _, kw in calls if name == "_pytest" for node in kw["nodes"]}
+            assert {
+                "tests/test_personal_memory_consent.py",
+                "tests/test_personal_memory_consent_journal.py",
+                "tests/test_personal_memory_consent_service.py",
+                "tests/test_personal_memory_consent_api.py",
+                "tests/test_shared_identity_site_runtime.py",
+                "tests/test_shared_identity_site_server.py",
+                "tests/test_shared_link_coordinator_runtime.py",
+                "tests/test_shared_link_coordinator_server.py",
+            } <= executed
         assert invocation["credential_url_environment"][runner.E5N_COMMITTER_DATABASE_ENV] == (clone_name,"home_agent_binding_committer","postgres_binding_committer_password")
         assert invocation["url_environment"][runner.E5H_OWNER_DATABASE_ENV] == clone_name
         assert invocation["credential_url_environment"][runner.E5H_COMMITTER_DATABASE_ENV] == (clone_name,"home_agent_binding_committer","postgres_binding_committer_password")

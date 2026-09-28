@@ -101,7 +101,7 @@ role="${1:-${HOME_AGENT_ROLE:-api}}"
 
 if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ] && [ "$role" != "migrate" ]; then
   case "$role" in
-    phase3-migrate-*|personal-memory-api)
+    phase3-migrate-*|personal-memory-api|site-identity-api|link-coordinator-api)
       echo "phase3 migration cannot use automatic startup migration" >&2
       exit 78
       ;;
@@ -112,6 +112,20 @@ if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ] && [ "$role" != "migrate" ]; then
 fi
 
 case "$role" in
+  link-coordinator-api)
+    [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
+      echo "private link coordinator requires one command and the API role" >&2
+      exit 64
+    }
+    exec python -m app.shared_link_coordinator_server
+    ;;
+  site-identity-api)
+    [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
+      echo "private site identity listener requires one command and the API role" >&2
+      exit 64
+    }
+    exec python -m app.shared_identity_site_server
+    ;;
   personal-memory-api)
     [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
       echo "private preference listener requires one command and the API role" >&2

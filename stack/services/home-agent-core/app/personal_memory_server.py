@@ -18,6 +18,7 @@ from .personal_memory_consent import SharingReviewCommitment
 from .personal_memory_consent_service import ConsentDatabase, PreferenceConsentService
 from .personal_memory_consent_journal import ConsentJournal
 from .personal_memory_grants import PreferenceGrantStorage
+from .startup_admission import admit_at_startup
 
 NETWORKS = tuple(ipaddress.ip_network(value) for value in (
     "127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12",
@@ -136,7 +137,7 @@ def build_consent_listener(core_application, profile):
     async def lifespan(app):
         async with core_application.router.lifespan_context(core_application):
             memory = build_personal_memory_service(core_application, review_key=profile.review_key)
-            await memory.admission()
+            await admit_at_startup(memory.admission)
             async with AsyncExitStack() as cleanup:
                 database = ConsentDatabase(config.database_url)
                 cleanup.push_async_callback(database.close)

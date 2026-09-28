@@ -405,7 +405,14 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
                 "tests/test_shared_identity_site_server.py",
                 "tests/test_shared_link_coordinator_runtime.py",
                 "tests/test_shared_link_coordinator_server.py",
+                "tests/test_startup_admission.py",
+                "tests/test_shared_preference_roles.py",
+                "tests/test_shared_preference_roles_postgres.py",
             } <= executed
+            ordered = [node for name, _, kw in calls if name == "_pytest" for node in kw["nodes"]]
+            # Real logins commit, so the activation test must run after every
+            # rolled-back consent/grant test in the same clone.
+            assert ordered[-1] == "tests/test_shared_preference_roles_postgres.py"
         assert invocation["credential_url_environment"][runner.E5N_COMMITTER_DATABASE_ENV] == (clone_name,"home_agent_binding_committer","postgres_binding_committer_password")
         assert invocation["url_environment"][runner.E5H_OWNER_DATABASE_ENV] == clone_name
         assert invocation["credential_url_environment"][runner.E5H_COMMITTER_DATABASE_ENV] == (clone_name,"home_agent_binding_committer","postgres_binding_committer_password")

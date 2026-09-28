@@ -635,7 +635,29 @@ class RepositoryBoundaryTests(unittest.TestCase):
         )
         self.assertIn("Review code <code>{bindingProposal.review_code}</code>", panel)
         self.assertNotIn("confirmPrincipalBinding", panel)
-        self.assertNotIn("window.crypto.randomUUID()", panel)
+        # Principal-binding confirmation stays disabled, so the panel must not
+        # mint a binding confirmation nonce. Every client-minted UUID has to be
+        # one of the reviewed uses: the shared-preference proposal operation_id
+        # (an idempotency key; confirmation still needs the Core-issued
+        # reviewed_digest) and the v4 relationship attestation nonces.
+        self.assertEqual(
+            sorted(
+                line.strip()
+                for line in panel.splitlines()
+                if "randomUUID" in line or "getRandomValues" in line
+            ),
+            [
+                "attestation_nonce: crypto.randomUUID(),",
+                "attestation_nonce: crypto.randomUUID(),",
+                "const operation_id = window.crypto.randomUUID();",
+            ],
+        )
+        self.assertRegex(
+            panel,
+            r"const operation_id = window\.crypto\.randomUUID\(\);\n\s*"
+            r"const result = \(await api\.personalMemory\(\"sharing-propose\", "
+            r"\{version:1, operation_id\}",
+        )
         self.assertIn("confirmation disabled", panel)
         self.assertIn("capability_disabled", panel)
         self.assertNotIn("/api/agent/v1/people", client)
@@ -698,9 +720,28 @@ class RepositoryBoundaryTests(unittest.TestCase):
         edge = read("ha-config/home_agent_edge/const.py")
         edge_setup = read("ha-config/home_agent_edge/__init__.py")
         bff = read("stack/services/home-agent-bff/src/bff.mjs")
+        transport = read("stack/services/home-agent-bff/src/ha-token-transport.mjs")
         self.assertIn('WHOAMI_URL = "/api/home_agent_edge/whoami"', edge)
         self.assertIn('getattr(user, "is_active", False)', edge_setup)
-        self.assertIn("/api/home_agent_edge/whoami", bff)
+        # The BFF resolves the HA subject through the one shared transport,
+        # for both the browser session and the qualified Victoria sign-in.
+        self.assertIn("${config.haUrl}/api/home_agent_edge/whoami", transport)
+        self.assertIn("if (value.is_active !== true)", transport)
+        import_transport = re.compile(
+            r"import \{[^}]*\bfetchHaSubject\b[^}]*\} from \"\./ha-token-transport\.mjs\";"
+        )
+        self.assertRegex(bff, import_transport)
+        self.assertRegex(
+            read("stack/services/home-agent-bff/src/qualified-ha-auth.mjs"),
+            import_transport,
+        )
+        for source in sorted(
+            (ROOT / "stack/services/home-agent-bff/src").glob("*.mjs")
+        ):
+            if source.name != "ha-token-transport.mjs":
+                self.assertNotIn(
+                    "whoami", source.read_text(encoding="utf-8"), source.name
+                )
         self.assertIn("/api/agent/auth/callback", bff)
         self.assertIn("OAUTH_COOKIE_NAME", bff)
 

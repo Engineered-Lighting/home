@@ -818,7 +818,7 @@ class DurableWorker:
             if owns_claim is None:
                 return
             await self._advance_ledger_state(connection, head, now)
-            if entry.record.subject_kind == "descriptor_fact":
+            if entry.record.subject_kind in ("descriptor_fact", "personal_preference_fact"):
                 await connection.execute(
                     update(schema.erasure_requests)
                     .where(

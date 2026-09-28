@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 from . import schema
 from .crypto import sha256_json
 from .db import Database
-from .erasure import apply_descriptor_erasure
+from .erasure import apply_descriptor_erasure, apply_personal_preference_erasure
 from .ledger import (
     ZERO_HASH,
     EncryptedErasureLedger,
@@ -366,9 +366,11 @@ class RestoreReplay:
                             "erasure replay receipt conflicts with ledger"
                         )
                 else:
+                    preference = entry.record.subject_kind == "personal_preference_fact"
+                    scope_key = "preference_fact_id" if preference else "descriptor_fact_id"
                     replay_scope = {
                         "replayed_from_ledger": True,
-                        "descriptor_fact_id": str(entry.record.fact_id),
+                        scope_key: str(entry.record.fact_id),
                         "checkpoint_affected": entry.record.checkpoint_affected,
                         "backup_expiry_at": (
                             entry.record.backup_expiry_at.isoformat()
@@ -412,9 +414,11 @@ class RestoreReplay:
                                 )
                             )
                     else:
-                        existing_fact = request["scope"].get("descriptor_fact_id")
+                        existing_fact = request["scope"].get(scope_key)
+                        other_key = "descriptor_fact_id" if preference else "preference_fact_id"
                         if (
                             request["principal_id"] != entry.record.principal_id
+                            or other_key in request["scope"]
                             or (
                                 existing_fact is not None
                                 and existing_fact != str(entry.record.fact_id)
@@ -435,7 +439,8 @@ class RestoreReplay:
                                 completed_at=entry.record.completed_at,
                             )
                         )
-                    await apply_descriptor_erasure(
+                    apply_erasure = apply_personal_preference_erasure if preference else apply_descriptor_erasure
+                    await apply_erasure(
                         connection,
                         principal_id=entry.record.principal_id,
                         fact_id=entry.record.fact_id,

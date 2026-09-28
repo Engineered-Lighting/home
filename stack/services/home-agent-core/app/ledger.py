@@ -60,7 +60,7 @@ class ErasureLedgerRecord(BaseModel):
     version: Literal[1] = 1
     outbox_id: uuid.UUID
     erasure_request_id: uuid.UUID
-    subject_kind: Literal["descriptor_fact", "person"] = "descriptor_fact"
+    subject_kind: Literal["descriptor_fact", "personal_preference_fact", "person"] = "descriptor_fact"
     principal_id: uuid.UUID | None = None
     fact_id: uuid.UUID | None = None
     person_id: uuid.UUID | None = None
@@ -76,7 +76,7 @@ class ErasureLedgerRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_subject(self) -> "ErasureLedgerRecord":
-        if self.subject_kind == "descriptor_fact":
+        if self.subject_kind in ("descriptor_fact", "personal_preference_fact"):
             if (
                 self.principal_id is None
                 or self.fact_id is None

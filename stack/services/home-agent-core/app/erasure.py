@@ -96,6 +96,35 @@ async def apply_descriptor_erasure(
     now: datetime,
     require_existing: bool,
 ) -> DescriptorErasureResult:
+    return await _apply_fact_erasure(
+        connection, principal_id=principal_id, fact_id=fact_id,
+        erasure_request_id=erasure_request_id, now=now,
+        require_existing=require_existing, predicate="place_social_descriptor",
+        candidate_key="descriptor_fact_id", reason="descriptor_erased",
+    )
+
+
+async def apply_personal_preference_erasure(
+    connection, *, principal_id: uuid.UUID, fact_id: uuid.UUID,
+    erasure_request_id: uuid.UUID, now: datetime, require_existing: bool,
+) -> DescriptorErasureResult:
+    """Scrub the typed preference through Core's existing erasure lineage.
+
+    The caller must authenticate and authorize the transaction. This function
+    grants no cross-home access and accepts no caller-selected predicate.
+    """
+    return await _apply_fact_erasure(
+        connection, principal_id=principal_id, fact_id=fact_id,
+        erasure_request_id=erasure_request_id, now=now,
+        require_existing=require_existing, predicate="personal_preference.evening_lighting",
+        candidate_key="preference_fact_id", reason="personal_preference_erased",
+    )
+
+
+async def _apply_fact_erasure(
+    connection, *, principal_id, fact_id, erasure_request_id, now,
+    require_existing, predicate, candidate_key, reason,
+) -> DescriptorErasureResult:
     # Retrieval is blocked before any content mutation. Descendant blocks are
     # added after the bounded, cycle-detecting lineage traversal succeeds.
     await connection.execute(
@@ -113,7 +142,7 @@ async def apply_descriptor_erasure(
                 select(schema.fact_versions)
                 .where(
                     schema.fact_versions.c.fact_id == fact_id,
-                    schema.fact_versions.c.predicate == "place_social_descriptor",
+                    schema.fact_versions.c.predicate == predicate,
                     schema.fact_versions.c.perspective_principal_id == principal_id,
                 )
                 .order_by(schema.fact_versions.c.version)
@@ -126,7 +155,7 @@ async def apply_descriptor_erasure(
     if require_existing and not versions:
         from .errors import NotFoundError
 
-        raise NotFoundError("owned descriptor fact does not exist")
+        raise NotFoundError("owned descriptor fact does not exist" if predicate == "place_social_descriptor" else "owned preference fact does not exist")
 
     version_transaction_ids = [row["memory_transaction_id"] for row in versions]
     pending_transaction_ids = (
@@ -136,7 +165,7 @@ async def apply_descriptor_erasure(
                 .where(
                     schema.memory_transactions.c.principal_id == principal_id,
                     schema.memory_transactions.c.candidate.contains(
-                        {"descriptor_fact_id": str(fact_id)}
+                        {candidate_key: str(fact_id)}
                     ),
                 )
                 .with_for_update()
@@ -205,7 +234,7 @@ async def apply_descriptor_erasure(
                 schema.initiatives.c.source_fact_version_id.in_(fact_version_ids),
                 schema.initiatives.c.state.in_(["pending", "claimed", "suppressed"]),
             )
-            .values(state="suppressed", suppression_reason="descriptor_erased")
+            .values(state="suppressed", suppression_reason=reason)
         )
     artifact_ids = [fact_id, *transaction_ids, *descendant_ids]
     await connection.execute(

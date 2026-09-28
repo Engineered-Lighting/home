@@ -215,7 +215,11 @@ def test_shared_link_combined_issuer_chain_exact_replay_and_generation_fence(dat
         assert error.value.orig.sqlstate == "42501"
 
 
-def test_shared_link_bound_session_revocation_is_monotonic_and_issuer_scoped(database):
+    if session_kernel_enabled:
+        _assert_bound_session_revocation_is_monotonic_and_issuer_scoped(database)
+
+
+def _assert_bound_session_revocation_is_monotonic_and_issuer_scoped(database):
     engine,base,_,_,enabled = database
     if not enabled: pytest.skip("0046 session kernel clone required")
     with engine.connect() as conn:

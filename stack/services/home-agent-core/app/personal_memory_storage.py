@@ -6,7 +6,7 @@ transaction. Database permissions remain a separate deployment prerequisite.
 """
 import hmac
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from psycopg.types.range import Range
@@ -62,6 +62,59 @@ class PersonalMemoryStorage:
         if not isinstance(policy_version, str) or not 1 <= len(policy_version) <= 128:
             raise ValueError("configured policy version required")
         self.signer, self.policy_digest, self.policy_version = signer, policy_digest, policy_version
+
+    async def resolve_authority(self, connection, *, issuer_id, subject,
+                                session_commitment, write, retained=None):
+        """Resolve an authenticated BFF session, not browser-supplied owner IDs.
+
+        The ingress credential fixes issuer_id. Its BFF must freshly validate
+        subject and derive the session commitment. Retained authority may come
+        only from the staged database record; it never renews the review lease.
+        """
+        if (issuer_id not in ("home-assistant:echo", "home-assistant:victoria") or
+            type(subject) is not str or not 1 <= len(subject) <= 64 or subject != subject.strip() or
+            any(ord(c) < 32 or ord(c) == 127 for c in subject) or
+            type(session_commitment) is not str or not re.fullmatch(r"[a-f0-9]{64}", session_commitment) or
+            type(write) is not bool or retained is not None and type(retained) is not PreferenceAuthority):
+            raise ForbiddenError("authenticated preference session required")
+        if (await connection.execute(text("SHOW transaction_isolation"))).scalar_one() != "serializable":
+            raise ValueError("serializable preference transaction required")
+        rows = (await connection.execute(text("""
+            SELECT l.link_id,l.principal_id,l.person_id,l.authorization_generation,
+                   g.site_id,g.capability,g.revision,g.expires_at
+            FROM identity.shared_subject_bindings b
+            JOIN identity.shared_owner_links l ON l.link_id=b.link_id
+            JOIN identity.shared_source_grants g ON g.link_id=l.link_id
+            WHERE b.issuer_id=:issuer AND b.subject=:subject AND b.revoked_at IS NULL
+              AND l.revoked_at IS NULL AND g.revoked_at IS NULL
+              AND g.authorization_generation=l.authorization_generation
+              AND g.source_id=:source AND g.site_id IN ('echo','victoria')
+              AND g.capability IN ('memory.read','personal_memory.write')
+              AND g.expires_at>clock_timestamp()
+        """), {"issuer":issuer_id,"subject":subject,"source":SOURCE})).mappings().all()
+        if not rows or len({row["link_id"] for row in rows}) != 1:
+            raise ForbiddenError("linked preference owner unavailable")
+        grants = {(row["site_id"],row["capability"]):row for row in rows}
+        capability = "personal_memory.write" if write else "memory.read"
+        required = {(site,cap) for site in ("echo","victoria") for cap in ("memory.read",capability)}
+        if not required.issubset(grants):
+            raise ForbiddenError("current preference grants required")
+        now = (await connection.execute(text("SELECT clock_timestamp()"))).scalar_one()
+        expires = min(now+timedelta(seconds=60), *(grants[key]["expires_at"] for key in required))
+        anchor = rows[0]
+        authority = PreferenceAuthority(
+            principal_id=anchor["principal_id"],person_id=anchor["person_id"],link_id=anchor["link_id"],
+            authorization_generation=anchor["authorization_generation"],issuer_id=issuer_id,
+            site_id=issuer_id.split(":",1)[1],session_commitment=session_commitment,
+            echo_grant_revision=grants[("echo",capability)]["revision"],
+            victoria_grant_revision=grants[("victoria",capability)]["revision"],valid_until=expires)
+        if retained is not None:
+            if (retained.model_dump(exclude={"valid_until"}) != authority.model_dump(exclude={"valid_until"}) or
+                not now < retained.valid_until <= expires):
+                raise ForbiddenError("preference authority changed after review")
+            authority = retained
+        await self._admit(connection, authority, write=write)
+        return authority
 
     async def _admit(self, connection, authority, *, write):
         if type(authority) is not PreferenceAuthority:

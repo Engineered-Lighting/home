@@ -55,7 +55,25 @@ def test_preference_storage_correction_forgetting_and_relearning():
                         return connection.execute(statement,parameters or {})
 
                 async def exercise():
+                    nonlocal authority
                     conn = AsyncTransaction()
+                    subjects = dict(connection.execute(text("SELECT issuer_id,subject FROM identity.shared_subject_bindings WHERE link_id=:link AND revoked_at IS NULL"),
+                        {"link":link["link_id"]}).all())
+                    authority = await storage.resolve_authority(conn,issuer_id="home-assistant:echo",
+                        subject=subjects["home-assistant:echo"],session_commitment=authority.session_commitment,write=True)
+                    assert authority.principal_id==link["principal_id"]
+                    assert authority.valid_until <= now+timedelta(seconds=65)
+                    retained = await storage.resolve_authority(conn,issuer_id=authority.issuer_id,
+                        subject=subjects[authority.issuer_id],session_commitment=authority.session_commitment,
+                        write=True,retained=authority)
+                    assert retained==authority  # Confirmation cannot extend the review lease.
+                    with pytest.raises(ForbiddenError):
+                        await storage.resolve_authority(conn,issuer_id=authority.issuer_id,
+                            subject="unlinked-"+uuid4().hex,session_commitment=authority.session_commitment,write=True)
+                    with pytest.raises(ForbiddenError):
+                        await storage.resolve_authority(conn,issuer_id=authority.issuer_id,
+                            subject=subjects[authority.issuer_id],session_commitment=uuid4().hex*2,
+                            write=True,retained=authority)
 
                     async def propose(operation,revision,tone="warm"):
                         current = await storage.read(conn,authority)
@@ -85,9 +103,8 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     assert (await confirm(first))["revision"]==1
                     first_snapshot = await storage.read(conn,authority)
                     assert first_snapshot["preference"].value=="warm"
-                    victoria = PreferenceAuthority.model_validate({**authority.model_dump(),
-                        "issuer_id":"home-assistant:victoria","site_id":"victoria",
-                        "session_commitment":uuid4().hex*2})
+                    victoria = await storage.resolve_authority(conn,issuer_id="home-assistant:victoria",
+                        subject=subjects["home-assistant:victoria"],session_commitment=uuid4().hex*2,write=False)
                     assert (await storage.read(conn,victoria))["preference"].value=="warm"
                     wrong_owner = PreferenceAuthority.model_validate({**authority.model_dump(),"principal_id":uuid4()})
                     with pytest.raises(ForbiddenError): await storage.read(conn,wrong_owner)

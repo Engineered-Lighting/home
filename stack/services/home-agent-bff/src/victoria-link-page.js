@@ -1,6 +1,8 @@
 "use strict";
 (() => {
   const el=id=>document.getElementById(id);
+  // Offer expiries come from the server clock; allow a browser clock slightly behind it.
+  const SERVER_CLOCK_SKEW_MS=30000;
   let session=null,pairingId=null,busy=false,blocked=false,epoch=0,expiry=0,haOrigin=null;
   const status=text=>{el("status").textContent=text;};
   const reset=()=>{
@@ -66,7 +68,7 @@
     el("offer").hidden=true;
     const result=await request("/api/agent/shared-identity/handoff",{version:1,pairing_id:pairingId,consent:true});
     if(result?.version!==1 || result.offer?.pairing_id!==pairingId || !/^[a-f0-9]{64}$/.test(result.offer.token) ||
-      !Number.isSafeInteger(result.offer.expires_at) || result.offer.expires_at<=Date.now() || result.offer.expires_at>Date.now()+60000)throw new Error();
+      !Number.isSafeInteger(result.offer.expires_at) || result.offer.expires_at<=Date.now() || result.offer.expires_at>Date.now()+60000+SERVER_CLOCK_SKEW_MS)throw new Error();
     expiry=result.offer.expires_at;el("code").value=result.offer.token;el("code-label").hidden=false;
     status("Copy this code into the Los Angeles Home tab.");
   });

@@ -5,6 +5,8 @@ const {chromium}=require("playwright");
 const root=path.resolve(__dirname,".."),id="00000000-0000-0000-0000-000000000001",gesture="00000000-0000-0000-0000-000000000002";
 const review=()=>({version:1,ceremony_id:id,gesture_id:gesture,reviewed_digest:"a".repeat(64),expires_at:new Date(Date.now()+240000).toISOString(),
   accounts:[{site_id:"echo",issuer_id:"home-assistant:echo",subject:"owner"},{site_id:"victoria",issuer_id:"home-assistant:victoria",subject:"victoria-owner"}]});
+// Model a server clock 2 s ahead of the browser: a full 60 s window must still be accepted.
+const serverExpiry=()=>Date.now()+62000;
 const form=()=>({status:"form",handle:"f".repeat(64),step:"init",fields:["username","password"],invalid:false});
 (async()=>{
   const browser=await chromium.launch({headless:true});
@@ -24,7 +26,7 @@ const form=()=>({status:"form",handle:"f".repeat(64),step:"init",fields:["userna
         if(operation==="session")return reply({authenticated:true,user_id:"owner",csrf_token:"csrf",authority:{version:1,site_id:"echo",ha_issuer_id:"home-assistant:echo"},shared_link_review_enabled:true,shared_link_setup:{victoria_origin:"https://victoria.test"}});
         if(operation==="snapshot")return reply({rollout_mode:"shadow",capabilities:{},preferences:{}});
         if(operation==="status")return reply({state:"bound"});
-        if(operation==="start")return reply({pairing_id:id,expires_at:Date.now()+59000});
+        if(operation==="start")return reply({pairing_id:id,expires_at:serverExpiry()});
         if(operation==="handoff" && mode==="unknown-handoff")return reply({error:"unknown"},503);
         if(["handoff","issuance-outcome","victoria-auth-admit"].includes(operation))return reply({version:1,status:"authentication_required",ceremony_id:id});
         if(operation==="auth-begin")return reply(form());
@@ -70,7 +72,7 @@ const form=()=>({status:"form",handle:"f".repeat(64),step:"init",fields:["userna
         contentType:url.pathname==="/"?"text/html":url.pathname.endsWith("css")?"text/css":"text/javascript"});
       const operation=url.pathname.split("/").at(-1);calls.push(operation);
       const body=operation==="session"?{authenticated:true,csrf_token:"csrf",authority:{site_id:"victoria",ha_issuer_id:"home-assistant:victoria"}}:
-        operation==="handoff"?{version:1,offer:{pairing_id:id,token:"b".repeat(64),expires_at:Date.now()+59000}}:
+        operation==="handoff"?{version:1,offer:{pairing_id:id,token:"b".repeat(64),expires_at:serverExpiry()}}:
         operation==="auth-begin"?form():{version:1,status:"authenticated",site_id:"victoria",ceremony_id:id};
       return route.fulfill({contentType:"application/json",body:JSON.stringify(body)});
     });

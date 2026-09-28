@@ -2,6 +2,10 @@ const { useEffect, useMemo, useRef, useState } = React;
 
 const DEFAULT_DESCRIPTOR_TEXT = "This is my parents’ mountain house.";
 
+// Expiries come from the server clock. Allow a browser clock that runs slightly
+// behind it; the server still enforces every window.
+const SERVER_CLOCK_SKEW_MS = 30_000;
+
 function sharedLinkCeremonyFromHash(hash) {
   return /^#shared-link\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/.exec(hash || "")?.[1] || null;
 }
@@ -12,7 +16,7 @@ function sharedLinkReviewValid(value, ceremonyId, now) {
     typeof value.gesture_id === "string" && uuid.test(value.gesture_id) &&
     typeof value.reviewed_digest === "string" && /^[a-f0-9]{64}$/.test(value.reviewed_digest) &&
     typeof value.expires_at === "string" && Number.isFinite(Date.parse(value.expires_at)) &&
-    Date.parse(value.expires_at) > now && Date.parse(value.expires_at) <= now + 300_000 &&
+    Date.parse(value.expires_at) > now && Date.parse(value.expires_at) <= now + 300_000 + SERVER_CLOCK_SKEW_MS &&
     Array.isArray(value.accounts) && value.accounts.length === 2 &&
     value.accounts.every((account, index) => account.site_id === (index ? "victoria" : "echo") &&
       account.issuer_id === `home-assistant:${account.site_id}` &&
@@ -330,7 +334,7 @@ function SharedPreferenceConsent({ api }) {
         if (result?.version !== 1 || result.operation_id !== operation_id || result.source !== "core.personal-preferences.v1" ||
             result.applies_to !== "both_homes" || result.effect !== "read_and_manage_confirmed_preferences" ||
             !/^[a-f0-9]{64}$/.test(result.reviewed_digest) || !Number.isFinite(Date.parse(result.grants_expire_at)) ||
-            !(Date.parse(result.expires_at) > Date.now() && Date.parse(result.expires_at) <= Date.now()+61000)) throw new Error("invalid_review");
+            !(Date.parse(result.expires_at) > Date.now() && Date.parse(result.expires_at) <= Date.now()+60000+SERVER_CLOCK_SKEW_MS)) throw new Error("invalid_review");
         retained.current = result; setReview(result); setChecked(false); setNow(Date.now()); setStatus("review");
       } else {
         if (kind === "confirm") dispatched.current = true;
@@ -511,7 +515,7 @@ function SharedLinkSetupCard({ api, setup }) {
       if(!current())return;
       if(operationName==="start") {
         if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(result?.pairing_id || "") ||
-          !Number.isSafeInteger(result.expires_at) || result.expires_at<=Date.now() || result.expires_at>Date.now()+60000)throw new Error();
+          !Number.isSafeInteger(result.expires_at) || result.expires_at<=Date.now() || result.expires_at>Date.now()+60000+SERVER_CLOCK_SKEW_MS)throw new Error();
         setPair(result);setStage("handoff");
       } else if(operationName==="handoff" || operationName==="issuance-outcome") {
         if(result?.ceremony_id!==pair.pairing_id || result.status!=="authentication_required")throw new Error();

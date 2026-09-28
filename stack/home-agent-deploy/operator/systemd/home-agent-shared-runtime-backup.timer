@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Home Agent shared-runtime off-host backup
+
+[Timer]
+OnCalendar=*-*-* 04:37:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=home-agent-shared-runtime-backup.service
+
+[Install]
+WantedBy=timers.target

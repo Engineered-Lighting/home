@@ -13,7 +13,10 @@ case "${1:-}" in
     # Keep the first-hop bridge guard present across boot, stop, reload, and
     # flush lifecycle boundaries. This action uses only root-owned static
     # configuration; Docker, DNS, and Tailscale need not be online yet.
-    exec /usr/bin/python3 -I "$helper" guard --env "$environment"
+    /usr/bin/python3 -I "$helper" guard --env "$environment"
+    # The separately provisioned Victoria linking service has its own bridge
+    # and guard; it is skipped until its HA origin is provisioned.
+    exec /usr/bin/python3 -I "$helper" guard --profile victoria-link       --if-configured --env "$environment"
     ;;
   status)
     exit 0

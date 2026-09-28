@@ -1,0 +1,7 @@
+{
+  "services": {
+    "origin": {
+      "image": "${HOME_AGENT_SHARED_ORIGIN_IMAGE:?set verified immutable Origin image}"
+    }
+  }
+}

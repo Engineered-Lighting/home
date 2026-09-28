@@ -1,0 +1,39 @@
+[Unit]
+Description=Replicate Home Agent shared-preference journals, config and secrets off-host
+RequiresMountsFor=/srv/home-agent
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/srv/home-agent
+ConditionPathIsDirectory=/srv/home-agent/shared-runtime-backup
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=/usr/bin/test -f /srv/home-agent/config/shared-runtime-backup.env
+ExecStartPre=/usr/bin/test -f /srv/home-agent/config/shared-runtime-backup-operator.sha256
+ExecStart=/usr/bin/python3 -I -s /usr/local/libexec/home-agent/shared-runtime-backup.py
+TimeoutStartSec=45min
+UMask=0077
+Nice=10
+CPUQuota=25%
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=64
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/home-agent/shared-runtime-backup
+ReadWritePaths=/srv/home-agent/shared-preferences
+ReadWritePaths=/srv/home-agent/secrets/shared-runtime-rclone
+ReadWritePaths=/run/lock

@@ -58,8 +58,10 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     conn = AsyncTransaction()
 
                     async def propose(operation,revision,tone="warm"):
+                        current = await storage.read(conn,authority)
                         request = PreferenceProposalRequest(operation_id=uuid4(),operation=operation,
-                            expected_revision=revision,preference=None if operation=="forget" else EveningLightingPreference(value=tone))
+                            expected_revision=revision,expected_fact_id=current["fact_id"] if revision else None,
+                            preference=None if operation=="forget" else EveningLightingPreference(value=tone))
                         return request,await storage.propose(conn,authority,request)
 
                     async def confirm(pair):
@@ -81,7 +83,8 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     first = await propose("remember",0)
                     assert await storage.propose(conn,authority,first[0]) == first[1]
                     assert (await confirm(first))["revision"]==1
-                    assert (await storage.read(conn,authority))["preference"].value=="warm"
+                    first_snapshot = await storage.read(conn,authority)
+                    assert first_snapshot["preference"].value=="warm"
                     victoria = PreferenceAuthority.model_validate({**authority.model_dump(),
                         "issuer_id":"home-assistant:victoria","site_id":"victoria",
                         "session_commitment":uuid4().hex*2})
@@ -99,7 +102,12 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     assert snapshot["preference"] is None and snapshot["revision"]==3
                     with pytest.raises(ConflictError): await propose("remember",0)
                     assert (await confirm(await propose("remember",3)))["revision"]==4
-                    assert (await storage.read(conn,authority))["preference"].value=="warm"
+                    latest = await storage.read(conn,authority)
+                    assert latest["preference"].value=="warm" and latest["fact_id"]!=first_snapshot["fact_id"]
+                    with pytest.raises(ConflictError):
+                        await storage.propose(conn,authority,PreferenceProposalRequest(
+                            operation_id=uuid4(),operation="correct",expected_revision=4,
+                            expected_fact_id=first_snapshot["fact_id"],preference=EveningLightingPreference(value="cool")))
                     connection.execute(text("UPDATE identity.shared_source_grants SET revoked_at=clock_timestamp() WHERE source_id=:source AND site_id='victoria' AND capability='memory.read'"),{"source":SOURCE})
                     with pytest.raises(ForbiddenError): await storage.read(conn,authority)
                     with pytest.raises(ForbiddenError): await storage.read(conn,victoria)

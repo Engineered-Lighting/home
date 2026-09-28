@@ -49,10 +49,13 @@ class PreferenceProposalRequest(Contract):
     operation_id: UUID
     operation: Literal["remember", "correct", "forget"]
     expected_revision: int = Field(ge=0, lt=9223372036854775807)
+    expected_fact_id: UUID | None = Field(default=None, repr=False)
     preference: EveningLightingPreference | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def shape(self):
+        if (self.expected_revision == 0) != (self.expected_fact_id is None):
+            raise ValueError("existing revisions require their exact fact identity")
         if self.operation != "remember" and self.expected_revision == 0:
             raise ValueError("changes require an existing revision")
         if (self.operation == "forget") != (self.preference is None):
@@ -103,6 +106,7 @@ class PreferenceReview(Contract):
     operation_id: UUID
     operation: Literal["remember", "correct", "forget"]
     expected_revision: int = Field(ge=0)
+    expected_fact_id: UUID | None = Field(default=None, repr=False)
     current: EveningLightingPreference | None = Field(repr=False)
     proposed: EveningLightingPreference | None = Field(repr=False)
     source_site: Site
@@ -156,7 +160,7 @@ class PreferenceReviewCommitment:
                 raise ValueError("invalid retained review expiry")
             deadline = expires_at
         body = dict(version=1, operation_id=request.operation_id, operation=request.operation,
-                    expected_revision=request.expected_revision, current=current,
+                    expected_revision=request.expected_revision, expected_fact_id=request.expected_fact_id, current=current,
                     proposed=request.preference, source_site=authority.site_id,
                     applies_to="both_homes", effect="memory_only", expires_at=deadline)
         payload = {**body, "current": current.model_dump() if current else None,

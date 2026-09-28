@@ -28,9 +28,9 @@ KIND = "personal_preference.v1"
 def restore_preference_record(model, value):
     """Decode our stored JSON fields without relaxing the public contract."""
     fields = {
-        PreferenceProposalRequest: (("operation_id",), ()),
+        PreferenceProposalRequest: (("operation_id","expected_fact_id"), ()),
         PreferenceAuthority: (("principal_id","person_id","link_id"), ("valid_until",)),
-        PreferenceReview: (("operation_id",), ("expires_at",)),
+        PreferenceReview: (("operation_id","expected_fact_id"), ("expires_at",)),
     }
     if model not in fields or type(value) is not dict:
         raise ValueError("invalid retained preference record")
@@ -38,6 +38,7 @@ def restore_preference_record(model, value):
     ids, times = fields[model]
     for key in ids:
         raw = decoded.get(key)
+        if key=="expected_fact_id" and raw is None: continue
         if type(raw) is not str or len(raw)!=36:
             raise ValueError("invalid retained preference identifier")
         parsed = UUID(raw)
@@ -146,7 +147,7 @@ class PersonalMemoryStorage:
                 raise ConflictError("preference provenance unavailable")
         # The caller must revalidate before delivering a response after this
         # transaction ends; the returned snapshot grants no subsequent access.
-        return {"revision": revision, "preference": value,
+        return {"revision": revision, "fact_id":row["fact_id"] if row else None, "preference": value,
                 "confirmed_at": row["committed_at"] if row else None,
                 "source":SOURCE,"source_site":source_site}
 
@@ -169,7 +170,8 @@ class PersonalMemoryStorage:
                 raise ConflictError("preference review expired")
             return review
         row, current, revision = await self._current(connection, authority)
-        if revision != request.expected_revision or revision >= 2147483647:
+        if (revision != request.expected_revision or revision >= 2147483647
+            or request.expected_fact_id != (row["fact_id"] if row else None)):
             raise ConflictError("preference revision changed")
         review = self.signer.prepare(request, authority, current, now=now)
         fact_id = row["fact_id"] if current is not None else uuid7()
@@ -234,7 +236,7 @@ class PersonalMemoryStorage:
         if retained != authority:
             raise ForbiddenError("preference authority changed after review")
         old, current, revision = await self._current(connection, authority)
-        if revision != request.expected_revision:
+        if revision != request.expected_revision or request.expected_fact_id != (old["fact_id"] if old else None):
             raise ConflictError("preference revision changed after review")
         self.signer.verify(request,authority,current,review,confirmation,now=now)
         gesture = (await connection.execute(select(schema.confirmation_artifacts.c.artifact_id).where(

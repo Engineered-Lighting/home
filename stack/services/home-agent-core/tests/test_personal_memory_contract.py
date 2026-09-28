@@ -21,6 +21,7 @@ def fixture(operation="remember", revision=0):
     )
     request = PreferenceProposalRequest(
         operation_id=uuid4(), operation=operation, expected_revision=revision,
+        expected_fact_id=uuid4() if revision else None,
         preference=None if operation == "forget" else EveningLightingPreference(value="warm"),
     )
     current = EveningLightingPreference(value="cool") if revision else None
@@ -145,10 +146,17 @@ def test_debug_representations_do_not_disclose_preference_or_owner():
 
 def test_remembering_after_forgetting_keeps_the_tombstone_revision():
     signer, request, authority, _, _, _ = fixture()
-    request = PreferenceProposalRequest.model_validate({**request.model_dump(), "expected_revision": 3})
+    request = PreferenceProposalRequest.model_validate({**request.model_dump(), "expected_revision": 3, "expected_fact_id":uuid4()})
     review = signer.prepare(request, authority, None, now=NOW)
     confirmation = PreferenceConfirmation(operation_id=request.operation_id, reviewed_digest=review.reviewed_digest)
     assert signer.verify(request, authority, None, review, confirmation, now=NOW) == review
-    stale = PreferenceProposalRequest.model_validate({**request.model_dump(), "expected_revision": 0})
+    stale = PreferenceProposalRequest.model_validate({**request.model_dump(), "expected_revision": 0, "expected_fact_id":None})
     with pytest.raises(ValueError):
         signer.verify(stale, authority, None, review, confirmation, now=NOW)
+
+
+def test_review_cannot_be_applied_to_another_fact_at_the_same_revision():
+    signer,request,authority,current,review,confirmation = fixture("correct",2)
+    replaced = PreferenceProposalRequest.model_validate({**request.model_dump(),"expected_fact_id":uuid4()})
+    with pytest.raises(ValueError):
+        signer.verify(replaced,authority,current,review,confirmation,now=NOW)

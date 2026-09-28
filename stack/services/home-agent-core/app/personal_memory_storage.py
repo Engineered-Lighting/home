@@ -259,6 +259,9 @@ class PersonalMemoryStorage:
         if revision != request.expected_revision or request.expected_fact_id != (old["fact_id"] if old else None):
             raise ConflictError("preference revision changed after review")
         self.signer.verify(request,authority,current,review,confirmation,now=now)
+        # Core mints this immutable receipt in the same serializable transaction.
+        # The API deliberately cannot update confirmation history; no additional
+        # row lock or UPDATE grant is needed to read its own inserted receipt.
         gesture = (await connection.execute(select(schema.confirmation_artifacts.c.artifact_id).where(
             schema.confirmation_artifacts.c.artifact_id==confirmation_artifact_id,
             schema.confirmation_artifacts.c.principal_id==authority.principal_id,
@@ -266,7 +269,7 @@ class PersonalMemoryStorage:
             schema.confirmation_artifacts.c.proposal_digest==review.reviewed_digest,
             schema.confirmation_artifacts.c.consumed_at.is_not(None),
             schema.confirmation_artifacts.c.expires_at>now,
-        ).with_for_update())).scalar_one_or_none()
+        ))).scalar_one_or_none()
         if gesture is None:
             raise ForbiddenError("governed preference confirmation unavailable")
         fact_id = UUID(tx["candidate"]["preference_fact_id"])

@@ -103,6 +103,21 @@ function exactBffRoot(value) {
   }
 }
 
+// Home origins allowed to embed the inline preference review. They must be
+// exact HTTPS origins on a different host from the Agent origin; anything else
+// makes the whole configuration unready rather than silently dropping a value.
+function preferenceHomeOrigins(value, publicOrigin) {
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+  const values = raw.split(/\s+/);
+  if (!publicOrigin || values.length > 4 || new Set(values).size !== values.length) return null;
+  const parsed = values.map(exactHttpsOrigin);
+  // A CSP source list also accepts wildcards, so admit only literal hostnames.
+  if (parsed.some((url) => !url || !/^[a-z0-9.-]+$/.test(url.hostname) ||
+      url.hostname === publicOrigin.hostname)) return null;
+  return parsed.map((url) => url.origin);
+}
+
 function boundedPort(value, fallback) {
   const port = Number(value === undefined || value === "" ? fallback : value);
   return Number.isSafeInteger(port) && port >= 1 && port <= 65_535 ? port : null;
@@ -114,6 +129,7 @@ function configFromEnv(env = process.env) {
   const assetRoot = String(env.HOME_AGENT_WEB_ASSET_ROOT || "").trim();
   const bindHost = String(env.HOME_AGENT_WEB_HOST || "0.0.0.0").trim();
   const port = boundedPort(env.HOME_AGENT_WEB_PORT, 8096);
+  const preferenceFrameAncestors = preferenceHomeOrigins(env.HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS, publicOrigin);
   const assetRootReady = Boolean(
     assetRoot && path.isAbsolute(assetRoot) &&
     [...STATIC_ASSETS.values()].every(([filename]) => {
@@ -126,7 +142,7 @@ function configFromEnv(env = process.env) {
   );
   return Object.freeze({
     ready: Boolean(
-      publicOrigin && bff && assetRootReady && bindHost && port &&
+      publicOrigin && bff && assetRootReady && bindHost && port && preferenceFrameAncestors &&
       !/[\u0000-\u001f\u007f]/.test(bindHost)
     ),
     bindHost,
@@ -135,7 +151,23 @@ function configFromEnv(env = process.env) {
     expectedHost: publicOrigin?.host.toLowerCase() || null,
     bffOrigin: bff?.origin || null,
     assetRoot,
+    preferenceFrameAncestors: Object.freeze([...(preferenceFrameAncestors || [])]),
   });
+}
+
+// The preference review renders inline in the Home chat, so only that page may
+// be framed, and only by the provisioned Home origins. Every other Agent page
+// keeps frame-ancestors 'none' and X-Frame-Options DENY.
+function preferenceReviewHeaders(config) {
+  const { "X-Frame-Options": _denied, ...headers } = STATIC_SECURITY_HEADERS;
+  const ancestors = config.preferenceFrameAncestors.length ? config.preferenceFrameAncestors.join(" ") : "'none'";
+  return {
+    ...headers,
+    "Content-Security-Policy": headers["Content-Security-Policy"].replace("frame-ancestors 'none'", `frame-ancestors ${ancestors}`),
+    // Home and Agent are distinct hosts of one site; the framed document is a
+    // same-site embed. Its scripts and styles stay same-origin only.
+    "Cross-Origin-Resource-Policy": "same-site",
+  };
 }
 
 function singleRawHeader(req, name) {
@@ -217,11 +249,7 @@ function serveStatic(req, res, config, url) {
     return;
   }
   res.writeHead(200, {
-    ...STATIC_SECURITY_HEADERS,
-    // Only this bounded review surface needs its cross-origin Home opener.
-    // The controller authenticates the parent origin, window and nonce and
-    // requires explicit user gestures; the main Agent panel stays isolated.
-    ...(filename === "preference-review.html" ? { "Cross-Origin-Opener-Policy": "unsafe-none" } : {}),
+    ...(filename === "preference-review.html" ? preferenceReviewHeaders(config) : STATIC_SECURITY_HEADERS),
     "Cache-Control": cacheControl,
     "Content-Type": contentType,
     "Content-Length": body.length,

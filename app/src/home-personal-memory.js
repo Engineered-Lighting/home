@@ -2,6 +2,7 @@
   "use strict";
   let active=null;
   const exact=(v,keys)=>v && typeof v==="object" && !Array.isArray(v) && Object.keys(v).sort().join()===[...keys].sort().join();
+  const STATUSES=new Set(["review_pending","confirming","pending","forgotten","cancelled","expired","unavailable","absent","read","saved"]);
   function parse(text) {
     if(typeof text!=="string" || text.length>180) return null;
     const value=text.trim().replace(/[.!?]$/,"").toLowerCase();
@@ -11,6 +12,9 @@
     return match ? {operation:match[1]?.startsWith("actually") ? "correct" : "remember",tone:match[2]} : null;
   }
   function reset() {active?.cancel();active=null;}
+  // The review is an Agent-origin page framed inline in the chat card. Its
+  // session, CSRF token and API calls never reach this page; Home receives only
+  // results bound to this card's nonce, from that exact frame and origin.
   function run(text,options) {
     const intent=parse(text);
     reset();
@@ -27,50 +31,72 @@
       origin=url.origin;
     } catch {emit({kind:"home",text:"The trusted preference review is not configured yet."});return true;}
     const nonce=root.crypto.randomUUID().replace(/-/g,"");
-    let popup=null,timer,deadline,done=false;
+    const frame=root.document.createElement("iframe");
+    frame.src=origin+"/home-agent/preference-review.html#"+nonce;
+    frame.title="Shared preference review";
+    frame.referrerPolicy="no-referrer";
+    frame.setAttribute("allow","");
+    frame.style.cssText="display:block;width:100%;max-width:520px;height:176px;border:0;border-radius:10px;background:#141a18;color-scheme:dark";
+    let timer,deadline,done=false,loads=0,confirming=false;
     const valid=()=>!done && options.isCurrent();
     const dispose=()=>{
       done=true;clearInterval(timer);clearTimeout(deadline);root.removeEventListener("message",receive);
+      frame.remove();
       if(active===handle) active=null;
     };
+    const reply=text=>emit({kind:"home",text});
     const receive=event=>{
       const value=event.data;
-      if(!valid() || event.origin!==origin || event.source!==popup || !value || value.version!==1 ||
-          value.type!=="home.preference.result" || value.nonce!==nonce) return;
+      if(!valid() || event.origin!==origin || event.source!==frame.contentWindow || !value || value.version!==1 || value.nonce!==nonce) return;
+      if(value.type==="home.preference.size") {
+        if(exact(value,["version","type","nonce","height"]) && Number.isInteger(value.height) && value.height>=48 && value.height<=640) frame.style.height=value.height+"px";
+        return;
+      }
       const withTone=["read","saved"].includes(value.status);
-      if(!exact(value,withTone ? ["version","type","nonce","status","tone"] : ["version","type","nonce","status"]) ||
-          withTone && !(value.status==="read" && value.tone===null || ["warm","neutral","cool"].includes(value.tone))) return;
-      const messages={review_pending:"Review this change in the trusted Home preference window. It applies to both homes.",
-        pending:"The preference operation is not yet confirmed. Check its outcome in the review window; do not submit it again.",
-        forgotten:"Your evening lighting preference has been forgotten in both homes.",
-        cancelled:"Preference review cancelled. No confirmation was sent.",
-        expired:"The preference review expired. Make a new request to continue.",
-        unavailable:"Shared preferences are unavailable. Check the trusted review window."};
+      if(value.type!=="home.preference.result" || !STATUSES.has(value.status) ||
+          !exact(value,["version","type","nonce","status",...(withTone ? ["tone"] : [])])) return;
+      if(withTone && !(value.status==="read" && value.tone===null || ["warm","neutral","cool"].includes(value.tone))) return;
+      if(value.status==="review_pending") return;
+      if(value.status==="confirming") {confirming=true;return;}
+      const messages={
+        pending:"The change is not confirmed yet. Use Check outcome in the card; do not ask again.",
+        forgotten:"Forgotten: your evening lighting preference is gone from both homes.",
+        cancelled:"Cancelled. Nothing was changed.",
+        expired:"That review expired before it was confirmed. Nothing was changed; ask again to continue.",
+        absent:"There is no saved evening lighting preference to change. Ask me to remember one first.",
+        unavailable:"Shared preferences are unavailable right now. Nothing was confirmed.",
+      };
       const message=value.status==="read" ? (value.tone ? `You prefer ${value.tone} lighting in the evening. This preference is shared across both homes.` : "No evening lighting preference is saved.") :
-        value.status==="saved" ? `Saved: ${value.tone} lighting in the evening, shared across both homes. Your lights have not been changed.` : messages[value.status];
-      if(!message) return;
-      emit({kind:"home",text:message});
-      if(!["review_pending","pending"].includes(value.status)) dispose();
+        value.status==="saved" ? `Saved: ${value.tone} lighting in the evening, for both homes. Your lights have not been changed.` : messages[value.status];
+      reply(message);
+      // A pending outcome keeps the card so its lookup stays reachable.
+      if(value.status!=="pending") dispose();
     };
-    const open=()=>{
-      if(!valid() || popup && !popup.closed) return;
-      popup=root.open(origin+"/home-agent/preference-review.html#"+nonce,"home_preference_"+nonce,"popup,width=520,height=640");
-      if(!popup) return false;
-      return true;
-    };
-    const handle={cancel(){dispose();try {popup?.close();} catch {}}};
+    frame.addEventListener("load",()=>{
+      // A reloaded or re-attached frame lost its nonce; never re-bind it.
+      if(++loads===1 || done) return;
+      if(valid()) reply(confirming ? "The preference review closed after a confirmation was sent. It may have completed; ask what I prefer to check before trying again." :
+        "The preference review closed. Nothing was confirmed.");
+      dispose();
+    });
+    const handle={cancel(){dispose();}};
     active=handle;root.addEventListener("message",receive);
     timer=setInterval(()=>{
       if(!valid()) {handle.cancel();return;}
-      if(popup?.closed) {dispose();return;}
-      popup?.postMessage({version:1,type:"home.preference.request",nonce,intent},origin);
+      frame.contentWindow?.postMessage({version:1,type:"home.preference.request",nonce,intent},origin);
     },500);
     deadline=setTimeout(()=>{
-      if(valid()) emit({kind:"home",text:"The preference review connection expired. An already-sent confirmation may still have completed; do not assume it was cancelled."});
+      if(valid()) reply(confirming ? "The preference review timed out after a confirmation was sent. It may have completed; ask what I prefer to check." :
+        "The preference review timed out. Nothing was confirmed.");
       dispose();
     },300000);
-    const opened=open();
-    emit({kind:"personal-memory-launch",text:opened ? "Opening your trusted Home preference review…" : "Open the trusted Home preference review to continue.",openReview:open});
+    const intro={read:"Checking your shared preference…",forget:"Review below to forget this preference in both homes.",
+      remember:"Review below to save this preference for both homes.",correct:"Review below to update this preference for both homes."}[intent.operation];
+    emit({kind:"personal-memory-review",text:intro,mountReview(container) {
+      if(done || !container) return ()=>{};
+      if(frame.parentNode!==container) container.appendChild(frame);
+      return ()=>{if(frame.parentNode===container && !done) frame.remove();};
+    }});
     return true;
   }
   root.addEventListener("pagehide",reset);

@@ -66,6 +66,7 @@ These values move to the new origins. The reviewed `network_contract.py` and
 | `home-agent.env` | `HOME_AGENT_OAUTH_REDIRECT_URI` | `https://echo-agent.<tailnet>.ts.net/api/agent/auth/callback` |
 | `home-agent.env` | `HOME_AGENT_VICTORIA_HA_URL` and egress keys | see `../bff-egress/README.md` |
 | `home-agent-origin.env` | `HOME_AGENT_WEB_PUBLIC_ORIGIN` | `https://echo-agent.<tailnet>.ts.net` |
+| `home-agent-origin.env` | `HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS` | `https://home-app.<tailnet>.ts.net` (must equal the BFF `personalMemoryHomeOrigins`; lets only Home frame the inline preference review) |
 | gateway `web-gateway.env` | `HOME_WEB_AGENT_ORIGINS` | `https://echo-agent.<tailnet>.ts.net` |
 
 `HOME_AGENT_NATIVE_PUBLIC_ORIGIN` must not appear in the browser allowed set.

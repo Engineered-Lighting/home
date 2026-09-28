@@ -17,6 +17,7 @@ from network_contract import (
     validate_image_id,
     validate_oauth_contract,
     validate_origin_inspect,
+    validate_preference_home_origins,
 )
 
 STACK = Path(__file__).resolve().parents[2]
@@ -295,6 +296,52 @@ class NetworkContractTests(unittest.TestCase):
                     origin=origin_ip,
                     public_origin=PUBLIC_ORIGIN,
                     image_id=ORIGIN_IMAGE_ID,
+                )
+
+    def test_preference_home_origins_are_exact_and_match_the_running_origin(self):
+        home = "https://home.example.ts.net"
+        self.assertEqual(validate_preference_home_origins({}, PUBLIC_ORIGIN), "")
+        self.assertEqual(
+            validate_preference_home_origins(
+                {"HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS": home}, PUBLIC_ORIGIN
+            ),
+            home,
+        )
+        for value in (
+            "http://home.example.ts.net",
+            f"{home}/",
+            "https://*.example.ts.net",
+            "https://HOME.example.ts.net",
+            "https://home.example.ts.net:443",
+            "https://home-app.example.ts.net",
+            f"{home} {home}",
+            f"{home}  https://other.example.ts.net",
+            "'self'",
+        ):
+            with self.subTest(value=value), self.assertRaises(ContractError):
+                validate_preference_home_origins(
+                    {"HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS": value}, PUBLIC_ORIGIN
+                )
+        origin_ip = ipaddress.ip_address("172.23.0.10")
+        running = origin_shape()
+        running["Config"]["Env"].append(f"HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS={home}")
+        validate_origin_inspect(
+            running,
+            network_name="home-agent_api-net",
+            origin=origin_ip,
+            public_origin=PUBLIC_ORIGIN,
+            image_id=ORIGIN_IMAGE_ID,
+            preference_home_origins=home,
+        )
+        for inspect, expected in ((running, ""), (origin_shape(), home)):
+            with self.subTest(expected=expected), self.assertRaises(ContractError):
+                validate_origin_inspect(
+                    inspect,
+                    network_name="home-agent_api-net",
+                    origin=origin_ip,
+                    public_origin=PUBLIC_ORIGIN,
+                    image_id=ORIGIN_IMAGE_ID,
+                    preference_home_origins=expected,
                 )
 
     def test_running_origin_identity_and_hardening_cannot_drift(self):

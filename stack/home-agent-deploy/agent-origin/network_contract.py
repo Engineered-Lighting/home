@@ -111,6 +111,36 @@ def validate_oauth_contract(base_env: dict[str, str], origin_env: dict[str, str]
     return public_origin
 
 
+def validate_preference_home_origins(origin_env: dict[str, str], public_origin: str) -> str:
+    """Home origins allowed to frame the inline preference review (may be empty)."""
+    raw = origin_env.get("HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS", "")
+    values = raw.split()
+    if raw != " ".join(values) or len(values) > 4 or len(set(values)) != len(values):
+        raise ContractError("preference Home origins must be distinct, single-space separated")
+    agent_host = urlsplit(public_origin).hostname
+    for value in values:
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+        except ValueError as exc:
+            raise ContractError("preference Home origin is invalid") from exc
+        host = parsed.hostname or ""
+        canonical = f"https://{host}" + (f":{port}" if port not in (None, 443) else "")
+        if (
+            parsed.scheme != "https"
+            or re.fullmatch(r"[a-z0-9.-]+", host) is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or value != canonical
+            or host == agent_host
+        ):
+            raise ContractError("preference Home origin must be an exact HTTPS origin on another host")
+    return raw
+
+
 def validate_address_contract(
     subnet_value: str,
     dynamic_value: str,
@@ -425,6 +455,7 @@ def validate_origin_inspect(
     origin: ipaddress.IPv4Address,
     public_origin: str,
     image_id: str,
+    preference_home_origins: str = "",
 ) -> None:
     expected_image_id = validate_image_id(image_id)
     config = inspect.get("Config", {})
@@ -476,6 +507,8 @@ def validate_origin_inspect(
     environment = container_environment(inspect)
     if environment.get("HOME_AGENT_WEB_PUBLIC_ORIGIN") != public_origin:
         raise ContractError("running Agent origin public origin differs from reviewed configuration")
+    if environment.get("HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS", "") != preference_home_origins:
+        raise ContractError("running Agent origin preference Home origins differ from reviewed configuration")
 
 
 def configuration(base_env: dict[str, str], origin_env: dict[str, str]) -> dict[str, str]:
@@ -507,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         origin_env = read_env(args.origin_env)
         values = configuration(base_env, origin_env)
         public_origin = validate_oauth_contract(base_env, origin_env)
+        preference_home_origins = validate_preference_home_origins(origin_env, public_origin)
         bff_image_id = validate_image_id(
             values["bff_image_id"],
             component="BFF",
@@ -555,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
                 origin=origin,
                 public_origin=public_origin,
                 image_id=origin_image_id,
+                preference_home_origins=preference_home_origins,
             )
     except (ContractError, OSError, subprocess.SubprocessError) as exc:
         print(f"home-agent-origin network preflight failed: {exc}", file=sys.stderr)

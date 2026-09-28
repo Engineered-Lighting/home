@@ -7,6 +7,9 @@ COPY --from=agent_assets index.html /srv/home-agent/index.html
 COPY --from=agent_assets api.js /srv/home-agent/api.js
 COPY --from=agent_assets panel.js /srv/home-agent/panel.js
 COPY --from=agent_assets panel.css /srv/home-agent/panel.css
+COPY --from=agent_assets preference-review.html /srv/home-agent/preference-review.html
+COPY --from=agent_assets preference-review.js /srv/home-agent/preference-review.js
+COPY --from=agent_assets preference-review.css /srv/home-agent/preference-review.css
 
 USER node
 EXPOSE 8096

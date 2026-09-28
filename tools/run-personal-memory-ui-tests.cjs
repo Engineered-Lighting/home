@@ -16,7 +16,7 @@ const preference=tone=>({version:1,kind:"personal_preference",key:"lighting.even
   let browser;
   try {
     browser=await chromium.launch({headless:true});
-    for(const mode of ["remember","correct","read","forget","unknown","wrong-origin","cancel-context"]) {
+    for(const mode of ["remember","correct","read","forget","unknown","wrong-origin","cancel-context","clear-review"]) {
       const context=await browser.newContext({viewport:{width:390,height:844}}),calls=[],errors=[];
       let tone=mode==="remember" || mode==="unknown" ? null : "warm",revision=tone?1:0,review;
       context.on("page",page=>page.on("pageerror",error=>errors.push(error.message)));
@@ -65,9 +65,11 @@ const preference=tone=>({version:1,kind:"personal_preference",key:"lighting.even
         if(mode==="wrong-origin") {
           await popup.getByText("Ready for your Home request.").waitFor();await page.waitForTimeout(1100);
           assert.equal(calls.filter(call=>call.operation!=="session").length,0);
-        } else if(mode==="cancel-context") {
+        } else if(mode==="cancel-context" || mode==="clear-review") {
           await popup.getByRole("button",{name:"Confirm and show in Home"}).waitFor();
-          const closed=popup.waitForEvent("close");await page.evaluate(()=>{window.current=false;});await closed;
+          const closed=popup.waitForEvent("close");
+          await page.evaluate(mode=>{if(mode==="clear-review")window.HomePersonalMemory.reset();else window.current=false;},mode);
+          await closed;
           assert.equal(calls.filter(c=>c.operation==="confirm").length,0);
         } else if(mode==="read") {
           await popup.getByRole("button",{name:"Show in Home",exact:true}).waitFor();

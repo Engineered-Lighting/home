@@ -506,8 +506,15 @@ function usePerceptionImageReady(snapshotUrl) {
   return state;
 }
 
-function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = false }) {
+function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = false, imageNoLongerRetained = false }) {
   const [expanded, setExpanded] = React.useState(false);
+  const [narrow, setNarrow] = React.useState(() => window.innerWidth < 700);
+  React.useEffect(() => {
+    const media=window.matchMedia('(max-width: 699px)');
+    const update=()=>setNarrow(media.matches);
+    update();media.addEventListener('change',update);
+    return ()=>media.removeEventListener('change',update);
+  }, []);
   const [lightboxOpen, setLightboxOpen] = React.useState(false);
   const imageState = usePerceptionImageReady(snapshotUrl);
   const showImageUnavailable = imageUnavailable || imageState === "error";
@@ -607,7 +614,7 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
     </div>
   ) : null;
   // Layout: thumbnail (when present) | room label | summary | (right slot)
-  const cols = hasThumb
+  const cols = narrow && expanded ? "minmax(0, 1fr)" : hasThumb
     ? (isAnnotated ? "1fr"
       : expanded ? "minmax(180px, 280px) minmax(60px, 100px) 1fr auto"
                 : "minmax(40px, 56px) minmax(60px, 100px) 1fr auto")
@@ -665,7 +672,7 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
                 fontFamily: HG_MONO,
                 fontSize: 9,
                 letterSpacing: "0.06em",
-              }}>image unavailable</span>
+              }}>{imageNoLongerRetained ? "image no longer retained" : "image unavailable"}</span>
             )}
           </div>
           <button
@@ -770,8 +777,9 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
           fontFamily: HG_MONO,
           fontSize: 9,
           letterSpacing: "0.06em",
-          whiteSpace: "nowrap",
-        }}>{showImageUnavailable ? "image unavailable" : ""}</span>
+          whiteSpace: "normal",
+          gridColumn: narrow ? "1 / -1" : undefined,
+        }}>{showImageUnavailable ? (imageNoLongerRetained ? "image no longer retained" : "image unavailable") : ""}</span>
       </div>
       {lightbox}
     </React.Fragment>
@@ -1021,12 +1029,13 @@ function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecyc
         }
         return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
       case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
+      case "personal-memory-launch": return <div><HomeContent text={e.text} /><button type="button" onClick={() => e.openReview?.()} style={{marginTop:12,padding:"12px 16px",minHeight:44,color:"var(--hg-fg-1)",background:"var(--hg-bg-2)",border:"1px solid var(--hg-border)",borderRadius:8}}>Open preference review</button></div>;
       // Lighting articulation events carry kind "assistant" (emitter contract
       // — run-lighting-events-tests asserts the kind). Render them like home
       // turns; without this case they fell through to null (empty bubbles).
       case "assistant":  return <HomeContent text={e.text} />;
       case "external":   return <ExternalContent text={e.text} streaming={e.streaming} />;
-      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} imageMode={e.imageMode} imageUnavailable={e.imageUnavailable} />;
+      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} imageMode={e.imageMode} imageUnavailable={e.imageUnavailable} imageNoLongerRetained={e.imageNoLongerRetained} />;
       case "proactive":  return <ProactiveContent text={e.text} />;
       case "diag":       return <DiagContent text={e.text} channel={e.channel} />;
       case "system":     return <SystemContent text={e.text} tone={e.tone} />;

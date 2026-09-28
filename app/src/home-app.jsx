@@ -5094,7 +5094,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-  const initialConvId = useMemo(() => loadConversationId(), []);
+  const initialConvId = useMemo(() => {
+    try { return localStorage.getItem('hg-conversation-endpoint') === initialPrefs.endpoint ? loadConversationId() : null; }
+    catch { return null; }
+  }, []);
 
   const [theme, setTheme] = useState(themeOverride || initialPrefs.theme || "dark");
   useEffect(() => { if (themeOverride) setTheme(themeOverride); }, [themeOverride]);
@@ -5933,7 +5936,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       lastPersistRef.current = Date.now();
       saveEvents(
         coalesceAssistantTurnEvents(
-          events.filter((e) => !e.onboarding).map(sanitizeChatEventForStorage),
+          events.filter((e) => !e.onboarding && !e.privateCameraContext).map(sanitizeChatEventForStorage),
         ),
       );
     }, wait);
@@ -5956,7 +5959,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, [events, voice.state]);
 
   /* Persist conversation_id whenever it changes */
-  useEffect(() => { saveConversationId(conversationId); }, [conversationId]);
+  useEffect(() => {
+    if(cameraEndpointRef.current !== endpoint) return;
+    saveConversationId(conversationId);
+    try { localStorage.setItem('hg-conversation-endpoint',endpoint || ''); } catch {}
+  }, [conversationId, endpoint]);
 
   /* Feed grouping + windowing. Grouping is memoized (it used to re-run
    * inline in the JSX on every render), and only the last `feedWindowSize`
@@ -5981,7 +5988,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       : ev;
     setEvents((prev) => {
       if (isRecentDuplicateEvent(prev, corrected)) return prev;
-      const next = [...prev, { id: nextId(), time: fmtTime(), ...corrected }];
+      const retained = window.HomeCameraQuery?.retainImages(prev, corrected) || prev;
+      const next = [...retained, { id: nextId(), time: fmtTime(), ...corrected }];
       // In-memory cap: long sessions otherwise grow without bound.
       // Storage caps separately (200 on save); the live array keeps 600.
       return next.length > 600 ? next.slice(-600) : next;
@@ -7087,7 +7095,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
       if (haEvent.type === "intent-end") {
         const { convId, speech } = extractIntentEnd(haEvent);
-        if (convId) setConversationId(convId);
+        if (convId && cameraEndpointRef.current === endpoint) setConversationId(convId);
         const speechText = normalizeChatEventText(speech || "");
         if (speechText) {
           const activeStreamingId = streamingBubbleId;
@@ -7296,9 +7304,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // Phase 7 destructive guard: the armed clear card was confirmed —
       // perform the wipe that Ctrl+L / /clear used to run instantly.
       stopStreaming();
+      window.HomePersonalMemory?.reset();
+      window.HomeCameraQuery?.reset({privateData:true});
       clearedEventsRef.current = eventsSnapshotRef.current.filter(
         (e) => !(e.kind === "action" && e.service === "home.clear_conversation")
-      );
+      ).map(e => e.privateCameraContext ? {...e,snapshotUrl:undefined,imageUnavailable:true,imageNoLongerRetained:true} : e);
       setEvents([]);
       setConversationId(null);
       // A confirmed clear is a fresh start — reset the persisted flag so
@@ -9190,6 +9200,64 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return true;
   }, [addEvent, connection, endpoint, sim.active, token]);
 
+  const cameraQueryGenerationRef = useRef(0);
+  const [conversationHome, setConversationHome] = useState(() => window.HomeSpatialViewport?.getSelectedSiteId?.() || 'echo');
+  const conversationHomeRef = useRef(conversationHome);
+  const selectConversationHome = useCallback((next) => {
+    if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
+    window.HomePersonalMemory?.reset();
+    conversationHomeRef.current = next;
+    setConversationHome(next);
+    cameraQueryGenerationRef.current++;
+    window.HomeCameraQuery?.reset();
+    window.HomeSpatialViewport?.selectSite?.(next);
+  }, []);
+  const cameraEndpointRef = useRef(endpoint);
+  useEffect(() => {
+    const clear = () => {
+      window.HomePersonalMemory?.reset();
+      cameraQueryGenerationRef.current += 1;
+      window.HomeCameraQuery?.reset({privateData:true});
+      clearedEventsRef.current = null;
+      setEvents(prev => prev.filter(event => !event.privateCameraContext));
+    };
+    clear();
+    if(cameraEndpointRef.current !== endpoint) {
+      cameraEndpointRef.current = endpoint;
+      setConversationId(null);
+    }
+    return clear;
+  }, [connection, endpoint, token]);
+  useEffect(() => {
+    let site=window.HomeSpatialViewport?.getSelectedSiteId();
+    return window.HomeSpatialViewport?.subscribe(() => {
+      const next=window.HomeSpatialViewport?.getSelectedSiteId();
+      if(next===site) return;
+      site=next;
+      if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
+      window.HomePersonalMemory?.reset();
+      conversationHomeRef.current=next;setConversationHome(next);
+      cameraQueryGenerationRef.current++;
+      window.HomeCameraQuery?.reset();
+    });
+  }, []);
+  const clearPrivateCameraContext = useCallback(() => {
+    window.HomePersonalMemory?.reset();
+    cameraQueryGenerationRef.current++;
+    window.HomeCameraQuery?.reset({privateData:true});
+    clearedEventsRef.current=null;
+    setEvents(prev=>prev.filter(e=>!e.privateCameraContext));
+  }, []);
+  useEffect(() => {
+    if(!window.HG_WEB_MODE) return;
+    const check=()=>window.HomeCameraQuery?.validateAuthority(clearPrivateCameraContext);
+    check();
+    const timer=setInterval(check,30000);
+    window.addEventListener('focus',check);
+    window.addEventListener('pagehide',clearPrivateCameraContext);
+    return ()=>{clearInterval(timer);window.removeEventListener('focus',check);window.removeEventListener('pagehide',clearPrivateCameraContext);};
+  }, [clearPrivateCameraContext]);
+
   const runNaturalDeepLook = useCallback(async (text) => {
     const api = window.HomeNaturalLook;
     if (!api || typeof api.runNaturalDeepLook !== "function") return false;
@@ -9203,9 +9271,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       perceptionHints: (window.HomeFrigatePerception?.freshPerceptionHints
         ? window.HomeFrigatePerception.freshPerceptionHints([
             ...frigatePerceptionHintsRef.current,
-            ...events.filter((e) => e.kind === "perception" && e.perception),
+            ...events.filter((e) => !e.privateCameraContext && e.kind === "perception" && e.perception),
           ])
-        : events.filter((e) => e.kind === "perception" && e.perception).map((e) => e.perception)),
+        : events.filter((e) => !e.privateCameraContext && e.kind === "perception" && e.perception).map((e) => e.perception)),
       roomContext,
       sendToHA,
       simActive: sim.active,
@@ -9227,11 +9295,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     }
     lastSubmittedTextRef.current = { text: submitKey, ts: now };
     if (text.startsWith("/")) {
+      window.HomeCameraQuery?.reset();
       setInput("");
       handleCommand(text);
       return;
     }
     setInput("");
+    const cameraQueryClient = haClientRef.current;
+    const cameraQueryGeneration = cameraQueryGenerationRef.current;
+    if (window.HomePersonalMemory?.run(text, {addEvent,
+      isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
+    })) {
+      window.HomeCameraQuery?.reset();
+      return;
+    }
+    if (window.HomeCameraQuery && await window.HomeCameraQuery.run(text, {
+      addEvent, simActive: sim.active,
+      validateAuthority: window.HG_WEB_MODE ? () => window.HomeCameraQuery.validateAuthority(clearPrivateCameraContext) : undefined,
+      onAuthorityLoss: clearPrivateCameraContext,
+      isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
+    })) return;
     if (await answerDirectLightStateQuestion(text)) return;
     if (await runNaturalDeepLook(text)) return;
     // External Reasoning router: classify the text + dispatch externally
@@ -9255,7 +9338,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } else {
       sendToHA(text);
     }
-  }, [input, handleCommand, answerDirectLightStateQuestion, runNaturalDeepLook, sendToHA, dispatchExternal]);
+  }, [input, handleCommand, answerDirectLightStateQuestion, runNaturalDeepLook, sendToHA, dispatchExternal, addEvent, sim.active]);
 
   /* ── Global keyboard shortcuts ─────────────────────────────────────── */
   useEffect(() => {
@@ -9385,7 +9468,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
       if (haEvent.type === "intent-end") {
         const { convId } = extractIntentEnd(haEvent);
-        if (convId) setConversationId(convId);
+        if (convId && cameraEndpointRef.current === endpoint) setConversationId(convId);
         return;
       }
       if (haEvent.type === "tts-end") {
@@ -11169,7 +11252,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       identity={identity}
       media={media}
       cameraLabels={cameraLabels}
-      recentPerceptions={events.filter((e) => e.kind === "perception").slice(-5)}
+      recentPerceptions={events.filter((e) => !e.privateCameraContext && e.kind === "perception").slice(-5)}
       traceSummary={traceSummary}
       lastTrace={lastTrace}
       setTraceSummary={setTraceSummary}
@@ -11731,6 +11814,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       {!isSpatialWide && metricsStrip}
       <VoiceBanner voice={voice} onRetry={toggleMic} />
       </div>
+      )}
+      {window.HG_WEB_MODE && window.HomeCameraQuery && (
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'6px 16px',fontSize:12,color:'var(--hg-fg-2)',flexShrink:0}}>
+          <label htmlFor="conversation-home-view">Home view</label>
+          <select id="conversation-home-view" aria-label="Conversation home view" value={conversationHome}
+            onChange={event=>selectConversationHome(event.target.value)}
+            style={{background:'var(--hg-bg)',color:'var(--hg-fg-1)',border:'1px solid var(--hg-border)',borderRadius:5,padding:'5px 8px',font:'inherit'}}>
+            <option value="echo">Los Angeles</option>
+            <option value="victoria">Victoria</option>
+          </select>
+          <span style={{fontSize:11}}>Name a home for commands</span>
+        </div>
       )}
       <InputRow
         value={input}

@@ -11,6 +11,7 @@ import {
   createAgentOrigin,
   filteredAgentCookies,
   safeRequestTarget,
+  STATIC_ASSETS,
 } from "../src/origin.mjs";
 import {
   hasDefaultIpv4Route,
@@ -20,6 +21,13 @@ import {
 const PUBLIC_ORIGIN = "https://agent.test:8443";
 const PUBLIC_HOST = "agent.test:8443";
 const UUID = "018f6f42-3a8b-7c11-8123-123456789abc";
+
+test("deployable image contains every asset required by origin readiness", () => {
+  const dockerfile=fs.readFileSync(new URL("../Dockerfile",import.meta.url),"utf8");
+  for(const [filename] of STATIC_ASSETS.values()) {
+    assert.ok(dockerfile.split(/\r?\n/).includes(`COPY --from=agent_assets ${filename} /srv/home-agent/${filename}`),filename);
+  }
+});
 
 function makeAssets() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "home-agent-origin-"));
@@ -309,7 +317,7 @@ test("deployment has pinned internal ingress and no host port or egress network"
   assert.doesNotMatch(compose, /^\s+volumes:/m);
   const dockerfile = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
   const assetCopies = dockerfile.match(/^COPY --from=agent_assets .+$/gm) || [];
-  assert.equal(assetCopies.length, 4);
+  assert.equal(assetCopies.length, 7);
   assert.doesNotMatch(dockerfile, /^COPY\s+\.\s/m);
 });
 

@@ -11,3 +11,5 @@ its opener isolation and all pages remain protected against framing.
 Keep Victoria navigation links restricted to authenticated browser setup;
 native rendering rejects the linking card. Update the boundary fixtures for
 the provisioned connection registry and verify popup flows with real origin headers.
+Package all review assets in the deployable origin image and exercise their
+availability in the pinned image smoke check.

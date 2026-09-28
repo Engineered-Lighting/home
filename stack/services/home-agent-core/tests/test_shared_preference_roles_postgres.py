@@ -116,6 +116,8 @@ def test_dedicated_logins_activate_with_exact_kernel_grants_and_return_dormant(t
         try:
             with owner.begin():
                 roles.deactivate(owner.connection)
+            with owner.begin():
+                assert roles.terminate_sessions(owner.connection) == 0
         finally:
             owner.close()
         with admin.connect() as connection:

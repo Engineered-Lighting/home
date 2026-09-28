@@ -48,14 +48,28 @@ async def test_suspension_that_never_clears_still_fails_startup():
 async def test_other_failures_are_not_retried():
     calls = 0
 
+    async def broken():
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("database configuration rejected")
+
+    with pytest.raises(RuntimeError):
+        await admit_at_startup(broken)
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_restore_replay_suspension_is_retried_then_fails():
+    calls = 0
+
     async def restore_pending():
         nonlocal calls
         calls += 1
-        raise RuntimeError("restore replay required")
+        raise OptionalWorkSuspendedError("restore replay required")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(OptionalWorkSuspendedError):
         await admit_at_startup(restore_pending)
-    assert calls == 1
+    assert calls > 1
 
 
 @pytest.mark.asyncio

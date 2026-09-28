@@ -111,9 +111,10 @@ def _function_grantees(connection, signature):
                              {"signature": signature}).scalar_one()
     if oid is None:
         raise ValueError("shared identity kernel function missing")
-    return set(connection.execute(text("""SELECT r.rolname FROM pg_catalog.pg_proc p,
+    # PUBLIC has grantee oid 0 and no pg_roles row; report it explicitly.
+    return set(connection.execute(text("""SELECT COALESCE(r.rolname,'PUBLIC') FROM pg_catalog.pg_proc p,
         LATERAL pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
-        JOIN pg_catalog.pg_roles r ON r.oid=a.grantee
+        LEFT JOIN pg_catalog.pg_roles r ON r.oid=a.grantee
         WHERE p.oid=:oid AND a.grantee<>p.proowner AND a.privilege_type='EXECUTE'"""),
         {"oid": oid}).scalars())
 
@@ -136,6 +137,9 @@ def activate(connection, passwords):
         if not _function_grantees(connection, signature) <= roles:
             raise ValueError("unexpected kernel function grantee")
     database = connection.execute(text("SELECT current_database()")).scalar_one()
+    # The SCRAM verifier is inlined below; keep it out of statement logs.
+    connection.execute(text("SET LOCAL log_statement = 'none'"))
+    connection.execute(text("SET LOCAL log_min_error_statement = 'panic'"))
     for role, (limit, functions) in ROLES.items():
         if functions:
             connection.execute(text(f"GRANT USAGE ON SCHEMA identity TO {role}"))
@@ -166,8 +170,15 @@ def deactivate(connection):
             connection.execute(text(f"REVOKE EXECUTE ON FUNCTION {signature} FROM {role}"))
         if functions:
             connection.execute(text(f"REVOKE USAGE ON SCHEMA identity FROM {role}"))
-    connection.execute(text("""SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity
+
+
+def terminate_sessions(connection):
+    """After deactivation commits, end remaining sessions and wait for exit."""
+    connection.execute(text("""SELECT pg_catalog.pg_terminate_backend(pid, 5000)
+        FROM pg_catalog.pg_stat_activity
         WHERE usename = ANY(:roles) AND pid<>pg_catalog.pg_backend_pid()"""), {"roles": list(ROLES)})
+    return connection.execute(text("SELECT count(*) FROM pg_catalog.pg_stat_activity "
+                                   "WHERE usename = ANY(:roles)"), {"roles": list(ROLES)}).scalar_one()
 
 
 def status(connection):
@@ -220,9 +231,8 @@ def main():
             _require_owner_transaction(connection)
             (activate(connection, passwords) if args.mode == "activate" else deactivate(connection))
         if args.mode == "deactivate":
-            with engine.connect() as connection:
-                remaining = connection.execute(text("SELECT count(*) FROM pg_catalog.pg_stat_activity "
-                    "WHERE usename = ANY(:roles)"), {"roles": list(ROLES)}).scalar_one()
+            with engine.begin() as connection:
+                remaining = terminate_sessions(connection)
             if remaining:
                 raise ValueError("shared role sessions remain after deactivation")
     finally:

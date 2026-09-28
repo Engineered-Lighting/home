@@ -4,9 +4,12 @@ Core proves worker maintenance only with a heartbeat newer than its own startup
 instant (`maintenance_observed_after`), and the worker heartbeats every ten
 seconds. A single admission check made immediately after startup therefore
 almost always reports the worker as unobserved. Retry the unchanged admission
-for a bounded window instead of weakening what it checks. Only suspension is
-retried; any other failure (for example a restore replay error) still fails
-startup immediately.
+for a bounded window instead of weakening what it checks.
+
+Every OptionalWorkSuspendedError is retried within that window, including
+schema, restore-replay and rollout suspensions; a condition that does not clear
+within about 30 seconds still fails startup, and each attempt re-checks
+everything. Any other exception fails startup immediately.
 """
 import asyncio
 

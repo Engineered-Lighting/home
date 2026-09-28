@@ -592,6 +592,15 @@
         },
         {
           "type": "bind",
+          "source": "${HOME_AGENT_VICTORIA_LINK_TLS_DIR:?set root-owned root:1000 0750 browser certificate directory}",
+          "target": "/tls",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
           "source": "${HOME_AGENT_VICTORIA_BFF_ROOT:?set prepared victoria-bff directory}/journals",
           "target": "/journals",
           "read_only": false,

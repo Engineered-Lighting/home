@@ -22,8 +22,11 @@ Other top-level entries in the source root are not covered; the receipt counts
 them. Numeric owners and modes are kept in the archive.
 
 Each SQLite journal under `journals/` (`*.sqlite`, `*.sqlite3`, `*.db`, or any
-file with a SQLite header) is copied with `sqlite3 -readonly <db> ".backup
-<copy>"`. The job waits up to 2 s per attempt and makes five attempts. A live
+file with a SQLite header) is copied with Python's standard-library SQLite
+online-backup API. It opens the source read-only, takes a read transaction
+first, and converts the copy to a single-file rollback-journal database. The LA
+host has no `sqlite3` CLI. The job waits up to 2 s per attempt and makes five
+attempts. A live
 file is never copied raw. Each copy must return `ok` for
 `PRAGMA integrity_check`. Each journal is internally consistent. There is no
 consistency point across journals. A journal with a hot rollback journal fails
@@ -71,7 +74,7 @@ file contents.
 
 ## Install
 
-Prerequisites: `sqlite3`, `openssl` 3.x, `rclone` and `findmnt` in root-owned
+Prerequisites: `python3` (standard library only), `openssl` 3.x, `rclone` and `findmnt` in root-owned
 system paths. Use a dedicated rclone configuration. It can name the same
 approved off-host account, but it keeps its own token so that refreshes never
 race the pgBackRest writer or the ledger replicator.
@@ -166,7 +169,7 @@ sha256sum shared-runtime.tar   # must equal the receipt's archive_sha256
 mkdir restore && tar -xpf shared-runtime.tar --numeric-owner -C restore
 (cd restore && sha256sum -c SHARED-RUNTIME-MANIFEST.sha256)
 for db in $(cd restore && awk '{print $2}' SHARED-RUNTIME-MANIFEST.sha256 | grep '/journals/'); do
-  test "$(sqlite3 "restore/$db" 'PRAGMA integrity_check;')" = ok || echo "FAILED $db"
+  test "$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("PRAGMA integrity_check").fetchone()[0])' "restore/$db")" = ok || echo "FAILED $db"
 done
 ```
 

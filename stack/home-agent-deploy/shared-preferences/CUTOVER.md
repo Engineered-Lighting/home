@@ -15,7 +15,8 @@ restored sessions.
   (`HOME_AGENT_SHARED_ORIGIN_IMAGE`) images.
 - The `echo-agent` and `victoria-agent` tailnet origin nodes are approved, with
   key expiry disabled (`../tailnet-origins/README.md`). The Victoria browser
-  certificate has been exported to `victoria-bff/config/browser-tls/`.
+  certificate has been exported to the root-owned `victoria-link-tls/`
+  directory, which victoria-link mounts read-only at `/tls`.
 - Victoria HA is served at `home-app.<tailnet>.ts.net:10001` and its unauthenticated whoami returns 401.
 - The shared-runtime backup has run once and its restore check passed.
 - The updated egress helper and lifecycle hook are installed with verified digests.
@@ -143,7 +144,10 @@ Then run `sudo tailscale serve --https=8443 off` on the primary node. Never use
 
 ## Rollback
 
-Stop victoria-link and turn off the origin-node Serve handlers. Restore the
+While victoria-link is still running, disable
+`home-agent-victoria-link-egress-verify.timer` and run `firewall_contract.py
+remove --profile victoria-link` (its live check needs the running container).
+Then stop victoria-link and turn off the origin-node Serve handlers. Restore the
 saved env files and the `:8443` handler. Recreate the old Origin `7f38a940…`
 and old BFF `3f5917f…`, putting back the saved session database if the new
 image opened it. Revert the gateway env and shell delta. Private Core services

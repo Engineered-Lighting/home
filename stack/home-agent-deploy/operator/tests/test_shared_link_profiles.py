@@ -40,6 +40,7 @@ def test_profiles_use_distinct_hostnames_and_fixed_private_endpoints():
     assert victoria["browserListener"] == {"address": "172.23.0.36", "port": 9450}
     # The Victoria session DB is named so the runtime backup excludes it.
     assert Path(victoria["sessionDbPath"]).name == "sessions.sqlite"
+    assert victoria["browserTls"]["privateKeyFile"] == "/tls/browser.key"
     # No secret material is ever inlined.
     text = json.dumps([echo, victoria])
     assert "credential\":" not in text.replace("credentialFile", "")
@@ -61,9 +62,9 @@ def _stage(tmp_path: Path):
             (root / name).write_text(value, encoding="utf-8")
     (echo_root / "journals").mkdir()
     (victoria_root / "journals").mkdir()
-    for name in ("browser-tls/browser.crt", "browser-tls/browser.key",
-                 "ingress-tls/server.crt", "ingress-tls/server.key"):
-        path = victoria_root / "config" / name
+    for name in ("tls/browser.crt", "tls/browser.key",
+                 "config/ingress-tls/server.crt", "config/ingress-tls/server.key"):
+        path = victoria_root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("placeholder", encoding="utf-8")
     return echo_root, victoria_root
@@ -74,7 +75,8 @@ def test_generated_profiles_pass_the_actual_bff_loaders(tmp_path):
     echo_root, victoria_root = _stage(tmp_path)
     echo, victoria = generator.build_profiles(
         TAILNET, echo_root=echo_root.as_posix(), victoria_secrets=(victoria_root / "secrets").as_posix(),
-        victoria_config=(victoria_root / "config").as_posix(), victoria_journals=(victoria_root / "journals").as_posix())
+        victoria_config=(victoria_root / "config").as_posix(), victoria_journals=(victoria_root / "journals").as_posix(),
+        victoria_tls=(victoria_root / "tls").as_posix())
     echo_file, victoria_file = tmp_path / "echo.json", tmp_path / "victoria.json"
     echo_file.write_bytes(generator._render(echo))
     victoria_file.write_bytes(generator._render(victoria))

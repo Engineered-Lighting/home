@@ -523,12 +523,26 @@ def _targets_guard(line: str, chain: str = GUARD_CHAIN) -> bool:
     )
 
 
-def _reviewed_leading_jumps(input_rules: list[str]) -> list[str]:
-    """INPUT rules before the first non-guard rule that jump to a reviewed guard."""
+def _reviewed_leading_jumps(input_rules: list[str], contract: Contract) -> list[str]:
+    """The leading INPUT rules that are exact reviewed first-hop guard jumps.
 
+    Only this profile's own exact jump, or another reviewed profile's exact
+    ``-A INPUT -i <other bridge> -j <other chain>`` jump, may precede it.
+    """
+
+    own = guard_rule_spec(contract, contract.tail_ip)[0]
+    others = {profile.chain for profile in PROFILES.values()} - {contract.profile.chain}
     leading: list[str] = []
     for line in input_rules:
-        if not any(_targets_guard(line, profile.chain) for profile in PROFILES.values()):
+        tokens = line.split()
+        other = (
+            len(tokens) == 6
+            and tokens[:3] == ["-A", "INPUT", "-i"]
+            and tokens[4] == "-j"
+            and tokens[3] != contract.bridge
+            and tokens[5] in others
+        )
+        if line != own and not other:
             break
         leading.append(line)
     return leading
@@ -555,7 +569,7 @@ def validate_guard_rules(
     ]
     # Each reviewed bridge has its own first-hop jump. Only another reviewed
     # profile's guard jump (which matches a different bridge) may precede it.
-    if references != [jump] or jump not in _reviewed_leading_jumps(input_rules):
+    if references != [jump] or jump not in _reviewed_leading_jumps(input_rules, contract):
         raise ContractError("BFF OAuth guard is not the sole first INPUT jump")
     if guard_lines != expected_guard_lines(contract, tail_ip):
         raise ContractError("BFF OAuth guard chain differs from exact allow/drop policy")
@@ -687,7 +701,7 @@ def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
         )
     elif references == [jump]:
         input_rules = [line for line in input_lines if line.startswith("-A INPUT ")]
-        if jump not in _reviewed_leading_jumps(input_rules):
+        if jump not in _reviewed_leading_jumps(input_rules, contract):
             _delete_guard_jump(contract)
             _run(
                 ["iptables", "-I", "INPUT", "1", "-i", contract.bridge, "-j", chain],

@@ -34,7 +34,7 @@ VICTORIA_SECRETS = ("commitment_key", "journal_key", "session_encryption_key", "
 
 
 def build_profiles(tailnet, *, echo_root="/link", victoria_secrets="/run/secrets",
-                   victoria_config="/config", victoria_journals="/journals"):
+                   victoria_config="/config", victoria_journals="/journals", victoria_tls="/tls"):
     if not re.fullmatch(r"[a-z0-9-]+\.ts\.net", tailnet):
         raise ValueError("tailnet domain rejected")
     home = f"https://home-app.{tailnet}"
@@ -84,8 +84,10 @@ def build_profiles(tailnet, *, echo_root="/link", victoria_secrets="/run/secrets
         "proofIngress": {"endpoint": core("victoria-identity", identity + "auth-proofs"),
                          "credentialFile": f"{victoria_secrets}/proof_credential"},
         "handoffCredentialFile": f"{victoria_secrets}/handoff_credential",
-        "browserTls": {"certificateFile": f"{victoria_config}/browser-tls/browser.crt",
-                       "privateKeyFile": f"{victoria_config}/browser-tls/browser.key"},
+        # Exported by the victoria-agent tailnet node into a root-owned
+        # directory, mounted read-only (see ../tailnet-origins/README.md).
+        "browserTls": {"certificateFile": f"{victoria_tls}/browser.crt",
+                       "privateKeyFile": f"{victoria_tls}/browser.key"},
         "ingressTls": {"certificateFile": f"{victoria_config}/ingress-tls/server.crt",
                        "privateKeyFile": f"{victoria_config}/ingress-tls/server.key"},
         "browserListener": {"address": VICTORIA_LINK_IP, "port": BROWSER_PORT},
@@ -124,9 +126,8 @@ def issue_ingress_certificate(root: Path, uid: int, days: int = 90) -> str:
     if (target / "server.crt").exists():
         return "unchanged"
     authority = root / "authority"
-    target.mkdir(mode=0o700)
-    os.chown(target, uid, uid)
-    with tempfile.TemporaryDirectory() as work:
+    # Stage key material on the prepared root's encrypted volume, never /tmp.
+    with tempfile.TemporaryDirectory(dir=root / "authority") as work:
         work = Path(work)
         (work / "ext.cnf").write_text(
             f"subjectAltName=IP:{VICTORIA_LINK_IP}\nextendedKeyUsage=serverAuth\n"
@@ -141,6 +142,10 @@ def issue_ingress_certificate(root: Path, uid: int, days: int = 90) -> str:
                        check=True, capture_output=True)
         subprocess.run(["openssl", "verify", "-CAfile", str(authority / "ca.crt"), str(work / "server.crt")],
                        check=True, capture_output=True)
+        # Create the target only once issuance succeeded, so a failed run can
+        # simply be retried.
+        target.mkdir(mode=0o700, exist_ok=True)
+        os.chown(target, uid, uid)
         for name, mode in (("server.key", 0o400), ("server.crt", 0o444)):
             _write_once(target / name, (work / name).read_bytes(), uid)
             os.chmod(target / name, mode)

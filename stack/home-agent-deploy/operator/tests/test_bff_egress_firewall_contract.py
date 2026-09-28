@@ -496,6 +496,18 @@ class VictoriaLinkEgressTests(unittest.TestCase):
                 ["-P INPUT DROP", bff_jump, "-A INPUT -i ha-vlink-egr0 -j ACCEPT", v_jump],
                 v_chain, self.contract, self.tail_ip)
 
+    def test_only_exact_other_profile_jumps_may_lead(self) -> None:
+        bff = contract_from_env(env())
+        bff_jump, established, bff_allow, bff_deny = guard_rule_spec(bff, self.tail_ip)
+        bff_chain = ["-N HOME_AGENT_BFF_INPUT", established, bff_allow, bff_deny]
+        for loose in (
+            "-A INPUT -j HOME_AGENT_VLINK_INPUT",                      # no bridge match
+            "-A INPUT -i ha-bff-egress0 -j HOME_AGENT_VLINK_INPUT",    # the BFF's own bridge
+            "-A INPUT -i ha-vlink-egr0 -p tcp -j HOME_AGENT_VLINK_INPUT",
+        ):
+            with self.subTest(loose=loose), self.assertRaises(ContractError):
+                validate_guard_rules(["-P INPUT DROP", loose, bff_jump], bff_chain, bff, self.tail_ip)
+
     def test_restoration_does_not_reorder_an_already_leading_guard(self) -> None:
         bff = contract_from_env(env())
         bff_jump = guard_rule_spec(bff, self.tail_ip)[0]

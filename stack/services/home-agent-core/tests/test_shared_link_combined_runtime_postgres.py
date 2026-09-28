@@ -101,6 +101,40 @@ def new_request(base):
 
 def test_shared_link_combined_issuer_chain_exact_replay_and_generation_fence(database):
     engine, base, lookup_enabled, proof_lookup_enabled, session_kernel_enabled = database
+    # Pending-ceremony checks must precede confirmation: logout does not unlink.
+    if proof_lookup_enabled:
+        pending = new_request(base)
+        pending_issuance = invoke(engine,COORDINATOR,BEGIN,pending)
+        with engine.connect() as conn: stamp = conn.execute(text("SELECT clock_timestamp()")).scalar_one()
+        pending_proof = dict(proof_id=uuid.uuid4(),subject=pending["echo_subject"],
+            session_commitment=pending["echo_session_commitment"],challenge_commitment=pending["echo_challenge_commitment"],
+            authenticated_at=stamp,registration_revision=pending_issuance["echo_registration_revision"])
+        pending_receipt = invoke(engine,ECHO,SharedLinkProofDatabase._statement,pending_proof)
+        assert invoke(engine,ECHO,PROOF_INSPECT,pending_proof,optional=True) == pending_receipt
+        with engine.begin() as conn:
+            conn.execute(REVOKE,{"issuer":"home-assistant:victoria","session":pending["victoria_session_commitment"],"id":uuid.uuid4()}).one()
+        # Sibling revocation cancels the pending ceremony; the fresh proof stays
+        # stored, but cannot be recovered as authority for a cancelled operation.
+        assert invoke(engine,ECHO,PROOF_INSPECT,pending_proof,optional=True) is None
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT consumed_at FROM identity.shared_auth_proofs WHERE proof_id=:proof_id"),pending_proof).scalar_one() is None
+
+    if session_kernel_enabled:
+        pending = new_request(base)
+        invoke(engine,COORDINATOR,BEGIN,pending)
+        revoke = {"session":pending["victoria_session_commitment"],"id":uuid.uuid4()}
+        invoke(engine,SESSION_ECHO,SESSION_REVOKE,revoke)
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT state FROM identity.shared_link_ceremonies WHERE ceremony_id=:ceremony_id"),pending).scalar_one()=="pending"
+        victoria_request = {**revoke,"id":uuid.uuid4()}
+        result = invoke(engine,SESSION_VICTORIA,SESSION_REVOKE,victoria_request)
+        assert result["issuer_id"] == "home-assistant:victoria"
+        assert invoke(engine,SESSION_VICTORIA,SESSION_REVOKE,victoria_request) == result
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT state,revision,ended_at FROM identity.shared_link_ceremonies WHERE ceremony_id=:ceremony_id"),pending).mappings().one()
+            assert row["state"]=="cancelled" and row["revision"]==2 and row["ended_at"]==result["revoked_at"]
+            assert conn.execute(text("SELECT count(*) FROM identity.shared_source_grants")).scalar_one()==0
+
     params = new_request(base)
     anchor = invoke(engine, COORDINATOR, LOOKUP, {"subject": params["echo_subject"]})
     assert anchor == {k: params[k] for k in ("principal_id", "person_id", "legacy_binding_id")}
@@ -180,21 +214,6 @@ def test_shared_link_combined_issuer_chain_exact_replay_and_generation_fence(dat
             invoke(engine, VICTORIA, PROOF_INSPECT, submissions[1][1], optional=True)
         assert error.value.orig.sqlstate == "42501"
 
-        pending = new_request(base)
-        pending_issuance = invoke(engine,COORDINATOR,BEGIN,pending)
-        with engine.connect() as conn: stamp = conn.execute(text("SELECT clock_timestamp()")).scalar_one()
-        pending_proof = dict(proof_id=uuid.uuid4(),subject=pending["echo_subject"],
-            session_commitment=pending["echo_session_commitment"],challenge_commitment=pending["echo_challenge_commitment"],
-            authenticated_at=stamp,registration_revision=pending_issuance["echo_registration_revision"])
-        pending_receipt = invoke(engine,ECHO,SharedLinkProofDatabase._statement,pending_proof)
-        assert invoke(engine,ECHO,PROOF_INSPECT,pending_proof,optional=True) == pending_receipt
-        with engine.begin() as conn:
-            conn.execute(REVOKE,{"issuer":"home-assistant:victoria","session":pending["victoria_session_commitment"],"id":uuid.uuid4()}).one()
-        # Sibling revocation cancels the pending ceremony; the fresh proof stays
-        # stored, but cannot be recovered as authority for a cancelled operation.
-        assert invoke(engine,ECHO,PROOF_INSPECT,pending_proof,optional=True) is None
-        with engine.connect() as conn:
-            assert conn.execute(text("SELECT consumed_at FROM identity.shared_auth_proofs WHERE proof_id=:proof_id"),pending_proof).scalar_one() is None
 
 def test_shared_link_bound_session_revocation_is_monotonic_and_issuer_scoped(database):
     engine,base,_,_,enabled = database
@@ -240,21 +259,14 @@ def test_shared_link_bound_session_revocation_is_monotonic_and_issuer_scoped(dat
         assert another["issuer_id"]=="home-assistant:echo"
     finally:
         with engine.begin() as conn: conn.execute(text("UPDATE identity.shared_issuers SET state='active' WHERE issuer_id='home-assistant:echo'"))
-    pending=new_request(base)
-    invoke(engine,COORDINATOR,BEGIN,pending)
-    revoke={"session":pending["victoria_session_commitment"],"id":uuid.uuid4()}
-    # Same bytes under the wrong issuer never cancel this Victoria session.
-    echo_result=invoke(engine,SESSION_ECHO,SESSION_REVOKE,revoke)
-    assert echo_result["issuer_id"]=="home-assistant:echo"
+    # A confirmed owner cannot start another linking ceremony merely by logging
+    # out. Exercise the session boundary against the existing confirmed link.
+    with pytest.raises(DBAPIError) as error:
+        invoke(engine,COORDINATOR,BEGIN,new_request(base))
+    assert error.value.orig.sqlstate == "23505"
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT state FROM identity.shared_link_ceremonies WHERE ceremony_id=:ceremony_id"),pending).scalar_one()=="pending"
-    victoria_request={**revoke,"id":uuid.uuid4()}
-    victoria_result=invoke(engine,SESSION_VICTORIA,SESSION_REVOKE,victoria_request)
-    assert victoria_result["issuer_id"]=="home-assistant:victoria"
-    assert invoke(engine,SESSION_VICTORIA,SESSION_REVOKE,victoria_request)==victoria_result
+        session = conn.execute(text("SELECT initiating_session_commitment FROM identity.shared_link_ceremonies WHERE state='consumed'")).scalar_one()
+    request = {"session": session, "id": uuid.uuid4()}
+    invoke(engine,SESSION_ECHO,SESSION_REVOKE,request)
     with engine.connect() as conn:
-        row=conn.execute(text("SELECT state,revision,ended_at FROM identity.shared_link_ceremonies WHERE ceremony_id=:ceremony_id"),pending).mappings().one()
-        assert row["state"]=="cancelled" and row["revision"]==2 and row["ended_at"]==victoria_result["revoked_at"]
-        assert conn.execute(text("SELECT count(*) FROM identity.shared_source_grants")).scalar_one()==0
-        # The existing confirmed link is not unlinked by a session logout.
         assert conn.execute(text("SELECT count(*) FROM identity.shared_owner_links WHERE revoked_at IS NULL")).scalar_one()==live_links_before

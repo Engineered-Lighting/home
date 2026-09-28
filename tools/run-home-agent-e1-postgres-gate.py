@@ -4239,6 +4239,7 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
                     + (["tests/test_personal_preference_authority_postgres.py", "tests/test_personal_memory_storage_postgres.py", "tests/test_personal_memory_grants_postgres.py", "tests/test_personal_memory_authority_resolution.py", "tests/test_personal_memory_runtime.py", "tests/test_personal_memory_server.py",
                         "tests/test_personal_memory_consent.py", "tests/test_personal_memory_consent_journal.py",
                         "tests/test_personal_memory_consent_service.py", "tests/test_personal_memory_consent_api.py",
+                        "tests/test_personal_memory_registration.py",
                         "tests/test_shared_identity_site_runtime.py", "tests/test_shared_identity_site_server.py",
                         "tests/test_shared_link_coordinator_runtime.py", "tests/test_shared_link_coordinator_server.py"] if preference_authority else []),
                 url_environment={url_env: clone,

@@ -11,6 +11,7 @@ from sqlalchemy.exc import DBAPIError
 from app.personal_memory_consent import SharingConfirmation, SharingReviewCommitment
 from app.personal_memory_grants import PreferenceGrantStorage, ROLE
 from app.personal_memory_grant_permissions import install_dormant_role
+from app.personal_memory_registration import register_sources
 from .e1_postgres_harness import assert_guarded_database_url
 
 
@@ -27,14 +28,12 @@ def test_consent_role_writes_only_reviewed_preference_grants():
                 assert connection.execute(text("SELECT current_database()")).scalar_one() == "personal_preference_authority_0047"
                 connection.execute(text("SET LOCAL SESSION AUTHORIZATION home_agent_owner"))
                 install_dormant_role(connection)
+                register_sources(connection)
+                register_sources(connection)
                 connection.execute(text("RESET SESSION AUTHORIZATION"))
                 assert connection.execute(text("SELECT rolcanlogin FROM pg_roles WHERE rolname=:role"), {"role": ROLE}).scalar_one() is False
                 link = connection.execute(text("SELECT * FROM identity.shared_owner_links WHERE revoked_at IS NULL")).mappings().one()
                 subject = connection.execute(text("SELECT subject FROM identity.shared_subject_bindings WHERE link_id=:link AND issuer_id='home-assistant:echo' AND revoked_at IS NULL"), {"link": link["link_id"]}).scalar_one()
-                for site in ("echo", "victoria"):
-                    for capability in ("memory.read", "personal_memory.write"):
-                        connection.execute(text("INSERT INTO identity.shared_sources VALUES(:site,'core.personal-preferences.v1',:capability,:issuer,1,'active')"),
-                            {"site": site, "capability": capability, "issuer": "home-assistant:"+site})
 
                 class Adapter:
                     async def execute(self, statement, parameters=None):

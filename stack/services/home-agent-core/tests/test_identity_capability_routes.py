@@ -21,8 +21,9 @@ from app.parent_relationship_adapter import AuthenticatedParentRelationshipAdapt
 
 BINDING = "0017_authenticated_binding_e5c"
 PARENTS = ("0021_parent_status_e5h", "0027_owner_person_e5n", "0028_owner_partner_access_e5o",
-           "0029_owner_person_role_e5p", "0030_relationship_vocabulary_e5q", "0031_relationship_uniqueness_e5r")
-OWNERS = PARENTS[-2:]
+           "0029_owner_person_role_e5p", "0030_relationship_vocabulary_e5q", "0031_relationship_uniqueness_e5r",
+           "0047_personal_pref_authority_v1")
+OWNERS = PARENTS[-3:]
 UUID7 = "01900000-0000-7000-8000-000000000001"
 UUID4 = "01900000-0000-4000-8000-000000000002"
 TOKEN = "capability-route-fixture-token-at-least32chars"

@@ -23,6 +23,7 @@ from app.personal_memory_contract import (
 from app.personal_memory_storage import KIND, PersonalMemoryStorage
 from app.personal_memory_service import PersonalMemoryService
 from app.store import CoreStore
+from app.personal_memory_permissions import apply_permissions
 from .e1_postgres_harness import assert_guarded_database_url
 
 
@@ -37,8 +38,25 @@ def test_preference_storage_correction_forgetting_and_relearning():
             transaction = connection.begin()
             try:
                 assert connection.execute(text("SELECT current_database()")).scalar_one()=="personal_preference_authority_0047"
-                connection.execute(text("GRANT EXECUTE ON FUNCTION identity.resolve_personal_preference_authority_v1(text,text,text,boolean) TO home_agent_api"))
-                connection.execute(text("GRANT INSERT (link_id,parent_artifact_id,child_artifact_id,relation) ON ingest.artifact_links TO home_agent_api"))
+                # Run the actual bounded activation as the migration owner,
+                # not an administrator-only GRANT sequence unavailable live.
+                connection.execute(text("SET LOCAL SESSION AUTHORIZATION home_agent_owner"))
+                guard_probe=connection.begin_nested()
+                try:
+                    connection.execute(text("ALTER TABLE ingest.artifact_links DISABLE TRIGGER personal_preference_lineage_guard"))
+                    with pytest.raises(ValueError,match="lineage guard unavailable"):
+                        apply_permissions(connection,enabled=True)
+                finally:
+                    guard_probe.rollback()
+                apply_permissions(connection,enabled=True)
+                apply_permissions(connection,enabled=True)
+                apply_permissions(connection,enabled=False)
+                assert not connection.execute(text("SELECT has_function_privilege('home_agent_api',"
+                    "'identity.resolve_personal_preference_authority_v1(text,text,text,boolean)','EXECUTE')")).scalar_one()
+                assert not connection.execute(text("SELECT has_column_privilege('home_agent_api',"
+                    "'ingest.artifact_links','link_id','INSERT')")).scalar_one()
+                apply_permissions(connection,enabled=True)
+                connection.execute(text("RESET SESSION AUTHORIZATION"))
                 link = connection.execute(text("SELECT * FROM identity.shared_owner_links")).mappings().one()
                 now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
                 for site in ("echo","victoria"):

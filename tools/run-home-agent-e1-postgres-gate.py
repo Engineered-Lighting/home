@@ -4224,9 +4224,12 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
                     nodes=[
                         "tests/test_phase3_owner_person_kernel_e5n_runtime_postgres.py::test_e5n_creates_the_person_the_attestation_and_nothing_else",
                         "tests/test_phase3_owner_partner_kernel_e5k_runtime_postgres.py::test_e5k_commits_a_symmetric_owner_attested_partnership",
+                        "tests/test_phase3_parent_relationship_status_e5h_runtime_postgres.py::test_e5h_recovers_committed_parent_authority_table_blind",
                     ],
-                    url_environment={E5N_OWNER_DATABASE_ENV: clone},
+                    url_environment={E5N_OWNER_DATABASE_ENV: clone,E5H_OWNER_DATABASE_ENV: clone},
                     credential_url_environment={E5N_COMMITTER_DATABASE_ENV: (
+                        clone, "home_agent_binding_committer", "postgres_binding_committer_password"),
+                        E5H_COMMITTER_DATABASE_ENV: (
                         clone, "home_agent_binding_committer", "postgres_binding_committer_password")},
                     environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
                                  ALLOWLIST_ENV: f"{BASE_DATABASE},{clone}"}, fail_fast=True)

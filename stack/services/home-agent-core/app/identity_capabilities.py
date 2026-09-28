@@ -3,8 +3,13 @@
 This is capability compatibility, not deployment authorization. Startup still
 requires the exact configured database revision; restore, rollout, credentials,
 current-authority and database-kernel checks remain independent gates. A new
-migration is denied until its function contracts AND replayed role grants have
-been reviewed. Never infer compatibility from lexical/numeric revision ordering.
+migration is denied until its function contracts and preserved or replayed role
+grants have been reviewed. Never infer compatibility from revision ordering.
+
+0047 preserves these legacy functions and grants when migrating from the
+commissioned 0031 database. The hosted clone validates existing person and
+relationship writes there. The legacy generic grants replay script is not a
+0047 provisioning path; shared preference activation is separate.
 """
 from types import MappingProxyType
 from typing import Literal
@@ -33,6 +38,7 @@ _REVIEWED_REVISIONS = MappingProxyType({
         "0029_owner_person_role_e5p",
         "0030_relationship_vocabulary_e5q",
         "0031_relationship_uniqueness_e5r",
+        "0047_personal_pref_authority_v1",
     }),
     # These current adapters require the repaired dedicated roles and the
     # seven-predicate contract. 0031 changes uniqueness indexes only. Earlier
@@ -40,10 +46,12 @@ _REVIEWED_REVISIONS = MappingProxyType({
     "owner_person_creation": frozenset({
         "0030_relationship_vocabulary_e5q",
         "0031_relationship_uniqueness_e5r",
+        "0047_personal_pref_authority_v1",
     }),
     "owner_relationship_attestation": frozenset({
         "0030_relationship_vocabulary_e5q",
         "0031_relationship_uniqueness_e5r",
+        "0047_personal_pref_authority_v1",
     }),
 })
 

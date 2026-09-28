@@ -395,6 +395,9 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
     assert invocation["url_environment"][runner.E5N_OWNER_DATABASE_ENV if stage == "preference_authority" else url_env] == clone_name
     if stage == "preference_authority":
         assert invocation["credential_url_environment"][runner.E5N_COMMITTER_DATABASE_ENV] == (clone_name,"home_agent_binding_committer","postgres_binding_committer_password")
+        assert invocation["url_environment"][runner.E5H_OWNER_DATABASE_ENV] == clone_name
+        assert invocation["credential_url_environment"][runner.E5H_COMMITTER_DATABASE_ENV] == (clone_name,"home_agent_binding_committer","postgres_binding_committer_password")
+        assert any("test_e5h_recovers_committed_parent_authority_table_blind" in node for node in invocation["nodes"])
     assert invocation["environment"][runner.ALLOWLIST_ENV] == f"{runner.BASE_DATABASE},{clone_name}"
     cleanup = [(i, kw) for i, (name, _, kw) in enumerate(calls) if name == "_psql"]
     assert len(cleanup) == 1 and calls[cleanup[0][0]-1][0] == "_verify_cluster_guard"

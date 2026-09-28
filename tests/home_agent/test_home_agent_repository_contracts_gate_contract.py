@@ -20,11 +20,13 @@ SUITES = (
     "tests/home_agent/test_compose_tmpfs_quoting_e5p.py",
     "tests/home_agent/test_ha_host_module_deployment.py",
     "tests/home_agent/test_home_agent_repository_contracts_gate_contract.py",
+    "tests/home_agent/test_identity_finalizer_foundation_deployment_contract.py",
     "tests/home_agent/test_identity_migration_role_deployment_contract.py",
     "tests/home_agent/test_kernel_call_bindings_match.py",
     "tests/home_agent/test_legacy_identity_fence.py",
     "tests/home_agent/test_legacy_people_api_boundary.py",
     "tests/home_agent/test_local_pgbackrest_repository_contract.py",
+    "tests/home_agent/test_native_attestation_deployment_contract.py",
     "tests/home_agent/test_phase3_activation_probe_e5ac.py",
     "tests/home_agent/test_phase3_catalog_contract_acl_order_e5o.py",
     "tests/home_agent/test_phase3_frozen_migration_ddl_e5n.py",
@@ -45,14 +47,19 @@ READ_PATHS = (
     "stack/home-agent-deploy/**",
     "stack/services/home-agent-core/README.md",
     "stack/services/home-agent-core/alembic/versions/**",
+    "stack/services/home-agent-core/app/api.py",
+    "stack/services/home-agent-core/app/auth.py",
     "stack/services/home-agent-core/app/config.py",
     "stack/services/home-agent-core/app/db.py",
+    "stack/services/home-agent-core/app/main.py",
     "stack/services/home-agent-core/app/phase3_activation_probe.py",
+    "stack/services/home-agent-core/app/store.py",
     "stack/services/home-agent-core/docker-entrypoint.sh",
     "tests/home_agent/requirements-contracts.lock",
     "tests/home_agent/requirements-contracts.txt",
     "tools/release/release-lib.mjs",
     "tools/run-home-agent-e1-postgres-gate.py",
+    "web-gateway/server.mjs",
 )
 
 
@@ -116,9 +123,17 @@ class HomeAgentRepositoryContractsGateContractTests(unittest.TestCase):
                 self.assertEqual(version, core[name], name)
 
     def test_every_home_agent_suite_runs_in_some_workflow(self) -> None:
-        referenced = E1_RUNNER.read_text(encoding="utf-8")
+        # A name in a `paths:` trigger or in the E1 build-context list only
+        # decides when a gate runs or what it can read, not what it executes.
+        runner = E1_RUNNER.read_text(encoding="utf-8")
+        context = runner.index("BUILD_CONTEXT_FILES = (")
+        referenced = runner[:context] + runner[runner.index("\n)\n", context) :]
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
-            referenced += workflow.read_text(encoding="utf-8")
+            referenced += "\n".join(
+                line
+                for line in workflow.read_text(encoding="utf-8").splitlines()
+                if not re.match(r'\s+- "[^"]+"$', line)
+            )
         orphans = [
             path.name
             for path in sorted((ROOT / "tests/home_agent").glob("test_*.py"))

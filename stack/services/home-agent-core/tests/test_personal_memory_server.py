@@ -11,6 +11,36 @@ from .test_personal_memory_runtime import fixture as core_fixture
 from app.errors import OptionalWorkSuspendedError
 
 
+@pytest.mark.parametrize("module_name", ["personal_memory_server", "shared_identity_site_server", "shared_link_coordinator_server"])
+def test_private_entrypoints_bound_real_core_pool(tmp_path, monkeypatch, module_name):
+    import base64
+    import importlib
+    import uvicorn
+    from app import config
+    module = importlib.import_module("app." + module_name)
+    original_settings = config.Settings
+    captured = []
+    def settings(**kwargs):
+        return original_settings(database_url="postgresql+psycopg://home_agent_api:fixture@localhost/home_agent",
+            policy_digest="a"*64, service_token="b"*64,
+            knowledge_encryption_key=base64.urlsafe_b64encode(b"k"*32).decode(),
+            role="api", rollout_mode="shadow", **kwargs)
+    monkeypatch.setattr(config, "Settings", settings)
+    from types import SimpleNamespace
+    provisioned = SimpleNamespace(address="127.0.0.1", port=9448, certificate="unused", private_key="unused")
+    monkeypatch.setattr(module, "load_profile", lambda _: provisioned)
+    def listener(core, profile):
+        captured.append(core)
+        return core
+    monkeypatch.setattr(module, "build_listener", listener)
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+    module.main()
+    pool = captured[0].state.database.engine.pool
+    assert pool.size() == 2
+    assert pool._max_overflow == 0
+    assert captured[0].state.operator_database is None
+
+
 def profile(tmp_path, **patch):
     for name, data in (("credential",b"a"*64),("review",b"b"*64),
                        ("cert",b"fixture certificate"),("key",b"fixture TLS key")):

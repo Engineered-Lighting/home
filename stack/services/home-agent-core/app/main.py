@@ -164,7 +164,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         level=getattr(logging, settings.log_level),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    database = Database(settings.async_database_url())
+    database = Database(settings.async_database_url(),
+                        pool_size=settings.database_pool_size,
+                        max_overflow=settings.database_max_overflow)
     operator_database = (
         Database(settings.async_operator_database_url())
         if settings.operator_database_url is not None

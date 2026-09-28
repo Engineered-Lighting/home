@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     role: Literal["api", "ingest", "worker", "restore", "rollout", "all"] = "api"
     port: int = Field(default=8104, ge=1, le=65535)
     database_url: SecretStr
+    database_pool_size: int = Field(default=5, ge=1, le=5, strict=True)
+    database_max_overflow: int = Field(default=5, ge=0, le=5, strict=True)
     operator_database_url: SecretStr | None = None
     binding_commit_database_url: SecretStr | None = None
     runtime_spool_path: Path = Path("/runtime/runtime.sqlite")

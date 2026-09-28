@@ -436,12 +436,12 @@ class ParentRelationshipAuthorityDatabase:
 
 
 class Database:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, pool_size: int = 5, max_overflow: int = 5) -> None:
         self.engine: AsyncEngine = create_async_engine(
             url,
             pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=5,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
             pool_recycle=1800,
         )
 

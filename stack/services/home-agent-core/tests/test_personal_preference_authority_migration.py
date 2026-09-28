@@ -51,7 +51,13 @@ def test_new_function_is_dormant_and_cannot_write_identity(monkeypatch):
         assert flag in role
     assert not any(s.startswith(("GRANT INSERT", "GRANT DELETE")) for s in statements)
     assert not any(s.startswith("GRANT EXECUTE") and module.FUNCTION in s for s in statements)
-    assert not any("FOR UPDATE TO" in s or "FOR INSERT TO" in s for s in statements)
+    assert not any("FOR INSERT TO" in s for s in statements)
+    locks = [s for s in statements if "FOR UPDATE TO" in s]
+    assert len(locks) == len(module.LOCK_COLUMNS)
+    assert all("WITH CHECK (false)" in s for s in locks)
+    boundaries = [s for s in statements if "AS RESTRICTIVE FOR ALL" in s]
+    assert len(boundaries) == len(module.READS) - 1
+    assert all("WITH CHECK (false)" in s for s in boundaries)
     assert not any(word in module.BODY for word in ("INSERT INTO", "UPDATE identity.", "DELETE FROM"))
     assert f"REVOKE ALL ON FUNCTION {module.FUNCTION}({module.SIGNATURE}) FROM PUBLIC;" in statements
     assert any("aclexplode(p.proacl)" in s and "a.grantee<>p.proowner" in s for s in statements)

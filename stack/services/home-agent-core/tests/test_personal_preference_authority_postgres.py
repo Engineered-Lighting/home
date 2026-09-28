@@ -59,6 +59,14 @@ def test_api_role_resolves_only_current_linked_and_granted_preference_owner():
                     invoke(params)
                 assert denied.value.orig.sqlstate == "42501"
                 connection.execute(text(f"GRANT EXECUTE ON FUNCTION {SIGNATURE} TO home_agent_api"))
+                # Even the non-login function owner may lock, but cannot write
+                # a changed row (including an otherwise harmless no-op).
+                with pytest.raises(DBAPIError) as denied:
+                    with connection.begin_nested():
+                        connection.execute(text("SET LOCAL SESSION AUTHORIZATION home_agent_owner"))
+                        connection.execute(text("SET LOCAL ROLE home_agent_personal_memory_reader"))
+                        connection.execute(text("UPDATE identity.shared_owner_links SET link_id=link_id WHERE link_id=:link RETURNING link_id"), {"link":link["link_id"]}).one()
+                assert denied.value.orig.sqlstate == "42501"
                 for site in ("echo", "victoria"):
                     row = invoke({**params, "issuer": f"home-assistant:{site}", "subject": subjects[f"home-assistant:{site}"]})
                     assert row["principal_id"] == link["principal_id"]

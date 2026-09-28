@@ -144,9 +144,13 @@ def upgrade():
     for table,columns in READS.items():
         op.execute(f"GRANT SELECT ({columns}) ON {table} TO {ROLE};")
         if table!='public.alembic_version':
-            op.execute(f"CREATE POLICY personal_preference_reader_boundary ON {table} AS RESTRICTIVE FOR ALL TO {ROLE} USING ({PAIR}) WITH CHECK ({PAIR});")
+            op.execute(f"CREATE POLICY personal_preference_reader_boundary ON {table} AS RESTRICTIVE FOR ALL TO {ROLE} USING ({PAIR}) WITH CHECK (false);")
             op.execute(f"CREATE POLICY personal_preference_reader_select ON {table} FOR SELECT TO {ROLE} USING ({PAIR});")
-    for table,column in LOCK_COLUMNS.items(): op.execute(f"GRANT UPDATE ({column}) ON {table} TO {ROLE};")
+    for table,column in LOCK_COLUMNS.items():
+        op.execute(f"GRANT UPDATE ({column}) ON {table} TO {ROLE};")
+        # FOR SHARE checks UPDATE USING, but not UPDATE WITH CHECK. Permit row
+        # locks while forbidding every actual updated row, including no-ops.
+        op.execute(f"CREATE POLICY personal_preference_reader_lock ON {table} FOR UPDATE TO {ROLE} USING ({PAIR}) WITH CHECK (false);")
     for helper in HELPERS: op.execute(f"GRANT EXECUTE ON FUNCTION {helper} TO {ROLE};")
     op.execute(BODY)
     op.execute(f"GRANT CREATE ON SCHEMA identity TO {ROLE};")
@@ -176,6 +180,7 @@ def downgrade():
     for helper in HELPERS:
         op.execute(f"REVOKE EXECUTE ON FUNCTION {helper} FROM {ROLE};")
     for table,column in LOCK_COLUMNS.items():
+        op.execute(f"DROP POLICY personal_preference_reader_lock ON {table};")
         op.execute(f"REVOKE UPDATE ({column}) ON {table} FROM {ROLE};")
     for table,columns in READS.items():
         if table!='public.alembic_version':

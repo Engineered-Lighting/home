@@ -1,0 +1,6 @@
+# Interpreter-only dependencies for the hosted Home Agent repository contract
+# gate (.github/workflows/home-agent-repository-contracts.yml). Keep versions
+# aligned with stack/services/home-agent-core/requirements-dev.lock.
+pytest==8.3.4
+pyyaml==6.0.2
+sqlalchemy==2.0.36

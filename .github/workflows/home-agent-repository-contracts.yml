@@ -1,0 +1,141 @@
+name: home agent repository contracts
+
+# Deterministic, database-free contract suites under tests/home_agent that read
+# repository files (deployment scripts, compose, Alembic revisions, the legacy
+# identity integration, change-note fragments) and need nothing beyond the
+# hash-pinned interpreter packages in tests/home_agent/requirements-contracts.lock.
+# PostgreSQL-backed suites stay in home-agent-e1-postgres.yml.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/home-agent-repository-contracts.yml"
+      - "changes/unreleased/**"
+      - "docs/HOME-AGENT-RUNBOOK.md"
+      - "ha-config/extended_openai_conversation/**"
+      - "stack/home-agent.env.example"
+      - "stack/home-agent-compose.yml"
+      - "stack/home-agent-deploy/**"
+      - "stack/services/home-agent-core/README.md"
+      - "stack/services/home-agent-core/alembic/versions/**"
+      - "stack/services/home-agent-core/app/config.py"
+      - "stack/services/home-agent-core/app/db.py"
+      - "stack/services/home-agent-core/app/phase3_activation_probe.py"
+      - "stack/services/home-agent-core/docker-entrypoint.sh"
+      - "tests/home_agent/requirements-contracts.lock"
+      - "tests/home_agent/requirements-contracts.txt"
+      - "tests/home_agent/test_apply_grants_admits_every_revision.py"
+      - "tests/home_agent/test_binding_operator_deployment_contract.py"
+      - "tests/home_agent/test_change_note_fragments.py"
+      - "tests/home_agent/test_compose_tmpfs_quoting_e5p.py"
+      - "tests/home_agent/test_ha_host_module_deployment.py"
+      - "tests/home_agent/test_home_agent_repository_contracts_gate_contract.py"
+      - "tests/home_agent/test_identity_migration_role_deployment_contract.py"
+      - "tests/home_agent/test_kernel_call_bindings_match.py"
+      - "tests/home_agent/test_legacy_identity_fence.py"
+      - "tests/home_agent/test_legacy_people_api_boundary.py"
+      - "tests/home_agent/test_local_pgbackrest_repository_contract.py"
+      - "tests/home_agent/test_phase3_activation_probe_e5ac.py"
+      - "tests/home_agent/test_phase3_catalog_contract_acl_order_e5o.py"
+      - "tests/home_agent/test_phase3_frozen_migration_ddl_e5n.py"
+      - "tests/home_agent/test_property_contracts_stay_fatal.py"
+      - "tests/home_agent/test_relationship_predicate_constraints_agree.py"
+      - "tests/home_agent/test_worker_lease_deployment_contract.py"
+      - "tools/release/release-lib.mjs"
+      - "tools/run-home-agent-e1-postgres-gate.py"
+  push:
+    branches: [main, codex/home-agent-integration]
+    paths:
+      - ".github/workflows/home-agent-repository-contracts.yml"
+      - "changes/unreleased/**"
+      - "docs/HOME-AGENT-RUNBOOK.md"
+      - "ha-config/extended_openai_conversation/**"
+      - "stack/home-agent.env.example"
+      - "stack/home-agent-compose.yml"
+      - "stack/home-agent-deploy/**"
+      - "stack/services/home-agent-core/README.md"
+      - "stack/services/home-agent-core/alembic/versions/**"
+      - "stack/services/home-agent-core/app/config.py"
+      - "stack/services/home-agent-core/app/db.py"
+      - "stack/services/home-agent-core/app/phase3_activation_probe.py"
+      - "stack/services/home-agent-core/docker-entrypoint.sh"
+      - "tests/home_agent/requirements-contracts.lock"
+      - "tests/home_agent/requirements-contracts.txt"
+      - "tests/home_agent/test_apply_grants_admits_every_revision.py"
+      - "tests/home_agent/test_binding_operator_deployment_contract.py"
+      - "tests/home_agent/test_change_note_fragments.py"
+      - "tests/home_agent/test_compose_tmpfs_quoting_e5p.py"
+      - "tests/home_agent/test_ha_host_module_deployment.py"
+      - "tests/home_agent/test_home_agent_repository_contracts_gate_contract.py"
+      - "tests/home_agent/test_identity_migration_role_deployment_contract.py"
+      - "tests/home_agent/test_kernel_call_bindings_match.py"
+      - "tests/home_agent/test_legacy_identity_fence.py"
+      - "tests/home_agent/test_legacy_people_api_boundary.py"
+      - "tests/home_agent/test_local_pgbackrest_repository_contract.py"
+      - "tests/home_agent/test_phase3_activation_probe_e5ac.py"
+      - "tests/home_agent/test_phase3_catalog_contract_acl_order_e5o.py"
+      - "tests/home_agent/test_phase3_frozen_migration_ddl_e5n.py"
+      - "tests/home_agent/test_property_contracts_stay_fatal.py"
+      - "tests/home_agent/test_relationship_predicate_constraints_agree.py"
+      - "tests/home_agent/test_worker_lease_deployment_contract.py"
+      - "tools/release/release-lib.mjs"
+      - "tools/run-home-agent-e1-postgres-gate.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-agent-repository-contracts-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install the hash-pinned contract interpreter packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/home-agent-contracts"
+          "${RUNNER_TEMP}/home-agent-contracts/bin/python" -m pip install \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --require-hashes \
+            --no-deps \
+            -r tests/home_agent/requirements-contracts.lock
+
+      - name: Run repository contracts
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/home-agent-contracts/bin/python" -m pytest \
+            -p no:cacheprovider \
+            -q \
+            tests/home_agent/test_home_agent_repository_contracts_gate_contract.py \
+            tests/home_agent/test_apply_grants_admits_every_revision.py \
+            tests/home_agent/test_binding_operator_deployment_contract.py \
+            tests/home_agent/test_change_note_fragments.py \
+            tests/home_agent/test_compose_tmpfs_quoting_e5p.py \
+            tests/home_agent/test_ha_host_module_deployment.py \
+            tests/home_agent/test_identity_migration_role_deployment_contract.py \
+            tests/home_agent/test_kernel_call_bindings_match.py \
+            tests/home_agent/test_legacy_identity_fence.py \
+            tests/home_agent/test_legacy_people_api_boundary.py \
+            tests/home_agent/test_local_pgbackrest_repository_contract.py \
+            tests/home_agent/test_phase3_activation_probe_e5ac.py \
+            tests/home_agent/test_phase3_catalog_contract_acl_order_e5o.py \
+            tests/home_agent/test_phase3_frozen_migration_ddl_e5n.py \
+            tests/home_agent/test_property_contracts_stay_fatal.py \
+            tests/home_agent/test_relationship_predicate_constraints_agree.py \
+            tests/home_agent/test_worker_lease_deployment_contract.py
+          git diff --exit-code

@@ -5,6 +5,7 @@ permissions. They exercise real Core tables, revisions and deletion behavior.
 """
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -18,6 +19,8 @@ from app.personal_memory_contract import (
     PreferenceProposalRequest, PreferenceReviewCommitment,
 )
 from app.personal_memory_storage import KIND, PersonalMemoryStorage
+from app.personal_memory_service import PersonalMemoryService
+from app.store import CoreStore
 from .e1_postgres_harness import assert_guarded_database_url
 
 
@@ -125,6 +128,32 @@ def test_preference_storage_correction_forgetting_and_relearning():
                         await storage.propose(conn,authority,PreferenceProposalRequest(
                             operation_id=uuid4(),operation="correct",expected_revision=4,
                             expected_fact_id=first_snapshot["fact_id"],preference=EveningLightingPreference(value="cool")))
+                    # Exercise the authenticated transaction service and real
+                    # Core confirmation minting in this rollback-only fixture.
+                    # The outer admin transaction still does not prove deployed
+                    # login, production roles or independent transaction races.
+                    class DatabaseFixture:
+                        @asynccontextmanager
+                        async def transaction(self, *, serializable):
+                            assert serializable
+                            yield conn
+                    core = object.__new__(CoreStore)
+                    core.database = DatabaseFixture()
+                    admissions = []
+                    async def admit(): admissions.append(True)
+                    service = PersonalMemoryService(store=core,storage=storage,admission=admit)
+                    session = dict(issuer_id="home-assistant:echo",subject=subjects["home-assistant:echo"],
+                        session_commitment=authority.session_commitment)
+                    request = PreferenceProposalRequest(operation_id=uuid4(),operation="correct",
+                        expected_revision=4,expected_fact_id=latest["fact_id"],
+                        preference=EveningLightingPreference(value="neutral"))
+                    review = await service.propose(session,request)
+                    assert await service.propose(session,request)==review
+                    confirmation = PreferenceConfirmation(operation_id=request.operation_id,reviewed_digest=review.reviewed_digest)
+                    assert (await service.confirm(session,confirmation,gesture_id=uuid4()))["revision"]==5
+                    assert (await service.read(session))["preference"].value=="neutral"
+                    assert (await service.outcome(session,confirmation))["revision"]==5
+                    assert len(admissions)>=10
                     connection.execute(text("UPDATE identity.shared_source_grants SET revoked_at=clock_timestamp() WHERE source_id=:source AND site_id='victoria' AND capability='memory.read'"),{"source":SOURCE})
                     with pytest.raises(ForbiddenError): await storage.read(conn,authority)
                     with pytest.raises(ForbiddenError): await storage.read(conn,victoria)

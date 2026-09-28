@@ -31,6 +31,7 @@ def restore_preference_record(model, value):
         PreferenceProposalRequest: (("operation_id","expected_fact_id"), ()),
         PreferenceAuthority: (("principal_id","person_id","link_id"), ("valid_until",)),
         PreferenceReview: (("operation_id","expected_fact_id"), ("expires_at",)),
+        PreferenceConfirmation: (("operation_id",), ()),
     }
     if model not in fields or type(value) is not dict:
         raise ValueError("invalid retained preference record")

@@ -4241,7 +4241,10 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
                         "tests/test_personal_memory_consent_service.py", "tests/test_personal_memory_consent_api.py",
                         "tests/test_personal_memory_registration.py",
                         "tests/test_shared_identity_site_runtime.py", "tests/test_shared_identity_site_server.py",
-                        "tests/test_shared_link_coordinator_runtime.py", "tests/test_shared_link_coordinator_server.py"] if preference_authority else []),
+                        "tests/test_shared_link_coordinator_runtime.py", "tests/test_shared_link_coordinator_server.py",
+                        "tests/test_startup_admission.py", "tests/test_shared_preference_roles.py",
+                        # Commits real logins and restores the dormant roles; keep it last.
+                        "tests/test_shared_preference_roles_postgres.py"] if preference_authority else []),
                 url_environment={url_env: clone,
                                  "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
                 environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,

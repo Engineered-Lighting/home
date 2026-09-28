@@ -167,6 +167,8 @@ async def test_failed_core_admission_does_not_initialize_consent_storage(tmp_pat
     core = core_fixture(monkeypatch)
     core.state.database.engine.url = make_url("postgresql://home_agent_api@localhost/unused")
     core.state.maintenance_observed_after = None
+    monkeypatch.setattr("app.startup_admission.STARTUP_ADMISSION_SECONDS", 0.05)
+    monkeypatch.setattr("app.startup_admission.STARTUP_ADMISSION_INTERVAL", 0.01)
     app = server.build_listener(core, consent_profile(tmp_path))
     with pytest.raises(OptionalWorkSuspendedError):
         async with app.router.lifespan_context(app): pytest.fail("admission bypass")

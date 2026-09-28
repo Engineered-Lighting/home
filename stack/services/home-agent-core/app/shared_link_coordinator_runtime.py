@@ -27,6 +27,7 @@ from .shared_link_journal import SharedLinkJournal
 from .shared_link_review_api import LinkReviewBinding, create_link_review_ingress
 from .shared_link_review_assembly import SharedLinkReviewAssembly
 from .shared_link_review_service import SharedLinkReviewService
+from .startup_admission import admit_at_startup
 
 
 @asynccontextmanager
@@ -54,8 +55,7 @@ async def open_link_coordinator(*, issuance_binding, review_binding,
     preparer = SharedLinkConfirmationPreparer(confirmation_key, key_id=confirmation_key_id)
     async with AsyncExitStack() as cleanup:
         # Establish admission before creating private journal files.
-        async with asyncio.timeout(10):
-            await admission()
+        await admit_at_startup(admission)
         issuance = SharedLinkIssuanceDatabase(coordinator_database_url, commitments=commitments)
         cleanup.push_async_callback(issuance.close)
         confirmation = SharedLinkConfirmationDatabase(coordinator_database_url)

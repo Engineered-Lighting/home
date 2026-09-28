@@ -1,0 +1,39 @@
+[Unit]
+Description=Tailnet browser-origin node %i (userspace tailscaled)
+Documentation=file:///usr/local/share/home-agent/tailnet-origins/README.md
+Wants=network-online.target
+After=network-online.target tailscaled.service
+ConditionPathExists=/etc/tailscale-origin/%i.env
+OnFailure=ntfy-alert@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/tailscale-origin/%i.env
+# Userspace networking: this node owns no kernel interface, routes or firewall
+# chains, so it cannot disturb the host's primary tailscaled (home-app).
+ExecStart=/usr/sbin/tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale-origin/%i --socket=/run/tailscale-origin-%i/tailscaled.sock --port=${TS_ORIGIN_PORT}
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=tailscale-origin-%i
+RuntimeDirectoryMode=0755
+StateDirectory=tailscale-origin/%i
+StateDirectoryMode=0700
+UMask=0077
+MemoryMax=256M
+MemorySwapMax=0
+CPUQuota=25%
+TasksMax=256
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

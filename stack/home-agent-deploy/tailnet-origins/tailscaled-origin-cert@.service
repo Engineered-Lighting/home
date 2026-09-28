@@ -1,0 +1,18 @@
+[Unit]
+Description=Refresh exported certificate for tailnet origin node %i
+Requires=tailscaled-origin@%i.service
+After=tailscaled-origin@%i.service docker.service
+ConditionPathExists=/etc/tailscale-origin/%i.env
+OnFailure=ntfy-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/home-agent/tailnet-origins/refresh-origin-cert.sh %i
+UMask=0077
+CPUQuota=25%
+MemoryMax=128M
+TasksMax=32
+TimeoutStartSec=5min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true

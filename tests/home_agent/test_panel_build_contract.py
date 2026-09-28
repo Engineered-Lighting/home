@@ -39,6 +39,7 @@ class PanelBuildContractTests(unittest.TestCase):
                 "react-dom-runtime"
             ),
             "app/src/home-agent/panel.jsx": "view()",
+            "app/src/home-connection-registry.js": "registry-runtime",
         }
         for relative, content in fixture_files.items():
             target = self.root / relative
@@ -96,6 +97,15 @@ class PanelBuildContractTests(unittest.TestCase):
         self.assertEqual(1, checked.returncode)
         self.assertIn("is stale", checked.stderr)
         self.assertIn("build-home-agent-panel.js", checked.stderr)
+        self.assertEqual(before, self.snapshot())
+
+    def test_registry_change_requires_bundle_rebuild(self) -> None:
+        registry = self.root / "app/src/home-connection-registry.js"
+        registry.write_text("updated-registry-runtime", encoding="utf-8")
+        before = self.snapshot()
+        checked = self.run_builder("--check")
+        self.assertEqual(1, checked.returncode)
+        self.assertIn("is stale", checked.stderr)
         self.assertEqual(before, self.snapshot())
 
     def test_check_rejects_missing_bundle_without_creating_it(self) -> None:

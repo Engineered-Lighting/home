@@ -533,7 +533,7 @@ function SharedLinkSetupCard({ api, setup }) {
     } catch (_) {if(current())setMessage("This step did not return a verified result. Use its status check; no action was retried.");}
     finally {if(operation.current===controller)operation.current=null;if(current())setBusy(false);}
   };
-  if(!origin)return null;
+  if(api.invoke || !origin)return null;
   if(stage==="review")return <SharedLinkReviewCard api={api} ceremonyId={pair.pairing_id}/>;
   return <section className="agent-card agent-link-setup" aria-busy={busy}>
     <h2>Connect your two homes</h2>

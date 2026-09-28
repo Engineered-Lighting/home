@@ -1,11 +1,21 @@
 "use strict";
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path");
 const {chromium}=require("playwright");
+const http=require("node:http");
 const root=path.resolve(__dirname,".."),fact="00000000-0000-0000-0000-000000000001";
 const preference=tone=>({version:1,kind:"personal_preference",key:"lighting.evening.tone",scope:"owner",value:tone});
 (async()=>{
-  const browser=await chromium.launch({headless:true});
+  const {configFromEnv,createAgentOrigin}=await import("../stack/services/home-agent-origin/src/origin.mjs");
+  const originServer=createAgentOrigin(configFromEnv({
+    HOME_AGENT_WEB_PUBLIC_ORIGIN:"https://agent.test",
+    HOME_AGENT_WEB_BFF_URL:"http://127.0.0.1:1",
+    HOME_AGENT_WEB_ASSET_ROOT:path.join(root,"app/src/home-agent"),
+    HOME_AGENT_WEB_HOST:"127.0.0.1",HOME_AGENT_WEB_PORT:"8096",
+  }));
+  await new Promise((resolve,reject)=>{originServer.once("error",reject);originServer.listen(0,"127.0.0.1",resolve);});
+  let browser;
   try {
+    browser=await chromium.launch({headless:true});
     for(const mode of ["remember","correct","read","forget","unknown","wrong-origin","cancel-context"]) {
       const context=await browser.newContext({viewport:{width:390,height:844}}),calls=[],errors=[];
       let tone=mode==="remember" || mode==="unknown" ? null : "warm",revision=tone?1:0,review;
@@ -21,7 +31,15 @@ const preference=tone=>({version:1,kind:"personal_preference",key:"lighting.even
         if(url.pathname.startsWith("/home-agent/")) {
           const name=url.pathname.split("/").at(-1);
           assert.ok(["preference-review.html","preference-review.css","preference-review.js","api.js"].includes(name));
-          return route.fulfill({contentType:name.endsWith("html")?"text/html":name.endsWith("css")?"text/css":"text/javascript",body:fs.readFileSync(path.join(root,"app/src/home-agent",name))});
+          const served=await new Promise((resolve,reject)=>{
+            http.get({hostname:"127.0.0.1",port:originServer.address().port,path:url.pathname,headers:{Host:"agent.test"}},res=>{
+              const chunks=[];res.on("data",chunk=>chunks.push(chunk));
+              res.on("end",()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}));
+              res.on("error",reject);
+            }).on("error",reject);
+          });
+          assert.equal(served.status,200);
+          return route.fulfill(served);
         }
         const operation=url.pathname.split("/").at(-1),body=request.postDataJSON();calls.push({operation,body});
         if(operation==="session") return reply({authenticated:true,user_id:"owner",csrf_token:"private-csrf",authority:{version:1,site_id:"echo",ha_issuer_id:"home-assistant:echo"},personal_memory_enabled:true,
@@ -80,5 +98,8 @@ const preference=tone=>({version:1,kind:"personal_preference",key:"lighting.even
         console.log("PASS",mode);
       } finally {await context.close();}
     }
-  } finally {await browser.close();}
+  } finally {
+    await browser?.close();
+    await new Promise(resolve=>originServer.close(resolve));
+  }
 })().catch(error=>{console.error(error);process.exitCode=1;});

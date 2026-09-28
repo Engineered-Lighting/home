@@ -139,19 +139,21 @@ async function behaviorTest() {
 async function browserBindingBehaviorTest() {
   const calls = [];
   const responses = new Map([
-    ["/api/agent/auth/session", { authenticated: true, user_id: "opaque-subject", csrf_token: "csrf" }],
+    ["/api/agent/auth/session", { authenticated: true, user_id: "opaque-subject", csrf_token: "csrf",
+      authority: { version: 1, site_id: "echo", ha_issuer_id: "home-assistant:echo" } }],
     ["/api/agent/v1/principal-binding-proposal", { state: "not_requested" }],
     ["/api/agent/v1/principal-binding-request", { state: "awaiting_operator_review" }],
     ["/api/agent/v1/principal-binding-request/cancel", { state: "not_requested" }],
     ["/api/agent/v1/principal-binding-proposal/confirm", { state: "bound" }],
   ]);
   const window = {
-    location: { assign: () => { throw new Error("binding API attempted navigation"); } },
+    location: { origin: "https://agent.test", assign: () => { throw new Error("binding API attempted navigation"); } },
     crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000000" },
   };
   const context = vm.createContext({
     window,
     globalThis: window,
+    AbortController,
     fetch: async (url, init) => {
       calls.push({ url, init });
       return { ok: true, status: 200, json: async () => responses.get(url) || {} };
@@ -163,6 +165,7 @@ async function browserBindingBehaviorTest() {
     Boolean,
     Promise,
   });
+  vm.runInContext(read("app/src/home-connection-registry.js"), context);
   vm.runInContext(read("app/src/home-agent/api.js"), context, { filename: "api-browser.js" });
   // panel.js is a separate <script>; it can only see what api.js puts on the
   // global. Anything api.js exports through module.exports is invisible in a
@@ -221,13 +224,19 @@ async function browserBindingBehaviorTest() {
 async function browserPreferenceOptOutBehaviorTest() {
   const calls = [];
   const window = {
+    location: { origin: "https://agent.test" },
     crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000000" },
   };
   const context = vm.createContext({
     window,
     globalThis: window,
+    AbortController,
     fetch: async (url, init) => {
       calls.push({ url, init });
+      if (url === "/api/agent/auth/session") return { ok: true, status: 200, json: async () => ({
+        authenticated: true, user_id: "opaque-subject", csrf_token: "csrf",
+        authority: { version: 1, site_id: "echo", ha_issuer_id: "home-assistant:echo" },
+      }) };
       return { ok: true, status: 200, json: async () => ({ enabled: false }) };
     },
     URL,
@@ -237,11 +246,13 @@ async function browserPreferenceOptOutBehaviorTest() {
     Boolean,
     Promise,
   });
+  vm.runInContext(read("app/src/home-connection-registry.js"), context);
   vm.runInContext(read("app/src/home-agent/api.js"), context, {
     filename: "api-browser-opt-out.js",
   });
   const api = new window.HomeAgentApi();
-  api.csrf = "csrf";
+  await api.session();
+  calls.length = 0;
   await api.disablePreference("location_memory");
 
   assert("browser rollback opt-out is a CSRF-bound direction-fixed PUT",
@@ -385,7 +396,15 @@ function principalOperationBoundaryTest() {
   assert("Tauri creates a separate hidden local Agent window", tauri.app.windows.length === 2 && tauri.app.windows[1].label === "agent" && tauri.app.windows[1].url === "home-agent/index.html" && tauri.app.windows[1].visible === false, tauri.app.windows);
   assert("Agent capability is scoped only to local auth-event observation", agentCapability.windows?.length === 1 && agentCapability.windows[0] === "agent" && JSON.stringify(agentCapability.permissions) === JSON.stringify(["core:event:allow-listen", "core:event:allow-unlisten"]));
   assert("Agent document has a script-strict local CSP", agentHtml.includes("default-src 'none'") && agentHtml.includes("script-src 'self'") && !agentHtml.includes("unsafe-inline") && !agentHtml.includes("unsafe-eval"));
-  assert("Agent document has no runtime compiler, inline script, inline style, or navigable Home link", !/(babel|text\/babel|<style|<script[^>]*>\s*[^<])/i.test(agentHtml) && !/style=|href=/i.test(agentPanel));
+  const browserLinkCard = agentPanel.slice(agentPanel.indexOf("function SharedLinkSetupCard("), agentPanel.indexOf("function SharedLinkEntry("));
+  const remainingPanel = agentPanel.replace(browserLinkCard, "");
+  assert("Agent document has no runtime compiler, inline script, inline style, or native navigation link",
+    !/(babel|text\/babel|<style|<script[^>]*>\s*[^<])/i.test(agentHtml) && !/style=/i.test(agentPanel) && !/href=/i.test(remainingPanel));
+  assert("only the browser linking card can navigate to its provisioned Victoria origin",
+    browserLinkCard.includes("if(api.invoke || !origin)return null;") &&
+    browserLinkCard.includes('url.protocol==="https:" && url.origin===setup.victoria_origin && url.hostname!==window.location.hostname') &&
+    (browserLinkCard.match(/<a href=\{origin\+"\/(?:#shared-link\/"\+pair\.pairing_id|"\})/g) || []).length === 3 &&
+    (browserLinkCard.match(/target="_blank" rel="noopener noreferrer"/g) || []).length === 3);
   assert("Agent document has no parent-origin asset dependency", !agentHtml.includes("../") && !read("app/src/home-agent/api.js").includes("../index.html"));
   const agentSources = [agentHtml, agentPanel, agentCompiledPanel, read("app/src/home-agent/api.js")].join("\n");
   assert("Agent source and generated bundle remain clean UTF-8 without mojibake canaries", agentSources.includes("parents’") && agentSources.includes("Core’s") && agentSources.includes("—") && !/[âÃÂ]/.test(agentSources));

@@ -992,7 +992,7 @@ function SharedLinkSetupCard({
       if (current()) setBusy(false);
     }
   };
-  if (!origin) return null;
+  if (api.invoke || !origin) return null;
   if (stage === "review") return React.createElement(SharedLinkReviewCard, {
     api: api,
     ceremonyId: pair.pairing_id

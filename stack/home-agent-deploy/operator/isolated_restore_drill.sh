@@ -736,7 +736,12 @@ timeout --signal=TERM --kill-after=30s "$phase_timeout" \
 forget_container "$checksum_container"
 
 drill_succeeded=1
-python3 "$receipt_writer" restore \
+receipt_command=restore
+case "$HOME_AGENT_EXPECTED_DB_REVISION" in
+  0031_relationship_uniqueness_e5r|0047_personal_pref_authority_v1)
+    receipt_command=restore-maintenance ;;
+esac
+python3 "$receipt_writer" "$receipt_command" \
   --backup-label "$backup_label" \
   --schema-revision "$HOME_AGENT_EXPECTED_DB_REVISION" \
   --database-system-identifier "$restored_system_id"

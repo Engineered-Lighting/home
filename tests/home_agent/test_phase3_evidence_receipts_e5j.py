@@ -181,7 +181,7 @@ def test_restore_drill_writes_only_after_database_and_page_checks_pass() -> None
     source = DRILL.read_text(encoding="utf-8")
     checksum = source.index('info "checking every restored page checksum offline"')
     success = source.index("drill_succeeded=1")
-    writer = source.index('python3 "$receipt_writer" restore')
+    writer = source.index('python3 "$receipt_writer" "$receipt_command"')
 
     assert checksum < success < writer
     assert '--database-system-identifier "$restored_system_id"' in source
@@ -197,3 +197,36 @@ def test_preflight_rejects_the_old_conflated_e5i_contract() -> None:
     assert module.ERASURE_CONTRACT in preflight_source
     assert "erasure_ledger_replay_status" not in preflight_source
     assert "phase3-restore-drill-receipt-e5i-v1" not in preflight_source
+
+
+@pytest.mark.parametrize("revision", ["0031_relationship_uniqueness_e5r", "0047_personal_pref_authority_v1"])
+def test_maintenance_receipt_cannot_satisfy_legacy_activation(revision) -> None:
+    module = _module()
+    receipt = module.build_maintenance_restore_receipt(
+        backup_label="20260928-123053F", schema_revision=revision,
+        database_system_identifier="7522608291310326247", completed_at=NOW,
+    )
+    assert receipt["schema_revision"] == revision
+    assert receipt["contract"] == "home-agent-maintenance-restore-receipt-v1"
+    with pytest.raises(module.ReceiptError):
+        module.validate_restore_receipt(receipt)
+    with pytest.raises(module.ReceiptError):
+        module.build_restore_receipt(
+            backup_label=receipt["backup_label"], schema_revision=revision,
+            database_system_identifier=receipt["database_system_identifier"], completed_at=NOW,
+        )
+    assert module.MAINTENANCE_RESTORE_PATH != module.RESTORE_RECEIPT_PATH
+
+
+@pytest.mark.parametrize("change", [
+    {"schema_revision": "0048_unreviewed"}, {"schema_revision": "0006a_worker_lease_arbitration"},
+    {"backup_label": "latest"}, {"database_system_identifier": "invalid"},
+    {"completed_at": datetime(2026, 9, 28)},
+])
+def test_maintenance_receipt_rejects_unverified_identity(change) -> None:
+    module = _module()
+    arguments = dict(backup_label="20260928-123053F", schema_revision="0031_relationship_uniqueness_e5r",
+                     database_system_identifier="7522608291310326247", completed_at=NOW)
+    arguments.update(change)
+    with pytest.raises(module.ReceiptError):
+        module.build_maintenance_restore_receipt(**arguments)

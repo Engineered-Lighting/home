@@ -540,6 +540,93 @@
           "max-file": "2"
         }
       }
+    },
+    "victoria-link": {
+      "image": "${HOME_AGENT_SHARED_BFF_IMAGE:?set verified immutable BFF image}",
+      "command": [
+        "node",
+        "victoria-link-server.mjs"
+      ],
+      "profiles": [
+        "shared-preferences"
+      ],
+      "restart": "no",
+      "init": true,
+      "user": "1000:1000",
+      "read_only": true,
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "cpus": "${HOME_AGENT_VICTORIA_LINK_CPUS:?set admitted CPU limit}",
+      "mem_limit": "${HOME_AGENT_VICTORIA_LINK_MEMORY:?set admitted RAM limit}",
+      "memswap_limit": "${HOME_AGENT_VICTORIA_LINK_MEMORY:?disable swap with equal RAM limit}",
+      "pids_limit": "${HOME_AGENT_VICTORIA_LINK_PIDS:?set admitted process limit}",
+      "tmpfs": [
+        "/tmp:size=16m,mode=1777"
+      ],
+      "environment": {
+        "HOME_AGENT_VICTORIA_LINK_CONFIG_FILE": "/config/link.json",
+        "NODE_EXTRA_CA_CERTS": "/config/internal-ca.crt"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_VICTORIA_BFF_ROOT:?set prepared victoria-bff directory}/secrets",
+          "target": "/run/secrets",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_VICTORIA_BFF_ROOT:?set prepared victoria-bff directory}/config",
+          "target": "/config",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_VICTORIA_LINK_TLS_DIR:?set root-owned root:1000 0750 browser certificate directory}",
+          "target": "/tls",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_VICTORIA_BFF_ROOT:?set prepared victoria-bff directory}/journals",
+          "target": "/journals",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ],
+      "extra_hosts": [
+        "${HOME_AGENT_VICTORIA_HA_HOSTNAME:?set Victoria HA origin hostname}:${HOME_AGENT_HA_TAILSCALE_IPV4:?set pinned Tailscale IPv4}"
+      ],
+      "networks": {
+        "api": {
+          "ipv4_address": "${HOME_AGENT_VICTORIA_LINK_IP:?set reserved private API-network address}"
+        },
+        "victoria-link-egress": {
+          "ipv4_address": "${HOME_AGENT_VICTORIA_LINK_EGRESS_IP:-172.26.0.10}"
+        }
+      },
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-size": "1m",
+          "max-file": "2"
+        }
+      }
     }
   },
   "networks": {
@@ -550,6 +637,22 @@
     "database": {
       "external": true,
       "name": "${HOME_AGENT_POSTGRES_NETWORK:?set existing private PostgreSQL network}"
+    },
+    "victoria-link-egress": {
+      "name": "home-agent_victoria-link-egress",
+      "driver": "bridge",
+      "enable_ipv6": false,
+      "driver_opts": {
+        "com.docker.network.bridge.name": "${HOME_AGENT_VICTORIA_LINK_EGRESS_BRIDGE:-ha-vlink-egr0}"
+      },
+      "ipam": {
+        "config": [
+          {
+            "subnet": "${HOME_AGENT_VICTORIA_LINK_EGRESS_SUBNET:-172.26.0.0/24}",
+            "gateway": "${HOME_AGENT_VICTORIA_LINK_EGRESS_GATEWAY:-172.26.0.1}"
+          }
+        ]
+      }
     }
   }
 }

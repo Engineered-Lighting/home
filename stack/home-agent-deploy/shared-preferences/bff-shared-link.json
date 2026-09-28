@@ -1,0 +1,40 @@
+{
+  "services": {
+    "bff": {
+      "image": "${HOME_AGENT_SHARED_BFF_IMAGE:?set verified immutable BFF image}",
+      "environment": {
+        "HOME_AGENT_SHARED_LINK_CONFIG_FILE": "/link/config/link.json",
+        "NODE_EXTRA_CA_CERTS": "/link/config/internal-ca.crt"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_ECHO_BFF_ROOT:?set prepared echo-bff directory}/config",
+          "target": "/link/config",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_ECHO_BFF_ROOT:?set prepared echo-bff directory}/secrets",
+          "target": "/link/secrets",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_ECHO_BFF_ROOT:?set prepared echo-bff directory}/journals",
+          "target": "/link/journals",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    }
+  }
+}

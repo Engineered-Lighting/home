@@ -203,3 +203,56 @@ sudo /usr/bin/python3 -I \
 Removing the rule invalidates browser OAuth refresh, whoami, logout revocation,
 and new code exchange. Existing opaque Agent cookies then fail closed; it does
 not affect Home Assistant device control.
+
+## Victoria linking profile
+
+The separately provisioned Victoria linking service (`victoria-link` in
+`shared-preferences/compose.json`) reaches Victoria Home Assistant through its
+own added Serve handler on this same node
+(`home-app.<tailnet>.ts.net:10001 → 192.168.1.60:80`). It uses the same reviewed
+tool with `--profile victoria-link`. The profile has its own values:
+
+- bridge `ha-vlink-egr0`, subnet `172.26.0.0/24`, source address `172.26.0.10`
+- guard chain `HOME_AGENT_VLINK_INPUT`
+- UFW comment `home-agent-victoria-link-to-victoria-ha`
+
+It publishes no host port, so its guard has no return-flow rule: just the exact
+HA allow and a terminal drop. Each profile's first-hop jump must lead `INPUT`.
+The only thing allowed in front of it is the other reviewed profile's jump, which
+matches a different bridge.
+
+Provision in `/srv/home-agent/config/home-agent.env`:
+
+```text
+HOME_AGENT_VICTORIA_HA_URL=https://home-app.<tailnet>.ts.net:10001
+HOME_AGENT_VICTORIA_HA_HOSTNAME=home-app.<tailnet>.ts.net
+HOME_AGENT_VICTORIA_LINK_EGRESS_SUBNET=172.26.0.0/24
+HOME_AGENT_VICTORIA_LINK_EGRESS_GATEWAY=172.26.0.1
+HOME_AGENT_VICTORIA_LINK_EGRESS_IP=172.26.0.10
+```
+
+The lifecycle hook guards this profile only once `HOME_AGENT_VICTORIA_HA_URL` is
+set (`--if-configured`). Until then no allow rule exists for the bridge, and
+UFW's default-deny input policy drops its traffic.
+
+Updating the hook changes its reviewed digest. Install the new helper and hook
+together, compare both blob digests, and reload UFW. Then check that the BFF
+guard verifies before starting victoria-link:
+
+```bash
+sudo /usr/bin/python3 -I /usr/local/libexec/home-agent-bff-egress/firewall_contract.py \
+  verify --env /srv/home-agent/config/home-agent.env
+# after victoria-link is running:
+sudo /usr/bin/python3 -I /usr/local/libexec/home-agent-bff-egress/firewall_contract.py \
+  apply --profile victoria-link --env /srv/home-agent/config/home-agent.env
+sudo install -m 0644 -o root -g root \
+  stack/home-agent-deploy/operator/systemd/home-agent-victoria-link-egress-verify.service \
+  stack/home-agent-deploy/operator/systemd/home-agent-victoria-link-egress-verify.timer \
+  /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now home-agent-victoria-link-egress-verify.timer
+```
+
+`apply` probes Victoria HA's token endpoint from inside the container with an
+empty GET, which must return 405. Roll back with `remove --profile victoria-link`
+after disabling its timer. That leaves the BFF profile untouched.

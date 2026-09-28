@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Reconcile the BFF's one permitted host-local HA OAuth path.
+"""Reconcile each reviewed container's one permitted host-local HA OAuth path.
 
 The browser reaches Home Assistant through Tailscale Serve.  The BFF must use
 the same TLS endpoint for code exchange, refresh, whoami, and revocation, but a
 default-deny host firewall also applies to packets sourced by Docker bridges.
 This tool validates the complete live identity/network contract before adding
 or accepting one exact UFW rule.  It never reads or prints OAuth material.
+
+Two reviewed profiles exist. ``bff`` (the default) is the Echo BFF reaching
+Echo HA; ``victoria-link`` is the separately provisioned Victoria linking
+service reaching Victoria HA through its own added Serve port on this same
+node. Each profile has its own bridge, source address, guard chain and rule.
 """
 
 from __future__ import annotations
@@ -40,13 +45,68 @@ TRUSTED_INSTALL = Path(
     "/usr/local/libexec/home-agent-bff-egress/firewall_contract.py"
 )
 UFW_HOOK = Path("/etc/ufw/after.init")
-UFW_HOOK_SHA256 = "530be4a84d913d9cbe9dc1b50bb0f04220490cd7a9f7937197f3988adfa38de8"
+UFW_HOOK_SHA256 = "e0f9d04732f1bdb809957ffd68a0966bd736eb7d887b6fb1d5dda18ac933dfd7"
 UFW_CONFIG = Path("/etc/ufw/ufw.conf")
 TRUSTED_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 class ContractError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class Profile:
+    name: str
+    network: str
+    container: str
+    compose_project: str
+    compose_service: str
+    comment: str
+    chain: str
+    url_key: str
+    egress_prefix: str
+    default_subnet: str
+    default_gateway: str
+    default_ip: str
+    default_bridge: str
+    # The BFF publishes one loopback port whose replies must return through
+    # the guard; a profile without host publication has no return-flow rule.
+    published_port: int | None
+
+
+BFF = Profile(
+    name="bff",
+    network=NETWORK_NAME,
+    container=CONTAINER_NAME,
+    compose_project=COMPOSE_PROJECT,
+    compose_service=COMPOSE_SERVICE,
+    comment=RULE_COMMENT,
+    chain=GUARD_CHAIN,
+    url_key="HOME_AGENT_HA_URL",
+    egress_prefix="HOME_AGENT_BFF_EGRESS_",
+    default_subnet=DEFAULT_SUBNET,
+    default_gateway=DEFAULT_GATEWAY,
+    default_ip=DEFAULT_BFF_IP,
+    default_bridge=DEFAULT_BRIDGE,
+    published_port=8097,
+)
+VICTORIA_LINK = Profile(
+    name="victoria-link",
+    network="home-agent_victoria-link-egress",
+    container="home-shared-preferences-victoria-link-1",
+    compose_project="home-shared-preferences",
+    compose_service="victoria-link",
+    comment="home-agent-victoria-link-to-victoria-ha",
+    chain="HOME_AGENT_VLINK_INPUT",
+    url_key="HOME_AGENT_VICTORIA_HA_URL",
+    egress_prefix="HOME_AGENT_VICTORIA_LINK_EGRESS_",
+    default_subnet="172.26.0.0/24",
+    default_gateway="172.26.0.1",
+    default_ip="172.26.0.10",
+    default_bridge="ha-vlink-egr0",
+    published_port=None,
+)
+PROFILES = {profile.name: profile for profile in (BFF, VICTORIA_LINK)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +119,8 @@ class Contract:
     gateway: ipaddress.IPv4Address
     bff_ip: ipaddress.IPv4Address
     bridge: str
-    bind_address: ipaddress.IPv4Address
+    bind_address: ipaddress.IPv4Address | None
+    profile: Profile = BFF
 
 
 def validate_trusted_execution() -> None:
@@ -172,13 +233,13 @@ def read_env(path: str | Path) -> dict[str, str]:
     return values
 
 
-def contract_from_env(values: dict[str, str]) -> Contract:
-    ha_url = values.get("HOME_AGENT_HA_URL", "")
+def contract_from_env(values: dict[str, str], profile: Profile = BFF) -> Contract:
+    ha_url = values.get(profile.url_key, "")
     try:
         parsed = urlsplit(ha_url)
         port = parsed.port or 443
     except ValueError as exc:
-        raise ContractError("HOME_AGENT_HA_URL is invalid") from exc
+        raise ContractError(f"{profile.url_key} is invalid") from exc
     host = parsed.hostname or ""
     canonical = f"https://{host}" + (f":{port}" if port != 443 else "")
     if (
@@ -192,30 +253,33 @@ def contract_from_env(values: dict[str, str]) -> Contract:
         or parsed.fragment
         or ha_url.rstrip("/") != canonical
     ):
-        raise ContractError("HOME_AGENT_HA_URL must be one canonical HTTPS root")
+        raise ContractError(f"{profile.url_key} must be one canonical HTTPS root")
 
+    prefix = profile.egress_prefix
     try:
         subnet = ipaddress.ip_network(
-            values.get("HOME_AGENT_BFF_EGRESS_SUBNET", DEFAULT_SUBNET), strict=True
+            values.get(f"{prefix}SUBNET", profile.default_subnet), strict=True
         )
         gateway = ipaddress.ip_address(
-            values.get("HOME_AGENT_BFF_EGRESS_GATEWAY", DEFAULT_GATEWAY)
+            values.get(f"{prefix}GATEWAY", profile.default_gateway)
         )
         bff_ip = ipaddress.ip_address(
-            values.get("HOME_AGENT_BFF_EGRESS_IP", DEFAULT_BFF_IP)
+            values.get(f"{prefix}IP", profile.default_ip)
         )
         tail_ip = ipaddress.ip_address(
             values.get("HOME_AGENT_HA_TAILSCALE_IPV4", "")
         )
-        bind_address = ipaddress.ip_address(
-            values.get("HOME_AGENT_BFF_BIND_ADDR", "127.0.0.1")
+        bind_address = (
+            ipaddress.ip_address(values.get("HOME_AGENT_BFF_BIND_ADDR", "127.0.0.1"))
+            if profile.published_port is not None
+            else None
         )
     except ValueError as exc:
         raise ContractError("BFF egress address contract is invalid") from exc
     if not isinstance(subnet, ipaddress.IPv4Network) or not all(
         isinstance(value, ipaddress.IPv4Address)
-        for value in (gateway, bff_ip, tail_ip, bind_address)
-    ):
+        for value in (gateway, bff_ip, tail_ip)
+    ) or (bind_address is not None and not isinstance(bind_address, ipaddress.IPv4Address)):
         raise ContractError("BFF egress contract must use IPv4")
     if gateway not in subnet or bff_ip not in subnet:
         raise ContractError("BFF egress gateway and address must be inside the subnet")
@@ -225,10 +289,10 @@ def contract_from_env(values: dict[str, str]) -> Contract:
         raise ContractError("BFF egress address is not independently usable")
     if tail_ip not in ipaddress.ip_network("100.64.0.0/10"):
         raise ContractError("HA endpoint must use a pinned Tailscale IPv4 address")
-    if not bind_address.is_loopback:
+    if bind_address is not None and not bind_address.is_loopback:
         raise ContractError("BFF host publication must remain loopback-only")
 
-    bridge = values.get("HOME_AGENT_BFF_EGRESS_BRIDGE", DEFAULT_BRIDGE)
+    bridge = values.get(f"{prefix}BRIDGE", profile.default_bridge)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", bridge):
         raise ContractError("BFF egress bridge name is invalid")
     return Contract(
@@ -241,6 +305,7 @@ def contract_from_env(values: dict[str, str]) -> Contract:
         bff_ip=bff_ip,
         bridge=bridge,
         bind_address=bind_address,
+        profile=profile,
     )
 
 
@@ -296,7 +361,7 @@ def validate_tailnet_endpoint(
 
 def validate_network(contract: Contract, value: dict) -> None:
     if (
-        value.get("Name") != NETWORK_NAME
+        value.get("Name") != contract.profile.network
         or value.get("Driver") != "bridge"
         or value.get("Scope") != "local"
         or value.get("Internal") is not False
@@ -314,7 +379,7 @@ def validate_network(contract: Contract, value: dict) -> None:
     if len(members) != 1:
         raise ContractError("BFF egress network must contain exactly one container")
     member = next(iter(members.values()))
-    if member.get("Name") != CONTAINER_NAME:
+    if member.get("Name") != contract.profile.container:
         raise ContractError("unexpected container attached to BFF egress network")
     member_ip = str(member.get("IPv4Address", "")).split("/", 1)[0]
     if member_ip != str(contract.bff_ip):
@@ -334,21 +399,22 @@ def _container_environment(value: dict) -> dict[str, str]:
 
 
 def validate_container(contract: Contract, value: dict) -> None:
+    profile = contract.profile
     config = value.get("Config") or {}
     host = value.get("HostConfig") or {}
     labels = config.get("Labels") or {}
     if (
-        value.get("Name") != f"/{CONTAINER_NAME}"
-        or labels.get("com.docker.compose.project") != COMPOSE_PROJECT
-        or labels.get("com.docker.compose.service") != COMPOSE_SERVICE
+        value.get("Name") != f"/{profile.container}"
+        or labels.get("com.docker.compose.project") != profile.compose_project
+        or labels.get("com.docker.compose.service") != profile.compose_service
     ):
         raise ContractError("live BFF does not have the reviewed Compose identity")
     networks = ((value.get("NetworkSettings") or {}).get("Networks") or {})
-    if set(networks) != {API_NETWORK_NAME, NETWORK_NAME}:
+    if set(networks) != {API_NETWORK_NAME, profile.network}:
         raise ContractError("live BFF has an unreviewed network attachment")
-    if networks[NETWORK_NAME].get("IPAddress") != str(contract.bff_ip):
+    if networks[profile.network].get("IPAddress") != str(contract.bff_ip):
         raise ContractError("live BFF source address differs from policy")
-    if networks[NETWORK_NAME].get("GlobalIPv6Address") not in (None, ""):
+    if networks[profile.network].get("GlobalIPv6Address") not in (None, ""):
         raise ContractError("live BFF received an unreviewed IPv6 address")
     if (
         host.get("ReadonlyRootfs") is not True
@@ -359,22 +425,31 @@ def validate_container(contract: Contract, value: dict) -> None:
     ):
         raise ContractError("live BFF hardening differs from policy")
     bindings = host.get("PortBindings") or {}
-    if set(bindings) != {"8097/tcp"} or len(bindings["8097/tcp"] or []) != 1:
+    if profile.published_port is None:
+        # The Victoria link service is reachable only on the private API
+        # network and through its tailnet origin node; it publishes nothing,
+        # and its HA origin comes from its mounted profile, not environment.
+        if bindings:
+            raise ContractError("live BFF host publication differs from policy")
+        return
+    published = f"{profile.published_port}/tcp"
+    if set(bindings) != {published} or len(bindings[published] or []) != 1:
         raise ContractError("live BFF host publication differs from policy")
-    binding = bindings["8097/tcp"][0]
+    binding = bindings[published][0]
     if binding.get("HostIp") != str(contract.bind_address):
         raise ContractError("live BFF host publication is not the reviewed loopback")
     environment = _container_environment(value)
-    if environment.get("HOME_AGENT_HA_URL") != contract.ha_url:
+    if environment.get(profile.url_key) != contract.ha_url:
         raise ContractError("live BFF HA endpoint differs from policy")
 
 
 def live_contract(contract: Contract) -> ipaddress.IPv4Address:
     network_payload = _json_command(
-        ["docker", "network", "inspect", NETWORK_NAME], "Docker network inspection"
+        ["docker", "network", "inspect", contract.profile.network],
+        "Docker network inspection",
     )
     container_payload = _json_command(
-        ["docker", "inspect", CONTAINER_NAME], "Docker BFF inspection"
+        ["docker", "inspect", contract.profile.container], "Docker BFF inspection"
     )
     status = _json_command(["tailscale", "status", "--json"], "Tailscale inspection")
     if not isinstance(network_payload, list) or len(network_payload) != 1:
@@ -412,29 +487,65 @@ def _rule_command(contract: Contract, tail_ip: ipaddress.IPv4Address) -> list[st
 
 def guard_rule_spec(
     contract: Contract, tail_ip: ipaddress.IPv4Address
-) -> tuple[str, str, str, str]:
-    """Return the canonical jump, return-flow allow, HA allow, and drop."""
+) -> tuple[str, str | None, str, str]:
+    """Return the canonical jump, return-flow allow (if any), HA allow, and drop."""
 
-    jump = f"-A INPUT -i {contract.bridge} -j {GUARD_CHAIN}"
-    established = (
-        f"-A {GUARD_CHAIN} -s {contract.bff_ip}/32 "
-        f"-d {contract.gateway}/32 -p tcp -m tcp --sport 8097 -m conntrack "
-        "--ctstate RELATED,ESTABLISHED -j ACCEPT"
-    )
+    chain = contract.profile.chain
+    jump = f"-A INPUT -i {contract.bridge} -j {chain}"
+    established = None
+    if contract.profile.published_port is not None:
+        established = (
+            f"-A {chain} -s {contract.bff_ip}/32 "
+            f"-d {contract.gateway}/32 -p tcp -m tcp "
+            f"--sport {contract.profile.published_port} -m conntrack "
+            "--ctstate RELATED,ESTABLISHED -j ACCEPT"
+        )
     allow = (
-        f"-A {GUARD_CHAIN} -s {contract.bff_ip}/32 -d {tail_ip}/32 "
+        f"-A {chain} -s {contract.bff_ip}/32 -d {tail_ip}/32 "
         f"-p tcp -m tcp --dport {contract.ha_port} -j ACCEPT"
     )
-    deny = f"-A {GUARD_CHAIN} -j DROP"
+    deny = f"-A {chain} -j DROP"
     return jump, established, allow, deny
 
 
-def _targets_guard(line: str) -> bool:
+def expected_guard_lines(
+    contract: Contract, tail_ip: ipaddress.IPv4Address
+) -> list[str]:
+    _jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
+    return [f"-N {contract.profile.chain}", *([established] if established else []), allow, deny]
+
+
+def _targets_guard(line: str, chain: str = GUARD_CHAIN) -> bool:
     tokens = line.split()
     return any(
-        tokens[index] == "-j" and tokens[index + 1] == GUARD_CHAIN
+        tokens[index] == "-j" and tokens[index + 1] == chain
         for index in range(len(tokens) - 1)
     )
+
+
+def _reviewed_leading_jumps(input_rules: list[str], contract: Contract) -> list[str]:
+    """The leading INPUT rules that are exact reviewed first-hop guard jumps.
+
+    Only this profile's own exact jump, or another reviewed profile's exact
+    ``-A INPUT -i <other bridge> -j <other chain>`` jump, may precede it.
+    """
+
+    own = guard_rule_spec(contract, contract.tail_ip)[0]
+    others = {profile.chain for profile in PROFILES.values()} - {contract.profile.chain}
+    leading: list[str] = []
+    for line in input_rules:
+        tokens = line.split()
+        other = (
+            len(tokens) == 6
+            and tokens[:3] == ["-A", "INPUT", "-i"]
+            and tokens[4] == "-j"
+            and tokens[3] != contract.bridge
+            and tokens[5] in others
+        )
+        if line != own and not other:
+            break
+        leading.append(line)
+    return leading
 
 
 def validate_guard_rules(
@@ -451,12 +562,16 @@ def validate_guard_rules(
     in UFW, Docker, or a later custom chain are unreachable for this bridge.
     """
 
-    jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
+    jump = guard_rule_spec(contract, tail_ip)[0]
     input_rules = [line for line in input_lines if line.startswith("-A INPUT ")]
-    references = [line for line in input_rules if _targets_guard(line)]
-    if not input_rules or input_rules[0] != jump or references != [jump]:
+    references = [
+        line for line in input_rules if _targets_guard(line, contract.profile.chain)
+    ]
+    # Each reviewed bridge has its own first-hop jump. Only another reviewed
+    # profile's guard jump (which matches a different bridge) may precede it.
+    if references != [jump] or jump not in _reviewed_leading_jumps(input_rules, contract):
         raise ContractError("BFF OAuth guard is not the sole first INPUT jump")
-    if guard_lines != [f"-N {GUARD_CHAIN}", established, allow, deny]:
+    if guard_lines != expected_guard_lines(contract, tail_ip):
         raise ContractError("BFF OAuth guard chain differs from exact allow/drop policy")
 
 
@@ -482,7 +597,7 @@ def _input_lines() -> list[str]:
 def validate_guard_live(
     contract: Contract, tail_ip: ipaddress.IPv4Address
 ) -> None:
-    guard_lines = _iptables_chain_lines(GUARD_CHAIN)
+    guard_lines = _iptables_chain_lines(contract.profile.chain)
     if guard_lines is None:
         raise ContractError("BFF OAuth first-hop guard is absent")
     validate_guard_rules(_input_lines(), guard_lines, contract, tail_ip)
@@ -490,41 +605,46 @@ def validate_guard_live(
 
 def _delete_guard_jump(contract: Contract) -> None:
     _run(
-        ["iptables", "-D", "INPUT", "-i", contract.bridge, "-j", GUARD_CHAIN],
+        ["iptables", "-D", "INPUT", "-i", contract.bridge, "-j", contract.profile.chain],
         "BFF OAuth guard-jump removal",
     )
 
 
 def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
-    jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
-    expected_guard = [f"-N {GUARD_CHAIN}", established, allow, deny]
-    legacy_guard = [f"-N {GUARD_CHAIN}", allow, deny]
+    chain = contract.profile.chain
+    port = contract.profile.published_port
+    jump = guard_rule_spec(contract, tail_ip)[0]
+    expected_guard = expected_guard_lines(contract, tail_ip)
+    _jump, _established, allow, deny = guard_rule_spec(contract, tail_ip)
+    # Only the BFF ever had the earlier two-rule guard.
+    legacy_guard = [f"-N {chain}", allow, deny] if port is not None else None
     input_lines = _input_lines()
-    references = [line for line in input_lines if _targets_guard(line)]
-    guard_lines = _iptables_chain_lines(GUARD_CHAIN)
+    references = [line for line in input_lines if _targets_guard(line, chain)]
+    guard_lines = _iptables_chain_lines(chain)
     created = False
 
     if guard_lines is None:
         if references:
             raise ContractError("INPUT references an absent BFF OAuth guard")
         try:
-            _run(["iptables", "-N", GUARD_CHAIN], "BFF OAuth guard creation")
+            _run(["iptables", "-N", chain], "BFF OAuth guard creation")
             created = True
+            if port is not None:
+                _run(
+                    [
+                        "iptables", "-A", chain,
+                        "-s", f"{contract.bff_ip}/32",
+                        "-d", f"{contract.gateway}/32",
+                        "-p", "tcp", "--sport", str(port),
+                        "-m", "conntrack",
+                        "--ctstate", "RELATED,ESTABLISHED",
+                        "-j", "ACCEPT",
+                    ],
+                    "BFF loopback established-return guard allow",
+                )
             _run(
                 [
-                    "iptables", "-A", GUARD_CHAIN,
-                    "-s", f"{contract.bff_ip}/32",
-                    "-d", f"{contract.gateway}/32",
-                    "-p", "tcp", "--sport", "8097",
-                    "-m", "conntrack",
-                    "--ctstate", "RELATED,ESTABLISHED",
-                    "-j", "ACCEPT",
-                ],
-                "BFF loopback established-return guard allow",
-            )
-            _run(
-                [
-                    "iptables", "-A", GUARD_CHAIN,
+                    "iptables", "-A", chain,
                     "-s", f"{contract.bff_ip}/32",
                     "-d", f"{tail_ip}/32",
                     "-p", "tcp", "--dport", str(contract.ha_port),
@@ -533,35 +653,35 @@ def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
                 "BFF OAuth exact guard allow",
             )
             _run(
-                ["iptables", "-A", GUARD_CHAIN, "-j", "DROP"],
+                ["iptables", "-A", chain, "-j", "DROP"],
                 "BFF OAuth terminal guard drop",
             )
             guard_lines = expected_guard
         except ContractError:
             if created:
                 subprocess.run(
-                    ["iptables", "-F", GUARD_CHAIN],
+                    ["iptables", "-F", chain],
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
                 subprocess.run(
-                    ["iptables", "-X", GUARD_CHAIN],
+                    ["iptables", "-X", chain],
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
             raise
-    elif guard_lines == legacy_guard:
+    elif legacy_guard is not None and guard_lines == legacy_guard:
         # Upgrade only the exact previously reviewed guard in place. Inserting
         # the return-flow rule before the existing HA allow/drop pair creates
         # no fail-open interval and leaves all new BFF-originated flows denied.
         _run(
             [
-                "iptables", "-I", GUARD_CHAIN, "1",
+                "iptables", "-I", chain, "1",
                 "-s", f"{contract.bff_ip}/32",
                 "-d", f"{contract.gateway}/32",
-                "-p", "tcp", "--sport", "8097",
+                "-p", "tcp", "--sport", str(port),
                 "-m", "conntrack",
                 "--ctstate", "RELATED,ESTABLISHED",
                 "-j", "ACCEPT",
@@ -573,18 +693,18 @@ def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
         raise ContractError("existing BFF OAuth guard chain is unreviewed")
 
     input_lines = _input_lines()
-    references = [line for line in input_lines if _targets_guard(line)]
+    references = [line for line in input_lines if _targets_guard(line, chain)]
     if not references:
         _run(
-            ["iptables", "-I", "INPUT", "1", "-i", contract.bridge, "-j", GUARD_CHAIN],
+            ["iptables", "-I", "INPUT", "1", "-i", contract.bridge, "-j", chain],
             "BFF OAuth first-hop guard insertion",
         )
     elif references == [jump]:
         input_rules = [line for line in input_lines if line.startswith("-A INPUT ")]
-        if not input_rules or input_rules[0] != jump:
+        if jump not in _reviewed_leading_jumps(input_rules, contract):
             _delete_guard_jump(contract)
             _run(
-                ["iptables", "-I", "INPUT", "1", "-i", contract.bridge, "-j", GUARD_CHAIN],
+                ["iptables", "-I", "INPUT", "1", "-i", contract.bridge, "-j", chain],
                 "BFF OAuth first-hop guard restoration",
             )
     else:
@@ -593,17 +713,18 @@ def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
 
 
 def remove_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
-    guard_lines = _iptables_chain_lines(GUARD_CHAIN)
+    chain = contract.profile.chain
+    guard_lines = _iptables_chain_lines(chain)
     input_lines = _input_lines()
-    references = [line for line in input_lines if _targets_guard(line)]
+    references = [line for line in input_lines if _targets_guard(line, chain)]
     if guard_lines is None and not references:
         return
     if guard_lines is None:
         raise ContractError("INPUT references an absent BFF OAuth guard")
     validate_guard_rules(input_lines, guard_lines, contract, tail_ip)
     _delete_guard_jump(contract)
-    _run(["iptables", "-F", GUARD_CHAIN], "BFF OAuth guard flush")
-    _run(["iptables", "-X", GUARD_CHAIN], "BFF OAuth guard deletion")
+    _run(["iptables", "-F", chain], "BFF OAuth guard flush")
+    _run(["iptables", "-X", chain], "BFF OAuth guard deletion")
 
 
 def rule_present(contract: Contract, tail_ip: ipaddress.IPv4Address) -> bool:
@@ -641,7 +762,7 @@ def apply_rule(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
             "to", str(tail_ip),
             "port", str(contract.ha_port),
             "proto", "tcp",
-            "comment", RULE_COMMENT,
+            "comment", contract.profile.comment,
         ],
         "UFW BFF OAuth rule application",
     )
@@ -666,21 +787,34 @@ def remove_rule(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
         raise ContractError("UFW retained the BFF OAuth rule after removal")
 
 
-def probe_from_bff() -> None:
+def probe_from_bff(contract: Contract | None = None) -> None:
     # GET intentionally carries no code, token, cookie, or identity. HA's
-    # token endpoint must be reachable and reject that method with 405.
+    # token endpoint must be reachable and reject that method with 405. The
+    # canonical URL is non-secret and already validated by the contract.
+    profile = contract.profile if contract is not None else BFF
+    target = (
+        "process.env.HOME_AGENT_HA_URL"
+        if profile.published_port is not None
+        else json.dumps(contract.ha_url)
+    )
     program = (
-        "fetch(process.env.HOME_AGENT_HA_URL+'/auth/token',"
+        f"fetch({target}+'/auth/token',"
         "{method:'GET',redirect:'error',signal:AbortSignal.timeout(5000)})"
         ".then(r=>process.exit(r.status===405?0:2)).catch(()=>process.exit(3))"
     )
-    _run(["docker", "exec", CONTAINER_NAME, "node", "-e", program], "BFF OAuth path probe")
+    _run(["docker", "exec", profile.container, "node", "-e", program], "BFF OAuth path probe")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("apply", "verify", "remove", "guard"))
     parser.add_argument("--env", required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILES), default=BFF.name)
+    parser.add_argument(
+        "--if-configured",
+        action="store_true",
+        help="exit successfully when the profile's HA URL is not provisioned",
+    )
     args = parser.parse_args(argv)
     if os.geteuid() != 0:
         print("BFF OAuth firewall contract requires root", file=sys.stderr)
@@ -688,7 +822,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         validate_trusted_execution()
         sanitize_process_environment()
-        contract = contract_from_env(read_env(validate_root_config(args.env)))
+        profile = PROFILES[args.profile]
+        values = read_env(validate_root_config(args.env))
+        if args.if_configured and not values.get(profile.url_key):
+            # An unprovisioned profile has no bridge allow rule; UFW's
+            # default-deny input policy already drops anything from it.
+            print(f"{profile.name} OAuth firewall contract not configured")
+            return 0
+        contract = contract_from_env(values, profile)
         if args.action != "remove":
             validate_lifecycle_hook()
         if args.action == "guard":
@@ -703,12 +844,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "apply":
             apply_rule(contract, tail_ip)
             apply_guard(contract, tail_ip)
-            probe_from_bff()
+            probe_from_bff(contract)
         elif args.action == "verify":
             if not rule_present(contract, tail_ip):
                 raise ContractError("exact BFF OAuth firewall rule is absent")
             validate_guard_live(contract, tail_ip)
-            probe_from_bff()
+            probe_from_bff(contract)
         else:
             remove_guard(contract, tail_ip)
             remove_rule(contract, tail_ip)

@@ -1,0 +1,99 @@
+--- a/app/src/index.html
++++ b/app/src/index.html
+@@ -128,6 +128,7 @@
+   <script src="./home-web-runtime.js"></script>
+   <script src="./home-security.js"></script>
+   <script src="./home-services.js"></script>
++  <script src="./home-connection-registry.js"></script>
+ </head>
+ <body>
+   <script>
+@@ -217,6 +218,7 @@
+         ['home-perception-lab-archive.js', false],
+         ['home-perception-lab-transport.js', false],
+         ['home-camera-query.js', false],
++        ['home-personal-memory.js', false],
+         ['home-perception-lab-data.js', false],
+         ['home-ha.jsx', true],
+         ['home-icons.jsx', true],
+--- a/app/src/home-events.jsx
++++ b/app/src/home-events.jsx
+@@ -1029,6 +1029,7 @@
+         }
+         return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
+       case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
++      case "personal-memory-launch": return <div><HomeContent text={e.text} /><button type="button" onClick={() => e.openReview?.()} style={{marginTop:12,padding:"12px 16px",minHeight:44,color:"var(--hg-fg-1)",background:"var(--hg-bg-2)",border:"1px solid var(--hg-border)",borderRadius:8}}>Open preference review</button></div>;
+       // Lighting articulation events carry kind "assistant" (emitter contract
+       // — run-lighting-events-tests asserts the kind). Render them like home
+       // turns; without this case they fell through to null (empty bubbles).
+--- a/app/src/home-app.jsx
++++ b/app/src/home-app.jsx
+@@ -7403,6 +7403,7 @@
+       // Phase 7 destructive guard: the armed clear card was confirmed —
+       // perform the wipe that Ctrl+L / /clear used to run instantly.
+       stopStreaming();
++      window.HomePersonalMemory?.reset();
+       window.HomeCameraQuery?.reset({privateData:true});
+       clearedEventsRef.current = eventsSnapshotRef.current.filter(
+         (e) => !(e.kind === "action" && e.service === "home.clear_conversation")
+@@ -9310,6 +9311,7 @@
+   const conversationHomeRef = useRef(conversationHome);
+   const selectConversationHome = useCallback((next) => {
+     if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
++    window.HomePersonalMemory?.reset();
+     conversationHomeRef.current = next;
+     setConversationHome(next);
+     cameraQueryGenerationRef.current++;
+@@ -9319,6 +9321,7 @@
+   const cameraEndpointRef = useRef(endpoint);
+   useEffect(() => {
+     const clear = () => {
++      window.HomePersonalMemory?.reset();
+       cameraQueryGenerationRef.current += 1;
+       window.HomeCameraQuery?.reset({privateData:true});
+       clearedEventsRef.current = null;
+@@ -9338,12 +9341,14 @@
+       if(next===site) return;
+       site=next;
+       if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
++      window.HomePersonalMemory?.reset();
+       conversationHomeRef.current=next;setConversationHome(next);
+       cameraQueryGenerationRef.current++;
+       window.HomeCameraQuery?.reset();
+     });
+   }, []);
+   const clearPrivateCameraContext = useCallback(() => {
++    window.HomePersonalMemory?.reset();
+     cameraQueryGenerationRef.current++;
+     window.HomeCameraQuery?.reset({privateData:true});
+     clearedEventsRef.current=null;
+@@ -9404,6 +9409,12 @@
+     setInput("");
+     const cameraQueryClient = haClientRef.current;
+     const cameraQueryGeneration = cameraQueryGenerationRef.current;
++    if (window.HomePersonalMemory?.run(text, {addEvent,
++      isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
++    })) {
++      window.HomeCameraQuery?.reset();
++      return;
++    }
+     if (window.HomeCameraQuery && await window.HomeCameraQuery.run(text, {
+       addEvent, simActive: sim.active,
+       validateAuthority: window.HG_WEB_MODE ? () => window.HomeCameraQuery.validateAuthority(clearPrivateCameraContext) : undefined,
+--- a/app/src/home-people.jsx
++++ b/app/src/home-people.jsx
+@@ -948,10 +948,12 @@
+               <strong>{notReady.fallbackStatus === 401 ? "Sign in to load People" : "People service unavailable"}</strong>
+               <p style={{margin:"6px 0"}}>People records are now served by the Home Agent. The legacy identity store is intentionally read-only.</p>
+               <p style={{margin:"6px 0"}}>{notReady.fallbackStatus === 401
+-                ? "Your People session is missing or expired. Sign in with Home Assistant, then return here and retry."
++                ? (window.HG_AGENT_ORIGIN
++                  ? "The household is kept by the Home Agent on its own secure address. Open it there to view and manage People."
++                  : "Your People session is missing or expired. Sign in with Home Assistant, then return here and retry.")
+                 : notReady.fallbackStatus === 403 ? "Your current Home Agent session cannot access the household."
+                 : "The Home Agent could not load the household. Your saved people have not been deleted."}</p>
+-              {notReady.fallbackStatus === 401 && <a href="/home-agent/" target="_blank" rel="noopener noreferrer" style={{color:"var(--hg-ice)",marginRight:12}}>Open Home Assistant sign-in ↗</a>}
++              {notReady.fallbackStatus === 401 && <a href={(window.HG_AGENT_ORIGIN || "") + "/home-agent/"} target="_blank" rel="noopener noreferrer" style={{color:"var(--hg-ice)",marginRight:12}}>{window.HG_AGENT_ORIGIN ? "Open People in the Home Agent ↗" : "Open Home Assistant sign-in ↗"}</a>}
+               <button onClick={refresh} style={{font:"inherit",color:"inherit",background:"transparent",border:"1px solid currentColor",padding:"4px 10px",cursor:"pointer"}}>Retry People</button>
+               <details style={{marginTop:8}}><summary>Connection details</summary><code>{notReady.fallback}</code></details>
+             </> : <>

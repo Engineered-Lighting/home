@@ -13,6 +13,8 @@ HELPER = DEPLOY / "bff-egress"
 sys.path.insert(0, str(HELPER))
 
 from firewall_contract import (  # noqa: E402
+    BFF,
+    VICTORIA_LINK,
     ContractError,
     UFW_HOOK_SHA256,
     apply_guard,
@@ -384,6 +386,148 @@ class BffEgressFirewallContractTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(hook.encode()).hexdigest(), UFW_HOOK_SHA256
         )
+
+
+VICTORIA_HA_URL = "https://home-app.example.ts.net:10001"
+
+
+def victoria_env(**updates: str) -> dict[str, str]:
+    value = env(HOME_AGENT_VICTORIA_HA_URL=VICTORIA_HA_URL)
+    value.update(updates)
+    return value
+
+
+def victoria_network_shape():
+    shape = network_shape()
+    shape["Name"] = "home-agent_victoria-link-egress"
+    shape["Options"] = {"com.docker.network.bridge.name": "ha-vlink-egr0"}
+    shape["IPAM"] = {"Config": [{"Subnet": "172.26.0.0/24", "Gateway": "172.26.0.1"}]}
+    shape["Containers"] = {"id": {
+        "Name": "home-shared-preferences-victoria-link-1", "IPv4Address": "172.26.0.10/24"}}
+    return shape
+
+
+def victoria_container_shape():
+    shape = container_shape()
+    shape["Name"] = "/home-shared-preferences-victoria-link-1"
+    shape["Config"] = {"Labels": {
+        "com.docker.compose.project": "home-shared-preferences",
+        "com.docker.compose.service": "victoria-link",
+    }, "Env": []}
+    shape["HostConfig"]["PortBindings"] = {}
+    shape["NetworkSettings"] = {"Networks": {
+        "home-agent_api-net": {"IPAddress": "172.23.0.36", "GlobalIPv6Address": ""},
+        "home-agent_victoria-link-egress": {"IPAddress": "172.26.0.10", "GlobalIPv6Address": ""},
+    }}
+    return shape
+
+
+class VictoriaLinkEgressTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.contract = contract_from_env(victoria_env(), VICTORIA_LINK)
+        self.tail_ip = ipaddress.IPv4Address("100.87.94.18")
+
+    def test_default_profile_is_unchanged_bff(self) -> None:
+        self.assertIs(contract_from_env(env()).profile, BFF)
+        self.assertEqual(BFF.chain, "HOME_AGENT_BFF_INPUT")
+        self.assertEqual(BFF.published_port, 8097)
+
+    def test_profile_accepts_exact_live_shapes_without_host_publication(self) -> None:
+        self.assertEqual(self.contract.ha_url, VICTORIA_HA_URL)
+        self.assertEqual(self.contract.ha_port, 10001)
+        self.assertIsNone(self.contract.bind_address)
+        validate_network(self.contract, victoria_network_shape())
+        validate_container(self.contract, victoria_container_shape())
+
+    def test_profile_rejects_publication_bff_identity_and_extra_networks(self) -> None:
+        published = victoria_container_shape()
+        published["HostConfig"]["PortBindings"] = {
+            "9450/tcp": [{"HostIp": "127.0.0.1", "HostPort": "9450"}]}
+        bff_identity = victoria_container_shape()
+        bff_identity["Name"] = "/home-agent-bff-1"
+        extra = victoria_container_shape()
+        extra["NetworkSettings"]["Networks"]["home-agent_bff-public"] = {
+            "IPAddress": "172.22.0.11", "GlobalIPv6Address": ""}
+        for value in (published, bff_identity, extra):
+            with self.subTest(value=value["Name"]), self.assertRaises(ContractError):
+                validate_container(self.contract, value)
+        with self.assertRaises(ContractError):
+            validate_network(self.contract, network_shape())
+
+    def test_unprovisioned_profile_has_no_contract(self) -> None:
+        with self.assertRaises(ContractError):
+            contract_from_env(env(), VICTORIA_LINK)
+
+    def test_guard_has_no_return_flow_rule_and_its_own_chain(self) -> None:
+        jump, established, allow, deny = guard_rule_spec(self.contract, self.tail_ip)
+        self.assertIsNone(established)
+        self.assertEqual(jump, "-A INPUT -i ha-vlink-egr0 -j HOME_AGENT_VLINK_INPUT")
+        self.assertIn("-s 172.26.0.10/32 -d 100.87.94.18/32", allow)
+        self.assertIn("--dport 10001", allow)
+        commands: list[list[str]] = []
+        with (
+            patch("firewall_contract._input_lines", return_value=["-P INPUT DROP"]),
+            patch("firewall_contract._iptables_chain_lines", return_value=None),
+            patch("firewall_contract._run", side_effect=lambda c, _l: commands.append(c)),
+            patch("firewall_contract.validate_guard_live"),
+        ):
+            apply_guard(self.contract, self.tail_ip)
+        self.assertEqual(commands, [
+            ["iptables", "-N", "HOME_AGENT_VLINK_INPUT"],
+            ["iptables", "-A", "HOME_AGENT_VLINK_INPUT", "-s", "172.26.0.10/32",
+             "-d", "100.87.94.18/32", "-p", "tcp", "--dport", "10001", "-j", "ACCEPT"],
+            ["iptables", "-A", "HOME_AGENT_VLINK_INPUT", "-j", "DROP"],
+            ["iptables", "-I", "INPUT", "1", "-i", "ha-vlink-egr0", "-j", "HOME_AGENT_VLINK_INPUT"],
+        ])
+
+    def test_both_first_hop_guards_may_lead_input_in_either_order(self) -> None:
+        bff = contract_from_env(env())
+        bff_jump, established, bff_allow, bff_deny = guard_rule_spec(bff, self.tail_ip)
+        v_jump, _none, v_allow, v_deny = guard_rule_spec(self.contract, self.tail_ip)
+        bff_chain = ["-N HOME_AGENT_BFF_INPUT", established, bff_allow, bff_deny]
+        v_chain = ["-N HOME_AGENT_VLINK_INPUT", v_allow, v_deny]
+        for order in ([bff_jump, v_jump], [v_jump, bff_jump]):
+            lines = ["-P INPUT DROP", *order, "-A INPUT -j ufw-before-input"]
+            validate_guard_rules(lines, bff_chain, bff, self.tail_ip)
+            validate_guard_rules(lines, v_chain, self.contract, self.tail_ip)
+        # A non-guard rule before the Victoria jump makes it bypassable.
+        with self.assertRaises(ContractError):
+            validate_guard_rules(
+                ["-P INPUT DROP", bff_jump, "-A INPUT -i ha-vlink-egr0 -j ACCEPT", v_jump],
+                v_chain, self.contract, self.tail_ip)
+
+    def test_only_exact_other_profile_jumps_may_lead(self) -> None:
+        bff = contract_from_env(env())
+        bff_jump, established, bff_allow, bff_deny = guard_rule_spec(bff, self.tail_ip)
+        bff_chain = ["-N HOME_AGENT_BFF_INPUT", established, bff_allow, bff_deny]
+        for loose in (
+            "-A INPUT -j HOME_AGENT_VLINK_INPUT",                      # no bridge match
+            "-A INPUT -i ha-bff-egress0 -j HOME_AGENT_VLINK_INPUT",    # the BFF's own bridge
+            "-A INPUT -i ha-vlink-egr0 -p tcp -j HOME_AGENT_VLINK_INPUT",
+        ):
+            with self.subTest(loose=loose), self.assertRaises(ContractError):
+                validate_guard_rules(["-P INPUT DROP", loose, bff_jump], bff_chain, bff, self.tail_ip)
+
+    def test_restoration_does_not_reorder_an_already_leading_guard(self) -> None:
+        bff = contract_from_env(env())
+        bff_jump = guard_rule_spec(bff, self.tail_ip)[0]
+        v_jump = guard_rule_spec(self.contract, self.tail_ip)[0]
+        chain = ["-N HOME_AGENT_VLINK_INPUT", *guard_rule_spec(self.contract, self.tail_ip)[2:]]
+        commands: list[list[str]] = []
+        with (
+            patch("firewall_contract._input_lines",
+                  return_value=["-P INPUT DROP", bff_jump, v_jump]),
+            patch("firewall_contract._iptables_chain_lines", return_value=chain),
+            patch("firewall_contract._run", side_effect=lambda c, _l: commands.append(c)),
+            patch("firewall_contract.validate_guard_live"),
+        ):
+            apply_guard(self.contract, self.tail_ip)
+        self.assertEqual(commands, [])
+
+    def test_hook_guards_victoria_only_when_configured(self) -> None:
+        hook = (DEPLOY / "bff-egress/ufw_after_init.sh").read_text(encoding="utf-8")
+        self.assertIn("guard --profile victoria-link", hook)
+        self.assertIn("--if-configured", hook)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,18 @@ def test_private_entrypoints_bound_real_core_pool(tmp_path, monkeypatch, module_
     assert captured[0].state.operator_database is None
 
 
+def test_connection_limits_can_be_provisioned_by_environment(monkeypatch):
+    import base64
+    from app.config import Settings
+    monkeypatch.setenv("HOME_AGENT_DATABASE_POOL_SIZE", "2")
+    monkeypatch.setenv("HOME_AGENT_DATABASE_MAX_OVERFLOW", "0")
+    settings = Settings(database_url="postgresql+psycopg://home_agent_api:fixture@localhost/home_agent",
+        policy_digest="a"*64, service_token="b"*64,
+        knowledge_encryption_key=base64.urlsafe_b64encode(b"k"*32).decode())
+    assert settings.database_pool_size == 2
+    assert settings.database_max_overflow == 0
+
+
 def profile(tmp_path, **patch):
     for name, data in (("credential",b"a"*64),("review",b"b"*64),
                        ("cert",b"fixture certificate"),("key",b"fixture TLS key")):

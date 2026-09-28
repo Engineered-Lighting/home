@@ -31,6 +31,10 @@ ERASURE_CONTRACT = "phase3-erasure-current-receipt-e5j-v1"
 CONFIG_ROOT = Path("/srv/home-agent/config")
 ENVIRONMENT_PATH = CONFIG_ROOT / "home-agent.env"
 RESTORE_RECEIPT_PATH = CONFIG_ROOT / "phase3-restore-drill-e5j.json"
+MAINTENANCE_RESTORE_PATH = CONFIG_ROOT / "maintenance-restore-drill.json"
+MAINTENANCE_REVISIONS = frozenset({
+    "0031_relationship_uniqueness_e5r", "0047_personal_pref_authority_v1",
+})
 ERASURE_RECEIPT_PATH = CONFIG_ROOT / "phase3-erasure-current-e5j.json"
 LEDGER_HEAD_PATH = Path("/srv/home-agent/erasure-ledger/ledger.head.json")
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
@@ -84,6 +88,25 @@ def build_restore_receipt(
         raise ReceiptError("database system identifier is invalid")
     return {
         "contract": RESTORE_CONTRACT,
+        "backup_label": backup_label,
+        "schema_revision": schema_revision,
+        "database_system_identifier": database_system_identifier,
+        "completed_at": _utc_text(completed_at),
+        "restore_status": "passed",
+    }
+
+
+def build_maintenance_restore_receipt(
+    *, backup_label: str, schema_revision: str,
+    database_system_identifier: str, completed_at: datetime,
+) -> dict[str, Any]:
+    """Record a completed maintenance drill without granting E5j activation."""
+    if (schema_revision not in MAINTENANCE_REVISIONS
+            or BACKUP_LABEL.fullmatch(backup_label) is None
+            or SYSTEM_IDENTIFIER.fullmatch(database_system_identifier) is None):
+        raise ReceiptError("maintenance restore identity is invalid")
+    return {
+        "contract": "home-agent-maintenance-restore-receipt-v1",
         "backup_label": backup_label,
         "schema_revision": schema_revision,
         "database_system_identifier": database_system_identifier,
@@ -309,13 +332,15 @@ def _verify_erasure_current() -> Any:
 
 
 def write_restore(args: argparse.Namespace) -> None:
-    receipt = build_restore_receipt(
+    maintenance = args.command == "restore-maintenance"
+    builder = build_maintenance_restore_receipt if maintenance else build_restore_receipt
+    receipt = builder(
         backup_label=args.backup_label,
         schema_revision=args.schema_revision,
         database_system_identifier=args.database_system_identifier,
         completed_at=datetime.now(UTC),
     )
-    atomic_write_root_receipt(RESTORE_RECEIPT_PATH, receipt)
+    atomic_write_root_receipt(MAINTENANCE_RESTORE_PATH if maintenance else RESTORE_RECEIPT_PATH, receipt)
 
 
 def write_erasure_current() -> None:
@@ -342,15 +367,16 @@ def write_erasure_current() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="phase3-evidence-receipts")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    restore = subparsers.add_parser("restore")
-    restore.add_argument("--backup-label", required=True)
-    restore.add_argument("--schema-revision", required=True)
-    restore.add_argument("--database-system-identifier", required=True)
+    for name in ("restore", "restore-maintenance"):
+        restore = subparsers.add_parser(name)
+        restore.add_argument("--backup-label", required=True)
+        restore.add_argument("--schema-revision", required=True)
+        restore.add_argument("--database-system-identifier", required=True)
     subparsers.add_parser("erasure-current")
     args = parser.parse_args()
     try:
         _require_root_linux()
-        if args.command == "restore":
+        if args.command in {"restore", "restore-maintenance"}:
             write_restore(args)
         else:
             write_erasure_current()

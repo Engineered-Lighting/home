@@ -52,12 +52,15 @@ docker compose --env-file /absolute/reviewed.env -f compose.json --profile share
 Validate current host health, compatible schema 0047, installed permissions,
 verified backup and rollback artifacts before a coordinated startup. Start only
 the explicitly admitted service names with `up -d --no-build --no-deps`.
-Automatic restart is disabled for commissioning. Inspect TLS and authenticated
-operation results; this configuration does not claim application readiness.
+The five live services (`echo-preferences`, `echo-identity`, `victoria-identity`,
+`link-coordinator`, `victoria-link`) restart `unless-stopped`, after live
+acceptance on 2026-09-28 and a sustained resource check. `victoria-preferences`
+has no client yet, so it stays staged with `restart: no`. Inspect TLS and
+authenticated operation results after any restart.
 
 Rollback stops these new services and revokes their new credentials while
 retaining journals, current data and deletion history. It must not restore an
-older database. No live acceptance has been performed with this configuration.
+older database. Live acceptance passed on 2026-09-28; see `docs/SHARED-PREFERENCES-RELEASE-2026-09-28.md`.
 
 ## Migration 0031 -> 0047
 

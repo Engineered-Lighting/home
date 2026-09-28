@@ -102,12 +102,12 @@ BEGIN
    ORDER BY g.site_id,g.capability FOR SHARE OF g,s,i
  LOOP
    grants:=grants+1; expiry:=least(expiry,grant_row.expires_at);
-   IF grant_row.capability=CASE WHEN p_write THEN 'personal_memory.write' ELSE 'memory.read' END THEN
+   IF grant_row.capability=(CASE WHEN p_write THEN 'personal_memory.write' ELSE 'memory.read' END) THEN
      IF grant_row.site_id='echo' THEN echo_revision:=grant_row.revision;
      ELSE victoria_revision:=grant_row.revision; END IF;
    END IF;
  END LOOP;
- IF grants<>CASE WHEN p_write THEN 4 ELSE 2 END OR echo_revision IS NULL OR victoria_revision IS NULL OR expiry<=clock_timestamp() THEN
+ IF grants<>(CASE WHEN p_write THEN 4 ELSE 2 END) OR echo_revision IS NULL OR victoria_revision IS NULL OR expiry<=clock_timestamp() THEN
    RAISE EXCEPTION 'personal_preference_grants_unavailable' USING ERRCODE='42501';
  END IF;
  RETURN QUERY SELECT anchor.principal_id,anchor.person_id,anchor.link_id,anchor.authorization_generation,

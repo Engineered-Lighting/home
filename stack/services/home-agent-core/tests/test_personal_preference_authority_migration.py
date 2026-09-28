@@ -67,7 +67,7 @@ def test_authority_requires_fixed_source_both_homes_and_live_session():
         "g.source_id='core.personal-preferences.v1'", "g.site_id IN ('echo','victoria')",
         "s.registration_revision=g.source_revision", "g.authorization_generation=anchor.authorization_generation",
         "FOR SHARE OF b,l,p,person", "FOR SHARE OF b,i", "FOR SHARE OF g,s,i",
-        "grants<>CASE WHEN p_write THEN 4 ELSE 2 END", "interval '60 seconds'",
+        "grants<>(CASE WHEN p_write THEN 4 ELSE 2 END)", "interval '60 seconds'",
     ):
         assert required in body
     # The role has only named-column reads; wildcard expansion would fail or

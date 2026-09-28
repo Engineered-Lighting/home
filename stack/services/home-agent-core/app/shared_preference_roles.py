@@ -143,8 +143,12 @@ def activate(connection, passwords):
             connection.execute(text(f"GRANT EXECUTE ON FUNCTION {signature} TO {role}"))
         connection.execute(text(f'GRANT CONNECT ON DATABASE "{database}" TO {role}'))
         verifier = scram_verifier(passwords[role])
-        connection.execute(text(f"ALTER ROLE {role} WITH LOGIN PASSWORD '{verifier}' "
-                                f"CONNECTION LIMIT {int(limit)} VALID UNTIL 'infinity'"))
+        if not re.fullmatch(r"SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+", verifier):
+            raise ValueError("unexpected verifier shape")
+        # exec_driver_sql: the verifier's ":salt" must not be parsed as a bind
+        # parameter, and utility statements cannot take bound values anyway.
+        connection.exec_driver_sql(f"ALTER ROLE {role} WITH LOGIN PASSWORD '{verifier}' "
+                                   f"CONNECTION LIMIT {int(limit)} VALID UNTIL 'infinity'")
 
 
 def deactivate(connection):
@@ -167,13 +171,15 @@ def deactivate(connection):
 
 
 def status(connection):
-    database = connection.execute(text("SELECT current_database()")).scalar_one()
     result = {}
     for role, (limit, functions) in ROLES.items():
+        # "connect" is this role's own database grant; PUBLIC's is excluded.
         row = connection.execute(text("""SELECT rolcanlogin,rolconnlimit,rolvaliduntil IS NULL OR rolvaliduntil>now(),
-            has_database_privilege(rolname,:database,'CONNECT'),
+            EXISTS(SELECT 1 FROM pg_catalog.pg_database d,
+              LATERAL pg_catalog.aclexplode(COALESCE(d.datacl,pg_catalog.acldefault('d',d.datdba))) a
+              WHERE d.datname=current_database() AND a.grantee=r.oid AND a.privilege_type='CONNECT'),
             (SELECT count(*) FROM pg_catalog.pg_stat_activity a WHERE a.usename=r.rolname)
-            FROM pg_catalog.pg_roles r WHERE rolname=:role"""), {"role": role, "database": database}).one_or_none()
+            FROM pg_catalog.pg_roles r WHERE rolname=:role"""), {"role": role}).one_or_none()
         if row is None:
             result[role] = {"present": False}
             continue

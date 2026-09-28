@@ -407,6 +407,8 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
                 "tests/test_shared_link_coordinator_server.py",
                 "tests/test_startup_admission.py",
                 "tests/test_shared_preference_roles.py",
+                "tests/test_shared_link_key_admission.py",
+                "tests/test_shared_link_key_admission_postgres.py",
                 "tests/test_shared_preference_roles_postgres.py",
             } <= executed
             ordered = [node for name, _, kw in calls if name == "_pytest" for node in kw["nodes"]]
@@ -1772,7 +1774,8 @@ def test_every_nonweb_activation_source_is_in_the_hosted_gate_context() -> None:
         ROOT / ".github/workflows/home-agent-web-boundary.yml"
     ).read_text(encoding="utf-8")
     assert web_workflow.count('- "app/src/home-agent/**"') == 2
-    assert web_workflow.count('- "stack/services/home-agent-bff/**"') == 2
+    # The BFF is covered by the whole-stack filter (both push and pull_request).
+    assert web_workflow.count('- "stack/**"') == 2
 
 
 KERNEL_TEST = (

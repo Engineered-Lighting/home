@@ -11,6 +11,14 @@ restored sessions.
 - Schema 0047 migration receipt present. `echo-identity`, `victoria-identity`,
   `link-coordinator` and `echo-preferences` are running and verified.
   `victoria-preferences` stays staged.
+- The coordinator's commitment key is admitted. Until it is, every issuance
+  fails with `shared_link_key_not_admitted` and the Home tab reports an
+  unverified pairing. Run once as the owner, in the `migrate` operator service
+  with the coordinator's `commitment_key` mounted read-only, using the
+  `commitment_key_id` from the coordinator profile:
+  `python -m app.shared_link_key_admission admit --database-url-file
+  /run/secrets/database_url --key-file <mounted key> --key-id <commitment_key_id>`.
+  `status` with the same key arguments must then report `"matches": true`.
 - Imported, identity-verified BFF (`HOME_AGENT_SHARED_BFF_IMAGE`) and Origin
   (`HOME_AGENT_SHARED_ORIGIN_IMAGE`) images.
 - The `echo-agent` and `victoria-agent` tailnet origin nodes are approved, with

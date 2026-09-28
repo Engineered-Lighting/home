@@ -40,13 +40,17 @@ sudo install -m 0644 -o root -g root "$src/README.md" /usr/local/share/home-agen
 for unit in tailscaled-origin@.service tailscaled-origin-cert@.service tailscaled-origin-cert@.timer; do
   sudo install -m 0644 -o root -g root "$src/$unit" /etc/systemd/system/
 done
-check() { test "$(git hash-object "$src/$1")" = "$(sudo git hash-object "$2")" || { echo "digest mismatch: $1" >&2; exit 1; }; }
+reviewed=<merge commit sha>
+check() { test "$(git rev-parse "$reviewed:$src/$1")" = "$(sudo git hash-object "$2")" || { echo "digest mismatch: $1" >&2; return 1; }; }
 check refresh-origin-cert.sh /usr/local/libexec/home-agent/tailnet-origins/refresh-origin-cert.sh
 check tailscaled-origin@.service /etc/systemd/system/tailscaled-origin@.service
 check tailscaled-origin-cert@.service /etc/systemd/system/tailscaled-origin-cert@.service
 check tailscaled-origin-cert@.timer /etc/systemd/system/tailscaled-origin-cert@.timer
-sudo install -m 0644 -o root -g root "$src/echo-agent.env.example" /etc/tailscale-origin/echo-agent.env
-sudo install -m 0644 -o root -g root "$src/victoria-agent.env.example" /etc/tailscale-origin/victoria-agent.env
+# First install only; never overwrite reviewed instance configuration.
+for i in echo-agent victoria-agent; do
+  test -e /etc/tailscale-origin/$i.env ||
+    sudo install -m 0644 -o root -g root "$src/$i.env.example" /etc/tailscale-origin/$i.env
+done
 sudo systemctl daemon-reload
 ```
 
@@ -86,22 +90,34 @@ Never use Funnel. These instances hold only the handlers above.
 
 ## Victoria certificate
 
-`victoria-link` loads `browser.crt`/`browser.key` at startup. The refresh helper
-runs daily. It installs the certificate only when it changes, and restarts the
-container only if no owner sign-in window is open (`/run/tailscale-origin-hold`):
+`victoria-link` loads `browser.crt`/`browser.key` at startup from a read-only
+mount. The helper runs daily and only replaces the files when the certificate
+changes:
+
+- The certificate directory must be root-owned (`root:1000 0750`), and every
+  parent must be root-owned and not group- or other-writable. The helper
+  refuses otherwise.
+- It stages only in the node's root-only state directory. The key is
+  installed as `root:1000 0440`.
+- Each change records a persistent restart-pending marker that only a
+  successful container restart clears.
+- An open owner sign-in window (`/run/tailscale-origin-hold`) defers the
+  restart. A restart still pending after 7 days fails the unit, so
+  `OnFailure` alerts.
 
 ```sh
-sudo install -d -m 0700 -o 1000 -g 1000 \
-  /srv/home-agent/shared-preferences/prepared-20260928/victoria-bff/config/browser-tls
+sudo install -d -m 0750 -o root -g 1000 \
+  /srv/home-agent/shared-preferences/prepared-20260928/victoria-link-tls
 sudo /usr/local/libexec/home-agent/tailnet-origins/refresh-origin-cert.sh victoria-agent
 sudo systemctl enable --now tailscaled-origin-cert@victoria-agent.timer
 sudo touch /run/tailscale-origin-hold    # before an owner sign-in window
 sudo rm -f /run/tailscale-origin-hold    # after it
 ```
 
-A deferred restart is reported as pending. Restart victoria-link deliberately
-after the window. Any victoria-link restart ends in-flight Victoria linking
-sessions.
+After the hold is removed, the next run performs any deferred restart. To do it
+immediately, rerun the helper. Any victoria-link restart ends in-flight
+Victoria linking sessions. `OnFailure=ntfy-alert@%n.service` uses the host's
+existing alert template, which `tailscaled.service` also uses.
 
 ## Rollback
 

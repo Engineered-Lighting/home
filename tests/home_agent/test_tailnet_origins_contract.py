@@ -1,14 +1,16 @@
 """Contract checks for the tailnet browser-origin node deployment files.
 
 The extra origin nodes run on the production LA host beside its primary
-tailscaled. These checks keep them userspace-only, resource bounded, and free
-of Funnel or primary-node Serve resets.
+tailscaled. These checks keep them userspace-only, isolated from the primary
+node's state and firewall, resource bounded, and free of Funnel or primary-node
+Serve resets.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DIR = ROOT / "stack/home-agent-deploy/tailnet-origins"
@@ -27,58 +29,90 @@ def _directives(name: str) -> dict[str, str]:
     return values
 
 
-def test_origin_node_is_userspace_and_isolated_from_primary_node():
-    unit = _directives("tailscaled-origin@.service")
-    exec_start = unit["ExecStart"]
-    assert "--tun=userspace-networking" in exec_start
-    assert "--socket=/run/tailscale-origin-%i/tailscaled.sock" in exec_start
-    assert "--statedir=/var/lib/tailscale-origin/%i" in exec_start
-    # Never the primary node's state or socket.
-    assert "/var/lib/tailscale/" not in exec_start
-    assert "/run/tailscale/" not in exec_start
-    assert "--port=${TS_ORIGIN_PORT}" in exec_start
+class TailnetOriginContractTests(unittest.TestCase):
+    def test_origin_node_is_userspace_and_isolated_from_primary_node(self) -> None:
+        unit = _directives("tailscaled-origin@.service")
+        exec_start = unit["ExecStart"]
+        self.assertIn("--tun=userspace-networking", exec_start)
+        self.assertIn("--socket=/run/tailscale-origin-%i/tailscaled.sock", exec_start)
+        self.assertIn("--statedir=/var/lib/tailscale-origin/%i", exec_start)
+        self.assertIn("--port=${TS_ORIGIN_PORT}", exec_start)
+        self.assertNotIn("/var/lib/tailscale/", exec_start)
+        self.assertNotIn("/run/tailscale/", exec_start)
+        self.assertEqual(unit["Type"], "notify")
+        # `tailscaled --cleanup` would tear down the primary node's tailscale0
+        # interface and firewall chains.
+        self.assertNotIn("ExecStopPost", unit)
+        self.assertNotIn("--cleanup", _text("tailscaled-origin@.service"))
+
+    def test_origin_node_is_resource_bounded(self) -> None:
+        unit = _directives("tailscaled-origin@.service")
+        self.assertEqual(unit["MemoryMax"], "256M")
+        self.assertEqual(unit["MemorySwapMax"], "0")
+        self.assertEqual(unit["CPUQuota"], "25%")
+        self.assertEqual(unit["TasksMax"], "256")
+        self.assertEqual(unit["NoNewPrivileges"], "true")
+        self.assertEqual(unit["Restart"], "on-failure")
+
+    def test_origin_ports_are_distinct_from_primary_and_each_other(self) -> None:
+        ports = []
+        for name in ("echo-agent.env.example", "victoria-agent.env.example"):
+            match = re.search(r"^TS_ORIGIN_PORT=(\d+)$", _text(name), re.MULTILINE)
+            self.assertIsNotNone(match, name)
+            ports.append(int(match.group(1)))
+        self.assertEqual(len(set(ports)), 2)
+        self.assertNotIn(41641, ports)
+
+    def test_certificate_refresh_never_stages_where_others_can_write(self) -> None:
+        script = _text("refresh-origin-cert.sh")
+        self.assertIn('mktemp -d "$state/.refresh.XXXXXX"', script)
+        self.assertNotIn('mktemp -d "${TS_ORIGIN_CERT_DIR}', script)
+        self.assertIn("cert path not root-owned", script)
+        self.assertIn("cert path writable by others", script)
+        self.assertIn('install -o root -g "$TS_ORIGIN_CERT_GROUP" -m 0440', script)
+        self.assertNotIn("chown", script)
+        self.assertNotIn("TS_ORIGIN_CERT_OWNER", script)
+        self.assertNotRegex(script, r"cat\s+[^|]*browser\.key")
+        env = _text("victoria-agent.env.example")
+        self.assertNotIn("victoria-bff/config", env)
+        self.assertIn("TS_ORIGIN_CERT_GROUP=1000", env)
+
+    def test_deferred_restart_is_persistent_and_eventually_alerts(self) -> None:
+        script = _text("refresh-origin-cert.sh")
+        self.assertIn('pending="$state/restart-pending"', script)
+        self.assertIn("/run/tailscale-origin-hold", script)
+        self.assertIn("-gt 604800", script)
+        self.assertIn("-checkend 1209600", script)
+        self.assertIn("trap 'exit 143' TERM INT HUP", script)
+        # The marker is written before the files are replaced.
+        self.assertLess(script.index('date +%s > "$pending"'), script.index('mv -f "$dir/.browser.key.new"'))
+
+    def test_no_funnel_or_primary_serve_reset(self) -> None:
+        for path in DIR.iterdir():
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("tailscale funnel", text.lower(), path.name)
+            for line in text.splitlines():
+                if "serve reset" in line:
+                    self.assertIn("never", line.lower(), f"{path.name}: {line}")
+
+    def test_readme_tailscale_commands_target_an_origin_socket_or_are_allowlisted(self) -> None:
+        allowed_primary = {
+            "sudo tailscale serve status",
+            "sudo tailscale serve --tls-terminated-tcp=10001 off",
+        }
+        for line in _text("README.md").splitlines():
+            command = line.strip().rstrip(".").strip("`")
+            if not re.match(r"(sudo )?tailscale\s", command):
+                continue
+            if command.split("#", 1)[0].strip() in allowed_primary:
+                continue
+            self.assertIn("--socket=", command, command)
+
+    def test_victoria_origin_uses_raw_passthrough_and_echo_uses_https_proxy(self) -> None:
+        readme = _text("README.md")
+        self.assertIn("--tcp=443 tcp://172.23.0.36:9450", readme)
+        self.assertIn("--https=443 http://172.23.0.10:8096", readme)
 
 
-def test_origin_node_is_resource_bounded():
-    unit = _directives("tailscaled-origin@.service")
-    assert unit["MemoryMax"] == "128M"
-    assert unit["MemorySwapMax"] == "0"
-    assert unit["CPUQuota"] == "25%"
-    assert unit["TasksMax"] == "64"
-    assert unit["NoNewPrivileges"] == "true"
-    assert unit["Restart"] == "on-failure"
-
-
-def test_origin_ports_are_distinct_from_primary_and_each_other():
-    ports = []
-    for name in ("echo-agent.env.example", "victoria-agent.env.example"):
-        match = re.search(r"^TS_ORIGIN_PORT=(\d+)$", _text(name), re.MULTILINE)
-        assert match, name
-        ports.append(int(match.group(1)))
-    assert len(set(ports)) == 2
-    assert 41641 not in ports
-
-
-def test_certificate_refresh_defers_restart_during_owner_window():
-    script = _text("refresh-origin-cert.sh")
-    assert "/run/tailscale-origin-hold" in script
-    assert "-checkend 1209600" in script
-    assert "set -eu" in script
-    # The key is written readable only by its owner and never echoed.
-    assert "chmod 0400" in script
-    assert not re.search(r"cat\s+[^|]*browser\.key", script)
-
-
-def test_no_funnel_or_primary_serve_reset():
-    for path in DIR.iterdir():
-        text = path.read_text(encoding="utf-8")
-        assert "tailscale funnel" not in text.lower(), path.name
-        for line in text.splitlines():
-            if "serve reset" in line:
-                assert "never" in line.lower(), f"{path.name}: {line}"
-
-
-def test_victoria_origin_uses_raw_passthrough_and_echo_uses_https_proxy():
-    readme = _text("README.md")
-    assert "--tcp=443 tcp://172.23.0.36:9450" in readme
-    assert "--https=443 http://172.23.0.10:8096" in readme
+if __name__ == "__main__":
+    unittest.main()

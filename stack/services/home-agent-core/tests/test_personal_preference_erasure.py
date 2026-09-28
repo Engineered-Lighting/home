@@ -110,3 +110,23 @@ async def test_descriptor_entrypoint_keeps_its_original_scope(monkeypatch):
     )
     assert delegated.await_args.kwargs["predicate"] == "place_social_descriptor"
     assert delegated.await_args.kwargs["candidate_key"] == "descriptor_fact_id"
+
+
+@pytest.mark.asyncio
+async def test_replaying_empty_history_does_not_make_it_unbounded(monkeypatch):
+    statements = []
+    version = dict(fact_version_id=uuid4(),memory_transaction_id=uuid4(),system_range=Range(empty=True))
+
+    async def execute(statement, *args):
+        statements.append(statement)
+        if statement.is_select and "knowledge.fact_versions" in str(statement):
+            return Rows([version])
+        return Rows([])
+
+    connection = type("Connection", (), {"execute": staticmethod(execute)})()
+    monkeypatch.setattr(erasure, "governed_descendants", AsyncMock(return_value=[]))
+    await erasure.apply_personal_preference_erasure(connection,principal_id=uuid4(),fact_id=uuid4(),
+        erasure_request_id=uuid4(),now=NOW,require_existing=False)
+    updates = [s.compile(dialect=postgresql.dialect()).params for s in statements
+               if str(s).startswith("UPDATE knowledge.fact_versions")]
+    assert len(updates)==1 and "system_range" not in updates[0]

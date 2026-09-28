@@ -53,8 +53,8 @@ class PreferenceProposalRequest(Contract):
 
     @model_validator(mode="after")
     def shape(self):
-        if (self.operation == "remember") != (self.expected_revision == 0):
-            raise ValueError("remember requires no existing record; changes require its revision")
+        if self.operation != "remember" and self.expected_revision == 0:
+            raise ValueError("changes require an existing revision")
         if (self.operation == "forget") != (self.preference is None):
             raise ValueError("forget has no proposed value; writes require a typed preference")
         return self
@@ -143,7 +143,9 @@ class PreferenceReviewCommitment:
         PreferenceAuthority.aware(now)
         if now >= authority.valid_until:
             raise ValueError("authority expired")
-        if (request.expected_revision == 0) != (current is None):
+        # A forgotten record keeps its revision. Remembering again must name
+        # that tombstone revision rather than resetting the history to zero.
+        if (request.operation == "remember") != (current is None):
             raise ValueError("current record does not match proposal")
         if current is not None and type(current) is not EveningLightingPreference:
             raise TypeError("typed current preference required")

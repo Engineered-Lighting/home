@@ -195,7 +195,7 @@ async def _apply_fact_erasure(
             "object": {"erased": True},
             "resolution": "suppressed",
         }
-        if version["system_range"].upper is None:
+        if not version["system_range"].isempty and version["system_range"].upper is None:
             values["system_range"] = Range(
                 version["system_range"].lower, now, bounds="[)"
             )

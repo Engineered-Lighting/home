@@ -99,7 +99,7 @@ def test_expiry_never_renews_on_confirmation():
 
 
 @pytest.mark.parametrize("operation,revision,preference", [
-    ("remember", 1, {"value": "warm"}), ("correct", 0, {"value": "warm"}),
+    ("correct", 0, {"value": "warm"}),
     ("forget", 0, None), ("forget", 1, {"value": "warm"}), ("correct", 1, None),
 ])
 def test_corrections_and_forgetting_require_existing_revision(operation, revision, preference):
@@ -141,3 +141,14 @@ def test_debug_representations_do_not_disclose_preference_or_owner():
     for value in (request, authority, current, review, confirm):
         assert "warm" not in repr(value) and "cool" not in repr(value)
         assert str(authority.person_id) not in repr(value)
+
+
+def test_remembering_after_forgetting_keeps_the_tombstone_revision():
+    signer, request, authority, _, _, _ = fixture()
+    request = PreferenceProposalRequest.model_validate({**request.model_dump(), "expected_revision": 3})
+    review = signer.prepare(request, authority, None, now=NOW)
+    confirmation = PreferenceConfirmation(operation_id=request.operation_id, reviewed_digest=review.reviewed_digest)
+    assert signer.verify(request, authority, None, review, confirmation, now=NOW) == review
+    stale = PreferenceProposalRequest.model_validate({**request.model_dump(), "expected_revision": 0})
+    with pytest.raises(ValueError):
+        signer.verify(stale, authority, None, review, confirmation, now=NOW)

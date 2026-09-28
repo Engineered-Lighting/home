@@ -352,6 +352,7 @@ def test_production_boundary_is_fixed_host_bound_restart_safe_and_admitted() -> 
     assert "def _run_edge_source_contracts" in gate
     assert "test_edge.py &&" in gate
     assert "test_transport.py" in gate
+    assert "test_lighting.py" in gate
     postgres_test_image = (
         ROOT / "stack/services/home-agent-core/Dockerfile.postgres-test"
     ).read_text(encoding="utf-8")

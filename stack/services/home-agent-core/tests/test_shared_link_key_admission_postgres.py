@@ -1,7 +1,7 @@
 """Owner admission of the coordinator commitment key in the guarded 0047 clone.
 
-Everything runs in one owner transaction that is rolled back, so the clone's
-admission table stays empty for the other stages.
+Everything runs in one owner transaction that is rolled back, so whatever an
+earlier stage left in the clone's admission table is restored unchanged.
 """
 import os
 
@@ -21,12 +21,17 @@ def test_owner_admits_the_coordinator_key_once_and_refuses_a_different_key():
         connect_args={"connect_timeout": 5, "options": "-c statement_timeout=10000 -c lock_timeout=5000"})
     key = SharedLinkCommitments(b"k" * 32, key_id="shared-link-fixture")
     other = SharedLinkCommitments(b"o" * 32, key_id="shared-link-fixture")
+    snapshot = text("SELECT scope,key_id,key_fingerprint,revision,state FROM privacy.shared_link_key_admission ORDER BY scope")
     try:
+        with engine.connect() as connection:
+            before = [tuple(r) for r in connection.execute(snapshot).all()]
         with engine.connect() as connection:
             connection.execute(text("SET SESSION AUTHORIZATION home_agent_owner"))
             connection.commit()
             transaction = connection.begin()
             try:
+                # Start from an empty table; the rollback below restores any prior row.
+                connection.execute(text("DELETE FROM privacy.shared_link_key_admission"))
                 assert admission.status(connection, key) == {"admitted": False}
                 assert admission.admit(connection, key) == "admitted"
                 row = connection.execute(text("SELECT scope,key_id,key_fingerprint,revision,state "
@@ -47,6 +52,6 @@ def test_owner_admits_the_coordinator_key_once_and_refuses_a_different_key():
                 connection.execute(text("RESET SESSION AUTHORIZATION"))
                 connection.commit()
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT count(*) FROM privacy.shared_link_key_admission")).scalar_one() == 0
+            assert [tuple(r) for r in connection.execute(snapshot).all()] == before
     finally:
         engine.dispose()

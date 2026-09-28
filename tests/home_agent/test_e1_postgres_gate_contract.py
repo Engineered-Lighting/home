@@ -1630,6 +1630,8 @@ def test_test_image_and_ci_pin_the_reviewed_top_level_inputs() -> None:
     assert "COPY .github/workflows/home-agent-e1-postgres.yml" in dockerfile
     assert f"actions/checkout@{CHECKOUT_SHA}" in workflow
     assert "actions/checkout v4.3.1" in workflow
+    # The web-root coverage contract reads the web boundary workflow.
+    assert workflow.count('- ".github/workflows/home-agent-web-boundary.yml"') == 2
     assert workflow.count('- "stack/home-agent.env.example"') == 2
     assert (
         workflow.count(
@@ -1773,9 +1775,16 @@ def test_every_nonweb_activation_source_is_in_the_hosted_gate_context() -> None:
     web_workflow = (
         ROOT / ".github/workflows/home-agent-web-boundary.yml"
     ).read_text(encoding="utf-8")
-    assert web_workflow.count('- "app/src/home-agent/**"') == 2
-    # The BFF is covered by the whole-stack filter (both push and pull_request).
-    assert web_workflow.count('- "stack/**"') == 2
+    # The web roots skipped above are gated by the web boundary workflow
+    # instead, so both of its triggers must cover each one with a tree glob.
+    pull_request, push = web_workflow.split("\n  push:\n", 1)
+    push = push.split("\n  workflow_dispatch:", 1)[0]
+    for trigger in (pull_request, push):
+        trees = re.findall(r'(?m)^      - "([^"*]+)/\*\*"$', trigger)
+        for web_root in web_roots:
+            assert any(
+                web_root == tree or web_root.startswith(tree + "/") for tree in trees
+            ), web_root
 
 
 KERNEL_TEST = (

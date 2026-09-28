@@ -407,6 +407,8 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
                 "tests/test_shared_link_coordinator_server.py",
                 "tests/test_startup_admission.py",
                 "tests/test_shared_preference_roles.py",
+                "tests/test_shared_link_key_admission.py",
+                "tests/test_shared_link_key_admission_postgres.py",
                 "tests/test_shared_preference_roles_postgres.py",
             } <= executed
             ordered = [node for name, _, kw in calls if name == "_pytest" for node in kw["nodes"]]

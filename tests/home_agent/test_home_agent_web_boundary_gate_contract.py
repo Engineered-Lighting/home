@@ -31,13 +31,20 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
         self.assertEqual(self.source.count(CHECKOUT), 2)
         self.assertIn("branches: [main, codex/home-agent-integration]", self.source)
         self.assertIn('".github/workflows/home-agent-web-boundary.yml"', self.source)
-        self.assertIn('"stack/services/home-agent-bff/**"', self.source)
-        self.assertIn('"stack/services/home-agent-origin/**"', self.source)
-        self.assertIn('"stack/home-agent-deploy/agent-origin/**"', self.source)
-        self.assertEqual(
-            self.source.count('"tests/home_agent/test_panel_build_contract.py"'),
-            2,
-        )
+        for path in (
+            '"app/src-tauri/src/native_auth.rs"',
+            '"changes/unreleased/home-agent-dedicated-origin.md"',
+            '"changes/unreleased/home-agent-phase2-readiness.md"',
+            '"docs/HOME-AGENT-*.md"',
+            '"ha-config/home_agent_edge/**"',
+            '"stack/**"',
+            '"tests/home_agent/itaipava_golden_scenarios.json"',
+            '"tests/home_agent/test_panel_build_contract.py"',
+            '"tests/home_agent/test_repository_contract.py"',
+            '"tools/deploy-intelligence.ps1"',
+            '"web-gateway/**"',
+        ):
+            self.assertEqual(self.source.count(path), 2, path)
         self.assertIn("permissions:\n  contents: read", self.source)
         self.assertIn(f"NODE_IMAGE: {NODE_IMAGE}", self.source)
         self.assertIn(
@@ -81,6 +88,7 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
             "test_network_contract.py",
             "test_home_agent_web_boundary_gate_contract.py",
             "tests/home_agent/test_panel_build_contract.py",
+            "tests/home_agent/test_repository_contract.py",
             "git diff --exit-code -- app/src/home-agent/panel.js",
         ):
             self.assertIn(token, self.gate)

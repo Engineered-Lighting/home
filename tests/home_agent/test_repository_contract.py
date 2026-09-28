@@ -738,12 +738,16 @@ class RepositoryBoundaryTests(unittest.TestCase):
             read("stack/services/home-agent-bff/src/qualified-ha-auth.mjs"),
             import_transport,
         )
+        # Only the transport may address the HA edge routes. Match the route
+        # prefix rather than the word "whoami" so prose comments stay legal.
         for source in sorted(
             (ROOT / "stack/services/home-agent-bff/src").glob("*.mjs")
         ):
             if source.name != "ha-token-transport.mjs":
                 self.assertNotIn(
-                    "whoami", source.read_text(encoding="utf-8"), source.name
+                    "home_agent_edge/",
+                    source.read_text(encoding="utf-8"),
+                    source.name,
                 )
         self.assertIn("/api/agent/auth/callback", bff)
         self.assertIn("OAUTH_COOKIE_NAME", bff)

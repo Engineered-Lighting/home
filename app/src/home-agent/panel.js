@@ -1,4 +1,171 @@
 /* Generated local-only Agent bundle. */
+/* Provisioned connection contracts, independent of the visual site registry.
+ * This factory grants no authority. BFF/Core validate every session and grant.
+ * No default Victoria endpoint or new native IPC is introduced here.
+ */
+(function () {
+  "use strict";
+  var SITES = ["echo", "victoria"];
+  var OPERATIONS = ["session", "observations", "memory", "proposeLighting", "confirmLighting"];
+
+  function fail(message) { throw new Error(message); }
+  function fixedHttps(value) {
+    var url;
+    try { url = new URL(value); } catch (_) { fail("Invalid provisioned endpoint"); }
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+      fail("Provisioned endpoints require HTTPS without embedded credentials");
+    }
+    return url;
+  }
+  function freezeRecord(input) {
+    if (!input || SITES.indexOf(input.siteId) < 0 || !input.revision || !input.trustRevision) {
+      fail("Site and trust revisions are required");
+    }
+    var issuer = input.issuer;
+    if (issuer !== "home-assistant:" + input.siteId) fail("Unregistered stable issuer identity");
+    if (!input.transports || !Object.keys(input.transports).length) fail("No provisioned transport");
+    var transports = {};
+    Object.keys(input.transports).forEach(function (name) {
+      if (["lan", "private"].indexOf(name) < 0) fail("Unregistered transport");
+      transports[name] = fixedHttps(input.transports[name]).href;
+    });
+    if (!Array.isArray(input.capabilities) || input.capabilities.some(function (x) {
+      return OPERATIONS.indexOf(x) < 0;
+    })) fail("Unknown connection capability");
+    return Object.freeze({ siteId: input.siteId, revision: input.revision,
+      issuer: issuer, trustRevision: input.trustRevision,
+      transports: Object.freeze(transports), capabilities: Object.freeze(input.capabilities.slice()) });
+  }
+
+  function create(provisionedRecords, typedClient, monotonicClock) {
+    var mono = monotonicClock || function () { return performance.now() / 1000; };
+    if (!Array.isArray(provisionedRecords) || !typedClient || typeof typedClient.call !== "function") {
+      fail("Provisioned records and a typed client are required");
+    }
+    var records = new Map();
+    var hosts = new Map();
+    var issuers = new Set();
+    provisionedRecords.forEach(function (input) {
+      var record = freezeRecord(input);
+      if (records.has(record.siteId) || issuers.has(record.issuer)) fail("Duplicate site or issuer");
+      issuers.add(record.issuer);
+      Object.keys(record.transports).forEach(function (name) {
+        var host = new URL(record.transports[name]).hostname.toLowerCase();
+        if (hosts.has(host) && hosts.get(host) !== record.siteId) fail("BFF homes require distinct hostnames");
+        hosts.set(host, record.siteId);
+      });
+      records.set(record.siteId, record);
+    });
+    var current = null;
+    var generation = 0;
+    var controllers = new Set();
+    var cleanups = new Set();
+    var volatile = new Map();
+    var contextHistory = new Map();
+    var listeners = new Set();
+
+    function invalidate() {
+      generation += 1;
+      controllers.forEach(function (controller) { controller.abort(); });
+      controllers.clear();
+      cleanups.forEach(function (cleanup) { try { cleanup(); } catch (_) {} });
+      cleanups.clear();
+      volatile.clear();
+      contextHistory.clear();
+      listeners.forEach(function (listener) { try { listener(snapshot()); } catch (_) {} });
+    }
+    function snapshot() {
+      return Object.freeze({ siteId: current && current.siteId,
+        transport: current && current.transport, generation: generation });
+    }
+    function select(siteId, transport) {
+      var record = records.get(siteId);
+      if (!record || !Object.prototype.hasOwnProperty.call(record.transports, transport)) {
+        fail("Home connection is not provisioned");
+      }
+      if (current && current.siteId === siteId && current.transport === transport) return snapshot();
+      current = { siteId: siteId, transport: transport };
+      invalidate();
+      return snapshot();
+    }
+    async function request(operation, payload) {
+      if (!current) fail("Select a provisioned home connection");
+      var record = records.get(current.siteId);
+      if (OPERATIONS.indexOf(operation) < 0 || record.capabilities.indexOf(operation) < 0) {
+        fail("Operation is not provisioned");
+      }
+      var selected = snapshot();
+      var controller = new AbortController();
+      controllers.add(controller);
+      try {
+        var result = await typedClient.call(Object.freeze({
+          siteId: selected.siteId, issuer: record.issuer, endpoint: record.transports[selected.transport],
+          revision: record.revision, trustRevision: record.trustRevision,
+          operation: operation, payload: payload, signal: controller.signal,
+        }));
+        if (selected.generation !== generation || controller.signal.aborted) fail("Stale home response");
+        // The transport must return a server-authenticated site envelope, never a client header echo.
+        if (!result || result.siteId !== selected.siteId) fail("Response home mismatch");
+        return result;
+      } finally { controllers.delete(controller); }
+    }
+    return Object.freeze({
+      select: select, snapshot: snapshot, request: request,
+      clear: function () { current = null; invalidate(); },
+      revoke: function (siteId) { if (current && current.siteId === siteId) invalidate(); },
+      getProvisioned: function (siteId) { return records.get(siteId) || null; },
+      subscribe: function (listener) { listeners.add(listener); return function () { listeners.delete(listener); }; },
+      trackSubscription: function (generationAtStart, cleanup) {
+        if (typeof cleanup !== "function") fail("Subscription disposer required");
+        if (generationAtStart !== generation) { cleanup(); return false; }
+        cleanups.add(cleanup); return true;
+      },
+      putContext: function (generationAtStart, key, value, nowSeconds) {
+        if (generationAtStart !== generation || !current || !value || value.site_id !== current.siteId
+            || typeof key !== "string" || !key || key.length > 128
+            || key !== value.camera_id || !value.adapter_session || !Number.isInteger(value.sequence)
+            || value.sequence < 0 || !Number.isInteger(value.occupancy_generation) || value.occupancy_generation < 0
+            || !Number.isFinite(nowSeconds) || !Number.isFinite(value.observed_at)
+            || value.observed_at > nowSeconds || value.valid_until !== value.observed_at + 180
+            || value.valid_until <= nowSeconds || (!contextHistory.has(key) && contextHistory.size >= 64)) return false;
+        var previous = contextHistory.get(key);
+        if (previous && (previous.retired.has(value.adapter_session)
+            || (value.adapter_session === previous.session && (
+              value.occupancy_generation < previous.occupancyGeneration
+              || value.sequence <= previous.sequence || value.observed_at < previous.observedAt)))) return false;
+        var retired = previous ? previous.retired : new Set();
+        if (previous && previous.session !== value.adapter_session) retired.add(previous.session);
+        contextHistory.set(key, { retired: retired, session: value.adapter_session,
+          occupancyGeneration: value.occupancy_generation, sequence: value.sequence, observedAt: value.observed_at });
+        volatile.set(key, { value: Object.freeze(Object.assign({}, value)),
+          expiresMono: mono() + Math.min(180, value.valid_until - nowSeconds) }); return true;
+      },
+      currentContext: function (key, nowSeconds, availability) {
+        var entry = volatile.get(key);
+        var value = entry && entry.value;
+        if (value && availability && availability.site_id === value.site_id
+            && availability.adapter_session === value.adapter_session && availability.online === false) {
+          volatile.delete(key); return null;
+        }
+        if (entry && (mono() >= entry.expiresMono || nowSeconds >= value.valid_until || nowSeconds < value.observed_at)) {
+          volatile.delete(key); return null;
+        }
+        if (!value || !current || !Number.isFinite(nowSeconds) || !availability || availability.online !== true
+            || availability.site_id !== current.siteId || availability.retained === true
+            || !Number.isFinite(availability.checked_at) || nowSeconds < availability.checked_at
+            || nowSeconds - availability.checked_at > 10
+            || availability.adapter_session !== value.adapter_session
+            || availability.occupancy_generation !== value.occupancy_generation
+            || !Number.isFinite(value.observed_at) || !Number.isFinite(value.valid_until)
+            || value.observed_at > nowSeconds || value.valid_until !== value.observed_at + 180
+            || nowSeconds >= value.valid_until) return null;
+        return value;
+      },
+    });
+  }
+  window.HomeConnectionRegistry = Object.freeze({ create: create });
+}());
+;
 /**
  * @license React
  * react.production.min.js
@@ -306,6 +473,13 @@ const {
   useState
 } = React;
 const DEFAULT_DESCRIPTOR_TEXT = "This is my parents’ mountain house.";
+function sharedLinkCeremonyFromHash(hash) {
+  return /^#shared-link\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/.exec(hash || "")?.[1] || null;
+}
+function sharedLinkReviewValid(value, ceremonyId, now) {
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+  return value?.version === 1 && value.ceremony_id === ceremonyId && typeof value.gesture_id === "string" && uuid.test(value.gesture_id) && typeof value.reviewed_digest === "string" && /^[a-f0-9]{64}$/.test(value.reviewed_digest) && typeof value.expires_at === "string" && Number.isFinite(Date.parse(value.expires_at)) && Date.parse(value.expires_at) > now && Date.parse(value.expires_at) <= now + 300_000 && Array.isArray(value.accounts) && value.accounts.length === 2 && value.accounts.every((account, index) => account.site_id === (index ? "victoria" : "echo") && account.issuer_id === `home-assistant:${account.site_id}` && typeof account.subject === "string" && account.subject.length > 0 && [...account.subject].length <= 64 && account.subject.trim() === account.subject && !/[\x00-\x1f\x7f]/.test(account.subject));
+}
 function capturePrincipalOperation(subject, generation) {
   return Object.freeze({
     subject: subject || null,
@@ -474,6 +648,431 @@ function HouseholdCard({
     onClick: () => onAttestEdge(edgeDraft)
   }, busy ? "Recording…" : "Record relationship")));
 }
+function SharedPreferenceConsent({
+  api
+}) {
+  const [status, setStatus] = useState("idle");
+  const [review, setReview] = useState(null);
+  const [checked, setChecked] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const running = useRef(null);
+  const alive = useRef(true);
+  const blocked = useRef(false);
+  const dispatched = useRef(false);
+  const retained = useRef(null);
+  useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      blocked.current = true;
+      running.current?.abort();
+      retained.current = null;
+      setReview(null);
+      setChecked(false);
+      setStatus("unavailable");
+    });
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      alive.current = false;
+      running.current?.abort();
+      unsubscribe();
+      window.clearInterval(timer);
+    };
+  }, [api]);
+  const busy = ["loading", "confirming", "checking"].includes(status);
+  const expired = review && now >= Date.parse(review.expires_at);
+  async function perform(kind) {
+    if (running.current || !alive.current || blocked.current) return;
+    if (kind === "confirm" && (!checked || !review || dispatched.current || Date.now() >= Date.parse(review.expires_at))) return;
+    if (kind === "propose" && dispatched.current || kind === "outcome" && !retained.current) return;
+    const controller = new AbortController(),
+      generation = api.authorityGeneration;
+    running.current = controller;
+    const current = () => alive.current && !blocked.current && !controller.signal.aborted && generation === api.authorityGeneration;
+    setStatus(kind === "propose" ? "loading" : kind === "confirm" ? "confirming" : "checking");
+    try {
+      if (kind === "propose") {
+        const operation_id = window.crypto.randomUUID();
+        const result = (await api.personalMemory("sharing-propose", {
+          version: 1,
+          operation_id
+        }, {
+          signal: controller.signal
+        })).result;
+        if (!current()) return;
+        if (result?.version !== 1 || result.operation_id !== operation_id || result.source !== "core.personal-preferences.v1" || result.applies_to !== "both_homes" || result.effect !== "read_and_manage_confirmed_preferences" || !/^[a-f0-9]{64}$/.test(result.reviewed_digest) || !Number.isFinite(Date.parse(result.grants_expire_at)) || !(Date.parse(result.expires_at) > Date.now() && Date.parse(result.expires_at) <= Date.now() + 61000)) throw new Error("invalid_review");
+        retained.current = result;
+        setReview(result);
+        setChecked(false);
+        setNow(Date.now());
+        setStatus("review");
+      } else {
+        if (kind === "confirm") dispatched.current = true;
+        const body = {
+          version: 1,
+          operation_id: retained.current.operation_id
+        };
+        if (kind === "confirm") body.reviewed_digest = retained.current.reviewed_digest;
+        const result = (await api.personalMemory("sharing-" + kind, body, {
+          signal: controller.signal
+        })).result;
+        if (!current()) return;
+        if (result?.version !== 1 || result.operation_id !== retained.current.operation_id || result.status !== "committed") throw new Error("outcome_unknown");
+        setReview(null);
+        setChecked(false);
+        setStatus("committed");
+      }
+    } catch {
+      if (current()) {
+        setChecked(false);
+        setStatus(kind === "propose" ? "unavailable" : "unknown");
+      }
+    } finally {
+      if (running.current === controller) running.current = null;
+    }
+  }
+  return React.createElement("section", {
+    className: "agent-card agent-preference-sharing",
+    "aria-busy": busy
+  }, React.createElement("h2", null, "Share preferences between homes"), React.createElement("p", null, "Link your Los Angeles and Victoria accounts first. Then choose whether Home can read and manage your confirmed evening lighting preference across both homes."), React.createElement("div", {
+    role: "status",
+    "aria-live": "polite"
+  }, busy && React.createElement("p", null, status === "loading" ? "Preparing your sharing review..." : status === "confirming" ? "Confirming sharing..." : "Checking the original confirmation..."), status === "unavailable" && React.createElement("p", null, "Sharing setup is unavailable. Check that both accounts are linked and you are signed in."), status === "unknown" && React.createElement("p", null, "The outcome is not confirmed. Check its status instead of submitting again."), status === "committed" && React.createElement("p", null, "Preference sharing was confirmed. You can now return to Home and ask it to remember your evening lighting preference."), expired && status === "review" && React.createElement("p", null, "This review expired. Request a new review to continue.")), ["idle", "unavailable"].includes(status) && !blocked.current && !dispatched.current && React.createElement("button", {
+    disabled: busy,
+    onClick: () => perform("propose")
+  }, "Review preference sharing"), status === "review" && review && React.createElement(React.Fragment, null, React.createElement("p", null, "Applies to Los Angeles and Victoria until ", new Date(review.grants_expire_at).toLocaleString(), "."), React.createElement("p", null, "This saves and retrieves preferences. It does not control lights or share camera history."), React.createElement("label", null, React.createElement("input", {
+    type: "checkbox",
+    checked: checked,
+    disabled: expired || busy,
+    onChange: event => setChecked(event.target.checked)
+  }), " Allow Home to read and manage this shared preference."), React.createElement("p", null, React.createElement("button", {
+    disabled: !checked || expired || busy,
+    onClick: event => {
+      if (event.nativeEvent.isTrusted) perform("confirm");
+    }
+  }, "Confirm preference sharing")), expired && React.createElement("button", {
+    onClick: () => perform("propose")
+  }, "Get a new review")), status === "unknown" && React.createElement("button", {
+    disabled: busy,
+    onClick: () => perform("outcome")
+  }, "Check sharing status"));
+}
+function SharedLinkReviewCard({
+  api,
+  ceremonyId
+}) {
+  const [status, setStatus] = useState("idle");
+  const [review, setReview] = useState(null);
+  const [checked, setChecked] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const operation = useRef(null);
+  const alive = useRef(true);
+  const blocked = useRef(false);
+  const approved = useRef(false);
+  useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      blocked.current = true;
+      operation.current?.abort();
+      setReview(null);
+      setChecked(false);
+      setStatus("unavailable");
+    });
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      alive.current = false;
+      operation.current?.abort();
+      unsubscribe();
+      window.clearInterval(timer);
+    };
+  }, [api]);
+  const expired = review && now >= Date.parse(review.expires_at);
+  const busy = ["loading", "confirming", "checking"].includes(status);
+  const perform = async kind => {
+    if (operation.current || blocked.current || !alive.current) return;
+    if (kind === "confirm" && (!checked || approved.current || !sharedLinkReviewValid(review, ceremonyId, Date.now()))) return;
+    if (kind === "review" && approved.current) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    const generation = api.authorityGeneration;
+    const current = () => alive.current && !blocked.current && !controller.signal.aborted && generation === api.authorityGeneration;
+    setStatus(kind === "review" ? "loading" : kind === "confirm" ? "confirming" : "checking");
+    try {
+      if (kind === "review") {
+        const value = await api.sharedLinkReview(ceremonyId, {
+          signal: controller.signal
+        });
+        if (!current()) return;
+        if (!sharedLinkReviewValid(value, ceremonyId, Date.now())) throw new Error("review_unavailable");
+        setReview(value);
+        setChecked(false);
+        setNow(Date.now());
+        setStatus("review");
+      } else {
+        if (kind === "confirm") approved.current = true;
+        const value = kind === "confirm" ? await api.confirmSharedLink(ceremonyId, review.gesture_id, review.reviewed_digest, {
+          signal: controller.signal
+        }) : await api.sharedLinkOutcome(ceremonyId, {
+          signal: controller.signal
+        });
+        if (!current()) return;
+        if (value?.version !== 1 || value.status !== "confirmed" || value.ceremony_id !== ceremonyId) {
+          throw new Error("outcome_unavailable");
+        }
+        approved.current = true;
+        setReview(null);
+        setChecked(false);
+        setStatus("confirmed");
+      }
+    } catch {
+      if (current()) {
+        setReview(null);
+        setChecked(false);
+        setStatus(kind === "review" ? "unavailable" : "unknown");
+      }
+    } finally {
+      if (operation.current === controller) operation.current = null;
+    }
+  };
+  return React.createElement("section", {
+    className: "agent-card agent-shared-link",
+    "aria-labelledby": "shared-link-title",
+    "aria-busy": busy
+  }, React.createElement("h2", {
+    id: "shared-link-title"
+  }, "Connect your two homes"), React.createElement("p", null, "Link your Los Angeles and Victoria accounts for your personal assistant. Memory access and home controls require separate permissions."), React.createElement("div", {
+    role: "status",
+    "aria-live": "polite"
+  }, status === "idle" && React.createElement("p", null, "Review the accounts you authenticated before linking them."), status === "loading" && React.createElement("p", null, "Loading your account review\u2026"), status === "confirming" && React.createElement("p", null, "Confirming your accounts\u2026"), status === "checking" && React.createElement("p", null, "Checking the original confirmation\u2026"), status === "confirmed" && React.createElement("p", null, "Your two accounts are linked."), status === "unavailable" && React.createElement("p", null, "This account review is unavailable. You can check an earlier confirmation below."), status === "unknown" && React.createElement("p", null, "The confirmation outcome is unknown. Check its status before starting another link."), status === "review" && expired && React.createElement("p", null, "This review expired. Start a new account-linking interaction to confirm.")), status === "idle" && React.createElement("button", {
+    onClick: () => perform("review")
+  }, "Review both accounts"), status === "review" && review && React.createElement(React.Fragment, null, React.createElement("dl", {
+    className: "agent-grid"
+  }, review.accounts.map(account => React.createElement(React.Fragment, {
+    key: account.site_id
+  }, React.createElement("dt", null, account.site_id === "echo" ? "Los Angeles" : "Victoria"), React.createElement("dd", null, "Home Assistant account ", React.createElement("code", null, account.subject))))), React.createElement("label", null, React.createElement("input", {
+    type: "checkbox",
+    checked: checked,
+    disabled: expired,
+    onChange: event => setChecked(event.target.checked)
+  }), " These are both my accounts."), React.createElement("button", {
+    disabled: !checked || expired || busy,
+    onClick: () => perform("confirm")
+  }, "Link these two accounts")), ["idle", "unavailable", "unknown"].includes(status) && !blocked.current && React.createElement("button", {
+    onClick: () => perform("outcome")
+  }, "Check confirmation status"));
+}
+function SharedLinkLoginForm({
+  form,
+  busy,
+  onSubmit
+}) {
+  const valid = form?.status === "form" && /^[a-f0-9]{64}$/.test(form.handle || "") && Array.isArray(form.fields) && form.fields.length > 0 && form.fields.length <= 8 && new Set(form.fields).size === form.fields.length && form.fields.every(name => ["username", "password", "code", "multi_factor_auth_module"].includes(name));
+  if (!valid) return React.createElement("p", null, "The authentication form is unavailable. Check the original authentication below.");
+  return React.createElement("form", {
+    onSubmit: event => {
+      event.preventDefault();
+      const element = event.currentTarget,
+        data = new FormData(element),
+        input = {};
+      for (const field of form.fields) input[field] = String(data.get(field) || "");
+      element.reset();
+      onSubmit(form.handle, input);
+    }
+  }, form.invalid && React.createElement("p", {
+    role: "alert"
+  }, "Authentication was not accepted. Check your details."), form.fields.map(field => React.createElement("label", {
+    key: field
+  }, {
+    username: "Username",
+    password: "Password",
+    code: "Authentication code",
+    multi_factor_auth_module: "Verification method"
+  }[field], field === "multi_factor_auth_module" ? React.createElement("select", {
+    name: field,
+    required: true,
+    disabled: busy
+  }, (form.choices || []).map(([value, label]) => React.createElement("option", {
+    key: value,
+    value: value
+  }, label))) : React.createElement("input", {
+    name: field,
+    type: field === "password" ? "password" : "text",
+    autoComplete: field === "password" ? "current-password" : field === "username" ? "username" : "one-time-code",
+    maxLength: 256,
+    required: true,
+    disabled: busy
+  }))), React.createElement("button", {
+    disabled: busy
+  }, "Authenticate Los Angeles account"));
+}
+function SharedLinkSetupCard({
+  api,
+  setup
+}) {
+  const [pair, setPair] = useState(null),
+    [stage, setStage] = useState("start"),
+    [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(""),
+    [form, setForm] = useState(null),
+    [token, setToken] = useState("");
+  const operation = useRef(null),
+    blocked = useRef(false),
+    alive = useRef(true);
+  const [now, setNow] = useState(Date.now());
+  let origin;
+  try {
+    const url = new URL(setup?.victoria_origin);
+    if (url.protocol === "https:" && url.origin === setup.victoria_origin && url.hostname !== window.location.hostname) origin = url.origin;
+  } catch (_) {}
+  useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      blocked.current = true;
+      operation.current?.abort();
+      setPair(null);
+      setForm(null);
+      setToken("");
+      setStage("unavailable");
+    });
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      alive.current = false;
+      operation.current?.abort();
+      unsubscribe();
+      window.clearInterval(timer);
+    };
+  }, [api]);
+  const run = async (operationName, extra = {}) => {
+    if (!origin || blocked.current || operation.current || !alive.current) return;
+    const controller = new AbortController(),
+      generation = api.authorityGeneration;
+    operation.current = controller;
+    setBusy(true);
+    setMessage("");
+    const current = () => alive.current && !blocked.current && !controller.signal.aborted && generation === api.authorityGeneration;
+    if (operationName === "start") setStage("starting");
+    if (operationName === "handoff") {
+      setStage("issuance-unknown");
+      setToken("");
+    }
+    if (operationName === "auth-begin" || operationName === "auth-submit") {
+      setStage("echo-unknown");
+      setForm(null);
+    }
+    try {
+      let result = await api.sharedLinkSetup(operationName, operationName === "start" ? {} : {
+        pairing_id: pair.pairing_id,
+        ...extra
+      }, {
+        signal: controller.signal
+      });
+      if (!current()) return;
+      if (operationName === "start") {
+        if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(result?.pairing_id || "") || !Number.isSafeInteger(result.expires_at) || result.expires_at <= Date.now() || result.expires_at > Date.now() + 60000) throw new Error();
+        setPair(result);
+        setStage("handoff");
+      } else if (operationName === "handoff" || operationName === "issuance-outcome") {
+        if (result?.ceremony_id !== pair.pairing_id || result.status !== "authentication_required") throw new Error();
+        setStage("echo-ready");
+      } else if (operationName.startsWith("auth-")) {
+        if (result?.status === "form") {
+          setForm(result);
+          setStage("echo-form");
+        } else if (result?.status === "authenticated" && result.site_id === "echo" && result.ceremony_id === pair.pairing_id) setStage("victoria-ready");else throw new Error();
+      } else if (operationName === "victoria-auth-admit") {
+        if (result?.status !== "authentication_required" || result.ceremony_id !== pair.pairing_id) throw new Error();
+        setStage("victoria-waiting");
+      } else if (operationName === "victoria-auth-outcome") {
+        if (result?.status !== "authenticated" || result.site_id !== "victoria" || result.ceremony_id !== pair.pairing_id) throw new Error();
+        setStage("prepare");
+      } else if (operationName === "prepare-review") {
+        if (!sharedLinkReviewValid(result, pair.pairing_id, Date.now())) throw new Error();
+        setStage("review");
+      }
+    } catch (_) {
+      if (current()) setMessage("This step did not return a verified result. Use its status check; no action was retried.");
+    } finally {
+      if (operation.current === controller) operation.current = null;
+      if (current()) setBusy(false);
+    }
+  };
+  if (!origin) return null;
+  if (stage === "review") return React.createElement(SharedLinkReviewCard, {
+    api: api,
+    ceremonyId: pair.pairing_id
+  });
+  return React.createElement("section", {
+    className: "agent-card agent-link-setup",
+    "aria-busy": busy
+  }, React.createElement("h2", null, "Connect your two homes"), React.createElement("p", null, "Sign in to Victoria first, then link the two accounts. You will review both accounts before confirming."), React.createElement("a", {
+    href: origin + "/",
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, "Open Victoria sign-in"), message && React.createElement("p", {
+    role: "status"
+  }, message), stage === "start" && React.createElement("p", null, React.createElement("button", {
+    disabled: busy,
+    onClick: () => run("start")
+  }, "Start account linking")), stage === "handoff" && React.createElement(React.Fragment, null, React.createElement("p", null, React.createElement("a", {
+    href: origin + "/#shared-link/" + pair.pairing_id,
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, "Create a Victoria connection code")), React.createElement("p", null, now >= pair.expires_at ? "This pairing expired. Reload to start again." : "Copy the connection code from Victoria and paste it here within one minute."), React.createElement("label", null, "Victoria connection code", React.createElement("input", {
+    autoComplete: "off",
+    value: token,
+    maxLength: 64,
+    onChange: e => setToken(e.target.value.trim())
+  })), React.createElement("button", {
+    disabled: busy || now >= pair.expires_at || !/^[a-f0-9]{64}$/.test(token),
+    onClick: () => run("handoff", {
+      token
+    })
+  }, "Connect this Victoria session")), stage === "issuance-unknown" && React.createElement("button", {
+    disabled: busy,
+    onClick: () => run("issuance-outcome")
+  }, "Check pairing status"), stage === "echo-ready" && React.createElement("button", {
+    disabled: busy,
+    onClick: () => run("auth-begin")
+  }, "Verify Los Angeles account"), stage === "echo-form" && React.createElement(SharedLinkLoginForm, {
+    form: form,
+    busy: busy,
+    onSubmit: (handle, input) => run("auth-submit", {
+      handle,
+      input
+    })
+  }), stage === "echo-unknown" && React.createElement("button", {
+    disabled: busy,
+    onClick: () => run("auth-outcome")
+  }, "Check Los Angeles authentication"), stage === "victoria-ready" && React.createElement("button", {
+    disabled: busy,
+    onClick: () => run("victoria-auth-admit")
+  }, "Prepare Victoria verification"), stage === "victoria-waiting" && React.createElement(React.Fragment, null, React.createElement("p", null, React.createElement("a", {
+    href: origin + "/#shared-link/" + pair.pairing_id,
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, "Verify your account in Victoria")), React.createElement("button", {
+    disabled: busy,
+    onClick: () => run("victoria-auth-outcome")
+  }, "Check Victoria authentication")), stage === "prepare" && React.createElement("button", {
+    disabled: busy,
+    onClick: () => run("prepare-review")
+  }, "Prepare account review"), stage === "starting" && !busy && React.createElement("p", null, "The pairing result is unavailable. No accounts were linked."), stage === "unavailable" && React.createElement("p", null, "Your session changed. Sign in again before linking."));
+}
+function SharedLinkEntry({
+  api,
+  setup
+}) {
+  const [ceremonyId, setCeremonyId] = useState(sharedLinkCeremonyFromHash(window.location.hash));
+  useEffect(() => {
+    const changed = () => setCeremonyId(sharedLinkCeremonyFromHash(window.location.hash));
+    window.addEventListener("hashchange", changed);
+    return () => window.removeEventListener("hashchange", changed);
+  }, []);
+  return ceremonyId ? React.createElement(SharedLinkReviewCard, {
+    key: ceremonyId,
+    api: api,
+    ceremonyId: ceremonyId
+  }) : setup ? React.createElement(SharedLinkSetupCard, {
+    api: api,
+    setup: setup
+  }) : null;
+}
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -572,12 +1171,17 @@ function HomeAgentPanel() {
   const principalOperationCurrent = ticket => principalOperationIsCurrent(ticket, activeSubject.current, authorityGeneration.current);
   const refresh = async () => {
     const generation = ++refreshGeneration.current;
-    const isCurrent = () => generation === refreshGeneration.current;
+    let acceptedAuthorityGeneration = null;
+    const isCurrent = () => generation === refreshGeneration.current && (api.invoke || acceptedAuthorityGeneration === null || acceptedAuthorityGeneration === api.authorityGeneration);
     setError("");
     try {
       const currentSession = await api.session();
       if (!isCurrent()) return;
-      const subject = currentSession?.authenticated === true ? api.invoke ? "native-credential" : currentSession?.user_id : null;
+      if (!api.invoke) {
+        if (!api.authority) return;
+        acceptedAuthorityGeneration = api.authorityGeneration;
+      }
+      const subject = currentSession?.authenticated === true ? api.invoke ? "native-credential" : JSON.stringify([currentSession?.authority?.ha_issuer_id, currentSession?.authority?.site_id, currentSession?.user_id]) : null;
       if (currentSession?.authenticated === true && !subject) {
         throw new Error("authenticated_session_missing_subject");
       }
@@ -661,7 +1265,7 @@ function HomeAgentPanel() {
       if (!isCurrent()) return;
       clearPrincipalData();
       activeSubject.current = null;
-      if (cause.status === 401) {
+      if (cause.status === 401 || !api.invoke && api.logoutPending) {
         setSession(null);
         setPhase("signed_out");
         setError("");
@@ -673,6 +1277,12 @@ function HomeAgentPanel() {
     }
   };
   useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      clearPrincipalState();
+      activeSubject.current = null;
+      setSession(null);
+      setPhase("signed_out");
+    });
     refresh();
     let disposed = false;
     let unlisten = null;
@@ -686,7 +1296,9 @@ function HomeAgentPanel() {
     }
     return () => {
       disposed = true;
+      unsubscribe();
       unlisten?.();
+      api.invalidateAuthority();
     };
   }, []);
   useEffect(() => {
@@ -1101,9 +1713,16 @@ function HomeAgentPanel() {
     onClick: refresh
   }, "Refresh"), session?.authenticated && React.createElement("button", {
     onClick: signOut
-  }, "Sign out"))), phase === "signed_out" && React.createElement("section", {
+  }, "Sign out"))), !api.invoke && session?.authenticated && api.authority && session.shared_link_review_enabled === true && React.createElement(SharedLinkEntry, {
+    key: `${api.authority}:${api.authorityGeneration}`,
+    api: api,
+    setup: session.shared_link_setup
+  }), !api.invoke && session?.authenticated && api.authority && session.personal_memory_enabled === true && React.createElement(SharedPreferenceConsent, {
+    key: `sharing:${api.authority}:${api.authorityGeneration}`,
+    api: api
+  }), phase === "signed_out" && React.createElement("section", {
     className: "agent-card"
-  }, React.createElement("h2", null, "Authentication required"), React.createElement("p", null, "The Agent surface uses Home Assistant OAuth. No long-lived token is stored in this page."), session?.reason === "native_logout_revocation_pending" ? React.createElement("button", {
+  }, React.createElement("h2", null, "Authentication required"), React.createElement("p", null, "The Agent surface uses Home Assistant OAuth. No long-lived token is stored in this page."), session?.reason === "native_logout_revocation_pending" || !api.invoke && api.logoutPending ? React.createElement(React.Fragment, null, React.createElement("button", {
     onClick: async () => {
       try {
         await api.logout();
@@ -1112,7 +1731,16 @@ function HomeAgentPanel() {
         setError(cause.message || String(cause));
       }
     }
-  }, "Retry secure sign-out") : React.createElement("button", {
+  }, "Retry secure sign-out"), !api.invoke && React.createElement("button", {
+    onClick: async () => {
+      try {
+        await api.login();
+        setPhase("authenticating");
+      } catch (cause) {
+        setError(cause.message || String(cause));
+      }
+    }
+  }, "Start a new sign-in")) : React.createElement("button", {
     disabled: session?.login_enabled === false,
     onClick: async () => {
       try {

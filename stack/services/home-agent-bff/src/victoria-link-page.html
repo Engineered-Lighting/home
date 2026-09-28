@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect Victoria · Home</title><link rel="stylesheet" href="/link-setup.css"><script src="/link-setup.js" defer></script></head>
+<body><main><p class="eyebrow">HOME · VICTORIA</p><h1>Connect your two homes</h1>
+<p>Use your Victoria Home Assistant account. Final approval happens in your Los Angeles Home tab.</p>
+<p id="status" role="status" aria-live="polite">Checking your session…</p>
+<button id="login" hidden>Sign in to Victoria</button>
+<section id="pairing" hidden><h2>Connect this session</h2><p>Create a one-use code, then paste it into the Los Angeles Home tab within one minute.</p>
+<button id="offer">Create connection code</button><label id="code-label" hidden>Connection code<input id="code" readonly autocomplete="off"></label>
+<p id="expiry"></p><h2>Verify your Victoria account</h2><p>After Home prepares Victoria verification, authenticate below.</p>
+<button id="begin">Verify Victoria account</button><form id="auth-form" hidden></form>
+<button id="recover" hidden>Check authentication status</button></section>
+<button id="logout" hidden>Sign out</button></main></body></html>

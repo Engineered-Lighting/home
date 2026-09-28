@@ -3,8 +3,35 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { asTokenBuffer, exchangeCode, refreshAccessToken, revokeRefreshToken, fetchHaSubject } from "./ha-token-transport.mjs";
+import { QualifiedHaAuth } from "./qualified-ha-auth.mjs";
+import { EchoLinkReview } from "./echo-link-review.mjs";
+import { EchoLinkStart } from "./echo-link-start.mjs";
+import { PersonalMemoryClient } from "./personal-memory-client.mjs";
+import { SharedSessionRevocationOutbox } from "./shared-session-revocation-outbox.mjs";
 
 const COOKIE_NAME = "__Host-home_agent";
+const LEGACY_HA_ISSUER_ID = "home-assistant:echo";
+const LEGACY_SITE_ID = "echo";
+
+function issuerBinding(config) {
+  return {
+    haIssuerId: config.haIssuerId === undefined ? LEGACY_HA_ISSUER_ID : config.haIssuerId,
+    siteId: config.siteId === undefined ? LEGACY_SITE_ID : config.siteId,
+  };
+}
+
+function legacyIssuerConfigurationValid(config) {
+  const { haIssuerId, siteId } = issuerBinding(config);
+  return haIssuerId === LEGACY_HA_ISSUER_ID && siteId === LEGACY_SITE_ID;
+}
+
+function sessionOriginsJson(origins) {
+  if (!(origins instanceof Set) || [...origins].some((origin) => typeof origin !== "string")) {
+    throw new Error("session origins require a provisioned set");
+  }
+  return JSON.stringify([...origins].sort());
+}
 const OAUTH_COOKIE_NAME = "__Host-home_agent_oauth";
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_CORE_RESPONSE_BYTES = 1024 * 1024;
@@ -829,7 +856,7 @@ function endpointConfigurationValid(config) {
     ? exactAllowedOrigins([...config.allowedOrigins].join(","), { allowInsecure })
     : null;
   return Boolean(
-    origins && origins.size === config.allowedOrigins.size &&
+    legacyIssuerConfigurationValid(config) && origins && origins.size === config.allowedOrigins.size &&
     serviceRoot(config.haUrl, { kind: "ha", allowInsecure }) === config.haUrl &&
     serviceRoot(config.coreUrl, { kind: "core", allowInsecure }) === config.coreUrl &&
     oauthClientId(config.clientId, origins, { allowInsecure }) === config.clientId &&
@@ -851,6 +878,12 @@ function configFromEnv(env = process.env) {
   const config = {
     bindHost: env.HOME_AGENT_BFF_HOST || "127.0.0.1",
     port: Number(env.HOME_AGENT_BFF_PORT || 8097),
+    // Registered authority is stable when its LAN/Tailscale transport changes.
+    // Victoria needs its own reviewed authority ingress; legacy Core is Echo.
+    // These labels do not attest a live HA installation. Operators must verify
+    // that the provisioned HA endpoint/trust configuration belongs to Echo.
+    haIssuerId: env.HOME_AGENT_HA_ISSUER_ID ?? LEGACY_HA_ISSUER_ID,
+    siteId: env.HOME_AGENT_SITE_ID ?? LEGACY_SITE_ID,
     allowedOrigins: allowedOrigins || new Set(),
     haUrl: serviceRoot(env.HOME_AGENT_HA_URL, {
       kind: "ha", allowInsecure: allowInsecureTestUrls,
@@ -910,7 +943,7 @@ function configFromEnv(env = process.env) {
     !config.allowedOrigins.has(config.nativePublicOrigin)
   );
   config.ready = Boolean(
-    config.allowedOrigins.size && config.haUrl && config.clientId &&
+    legacyIssuerConfigurationValid(config) && config.allowedOrigins.size && config.haUrl && config.clientId &&
     config.redirectUri && config.postLoginRedirect && config.coreUrl && config.coreToken &&
     config.sessionEncryptionKey?.length === SESSION_KEY_BYTES && sessionPersistenceReady &&
     config.idleTtlMs && config.absoluteTtlMs && config.principalRevalidateMs !== null &&
@@ -919,14 +952,6 @@ function configFromEnv(env = process.env) {
   return config;
 }
 
-function asTokenBuffer(value, label, { required = false } = {}) {
-  const token = Buffer.isBuffer(value) ? Buffer.from(value) : Buffer.from(String(value || ""));
-  if ((required && token.length === 0) || token.length > MAX_HA_TOKEN_BYTES) {
-    token.fill(0);
-    throw new Error(`invalid ${label}`);
-  }
-  return token;
-}
 
 function packTokenBundle(accessToken, refreshToken) {
   let access;
@@ -1017,12 +1042,60 @@ function destroyEnvelope(envelope) {
   envelope?.tag?.fill(0);
 }
 
+const QUALIFIED_SESSION_PROFILES = new WeakSet();
+
+// Separate authority composition; never enables the legacy BFF/Core routes.
+function createVictoriaSessionStore({ auth, browserOrigin, echoOrigins, sessionDbPath,
+  sessionEncryptionKey, idleTtlMs, absoluteTtlMs, sharedSessionRevocation, now = Date.now }) {
+  if (!(auth instanceof QualifiedHaAuth)) throw new Error("qualified session auth required");
+  const [issuer, site, , clientId, redirectUri] = JSON.parse(auth.binding);
+  const origin = new URL(browserOrigin);
+  const exactOrigin = (value) => {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.origin !== value || parsed.username || parsed.password) {
+      throw new Error("qualified session origin invalid");
+    }
+    return parsed;
+  };
+  exactOrigin(browserOrigin);
+  if (issuer !== "home-assistant:victoria" || site !== "victoria" ||
+      !(echoOrigins instanceof Set) || !echoOrigins.size ||
+      [...echoOrigins].some((value) => exactOrigin(value).hostname === origin.hostname) ||
+      new URL(clientId).origin !== browserOrigin || new URL(redirectUri).origin !== browserOrigin ||
+      typeof sessionDbPath !== "string" || !path.isAbsolute(sessionDbPath) || sessionDbPath === ":memory:" ||
+      (fs.existsSync(sessionDbPath) && fs.lstatSync(sessionDbPath).isSymbolicLink()) ||
+      !Number.isSafeInteger(idleTtlMs) || idleTtlMs <= 0 ||
+      !Number.isSafeInteger(absoluteTtlMs) || absoluteTtlMs < idleTtlMs) {
+    throw new Error("qualified Victoria session configuration rejected");
+  }
+  const config = Object.freeze({ haIssuerId: issuer, siteId: site, haAuthBinding: auth.binding,
+    allowedOrigins: new Set([browserOrigin]), principalRevalidateMs: 0 });
+  const profile = Object.freeze({ auth, config,
+    binding: JSON.stringify(["victoria-link-session-v1", auth.binding, browserOrigin, [...echoOrigins].sort()]) });
+  QUALIFIED_SESSION_PROFILES.add(profile);
+  const store = new SessionStore({ idleTtlMs, absoluteTtlMs, sessionEncryptionKey, sessionDbPath,
+    haIssuerId: issuer, siteId: site, allowedOrigins: config.allowedOrigins, sharedSessionRevocation, now }, profile);
+  return Object.freeze({ store, config });
+}
+
 class SessionStore {
   #sessionEncryptionKey;
   #db;
   #cleanupTimer;
   #cleanupInFlight = false;
   #closed = false;
+  #haIssuerId;
+  #siteId;
+  #browserOriginsJson;
+  #migratingLegacyEcho = false;
+  #pendingLogins = new Map();
+  #qualifiedProfile;
+  #verifiedLogins = new Map();
+  #qualifiedLoginsInFlight = 0;
+  #qualifiedChecks = new Set();
+  #sharedRevocation;
+  #sharedSessionOwner;
+  #restoredSharedSessions = new Set();
 
   constructor({
     idleTtlMs,
@@ -1030,8 +1103,21 @@ class SessionStore {
     sessionEncryptionKey,
     sessionDbPath,
     allowInMemorySessions = false,
+    haIssuerId = LEGACY_HA_ISSUER_ID,
+    siteId = LEGACY_SITE_ID,
+    allowedOrigins = new Set(),
+    sharedSessionRevocation,
     now = () => Date.now(),
-  } = {}) {
+  } = {}, qualifiedProfile) {
+    if (qualifiedProfile !== undefined && !QUALIFIED_SESSION_PROFILES.has(qualifiedProfile)) throw new Error("invalid session profile");
+    this.#qualifiedProfile = qualifiedProfile;
+    if (!qualifiedProfile && !legacyIssuerConfigurationValid({ haIssuerId, siteId })) {
+      throw new Error("issuer has no provisioned legacy authority boundary");
+    }
+    this.#haIssuerId = haIssuerId;
+    this.#siteId = siteId;
+    this.#browserOriginsJson = sessionOriginsJson(allowedOrigins);
+    if (sessionDbPath && !allowedOrigins.size) throw new Error("persistent sessions require provisioned browser origins");
     if (!Buffer.isBuffer(sessionEncryptionKey) || sessionEncryptionKey.length !== SESSION_KEY_BYTES) {
       throw new Error("a 32-byte BFF session encryption key is required");
     }
@@ -1049,12 +1135,64 @@ class SessionStore {
     this.sessions = new Map();
     this.sessionDbPath = sessionDbPath || ":memory:";
     this.#db = new DatabaseSync(this.sessionDbPath);
-    this.#initializeDatabase();
-    if (sessionDbPath) fs.chmodSync(sessionDbPath, 0o600);
-    this.#loadSessions();
+    try {
+      if (sharedSessionRevocation && !sessionDbPath) throw new Error("shared revocation requires persistent session storage");
+      if (sharedSessionRevocation) {
+        const ownerPath = `${fs.realpathSync(sessionDbPath)}.owner.sqlite`;
+        if (fs.existsSync(ownerPath) && fs.lstatSync(ownerPath).isSymbolicLink()) throw new Error("session ownership path invalid");
+        this.#sharedSessionOwner = new DatabaseSync(ownerPath);
+        this.#sharedSessionOwner.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE");
+      }
+      SharedSessionRevocationOutbox.preflight(this.#db,sharedSessionRevocation,haIssuerId,this.#sessionEncryptionKey);
+      this.#initializeDatabase();
+      if (sharedSessionRevocation) this.#sharedRevocation = new SharedSessionRevocationOutbox(
+        this.#db,sharedSessionRevocation,haIssuerId,siteId,now);
+      if (sessionDbPath) fs.chmodSync(sessionDbPath, 0o600);
+      this.#loadSessions();
+    } catch (error) {
+      this.#sharedRevocation?.close();
+      this.#sharedSessionOwner?.close();
+      this.#db.close();
+      this.#sessionEncryptionKey.fill(0);
+      throw error;
+    }
   }
 
+  get haIssuerId() { return this.#haIssuerId; }
+  get siteId() { return this.#siteId; }
+  get hasSharedSessionRevocation() { return !!this.#sharedRevocation; }
+  usesQualifiedConfiguration(config) { return !!this.#qualifiedProfile && config === this.#qualifiedProfile.config; }
+
   #initializeDatabase() {
+    const version = this.#db.prepare("PRAGMA user_version").get().user_version;
+    const tables = new Set(this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name));
+    if (this.#qualifiedProfile) {
+      if (version !== 0) {
+        if (version !== 2 || !tables.has("bff_qualified_binding")) throw new Error("qualified sessions cannot adopt legacy storage");
+        const marker = this.#db.prepare("SELECT * FROM bff_qualified_binding WHERE id=1").get();
+        if (!marker || marker.binding !== this.#qualifiedProfile.binding) throw new Error("qualified session binding changed");
+        const probe = openTokenBundle(this.#sessionEncryptionKey, marker.binding, {
+          version: 1, iv: Buffer.from(marker.iv), ciphertext: Buffer.from(marker.ciphertext), tag: Buffer.from(marker.tag) });
+        try { if (probe.accessToken.toString() !== "qualified-session-v1" || probe.refreshToken.toString() !== "qualified-session-marker") throw new Error("invalid qualified session key probe"); }
+        finally { probe.accessToken.fill(0); probe.refreshToken.fill(0); }
+      }
+    } else if (tables.has("bff_qualified_binding")) throw new Error("qualified sessions cannot enter legacy authority");
+    if (![0, 1, 2].includes(version) || (version === 0 && tables.size) ||
+        (version === 1 && !tables.has("bff_session")) ||
+        (version === 2 && (!tables.has("bff_session") || !tables.has("bff_issuer_binding")))) {
+      throw new Error("unsupported BFF session database authority schema");
+    }
+    if (version !== 0) {
+      const expected = ["id:TEXT", "principal_json:TEXT", "envelope_version:INTEGER", "iv:BLOB", "ciphertext:BLOB", "tag:BLOB",
+        "access_expires_at:INTEGER", "csrf:TEXT", "created_at:INTEGER", "last_seen_at:INTEGER", "principal_checked_at:INTEGER",
+        "state:TEXT", "revocation_reason:TEXT", "revocation_attempts:INTEGER", "next_revocation_at:INTEGER"];
+      const columns = this.#db.prepare("PRAGMA table_info(bff_session)").all();
+      if (JSON.stringify(columns.map((column) => `${column.name}:${column.type}`)) !== JSON.stringify(expected) ||
+          columns[0].pk !== 1 || columns.slice(1).some((column) => column.pk !== 0)) {
+        throw new Error("unsupported legacy BFF session table schema");
+      }
+    }
+    this.#migratingLegacyEcho = version === 1;
     this.#db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA synchronous=FULL;
@@ -1079,8 +1217,59 @@ class SessionStore {
       );
       CREATE INDEX IF NOT EXISTS bff_session_revocation_due
         ON bff_session(state, next_revocation_at);
-      PRAGMA user_version=1;
     `);
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      if (this.#qualifiedProfile && version === 0) {
+        this.#db.exec("CREATE TABLE bff_qualified_binding (id INTEGER PRIMARY KEY CHECK(id=1),binding TEXT NOT NULL,iv BLOB NOT NULL,ciphertext BLOB NOT NULL,tag BLOB NOT NULL)");
+        const probe = sealTokenBundle(this.#sessionEncryptionKey, this.#qualifiedProfile.binding, Buffer.from("qualified-session-v1"), Buffer.from("qualified-session-marker"));
+        try { this.#db.prepare("INSERT INTO bff_qualified_binding VALUES(1,?,?,?,?)").run(this.#qualifiedProfile.binding,probe.iv,probe.ciphertext,probe.tag); }
+        finally { destroyEnvelope(probe); }
+      }
+      this.#db.exec(`CREATE TABLE IF NOT EXISTS bff_issuer_binding (
+        id INTEGER PRIMARY KEY CHECK(id=1), issuer_id TEXT NOT NULL, site_id TEXT NOT NULL,
+        browser_origins_json TEXT NOT NULL
+      )`);
+      const binding = this.#db.prepare("SELECT issuer_id,site_id,browser_origins_json FROM bff_issuer_binding WHERE id=1").get();
+      // Old Echo binaries reset user_version to 1 on startup. A rollback may
+      // retain this marker; require the same issuer/origins before re-upgrading.
+      if ((version === 2 && !binding) || (binding && (binding.issuer_id !== this.#haIssuerId ||
+          binding.site_id !== this.#siteId || binding.browser_origins_json !== this.#browserOriginsJson))) {
+        throw new Error("session database issuer binding changed");
+      }
+      this.#db.prepare("INSERT OR IGNORE INTO bff_issuer_binding VALUES(1,?,?,?)").run(this.#haIssuerId, this.#siteId, this.#browserOriginsJson);
+      if (this.#migratingLegacyEcho) {
+        // Only a v1 database from the previously single-Echo BFF is eligible.
+        // Keep encrypted token envelopes/revocation queues intact. Migrate the
+        // authenticated subject metadata atomically with the database binding.
+        for (const row of this.#db.prepare("SELECT * FROM bff_session").all()) {
+          // A migrated database must carry envelopes authenticated by this
+          // deployment's existing key, not merely a similarly named table.
+          const tokens = openTokenBundle(this.#sessionEncryptionKey, row.id, {
+            version: Number(row.envelope_version), iv: Buffer.from(row.iv),
+            ciphertext: Buffer.from(row.ciphertext), tag: Buffer.from(row.tag),
+          });
+          tokens.accessToken.fill(0);
+          tokens.refreshToken.fill(0);
+          let principal;
+          try { principal = JSON.parse(row.principal_json); } catch { continue; }
+          if (principal && ((principal.haIssuerId !== undefined && principal.haIssuerId !== this.#haIssuerId) ||
+              (principal.siteId !== undefined && principal.siteId !== this.#siteId))) {
+            throw new Error("legacy session contains a contradictory issuer binding");
+          }
+          if (principal && typeof principal === "object" && !Array.isArray(principal) &&
+              principal.haIssuerId === undefined && principal.siteId === undefined) {
+            principal.haIssuerId = this.#haIssuerId;
+            principal.siteId = this.#siteId;
+            this.#db.prepare("UPDATE bff_session SET principal_json=? WHERE id=?").run(JSON.stringify(principal), row.id);
+          }
+        }
+      }
+      this.#db.exec("PRAGMA user_version=2; COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   #loadSessions() {
@@ -1091,14 +1280,22 @@ class SessionStore {
       let state = String(row.state || "revocation_pending");
       try { principal = JSON.parse(String(row.principal_json)); }
       catch { principal = null; }
-      if (!principal || typeof principal.userId !== "string" || !principal.userId) {
-        principal = { userId: "", isAdmin: false, isActive: false };
-        state = "revocation_pending";
+      if (principal && ((principal.haIssuerId !== undefined && principal.haIssuerId !== this.#haIssuerId) ||
+          (principal.siteId !== undefined && principal.siteId !== this.#siteId))) {
+        throw new Error("persisted session issuer binding changed");
+      }
+      if (!principal || typeof principal.userId !== "string" || !principal.userId ||
+          principal.haIssuerId !== this.#haIssuerId || principal.siteId !== this.#siteId) {
+        principal = { userId: "", isAdmin: false, isActive: false,
+          haIssuerId: this.#haIssuerId, siteId: this.#siteId };
+        if (state !== "authority_revoked") state = "revocation_pending";
       }
       if (!new Set(["active", "revocation_pending", "authority_revoked"]).has(state)) {
         state = "revocation_pending";
       }
       const id = String(row.id || "");
+      if (this.#sharedRevocation) this.#restoredSharedSessions.add(id);
+      if (this.#sharedRevocation?.retired(id) && state === "active") state = "revocation_pending";
       const session = {
         principal,
         sealedTokens: {
@@ -1129,6 +1326,10 @@ class SessionStore {
   }
 
   #persist(id, session) {
+    const atomicRevocation = !!this.#sharedRevocation && session.state !== "active";
+    if (atomicRevocation) this.#db.exec("BEGIN IMMEDIATE");
+    try {
+    if (atomicRevocation) this.#sharedRevocation.schedule(id);
     this.#db.prepare(`
       INSERT INTO bff_session (
         id, principal_json, envelope_version, iv, ciphertext, tag,
@@ -1168,6 +1369,11 @@ class SessionStore {
       session.revocationAttempts,
       session.nextRevocationAt,
     );
+    if (atomicRevocation) this.#db.exec("COMMIT");
+    } catch (error) {
+      if (atomicRevocation) this.#db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   #isExpired(session, now = this.now()) {
@@ -1194,6 +1400,79 @@ class SessionStore {
   }
 
   createSession({ principal, accessToken, refreshToken, expiresIn }) {
+    if (this.#qualifiedProfile) throw new Error("qualified sessions require verified login");
+    return this.#storeSession({ principal, accessToken, refreshToken, expiresIn }, false);
+  }
+
+  async authenticateLogin(code) {
+    if (!this.#qualifiedProfile || this.#closed || this.#qualifiedLoginsInFlight >= 2) throw new Error("qualified login unavailable");
+    this.#qualifiedLoginsInFlight++;
+    let tokens, id;
+    try {
+      tokens = await this.#qualifiedProfile.auth.exchange(code);
+      id = this.retainLoginTokens(tokens);
+      const principal = await this.#qualifiedProfile.auth.verify(tokens.accessToken);
+      this.#verifiedLogins.set(id, principal);
+      return this.completeLogin(id, principal);
+    } catch {
+      if (id) {
+        const pending = this.abandonLogin(id);
+        await this.revoke(this.#qualifiedProfile.config,id,pending,undefined,{reason:"unverified_login"});
+      } else if (tokens?.refreshToken?.length) {
+        await this.#qualifiedProfile.auth.revoke(tokens.refreshToken).catch(() => {});
+      }
+      throw new Error("qualified session login unavailable");
+    } finally {
+      this.#verifiedLogins.delete(id);
+      this.#qualifiedLoginsInFlight--;
+      tokens?.accessToken.fill(0); tokens?.refreshToken.fill(0);
+    }
+  }
+
+  #configurationMatches(config) {
+    return this.#qualifiedProfile ? config === this.#qualifiedProfile.config : legacyIssuerConfigurationValid(config);
+  }
+
+  retainLoginTokens(tokens) {
+    if (!Buffer.isBuffer(tokens.refreshToken) || !tokens.refreshToken.length) {
+      throw new Error("login refresh token unavailable");
+    }
+    const stored = this.#storeSession({ ...tokens,
+      principal: { userId: "", isActive: false, isAdmin: false } }, true);
+    this.#pendingLogins.set(stored.id, this.now());
+    return stored.id;
+  }
+
+  completeLogin(id, principal) {
+    if (this.#qualifiedProfile && this.#verifiedLogins.get(id) !== principal) throw new Error("qualified login has not been verified");
+    const session = this.sessions.get(id);
+    const started = this.#pendingLogins.get(id);
+    const now = this.now();
+    if (started === undefined || now < started || now - started >= REQUEST_TIMEOUT_MS ||
+        !session || session.state !== "revocation_pending" ||
+        session.revocationReason !== "unverified_login" || !principal?.userId ||
+        principal.isActive !== true || principal.haIssuerId !== this.#haIssuerId ||
+        principal.siteId !== this.#siteId) throw new Error("login completion rejected");
+    const previous = { ...session };
+    Object.assign(session, { principal, state: "active", revocationReason: null,
+      nextRevocationAt: 0, principalCheckedAt: this.now() });
+    try { this.#persist(id, session); }
+    catch (error) { Object.assign(session, previous); throw error; }
+    this.#pendingLogins.delete(id);
+    return { id, csrf: session.csrf };
+  }
+
+  abandonLogin(id) {
+    this.#pendingLogins.delete(id);
+    return this.getForRevocation(id);
+  }
+
+  #storeSession({ principal, accessToken, refreshToken, expiresIn }, pending) {
+    if (!principal || (principal.haIssuerId !== undefined && principal.haIssuerId !== this.#haIssuerId) ||
+        (principal.siteId !== undefined && principal.siteId !== this.#siteId)) {
+      throw new Error("session principal issuer mismatch");
+    }
+    principal = { ...principal, haIssuerId: this.#haIssuerId, siteId: this.#siteId };
     const id = randomToken();
     const csrf = randomToken();
     const now = this.now();
@@ -1210,8 +1489,8 @@ class SessionStore {
       createdAt: now,
       lastSeenAt: now,
       principalCheckedAt: now,
-      state: "active",
-      revocationReason: null,
+      state: pending ? "revocation_pending" : "active",
+      revocationReason: pending ? "unverified_login" : null,
       revocationAttempts: 0,
       nextRevocationAt: 0,
     };
@@ -1245,6 +1524,46 @@ class SessionStore {
     return session;
   }
 
+  linkingContext(id, commitmentKey) {
+    // Internal only: the caller must authenticate the request, enforce origin
+    // and CSRF, and obtain explicit linking intent before asking for this value.
+    // This is an existing session binding, not fresh HA authentication proof.
+    if (!Buffer.isBuffer(commitmentKey) || commitmentKey.length !== 32 ||
+        crypto.timingSafeEqual(commitmentKey, this.#sessionEncryptionKey)) {
+      throw new Error("dedicated linking session commitment key required");
+    }
+    if (typeof id !== "string" || !id) return null;
+    // A snapshot predating commitment arming has no tombstone to replay. Keep
+    // ordinary HA session compatibility, but require a new login before linking.
+    if (this.#sharedRevocation && this.#restoredSharedSessions.has(id)) return null;
+    const candidate = this.sessions.get(id);
+    const checkedNow = this.now();
+    if (!candidate || !Number.isSafeInteger(checkedNow) ||
+        ![candidate.createdAt, candidate.lastSeenAt, candidate.principalCheckedAt]
+          .every((time) => Number.isSafeInteger(time) && time <= checkedNow) ||
+        checkedNow >= candidate.createdAt + this.absoluteTtlMs ||
+        checkedNow >= candidate.lastSeenAt + this.idleTtlMs) return null;
+    const session = this.get(id);
+    const now = this.now();
+    if (!session || !Number.isSafeInteger(now) || now < checkedNow || !Number.isSafeInteger(session.principalCheckedAt) ||
+        now < session.principalCheckedAt || now - session.principalCheckedAt >= 300_000 ||
+        session.principal?.isActive !== true || session.principal.haIssuerId !== this.#haIssuerId ||
+        session.principal.siteId !== this.#siteId || typeof session.principal.userId !== "string" ||
+        !session.principal.userId.length || [...session.principal.userId].length > 64 ||
+        session.principal.userId.trim() !== session.principal.userId ||
+        /[\x00-\x1f\x7f]/.test(session.principal.userId)) return null;
+    const validUntil = Math.min(session.principalCheckedAt + 300_000,
+      session.createdAt + this.absoluteTtlMs, session.lastSeenAt + this.idleTtlMs);
+    if (!Number.isSafeInteger(validUntil) || validUntil <= now) return null;
+    const material = JSON.stringify(["home-agent:shared-link:v1:bff-session",
+      this.#haIssuerId, this.#siteId, id]);
+    return Object.freeze({ issuerId: this.#haIssuerId, siteId: this.#siteId,
+      subject: session.principal.userId,
+      sessionCommitment: this.#sharedRevocation ? this.#sharedRevocation.arm(id,commitmentKey) :
+        crypto.createHmac("sha256", commitmentKey).update(material).digest("hex"),
+      checkedAt: session.principalCheckedAt, validUntil });
+  }
+
   getForRevocation(id) {
     const key = String(id || "");
     const session = this.sessions.get(key);
@@ -1254,6 +1573,7 @@ class SessionStore {
   scheduleRevocation(id, session, reason, now = this.now()) {
     const key = String(id || "");
     if (!session || this.sessions.get(key) !== session) return false;
+    this.#pendingLogins.delete(key);
     if (session.state !== "authority_revoked") session.state = "revocation_pending";
     session.revocationReason = String(reason || "unspecified");
     session.nextRevocationAt = Math.min(session.nextRevocationAt || now, now);
@@ -1282,7 +1602,15 @@ class SessionStore {
   }
 
   #deleteAuthorityRevoked(id, session) {
+    if (this.#sharedRevocation) this.#db.exec("BEGIN IMMEDIATE");
+    try {
+    this.#sharedRevocation?.schedule(id);
     this.#db.prepare("DELETE FROM bff_session WHERE id = ?").run(id);
+    if (this.#sharedRevocation) this.#db.exec("COMMIT");
+    } catch (error) {
+      if (this.#sharedRevocation) this.#db.exec("ROLLBACK");
+      throw error;
+    }
     this.sessions.delete(id);
     destroyEnvelope(session.sealedTokens);
   }
@@ -1334,22 +1662,50 @@ class SessionStore {
     now = Date.now(),
     { forcePrincipalCheck = false } = {},
   ) {
+    if (!this.#configurationMatches(config) || session.principal.haIssuerId !== this.#haIssuerId ||
+        session.principal.siteId !== this.#siteId || (this.#browserOriginsJson !== "[]" &&
+        sessionOriginsJson(config.allowedOrigins) !== this.#browserOriginsJson)) {
+      throw new Error("session issuer mismatch before revalidation");
+    }
+    const qualifiedKey = String(id || "");
+    if (this.#qualifiedProfile) {
+      now = this.now();
+      if (!Number.isSafeInteger(now) || this.sessions.get(qualifiedKey) !== session ||
+          session.state !== "active" || ![session.createdAt,session.lastSeenAt,session.principalCheckedAt]
+            .every((stamp) => Number.isSafeInteger(stamp) && stamp <= now) ||
+          now >= session.createdAt + this.absoluteTtlMs || now >= session.lastSeenAt + this.idleTtlMs) {
+        this.scheduleRevocation(id,session,"invalid_revalidation_context");
+        throw new Error("qualified session unavailable before revalidation");
+      }
+      if (this.#qualifiedChecks.has(qualifiedKey) || this.#qualifiedChecks.size >= 2) {
+        throw new Error("qualified session revalidation busy");
+      }
+      this.#qualifiedChecks.add(qualifiedKey);
+    }
     const shouldRefresh = session.accessExpiresAt <= now + 60_000;
     const shouldCheckPrincipal = forcePrincipalCheck || shouldRefresh ||
       now - session.principalCheckedAt >= Math.max(0, config.principalRevalidateMs || 0);
-    if (!shouldCheckPrincipal) return session;
+    if (!shouldCheckPrincipal) { this.#qualifiedChecks.delete(qualifiedKey); return session; }
 
-    await this.#withTokens(id, session, async (current) => {
+    try { await this.#withTokens(id, session, async (current) => {
       let refreshed;
       let activeAccessToken = current.accessToken;
       let activeRefreshToken = current.refreshToken;
       try {
         if (shouldRefresh) {
-          refreshed = await refreshAccessToken(config, current.refreshToken, fetchImpl);
+          refreshed = this.#qualifiedProfile ? await this.#qualifiedProfile.auth.refresh(current.refreshToken) :
+            await refreshAccessToken(config, current.refreshToken, fetchImpl);
           activeAccessToken = refreshed.accessToken;
           if (refreshed.refreshToken.length) activeRefreshToken = refreshed.refreshToken;
         }
-        const principal = await fetchWhoami(config, activeAccessToken, fetchImpl);
+        const principal = this.#qualifiedProfile ? await this.#qualifiedProfile.auth.verify(activeAccessToken) :
+          await fetchWhoami(config, activeAccessToken, fetchImpl);
+        const checkedAt = this.#qualifiedProfile ? this.now() : now;
+        if (this.#qualifiedProfile && (this.sessions.get(String(id)) !== session || session.state !== "active" ||
+            !Number.isSafeInteger(checkedAt) || checkedAt < now ||
+            checkedAt >= session.createdAt + this.absoluteTtlMs || checkedAt >= session.lastSeenAt + this.idleTtlMs)) {
+          throw new Error("qualified session ended during revalidation");
+        }
         if (!timingSafeEqual(principal.userId, session.principal.userId)) {
           throw new Error("HA principal changed during session");
         }
@@ -1367,27 +1723,50 @@ class SessionStore {
         } else {
           this.#persist(String(id || ""), session);
         }
+      } catch (error) {
+        if (this.#qualifiedProfile) this.scheduleRevocation(id, session, "failed_revalidation");
+        if (this.#qualifiedProfile && refreshed) {
+          // A refresh may have rotated the token before verification failed or
+          // logout won. Retain the replacement as revocation-only work.
+          let cleanupId;
+          try {
+            cleanupId = this.retainLoginTokens({ ...refreshed, refreshToken: activeRefreshToken });
+            const cleanup = this.abandonLogin(cleanupId);
+            await this.revoke(config, cleanupId, cleanup, undefined, { reason: "failed_revalidation" });
+          } catch {
+            if (!cleanupId) await this.#qualifiedProfile.auth.revoke(activeRefreshToken).catch(() => {});
+          }
+        }
+        throw error;
       } finally {
         refreshed?.accessToken.fill(0);
         refreshed?.refreshToken.fill(0);
       }
-    });
+    }); } catch (error) {
+      if (this.#qualifiedProfile) this.scheduleRevocation(id, session, "failed_revalidation");
+      throw error;
+    } finally { this.#qualifiedChecks.delete(qualifiedKey); }
     return session;
   }
 
   async revoke(config, id, session, fetchImpl, { reason = "logout", now = this.now() } = {}) {
     const key = String(id || "");
     if (!session || this.sessions.get(key) !== session) return false;
+    if (!this.#configurationMatches(config) || session.principal.haIssuerId !== this.#haIssuerId ||
+        session.principal.siteId !== this.#siteId || (this.#browserOriginsJson !== "[]" &&
+        sessionOriginsJson(config.allowedOrigins) !== this.#browserOriginsJson)) return false;
     if (session.state === "authority_revoked") {
       try {
         this.#deleteAuthorityRevoked(key, session);
-        return true;
+        await this.#sharedRevocation?.drain();
+        return this.#sharedRevocation ? this.#sharedRevocation.delivered(key) : true;
       } catch { return false; }
     }
     this.scheduleRevocation(key, session, reason, now);
     try {
       await this.#withTokens(key, session, async ({ refreshToken }) => {
-        await revokeRefreshToken(config, refreshToken, fetchImpl);
+        if (this.#qualifiedProfile) await this.#qualifiedProfile.auth.revoke(refreshToken);
+        else await revokeRefreshToken(config, refreshToken, fetchImpl);
       });
     } catch {
       this.#recordRevocationFailure(key, session, now);
@@ -1404,7 +1783,8 @@ class SessionStore {
     }
     try {
       this.#deleteAuthorityRevoked(key, session);
-      return true;
+      await this.#sharedRevocation?.drain();
+      return this.#sharedRevocation ? this.#sharedRevocation.delivered(key) : true;
     } catch { return false; }
   }
 
@@ -1416,6 +1796,11 @@ class SessionStore {
     const candidates = [];
     for (const [id, session] of this.sessions) {
       if (candidates.length >= limit) break;
+      const loginStarted = this.#pendingLogins.get(id);
+      if (loginStarted !== undefined) {
+        if (now >= loginStarted && now - loginStarted < REQUEST_TIMEOUT_MS) continue;
+        this.#pendingLogins.delete(id);
+      }
       if (session.state === "active" && this.#isExpired(session, now)) {
         this.scheduleRevocation(id, session, "expired", now);
         candidates.push([id, session]);
@@ -1433,6 +1818,7 @@ class SessionStore {
         now,
       })) completed += 1;
     }
+    await this.#sharedRevocation?.drain();
     return { attempted: candidates.length, completed };
   }
 
@@ -1457,12 +1843,15 @@ class SessionStore {
 
   close() {
     if (this.#closed) return;
+    this.#sharedRevocation?.close();
     this.#closed = true;
     this.stopCleanup();
     for (const session of this.sessions.values()) destroyEnvelope(session.sealedTokens);
     this.sessions.clear();
+    this.#pendingLogins.clear();
     this.#sessionEncryptionKey.fill(0);
     this.#db.close();
+    this.#sharedSessionOwner?.close();
   }
 }
 
@@ -1527,135 +1916,9 @@ function oauthCallbackParameters(url) {
   return { state, code };
 }
 
-async function exchangeCode(config, code, fetchImpl) {
-  // HA Core's documented authorization-code endpoint does not authenticate
-  // this client or enforce PKCE. The BFF therefore relies on its actual
-  // controls: an exact same-origin HTTPS callback, one-time state bound to an
-  // HttpOnly initiation cookie, prompt server-side exchange, and no token in
-  // browser JavaScript. Do not send ignored verifier parameters and describe
-  // them as protection.
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code,
-    client_id: config.clientId,
-    redirect_uri: config.redirectUri,
-  });
-  const response = await fetchImpl(`${config.haUrl}/auth/token`, {
-    method: "POST",
-    redirect: "error",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`HA token exchange failed (${response.status})`);
-  return tokenBuffersFromResponse(await response.json(), "exchange");
-}
-
-async function refreshAccessToken(config, refreshToken, fetchImpl) {
-  if (!Buffer.isBuffer(refreshToken) || refreshToken.length === 0) {
-    throw new Error("HA refresh token is unavailable");
-  }
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken.toString("utf8"),
-    client_id: config.clientId,
-  });
-  try {
-    const response = await fetchImpl(`${config.haUrl}/auth/token`, {
-      method: "POST",
-      redirect: "error",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`HA token refresh failed (${response.status})`);
-    return tokenBuffersFromResponse(await response.json(), "refresh");
-  } finally {
-    // Remove the only mutable request-side plaintext reference available to
-    // us after fetch has consumed the form body.
-    body.delete("refresh_token");
-  }
-}
-
-async function revokeRefreshToken(config, refreshToken, fetchImpl) {
-  if (!Buffer.isBuffer(refreshToken) || refreshToken.length === 0) {
-    throw new Error("HA refresh token is unavailable");
-  }
-  const body = new URLSearchParams({
-    token: refreshToken.toString("utf8"),
-    action: "revoke",
-  });
-  try {
-    const response = await fetchImpl(`${config.haUrl}/auth/token`, {
-      method: "POST",
-      redirect: "error",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`HA token revocation failed (${response.status})`);
-  } finally {
-    body.delete("token");
-  }
-}
-
-function tokenBuffersFromResponse(value, operation) {
-  if (!value || typeof value.access_token !== "string" || !value.access_token) {
-    throw new Error(`HA token ${operation} returned no access token`);
-  }
-  if (
-    value.refresh_token !== undefined &&
-    value.refresh_token !== null &&
-    typeof value.refresh_token !== "string"
-  ) {
-    value.access_token = "";
-    value.refresh_token = "";
-    throw new Error(`HA token ${operation} returned an invalid refresh token`);
-  }
-  const expiresIn = value.expires_in;
-  let accessToken;
-  let refreshToken;
-  try {
-    accessToken = asTokenBuffer(value.access_token, "HA access token", { required: true });
-    refreshToken = asTokenBuffer(value.refresh_token || "", "HA refresh token");
-    return { accessToken, refreshToken, expiresIn };
-  } catch (error) {
-    accessToken?.fill(0);
-    refreshToken?.fill(0);
-    throw error;
-  } finally {
-    // JSON strings cannot be zeroized, but dropping them from the response
-    // object immediately keeps their lifetime outside the session store short.
-    value.access_token = "";
-    if (Object.hasOwn(value, "refresh_token")) value.refresh_token = "";
-  }
-}
-
 async function fetchWhoami(config, accessToken, fetchImpl) {
-  if (!Buffer.isBuffer(accessToken) || accessToken.length === 0) {
-    throw new Error("HA access token is unavailable");
-  }
-  const headers = new Headers({
-    Authorization: `Bearer ${accessToken.toString("utf8")}`,
-    Accept: "application/json",
-  });
-  let response;
-  try {
-    response = await fetchImpl(`${config.haUrl}/api/home_agent_edge/whoami`, {
-      headers,
-      redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } finally {
-    headers.delete("Authorization");
-  }
-  if (!response.ok) throw new Error(`HA whoami failed (${response.status})`);
-  const value = await response.json();
-  if (!value || typeof value.user_id !== "string" || !value.user_id) {
-    throw new Error("HA whoami returned no user_id");
-  }
-  if (value.is_active !== true) throw new Error("HA user is inactive");
-  return { userId: value.user_id, isAdmin: value.is_admin === true, isActive: true };
+  if (!legacyIssuerConfigurationValid(config)) throw new Error("HA issuer is not provisioned");
+  return { ...await fetchHaSubject(config, accessToken, fetchImpl), ...issuerBinding(config) };
 }
 
 async function proxyCoreRequest(
@@ -1672,6 +1935,11 @@ async function proxyCoreRequest(
   let rawBody;
   let body;
   try {
+    const binding = issuerBinding(config);
+    if (!legacyIssuerConfigurationValid(config) || principal.haIssuerId !== binding.haIssuerId ||
+        principal.siteId !== binding.siteId) {
+      throw new Error("principal issuer cannot enter legacy Core");
+    }
     rawBody = providedRawBody === undefined
       ? (req.method === "GET" ? undefined : await readBody(req))
       : providedRawBody;
@@ -1687,6 +1955,8 @@ async function proxyCoreRequest(
       Accept: "application/json",
       "Content-Type": "application/json",
       "X-Authenticated-HA-User": principal.userId,
+      "X-Authenticated-HA-Issuer": binding.haIssuerId,
+      "X-Authenticated-Home-Site": binding.siteId,
       "X-Request-Id": requestId,
     };
     if (nativeInstallationId) {
@@ -1761,7 +2031,10 @@ async function readBoundedCoreResponse(response) {
   }
 }
 
-function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) {
+function createBff(config, { fetchImpl = fetch, store, attestationStore, linkReview, linkStart, personalMemory } = {}) {
+  if (store && (store.haIssuerId !== LEGACY_HA_ISSUER_ID || store.siteId !== LEGACY_SITE_ID)) {
+    throw new Error("legacy BFF requires Echo sessions");
+  }
   const persistenceReady = (
     config.sessionDbPath && path.isAbsolute(config.sessionDbPath) &&
     config.sessionDbPath !== ":memory:"
@@ -1780,6 +2053,15 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) 
   ) throw new Error("BFF cannot start ready without sealed persistent sessions");
   const ownsStore = !store;
   const sessions = store || (config.ready ? new SessionStore(config) : null);
+  if (linkReview !== undefined && (!(linkReview instanceof EchoLinkReview) || !linkReview.usesStore(sessions))) {
+    throw new Error("link review requires the same authenticated session store");
+  }
+  if (linkStart !== undefined && (!(linkStart instanceof EchoLinkStart) || !linkStart.usesStore(sessions))) {
+    throw new Error("link start requires the same authenticated session store");
+  }
+  if (personalMemory !== undefined && (!(personalMemory instanceof PersonalMemoryClient) || !personalMemory.usesStore(sessions))) {
+    throw new Error("personal memory requires the same authenticated session store");
+  }
   const nativeAttestations = attestationStore || new NativeAttestationStore(
     config.nativeAttestationConfigured === true ? config.nativeInstallations : null,
   );
@@ -1853,20 +2135,27 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) 
       );
       try {
         const tokens = await exchangeCode(config, callback.code, fetchImpl);
+        let pendingId;
         try {
+          pendingId = sessions.retainLoginTokens(tokens);
           const principal = await fetchWhoami(config, tokens.accessToken, fetchImpl);
-          const session = sessions.createSession({
-            principal,
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            expiresIn: tokens.expiresIn,
-          });
+          const session = sessions.completeLogin(pendingId, principal);
           return redirect(res, config.postLoginRedirect, {
             "Set-Cookie": [
               sessionCookie(session.id, config.secureCookie),
               clearOauthCookie(config.secureCookie),
             ],
           });
+        } catch (error) {
+          if (pendingId) {
+            const pending = sessions.abandonLogin(pendingId);
+            await sessions.revoke(config, pendingId, pending, fetchImpl, { reason: "login_failed" });
+          } else {
+            // Persistence failure cannot authorize a session. Revoke immediately
+            // while token bytes are available; no durable recovery is claimed.
+            await revokeRefreshToken(config, tokens.refreshToken, fetchImpl).catch(() => {});
+          }
+          throw error;
         } finally {
           tokens.accessToken.fill(0);
           tokens.refreshToken.fill(0);
@@ -1975,7 +2264,25 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) 
       { error: "authentication_required" },
       { "Set-Cookie": clearSessionCookie(config.secureCookie) },
     );
-    const isFreshIdentityRoute = (
+    const linkOperation = req.method === "POST" && !url.search && linkReview ?
+      ({ "/api/agent/shared-identity/review": "review", "/api/agent/shared-identity/confirm": "confirm",
+        "/api/agent/shared-identity/outcome": "outcome" })[url.pathname] : null;
+    const startOperation = req.method === "POST" && !url.search && linkStart ?
+      ({ "/api/agent/shared-identity/start": "start", "/api/agent/shared-identity/handoff": "redeem",
+        "/api/agent/shared-identity/issuance-outcome": "recover" })[url.pathname] : null;
+    const authenticationOperation = req.method === "POST" && !url.search && linkStart?.authenticationEnabled ?
+      ({ "/api/agent/shared-identity/auth-begin": "begin", "/api/agent/shared-identity/auth-submit": "submit",
+        "/api/agent/shared-identity/auth-outcome": "recover" })[url.pathname] : null;
+    const victoriaAuthenticationOperation=req.method === "POST" && !url.search && linkStart?.authenticationEnabled ?
+      ({"/api/agent/shared-identity/victoria-auth-admit":"admit","/api/agent/shared-identity/victoria-auth-outcome":"outcome"})[url.pathname] : null;
+    const preparingReview=req.method==="POST" && !url.search && linkStart?.reviewEnabled && url.pathname==="/api/agent/shared-identity/prepare-review";
+    const memoryOperation = req.method === "POST" && !url.search && personalMemory ?
+      ({"/api/agent/personal-memory/read":"read","/api/agent/personal-memory/propose":"propose",
+        "/api/agent/personal-memory/confirm":"confirm","/api/agent/personal-memory/outcome":"outcome",
+        "/api/agent/personal-memory/sharing-propose":"sharing-propose",
+        "/api/agent/personal-memory/sharing-confirm":"sharing-confirm",
+        "/api/agent/personal-memory/sharing-outcome":"sharing-outcome"})[url.pathname] : null;
+    const isFreshIdentityRoute = Boolean(memoryOperation || linkOperation || startOperation || authenticationOperation || victoriaAuthenticationOperation || preparingReview) || (
       !url.search && (
         PRINCIPAL_BINDING_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`) ||
         PARENT_RELATIONSHIP_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`)
@@ -2004,12 +2311,90 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) 
       );
     }
 
+    if (memoryOperation) {
+      let rawBody;
+      const controller=new AbortController();
+      const disconnected=()=>controller.abort();
+      res.once("close",disconnected);
+      try {
+        if (req.headers["content-type"]!=="application/json" || req.headers["content-encoding"]) return json(res,415,{error:"json_required"});
+        rawBody=await readBody(req);
+        if (rawBody.length>2048) return json(res,413,{error:"body_too_large"});
+        const text=new TextDecoder("utf-8",{fatal:true}).decode(rawBody);
+        if (jsonHasDuplicateObjectKeys(text)) return json(res,422,{error:"invalid_preference_request"});
+        const result=await personalMemory.request(sessionId,memoryOperation,JSON.parse(text),{signal:controller.signal});
+        if (!res.destroyed) return json(res,200,result);
+      } catch {
+        if (!res.destroyed) return json(res,503,{error:"personal_memory_outcome_unknown"});
+      } finally {
+        rawBody?.fill(0);
+        res.removeListener("close",disconnected);
+      }
+      return;
+    }
+
+    if (linkOperation || startOperation || authenticationOperation || victoriaAuthenticationOperation || preparingReview) {
+      let rawBody;
+      const controller = new AbortController();
+      const disconnected = () => controller.abort();
+      res.once("close", disconnected);
+      try {
+        if (req.headers["content-type"] !== "application/json" || req.headers["content-encoding"]) {
+          return json(res, 415, { error: "json_required" });
+        }
+        rawBody = await readBody(req);
+        if (rawBody.length > 1024) return json(res, 413, { error: "body_too_large" });
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(rawBody);
+        const input = JSON.parse(text);
+        if (jsonHasDuplicateObjectKeys(text)) return json(res, 422, { error: "invalid_link_request" });
+        let result;
+        if (preparingReview) {
+          if(controller.signal.aborted) return;
+          result=await linkStart.prepareReview(sessionId,input,{signal:controller.signal});
+        } else if (victoriaAuthenticationOperation) {
+          if(controller.signal.aborted) return;
+          result=await linkStart.victoriaAuthentication(sessionId,victoriaAuthenticationOperation,input,{signal:controller.signal});
+        } else if (authenticationOperation) {
+          if (controller.signal.aborted) return;
+          result = await linkStart.authenticate(sessionId, authenticationOperation, input);
+        } else if (startOperation) {
+          const keys = input && typeof input === "object" && !Array.isArray(input) ? Object.keys(input).sort().join(",") : null;
+          const expected = { start: "", redeem: "pairing_id,token", recover: "pairing_id" }[startOperation];
+          if (keys !== expected) return json(res, 422, { error: "invalid_link_request" });
+          if (controller.signal.aborted) return;
+          result = startOperation === "start" ? await linkStart.start(sessionId) :
+            startOperation === "redeem" ? await linkStart.redeem(sessionId, input, { signal: controller.signal }) :
+              await linkStart.recover(sessionId, input.pairing_id, { signal: controller.signal });
+        } else {
+          result = await linkReview.request(sessionId, linkOperation, input, { signal: controller.signal });
+        }
+        if (!res.destroyed) return json(res, 200, result);
+      } catch {
+        if (!res.destroyed) return json(res, 503, { error: "linking_unavailable" });
+      } finally {
+        rawBody?.fill(0);
+        res.removeListener("close", disconnected);
+      }
+      return;
+    }
+
     if (url.pathname === "/api/agent/auth/session" && req.method === "GET") {
       return json(res, 200, {
         authenticated: true,
+        authority: {
+          version: 1,
+          site_id: session.principal.siteId,
+          ha_issuer_id: session.principal.haIssuerId,
+        },
         user_id: session.principal.userId,
         is_admin: session.principal.isAdmin,
         csrf_token: session.csrf,
+        ...(linkReview ? { shared_link_review_enabled: true } : {}),
+        ...(personalMemory ? { personal_memory_enabled: true,
+          personal_memory_home_origins:config.personalMemoryHomeOrigins ?? [] } : {}),
+        ...(linkStart ? { shared_link_start_enabled: true } : {}),
+        ...(linkStart?.authenticationEnabled ? { shared_link_auth_enabled: true } : {}),
+        ...(linkStart?.browserSetup ? { shared_link_setup: linkStart.browserSetup } : {}),
       });
     }
 
@@ -2057,7 +2442,9 @@ export {
   SessionStore,
   configFromEnv,
   createBff,
+  createVictoriaSessionStore,
   isAllowedOrigin,
+  jsonHasDuplicateObjectKeys,
   loadNativeInstallationRegistry,
   nativeRouteAllowed,
   normalizeParentRelationshipBody,

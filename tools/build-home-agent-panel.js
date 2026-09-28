@@ -19,6 +19,7 @@ function renderBundle() {
   if (!Babel?.transform) throw new Error("bundled Babel transform unavailable");
   const source = fs.readFileSync(input, "utf8");
   const runtime = [
+    path.join(repo, "app", "src", "home-connection-registry.js"),
     path.join(
       repo,
       "app",

@@ -2,6 +2,25 @@ const { useEffect, useMemo, useRef, useState } = React;
 
 const DEFAULT_DESCRIPTOR_TEXT = "This is my parents’ mountain house.";
 
+function sharedLinkCeremonyFromHash(hash) {
+  return /^#shared-link\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/.exec(hash || "")?.[1] || null;
+}
+
+function sharedLinkReviewValid(value, ceremonyId, now) {
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+  return value?.version === 1 && value.ceremony_id === ceremonyId &&
+    typeof value.gesture_id === "string" && uuid.test(value.gesture_id) &&
+    typeof value.reviewed_digest === "string" && /^[a-f0-9]{64}$/.test(value.reviewed_digest) &&
+    typeof value.expires_at === "string" && Number.isFinite(Date.parse(value.expires_at)) &&
+    Date.parse(value.expires_at) > now && Date.parse(value.expires_at) <= now + 300_000 &&
+    Array.isArray(value.accounts) && value.accounts.length === 2 &&
+    value.accounts.every((account, index) => account.site_id === (index ? "victoria" : "echo") &&
+      account.issuer_id === `home-assistant:${account.site_id}` &&
+      typeof account.subject === "string" && account.subject.length > 0 &&
+      [...account.subject].length <= 64 && account.subject.trim() === account.subject &&
+      !/[\x00-\x1f\x7f]/.test(account.subject));
+}
+
 function capturePrincipalOperation(subject, generation) {
   return Object.freeze({ subject: subject || null, generation });
 }
@@ -275,6 +294,284 @@ function HouseholdCard({
   );
 }
 
+function SharedPreferenceConsent({ api }) {
+  const [status, setStatus] = useState("idle");
+  const [review, setReview] = useState(null);
+  const [checked, setChecked] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const running = useRef(null);
+  const alive = useRef(true);
+  const blocked = useRef(false);
+  const dispatched = useRef(false);
+  const retained = useRef(null);
+  useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      blocked.current = true; running.current?.abort(); retained.current = null;
+      setReview(null); setChecked(false); setStatus("unavailable");
+    });
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => { alive.current = false; running.current?.abort(); unsubscribe(); window.clearInterval(timer); };
+  }, [api]);
+  const busy = ["loading", "confirming", "checking"].includes(status);
+  const expired = review && now >= Date.parse(review.expires_at);
+  async function perform(kind) {
+    if (running.current || !alive.current || blocked.current) return;
+    if (kind === "confirm" && (!checked || !review || dispatched.current || Date.now() >= Date.parse(review.expires_at))) return;
+    if (kind === "propose" && dispatched.current || kind === "outcome" && !retained.current) return;
+    const controller = new AbortController(), generation = api.authorityGeneration;
+    running.current = controller;
+    const current = () => alive.current && !blocked.current && !controller.signal.aborted && generation === api.authorityGeneration;
+    setStatus(kind === "propose" ? "loading" : kind === "confirm" ? "confirming" : "checking");
+    try {
+      if (kind === "propose") {
+        const operation_id = window.crypto.randomUUID();
+        const result = (await api.personalMemory("sharing-propose", {version:1, operation_id}, {signal:controller.signal})).result;
+        if (!current()) return;
+        if (result?.version !== 1 || result.operation_id !== operation_id || result.source !== "core.personal-preferences.v1" ||
+            result.applies_to !== "both_homes" || result.effect !== "read_and_manage_confirmed_preferences" ||
+            !/^[a-f0-9]{64}$/.test(result.reviewed_digest) || !Number.isFinite(Date.parse(result.grants_expire_at)) ||
+            !(Date.parse(result.expires_at) > Date.now() && Date.parse(result.expires_at) <= Date.now()+61000)) throw new Error("invalid_review");
+        retained.current = result; setReview(result); setChecked(false); setNow(Date.now()); setStatus("review");
+      } else {
+        if (kind === "confirm") dispatched.current = true;
+        const body = {version:1, operation_id:retained.current.operation_id};
+        if (kind === "confirm") body.reviewed_digest = retained.current.reviewed_digest;
+        const result = (await api.personalMemory("sharing-"+kind, body, {signal:controller.signal})).result;
+        if (!current()) return;
+        if (result?.version !== 1 || result.operation_id !== retained.current.operation_id || result.status !== "committed") throw new Error("outcome_unknown");
+        setReview(null); setChecked(false); setStatus("committed");
+      }
+    } catch {
+      if (current()) { setChecked(false); setStatus(kind === "propose" ? "unavailable" : "unknown"); }
+    } finally { if (running.current === controller) running.current = null; }
+  }
+  return <section className="agent-card agent-preference-sharing" aria-busy={busy}>
+    <h2>Share preferences between homes</h2>
+    <p>Link your Los Angeles and Victoria accounts first. Then choose whether Home can read and manage your confirmed evening lighting preference across both homes.</p>
+    <div role="status" aria-live="polite">
+      {busy && <p>{status === "loading" ? "Preparing your sharing review..." : status === "confirming" ? "Confirming sharing..." : "Checking the original confirmation..."}</p>}
+      {status === "unavailable" && <p>Sharing setup is unavailable. Check that both accounts are linked and you are signed in.</p>}
+      {status === "unknown" && <p>The outcome is not confirmed. Check its status instead of submitting again.</p>}
+      {status === "committed" && <p>Preference sharing was confirmed. You can now return to Home and ask it to remember your evening lighting preference.</p>}
+      {expired && status === "review" && <p>This review expired. Request a new review to continue.</p>}
+    </div>
+    {["idle", "unavailable"].includes(status) && !blocked.current && !dispatched.current &&
+      <button disabled={busy} onClick={() => perform("propose")}>Review preference sharing</button>}
+    {status === "review" && review && <>
+      <p>Applies to Los Angeles and Victoria until {new Date(review.grants_expire_at).toLocaleString()}.</p>
+      <p>This saves and retrieves preferences. It does not control lights or share camera history.</p>
+      <label><input type="checkbox" checked={checked} disabled={expired || busy} onChange={event => setChecked(event.target.checked)} /> Allow Home to read and manage this shared preference.</label>
+      <p><button disabled={!checked || expired || busy} onClick={event => { if (event.nativeEvent.isTrusted) perform("confirm"); }}>Confirm preference sharing</button></p>
+      {expired && <button onClick={() => perform("propose")}>Get a new review</button>}
+    </>}
+    {status === "unknown" && <button disabled={busy} onClick={() => perform("outcome")}>Check sharing status</button>}
+  </section>;
+}
+
+function SharedLinkReviewCard({ api, ceremonyId }) {
+  const [status, setStatus] = useState("idle");
+  const [review, setReview] = useState(null);
+  const [checked, setChecked] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const operation = useRef(null);
+  const alive = useRef(true);
+  const blocked = useRef(false);
+  const approved = useRef(false);
+  useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      blocked.current = true;
+      operation.current?.abort();
+      setReview(null); setChecked(false); setStatus("unavailable");
+    });
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      alive.current = false;
+      operation.current?.abort();
+      unsubscribe(); window.clearInterval(timer);
+    };
+  }, [api]);
+  const expired = review && now >= Date.parse(review.expires_at);
+  const busy = ["loading", "confirming", "checking"].includes(status);
+  const perform = async (kind) => {
+    if (operation.current || blocked.current || !alive.current) return;
+    if (kind === "confirm" && (!checked || approved.current ||
+        !sharedLinkReviewValid(review, ceremonyId, Date.now()))) return;
+    if (kind === "review" && approved.current) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    const generation = api.authorityGeneration;
+    const current = () => alive.current && !blocked.current && !controller.signal.aborted &&
+      generation === api.authorityGeneration;
+    setStatus(kind === "review" ? "loading" : kind === "confirm" ? "confirming" : "checking");
+    try {
+      if (kind === "review") {
+        const value = await api.sharedLinkReview(ceremonyId, { signal: controller.signal });
+        if (!current()) return;
+        if (!sharedLinkReviewValid(value, ceremonyId, Date.now())) throw new Error("review_unavailable");
+        setReview(value); setChecked(false); setNow(Date.now()); setStatus("review");
+      } else {
+        if (kind === "confirm") approved.current = true;
+        const value = kind === "confirm" ?
+          await api.confirmSharedLink(ceremonyId, review.gesture_id, review.reviewed_digest, { signal: controller.signal }) :
+          await api.sharedLinkOutcome(ceremonyId, { signal: controller.signal });
+        if (!current()) return;
+        if (value?.version !== 1 || value.status !== "confirmed" || value.ceremony_id !== ceremonyId) {
+          throw new Error("outcome_unavailable");
+        }
+        approved.current = true;
+        setReview(null); setChecked(false); setStatus("confirmed");
+      }
+    } catch {
+      if (current()) { setReview(null); setChecked(false); setStatus(kind === "review" ? "unavailable" : "unknown"); }
+    } finally { if (operation.current === controller) operation.current = null; }
+  };
+  return <section className="agent-card agent-shared-link" aria-labelledby="shared-link-title" aria-busy={busy}>
+    <h2 id="shared-link-title">Connect your two homes</h2>
+    <p>Link your Los Angeles and Victoria accounts for your personal assistant. Memory access and home controls require separate permissions.</p>
+    <div role="status" aria-live="polite">
+      {status === "idle" && <p>Review the accounts you authenticated before linking them.</p>}
+      {status === "loading" && <p>Loading your account review…</p>}
+      {status === "confirming" && <p>Confirming your accounts…</p>}
+      {status === "checking" && <p>Checking the original confirmation…</p>}
+      {status === "confirmed" && <p>Your two accounts are linked.</p>}
+      {status === "unavailable" && <p>This account review is unavailable. You can check an earlier confirmation below.</p>}
+      {status === "unknown" && <p>The confirmation outcome is unknown. Check its status before starting another link.</p>}
+      {status === "review" && expired && <p>This review expired. Start a new account-linking interaction to confirm.</p>}
+    </div>
+    {status === "idle" && <button onClick={() => perform("review")}>Review both accounts</button>}
+    {status === "review" && review && <>
+      <dl className="agent-grid">
+        {review.accounts.map((account) => <React.Fragment key={account.site_id}>
+          <dt>{account.site_id === "echo" ? "Los Angeles" : "Victoria"}</dt>
+          <dd>Home Assistant account <code>{account.subject}</code></dd>
+        </React.Fragment>)}
+      </dl>
+      <label><input type="checkbox" checked={checked} disabled={expired}
+        onChange={(event) => setChecked(event.target.checked)} /> These are both my accounts.</label>
+      <button disabled={!checked || expired || busy} onClick={() => perform("confirm")}>Link these two accounts</button>
+    </>}
+    {["idle", "unavailable", "unknown"].includes(status) && !blocked.current &&
+      <button onClick={() => perform("outcome")}>Check confirmation status</button>}
+  </section>;
+}
+
+function SharedLinkLoginForm({ form, busy, onSubmit }) {
+  const valid = form?.status === "form" && /^[a-f0-9]{64}$/.test(form.handle || "") &&
+    Array.isArray(form.fields) && form.fields.length > 0 && form.fields.length <= 8 &&
+    new Set(form.fields).size === form.fields.length && form.fields.every(name => ["username", "password", "code", "multi_factor_auth_module"].includes(name));
+  if (!valid) return <p>The authentication form is unavailable. Check the original authentication below.</p>;
+  return <form onSubmit={event => {
+    event.preventDefault();
+    const element = event.currentTarget, data = new FormData(element), input = {};
+    for (const field of form.fields) input[field] = String(data.get(field) || "");
+    element.reset();
+    onSubmit(form.handle, input);
+  }}>
+    {form.invalid && <p role="alert">Authentication was not accepted. Check your details.</p>}
+    {form.fields.map(field => <label key={field}>{({username:"Username",password:"Password",code:"Authentication code",multi_factor_auth_module:"Verification method"})[field]}
+      {field === "multi_factor_auth_module" ? <select name={field} required disabled={busy}>
+        {(form.choices || []).map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+      </select> : <input name={field} type={field === "password" ? "password" : "text"}
+        autoComplete={field === "password" ? "current-password" : field === "username" ? "username" : "one-time-code"}
+        maxLength={256} required disabled={busy} />}
+    </label>)}
+    <button disabled={busy}>Authenticate Los Angeles account</button>
+  </form>;
+}
+
+function SharedLinkSetupCard({ api, setup }) {
+  const [pair, setPair] = useState(null), [stage,setStage] = useState("start"), [busy,setBusy] = useState(false);
+  const [message,setMessage] = useState(""), [form,setForm] = useState(null), [token,setToken] = useState("");
+  const operation = useRef(null), blocked = useRef(false), alive = useRef(true);
+  const [now,setNow] = useState(Date.now());
+  let origin;
+  try {
+    const url=new URL(setup?.victoria_origin);
+    if(url.protocol==="https:" && url.origin===setup.victoria_origin && url.hostname!==window.location.hostname) origin=url.origin;
+  } catch (_) {}
+  useEffect(()=>{
+    const unsubscribe=api.subscribeAuthority(()=>{
+      blocked.current=true;operation.current?.abort();setPair(null);setForm(null);setToken("");setStage("unavailable");
+    });
+    const timer=window.setInterval(()=>setNow(Date.now()),1000);
+    return ()=>{alive.current=false;operation.current?.abort();unsubscribe();window.clearInterval(timer);};
+  },[api]);
+  const run=async(operationName,extra={})=>{
+    if(!origin || blocked.current || operation.current || !alive.current) return;
+    const controller=new AbortController(),generation=api.authorityGeneration;
+    operation.current=controller;setBusy(true);setMessage("");
+    const current=()=>alive.current && !blocked.current && !controller.signal.aborted && generation===api.authorityGeneration;
+    // Claim UI steps before sending. Unknown results expose lookup controls,
+    // never an automatic second write or replacement pairing.
+    if(operationName==="start")setStage("starting");
+    if(operationName==="handoff") {setStage("issuance-unknown");setToken("");}
+    if(operationName==="auth-begin" || operationName==="auth-submit") {setStage("echo-unknown");setForm(null);}
+    try {
+      let result=await api.sharedLinkSetup(operationName,operationName==="start"?{}:{pairing_id:pair.pairing_id,...extra},{signal:controller.signal});
+      if(!current())return;
+      if(operationName==="start") {
+        if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(result?.pairing_id || "") ||
+          !Number.isSafeInteger(result.expires_at) || result.expires_at<=Date.now() || result.expires_at>Date.now()+60000)throw new Error();
+        setPair(result);setStage("handoff");
+      } else if(operationName==="handoff" || operationName==="issuance-outcome") {
+        if(result?.ceremony_id!==pair.pairing_id || result.status!=="authentication_required")throw new Error();
+        setStage("echo-ready");
+      } else if(operationName.startsWith("auth-")) {
+        if(result?.status==="form") {setForm(result);setStage("echo-form");}
+        else if(result?.status==="authenticated" && result.site_id==="echo" && result.ceremony_id===pair.pairing_id)setStage("victoria-ready");
+        else throw new Error();
+      } else if(operationName==="victoria-auth-admit") {
+        if(result?.status!=="authentication_required" || result.ceremony_id!==pair.pairing_id)throw new Error();
+        setStage("victoria-waiting");
+      } else if(operationName==="victoria-auth-outcome") {
+        if(result?.status!=="authenticated" || result.site_id!=="victoria" || result.ceremony_id!==pair.pairing_id)throw new Error();
+        setStage("prepare");
+      } else if(operationName==="prepare-review") {
+        if(!sharedLinkReviewValid(result,pair.pairing_id,Date.now()))throw new Error();
+        setStage("review");
+      }
+    } catch (_) {if(current())setMessage("This step did not return a verified result. Use its status check; no action was retried.");}
+    finally {if(operation.current===controller)operation.current=null;if(current())setBusy(false);}
+  };
+  if(!origin)return null;
+  if(stage==="review")return <SharedLinkReviewCard api={api} ceremonyId={pair.pairing_id}/>;
+  return <section className="agent-card agent-link-setup" aria-busy={busy}>
+    <h2>Connect your two homes</h2>
+    <p>Sign in to Victoria first, then link the two accounts. You will review both accounts before confirming.</p>
+    <a href={origin+"/"} target="_blank" rel="noopener noreferrer">Open Victoria sign-in</a>
+    {message && <p role="status">{message}</p>}
+    {stage==="start" && <p><button disabled={busy} onClick={()=>run("start")}>Start account linking</button></p>}
+    {stage==="handoff" && <>
+      <p><a href={origin+"/#shared-link/"+pair.pairing_id} target="_blank" rel="noopener noreferrer">Create a Victoria connection code</a></p>
+      <p>{now>=pair.expires_at?"This pairing expired. Reload to start again.":"Copy the connection code from Victoria and paste it here within one minute."}</p>
+      <label>Victoria connection code<input autoComplete="off" value={token} maxLength={64} onChange={e=>setToken(e.target.value.trim())}/></label>
+      <button disabled={busy || now>=pair.expires_at || !/^[a-f0-9]{64}$/.test(token)} onClick={()=>run("handoff",{token})}>Connect this Victoria session</button>
+    </>}
+    {stage==="issuance-unknown" && <button disabled={busy} onClick={()=>run("issuance-outcome")}>Check pairing status</button>}
+    {stage==="echo-ready" && <button disabled={busy} onClick={()=>run("auth-begin")}>Verify Los Angeles account</button>}
+    {stage==="echo-form" && <SharedLinkLoginForm form={form} busy={busy} onSubmit={(handle,input)=>run("auth-submit",{handle,input})}/>}
+    {stage==="echo-unknown" && <button disabled={busy} onClick={()=>run("auth-outcome")}>Check Los Angeles authentication</button>}
+    {stage==="victoria-ready" && <button disabled={busy} onClick={()=>run("victoria-auth-admit")}>Prepare Victoria verification</button>}
+    {stage==="victoria-waiting" && <>
+      <p><a href={origin+"/#shared-link/"+pair.pairing_id} target="_blank" rel="noopener noreferrer">Verify your account in Victoria</a></p>
+      <button disabled={busy} onClick={()=>run("victoria-auth-outcome")}>Check Victoria authentication</button>
+    </>}
+    {stage==="prepare" && <button disabled={busy} onClick={()=>run("prepare-review")}>Prepare account review</button>}
+    {stage==="starting" && !busy && <p>The pairing result is unavailable. No accounts were linked.</p>}
+    {stage==="unavailable" && <p>Your session changed. Sign in again before linking.</p>}
+  </section>;
+}
+
+function SharedLinkEntry({ api, setup }) {
+  const [ceremonyId, setCeremonyId] = useState(sharedLinkCeremonyFromHash(window.location.hash));
+  useEffect(() => {
+    const changed = () => setCeremonyId(sharedLinkCeremonyFromHash(window.location.hash));
+    window.addEventListener("hashchange", changed);
+    return () => window.removeEventListener("hashchange", changed);
+  }, []);
+  return ceremonyId ? <SharedLinkReviewCard key={ceremonyId} api={api} ceremonyId={ceremonyId} /> : setup ? <SharedLinkSetupCard api={api} setup={setup}/> : null;
+}
+
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -383,13 +680,23 @@ function HomeAgentPanel() {
 
   const refresh = async () => {
     const generation = ++refreshGeneration.current;
-    const isCurrent = () => generation === refreshGeneration.current;
+    let acceptedAuthorityGeneration = null;
+    const isCurrent = () => generation === refreshGeneration.current &&
+      (api.invoke || acceptedAuthorityGeneration === null || acceptedAuthorityGeneration === api.authorityGeneration);
     setError("");
     try {
       const currentSession = await api.session();
       if (!isCurrent()) return;
+      if (!api.invoke) {
+        if (!api.authority) return;
+        // Capture after session() installs a newly verified subject/CSRF. Any
+        // later denial must invalidate values already held by this refresh too.
+        acceptedAuthorityGeneration = api.authorityGeneration;
+      }
       const subject = currentSession?.authenticated === true
-        ? (api.invoke ? "native-credential" : currentSession?.user_id)
+        ? (api.invoke ? "native-credential" : JSON.stringify([
+          currentSession?.authority?.ha_issuer_id, currentSession?.authority?.site_id, currentSession?.user_id,
+        ]))
         : null;
       if (currentSession?.authenticated === true && !subject) {
         throw new Error("authenticated_session_missing_subject");
@@ -485,7 +792,7 @@ function HomeAgentPanel() {
       // still clear the draft, just below and above.
       clearPrincipalData();
       activeSubject.current = null;
-      if (cause.status === 401) {
+      if (cause.status === 401 || (!api.invoke && api.logoutPending)) {
         setSession(null);
         setPhase("signed_out");
         setError("");
@@ -498,6 +805,12 @@ function HomeAgentPanel() {
   };
 
   useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      clearPrincipalState();
+      activeSubject.current = null;
+      setSession(null);
+      setPhase("signed_out");
+    });
     refresh();
     let disposed = false;
     let unlisten = null;
@@ -507,7 +820,7 @@ function HomeAgentPanel() {
         .then((stop) => { if (disposed) stop?.(); else unlisten = stop; })
         .catch(() => {});
     }
-    return () => { disposed = true; unlisten?.(); };
+    return () => { disposed = true; unsubscribe(); unlisten?.(); api.invalidateAuthority(); };
   }, []);
 
   useEffect(() => {
@@ -987,15 +1300,27 @@ function HomeAgentPanel() {
         </div>
       </header>
 
+      {!api.invoke && session?.authenticated && api.authority && session.shared_link_review_enabled === true &&
+        <SharedLinkEntry key={`${api.authority}:${api.authorityGeneration}`} api={api} setup={session.shared_link_setup} />}
+
+      {!api.invoke && session?.authenticated && api.authority && session.personal_memory_enabled === true &&
+        <SharedPreferenceConsent key={`sharing:${api.authority}:${api.authorityGeneration}`} api={api} />}
+
       {phase === "signed_out" && (
         <section className="agent-card">
           <h2>Authentication required</h2>
           <p>The Agent surface uses Home Assistant OAuth. No long-lived token is stored in this page.</p>
-          {session?.reason === "native_logout_revocation_pending" ? (
+          {(session?.reason === "native_logout_revocation_pending" || (!api.invoke && api.logoutPending)) ? (
+            <>
             <button onClick={async () => {
               try { await api.logout(); await refresh(); }
               catch (cause) { setError(cause.message || String(cause)); }
             }}>Retry secure sign-out</button>
+            {!api.invoke && <button onClick={async () => {
+              try { await api.login(); setPhase("authenticating"); }
+              catch (cause) { setError(cause.message || String(cause)); }
+            }}>Start a new sign-in</button>}
+            </>
           ) : <button disabled={session?.login_enabled === false} onClick={async () => {
             try {
               await api.login();

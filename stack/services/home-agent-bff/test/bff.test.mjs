@@ -31,6 +31,102 @@ import {
 } from "../src/bff.mjs";
 
 const servers = [];
+
+function verifiedLinkSession(store) {
+  const id = store.retainLoginTokens({ accessToken: Buffer.from("link-access"),
+    refreshToken: Buffer.from("link-refresh"), expiresIn: 300 });
+  store.completeLogin(id, { userId: "owner", isActive: true,
+    haIssuerId: "home-assistant:echo", siteId: "echo" });
+  return id;
+}
+
+test("linking context uses stable private commitments across persistent session recovery", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bff-link-context-"));
+  const config = configured({ sessionDbPath: path.join(directory, "sessions.sqlite"), now: () => 1000 });
+  const key = crypto.randomBytes(32);
+  let store = new SessionStore(config);
+  try {
+    const id = verifiedLinkSession(store);
+    const context = store.linkingContext(id, key);
+    assert.deepEqual(Object.keys(context).sort(), ["checkedAt", "issuerId", "sessionCommitment", "siteId", "subject", "validUntil"]);
+    assert.equal(Object.isFrozen(context), true);
+    assert.equal(context.issuerId, "home-assistant:echo");
+    assert.equal(context.siteId, "echo");
+    assert.equal(context.subject, "owner");
+    assert.equal(context.checkedAt, 1000);
+    assert.equal(context.validUntil, 31_000);
+    assert.match(context.sessionCommitment, /^[a-f0-9]{64}$/);
+    for (const secret of [id, "link-access", "link-refresh"]) assert.equal(JSON.stringify(context).includes(secret), false);
+    assert.notEqual(store.linkingContext(verifiedLinkSession(store), key).sessionCommitment, context.sessionCommitment);
+    assert.notEqual(store.linkingContext(id, crypto.randomBytes(32)).sessionCommitment, context.sessionCommitment);
+    store.close();
+    store = new SessionStore(config);
+    assert.deepEqual(store.linkingContext(id, key), context);
+  } finally {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("linking context requires a dedicated key and active verified session", () => {
+  const config = configured({ now: () => 1000 });
+  const store = new SessionStore(config);
+  const key = crypto.randomBytes(32);
+  try {
+    const id = verifiedLinkSession(store);
+    for (const bad of [undefined, "key", Buffer.alloc(31), config.sessionEncryptionKey]) {
+      assert.throws(() => store.linkingContext(id, bad), /dedicated/);
+    }
+    for (const absent of [null, {}, "missing", ""]) assert.equal(store.linkingContext(absent, key), null);
+    const pending = store.retainLoginTokens({ accessToken: Buffer.from("a"), refreshToken: Buffer.from("r"), expiresIn: 300 });
+    assert.equal(store.linkingContext(pending, key), null);
+    const session = store.get(id);
+    store.scheduleRevocation(id, session, "logout", 1000);
+    assert.equal(store.linkingContext(id, key), null);
+  } finally { store.close(); }
+});
+
+for (const [name, patch] of Object.entries({ inactive: { isActive: false },
+  issuer: { haIssuerId: "home-assistant:victoria" }, site: { siteId: "victoria" },
+  empty: { userId: "" }, whitespace: { userId: " owner" }, control: { userId: "a\nb" },
+  long: { userId: "a".repeat(65) } })) {
+  test(`linking context rejects ${name} principal`, () => {
+    const store = new SessionStore(configured({ now: () => 1000 }));
+    try {
+      const id = verifiedLinkSession(store);
+      Object.assign(store.get(id).principal, patch);
+      assert.equal(store.linkingContext(id, crypto.randomBytes(32)), null);
+    } finally { store.close(); }
+  });
+}
+
+test("linking context enforces check freshness, clock monotonicity and exact session expiry", () => {
+  let now = 1000;
+  const key = crypto.randomBytes(32);
+  const store = new SessionStore(configured({ now: () => now, idleTtlMs: 600_000, absoluteTtlMs: 900_000 }));
+  try {
+    const id = verifiedLinkSession(store);
+    assert.equal(store.linkingContext(id, key).validUntil, 301_000);
+    now = 300_999;
+    assert.ok(store.linkingContext(id, key));
+    now = 301_000;
+    assert.equal(store.linkingContext(id, key), null);
+    now = 2000;
+    assert.equal(store.linkingContext(id, key), null); // later activity cannot be rewound
+  } finally { store.close(); }
+  for (const limits of [{ idleTtlMs: 10_000, absoluteTtlMs: 20_000 },
+    { idleTtlMs: 20_000, absoluteTtlMs: 10_000 }]) {
+    now = 1000;
+    const bounded = new SessionStore(configured({ ...limits, now: () => now }));
+    try {
+      const id = verifiedLinkSession(bounded);
+      assert.equal(bounded.linkingContext(id, key).validUntil, 11_000);
+      now = 11_000;
+      assert.equal(bounded.linkingContext(id, key), null);
+    } finally { bounded.close(); }
+  }
+});
+
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
 });
@@ -62,6 +158,302 @@ function configured(overrides = {}) {
     ...overrides,
   };
 }
+
+for (const endpoint of ["token", "whoami"]) {
+  test(`OAuth rejects oversized HA ${endpoint} response without establishing a session`, async () => {
+    const config = configured();
+    const store = new SessionStore(config);
+    let calls = 0;
+    const base = await listen(createBff(config, { store, fetchImpl: async (url, init) => {
+      calls++;
+      if (init.body?.get("action") === "revoke") {
+        assert.equal(init.body.get("token"), "test-refresh");
+        return new Response(null, { status: 200 });
+      }
+      const token = String(url).endsWith("/auth/token");
+      const payload = token ? { access_token: "test-access", refresh_token: "test-refresh", expires_in: 300 } :
+        { user_id: "test-user", is_active: true };
+      if ((endpoint === "token") === token) payload.padding = "x".repeat(140_000);
+      return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
+    } }));
+    const started = await fetch(`${base}/api/agent/auth/start`, {
+      method: "POST", headers: { origin: "https://home.test" },
+    });
+    const state = new URL((await started.json()).authorize_url).searchParams.get("state");
+    const cookie = started.headers.get("set-cookie").split(";")[0];
+    const callback = await fetch(`${base}/api/agent/auth/callback?state=${state}&code=code`, {
+      headers: { cookie }, redirect: "manual",
+    });
+    assert.equal(callback.status, 502);
+    assert.deepEqual(await callback.json(), { error: "oauth_exchange_failed" });
+    assert.equal(store.sessions.size, 0);
+    assert.equal(calls, endpoint === "token" ? 1 : 3);
+    assert.equal((callback.headers.get("set-cookie") || "").includes(`${COOKIE_NAME}=`), false);
+    store.close();
+  });
+}
+
+test("issuer registration is stable across transport selection and rejects other authority namespaces", () => {
+  for (const change of [
+    { haIssuerId: "home-assistant:victoria", siteId: "victoria" },
+    { haIssuerId: "unknown" }, { siteId: "victoria" }, { haIssuerId: "" },
+  ]) {
+    assert.throws(() => createBff(configured(change)), /endpoint configuration/);
+    assert.throws(() => new SessionStore(configured(change)), /issuer/);
+  }
+  const plain = configFromEnv({});
+  assert.equal(plain.haIssuerId, "home-assistant:echo");
+  assert.equal(plain.siteId, "echo");
+  assert.equal(configFromEnv({ HOME_AGENT_HA_ISSUER_ID: "home-assistant:victoria", HOME_AGENT_SITE_ID: "victoria" }).ready, false);
+});
+
+test("unverified login tokens survive restart encrypted and can only be revoked", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bff-pending-login-"));
+  const config = configured({ sessionDbPath: path.join(directory, "sessions.sqlite"),
+    allowInMemorySessions: false });
+  let store = new SessionStore(config);
+  const tokens = { accessToken: Buffer.from("pending-access-canary"),
+    refreshToken: Buffer.from("pending-refresh-canary"), expiresIn: 300 };
+  try {
+    const id = store.retainLoginTokens(tokens);
+    assert.equal(store.get(id), null);
+    const busy = await store.cleanupExpired(config, async () => { throw new Error("must not race live validation"); });
+    assert.equal(busy.attempted, 0);
+    store.close();
+    for (const name of fs.readdirSync(directory)) {
+      const data = fs.readFileSync(path.join(directory, name));
+      assert.equal(data.includes(tokens.accessToken), false);
+      assert.equal(data.includes(tokens.refreshToken), false);
+    }
+    store = new SessionStore(config);
+    assert.equal(store.get(id), null);
+    assert.throws(() => store.completeLogin(id, { userId: "owner", isActive: true,
+      haIssuerId: "home-assistant:echo", siteId: "echo" }), /completion rejected/);
+    const failed = await store.cleanupExpired(config, async () => { throw new Error("HA unavailable"); });
+    assert.equal(failed.completed, 0);
+    const due = store.getForRevocation(id).nextRevocationAt;
+    store.close();
+    store = new SessionStore(config);
+    const cleaned = await store.cleanupExpired(config, async (url, init) => {
+      assert.equal(String(url), "https://ha.test/auth/token");
+      assert.equal(init.body.get("action"), "revoke");
+      assert.equal(init.body.get("token"), tokens.refreshToken.toString());
+      return new Response(null, { status: 200 });
+    }, { now: due });
+    assert.deepEqual(cleaned, { attempted: 1, completed: 1 });
+    assert.equal(store.sessions.size, 0);
+  } finally {
+    store.close();
+    tokens.accessToken.fill(0); tokens.refreshToken.fill(0);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("only current verified issuer can activate a retained login and abandonment prevents activation", () => {
+  const store = new SessionStore(configured());
+  const tokens = { accessToken: Buffer.from("access"), refreshToken: Buffer.from("refresh"), expiresIn: 300 };
+  const principal = { userId: "owner", isActive: true, haIssuerId: "home-assistant:echo", siteId: "echo" };
+  try {
+    const id = store.retainLoginTokens(tokens);
+    assert.throws(() => store.completeLogin(id, { ...principal, haIssuerId: "home-assistant:victoria" }));
+    assert.equal(store.get(id), null);
+    const completed = store.completeLogin(id, principal);
+    assert.equal(completed.id, id);
+    assert.equal(store.get(id).principal.userId, "owner");
+    assert.throws(() => store.completeLogin(id, principal));
+    const abandoned = store.retainLoginTokens(tokens);
+    store.abandonLogin(abandoned);
+    assert.throws(() => store.completeLogin(abandoned, principal));
+    assert.equal(store.get(abandoned), null);
+  } finally { store.close(); }
+});
+
+test("pending login lease expiry and explicit revocation fence late activation", async () => {
+  let now = 1000;
+  const config = configured({ now: () => now });
+  const store = new SessionStore(config);
+  const tokens = { accessToken: Buffer.from("access"), refreshToken: Buffer.from("refresh"), expiresIn: 300 };
+  const principal = { userId: "owner", isActive: true, haIssuerId: "home-assistant:echo", siteId: "echo" };
+  try {
+    const expired = store.retainLoginTokens(tokens);
+    now += REQUEST_TIMEOUT_MS;
+    assert.throws(() => store.completeLogin(expired, principal));
+    assert.deepEqual(await store.cleanupExpired(config, async () => new Response(null, { status: 200 })),
+      { attempted: 1, completed: 1 });
+    const revoked = store.retainLoginTokens(tokens);
+    store.scheduleRevocation(revoked, store.getForRevocation(revoked), "unverified_login");
+    assert.throws(() => store.completeLogin(revoked, principal));
+    assert.equal(store.get(revoked), null);
+    const rollback = store.retainLoginTokens(tokens);
+    now--;
+    assert.throws(() => store.completeLogin(rollback, principal));
+  } finally { store.close(); }
+});
+
+test("confirmed revocation of an unverified login survives failed local deletion and restart", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bff-login-delete-failure-"));
+  const dbPath = path.join(directory, "sessions.sqlite");
+  const config = configured({ sessionDbPath: dbPath, allowInMemorySessions: false });
+  let store = new SessionStore(config);
+  let database;
+  try {
+    const id = store.retainLoginTokens({ accessToken: Buffer.from("access"),
+      refreshToken: Buffer.from("refresh"), expiresIn: 300 });
+    store.abandonLogin(id);
+    database = new DatabaseSync(dbPath);
+    database.exec("CREATE TRIGGER fail_delete BEFORE DELETE ON bff_session BEGIN SELECT RAISE(ABORT, 'test deletion failure'); END");
+    assert.equal(await store.revoke(config, id, store.getForRevocation(id), async () =>
+      new Response(null, { status: 200 })), false);
+    assert.equal(store.getForRevocation(id).state, "authority_revoked");
+    store.close();
+    store = new SessionStore(config);
+    assert.equal(store.getForRevocation(id).state, "authority_revoked");
+    assert.equal(store.get(id), null);
+    database.exec("DROP TRIGGER fail_delete");
+    const result = await store.cleanupExpired(config, async () => { assert.fail("already revoked authority must not need HA"); });
+    assert.deepEqual(result, { attempted: 1, completed: 1 });
+    assert.equal(store.sessions.size, 0);
+  } finally {
+    store.close(); database?.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy Echo session migration preserves encrypted credentials and pending revocations atomically", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bff-issuer-migration-"));
+  const options = configured({ sessionDbPath: path.join(directory, "sessions.sqlite"), now: () => 1000 });
+  let store;
+  try {
+    store = new SessionStore(options);
+    const active = store.createSession({ principal: { userId: "same-ha-id" }, accessToken: "secret-access", refreshToken: "secret-refresh", expiresIn: 300 });
+    const pending = store.createSession({ principal: { userId: "revoked-user" }, accessToken: "old-access", refreshToken: "old-refresh", expiresIn: 300 });
+    store.scheduleRevocation(pending.id, store.get(pending.id), "logout", 1000);
+    store.close();
+    let database = new DatabaseSync(options.sessionDbPath);
+    const before = database.prepare("SELECT id,ciphertext,tag,state FROM bff_session ORDER BY id").all();
+    for (const row of database.prepare("SELECT id,principal_json FROM bff_session").all()) {
+      const principal = JSON.parse(row.principal_json);
+      delete principal.haIssuerId;
+      delete principal.siteId;
+      database.prepare("UPDATE bff_session SET principal_json=? WHERE id=?").run(JSON.stringify(principal), row.id);
+    }
+    database.exec("DROP TABLE bff_issuer_binding; PRAGMA user_version=1");
+    database.close();
+    store = new SessionStore({ ...options, haUrl: "https://same-ha-over-tailscale.test" });
+    assert.equal(store.get(active.id).principal.haIssuerId, "home-assistant:echo");
+    assert.equal(store.get(active.id).principal.siteId, "echo");
+    assert.equal(store.get(pending.id), null);
+    assert.equal(store.getForRevocation(pending.id).state, "revocation_pending");
+    database = new DatabaseSync(options.sessionDbPath);
+    assert.equal(database.prepare("PRAGMA user_version").get().user_version, 2);
+    assert.deepEqual({ ...database.prepare("SELECT issuer_id,site_id FROM bff_issuer_binding").get() },
+      { issuer_id: "home-assistant:echo", site_id: "echo" });
+    assert.deepEqual(database.prepare("SELECT id,ciphertext,tag,state FROM bff_session ORDER BY id").all(), before);
+    database.close();
+    let seen;
+    await store.revalidate({ ...options, haUrl: "https://same-ha-over-tailscale.test" }, active.id, store.get(active.id), async (url, request) => {
+      seen = { url, bearer: request.headers.get("Authorization") };
+      return Response.json({ user_id: "same-ha-id", is_active: true });
+    }, 1000, { forcePrincipalCheck: true });
+    assert.equal(seen.url, "https://same-ha-over-tailscale.test/api/home_agent_edge/whoami");
+    assert.equal(seen.bearer, "Bearer secret-access");
+  } finally {
+    store?.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("session issuer mismatches fail before refresh, cached use or revocation token disclosure", async () => {
+  const options = configured();
+  const store = new SessionStore(options);
+  try {
+    assert.throws(() => store.createSession({ principal: { userId: "same-id", siteId: "victoria" }, accessToken: "secret", refreshToken: "refresh" }), /issuer mismatch/);
+    const created = store.createSession({ principal: { userId: "same-id" }, accessToken: "secret", refreshToken: "refresh" });
+    const session = store.get(created.id);
+    let calls = 0;
+    const fetchImpl = async () => { calls += 1; throw new Error("should not disclose credentials"); };
+    const other = { ...options, haIssuerId: "home-assistant:victoria", siteId: "victoria" };
+    await assert.rejects(store.revalidate(other, created.id, session, fetchImpl), /issuer mismatch/);
+    assert.equal(await store.revoke(other, created.id, session, fetchImpl), false);
+    const otherOrigin = { ...options, allowedOrigins: new Set(["https://other-home.test"]) };
+    await assert.rejects(store.revalidate(otherOrigin, created.id, session, fetchImpl), /issuer mismatch/);
+    assert.equal(await store.revoke(otherOrigin, created.id, session, fetchImpl), false);
+    assert.equal(calls, 0);
+    assert.equal(store.get(created.id), session);
+  } finally { store.close(); }
+});
+
+test("persistent issuer contradiction and unknown session schema are never silently rebound", () => {
+  for (const scenario of ["binding", "legacy-principal", "future-schema"]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bff-issuer-contradiction-"));
+    const options = configured({ sessionDbPath: path.join(directory, "sessions.sqlite") });
+    try {
+      const store = new SessionStore(options);
+      const created = store.createSession({ principal: { userId: "same-ha-id" }, accessToken: "secret", refreshToken: "refresh" });
+      store.close();
+      let database = new DatabaseSync(options.sessionDbPath);
+      if (scenario === "binding") {
+        database.exec("UPDATE bff_issuer_binding SET issuer_id='home-assistant:victoria',site_id='victoria'");
+      } else if (scenario === "legacy-principal") {
+        database.prepare("UPDATE bff_session SET principal_json=? WHERE id=?").run(JSON.stringify({ userId: "same-ha-id", haIssuerId: "home-assistant:victoria", siteId: "victoria" }), created.id);
+        database.exec("DROP TABLE bff_issuer_binding; PRAGMA user_version=1");
+      } else { database.exec("PRAGMA user_version=3"); }
+      database.close();
+      assert.throws(() => new SessionStore(options), /issuer|authority schema/);
+      database = new DatabaseSync(options.sessionDbPath);
+      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM bff_session").get().n, 1);
+      assert.equal(database.prepare("PRAGMA user_version").get().user_version, scenario === "binding" ? 2 : scenario === "legacy-principal" ? 1 : 3);
+      database.close();
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test("session migration rejects unknown schema, origins and encryption keys without partial authority changes", () => {
+  for (const scenario of ["origins", "legacy-column", "legacy-key"]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bff-migration-proof-"));
+    const options = configured({ sessionDbPath: path.join(directory, "sessions.sqlite") });
+    try {
+      const store = new SessionStore(options);
+      const created = store.createSession({ principal: { userId: "echo-owner" }, accessToken: "secret", refreshToken: "refresh" });
+      store.close();
+      let database = new DatabaseSync(options.sessionDbPath);
+      const before = database.prepare("SELECT principal_json,ciphertext,tag FROM bff_session WHERE id=?").get(created.id);
+      if (scenario !== "origins") database.exec("DROP TABLE bff_issuer_binding; PRAGMA user_version=1");
+      if (scenario === "legacy-column") database.exec("ALTER TABLE bff_session ADD COLUMN unknown_authority TEXT");
+      database.close();
+      const invalidOptions = scenario === "origins" ? { ...options, allowedOrigins: new Set(["https://other.test"]) }
+        : scenario === "legacy-key" ? { ...options, sessionEncryptionKey: crypto.randomBytes(32) } : options;
+      assert.throws(() => new SessionStore(invalidOptions));
+      database = new DatabaseSync(options.sessionDbPath);
+      assert.equal(database.prepare("PRAGMA user_version").get().user_version, scenario === "origins" ? 2 : 1);
+      assert.deepEqual(database.prepare("SELECT principal_json,ciphertext,tag FROM bff_session WHERE id=?").get(created.id), before);
+      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='bff_issuer_binding'").get().n, scenario === "origins" ? 1 : 0);
+      database.close();
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test("Echo rollback and re-upgrade retain the original issuer and origin marker", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bff-rollback-issuer-"));
+  const options = configured({ sessionDbPath: path.join(directory, "sessions.sqlite") });
+  let store;
+  try {
+    store = new SessionStore(options);
+    const created = store.createSession({ principal: { userId: "echo-owner" }, accessToken: "secret", refreshToken: "refresh" });
+    store.close();
+    let database = new DatabaseSync(options.sessionDbPath);
+    database.exec("PRAGMA user_version=1");
+    database.prepare("UPDATE bff_session SET principal_json=? WHERE id=?").run(JSON.stringify({ userId: "echo-owner" }), created.id);
+    database.close();
+    assert.throws(() => new SessionStore({ ...options, allowedOrigins: new Set(["https://other.test"]) }), /issuer binding/);
+    store = new SessionStore(options);
+    assert.equal(store.get(created.id).principal.haIssuerId, "home-assistant:echo");
+    database = new DatabaseSync(options.sessionDbPath);
+    assert.equal(database.prepare("PRAGMA user_version").get().user_version, 2);
+    assert.equal(database.prepare("SELECT browser_origins_json FROM bff_issuer_binding").get().browser_origins_json, JSON.stringify(["https://home.test"]));
+    database.close();
+  } finally { store?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 function bodyDigest(body = Buffer.alloc(0)) {
   return crypto.createHash("sha256").update(body).digest("base64url");
@@ -1357,6 +1749,63 @@ test("typed descriptor lifecycle routes proxy to their exact Core paths", async 
   );
 });
 
+test("browser session exposes its validated issuer binding regardless of caller authority claims", async () => {
+  const config = configured();
+  const store = new SessionStore(config);
+  const session = store.createSession({
+    principal: { userId: "same-ha-user-id", isAdmin: false },
+    accessToken: "private-access-canary",
+    refreshToken: "private-refresh-canary",
+  });
+  let upstreamCalls = 0;
+  const base = await listen(createBff(config, { store, fetchImpl: async () => {
+    upstreamCalls += 1;
+    throw new Error("fresh session should not need upstream access");
+  } }));
+  const response = await fetch(`${base}/api/agent/auth/session`, {
+    headers: {
+      cookie: `${COOKIE_NAME}=${session.id}`,
+      "x-authenticated-ha-issuer": "home-assistant:victoria",
+      "x-authenticated-home-site": "victoria",
+      "x-home-agent-principal": "forged",
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const payload = await response.json();
+  assert.deepEqual(payload.authority, {
+    version: 1, site_id: "echo", ha_issuer_id: "home-assistant:echo",
+  });
+  assert.equal(payload.user_id, "same-ha-user-id");
+  assert.equal(payload.csrf_token, session.csrf);
+  assert.equal(upstreamCalls, 0);
+  assert.doesNotMatch(JSON.stringify(payload), /private-access-canary|private-refresh-canary/);
+  const unsigned = await fetch(`${base}/api/agent/auth/session`, {
+    headers: { "x-authenticated-ha-issuer": "home-assistant:echo", "x-authenticated-home-site": "echo" },
+  });
+  assert.equal(unsigned.status, 401);
+  const denied = await unsigned.json();
+  assert.equal(denied.authority, undefined);
+  assert.equal(denied.csrf_token, undefined);
+});
+
+test("revoked browser sessions cannot return authority metadata or a CSRF token", async () => {
+  const config = configured({ principalRevalidateMs: 0 });
+  const store = new SessionStore(config);
+  const session = store.createSession({ principal: { userId: "revoked-ha-user" },
+    accessToken: "private-access", refreshToken: "private-refresh" });
+  const base = await listen(createBff(config, { store, fetchImpl: async () => new Response("", { status: 401 }) }));
+  const response = await fetch(`${base}/api/agent/auth/session`, {
+    headers: { cookie: `${COOKIE_NAME}=${session.id}` },
+  });
+  assert.equal(response.status, 401);
+  const payload = await response.json();
+  assert.equal(payload.error, "authentication_revoked");
+  assert.equal(payload.authority, undefined);
+  assert.equal(payload.csrf_token, undefined);
+  assert.equal(store.get(session.id), null);
+});
+
 test("BFF constructs trusted upstream headers instead of forwarding actor headers", async () => {
   const config = configured();
   const store = new SessionStore(config);
@@ -1376,11 +1825,15 @@ test("BFF constructs trusted upstream headers instead of forwarding actor header
       cookie: `${COOKIE_NAME}=${session.id}`,
       authorization: "Bearer forged",
       "x-home-agent-principal": "forged",
+      "x-authenticated-ha-issuer": "home-assistant:victoria",
+      "x-authenticated-home-site": "victoria",
     },
   });
   assert.equal(observed.url, "http://core.internal:8096/v1/snapshot");
   assert.equal(observed.init.headers.Authorization, "Bearer internal-secret");
   assert.equal(observed.init.headers["X-Authenticated-HA-User"], "real-ha-user");
+  assert.equal(observed.init.headers["X-Authenticated-HA-Issuer"], "home-assistant:echo");
+  assert.equal(observed.init.headers["X-Authenticated-Home-Site"], "echo");
   assert.equal(observed.init.headers["X-Home-Agent-Principal"], undefined);
   assert.equal(observed.init.headers["X-Home-Agent-Admin"], undefined);
   assert.equal(observed.init.headers["X-Home-Agent-Channel"], undefined);

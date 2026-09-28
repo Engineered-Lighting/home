@@ -133,7 +133,13 @@ class PanelBuildContractTests(unittest.TestCase):
             rules = (
                 ROOT / f"stack/services/{service}/.dockerignore"
             ).read_text(encoding="utf-8").splitlines()
-            self.assertEqual(list(EXPECTED_DOCKER_CONTEXT), rules, service)
+            expected = list(EXPECTED_DOCKER_CONTEXT)
+            if service == "home-agent-bff":
+                expected.insert(expected.index("!src/"), "!victoria-link-server.mjs")
+                dockerfile = (ROOT / f"stack/services/{service}/Dockerfile").read_text(encoding="utf-8")
+                self.assertIn("COPY victoria-link-server.mjs ./", dockerfile)
+                self.assertIn('CMD ["node", "server.mjs"]', dockerfile)
+            self.assertEqual(expected, rules, service)
 
 
 if __name__ == "__main__":

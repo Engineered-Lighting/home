@@ -162,7 +162,7 @@ def main():
     from .config import Settings
     from .main import create_app
     import uvicorn
-    settings = Settings(database_pool_size=2, database_max_overflow=0)
+    settings = Settings(database_pool_size=1, database_max_overflow=0)
     if settings.operator_database_url is not None:
         raise ValueError("private preference listener does not use operator credentials")
     app = build_listener(create_app(settings), profile)

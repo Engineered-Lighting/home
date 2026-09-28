@@ -168,7 +168,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         pool_size=settings.database_pool_size,
                         max_overflow=settings.database_max_overflow)
     operator_database = (
-        Database(settings.async_operator_database_url())
+        Database(settings.async_operator_database_url(),
+                 pool_size=settings.database_pool_size,
+                 max_overflow=settings.database_max_overflow)
         if settings.operator_database_url is not None
         and settings.role in {"api", "all"}
         else None

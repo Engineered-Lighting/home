@@ -1,0 +1,22 @@
+{
+  "services": {
+    "core-api": {
+      "environment": {
+        "HOME_AGENT_DATABASE_POOL_SIZE": "2",
+        "HOME_AGENT_DATABASE_MAX_OVERFLOW": "0"
+      }
+    },
+    "core-ingest": {
+      "environment": {
+        "HOME_AGENT_DATABASE_POOL_SIZE": "2",
+        "HOME_AGENT_DATABASE_MAX_OVERFLOW": "0"
+      }
+    },
+    "core-worker": {
+      "environment": {
+        "HOME_AGENT_DATABASE_POOL_SIZE": "2",
+        "HOME_AGENT_DATABASE_MAX_OVERFLOW": "0"
+      }
+    }
+  }
+}

@@ -27,7 +27,7 @@ def database(monkeypatch, value, **changes):
     def make_engine(url, **options):
         assert url.username == module.ROLE
         assert url.drivername == "postgresql+psycopg"
-        assert options["hide_parameters"] and options["pool_size"] == 2 and options["max_overflow"] == 0
+        assert options["hide_parameters"] and options["pool_size"] == 1 and options["max_overflow"] == 0
         assert options["connect_args"]["options"] == "-c statement_timeout=7000 -c lock_timeout=5000 -c idle_in_transaction_session_timeout=10000"
         return engine
     monkeypatch.setattr(module, "create_async_engine", make_engine)

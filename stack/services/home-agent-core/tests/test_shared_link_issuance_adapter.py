@@ -70,7 +70,7 @@ def database(monkeypatch, **changes):
     factory = SharedLinkCommitments(b"x"*32, key_id="fixture-v1")
     def make_engine(url, **options):
         assert url.drivername == "postgresql+psycopg" and url.username == module.COORDINATOR_ROLE
-        assert options["pool_size"] == 2 and options["max_overflow"] == 0 and options["pool_timeout"] == 2
+        assert options["pool_size"] == 1 and options["max_overflow"] == 0 and options["pool_timeout"] == 2
         assert options["hide_parameters"] is True
         assert options["connect_args"] == {"connect_timeout": 5, "options":
             "-c statement_timeout=7000 -c lock_timeout=5000 -c idle_in_transaction_session_timeout=10000"}

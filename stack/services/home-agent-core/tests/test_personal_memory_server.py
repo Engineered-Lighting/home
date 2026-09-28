@@ -36,7 +36,7 @@ def test_private_entrypoints_bound_real_core_pool(tmp_path, monkeypatch, module_
     monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
     module.main()
     pool = captured[0].state.database.engine.pool
-    assert pool.size() == 2
+    assert pool.size() == 1
     assert pool._max_overflow == 0
     assert captured[0].state.operator_database is None
 

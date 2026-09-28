@@ -76,7 +76,7 @@ class SharedLinkIssuanceDatabase:
         self._commitments = commitments
         self._now = now
         self.engine = create_async_engine(database_url.set(drivername="postgresql+psycopg"),
-            pool_pre_ping=True, pool_size=2, max_overflow=0, pool_timeout=2,
+            pool_pre_ping=True, pool_size=1, max_overflow=0, pool_timeout=2,
             pool_recycle=300, hide_parameters=True,
             connect_args={"connect_timeout": 5, "options":
                 "-c statement_timeout=7000 -c lock_timeout=5000 "

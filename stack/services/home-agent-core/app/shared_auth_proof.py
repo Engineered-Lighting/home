@@ -91,7 +91,7 @@ class SharedAuthProofDatabase:
         # to be the first transaction statement. Server-side limits survive a lost
         # client cancellation; they do not prove an uncertain commit rolled back.
         self.issuer_id = issuer_id
-        self.engine = create_async_engine(database_url, pool_pre_ping=True, pool_size=2,
+        self.engine = create_async_engine(database_url, pool_pre_ping=True, pool_size=1,
             max_overflow=0, pool_timeout=2, pool_recycle=300, hide_parameters=True,
             connect_args={"connect_timeout": 5, "options":
                 "-c statement_timeout=7000 -c lock_timeout=5000 "

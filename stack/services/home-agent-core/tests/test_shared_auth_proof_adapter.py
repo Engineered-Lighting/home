@@ -74,7 +74,7 @@ def database(monkeypatch, value, *, linked=False, **changes):
     def make_engine(url, **options):
         assert url.drivername == "postgresql+psycopg"
         assert options["max_overflow"] == 0
-        assert options["pool_size"] == 2
+        assert options["pool_size"] == 1
         assert options["pool_timeout"] == 2
         assert options["connect_args"] == {"connect_timeout": 5, "options":
             "-c statement_timeout=7000 -c lock_timeout=5000 "

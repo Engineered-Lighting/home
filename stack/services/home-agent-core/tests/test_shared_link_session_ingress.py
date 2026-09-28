@@ -20,7 +20,7 @@ def fixture(monkeypatch, site="echo"):
     engine.expected_function = "identity.revoke_shared_link_session_bound_v1"
     def factory(url, **options):
         assert url.username == f"home_agent_shared_{site}_session_ingress"
-        assert options["pool_size"] == 2 and options["max_overflow"] == 0 and options["hide_parameters"]
+        assert options["pool_size"] == 1 and options["max_overflow"] == 0 and options["hide_parameters"]
         assert "statement_timeout=7000" in options["connect_args"]["options"]
         return engine
     monkeypatch.setattr(module, "create_async_engine", factory)

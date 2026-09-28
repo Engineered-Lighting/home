@@ -96,7 +96,7 @@ def main():
     from .config import Settings
     from .main import create_app
     import uvicorn
-    settings = Settings(database_pool_size=2, database_max_overflow=0)
+    settings = Settings(database_pool_size=1, database_max_overflow=0)
     if settings.operator_database_url is not None: raise ValueError("coordinator cannot use operator credentials")
     app = build_listener(create_app(settings),profile)
     uvicorn.run(app,host=profile.address,port=profile.port,ssl_certfile=profile.certificate,ssl_keyfile=profile.private_key,

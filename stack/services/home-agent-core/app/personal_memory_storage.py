@@ -6,11 +6,12 @@ transaction. Database permissions remain a separate deployment prerequisite.
 """
 import hmac
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from uuid import UUID
 
 from psycopg.types.range import Range
 from sqlalchemy import insert, select, text, update
+from sqlalchemy.exc import DBAPIError
 
 from . import schema
 from .erasure import apply_personal_preference_erasure, invalidate_descriptor_dependents
@@ -80,94 +81,59 @@ class PersonalMemoryStorage:
             raise ForbiddenError("authenticated preference session required")
         if (await connection.execute(text("SHOW transaction_isolation"))).scalar_one() != "serializable":
             raise ValueError("serializable preference transaction required")
-        rows = (await connection.execute(text("""
-            SELECT l.link_id,l.principal_id,l.person_id,l.authorization_generation,
-                   g.site_id,g.capability,g.revision,g.expires_at
-            FROM identity.shared_subject_bindings b
-            JOIN identity.shared_owner_links l ON l.link_id=b.link_id
-            JOIN identity.shared_source_grants g ON g.link_id=l.link_id
-            WHERE b.issuer_id=:issuer AND b.subject=:subject AND b.revoked_at IS NULL
-              AND l.revoked_at IS NULL AND g.revoked_at IS NULL
-              AND g.authorization_generation=l.authorization_generation
-              AND g.source_id=:source AND g.site_id IN ('echo','victoria')
-              AND g.capability IN ('memory.read','personal_memory.write')
-              AND g.expires_at>clock_timestamp()
-        """), {"issuer":issuer_id,"subject":subject,"source":SOURCE})).mappings().all()
-        if not rows or len({row["link_id"] for row in rows}) != 1:
-            raise ForbiddenError("linked preference owner unavailable")
-        grants = {(row["site_id"],row["capability"]):row for row in rows}
-        capability = "personal_memory.write" if write else "memory.read"
-        required = {(site,cap) for site in ("echo","victoria") for cap in ("memory.read",capability)}
-        if not required.issubset(grants):
-            raise ForbiddenError("current preference grants required")
+        authority = await self._lookup_authority(connection, issuer_id=issuer_id,
+            subject=subject, session_commitment=session_commitment, write=write)
         now = (await connection.execute(text("SELECT clock_timestamp()"))).scalar_one()
-        expires = min(now+timedelta(seconds=60), *(grants[key]["expires_at"] for key in required))
-        anchor = rows[0]
-        authority = PreferenceAuthority(
-            principal_id=anchor["principal_id"],person_id=anchor["person_id"],link_id=anchor["link_id"],
-            authorization_generation=anchor["authorization_generation"],issuer_id=issuer_id,
-            site_id=issuer_id.split(":",1)[1],session_commitment=session_commitment,
-            echo_grant_revision=grants[("echo",capability)]["revision"],
-            victoria_grant_revision=grants[("victoria",capability)]["revision"],valid_until=expires)
         if retained is not None:
             if (retained.model_dump(exclude={"valid_until"}) != authority.model_dump(exclude={"valid_until"}) or
-                not now < retained.valid_until <= expires):
+                not now < retained.valid_until <= authority.valid_until):
                 raise ForbiddenError("preference authority changed after review")
             authority = retained
         await self._admit(connection, authority, write=write)
         return authority
 
+    async def _lookup_authority(self, connection, *, issuer_id, subject, session_commitment, write):
+        # The fixed database function resolves identity and locks grants. The
+        # application role receives no direct shared-identity table permissions.
+        try:
+            row = (await connection.execute(text("""
+                SELECT * FROM identity.resolve_personal_preference_authority_v1(
+                    :issuer,:subject,:session,:write)
+            """), {"issuer":issuer_id,"subject":subject,"session":session_commitment,
+                    "write":write})).mappings().one()
+        except DBAPIError as error:
+            if getattr(error.orig, "sqlstate", None) in ("42501", "22023"):
+                raise ForbiddenError("current preference authority required") from error
+            # Serialization failures and infrastructure faults must propagate;
+            # neither is evidence that a write can safely be retried.
+            raise
+        return PreferenceAuthority(**dict(row),issuer_id=issuer_id,
+            site_id=issuer_id.split(":",1)[1],subject=subject,
+            session_commitment=session_commitment,access="write" if write else "read")
+
     async def _admit(self, connection, authority, *, write):
         if type(authority) is not PreferenceAuthority:
             raise TypeError("authenticated preference authority required")
         authority = PreferenceAuthority.model_validate(authority.model_dump())
+        if write and authority.access != "write":
+            raise ForbiddenError("write authority required")
         if (await connection.execute(text("SHOW transaction_isolation"))).scalar_one() != "serializable":
             raise ValueError("serializable preference transaction required")
         now = (await connection.execute(text("SELECT clock_timestamp()"))).scalar_one()
         if now >= authority.valid_until:
             raise ForbiddenError("preference authority expired")
-        params = authority.model_dump()
-        params["source"] = SOURCE
-        rows = (await connection.execute(text("""
-            SELECT g.site_id,g.capability,g.revision,g.expires_at
-            FROM identity.shared_owner_links l
-            JOIN identity.principals p ON p.principal_id=l.principal_id AND p.person_id=l.person_id
-            JOIN identity.people person ON person.person_id=l.person_id
-            JOIN identity.shared_source_grants g ON g.link_id=l.link_id
-            JOIN identity.shared_sources s USING(site_id,source_id,capability)
-            JOIN identity.shared_issuers i ON i.issuer_id=s.issuer_id AND i.site_id=s.site_id
-            WHERE l.link_id=:link_id AND l.principal_id=:principal_id AND l.person_id=:person_id
-              AND l.revoked_at IS NULL AND l.authorization_generation=:authorization_generation
-              AND p.status='active' AND p.kind='ha_user' AND person.status='active'
-              AND EXISTS (SELECT 1 FROM identity.shared_subject_bindings b
-                WHERE b.link_id=l.link_id AND b.issuer_id='home-assistant:echo' AND b.revoked_at IS NULL)
-              AND EXISTS (SELECT 1 FROM identity.shared_subject_bindings b
-                WHERE b.link_id=l.link_id AND b.issuer_id='home-assistant:victoria' AND b.revoked_at IS NULL)
-              AND g.authorization_generation=:authorization_generation AND g.revoked_at IS NULL
-              AND g.expires_at>clock_timestamp() AND g.source_id=:source
-              AND s.state='active' AND s.registration_revision=g.source_revision AND i.state='active'
-              AND g.site_id IN ('echo','victoria')
-              AND g.capability IN ('memory.read','personal_memory.write')
-            FOR SHARE OF l,g,s,i,p,person
-        """), params)).mappings().all()
-        grants = {(r["site_id"],r["capability"]): r["revision"] for r in rows}
-        capability = "personal_memory.write" if write else "memory.read"
-        if any(grants.get((site,capability)) != getattr(authority, f"{site}_grant_revision")
-               or (site,"memory.read") not in grants for site in ("echo","victoria")):
-            raise ForbiddenError("current preference grants required")
-        blocked = (await connection.execute(text("""
-            SELECT privacy.identity_person_is_blocked(:person_id)
-              OR EXISTS (SELECT 1 FROM privacy.shared_link_session_revocations
-                WHERE issuer_id=:issuer_id AND session_commitment=:session_commitment)
-        """), params)).scalar_one()
-        if blocked:
-            raise ForbiddenError("preference authority revoked")
-        # Serialize first creation as well as corrections, including the absence
-        # of an existing row. This lock is not an authority credential.
+        current = await self._lookup_authority(connection,issuer_id=authority.issuer_id,
+            subject=authority.subject,session_commitment=authority.session_commitment,
+            write=authority.access == "write")
+        if (current.model_dump(exclude={"valid_until"}) != authority.model_dump(exclude={"valid_until"}) or
+            authority.valid_until > current.valid_until):
+            raise ForbiddenError("preference authority changed")
+        # Serialize first creation as well as corrections, including absence of
+        # an existing row. This lock does not establish authority.
         await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:scope,0))"),
             {"scope": f"{PREDICATE}:{authority.person_id}:{authority.principal_id}"})
         now = (await connection.execute(text("SELECT clock_timestamp()"))).scalar_one()
-        if now >= authority.valid_until or any(now >= row["expires_at"] for row in rows):
+        if now >= authority.valid_until:
             raise ForbiddenError("preference authority expired while waiting")
         return now
 

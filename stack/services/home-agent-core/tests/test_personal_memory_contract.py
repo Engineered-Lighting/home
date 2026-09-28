@@ -16,7 +16,7 @@ NOW = datetime(2026, 9, 27, 22, tzinfo=UTC)
 def fixture(operation="remember", revision=0):
     authority = PreferenceAuthority(
         principal_id=uuid4(), person_id=uuid4(), link_id=uuid4(), authorization_generation=3,
-        issuer_id="home-assistant:echo", site_id="echo", session_commitment="a" * 64,
+        issuer_id="home-assistant:echo", site_id="echo", subject="fixture-owner", access="write", session_commitment="a" * 64,
         echo_grant_revision=2, victoria_grant_revision=4, valid_until=NOW + timedelta(minutes=5),
     )
     request = PreferenceProposalRequest(

@@ -1,7 +1,8 @@
-"""Storage lifecycle under synthetic authority in the guarded hosted clone.
+"""Storage lifecycle as the API role in the guarded hosted clone.
 
-These administrator fixtures do not prove BFF authentication or production role
-permissions. They exercise real Core tables, revisions and deletion behavior.
+Administrator access seeds synthetic linked accounts and grants only. Storage
+and service SQL use the existing API role. This does not prove live BFF login
+or independent transaction races.
 """
 import asyncio
 import os
@@ -25,7 +26,7 @@ from .e1_postgres_harness import assert_guarded_database_url
 
 
 def test_preference_storage_correction_forgetting_and_relearning():
-    url = os.getenv("TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL")
+    url = os.getenv("TEST_PERSONAL_PREFERENCE_AUTHORITY_ADMIN_DATABASE_URL")
     if not url: pytest.skip("guarded hosted preference storage clone required")
     assert_guarded_database_url(url)
     engine = create_engine(url,isolation_level="SERIALIZABLE",pool_size=1,max_overflow=0,
@@ -34,7 +35,8 @@ def test_preference_storage_correction_forgetting_and_relearning():
         with engine.connect() as connection:
             transaction = connection.begin()
             try:
-                assert connection.execute(text("SELECT current_database()")).scalar_one()=="shared_link_session_kernel_0046"
+                assert connection.execute(text("SELECT current_database()")).scalar_one()=="personal_preference_authority_0047"
+                connection.execute(text("GRANT EXECUTE ON FUNCTION identity.resolve_personal_preference_authority_v1(text,text,text,boolean) TO home_agent_api"))
                 link = connection.execute(text("SELECT * FROM identity.shared_owner_links")).mappings().one()
                 now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
                 for site in ("echo","victoria"):
@@ -47,15 +49,21 @@ def test_preference_storage_correction_forgetting_and_relearning():
                             (grant_id,link_id,site_id,source_id,capability,source_revision,authorization_generation,
                              revision,approval_commitment,created_at,expires_at)
                             VALUES(:id,:link,:site,:source,:capability,1,:generation,1,:approval,clock_timestamp(),:expires)"""),params)
+                subjects = dict(connection.execute(text("SELECT issuer_id,subject FROM identity.shared_subject_bindings WHERE link_id=:link AND revoked_at IS NULL"),
+                    {"link":link["link_id"]}).all())
                 authority = PreferenceAuthority(principal_id=link["principal_id"],person_id=link["person_id"],
                     link_id=link["link_id"],authorization_generation=link["authorization_generation"],
-                    issuer_id="home-assistant:echo",site_id="echo",session_commitment=uuid4().hex*2,
+                    issuer_id="home-assistant:echo",site_id="echo",subject=subjects["home-assistant:echo"],access="write",session_commitment=uuid4().hex*2,
                     echo_grant_revision=1,victoria_grant_revision=1,valid_until=now+timedelta(minutes=5))
                 storage = PersonalMemoryStorage(PreferenceReviewCommitment(b"k"*32),policy_digest="a"*64,policy_version="fixture")
 
                 class AsyncTransaction:
                     async def execute(self, statement, parameters=None):
-                        return connection.execute(statement,parameters or {})
+                        with connection.begin_nested():
+                            connection.execute(text("SET LOCAL SESSION AUTHORIZATION home_agent_api"))
+                            result=connection.execute(statement,parameters or {})
+                            connection.execute(text("RESET SESSION AUTHORIZATION"))
+                            return result
 
                 async def exercise():
                     nonlocal authority
@@ -65,6 +73,8 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     authority = await storage.resolve_authority(conn,issuer_id="home-assistant:echo",
                         subject=subjects["home-assistant:echo"],session_commitment=authority.session_commitment,write=True)
                     assert authority.principal_id==link["principal_id"]
+                    await conn.execute(text("SELECT set_config('app.principal_id',:principal,true)"),
+                        {"principal":str(authority.principal_id)})
                     assert authority.valid_until <= now+timedelta(seconds=65)
                     retained = await storage.resolve_authority(conn,issuer_id=authority.issuer_id,
                         subject=subjects[authority.issuer_id],session_commitment=authority.session_commitment,
@@ -87,13 +97,12 @@ def test_preference_storage_correction_forgetting_and_relearning():
 
                     async def confirm(pair):
                         request,review = pair
-                        artifact = uuid4()
-                        stamp = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
-                        # Synthetic governed gesture fixture, not a live owner approval.
-                        connection.execute(insert(schema.confirmation_artifacts).values(artifact_id=artifact,
-                            principal_id=authority.principal_id,purpose=f"{KIND}.{request.operation}.confirm",
-                            proposal_digest=review.reviewed_digest,client_nonce_sha256=uuid4().hex*2,
-                            issued_at=stamp,consumed_at=stamp,expires_at=stamp+timedelta(seconds=60)))
+                        # Synthetic gesture, real Core minting under API-role
+                        # permissions for every operation, including forgetting.
+                        artifact = await CoreStore._mint_authenticated_confirmation(
+                            object.__new__(CoreStore),conn,principal_id=authority.principal_id,
+                            purpose=f"{KIND}.{request.operation}.confirm",
+                            proposal_digest=review.reviewed_digest,client_nonce=uuid4())
                         confirmation = PreferenceConfirmation(operation_id=request.operation_id,reviewed_digest=review.reviewed_digest)
                         assert await storage.outcome(conn,authority,confirmation) is None
                         result = await storage.confirm(conn,authority,confirmation,confirmation_artifact_id=artifact)
@@ -130,8 +139,8 @@ def test_preference_storage_correction_forgetting_and_relearning():
                             expected_fact_id=first_snapshot["fact_id"],preference=EveningLightingPreference(value="cool")))
                     # Exercise the authenticated transaction service and real
                     # Core confirmation minting in this rollback-only fixture.
-                    # The outer admin transaction still does not prove deployed
-                    # login, production roles or independent transaction races.
+                    # API-role execution proves permissions here, but this
+                    # rollback-only fixture does not prove live login or races.
                     class DatabaseFixture:
                         @asynccontextmanager
                         async def transaction(self, *, serializable):

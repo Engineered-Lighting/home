@@ -5,7 +5,7 @@ the BFF; the BFF supplies its freshly checked subject and session commitment.
 """
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from . import schema
 from .errors import ForbiddenError, NotFoundError
@@ -23,7 +23,13 @@ class PersonalMemoryService:
     async def _authority(self, connection, session, *, write, retained=None):
         if type(session) is not dict or set(session) != {"issuer_id","subject","session_commitment"}:
             raise ForbiddenError("authenticated preference session required")
-        return await self.storage.resolve_authority(connection, **session, write=write, retained=retained)
+        authority = await self.storage.resolve_authority(connection, **session, write=write, retained=retained)
+        # Scope forced RLS only after governed lookup has established the owner.
+        # The authenticated subject is issuer-qualified; it is not a Core UUID.
+        # Transaction-local scope cannot leak through a pooled connection.
+        await connection.execute(text("SELECT set_config('app.principal_id',:principal,true)"),
+            {"principal": str(authority.principal_id)})
+        return authority
 
     async def _staged(self, connection, authority, operation_id):
         row = (await connection.execute(select(schema.memory_transactions).where(

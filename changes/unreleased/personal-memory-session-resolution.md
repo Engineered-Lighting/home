@@ -10,3 +10,5 @@ original authority expiry and rejects a changed session or grant revision.
 Add private read, proposal, confirmation and outcome routes with governed
 confirmation minting and a fresh permission check before delivery. Production
 activation remains dependent on runtime provisioning and role grants.
+Scope each preference transaction to the server-resolved owner so production
+row-level security applies without relying on administrator test access.

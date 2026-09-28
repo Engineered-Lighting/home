@@ -82,6 +82,8 @@ class PreferenceAuthority(Contract):
     authorization_generation: int = Field(gt=0, lt=9223372036854775807)
     issuer_id: Literal["home-assistant:echo", "home-assistant:victoria"]
     site_id: Site
+    subject: str = Field(min_length=1, max_length=64, repr=False)
+    access: Literal["read", "write"]
     session_commitment: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
     echo_grant_revision: int = Field(gt=0, lt=9223372036854775807)
     victoria_grant_revision: int = Field(gt=0, lt=9223372036854775807)
@@ -92,6 +94,13 @@ class PreferenceAuthority(Contract):
     def aware(cls, value):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("aware timestamp required")
+        return value
+
+    @field_validator("subject")
+    @classmethod
+    def canonical_subject(cls, value):
+        if value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError("canonical authenticated subject required")
         return value
 
     @model_validator(mode="after")

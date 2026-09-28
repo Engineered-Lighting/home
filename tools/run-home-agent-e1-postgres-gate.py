@@ -4233,7 +4233,7 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
     if preference_authority:
         pass
     elif session_kernel:
-        _run_shared_link_combined_gate(state, phase, secrets_directory, preference_authority=True)
+        _run_personal_preference_authority_gate(state, phase, secrets_directory)
     elif proof_lookup:
         _run_shared_link_session_kernel_gate(state, phase, secrets_directory)
     elif not session_kernel:
@@ -4255,6 +4255,10 @@ def _run_shared_link_proof_lookup_gate(state, phase, secrets_directory):
 
 def _run_shared_link_session_kernel_gate(state, phase, secrets_directory):
     _run_shared_link_combined_gate(state, phase, secrets_directory, session_kernel=True)
+
+
+def _run_personal_preference_authority_gate(state, phase, secrets_directory):
+    _run_shared_link_combined_gate(state, phase, secrets_directory, preference_authority=True)
 
 
 def _run_shared_identity_storage_gate(state, phase, secrets_directory):

@@ -355,7 +355,7 @@ def test_shared_link_proof_kernel_gate_guards_clone_and_cleans_after_failure(mon
 
 
 @pytest.mark.parametrize("failure", [False, True])
-@pytest.mark.parametrize("stage", ["confirmation", "combined", "lookup", "proof_lookup", "session_kernel"])
+@pytest.mark.parametrize("stage", ["confirmation", "combined", "lookup", "proof_lookup", "session_kernel", "preference_authority"])
 def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure, stage):
     runner = _load_runner()
     calls = []
@@ -367,12 +367,15 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
         monkeypatch.setattr(runner, "_run_shared_link_proof_lookup_gate", lambda *a: calls.append(("proof_lookup_stage", a, {})))
     elif stage == "proof_lookup":
         monkeypatch.setattr(runner, "_run_shared_link_session_kernel_gate", lambda *a: calls.append(("session_kernel_stage", a, {})))
+    elif stage == "session_kernel":
+        monkeypatch.setattr(runner, "_run_personal_preference_authority_gate", lambda *a: calls.append(("preference_authority_stage", a, {})))
     run_stage, clone_name, url_env = {
         "confirmation": (runner._run_shared_link_confirmation_kernel_gate, runner.SHARED_LINK_CONFIRM_KERNEL_DATABASE, "TEST_SHARED_LINK_CONFIRM_KERNEL_ADMIN_DATABASE_URL"),
         "combined": (runner._run_shared_link_combined_gate, runner.SHARED_LINK_COMBINED_DATABASE, "TEST_SHARED_LINK_COMBINED_ADMIN_DATABASE_URL"),
         "lookup": (runner._run_shared_link_lookup_gate, runner.SHARED_LINK_LOOKUP_DATABASE, "TEST_SHARED_LINK_CONFIRM_LOOKUP_ADMIN_DATABASE_URL"),
         "proof_lookup": (runner._run_shared_link_proof_lookup_gate, runner.SHARED_LINK_PROOF_LOOKUP_DATABASE, "TEST_SHARED_LINK_PROOF_LOOKUP_ADMIN_DATABASE_URL"),
         "session_kernel": (runner._run_shared_link_session_kernel_gate, runner.SHARED_LINK_SESSION_KERNEL_DATABASE, "TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL"),
+        "preference_authority": (runner._run_personal_preference_authority_gate, runner.PERSONAL_PREFERENCE_AUTHORITY_DATABASE, "TEST_PERSONAL_PREFERENCE_AUTHORITY_ADMIN_DATABASE_URL"),
     }[stage]
     for name in ("_alembic", "_alembic_downgrade", "_verify_cluster_guard", "_assert_database_revision", "_create_database_clone", "_psql"):
         monkeypatch.setattr(runner, name,
@@ -400,7 +403,8 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
         "combined": (runner.REVISION_0043,runner.REVISION_0042),
         "lookup": (runner.REVISION_0044,runner.REVISION_0043),
         "proof_lookup": (runner.REVISION_0045,runner.REVISION_0044),
-        "session_kernel": (runner.REVISION_0046,runner.REVISION_0045)}[stage]
+        "session_kernel": (runner.REVISION_0046,runner.REVISION_0045),
+        "preference_authority": (runner.REVISION_0047,runner.REVISION_0046)}[stage]
     assert revisions == [("_alembic",current)] + ([] if failure else [("_alembic_downgrade",previous)])
 
 
@@ -1863,5 +1867,6 @@ def test_shared_link_combined_stages_upgrade_then_downgrade_in_order(monkeypatch
     runner._run_shared_link_combined_gate(state,phase,Path("unused"))
     assert [(name,args[-1]) for name,args,_ in calls if name in ("_alembic","_alembic_downgrade")] == [
         ("_alembic",runner.REVISION_0043),("_alembic",runner.REVISION_0044),("_alembic",runner.REVISION_0045),("_alembic",runner.REVISION_0046),
+        ("_alembic",runner.REVISION_0047),("_alembic_downgrade",runner.REVISION_0046),
         ("_alembic_downgrade",runner.REVISION_0045),("_alembic_downgrade",runner.REVISION_0044),("_alembic_downgrade",runner.REVISION_0043),("_alembic_downgrade",runner.REVISION_0042)]
-    assert len([name for name,_,_ in calls if name=="_pytest"]) == 4
+    assert len([name for name,_,_ in calls if name=="_pytest"]) == 5

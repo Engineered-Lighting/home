@@ -27,7 +27,7 @@ export class EchoLinkStart {
     this.#journal = journal; this.#handoff = handoff; this.#issuance = issuance;
     this.#ceremony = ceremony;
     this.#review=review;
-    // The legacy Echo session path calls HA whoami directly with this fetch.
+    // The legacy Echo session path verifies the HA subject with this fetch.
     this.#fetch=fetchImpl;
   }
   get authenticationEnabled() { return Boolean(this.#ceremony); }

@@ -38,7 +38,7 @@ function fixture(t, { unknown = false, revoke = false, authentication = false, r
   store.completeLogin(sessionId, { userId: "owner", isActive: true, haIssuerId: "home-assistant:echo", siteId: "echo" });
   store.revalidate = async (configuration, id, session, fetchImpl, _now, options) => {
     assert.equal(configuration, config); assert.equal(id, sessionId); assert.equal(typeof options.forcePrincipalCheck, "boolean");
-    // Legacy (non-qualified) Echo sessions call HA whoami with this fetch.
+    // Legacy (non-qualified) Echo sessions verify the HA subject with this fetch.
     assert.equal(typeof fetchImpl, "function");
   };
   const journal = new SharedLinkPairingJournal({ databasePath: path.join(dir, "pairings.sqlite"), encryptionKey: crypto.randomBytes(32) });

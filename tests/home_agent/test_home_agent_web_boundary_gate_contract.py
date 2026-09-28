@@ -41,6 +41,7 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
             '"tests/home_agent/itaipava_golden_scenarios.json"',
             '"tests/home_agent/test_panel_build_contract.py"',
             '"tests/home_agent/test_repository_contract.py"',
+            '"tests/home_agent/test_tailnet_origins_contract.py"',
             '"tools/deploy-intelligence.ps1"',
             '"web-gateway/**"',
         ):
@@ -89,6 +90,7 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
             "test_home_agent_web_boundary_gate_contract.py",
             "tests/home_agent/test_panel_build_contract.py",
             "tests/home_agent/test_repository_contract.py",
+            "tests/home_agent/test_tailnet_origins_contract.py",
             "git diff --exit-code -- app/src/home-agent/panel.js",
         ):
             self.assertIn(token, self.gate)

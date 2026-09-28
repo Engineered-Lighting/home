@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/home-agent-e1-postgres.yml"
+      - ".github/workflows/home-agent-web-boundary.yml"
       - "docs/HOME-AGENT-RUNBOOK.md"
       - "stack/home-agent.env.example"
       - "stack/home-agent-compose.yml"
@@ -104,6 +105,7 @@ on:
     branches: [main, codex/home-agent-integration]
     paths:
       - ".github/workflows/home-agent-e1-postgres.yml"
+      - ".github/workflows/home-agent-web-boundary.yml"
       - "docs/HOME-AGENT-RUNBOOK.md"
       - "stack/home-agent.env.example"
       - "stack/home-agent-compose.yml"

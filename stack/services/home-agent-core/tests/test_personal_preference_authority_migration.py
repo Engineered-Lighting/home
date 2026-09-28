@@ -40,7 +40,9 @@ def test_existing_functions_are_verified_before_any_mutation(monkeypatch):
     assert "shared_link_combined_migration_authority_invalid" in statements[0]
     assert all("shared_link_combined_wrapper_drift" in sql for sql in statements[1:9])
     assert statements[9].startswith("CREATE ROLE ")
-    assert module.previous().body_source(module.BODY) in statements[-1]
+    assert module.previous().body_source(module.BODY) in statements[-3]
+    assert statements[-2] == module.LINEAGE_GUARD
+    assert 'personal_preference_lineage_drift' in statements[-1]
 
 
 def test_new_function_is_dormant_and_cannot_write_identity(monkeypatch):
@@ -86,7 +88,9 @@ def test_downgrade_verifies_new_kernel_before_removal_and_only_revokes_owned_gra
     module, statements = commands(monkeypatch, "downgrade")
     assert all("shared_link_combined_wrapper_drift" in s for s in statements[1:10])
     assert module.previous().body_source(module.BODY) in statements[9]
-    assert statements[10] == f"SET LOCAL ROLE {module.ROLE};"
+    assert 'personal_preference_lineage_drift' in statements[10]
+    assert statements[11] == 'DROP TRIGGER personal_preference_lineage_guard ON ingest.artifact_links;'
+    assert statements[13] == f"SET LOCAL ROLE {module.ROLE};"
     assert not any(word in s for s in statements for word in (
         "DROP OWNED", "DROP TABLE", "DELETE FROM", "TRUNCATE", "CASCADE"
     ))

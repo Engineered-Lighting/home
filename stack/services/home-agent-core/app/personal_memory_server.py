@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 
 from .personal_memory_api import PersonalMemoryBinding
 from .personal_memory_runtime import compose_personal_memory_ingress
@@ -99,5 +100,16 @@ def main():
         timeout_keep_alive=5, timeout_graceful_shutdown=10)
 
 
+def entrypoint():
+    try:
+        main()
+    except Exception:
+        # Settings and TLS exceptions can contain provisioned paths or values.
+        # Never emit their traceback on this credential-bearing entry point.
+        print("Private preference listener startup or runtime failed", file=sys.stderr)
+        return 78
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(entrypoint())

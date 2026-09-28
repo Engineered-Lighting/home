@@ -47,6 +47,16 @@ def test_reused_key_duplicate_fields_and_oversize_profile_are_rejected(tmp_path)
     with pytest.raises(ValueError): server.load_profile(str(path))
 
 
+def test_entrypoint_does_not_print_credential_bearing_errors(monkeypatch,capsys):
+    def fail():
+        raise ValueError("postgresql://user:private-password@host/db")
+    monkeypatch.setattr(server,"main",fail)
+    assert server.entrypoint()==78
+    output=capsys.readouterr()
+    assert output.out==""
+    assert output.err=="Private preference listener startup or runtime failed\n"
+
+
 @pytest.mark.asyncio
 async def test_private_listener_runs_core_lifespan_without_exposing_core_routes(tmp_path,monkeypatch):
     events=[]

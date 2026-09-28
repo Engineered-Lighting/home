@@ -38,6 +38,59 @@ LOCK_COLUMNS = {
     "identity.shared_issuers":"issuer_id",
 }
 HELPERS = ("privacy.identity_person_is_blocked(uuid)","privacy.lock_identity_semantic_write_fence()")
+LINEAGE_GUARD = """
+CREATE FUNCTION ingest.guard_personal_preference_lineage_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER
+SET search_path=pg_catalog SET row_security=on
+AS $lineage$
+DECLARE owner_id uuid; allowed boolean:=false;
+BEGIN
+ IF current_user<>'home_agent_api' THEN RETURN NEW; END IF;
+ owner_id:=nullif(current_setting('app.principal_id',true),'')::uuid;
+ IF owner_id IS NULL OR NOT EXISTS (
+   SELECT 1 FROM privacy.artifact_registry p,privacy.artifact_registry c
+   WHERE p.artifact_id=NEW.parent_artifact_id AND c.artifact_id=NEW.child_artifact_id
+     AND p.owner_principal_id=owner_id AND c.owner_principal_id=owner_id
+ ) THEN
+   RAISE EXCEPTION 'preference_lineage_owner_required' USING ERRCODE='42501';
+ END IF;
+ IF NEW.relation='supports' THEN
+   SELECT EXISTS (
+     SELECT 1 FROM identity.confirmation_artifacts a
+     JOIN knowledge.memory_transactions t ON t.transaction_id=NEW.child_artifact_id
+     WHERE a.artifact_id=NEW.parent_artifact_id AND a.principal_id=owner_id
+       AND t.principal_id=owner_id AND t.kind='personal_preference.v1'
+       AND t.state='needs_confirmation' AND a.consumed_at IS NOT NULL
+       AND a.expires_at>clock_timestamp()
+       AND a.purpose=('personal_preference.v1.'||(t.candidate->'request'->>'operation')||'.confirm')
+       AND a.proposal_digest=(t.preview->>'reviewed_digest')
+   ) INTO allowed;
+ ELSIF NEW.relation='derived_from' THEN
+   SELECT EXISTS (
+     SELECT 1 FROM knowledge.memory_transactions p
+     WHERE p.transaction_id=NEW.parent_artifact_id AND p.principal_id=owner_id
+       AND p.kind='personal_preference.v1' AND (
+         EXISTS (SELECT 1 FROM knowledge.fact_versions f
+           WHERE f.fact_id=NEW.child_artifact_id AND f.memory_transaction_id=p.transaction_id
+             AND f.perspective_principal_id=owner_id AND f.predicate='personal_preference.evening_lighting')
+         OR EXISTS (SELECT 1 FROM knowledge.memory_transactions c
+           WHERE c.transaction_id=NEW.child_artifact_id AND c.principal_id=owner_id
+             AND c.kind='personal_preference.v1' AND c.state='needs_confirmation'
+             AND p.state='committed'
+             AND (c.candidate->>'preference_fact_id')=(p.candidate->>'preference_fact_id'))
+       )
+   ) INTO allowed;
+ END IF;
+ IF NOT allowed THEN
+   RAISE EXCEPTION 'preference_lineage_scope_invalid' USING ERRCODE='42501';
+ END IF;
+ RETURN NEW;
+END
+$lineage$;
+REVOKE ALL ON FUNCTION ingest.guard_personal_preference_lineage_v1() FROM PUBLIC;
+CREATE TRIGGER personal_preference_lineage_guard BEFORE INSERT ON ingest.artifact_links
+FOR EACH ROW EXECUTE FUNCTION ingest.guard_personal_preference_lineage_v1();
+"""
 BODY = f"""
 CREATE FUNCTION {FUNCTION}(p_issuer text,p_subject text,p_session text,p_write boolean)
 RETURNS TABLE(principal_id uuid,person_id uuid,link_id uuid,authorization_generation bigint,
@@ -135,6 +188,23 @@ def advance(sql):
     return sql.replace(needle,f"a.version_num='{revision}'")
 
 
+def verify_lineage():
+    source = LINEAGE_GUARD.split('$lineage$')[1].replace("'", "''")
+    op.execute(f"""DO $verify$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_roles r ON r.oid=p.proowner
+        JOIN pg_catalog.pg_trigger t ON t.tgfoid=p.oid
+        WHERE p.oid='ingest.guard_personal_preference_lineage_v1()'::regprocedure
+          AND r.rolname='home_agent_owner' AND NOT p.prosecdef
+          AND p.prorettype='pg_catalog.trigger'::regtype AND p.prosrc='{source}'
+          AND p.proconfig=ARRAY['search_path=pg_catalog','row_security=on']::text[]
+          AND t.tgrelid='ingest.artifact_links'::regclass
+          AND t.tgname='personal_preference_lineage_guard' AND t.tgtype=7
+          AND t.tgenabled='O' AND NOT t.tgisinternal AND t.tgnargs=0 AND t.tgqual IS NULL
+      ) THEN RAISE EXCEPTION 'personal_preference_lineage_drift'; END IF;
+    END $verify$;""")
+
+
 def upgrade():
     old=previous();old._guard(down_revision)
     for wrapper,sql in wrappers(old): old._verify(wrapper,sql)
@@ -168,12 +238,19 @@ def upgrade():
     for wrapper,sql in wrappers(old):
         old._replace(wrapper,advance(sql));old._verify(wrapper,advance(sql))
     old._verify(KERNEL,BODY)
+    # INSERT remains ungranted to the API until explicit runtime activation.
+    # Other existing ingest/maintenance writers retain their current behavior.
+    op.execute(LINEAGE_GUARD)
+    verify_lineage()
 
 
 def downgrade():
     old=previous();old._guard(revision)
     for wrapper,sql in wrappers(old): old._verify(wrapper,advance(sql))
     old._verify(KERNEL,BODY)
+    verify_lineage()
+    op.execute("DROP TRIGGER personal_preference_lineage_guard ON ingest.artifact_links;")
+    op.execute("DROP FUNCTION ingest.guard_personal_preference_lineage_v1();")
     op.execute(f"SET LOCAL ROLE {ROLE};")
     op.execute(f"DROP FUNCTION {FUNCTION}({SIGNATURE});")
     op.execute('RESET ROLE;')

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, insert, select, text
+from sqlalchemy.exc import DBAPIError
 
 from app import schema
 from app.errors import ConflictError, ForbiddenError
@@ -37,6 +38,7 @@ def test_preference_storage_correction_forgetting_and_relearning():
             try:
                 assert connection.execute(text("SELECT current_database()")).scalar_one()=="personal_preference_authority_0047"
                 connection.execute(text("GRANT EXECUTE ON FUNCTION identity.resolve_personal_preference_authority_v1(text,text,text,boolean) TO home_agent_api"))
+                connection.execute(text("GRANT INSERT (link_id,parent_artifact_id,child_artifact_id,relation) ON ingest.artifact_links TO home_agent_api"))
                 link = connection.execute(text("SELECT * FROM identity.shared_owner_links")).mappings().one()
                 now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
                 for site in ("echo","victoria"):
@@ -115,12 +117,34 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     assert (await confirm(first))["revision"]==1
                     first_snapshot = await storage.read(conn,authority)
                     assert first_snapshot["preference"].value=="warm"
+                    async def reject_lineage(parent, child, relation):
+                        with pytest.raises(DBAPIError) as denied:
+                            await conn.execute(insert(schema.artifact_links).values(
+                                link_id=uuid4(),parent_artifact_id=parent,
+                                child_artifact_id=child,relation=relation))
+                        assert denied.value.orig.sqlstate == "42501"
+
+                    # API provenance permission must not become a general graph
+                    # writer, even for unrelated artifacts owned by this user.
+                    unrelated, unowned = uuid4(), uuid4()
+                    for artifact, owner in ((unrelated,authority.principal_id),(unowned,None)):
+                        connection.execute(insert(schema.artifact_registry).values(
+                            artifact_id=artifact,artifact_kind="fact",store="postgresql",
+                            owner_principal_id=owner,retention_class="until_erased"))
+                    await reject_lineage(first[0].operation_id,unrelated,"derived_from")
+                    await reject_lineage(first[0].operation_id,unowned,"derived_from")
+                    await reject_lineage(first[0].operation_id,first_snapshot["fact_id"],"supports")
                     victoria = await storage.resolve_authority(conn,issuer_id="home-assistant:victoria",
                         subject=subjects["home-assistant:victoria"],session_commitment=uuid4().hex*2,write=False)
                     assert (await storage.read(conn,victoria))["preference"].value=="warm"
                     wrong_owner = PreferenceAuthority.model_validate({**authority.model_dump(),"principal_id":uuid4()})
                     with pytest.raises(ForbiddenError): await storage.read(conn,wrong_owner)
                     correction = await propose("correct",1,"cool")
+                    wrong_receipt = await CoreStore._mint_authenticated_confirmation(
+                        object.__new__(CoreStore),conn,principal_id=authority.principal_id,
+                        purpose=f"{KIND}.forget.confirm",
+                        proposal_digest=correction[1].reviewed_digest,client_nonce=uuid4())
+                    await reject_lineage(wrong_receipt,correction[0].operation_id,"supports")
                     competing = await propose("correct",1,"neutral")
                     assert (await confirm(correction))["revision"]==2
                     with pytest.raises(ConflictError): await confirm(competing)

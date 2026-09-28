@@ -392,7 +392,9 @@ def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure,
     clone = next(args for name, args, _ in calls if name == "_create_database_clone")
     assert clone[-2:] == (runner.BASE_DATABASE, clone_name)
     invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
-    assert invocation["url_environment"][url_env] == clone_name
+    assert invocation["url_environment"][runner.E5N_OWNER_DATABASE_ENV if stage == "preference_authority" else url_env] == clone_name
+    if stage == "preference_authority":
+        assert invocation["credential_url_environment"][runner.E5N_COMMITTER_DATABASE_ENV] == (clone_name,"home_agent_binding_committer","postgres_binding_committer_password")
     assert invocation["environment"][runner.ALLOWLIST_ENV] == f"{runner.BASE_DATABASE},{clone_name}"
     cleanup = [(i, kw) for i, (name, _, kw) in enumerate(calls) if name == "_psql"]
     assert len(cleanup) == 1 and calls[cleanup[0][0]-1][0] == "_verify_cluster_guard"
@@ -1869,4 +1871,4 @@ def test_shared_link_combined_stages_upgrade_then_downgrade_in_order(monkeypatch
         ("_alembic",runner.REVISION_0043),("_alembic",runner.REVISION_0044),("_alembic",runner.REVISION_0045),("_alembic",runner.REVISION_0046),
         ("_alembic",runner.REVISION_0047),("_alembic_downgrade",runner.REVISION_0046),
         ("_alembic_downgrade",runner.REVISION_0045),("_alembic_downgrade",runner.REVISION_0044),("_alembic_downgrade",runner.REVISION_0043),("_alembic_downgrade",runner.REVISION_0042)]
-    assert len([name for name,_,_ in calls if name=="_pytest"]) == 5
+    assert len([name for name,_,_ in calls if name=="_pytest"]) == 6

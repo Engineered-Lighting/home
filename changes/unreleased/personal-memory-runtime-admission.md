@@ -9,3 +9,5 @@ schema, restore, rollout, retention, outbox, and storage checks. This prepares
 runtime integration without enabling a listener or changing production grants.
 Add an explicit TLS listener entry point with bounded provisioning files,
 separate credentials and review keys, and private-address-only binding.
+Report listener configuration failures without printing credential-bearing
+exception details.

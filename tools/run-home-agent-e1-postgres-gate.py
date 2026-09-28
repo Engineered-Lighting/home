@@ -4216,6 +4216,20 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
     try:
         _verify_cluster_guard(state, phase, secrets_directory, baseline | {clone})
         _assert_database_revision(state, phase, secrets_directory, clone, revision)
+        if preference_authority:
+            # New shared identity storage must preserve the existing governed
+            # identity writers. Reuse their actual split-credential operations
+            # at the new revision; do not infer compatibility from signatures.
+            _pytest(state, phase, secrets_directory,
+                    nodes=[
+                        "tests/test_phase3_owner_person_kernel_e5n_runtime_postgres.py::test_e5n_creates_the_person_the_attestation_and_nothing_else",
+                        "tests/test_phase3_owner_partner_kernel_e5k_runtime_postgres.py::test_e5k_commits_a_symmetric_owner_attested_partnership",
+                    ],
+                    url_environment={E5N_OWNER_DATABASE_ENV: clone},
+                    credential_url_environment={E5N_COMMITTER_DATABASE_ENV: (
+                        clone, "home_agent_binding_committer", "postgres_binding_committer_password")},
+                    environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                                 ALLOWLIST_ENV: f"{BASE_DATABASE},{clone}"}, fail_fast=True)
         _pytest(state, phase, secrets_directory,
                 nodes=[migration_test, "tests/test_shared_link_combined_runtime_postgres.py"]
                     + (["tests/test_personal_preference_erasure.py", "tests/test_personal_preference_erasure_postgres.py", "tests/test_personal_memory_storage_records.py", "tests/test_personal_memory_service.py", "tests/test_personal_memory_api.py", "tests/test_ledger_versions.py"] if session_kernel else [])

@@ -24,6 +24,7 @@ def test_owner_admits_the_coordinator_key_once_and_refuses_a_different_key():
     try:
         with engine.connect() as connection:
             connection.execute(text("SET SESSION AUTHORIZATION home_agent_owner"))
+            connection.commit()
             transaction = connection.begin()
             try:
                 assert admission.status(connection, key) == {"admitted": False}

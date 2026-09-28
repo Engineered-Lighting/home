@@ -8,6 +8,7 @@ from app import personal_memory_runtime as runtime
 from app.errors import OptionalWorkSuspendedError
 from app.personal_memory_api import PersonalMemoryBinding
 from app.store import CoreStore
+from app.config import Settings
 
 
 def fixture(monkeypatch):
@@ -32,6 +33,20 @@ def fixture(monkeypatch):
 def compose(app):
     return runtime.compose_personal_memory_ingress(app,
         binding=PersonalMemoryBinding("home-assistant:echo",b"b"*64),review_key=b"k"*32)
+
+
+def test_real_settings_admit_only_the_fixed_preference_revision():
+    import base64
+    arguments=dict(database_url="postgresql+psycopg://home_agent_api:fixture@localhost/home_agent",
+        policy_digest="a"*64,service_token="b"*64,
+        knowledge_encryption_key=base64.urlsafe_b64encode(b"k"*32).decode(),
+        role="api",rollout_mode="shadow")
+    settings=Settings(**arguments,readiness_migration=runtime.REVISION)
+    assert settings.readiness_migration==runtime.REVISION
+    # Intermediate linking migrations and unknown successors cannot serve.
+    for revision in ("0046_shared_link_session_krnl_v1","0048_unreviewed"):
+        with pytest.raises(ValueError):
+            Settings(**arguments,readiness_migration=revision)
 
 
 @pytest.mark.asyncio

@@ -309,10 +309,17 @@ class PersonalMemoryStorage:
             erasure_id = uuid7()
             await connection.execute(insert(schema.erasure_requests).values(
                 erasure_request_id=erasure_id,principal_id=authority.principal_id,
-                scope={"preference_fact_id":str(fact_id)},state="ledger_pending",
-                policy_digest=self.policy_digest,completed_at=now))
+                scope={"preference_fact_id":str(fact_id)},state="running",
+                policy_digest=self.policy_digest))
             await apply_personal_preference_erasure(connection,principal_id=authority.principal_id,
                 fact_id=fact_id,erasure_request_id=erasure_id,now=now,require_existing=True)
+            # Match Core's existing column-scoped erasure permissions: the API
+            # can update completion only after scrubbing, not insert it. Both
+            # statements and the outbox receipt commit in this transaction.
+            await connection.execute(update(schema.erasure_requests).where(
+                schema.erasure_requests.c.erasure_request_id==erasure_id,
+                schema.erasure_requests.c.principal_id==authority.principal_id,
+            ).values(state="ledger_pending",completed_at=now))
             await connection.execute(insert(schema.outbox).values(
                 outbox_id=uuid7(),topic="privacy.erasure.completed",aggregate_id=fact_id,payload={
                     "version":1,"subject_kind":"personal_preference_fact","erasure_request_id":str(erasure_id),

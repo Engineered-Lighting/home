@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Every revision this image is able to migrate to, and therefore every
 # revision it is willing to serve. The values are the deployable default plus
-# the five Phase 3 stages declared by docker-entrypoint.sh, and a contract test
+# the fixed Phase 3 stages declared by docker-entrypoint.sh, and a contract test
 # keeps the two lists identical. Core still cannot promote itself: the value is
 # supplied by the deployment, an unlisted one fails Settings at startup, and
 # app.main refuses to start unless the live database is at exactly this
@@ -30,6 +30,7 @@ ReadinessMigration = Literal[
     "0029_owner_person_role_e5p",
     "0030_relationship_vocabulary_e5q",
     "0031_relationship_uniqueness_e5r",
+    "0047_personal_pref_authority_v1",
 ]
 
 

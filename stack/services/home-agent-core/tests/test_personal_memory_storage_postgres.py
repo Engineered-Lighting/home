@@ -151,6 +151,11 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     assert (await storage.read(conn,authority))["preference"].value=="cool"
                     forgotten = await confirm(await propose("forget",2))
                     assert forgotten["status"]=="ledger_pending" and forgotten["revision"]==3
+                    deletion = connection.execute(select(schema.erasure_requests).where(
+                        schema.erasure_requests.c.principal_id==authority.principal_id,
+                        schema.erasure_requests.c.scope.contains({"preference_fact_id":str(first_snapshot["fact_id"])}),
+                    )).mappings().one()
+                    assert deletion["state"]=="ledger_pending" and deletion["completed_at"] is not None
                     snapshot = await storage.read(conn,authority)
                     assert snapshot["preference"] is None and snapshot["revision"]==3
                     with pytest.raises(ConflictError): await propose("remember",0)

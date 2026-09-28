@@ -11,3 +11,5 @@ Add an explicit TLS listener entry point with bounded provisioning files,
 separate credentials and review keys, and private-address-only binding.
 Report listener configuration failures without printing credential-bearing
 exception details.
+Prepare an exact preference migration target and matching startup revision.
+This does not activate production listeners, credentials, or source grants.

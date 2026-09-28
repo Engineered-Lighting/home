@@ -1,10 +1,7 @@
 """A route pinned to a revision the settings cannot hold is dead code.
 
-Both owner-attested routes gate on
-``settings.readiness_migration == <their pinned revision>``. ReadinessMigration
-is a closed Literal, so a pinned revision that is not a member can never be the
-configured value, and the route can never be reached -- it fails with a
-capability message that looks deliberate.
+Owner-attested routes now use an explicit reviewed revision matrix. Historical
+labels remain descriptive; executable route coverage verifies effective gates.
 
 Both were shipped that way. These tests exist so the next route cannot be.
 """
@@ -16,6 +13,7 @@ import re
 
 from app.api import OWNER_PARTNER_ADAPTER_REVISION, OWNER_PERSON_ADAPTER_REVISION
 from app.config import ReadinessMigration
+from app.identity_capabilities import supports_identity_capability
 
 APP = pathlib.Path(__file__).resolve().parents[1] / "app"
 
@@ -45,6 +43,10 @@ def test_routes_that_must_be_live_together_share_a_revision() -> None:
     """
 
     assert OWNER_PARTNER_ADAPTER_REVISION == OWNER_PERSON_ADAPTER_REVISION
+    expected = {"0030_relationship_vocabulary_e5q", "0031_relationship_uniqueness_e5r"}
+    for revision in _members():
+        for capability in ("owner_person_creation", "owner_relationship_attestation"):
+            assert supports_identity_capability(revision, capability) is (revision in expected)
 
 
 def test_the_pinned_revision_has_a_migration_behind_it() -> None:

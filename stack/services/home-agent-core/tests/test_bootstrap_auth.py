@@ -264,10 +264,13 @@ def test_core_accepts_only_versioned_attested_native_channel() -> None:
                     settings=SimpleNamespace(
                         service_token=SecretStr(
                             "service-token-with-at-least-32-chars"
-                        )
+                        ),
+                        ha_issuer_id="home-assistant:echo",
+                        site_id="echo",
                     )
                 )
             ),
+            "headers": [],
         }
     )
 

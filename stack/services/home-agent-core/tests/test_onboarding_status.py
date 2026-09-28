@@ -196,8 +196,10 @@ def test_onboarding_state_transitions_are_fail_closed(
     assert store.phase2_inspector_modes == ["record_only"]
 
 
-def test_onboarding_enables_parent_review_only_for_bound_e5h_subject(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("revision", ["0021_parent_status_e5h", "0030_relationship_vocabulary_e5q", "0031_relationship_uniqueness_e5r"])
+@pytest.mark.parametrize("adapter_available", [True, False])
+def test_onboarding_enables_parent_review_only_with_reviewed_revision_and_adapter(
+    tmp_path, monkeypatch, revision, adapter_available
 ) -> None:
     readiness = phase2_readiness(
         rollout_mode="record_only", qualifying=500, observation_days=8
@@ -210,8 +212,9 @@ def test_onboarding_enables_parent_review_only_for_bound_e5h_subject(
         readiness=readiness,
     )
     store.settings = store.settings.model_copy(
-        update={"readiness_migration": "0021_parent_status_e5h"}
+        update={"readiness_migration": revision}
     )
+    app.state.parent_relationship_adapter = object() if adapter_available else None
 
     with TestClient(app) as client:
         response = client.get(
@@ -220,7 +223,7 @@ def test_onboarding_enables_parent_review_only_for_bound_e5h_subject(
         )
 
     assert response.status_code == 200
-    assert response.json()["parent_relationship_confirmation"] == "enabled"
+    assert response.json()["parent_relationship_confirmation"] == ("enabled" if adapter_available else "disabled")
 
 
 def test_onboarding_uses_only_authenticated_service_identity_and_bounds_content(

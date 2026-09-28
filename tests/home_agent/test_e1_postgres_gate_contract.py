@@ -52,6 +52,444 @@ def _load_source_plan():
     return module
 
 
+def test_shared_identity_gate_runs_guarded_migration_tests_and_roundtrip(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_psql", "_pytest"):
+        monkeypatch.setattr(runner, name,
+                            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="a" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_identity_storage_gate(state, phase, Path("unused-fixture-secrets"))
+    migrations = [(name, args[-1]) for name, args, _ in calls
+                  if name in ("_alembic", "_alembic_downgrade")]
+    assert migrations == [("_alembic", runner.REVISION_0031),
+                          ("_alembic", runner.REVISION_0032),
+                          ("_alembic_downgrade", runner.REVISION_0031),
+                          ("_alembic", runner.REVISION_0032)]
+    test_call = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_identity_runtime_postgres.py" in test_call["nodes"]
+    assert test_call["url_environment"] == {
+        "TEST_SHARED_IDENTITY_OWNER_DATABASE_URL": runner.BASE_DATABASE,
+        "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": runner.ADMIN_DATABASE,
+    }
+    assert test_call["environment"] == {
+        runner.SENTINEL_ENV: state.sentinel, runner.SYSTEM_ID_ENV: phase.system_identifier,
+        runner.ALLOWLIST_ENV: runner.BASE_DATABASE,
+    }
+    assert test_call["fail_fast"] is True
+    sql = [kwargs["sql"] for name, _, kwargs in calls if name == "_psql"]
+    assert "GRANT SELECT, INSERT" in sql[0]
+    assert "REVOKE SELECT, INSERT" in sql[1]
+    # Existing guarded phase calls this tail after prior runtime contracts.
+    import inspect
+    body = inspect.getsource(runner._run_e4_scaffold_phase)
+    assert body.rstrip().endswith("_run_shared_auth_proof_gate(state, phase, secrets_directory)")
+    assert body.index("_run_shared_identity_storage_gate(") < body.index("_run_shared_auth_proof_gate(")
+
+
+def test_shared_identity_default_acl_fixture_is_reset_after_migration_failure(monkeypatch):
+    runner = _load_runner()
+    sql = []
+    def migrate(*args):
+        if args[-1] == runner.REVISION_0032:
+            raise runner.GateFailure("fixture migration failure")
+    monkeypatch.setattr(runner, "_alembic", migrate)
+    monkeypatch.setattr(runner, "_assert_database_revision", lambda *args: None)
+    monkeypatch.setattr(runner, "_psql", lambda *args, **kwargs: sql.append(kwargs["sql"]))
+    with pytest.raises(runner.GateFailure, match="fixture migration failure"):
+        runner._run_shared_identity_storage_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+    assert len(sql) == 2
+    assert "REVOKE SELECT, INSERT" in sql[-1]
+
+
+def test_shared_auth_proof_gate_uses_guarded_admin_and_returns_to_closed_storage(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_challenge_gate", lambda *args: calls.append(("challenge_stage", args, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="a" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_auth_proof_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0033), ("_alembic_downgrade", runner.REVISION_0032)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_auth_proof_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"] == {
+        "TEST_SHARED_AUTH_PROOF_ADMIN_DATABASE_URL": runner.BASE_DATABASE,
+        "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": runner.ADMIN_DATABASE}
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    assert [name for name, _, _ in calls].index("challenge_stage") < [name for name, _, _ in calls].index("_alembic_downgrade")
+
+
+def test_shared_link_challenge_gate_preserves_guarded_target_and_rollback(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_owner_gate", lambda *args: calls.append(("owner_stage", args, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_challenge_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0034), ("_alembic_downgrade", runner.REVISION_0033)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_link_challenge_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"]["TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL"] == runner.BASE_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    assert next(i for i, call in enumerate(calls) if call[0] == "owner_stage") < next(
+        i for i, call in enumerate(calls) if call[0] == "_alembic_downgrade")
+
+
+def test_shared_link_owner_gate_preserves_guarded_target_and_rollback(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_proof_gate", lambda *args: calls.append(("proof_stage", args, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_owner_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0035), ("_alembic_downgrade", runner.REVISION_0034)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_link_owner_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"]["TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL"] == runner.BASE_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    assert next(i for i, call in enumerate(calls) if call[0] == "proof_stage") < next(
+        i for i, call in enumerate(calls) if call[0] == "_alembic_downgrade")
+
+
+def test_shared_link_proof_gate_preserves_guarded_target_and_rollback(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_session_gate", lambda *args: calls.append(("session_stage", args, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_proof_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0036), ("_alembic_downgrade", runner.REVISION_0035)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_link_proof_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"]["TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL"] == runner.BASE_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    assert next(i for i, call in enumerate(calls) if call[0] == "session_stage") < next(
+        i for i, call in enumerate(calls) if call[0] == "_alembic_downgrade")
+
+
+def test_shared_link_session_gate_preserves_guarded_target_and_rollback(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_confirmation_gate", lambda *args: calls.append(("confirmation_stage", args, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_session_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0037), ("_alembic_downgrade", runner.REVISION_0036)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_link_session_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"]["TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL"] == runner.BASE_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    assert next(i for i, call in enumerate(calls) if call[0] == "confirmation_stage") < next(
+        i for i, call in enumerate(calls) if call[0] == "_alembic_downgrade")
+
+
+def test_shared_link_confirmation_gate_preserves_guarded_target_and_rollback(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_issuance_gate", lambda *args: calls.append(("issuance_stage", args, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_confirmation_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0038), ("_alembic_downgrade", runner.REVISION_0037)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_link_confirmation_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"]["TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL"] == runner.BASE_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    assert next(i for i, call in enumerate(calls) if call[0] == "issuance_stage") < next(
+        i for i, call in enumerate(calls) if call[0] == "_alembic_downgrade")
+
+
+def test_shared_link_issuance_gate_preserves_guarded_target_and_rollback(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_issuance_kernel_gate", lambda *args: calls.append(("kernel_stage", args, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_issuance_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0039), ("_alembic_downgrade", runner.REVISION_0038)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_link_issuance_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"]["TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL"] == runner.BASE_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    assert next(i for i, call in enumerate(calls) if call[0] == "kernel_stage") < next(
+        i for i, call in enumerate(calls) if call[0] == "_alembic_downgrade")
+
+
+def test_shared_link_issuance_kernel_gate_preserves_guarded_target_and_rollback(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_proof_kernel_gate", lambda *args: calls.append(("proof_stage", args, {})))
+    monkeypatch.setattr(runner, "_run_shared_link_issuance_positive_gate", lambda *args, **kwargs: calls.append(("positive_stage", args, kwargs)))
+    for name in ("_alembic", "_alembic_downgrade", "_assert_database_revision", "_pytest"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_issuance_kernel_gate(state, phase, Path("unused"))
+    assert [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")] == [
+        ("_alembic", runner.REVISION_0040), ("_alembic_downgrade", runner.REVISION_0039)]
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert "tests/test_shared_link_issuance_kernel_runtime_postgres.py" in invocation["nodes"]
+    assert invocation["url_environment"]["TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL"] == runner.BASE_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier, runner.ALLOWLIST_ENV: runner.BASE_DATABASE}
+    assert invocation["fail_fast"] is True
+    stages = [(i, kwargs) for i, (name, _, kwargs) in enumerate(calls) if name == "positive_stage"]
+    assert len(stages) == 2
+    assert stages[0][1] == {}
+    assert stages[1][1] == {"test_node": "tests/test_shared_link_issuance_kernel_erasure_postgres.py"}
+    assert stages[1][0] < next(i for i, call in enumerate(calls) if call[0] == "_alembic_downgrade")
+    assert stages[1][0] < next(i for i, call in enumerate(calls) if call[0] == "proof_stage")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_shared_link_issuance_positive_gate_uses_and_removes_only_clone(monkeypatch, failure):
+    runner = _load_runner()
+    calls = []
+    for name in ("_verify_cluster_guard", "_assert_database_revision", "_create_database_clone", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    def run_tests(*args, **kwargs):
+        calls.append(("_pytest", args, kwargs))
+        if failure:
+            raise runner.GateFailure("fixture failure")
+    monkeypatch.setattr(runner, "_pytest", run_tests)
+    state = SimpleNamespace(sentinel="b" * 64)
+    phase = SimpleNamespace(system_identifier="1234567890123456789")
+    if failure:
+        with pytest.raises(runner.GateFailure, match="fixture failure"):
+            runner._run_shared_link_issuance_positive_gate(state, phase, Path("unused"))
+    else:
+        runner._run_shared_link_issuance_positive_gate(state, phase, Path("unused"))
+    assert calls[0][0] == "_verify_cluster_guard"
+    assert calls[0][1][-1] == {runner.ADMIN_DATABASE, "template0", "template1", runner.BASE_DATABASE}
+    clone = next(args for name, args, _ in calls if name == "_create_database_clone")
+    assert clone[-2:] == (runner.BASE_DATABASE, runner.SHARED_LINK_KERNEL_DATABASE)
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert invocation["url_environment"]["TEST_SHARED_LINK_KERNEL_ADMIN_DATABASE_URL"] == runner.SHARED_LINK_KERNEL_DATABASE
+    assert invocation["environment"] == {runner.SENTINEL_ENV: state.sentinel,
+        runner.SYSTEM_ID_ENV: phase.system_identifier,
+        runner.ALLOWLIST_ENV: f"{runner.BASE_DATABASE},{runner.SHARED_LINK_KERNEL_DATABASE}"}
+    cleanup = [(i, kwargs) for i, (name, _, kwargs) in enumerate(calls) if name == "_psql"]
+    assert len(cleanup) == 1
+    index, operation = cleanup[0]
+    assert calls[index-1][0] == "_verify_cluster_guard"
+    assert operation["sql"] == f'DROP DATABASE "{runner.SHARED_LINK_KERNEL_DATABASE}" WITH (FORCE)'
+    assert operation["database"] == runner.ADMIN_DATABASE
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_shared_link_proof_kernel_gate_guards_clone_and_cleans_after_failure(monkeypatch, failure):
+    runner = _load_runner()
+    calls = []
+    monkeypatch.setattr(runner, "_run_shared_link_confirmation_kernel_gate", lambda *a: calls.append(("confirmation_stage", a, {})))
+    for name in ("_alembic", "_alembic_downgrade", "_verify_cluster_guard", "_assert_database_revision", "_create_database_clone", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    def run_tests(*args, **kwargs):
+        calls.append(("_pytest", args, kwargs))
+        if failure: raise runner.GateFailure("fixture failure")
+    monkeypatch.setattr(runner, "_pytest", run_tests)
+    state, phase = SimpleNamespace(sentinel="b"*64), SimpleNamespace(system_identifier="1234567890123456789")
+    if failure:
+        with pytest.raises(runner.GateFailure, match="fixture failure"):
+            runner._run_shared_link_proof_kernel_gate(state, phase, Path("unused"))
+    else:
+        runner._run_shared_link_proof_kernel_gate(state, phase, Path("unused"))
+    clone = next(args for name, args, _ in calls if name == "_create_database_clone")
+    assert clone[-2:] == (runner.BASE_DATABASE, runner.SHARED_LINK_PROOF_KERNEL_DATABASE)
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert invocation["url_environment"]["TEST_SHARED_LINK_PROOF_KERNEL_ADMIN_DATABASE_URL"] == runner.SHARED_LINK_PROOF_KERNEL_DATABASE
+    assert invocation["environment"][runner.ALLOWLIST_ENV] == f"{runner.BASE_DATABASE},{runner.SHARED_LINK_PROOF_KERNEL_DATABASE}"
+    assert invocation["fail_fast"] is True
+    cleanup = [(i, kw) for i, (name, _, kw) in enumerate(calls) if name == "_psql"]
+    assert len(cleanup) == 1
+    index, operation = cleanup[0]
+    assert calls[index-1][0] == "_verify_cluster_guard"
+    assert operation["sql"] == f'DROP DATABASE "{runner.SHARED_LINK_PROOF_KERNEL_DATABASE}" WITH (FORCE)'
+    revisions = [(name, args[-1]) for name, args, _ in calls if name in ("_alembic", "_alembic_downgrade")]
+    assert revisions == [("_alembic", runner.REVISION_0041)] + ([] if failure else [("_alembic_downgrade", runner.REVISION_0040)])
+
+
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("stage", ["confirmation", "combined", "lookup", "proof_lookup", "session_kernel"])
+def test_shared_link_confirmation_kernel_gate_guards_clone(monkeypatch, failure, stage):
+    runner = _load_runner()
+    calls = []
+    if stage == "confirmation":
+        monkeypatch.setattr(runner, "_run_shared_link_combined_gate", lambda *a: calls.append(("combined_stage", a, {})))
+    elif stage == "combined":
+        monkeypatch.setattr(runner, "_run_shared_link_lookup_gate", lambda *a: calls.append(("lookup_stage", a, {})))
+    elif stage == "lookup":
+        monkeypatch.setattr(runner, "_run_shared_link_proof_lookup_gate", lambda *a: calls.append(("proof_lookup_stage", a, {})))
+    elif stage == "proof_lookup":
+        monkeypatch.setattr(runner, "_run_shared_link_session_kernel_gate", lambda *a: calls.append(("session_kernel_stage", a, {})))
+    run_stage, clone_name, url_env = {
+        "confirmation": (runner._run_shared_link_confirmation_kernel_gate, runner.SHARED_LINK_CONFIRM_KERNEL_DATABASE, "TEST_SHARED_LINK_CONFIRM_KERNEL_ADMIN_DATABASE_URL"),
+        "combined": (runner._run_shared_link_combined_gate, runner.SHARED_LINK_COMBINED_DATABASE, "TEST_SHARED_LINK_COMBINED_ADMIN_DATABASE_URL"),
+        "lookup": (runner._run_shared_link_lookup_gate, runner.SHARED_LINK_LOOKUP_DATABASE, "TEST_SHARED_LINK_CONFIRM_LOOKUP_ADMIN_DATABASE_URL"),
+        "proof_lookup": (runner._run_shared_link_proof_lookup_gate, runner.SHARED_LINK_PROOF_LOOKUP_DATABASE, "TEST_SHARED_LINK_PROOF_LOOKUP_ADMIN_DATABASE_URL"),
+        "session_kernel": (runner._run_shared_link_session_kernel_gate, runner.SHARED_LINK_SESSION_KERNEL_DATABASE, "TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL"),
+    }[stage]
+    for name in ("_alembic", "_alembic_downgrade", "_verify_cluster_guard", "_assert_database_revision", "_create_database_clone", "_psql"):
+        monkeypatch.setattr(runner, name,
+            lambda *args, _name=name, **kwargs: calls.append((_name, args, kwargs)))
+    def run_tests(*args, **kwargs):
+        calls.append(("_pytest", args, kwargs))
+        if failure: raise runner.GateFailure("fixture failure")
+    monkeypatch.setattr(runner, "_pytest", run_tests)
+    state, phase = SimpleNamespace(sentinel="b"*64), SimpleNamespace(system_identifier="1234567890123456789")
+    if failure:
+        with pytest.raises(runner.GateFailure, match="fixture failure"):
+            run_stage(state, phase, Path("unused"))
+    else: run_stage(state, phase, Path("unused"))
+    clone = next(args for name, args, _ in calls if name == "_create_database_clone")
+    assert clone[-2:] == (runner.BASE_DATABASE, clone_name)
+    invocation = next(kwargs for name, _, kwargs in calls if name == "_pytest")
+    assert invocation["url_environment"][url_env] == clone_name
+    assert invocation["environment"][runner.ALLOWLIST_ENV] == f"{runner.BASE_DATABASE},{clone_name}"
+    cleanup = [(i, kw) for i, (name, _, kw) in enumerate(calls) if name == "_psql"]
+    assert len(cleanup) == 1 and calls[cleanup[0][0]-1][0] == "_verify_cluster_guard"
+    assert cleanup[0][1]["sql"] == f'DROP DATABASE "{clone_name}" WITH (FORCE)'
+    assert bool([name for name, _, _ in calls if name == "_alembic_downgrade"]) is not failure
+    revisions = [(name,args[-1]) for name,args,_ in calls if name in ("_alembic","_alembic_downgrade")]
+    current, previous = {"confirmation": (runner.REVISION_0042,runner.REVISION_0041),
+        "combined": (runner.REVISION_0043,runner.REVISION_0042),
+        "lookup": (runner.REVISION_0044,runner.REVISION_0043),
+        "proof_lookup": (runner.REVISION_0045,runner.REVISION_0044),
+        "session_kernel": (runner.REVISION_0046,runner.REVISION_0045)}[stage]
+    assert revisions == [("_alembic",current)] + ([] if failure else [("_alembic_downgrade",previous)])
+
+
+
+def test_shared_link_issuance_positive_gate_refuses_unverified_inventory(monkeypatch):
+    runner = _load_runner()
+    def refused(*args):
+        raise runner.GateFailure("unverified inventory")
+    monkeypatch.setattr(runner, "_verify_cluster_guard", refused)
+    for name in ("_create_database_clone", "_psql", "_pytest"):
+        monkeypatch.setattr(runner, name, lambda *a, **kw: pytest.fail("must not mutate unverified cluster"))
+    with pytest.raises(runner.GateFailure, match="unverified inventory"):
+        runner._run_shared_link_issuance_positive_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+
+
+def test_shared_link_issuance_acl_fixture_is_cleaned_after_failure(monkeypatch):
+    runner = _load_runner()
+    sql = []
+    def failed(*args):
+        raise runner.GateFailure("fixture")
+    monkeypatch.setattr(runner, "_alembic", failed)
+    monkeypatch.setattr(runner, "_psql", lambda *args, **kwargs: sql.append(kwargs["sql"]))
+    with pytest.raises(runner.GateFailure):
+        runner._run_shared_link_issuance_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+    assert len(sql) == 2 and "REVOKE EXECUTE ON FUNCTIONS" in sql[-1]
+    assert "REVOKE SELECT, INSERT ON TABLES" in sql[-1]
+
+
+def test_shared_link_confirmation_acl_fixture_is_cleaned_after_failure(monkeypatch):
+    runner = _load_runner()
+    sql = []
+    def failed(*args):
+        raise runner.GateFailure("fixture")
+    monkeypatch.setattr(runner, "_alembic", failed)
+    monkeypatch.setattr(runner, "_psql", lambda *args, **kwargs: sql.append(kwargs["sql"]))
+    with pytest.raises(runner.GateFailure):
+        runner._run_shared_link_confirmation_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+    assert len(sql) == 2 and "REVOKE EXECUTE ON FUNCTIONS" in sql[-1]
+
+
+def test_shared_link_session_acl_fixture_is_cleaned_after_failure(monkeypatch):
+    runner = _load_runner()
+    sql = []
+    def failed(*args):
+        raise runner.GateFailure("fixture")
+    monkeypatch.setattr(runner, "_alembic", failed)
+    monkeypatch.setattr(runner, "_psql", lambda *args, **kwargs: sql.append(kwargs["sql"]))
+    with pytest.raises(runner.GateFailure):
+        runner._run_shared_link_session_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+    assert len(sql) == 2 and "REVOKE EXECUTE ON FUNCTIONS" in sql[-1]
+    assert "REVOKE SELECT, INSERT ON TABLES" in sql[-1]
+
+
+def test_shared_link_proof_acl_fixture_is_cleaned_after_failure(monkeypatch):
+    runner = _load_runner()
+    sql = []
+    def failed(*args):
+        raise runner.GateFailure("fixture")
+    monkeypatch.setattr(runner, "_alembic", failed)
+    monkeypatch.setattr(runner, "_psql", lambda *args, **kwargs: sql.append(kwargs["sql"]))
+    with pytest.raises(runner.GateFailure):
+        runner._run_shared_link_proof_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+    assert len(sql) == 2 and "REVOKE EXECUTE ON FUNCTIONS" in sql[-1]
+
+
+def test_shared_link_owner_acl_fixture_is_cleaned_after_failure(monkeypatch):
+    runner = _load_runner()
+    sql = []
+    def failed(*args):
+        raise runner.GateFailure("fixture")
+    monkeypatch.setattr(runner, "_alembic", failed)
+    monkeypatch.setattr(runner, "_psql", lambda *args, **kwargs: sql.append(kwargs["sql"]))
+    with pytest.raises(runner.GateFailure):
+        runner._run_shared_link_owner_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+    assert len(sql) == 2 and "REVOKE EXECUTE ON FUNCTIONS" in sql[-1]
+
+
+def test_shared_link_challenge_acl_fixture_is_cleaned_after_failure(monkeypatch):
+    runner = _load_runner()
+    sql = []
+    def failed(*args):
+        raise runner.GateFailure("fixture")
+    monkeypatch.setattr(runner, "_alembic", failed)
+    monkeypatch.setattr(runner, "_psql", lambda *args, **kwargs: sql.append(kwargs["sql"]))
+    with pytest.raises(runner.GateFailure):
+        runner._run_shared_link_challenge_gate(SimpleNamespace(), SimpleNamespace(), Path("unused"))
+    assert len(sql) == 2 and "REVOKE SELECT, INSERT" in sql[-1]
+
+
 def test_runner_refuses_ambient_endpoint_overrides_before_docker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1414,3 +1852,16 @@ def test_migration_kernel_phase_is_isolated_and_reverts_itself() -> None:
     assert section.count("finally:") == 2
     assert "enabled=False" in section
     assert section.index("enabled=True") < section.index("finally:")
+
+
+def test_shared_link_combined_stages_upgrade_then_downgrade_in_order(monkeypatch):
+    runner = _load_runner()
+    calls = []
+    for name in ("_alembic", "_alembic_downgrade", "_verify_cluster_guard", "_assert_database_revision", "_create_database_clone", "_psql", "_pytest"):
+        monkeypatch.setattr(runner,name,lambda *args,_name=name,**kwargs:calls.append((_name,args,kwargs)))
+    state,phase = SimpleNamespace(sentinel="b"*64),SimpleNamespace(system_identifier="1234567890123456789")
+    runner._run_shared_link_combined_gate(state,phase,Path("unused"))
+    assert [(name,args[-1]) for name,args,_ in calls if name in ("_alembic","_alembic_downgrade")] == [
+        ("_alembic",runner.REVISION_0043),("_alembic",runner.REVISION_0044),("_alembic",runner.REVISION_0045),("_alembic",runner.REVISION_0046),
+        ("_alembic_downgrade",runner.REVISION_0045),("_alembic_downgrade",runner.REVISION_0044),("_alembic_downgrade",runner.REVISION_0043),("_alembic_downgrade",runner.REVISION_0042)]
+    assert len([name for name,_,_ in calls if name=="_pytest"]) == 4

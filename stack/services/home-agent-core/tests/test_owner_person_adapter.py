@@ -115,6 +115,8 @@ def test_the_adapter_uses_the_owner_attestation_pool() -> None:
 def test_the_route_is_pinned_and_wired() -> None:
     api = (APP / "api.py").read_text()
     main = (APP / "main.py").read_text()
-    assert 'OWNER_PERSON_ADAPTER_REVISION = "0027_owner_person_e5n"' in api
+    assert 'OWNER_PERSON_ADAPTER_REVISION = "0030_relationship_vocabulary_e5q"' in api
+    assert '"owner_person_creation"' in api
+    assert "supports_identity_capability(" in api
     assert "owner_person_adapter" in api
     assert "application.state.owner_person_adapter" in main

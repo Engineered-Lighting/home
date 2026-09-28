@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     restore_gate_cache_seconds: float = Field(default=1.0, ge=0, le=60)
     edge_token: SecretStr | None = Field(default=None, min_length=32)
     service_token: SecretStr | None = Field(default=None, min_length=32)
+    # Stable authority identity, independent of LAN/Tailscale transport. The
+    # current unqualified principal schema is provisioned only for Echo.
+    ha_issuer_id: Literal["home-assistant:echo"] = "home-assistant:echo"
+    site_id: Literal["echo"] = "echo"
     operator_token: SecretStr | None = Field(default=None, min_length=32)
     bootstrap_token: SecretStr | None = Field(default=None, min_length=32)
     policy_version: str = Field(

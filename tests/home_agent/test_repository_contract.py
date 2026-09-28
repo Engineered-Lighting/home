@@ -585,10 +585,13 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertLess(archive_at, load_at)
         self.assertLess(load_at, compare_at)
         self.assertLess(compare_at, tag_at)
-        self.assertIn(
-            "stack/home-agent-deploy/operator/imported_image_identity.py",
-            hosted_workflow,
+        # The hosted gate's `stack/**` trigger covers the imported-image verifier.
+        self.assertTrue(
+            (
+                ROOT / "stack/home-agent-deploy/operator/imported_image_identity.py"
+            ).is_file()
         )
+        self.assertEqual(hosted_workflow.count('      - "stack/**"\n'), 2)
         self.assertIn("rootfs diff IDs", normalized_origin_runbook)
         self.assertIn("local_image_id", origin_runbook)
         self.assertIn(

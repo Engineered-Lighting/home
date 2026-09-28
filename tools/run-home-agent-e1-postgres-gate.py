@@ -87,6 +87,8 @@ REVISION_0045 = "0045_shared_link_proof_lookup_v1"
 SHARED_LINK_PROOF_LOOKUP_DATABASE = "shared_link_proof_lookup_0045"
 REVISION_0046 = "0046_shared_link_session_krnl_v1"
 SHARED_LINK_SESSION_KERNEL_DATABASE = "shared_link_session_kernel_0046"
+REVISION_0047 = "0047_personal_pref_authority_v1"
+PERSONAL_PREFERENCE_AUTHORITY_DATABASE = "personal_preference_authority_0047"
 SHARED_IDENTITY_OWNER_DATABASE_ENV = "TEST_SHARED_IDENTITY_OWNER_DATABASE_URL"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
@@ -4184,7 +4186,7 @@ def _run_shared_link_confirmation_kernel_gate(state, phase, secrets_directory):
     _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0041)
 
 
-def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=False, proof_lookup=False, session_kernel=False):
+def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=False, proof_lookup=False, session_kernel=False, preference_authority=False):
     """Exercise the complete isolated SQL chain at its common pinned revision."""
     revision = REVISION_0044 if lookup else REVISION_0043
     previous = REVISION_0043 if lookup else REVISION_0042
@@ -4201,6 +4203,11 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
         clone = SHARED_LINK_SESSION_KERNEL_DATABASE
         url_env = "TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL"
         migration_test = "tests/test_shared_link_session_kernel_migration.py"
+    if preference_authority:
+        revision, previous = REVISION_0047, REVISION_0046
+        clone = PERSONAL_PREFERENCE_AUTHORITY_DATABASE
+        url_env = "TEST_PERSONAL_PREFERENCE_AUTHORITY_ADMIN_DATABASE_URL"
+        migration_test = "tests/test_personal_preference_authority_migration.py"
     _alembic(state, phase, secrets_directory, BASE_DATABASE, revision)
     _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, revision)
     baseline = {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE}
@@ -4211,7 +4218,8 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
         _assert_database_revision(state, phase, secrets_directory, clone, revision)
         _pytest(state, phase, secrets_directory,
                 nodes=[migration_test, "tests/test_shared_link_combined_runtime_postgres.py"]
-                    + (["tests/test_personal_preference_erasure.py", "tests/test_personal_preference_erasure_postgres.py", "tests/test_personal_memory_storage_records.py", "tests/test_personal_memory_storage_postgres.py", "tests/test_personal_memory_service.py", "tests/test_personal_memory_api.py", "tests/test_ledger_versions.py"] if session_kernel else []),
+                    + (["tests/test_personal_preference_erasure.py", "tests/test_personal_preference_erasure_postgres.py", "tests/test_personal_memory_storage_records.py", "tests/test_personal_memory_storage_postgres.py", "tests/test_personal_memory_service.py", "tests/test_personal_memory_api.py", "tests/test_ledger_versions.py"] if session_kernel else [])
+                    + (["tests/test_personal_preference_authority_postgres.py"] if preference_authority else []),
                 url_environment={url_env: clone,
                                  "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
                 environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
@@ -4222,7 +4230,11 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
               sql=f'DROP DATABASE "{clone}" WITH (FORCE)',
               label="remove committed combined linking fixture clone")
     _verify_cluster_guard(state, phase, secrets_directory, baseline)
-    if not session_kernel and proof_lookup:
+    if preference_authority:
+        pass
+    elif session_kernel:
+        _run_shared_link_combined_gate(state, phase, secrets_directory, preference_authority=True)
+    elif proof_lookup:
         _run_shared_link_session_kernel_gate(state, phase, secrets_directory)
     elif not session_kernel:
         if lookup:

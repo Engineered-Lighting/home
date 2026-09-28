@@ -38,10 +38,11 @@ FUNCTIONS = {
 
 @pytest.fixture(scope="module")
 def database():
-    session_kernel_enabled = bool(os.getenv("TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL"))
+    preference_authority_enabled = bool(os.getenv("TEST_PERSONAL_PREFERENCE_AUTHORITY_ADMIN_DATABASE_URL"))
+    session_kernel_enabled = preference_authority_enabled or bool(os.getenv("TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL"))
     proof_lookup_enabled = session_kernel_enabled or bool(os.getenv("TEST_SHARED_LINK_PROOF_LOOKUP_ADMIN_DATABASE_URL"))
     lookup_enabled = proof_lookup_enabled or bool(os.getenv("TEST_SHARED_LINK_CONFIRM_LOOKUP_ADMIN_DATABASE_URL"))
-    url = os.getenv("TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL") or os.getenv("TEST_SHARED_LINK_PROOF_LOOKUP_ADMIN_DATABASE_URL") or os.getenv("TEST_SHARED_LINK_CONFIRM_LOOKUP_ADMIN_DATABASE_URL") or os.getenv("TEST_SHARED_LINK_COMBINED_ADMIN_DATABASE_URL")
+    url = os.getenv("TEST_PERSONAL_PREFERENCE_AUTHORITY_ADMIN_DATABASE_URL") or os.getenv("TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL") or os.getenv("TEST_SHARED_LINK_PROOF_LOOKUP_ADMIN_DATABASE_URL") or os.getenv("TEST_SHARED_LINK_CONFIRM_LOOKUP_ADMIN_DATABASE_URL") or os.getenv("TEST_SHARED_LINK_COMBINED_ADMIN_DATABASE_URL")
     if not url: pytest.skip("dedicated guarded combined linking clone required")
     assert_guarded_database_url(url)
     engine = create_engine(url, isolation_level="SERIALIZABLE", pool_size=2, max_overflow=0,
@@ -57,9 +58,9 @@ def database():
         functions["identity.revoke_shared_link_session_bound_v1(text,uuid)"] = (SESSION_ECHO,SESSION_VICTORIA)
     try:
         with engine.begin() as conn:
-            assert conn.execute(text("SELECT current_database()")).scalar_one() == ("shared_link_session_kernel_0046" if session_kernel_enabled else "shared_link_proof_lookup_0045" if proof_lookup_enabled else "shared_link_lookup_0044" if lookup_enabled else "shared_link_combined_0043")
+            assert conn.execute(text("SELECT current_database()")).scalar_one() == ("personal_preference_authority_0047" if preference_authority_enabled else "shared_link_session_kernel_0046" if session_kernel_enabled else "shared_link_proof_lookup_0045" if proof_lookup_enabled else "shared_link_lookup_0044" if lookup_enabled else "shared_link_combined_0043")
             assert conn.execute(text("SELECT rolsuper FROM pg_roles WHERE rolname=current_user")).scalar_one()
-            assert conn.execute(text("SELECT version_num FROM public.alembic_version")).scalar_one() == ("0046_shared_link_session_krnl_v1" if session_kernel_enabled else "0045_shared_link_proof_lookup_v1" if proof_lookup_enabled else "0044_shared_link_reconcile_v1" if lookup_enabled else "0043_shared_link_combined_v1")
+            assert conn.execute(text("SELECT version_num FROM public.alembic_version")).scalar_one() == ("0047_personal_pref_authority_v1" if preference_authority_enabled else "0046_shared_link_session_krnl_v1" if session_kernel_enabled else "0045_shared_link_proof_lookup_v1" if proof_lookup_enabled else "0044_shared_link_reconcile_v1" if lookup_enabled else "0043_shared_link_combined_v1")
             graph = challenge_rows.__wrapped__(conn)
             base = prepared.__wrapped__(conn, graph)
             admitted.__wrapped__(conn, base)

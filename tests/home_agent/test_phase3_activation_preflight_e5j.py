@@ -25,6 +25,39 @@ NOW = datetime(2026, 7, 28, 19, 0, tzinfo=UTC)
 BACKUP_LABEL = "20260728-102702F"
 
 
+def test_conflict_is_reported_without_authorizing_activation(monkeypatch, capsys):
+    import io
+    import json
+    from urllib.error import HTTPError
+    import urllib.request
+    module = _module()
+    def response(request, **kwargs):
+        if request.full_url.endswith("phase3-readiness"):
+            raise HTTPError(request.full_url, 409, "conflict", {}, None)
+        return io.StringIO(json.dumps(_core_probe(ready=True)["phase2"]))
+    monkeypatch.setattr(urllib.request, "urlopen", response)
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: "fixture-token")
+    exec(module.CORE_PROBE, {})
+    probe = json.loads(capsys.readouterr().out)
+    assert probe["phase3"] == {"readiness_unavailable": True, "http_status": 409}
+    report = _evaluate(module, core_probe=probe)
+    assert report["preflight_passed"] is False
+    assert report["backup"]["repository_healthy"] is True
+
+
+def test_authentication_error_still_aborts_probe(monkeypatch):
+    import pytest
+    from urllib.error import HTTPError
+    import urllib.request
+    module = _module()
+    def denied(request, **kwargs):
+        raise HTTPError(request.full_url, 401, "denied", {}, None)
+    monkeypatch.setattr(urllib.request, "urlopen", denied)
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: "fixture-token")
+    with pytest.raises(HTTPError):
+        exec(module.CORE_PROBE, {})
+
+
 def _environment(*, topology: str = "local") -> dict[str, str]:
     return {
         "HOME_AGENT_EXPECTED_DB_REVISION": "0006a_worker_lease_arbitration",

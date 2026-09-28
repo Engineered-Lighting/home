@@ -1004,6 +1004,15 @@ function HelpRow({ sig, desc, onClick, baseColor, hoverColor, mobile = false }) 
   );
 }
 
+/* ── Shared preference review ────────────────────────────────────────── */
+// HomePersonalMemory owns the Agent-origin review frame; this only gives it a
+// stable place in the thread. The frame leaves on its own once it settles.
+function PersonalMemoryReviewContent({ text, mountReview }) {
+  const slot = React.useRef(null);
+  React.useEffect(() => mountReview?.(slot.current), [mountReview]);
+  return <div><HomeContent text={text} /><div ref={slot} style={{marginTop:10}} /></div>;
+}
+
 /* ── Event dispatch ──────────────────────────────────────────────────── */
 function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecycle, onWhy }) {
   // M5 (Addendum 27): wrap clickable bubble kinds with a thin <button>
@@ -1029,7 +1038,7 @@ function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecyc
         }
         return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
       case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
-      case "personal-memory-launch": return <div><HomeContent text={e.text} /><button type="button" onClick={() => e.openReview?.()} style={{marginTop:12,padding:"12px 16px",minHeight:44,color:"var(--hg-fg-1)",background:"var(--hg-bg-2)",border:"1px solid var(--hg-border)",borderRadius:8}}>Open preference review</button></div>;
+      case "personal-memory-review": return <PersonalMemoryReviewContent text={e.text} mountReview={e.mountReview} />;
       // Lighting articulation events carry kind "assistant" (emitter contract
       // — run-lighting-events-tests asserts the kind). Render them like home
       // turns; without this case they fell through to null (empty bubbles).

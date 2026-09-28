@@ -20,6 +20,9 @@ services:
       HOME_AGENT_WEB_PUBLIC_ORIGIN: "${HOME_AGENT_WEB_PUBLIC_ORIGIN:?set exact tailnet-only HTTPS origin}"
       HOME_AGENT_WEB_BFF_URL: http://bff:8097
       HOME_AGENT_WEB_ASSET_ROOT: /srv/home-agent
+      # Home origins allowed to frame the inline preference review. Empty keeps
+      # every Agent page, including the review, unframeable.
+      HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS: "${HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS:-}"
     networks:
       core-api:
         ipv4_address: "${HOME_AGENT_WEB_INTERNAL_IP:?set reviewed static address outside the dynamic IP range}"

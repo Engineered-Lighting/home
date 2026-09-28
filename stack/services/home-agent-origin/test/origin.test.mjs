@@ -87,7 +87,7 @@ function request(port, target, {
   });
 }
 
-async function fixture(upstreamHandler) {
+async function fixture(upstreamHandler, env = {}) {
   const assets = makeAssets();
   const seen = [];
   const upstream = http.createServer((req, res) => upstreamHandler(req, res, seen));
@@ -98,6 +98,7 @@ async function fixture(upstreamHandler) {
     HOME_AGENT_WEB_ASSET_ROOT: assets,
     HOME_AGENT_WEB_HOST: "127.0.0.1",
     HOME_AGENT_WEB_PORT: "8096",
+    ...env,
   });
   const origin = createAgentOrigin(config);
   const originPort = await listen(origin);
@@ -135,6 +136,20 @@ test("configuration fails closed for unsafe origins, service roots, and incomple
     "http://bff:8097/api/agent",
     "http://bff:8097?query",
   ]) assert.equal(configFromEnv({ ...base, HOME_AGENT_WEB_BFF_URL: value }).ready, false);
+  assert.deepEqual(configFromEnv(base).preferenceFrameAncestors, []);
+  assert.deepEqual(configFromEnv({ ...base, HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS: " https://home.test  https://home2.test:8443 " })
+    .preferenceFrameAncestors, ["https://home.test", "https://home2.test:8443"]);
+  for (const value of [
+    "http://home.test",
+    "https://home.test/",
+    "https://home.test/path",
+    "https://*.test",
+    "https://agent.test",
+    "https://agent.test:8443",
+    "https://home.test https://home.test",
+    "'self'",
+    "https://a.test https://b.test https://c.test https://d.test https://e.test",
+  ]) assert.equal(configFromEnv({ ...base, HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS: value }).ready, false, value);
   fs.rmSync(path.join(assets, "panel.js"));
   assert.equal(configFromEnv(base).ready, false);
   fs.rmSync(assets, { recursive: true, force: true });
@@ -490,17 +505,30 @@ test("shared-link origin forwards exact browser bodies and strips claimed author
   } finally { await f.cleanup(); }
 });
 
-test("preference review preserves its opener without weakening the main Agent panel", async () => {
-  const f = await fixture((_req, res) => res.end());
+test("only the preference review may be framed, and only by provisioned Home origins", async () => {
+  const f = await fixture((_req, res) => res.end(), { HOME_AGENT_WEB_PREFERENCE_HOME_ORIGINS: "https://home.test" });
   try {
     const review = await request(f.originPort, "/home-agent/preference-review.html");
     assert.equal(review.status, 200);
-    assert.equal(review.headers["cross-origin-opener-policy"], "unsafe-none");
     assert.equal(review.headers["cache-control"], "no-store");
-    assert.equal(review.headers["x-frame-options"], "DENY");
-    assert.match(review.headers["content-security-policy"], /frame-ancestors 'none'/);
-    const panel = await request(f.originPort, "/home-agent/");
-    assert.equal(panel.headers["cross-origin-opener-policy"], "same-origin");
+    assert.equal(review.headers["x-frame-options"], undefined);
+    assert.equal(review.headers["cross-origin-opener-policy"], "same-origin");
+    assert.equal(review.headers["cross-origin-resource-policy"], "same-site");
+    const csp = review.headers["content-security-policy"];
+    assert.match(csp, /(^|; )frame-ancestors https:\/\/home\.test(;|$)/);
+    assert.match(csp, /default-src 'none'/);
+    assert.match(csp, /frame-src 'none'/);
+    for (const asset of ["/home-agent/", "/home-agent/preference-review.js", "/home-agent/preference-review.css", "/home-agent/api.js"]) {
+      const other = await request(f.originPort, asset);
+      assert.equal(other.headers["x-frame-options"], "DENY", asset);
+      assert.match(other.headers["content-security-policy"], /frame-ancestors 'none'/, asset);
+      assert.equal(other.headers["cross-origin-resource-policy"], "same-origin", asset);
+    }
     assert.equal(f.seen.length, 0);
   } finally { await f.cleanup(); }
+  const closed = await fixture((_req, res) => res.end());
+  try {
+    const review = await request(closed.originPort, "/home-agent/preference-review.html");
+    assert.match(review.headers["content-security-policy"], /frame-ancestors 'none'/);
+  } finally { await closed.cleanup(); }
 });

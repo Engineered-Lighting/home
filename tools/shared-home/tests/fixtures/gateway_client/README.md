@@ -1,0 +1,1 @@
+These publicly committed credentials are exclusively for ephemeral localhost TLS contract tests. They confer no production trust or authority. Never provision this CA or these keys to a deployed service. Test certificates are valid 2020?2040; the CA signing key is not retained.

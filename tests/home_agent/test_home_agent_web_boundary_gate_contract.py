@@ -227,12 +227,15 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
             "!src/**",
         ]
         for service in ("home-agent-bff", "home-agent-origin"):
+            service_context = expected_context.copy()
+            if service == "home-agent-bff":
+                service_context.insert(4, "!victoria-link-server.mjs")
             directory = ROOT / "stack/services" / service
             dockerfile = (directory / "Dockerfile").read_text(encoding="utf-8")
             self.assertEqual(dockerfile.splitlines()[0], f"FROM {NODE_IMAGE}")
             self.assertEqual(
                 (directory / ".dockerignore").read_text(encoding="utf-8").splitlines(),
-                expected_context,
+                service_context,
             )
 
 

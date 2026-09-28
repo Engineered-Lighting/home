@@ -64,6 +64,32 @@ REVISION_0027 = "0027_owner_person_e5n"
 REVISION_0028 = "0028_owner_partner_access_e5o"
 REVISION_0029 = "0029_owner_person_role_e5p"
 REVISION_0030 = "0030_relationship_vocabulary_e5q"
+REVISION_0031 = "0031_relationship_uniqueness_e5r"
+REVISION_0032 = "0032_shared_identity_v1"
+REVISION_0033 = "0033_shared_auth_proof_v1"
+REVISION_0034 = "0034_shared_link_challenges_v1"
+REVISION_0035 = "0035_shared_link_owner_v1"
+REVISION_0036 = "0036_shared_link_proof_v1"
+REVISION_0037 = "0037_shared_link_session_v1"
+REVISION_0038 = "0038_shared_link_confirm_v1"
+REVISION_0039 = "0039_shared_link_issue_v1"
+REVISION_0040 = "0040_shared_link_issue_kernel_v1"
+SHARED_LINK_KERNEL_DATABASE = "shared_link_kernel_0040"
+REVISION_0041 = "0041_shared_link_proof_kernel_v1"
+SHARED_LINK_PROOF_KERNEL_DATABASE = "shared_link_proof_kernel_0041"
+REVISION_0042 = "0042_shared_link_confirm_krnl_v1"
+SHARED_LINK_CONFIRM_KERNEL_DATABASE = "shared_link_confirm_kernel_0042"
+REVISION_0043 = "0043_shared_link_combined_v1"
+SHARED_LINK_COMBINED_DATABASE = "shared_link_combined_0043"
+REVISION_0044 = "0044_shared_link_reconcile_v1"
+SHARED_LINK_LOOKUP_DATABASE = "shared_link_lookup_0044"
+REVISION_0045 = "0045_shared_link_proof_lookup_v1"
+SHARED_LINK_PROOF_LOOKUP_DATABASE = "shared_link_proof_lookup_0045"
+REVISION_0046 = "0046_shared_link_session_krnl_v1"
+SHARED_LINK_SESSION_KERNEL_DATABASE = "shared_link_session_kernel_0046"
+REVISION_0047 = "0047_personal_pref_authority_v1"
+PERSONAL_PREFERENCE_AUTHORITY_DATABASE = "personal_preference_authority_0047"
+SHARED_IDENTITY_OWNER_DATABASE_ENV = "TEST_SHARED_IDENTITY_OWNER_DATABASE_URL"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL"
@@ -3884,6 +3910,413 @@ def _run_e4_scaffold_phase(
         },
         fail_fast=True,
     )
+
+
+    _run_shared_identity_storage_gate(state, phase, secrets_directory)
+    _run_shared_auth_proof_gate(state, phase, secrets_directory)
+
+
+def _run_shared_auth_proof_gate(state, phase, secrets_directory):
+    """Dormant proof kernel acceptance in the guarded disposable cluster only."""
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0033)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0033)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_auth_proof_runtime_postgres.py",
+                   "tests/test_shared_auth_proof_adapter.py",
+                   "tests/test_shared_auth_proof_api.py",
+                   "tests/test_shared_auth_proof_ingress_migration.py"],
+            url_environment={"TEST_SHARED_AUTH_PROOF_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_challenge_gate(state, phase, secrets_directory)
+    # Fixture grants/data must be removed before rollback can succeed. No
+    # apply-grants or runtime caller provisioning is performed at this revision.
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0032)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0032)
+
+
+def _run_shared_link_challenge_gate(state, phase, secrets_directory):
+    """Isolated challenge storage acceptance; never enable a runtime caller."""
+    _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+          sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity, privacy "
+              "GRANT SELECT, INSERT ON TABLES TO home_agent_api;",
+          label="shared challenge default-ACL fixture")
+    try:
+        _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0034)
+    finally:
+        _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+              sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity, privacy "
+                  "REVOKE SELECT, INSERT ON TABLES FROM home_agent_api;",
+              label="shared challenge default-ACL fixture cleanup")
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0034)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_link_challenge_runtime_postgres.py",
+                   "tests/test_shared_link_challenge_schema.py", "tests/test_shared_link_challenge_migration.py"],
+            url_environment={"TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_owner_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0033)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0033)
+
+
+def _run_shared_link_owner_gate(state, phase, secrets_directory):
+    """Check the internal authority helper without provisioning any caller."""
+    _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+          sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+              "GRANT EXECUTE ON FUNCTIONS TO home_agent_api;", label="shared owner ACL fixture")
+    try:
+        _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0035)
+    finally:
+        _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+              sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+                  "REVOKE EXECUTE ON FUNCTIONS FROM home_agent_api;", label="shared owner ACL cleanup")
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0035)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_link_owner_authority.py", "tests/test_shared_link_owner_runtime_postgres.py"],
+            url_environment={"TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_proof_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0034)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0034)
+
+
+def _run_shared_link_proof_gate(state, phase, secrets_directory):
+    """Atomic challenge association acceptance without runtime caller grants."""
+    _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+          sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+              "GRANT EXECUTE ON FUNCTIONS TO home_agent_api;", label="shared proof association ACL fixture")
+    try:
+        _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0036)
+    finally:
+        _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+              sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+                  "REVOKE EXECUTE ON FUNCTIONS FROM home_agent_api;", label="shared proof association ACL cleanup")
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0036)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_link_proof_transaction.py", "tests/test_shared_link_proof_runtime_postgres.py"],
+            url_environment={"TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_session_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0035)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0035)
+
+
+def _run_shared_link_session_gate(state, phase, secrets_directory):
+    """Durable revocation and write-guard checks on the same disposable target."""
+    _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+          sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+              "GRANT EXECUTE ON FUNCTIONS TO home_agent_api; "
+              "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA privacy "
+              "GRANT SELECT, INSERT ON TABLES TO home_agent_api;", label="shared session ACL fixture")
+    try:
+        _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0037)
+    finally:
+        _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+              sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+                  "REVOKE EXECUTE ON FUNCTIONS FROM home_agent_api; "
+                  "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA privacy "
+                  "REVOKE SELECT, INSERT ON TABLES FROM home_agent_api;", label="shared session ACL cleanup")
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0037)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_link_session_migration.py", "tests/test_shared_link_session_runtime_postgres.py"],
+            url_environment={"TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_confirmation_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0036)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0036)
+
+
+def _run_shared_link_confirmation_gate(state, phase, secrets_directory):
+    """Atomic final-link acceptance, with no runtime capability provisioning."""
+    _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+          sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+              "GRANT EXECUTE ON FUNCTIONS TO home_agent_api;", label="shared confirmation ACL fixture")
+    try:
+        _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0038)
+    finally:
+        _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+              sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+                  "REVOKE EXECUTE ON FUNCTIONS FROM home_agent_api;", label="shared confirmation ACL cleanup")
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0038)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_link_confirmation_migration.py", "tests/test_shared_link_confirmation_runtime_postgres.py"],
+            url_environment={"TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_issuance_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0037)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0037)
+
+
+def _run_shared_link_issuance_gate(state, phase, secrets_directory):
+    """Issuer lifecycle and key admission on the guarded disposable target."""
+    _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+          sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+              "GRANT EXECUTE ON FUNCTIONS TO home_agent_api; "
+              "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA privacy "
+              "GRANT SELECT, INSERT ON TABLES TO home_agent_api;", label="shared issuance ACL fixture")
+    try:
+        _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0039)
+    finally:
+        _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+              sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity "
+                  "REVOKE EXECUTE ON FUNCTIONS FROM home_agent_api; "
+                  "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA privacy "
+                  "REVOKE SELECT, INSERT ON TABLES FROM home_agent_api;", label="shared issuance ACL cleanup")
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0039)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_link_issuance_migration.py", "tests/test_shared_link_issuance_runtime_postgres.py",
+                   "tests/test_shared_link_commitments.py", "tests/test_shared_link_issuance_adapter.py"],
+            url_environment={"TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_issuance_kernel_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0038)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0038)
+
+
+def _run_shared_link_issuance_kernel_gate(state, phase, secrets_directory):
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0040)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0040)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_link_issuance_kernel_migration.py",
+                   "tests/test_shared_link_issuance_kernel_runtime_postgres.py",
+                   "tests/test_shared_link_issuance_adapter.py"],
+            url_environment={"TEST_SHARED_LINK_CHALLENGE_ADMIN_DATABASE_URL": BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    _run_shared_link_issuance_positive_gate(state, phase, secrets_directory)
+    _run_shared_link_issuance_positive_gate(state, phase, secrets_directory,
+        test_node="tests/test_shared_link_issuance_kernel_erasure_postgres.py")
+    _run_shared_link_proof_kernel_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0039)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0039)
+
+
+def _run_shared_link_issuance_positive_gate(state, phase, secrets_directory, *,
+        test_node="tests/test_shared_link_issuance_kernel_positive_postgres.py"):
+    """Committed owner fixtures live only in a clone of the guarded 0040 base."""
+    baseline = {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE}
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0040)
+    _create_database_clone(state, phase, secrets_directory, BASE_DATABASE, SHARED_LINK_KERNEL_DATABASE)
+    try:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {SHARED_LINK_KERNEL_DATABASE})
+        _assert_database_revision(state, phase, secrets_directory, SHARED_LINK_KERNEL_DATABASE, REVISION_0040)
+        _pytest(state, phase, secrets_directory,
+                nodes=[test_node],
+                url_environment={"TEST_SHARED_LINK_KERNEL_ADMIN_DATABASE_URL": SHARED_LINK_KERNEL_DATABASE,
+                                 "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+                environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                             ALLOWLIST_ENV: f"{BASE_DATABASE},{SHARED_LINK_KERNEL_DATABASE}"}, fail_fast=True)
+    finally:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {SHARED_LINK_KERNEL_DATABASE})
+        _psql(state, phase, secrets_directory, database=ADMIN_DATABASE,
+              sql=f'DROP DATABASE "{SHARED_LINK_KERNEL_DATABASE}" WITH (FORCE)',
+              label="remove committed shared-link fixture clone")
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+
+
+def _run_shared_link_proof_kernel_gate(state, phase, secrets_directory):
+    """A separate committed clone, preserving the checked 0040 base on exit."""
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0041)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0041)
+    baseline = {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE}
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+    _create_database_clone(state, phase, secrets_directory, BASE_DATABASE, SHARED_LINK_PROOF_KERNEL_DATABASE)
+    try:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {SHARED_LINK_PROOF_KERNEL_DATABASE})
+        _assert_database_revision(state, phase, secrets_directory, SHARED_LINK_PROOF_KERNEL_DATABASE, REVISION_0041)
+        _pytest(state, phase, secrets_directory,
+                nodes=["tests/test_shared_link_proof_kernel_migration.py",
+                       "tests/test_shared_link_proof_kernel_runtime_postgres.py"],
+                url_environment={"TEST_SHARED_LINK_PROOF_KERNEL_ADMIN_DATABASE_URL": SHARED_LINK_PROOF_KERNEL_DATABASE,
+                                 "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+                environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                             ALLOWLIST_ENV: f"{BASE_DATABASE},{SHARED_LINK_PROOF_KERNEL_DATABASE}"}, fail_fast=True)
+    finally:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {SHARED_LINK_PROOF_KERNEL_DATABASE})
+        _psql(state, phase, secrets_directory, database=ADMIN_DATABASE,
+              sql=f'DROP DATABASE "{SHARED_LINK_PROOF_KERNEL_DATABASE}" WITH (FORCE)',
+              label="remove committed shared-link proof fixture clone")
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+    _run_shared_link_confirmation_kernel_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0040)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0040)
+
+
+def _run_shared_link_confirmation_kernel_gate(state, phase, secrets_directory):
+    """Confirmation cases commit only in this separately guarded clone."""
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0042)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0042)
+    baseline = {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE}
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+    _create_database_clone(state, phase, secrets_directory, BASE_DATABASE, SHARED_LINK_CONFIRM_KERNEL_DATABASE)
+    try:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {SHARED_LINK_CONFIRM_KERNEL_DATABASE})
+        _assert_database_revision(state, phase, secrets_directory, SHARED_LINK_CONFIRM_KERNEL_DATABASE, REVISION_0042)
+        _pytest(state, phase, secrets_directory,
+                nodes=["tests/test_shared_link_confirmation_kernel_migration.py",
+                       "tests/test_shared_link_confirmation_kernel_runtime_postgres.py",
+                       "tests/test_shared_link_confirmation_adapter.py"],
+                url_environment={"TEST_SHARED_LINK_CONFIRM_KERNEL_ADMIN_DATABASE_URL": SHARED_LINK_CONFIRM_KERNEL_DATABASE,
+                                 "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+                environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                             ALLOWLIST_ENV: f"{BASE_DATABASE},{SHARED_LINK_CONFIRM_KERNEL_DATABASE}"}, fail_fast=True)
+    finally:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {SHARED_LINK_CONFIRM_KERNEL_DATABASE})
+        _psql(state, phase, secrets_directory, database=ADMIN_DATABASE,
+              sql=f'DROP DATABASE "{SHARED_LINK_CONFIRM_KERNEL_DATABASE}" WITH (FORCE)',
+              label="remove committed shared-link confirmation fixture clone")
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+    _run_shared_link_combined_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0041)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0041)
+
+
+def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=False, proof_lookup=False, session_kernel=False, preference_authority=False):
+    """Exercise the complete isolated SQL chain at its common pinned revision."""
+    revision = REVISION_0044 if lookup else REVISION_0043
+    previous = REVISION_0043 if lookup else REVISION_0042
+    clone = SHARED_LINK_LOOKUP_DATABASE if lookup else SHARED_LINK_COMBINED_DATABASE
+    url_env = "TEST_SHARED_LINK_CONFIRM_LOOKUP_ADMIN_DATABASE_URL" if lookup else "TEST_SHARED_LINK_COMBINED_ADMIN_DATABASE_URL"
+    migration_test = "tests/test_shared_link_confirmation_lookup_migration.py" if lookup else "tests/test_shared_link_combined_revision_migration.py"
+    if proof_lookup:
+        revision, previous = REVISION_0045, REVISION_0044
+        clone = SHARED_LINK_PROOF_LOOKUP_DATABASE
+        url_env = "TEST_SHARED_LINK_PROOF_LOOKUP_ADMIN_DATABASE_URL"
+        migration_test = "tests/test_shared_link_proof_lookup_migration.py"
+    if session_kernel:
+        revision, previous = REVISION_0046, REVISION_0045
+        clone = SHARED_LINK_SESSION_KERNEL_DATABASE
+        url_env = "TEST_SHARED_LINK_SESSION_KERNEL_ADMIN_DATABASE_URL"
+        migration_test = "tests/test_shared_link_session_kernel_migration.py"
+    if preference_authority:
+        revision, previous = REVISION_0047, REVISION_0046
+        clone = PERSONAL_PREFERENCE_AUTHORITY_DATABASE
+        url_env = "TEST_PERSONAL_PREFERENCE_AUTHORITY_ADMIN_DATABASE_URL"
+        migration_test = "tests/test_personal_preference_authority_migration.py"
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, revision)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, revision)
+    baseline = {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE}
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+    _create_database_clone(state, phase, secrets_directory, BASE_DATABASE, clone)
+    try:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {clone})
+        _assert_database_revision(state, phase, secrets_directory, clone, revision)
+        if preference_authority:
+            # New shared identity storage must preserve the existing governed
+            # identity writers. Reuse their actual split-credential operations
+            # at the new revision; do not infer compatibility from signatures.
+            _pytest(state, phase, secrets_directory,
+                    nodes=[
+                        "tests/test_phase3_owner_person_kernel_e5n_runtime_postgres.py::test_e5n_creates_the_person_the_attestation_and_nothing_else",
+                        "tests/test_phase3_owner_partner_kernel_e5k_runtime_postgres.py::test_e5k_commits_a_symmetric_owner_attested_partnership",
+                        "tests/test_phase3_parent_relationship_status_e5h_runtime_postgres.py::test_e5h_recovers_committed_parent_authority_table_blind",
+                    ],
+                    url_environment={E5N_OWNER_DATABASE_ENV: clone,E5H_OWNER_DATABASE_ENV: clone},
+                    credential_url_environment={E5N_COMMITTER_DATABASE_ENV: (
+                        clone, "home_agent_binding_committer", "postgres_binding_committer_password"),
+                        E5H_COMMITTER_DATABASE_ENV: (
+                        clone, "home_agent_binding_committer", "postgres_binding_committer_password")},
+                    environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                                 ALLOWLIST_ENV: f"{BASE_DATABASE},{clone}"}, fail_fast=True)
+        _pytest(state, phase, secrets_directory,
+                nodes=[migration_test, "tests/test_shared_link_combined_runtime_postgres.py"]
+                    + (["tests/test_personal_preference_erasure.py", "tests/test_personal_preference_erasure_postgres.py", "tests/test_personal_memory_storage_records.py", "tests/test_personal_memory_service.py", "tests/test_personal_memory_api.py", "tests/test_ledger_versions.py"] if session_kernel else [])
+                    + (["tests/test_personal_preference_authority_postgres.py", "tests/test_personal_memory_storage_postgres.py", "tests/test_personal_memory_grants_postgres.py", "tests/test_personal_memory_authority_resolution.py", "tests/test_personal_memory_runtime.py", "tests/test_personal_memory_server.py",
+                        "tests/test_personal_memory_consent.py", "tests/test_personal_memory_consent_journal.py",
+                        "tests/test_personal_memory_consent_service.py", "tests/test_personal_memory_consent_api.py",
+                        "tests/test_personal_memory_registration.py",
+                        "tests/test_shared_identity_site_runtime.py", "tests/test_shared_identity_site_server.py",
+                        "tests/test_shared_link_coordinator_runtime.py", "tests/test_shared_link_coordinator_server.py"] if preference_authority else []),
+                url_environment={url_env: clone,
+                                 "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+                environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                             ALLOWLIST_ENV: f"{BASE_DATABASE},{clone}"}, fail_fast=True)
+    finally:
+        _verify_cluster_guard(state, phase, secrets_directory, baseline | {clone})
+        _psql(state, phase, secrets_directory, database=ADMIN_DATABASE,
+              sql=f'DROP DATABASE "{clone}" WITH (FORCE)',
+              label="remove committed combined linking fixture clone")
+    _verify_cluster_guard(state, phase, secrets_directory, baseline)
+    if preference_authority:
+        pass
+    elif session_kernel:
+        _run_personal_preference_authority_gate(state, phase, secrets_directory)
+    elif proof_lookup:
+        _run_shared_link_session_kernel_gate(state, phase, secrets_directory)
+    elif not session_kernel:
+        if lookup:
+            _run_shared_link_proof_lookup_gate(state, phase, secrets_directory)
+        else:
+            _run_shared_link_lookup_gate(state, phase, secrets_directory)
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, previous)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, previous)
+
+
+def _run_shared_link_lookup_gate(state, phase, secrets_directory):
+    _run_shared_link_combined_gate(state, phase, secrets_directory, lookup=True)
+
+
+def _run_shared_link_proof_lookup_gate(state, phase, secrets_directory):
+    _run_shared_link_combined_gate(state, phase, secrets_directory, proof_lookup=True)
+
+
+def _run_shared_link_session_kernel_gate(state, phase, secrets_directory):
+    _run_shared_link_combined_gate(state, phase, secrets_directory, session_kernel=True)
+
+
+def _run_personal_preference_authority_gate(state, phase, secrets_directory):
+    _run_shared_link_combined_gate(state, phase, secrets_directory, preference_authority=True)
+
+
+def _run_shared_identity_storage_gate(state, phase, secrets_directory):
+    """Exercise new inaccessible storage only inside the existing guarded gate.
+
+    This deliberately does not call apply-grants at 0032 or enable runtime
+    Settings. The database is the already labelled disposable BASE_DATABASE.
+    """
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0031)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0031)
+    # Prove the migration removes inherited default ACLs, not only PUBLIC.
+    _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+          sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity, privacy "
+              "GRANT SELECT, INSERT ON TABLES TO home_agent_api;",
+          label="shared identity default-ACL fixture")
+    try:
+        _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0032)
+    finally:
+        _psql(state, phase, secrets_directory, database=BASE_DATABASE,
+              sql="ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity, privacy "
+                  "REVOKE SELECT, INSERT ON TABLES FROM home_agent_api;",
+              label="shared identity default-ACL fixture cleanup")
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0032)
+    _pytest(state, phase, secrets_directory,
+            nodes=["tests/test_shared_identity_runtime_postgres.py",
+                   "tests/test_shared_identity_schema.py", "tests/test_shared_identity_migration.py"],
+            url_environment={SHARED_IDENTITY_OWNER_DATABASE_ENV: BASE_DATABASE,
+                             "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
+            environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,
+                         ALLOWLIST_ENV: BASE_DATABASE}, fail_fast=True)
+    # Tests roll back their fixture data. Verify empty storage can round-trip;
+    # populated and RLS-filtered downgrade refusal is exercised inside pytest.
+    _alembic_downgrade(state, phase, secrets_directory, BASE_DATABASE, REVISION_0031)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0031)
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0032)
+    _assert_database_revision(state, phase, secrets_directory, BASE_DATABASE, REVISION_0032)
 
 
 def _build_test_image(state: GateState, build_context: Path) -> None:

@@ -64,6 +64,7 @@ CORE_PROBE = r"""
 import json
 from pathlib import Path
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 operator = Path("/run/secrets/operator_token").read_text(encoding="utf-8").strip()
 bootstrap = Path("/run/secrets/bootstrap_token").read_text(encoding="utf-8").strip()
@@ -79,8 +80,15 @@ for key, path in (
             "X-Home-Agent-Bootstrap": bootstrap,
         },
     )
-    with urlopen(request, timeout=5) as response:
-        result[key] = json.load(response)
+    try:
+        with urlopen(request, timeout=5) as response:
+            result[key] = json.load(response)
+    except HTTPError as error:
+        if error.code != 409:
+            raise
+        # A known admission conflict is a blocker, not successful readiness.
+        # Do not copy the private response body into operator diagnostics.
+        result[key] = {"readiness_unavailable": True, "http_status": 409}
 print(json.dumps(result, separators=(",", ":"), sort_keys=True))
 """.strip()
 

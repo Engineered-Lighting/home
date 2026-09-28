@@ -1,0 +1,15 @@
+---
+title: Bind shared preferences to Core runtime admission
+target: backend
+type: added
+---
+
+Compose the private preference service with Core's API connection and live
+schema, restore, rollout, retention, outbox, and storage checks. This prepares
+runtime integration without enabling a listener or changing production grants.
+Add an explicit TLS listener entry point with bounded provisioning files,
+separate credentials and review keys, and private-address-only binding.
+Report listener configuration failures without printing credential-bearing
+exception details.
+Prepare an exact preference migration target and matching startup revision.
+This does not activate production listeners, credentials, or source grants.

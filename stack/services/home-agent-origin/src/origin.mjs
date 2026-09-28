@@ -11,6 +11,9 @@ const STATIC_ASSETS = new Map([
   ["/home-agent/api.js", ["api.js", "text/javascript; charset=utf-8", "private, no-cache"]],
   ["/home-agent/panel.js", ["panel.js", "text/javascript; charset=utf-8", "private, no-cache"]],
   ["/home-agent/panel.css", ["panel.css", "text/css; charset=utf-8", "private, no-cache"]],
+  ["/home-agent/preference-review.html", ["preference-review.html", "text/html; charset=utf-8", "no-store"]],
+  ["/home-agent/preference-review.js", ["preference-review.js", "text/javascript; charset=utf-8", "private, no-cache"]],
+  ["/home-agent/preference-review.css", ["preference-review.css", "text/css; charset=utf-8", "private, no-cache"]],
 ]);
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const BROWSER_API_ROUTES = Object.freeze([
@@ -18,6 +21,11 @@ const BROWSER_API_ROUTES = Object.freeze([
   ["GET", /^\/api\/agent\/auth\/callback$/],
   ["GET", /^\/api\/agent\/auth\/session$/],
   ["POST", /^\/api\/agent\/auth\/logout$/],
+  ["POST", /^\/api\/agent\/shared-identity\/review$/],
+  ["POST", /^\/api\/agent\/shared-identity\/confirm$/],
+  ["POST", /^\/api\/agent\/shared-identity\/outcome$/],
+  ["POST", /^\/api\/agent\/shared-identity\/(start|handoff|issuance-outcome|auth-begin|auth-submit|auth-outcome|victoria-auth-admit|victoria-auth-outcome|prepare-review)$/],
+  ["POST", /^\/api\/agent\/personal-memory\/(read|propose|confirm|outcome|sharing-propose|sharing-confirm|sharing-outcome)$/],
   ["GET", /^\/api\/agent\/v1\/onboarding\/status$/],
   ["GET", /^\/api\/agent\/v1\/principal-binding-proposal$/],
   ["POST", /^\/api\/agent\/v1\/principal-binding-request$/],
@@ -210,6 +218,10 @@ function serveStatic(req, res, config, url) {
   }
   res.writeHead(200, {
     ...STATIC_SECURITY_HEADERS,
+    // Only this bounded review surface needs its cross-origin Home opener.
+    // The controller authenticates the parent origin, window and nonce and
+    // requires explicit user gestures; the main Agent panel stays isolated.
+    ...(filename === "preference-review.html" ? { "Cross-Origin-Opener-Policy": "unsafe-none" } : {}),
     "Cache-Control": cacheControl,
     "Content-Type": contentType,
     "Content-Length": body.length,

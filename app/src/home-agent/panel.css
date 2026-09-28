@@ -66,4 +66,19 @@ textarea:focus-visible,
 .agent-grid dt { color: var(--hg-fg-4); }
 .agent-grid dd { margin: 0; }
 .agent-error { color: #ff8b8b; }
+.agent-shared-link .agent-grid { grid-template-columns: 140px minmax(0, 1fr); }
+.agent-shared-link dd { overflow-wrap: anywhere; }
+.agent-shared-link label { display: block; margin: 12px 0; }
+.agent-shared-link button { margin-right: 8px; margin-top: 8px; }
+@media (max-width: 600px) {
+  .agent-shared-link .agent-grid { grid-template-columns: minmax(0, 1fr); }
+}
 pre { overflow: auto; white-space: pre-wrap; }
+.agent-link-setup label { display: block; margin-top: 1rem; }
+.agent-link-setup input, .agent-link-setup select {
+  display: block; box-sizing: border-box; width: 100%; max-width: 100%;
+  margin: .4rem 0 .8rem; padding: .7rem; font: inherit; color: inherit;
+  background: #151917; border: 1px solid #576052; border-radius: 5px;
+}
+.agent-link-setup button { white-space: normal; min-height: 44px; }
+.agent-link-setup a { color: #dcc989; overflow-wrap: anywhere; }

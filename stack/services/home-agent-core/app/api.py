@@ -15,6 +15,7 @@ from .auth import (
     require_service_identity,
 )
 from .errors import (
+    AuthenticationError,
     CapabilityDisabledError,
     OptionalWorkSuspendedError,
     StorageReadOnlyDegradedError,
@@ -80,6 +81,7 @@ from .models import (
     VisitView,
 )
 from .phase2 import ControlledJourneyReference, Phase2GateInspector
+from .identity_capabilities import supports_identity_capability
 from .resources import inspect_disk_budget
 from .store import CoreStore
 
@@ -103,6 +105,8 @@ OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)
 
 
 PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
+# Historical adapter contract labels retained for existing integrations. The
+# reviewed compatibility matrix below controls HTTP capability admission.
 PRINCIPAL_BINDING_ADAPTER_REVISION = "0017_authenticated_binding_e5c"
 PARENT_RELATIONSHIP_ADAPTER_REVISION = "0021_parent_status_e5h"
 OWNER_PARTNER_ADAPTER_REVISION = "0030_relationship_vocabulary_e5q"
@@ -160,6 +164,8 @@ async def principal_from(
     service: Service,
     store: Store,
 ) -> dict[str, Any]:
+    if (service.ha_issuer_id, service.site_id) != ("home-assistant:echo", "echo"):
+        raise AuthenticationError("issuer-qualified linking is not enabled")
     return await store.resolve_principal(service.ha_user_id)
 
 
@@ -170,6 +176,8 @@ async def native_principal_from(
     service: NativeService,
     store: Store,
 ) -> dict[str, Any]:
+    if (service.ha_issuer_id, service.site_id) != ("home-assistant:echo", "echo"):
+        raise AuthenticationError("issuer-qualified linking is not enabled")
     return await store.resolve_principal(service.ha_user_id)
 
 
@@ -244,6 +252,7 @@ def semantic_router() -> APIRouter:
 
     @router.get("/onboarding/status", response_model=OnboardingStatusView)
     async def onboarding_status(
+        request: Request,
         service: Service,
         store: Store,
     ) -> OnboardingStatusView:
@@ -279,8 +288,12 @@ def semantic_router() -> APIRouter:
                 "enabled"
                 if (
                     binding_status == "bound"
-                    and store.settings.readiness_migration
-                    == PARENT_RELATIONSHIP_ADAPTER_REVISION
+                    and supports_identity_capability(
+                        store.settings.readiness_migration,
+                        "parent_relationship_confirmation",
+                    )
+                    and getattr(request.app.state, "parent_relationship_adapter", None)
+                    is not None
                 )
                 else "disabled"
             ),
@@ -322,9 +335,9 @@ def semantic_router() -> APIRouter:
         request: Request,
         service: Service,
     ) -> ParentRelationshipStatusView:
-        if (
-            request.app.state.settings.readiness_migration
-            != PARENT_RELATIONSHIP_ADAPTER_REVISION
+        if not supports_identity_capability(
+            request.app.state.settings.readiness_migration,
+            "parent_relationship_confirmation",
         ):
             raise CapabilityDisabledError(PARENT_RELATIONSHIP_CONFIRMATION_RETIRED)
         adapter = request.app.state.parent_relationship_adapter
@@ -345,9 +358,9 @@ def semantic_router() -> APIRouter:
         # The deployed 0006a image reaches this branch before reading the body.
         # Merely provisioning the dormant committer credential cannot activate
         # binding while the reviewed revision pin remains unchanged.
-        if (
-            request.app.state.settings.readiness_migration
-            != PRINCIPAL_BINDING_ADAPTER_REVISION
+        if not supports_identity_capability(
+            request.app.state.settings.readiness_migration,
+            "principal_binding_confirmation",
         ):
             raise CapabilityDisabledError(PRINCIPAL_BINDING_CONFIRMATION_RETIRED)
         store = request.app.state.operator_store
@@ -381,9 +394,9 @@ def semantic_router() -> APIRouter:
         request: Request,
         service: Service,
     ) -> ParentRelationshipPreviewView:
-        if (
-            request.app.state.settings.readiness_migration
-            != PARENT_RELATIONSHIP_ADAPTER_REVISION
+        if not supports_identity_capability(
+            request.app.state.settings.readiness_migration,
+            "parent_relationship_confirmation",
         ):
             raise CapabilityDisabledError(PARENT_RELATIONSHIP_CONFIRMATION_RETIRED)
         adapter = request.app.state.parent_relationship_adapter
@@ -411,9 +424,9 @@ def semantic_router() -> APIRouter:
         request: Request,
         service: Service,
     ) -> ParentRelationshipConfirmationView:
-        if (
-            request.app.state.settings.readiness_migration
-            != PARENT_RELATIONSHIP_ADAPTER_REVISION
+        if not supports_identity_capability(
+            request.app.state.settings.readiness_migration,
+            "parent_relationship_confirmation",
         ):
             raise CapabilityDisabledError(PARENT_RELATIONSHIP_CONFIRMATION_RETIRED)
         adapter = request.app.state.parent_relationship_adapter
@@ -693,9 +706,9 @@ def semantic_router() -> APIRouter:
     ) -> OwnerPersonView:
         # Not "/people": that path is the retired legacy identity import, and a
         # security boundary asserts the browser client never references it.
-        if (
-            request.app.state.settings.readiness_migration
-            != OWNER_PERSON_ADAPTER_REVISION
+        if not supports_identity_capability(
+            request.app.state.settings.readiness_migration,
+            "owner_person_creation",
         ):
             raise CapabilityDisabledError("adding a person is not deployed")
         adapter = getattr(request.app.state, "owner_person_adapter", None)
@@ -719,12 +732,11 @@ def semantic_router() -> APIRouter:
         request: Request,
         service: Service,
     ) -> OwnerPartnerAttestationView:
-        # Pinned to the revision that provisions the kernel's caller. Before
-        # that migration the GRANT does not exist, so the call would fail with
-        # a permission error rather than a capability message.
-        if (
-            request.app.state.settings.readiness_migration
-            != OWNER_PARTNER_ADAPTER_REVISION
+        # Admit only reviewed revisions retaining the current kernel signature,
+        # role and caller grants; a later schema alone grants no capability.
+        if not supports_identity_capability(
+            request.app.state.settings.readiness_migration,
+            "owner_relationship_attestation",
         ):
             raise CapabilityDisabledError(
                 "owner partner attestation is not deployed"

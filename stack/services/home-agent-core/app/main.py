@@ -15,6 +15,7 @@ from . import __version__
 from .api import ingest_router, semantic_router
 from .auth import (
     ATTESTED_NATIVE_CHANNEL,
+    legacy_issuer_claims_valid,
     native_installation_id_valid,
     require_bootstrap,
     require_native_service_identity,
@@ -126,6 +127,8 @@ def trusted_maintenance_gated_caller(request: Request, settings: Settings) -> bo
         ha_user_id = request.headers.get("x-authenticated-ha-user", "")
         if not ha_user_id or len(ha_user_id) > 64:
             return False
+        if not legacy_issuer_claims_valid(request, settings):
+            return False
         if requires_bootstrap:
             if settings.bootstrap_token is None or not hmac.compare_digest(
                 request.headers.get("x-home-agent-bootstrap", ""),
@@ -161,9 +164,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         level=getattr(logging, settings.log_level),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    database = Database(settings.async_database_url())
+    database = Database(settings.async_database_url(),
+                        pool_size=settings.database_pool_size,
+                        max_overflow=settings.database_max_overflow)
     operator_database = (
-        Database(settings.async_operator_database_url())
+        Database(settings.async_operator_database_url(),
+                 pool_size=settings.database_pool_size,
+                 max_overflow=settings.database_max_overflow)
         if settings.operator_database_url is not None
         and settings.role in {"api", "all"}
         else None

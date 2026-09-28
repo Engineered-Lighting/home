@@ -11,6 +11,7 @@ import {
   createAgentOrigin,
   filteredAgentCookies,
   safeRequestTarget,
+  STATIC_ASSETS,
 } from "../src/origin.mjs";
 import {
   hasDefaultIpv4Route,
@@ -21,6 +22,13 @@ const PUBLIC_ORIGIN = "https://agent.test:8443";
 const PUBLIC_HOST = "agent.test:8443";
 const UUID = "018f6f42-3a8b-7c11-8123-123456789abc";
 
+test("deployable image contains every asset required by origin readiness", () => {
+  const dockerfile=fs.readFileSync(new URL("../Dockerfile",import.meta.url),"utf8");
+  for(const [filename] of STATIC_ASSETS.values()) {
+    assert.ok(dockerfile.split(/\r?\n/).includes(`COPY --from=agent_assets ${filename} /srv/home-agent/${filename}`),filename);
+  }
+});
+
 function makeAssets() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "home-agent-origin-"));
   for (const [name, body] of [
@@ -28,6 +36,9 @@ function makeAssets() {
     ["api.js", "globalThis.api = true;"],
     ["panel.js", "globalThis.panel = true;"],
     ["panel.css", "body { color: white; }"],
+    ["preference-review.html", "<!doctype html><title>Preference review</title>"],
+    ["preference-review.js", "globalThis.preferenceReview = true;"],
+    ["preference-review.css", "body { color: white; }"],
   ]) fs.writeFileSync(path.join(root, name), body);
   return root;
 }
@@ -270,7 +281,7 @@ test("cookie filtering forwards only unambiguous Home Agent cookies", () => {
   assert.equal(filteredAgentCookies("__Host-home_agent=one; __Host-home_agent=two"), null);
 });
 
-test("origin serves only the four built Agent assets with hardened headers", async () => {
+test("origin serves only registered Agent assets with hardened headers", async () => {
   const f = await fixture((_req, res) => res.end());
   try {
     const page = await request(f.originPort, "/home-agent/");
@@ -306,7 +317,7 @@ test("deployment has pinned internal ingress and no host port or egress network"
   assert.doesNotMatch(compose, /^\s+volumes:/m);
   const dockerfile = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
   const assetCopies = dockerfile.match(/^COPY --from=agent_assets .+$/gm) || [];
-  assert.equal(assetCopies.length, 4);
+  assert.equal(assetCopies.length, 7);
   assert.doesNotMatch(dockerfile, /^COPY\s+\.\s/m);
 });
 
@@ -436,4 +447,60 @@ test("unsafe upstream redirects are converted to a generic failure", async () =>
   } finally {
     await f.cleanup();
   }
+});
+
+test("shared-link origin forwards exact browser bodies and strips claimed authority", async () => {
+  const f = await fixture((req, res, seen) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      seen.push({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString() });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"version":1}');
+    });
+  });
+  try {
+    const targets = [
+      ...["review", "confirm", "outcome", "start", "handoff", "issuance-outcome", "auth-begin", "auth-submit", "auth-outcome", "victoria-auth-admit", "victoria-auth-outcome", "prepare-review"].map(op => `/api/agent/shared-identity/${op}`),
+      ...["read", "propose", "confirm", "outcome", "sharing-propose", "sharing-confirm", "sharing-outcome"].map(op => `/api/agent/personal-memory/${op}`),
+    ];
+    for (const target of targets) {
+      const body = JSON.stringify({ ceremony_id: UUID });
+      assert.equal((await request(f.originPort, target, { method: "POST", body,
+        headers: { "Content-Type": "application/json" } })).status, 403);
+      const result = await request(f.originPort, target, { method: "POST", origin: PUBLIC_ORIGIN, body,
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": "csrf",
+          Cookie: "legacy=drop; __Host-home_agent=session", Authorization: "Bearer untrusted",
+          "X-Authenticated-Ha-User": "guest", "X-Authenticated-Home-Site": "victoria" } });
+      assert.equal(result.status, 200);
+      const received = f.seen.at(-1);
+      assert.equal(received.url, target);
+      assert.equal(received.body, body);
+      assert.equal(received.headers.cookie, "__Host-home_agent=session");
+      assert.equal(received.headers["x-csrf-token"], "csrf");
+      assert.equal(received.headers.authorization, undefined);
+      assert.equal(received.headers["x-authenticated-ha-user"], undefined);
+      assert.equal(received.headers["x-authenticated-home-site"], undefined);
+      assert.equal(result.headers["cache-control"], "no-store");
+    }
+    assert.equal(f.seen.length, targets.length);
+    for (const target of ["/api/agent/personal-memory/delete", "/api/agent/personal-memory/read/", "/api/agent/shared-identity/admin"]) {
+      assert.equal(browserApiRouteAllowed("POST", target), false);
+    }
+  } finally { await f.cleanup(); }
+});
+
+test("preference review preserves its opener without weakening the main Agent panel", async () => {
+  const f = await fixture((_req, res) => res.end());
+  try {
+    const review = await request(f.originPort, "/home-agent/preference-review.html");
+    assert.equal(review.status, 200);
+    assert.equal(review.headers["cross-origin-opener-policy"], "unsafe-none");
+    assert.equal(review.headers["cache-control"], "no-store");
+    assert.equal(review.headers["x-frame-options"], "DENY");
+    assert.match(review.headers["content-security-policy"], /frame-ancestors 'none'/);
+    const panel = await request(f.originPort, "/home-agent/");
+    assert.equal(panel.headers["cross-origin-opener-policy"], "same-origin");
+    assert.equal(f.seen.length, 0);
+  } finally { await f.cleanup(); }
 });

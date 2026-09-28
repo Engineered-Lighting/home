@@ -128,6 +128,7 @@
   <script src="./home-web-runtime.js"></script>
   <script src="./home-security.js"></script>
   <script src="./home-services.js"></script>
+  <script src="./home-connection-registry.js"></script>
 </head>
 <body>
   <div id="hg-boot-shell" data-phase="idle" aria-live="polite" aria-label="Home app loading">
@@ -207,6 +208,9 @@
         ['home-overlay.js', false],
         ['home-people-prewarm.js', false],
         ['home-tauri.jsx', true],
+        ['home-perception-lab-transport.js', false],
+        ['home-camera-query.js', false],
+        ['home-personal-memory.js', false],
         ['home-ha.jsx', true],
         ['home-icons.jsx', true],
         ['home-events.jsx', true],

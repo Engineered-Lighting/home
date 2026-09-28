@@ -50,6 +50,7 @@ PHASE3_OWNER_PARTNER_ACCESS_REVISION="0028_owner_partner_access_e5o"
 PHASE3_OWNER_PERSON_ROLE_REVISION="0029_owner_person_role_e5p"
 PHASE3_RELATIONSHIP_VOCABULARY_REVISION="0030_relationship_vocabulary_e5q"
 PHASE3_RELATIONSHIP_UNIQUENESS_REVISION="0031_relationship_uniqueness_e5r"
+PHASE3_PERSONAL_PREFERENCE_REVISION="0047_personal_pref_authority_v1"
 
 required_migration_target() {
   target="${HOME_AGENT_EXPECTED_DB_REVISION:-}"
@@ -100,7 +101,7 @@ role="${1:-${HOME_AGENT_ROLE:-api}}"
 
 if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ] && [ "$role" != "migrate" ]; then
   case "$role" in
-    phase3-migrate-*)
+    phase3-migrate-*|personal-memory-api|site-identity-api|link-coordinator-api)
       echo "phase3 migration cannot use automatic startup migration" >&2
       exit 78
       ;;
@@ -111,11 +112,39 @@ if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ] && [ "$role" != "migrate" ]; then
 fi
 
 case "$role" in
+  link-coordinator-api)
+    [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
+      echo "private link coordinator requires one command and the API role" >&2
+      exit 64
+    }
+    exec python -m app.shared_link_coordinator_server
+    ;;
+  site-identity-api)
+    [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
+      echo "private site identity listener requires one command and the API role" >&2
+      exit 64
+    }
+    exec python -m app.shared_identity_site_server
+    ;;
+  personal-memory-api)
+    [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
+      echo "private preference listener requires one command and the API role" >&2
+      exit 64
+    }
+    exec python -m app.personal_memory_server
+    ;;
   api|ingest|worker|all)
     exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port "${HOME_AGENT_PORT:-8104}" --workers 1
     ;;
   migrate)
     run_migration
+    ;;
+  phase3-migrate-personal-preferences)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 personal-preferences migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_PERSONAL_PREFERENCE_REVISION"
     ;;
   phase3-migrate-finalizer)
     [ "$#" -eq 1 ] || {

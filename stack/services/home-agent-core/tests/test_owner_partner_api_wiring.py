@@ -102,13 +102,16 @@ def test_the_document_digest_binds_the_partner_to_the_attester() -> None:
 
     ceremony, partner, other = _uuid7(), uuid.uuid4(), uuid.uuid4()
     base = _document_digest(
-        ha_user_id="ha-user-a", ceremony_id=ceremony, partner_person_id=partner
+        ha_user_id="ha-user-a", ceremony_id=ceremony, partner_person_id=partner,
+        subject_person_id=None, predicate="partner_of",
     )
     assert base != _document_digest(
-        ha_user_id="ha-user-a", ceremony_id=ceremony, partner_person_id=other
+        ha_user_id="ha-user-a", ceremony_id=ceremony, partner_person_id=other,
+        subject_person_id=None, predicate="partner_of",
     )
     assert base != _document_digest(
-        ha_user_id="ha-user-b", ceremony_id=ceremony, partner_person_id=partner
+        ha_user_id="ha-user-b", ceremony_id=ceremony, partner_person_id=partner,
+        subject_person_id=None, predicate="partner_of",
     )
     assert len(base) == 64
 
@@ -119,7 +122,8 @@ def test_the_route_is_pinned_to_a_settable_revision() -> None:
     person route pinned to a different one -- readiness_migration holds a
     single value, so at most one of them could ever be live.
 
-    Both now pin to the last revision in the series, which is a member.
+    Historical labels identify the first reviewed current contract; the explicit
+    capability matrix also admits the reviewed uniqueness-only successor.
     """
 
     from app.api import (
@@ -132,3 +136,5 @@ def test_the_route_is_pinned_to_a_settable_revision() -> None:
     assert "readiness_migration" in api
     assert OWNER_PARTNER_ADAPTER_REVISION == OWNER_PERSON_ADAPTER_REVISION
     assert OWNER_PARTNER_ADAPTER_REVISION in ReadinessMigration.__args__
+    assert '"owner_relationship_attestation"' in api
+    assert "supports_identity_capability(" in api

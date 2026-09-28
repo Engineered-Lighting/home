@@ -25,6 +25,23 @@ def native_installation_id_valid(value: str | None) -> bool:
 @dataclass(frozen=True, slots=True)
 class ServiceIdentity:
     ha_user_id: str
+    ha_issuer_id: str = "home-assistant:echo"
+    site_id: str = "echo"
+
+
+def legacy_issuer_claims_valid(request: Request, settings) -> bool:
+    """The legacy credential authenticates Echo only, never a claimed issuer.
+
+    Old BFFs omit both fields and retain their trusted Echo binding. Partial,
+    duplicate or different claims fail before any bare HA subject lookup.
+    """
+    if (settings.ha_issuer_id, settings.site_id) != ("home-assistant:echo", "echo"):
+        return False
+    issuers = request.headers.getlist("x-authenticated-ha-issuer")
+    sites = request.headers.getlist("x-authenticated-home-site")
+    if not issuers and not sites:
+        return True
+    return issuers == [settings.ha_issuer_id] and sites == [settings.site_id]
 
 
 def _bearer(authorization: str | None) -> str:
@@ -45,9 +62,13 @@ async def require_service_identity(
     expected = configured.get_secret_value()
     if not hmac.compare_digest(supplied, expected):
         raise AuthenticationError("invalid service credential")
+    if not legacy_issuer_claims_valid(request, request.app.state.settings):
+        raise AuthenticationError("issuer is outside this authority boundary")
     if not x_authenticated_ha_user or len(x_authenticated_ha_user) > 64:
         raise AuthenticationError("authenticated HA user is required")
-    return ServiceIdentity(ha_user_id=x_authenticated_ha_user)
+    return ServiceIdentity(ha_user_id=x_authenticated_ha_user,
+                           ha_issuer_id=request.app.state.settings.ha_issuer_id,
+                           site_id=request.app.state.settings.site_id)
 
 
 async def require_native_service_identity(
@@ -90,6 +111,8 @@ async def require_service_bearer(
         raise AuthenticationError("service authentication is disabled for this role")
     if not hmac.compare_digest(supplied, configured.get_secret_value()):
         raise AuthenticationError("invalid service credential")
+    if not legacy_issuer_claims_valid(request, request.app.state.settings):
+        raise AuthenticationError("issuer is outside this authority boundary")
 
 
 async def require_operator_bearer(
@@ -115,6 +138,8 @@ async def require_edge(
     expected = configured.get_secret_value()
     if not hmac.compare_digest(supplied, expected):
         raise AuthenticationError("invalid edge credential")
+    if not legacy_issuer_claims_valid(request, request.app.state.settings):
+        raise AuthenticationError("issuer is outside this authority boundary")
 
 
 async def require_bootstrap(

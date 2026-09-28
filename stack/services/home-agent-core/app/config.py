@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Every revision this image is able to migrate to, and therefore every
 # revision it is willing to serve. The values are the deployable default plus
-# the five Phase 3 stages declared by docker-entrypoint.sh, and a contract test
+# the fixed Phase 3 stages declared by docker-entrypoint.sh, and a contract test
 # keeps the two lists identical. Core still cannot promote itself: the value is
 # supplied by the deployment, an unlisted one fails Settings at startup, and
 # app.main refuses to start unless the live database is at exactly this
@@ -30,6 +30,7 @@ ReadinessMigration = Literal[
     "0029_owner_person_role_e5p",
     "0030_relationship_vocabulary_e5q",
     "0031_relationship_uniqueness_e5r",
+    "0047_personal_pref_authority_v1",
 ]
 
 
@@ -43,6 +44,8 @@ class Settings(BaseSettings):
     role: Literal["api", "ingest", "worker", "restore", "rollout", "all"] = "api"
     port: int = Field(default=8104, ge=1, le=65535)
     database_url: SecretStr
+    database_pool_size: int = Field(default=5, ge=1, le=5)
+    database_max_overflow: int = Field(default=5, ge=0, le=5)
     operator_database_url: SecretStr | None = None
     binding_commit_database_url: SecretStr | None = None
     runtime_spool_path: Path = Path("/runtime/runtime.sqlite")
@@ -59,6 +62,10 @@ class Settings(BaseSettings):
     restore_gate_cache_seconds: float = Field(default=1.0, ge=0, le=60)
     edge_token: SecretStr | None = Field(default=None, min_length=32)
     service_token: SecretStr | None = Field(default=None, min_length=32)
+    # Stable authority identity, independent of LAN/Tailscale transport. The
+    # current unqualified principal schema is provisioned only for Echo.
+    ha_issuer_id: Literal["home-assistant:echo"] = "home-assistant:echo"
+    site_id: Literal["echo"] = "echo"
     operator_token: SecretStr | None = Field(default=None, min_length=32)
     bootstrap_token: SecretStr | None = Field(default=None, min_length=32)
     policy_version: str = Field(

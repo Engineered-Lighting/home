@@ -36,6 +36,7 @@ FIXED_STAGES = {
     # guard only partner_of and parent_of had. Like the others it needs its own
     # fixed stage -- the generic migrator only deploys 0006a.
     "phase3-migrate-relationship-uniqueness": "0031_relationship_uniqueness_e5r",
+    "phase3-migrate-personal-preferences": "0047_personal_pref_authority_v1",
 }
 
 

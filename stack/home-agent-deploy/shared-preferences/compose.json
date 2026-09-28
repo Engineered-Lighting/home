@@ -9,7 +9,7 @@
       "profiles": [
         "shared-preferences"
       ],
-      "restart": "no",
+      "restart": "unless-stopped",
       "init": true,
       "user": "10001:10001",
       "read_only": true,
@@ -225,7 +225,7 @@
       "profiles": [
         "shared-preferences"
       ],
-      "restart": "no",
+      "restart": "unless-stopped",
       "init": true,
       "user": "10001:10001",
       "read_only": true,
@@ -333,7 +333,7 @@
       "profiles": [
         "shared-preferences"
       ],
-      "restart": "no",
+      "restart": "unless-stopped",
       "init": true,
       "user": "10001:10001",
       "read_only": true,
@@ -441,7 +441,7 @@
       "profiles": [
         "shared-preferences"
       ],
-      "restart": "no",
+      "restart": "unless-stopped",
       "init": true,
       "user": "10001:10001",
       "read_only": true,
@@ -550,7 +550,7 @@
       "profiles": [
         "shared-preferences"
       ],
-      "restart": "no",
+      "restart": "unless-stopped",
       "init": true,
       "user": "1000:1000",
       "read_only": true,

@@ -33,6 +33,9 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
         self.assertIn('".github/workflows/home-agent-web-boundary.yml"', self.source)
         self.assertIn('"stack/services/home-agent-bff/**"', self.source)
         self.assertIn('"stack/services/home-agent-origin/**"', self.source)
+        self.assertEqual(self.source.count('"app/src/home-connection-registry.js"'), 2)
+        self.assertEqual(self.source.count('"tools/run-home-agent-connection-tests.cjs"'), 2)
+        self.assertEqual(self.source.count('"tools/run-home-connection-tests.cjs"'), 2)
         self.assertIn('"stack/home-agent-deploy/agent-origin/**"', self.source)
         self.assertEqual(
             self.source.count('"tests/home_agent/test_panel_build_contract.py"'),
@@ -70,6 +73,7 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
             "--memory 256m",
             "--pids-limit 64",
             "node tools/build-home-agent-panel.js --check",
+            "node --test tools/run-home-agent-connection-tests.cjs tools/run-home-connection-tests.cjs",
             "node tools/run-home-security-tests.js",
             "node tools/run-native-agent-security-tests.js",
             "node tools/run-agent-origin-boundary-tests.mjs",
@@ -227,12 +231,15 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
             "!src/**",
         ]
         for service in ("home-agent-bff", "home-agent-origin"):
+            service_context = expected_context.copy()
+            if service == "home-agent-bff":
+                service_context.insert(4, "!victoria-link-server.mjs")
             directory = ROOT / "stack/services" / service
             dockerfile = (directory / "Dockerfile").read_text(encoding="utf-8")
             self.assertEqual(dockerfile.splitlines()[0], f"FROM {NODE_IMAGE}")
             self.assertEqual(
                 (directory / ".dockerignore").read_text(encoding="utf-8").splitlines(),
-                expected_context,
+                service_context,
             )
 
 

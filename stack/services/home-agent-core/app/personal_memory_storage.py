@@ -4,9 +4,9 @@ No HTTP route or credential is introduced here. Callers must authenticate the
 session, apply the Core maintenance/restore gate, and open a serializable
 transaction. Database permissions remain a separate deployment prerequisite.
 """
-import json
 import hmac
 import re
+from datetime import datetime
 from uuid import UUID
 
 from psycopg.types.range import Range
@@ -23,6 +23,35 @@ from .personal_memory_contract import (
 
 PREDICATE = "personal_preference.evening_lighting"
 KIND = "personal_preference.v1"
+
+
+def restore_preference_record(model, value):
+    """Decode our stored JSON fields without relaxing the public contract."""
+    fields = {
+        PreferenceProposalRequest: (("operation_id",), ()),
+        PreferenceAuthority: (("principal_id","person_id","link_id"), ("valid_until",)),
+        PreferenceReview: (("operation_id",), ("expires_at",)),
+    }
+    if model not in fields or type(value) is not dict:
+        raise ValueError("invalid retained preference record")
+    decoded = dict(value)
+    ids, times = fields[model]
+    for key in ids:
+        raw = decoded.get(key)
+        if type(raw) is not str or len(raw)!=36:
+            raise ValueError("invalid retained preference identifier")
+        parsed = UUID(raw)
+        if str(parsed)!=raw: raise ValueError("noncanonical retained preference identifier")
+        decoded[key] = parsed
+    for key in times:
+        raw = decoded.get(key)
+        if type(raw) is not str or len(raw)>64:
+            raise ValueError("invalid retained preference timestamp")
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("retained preference timestamp must be aware")
+        decoded[key] = parsed
+    return model.model_validate(decoded)
 
 
 class PersonalMemoryStorage:
@@ -105,10 +134,21 @@ class PersonalMemoryStorage:
     async def read(self, connection, authority):
         await self._admit(connection, authority, write=False)
         row, value, revision = await self._current(connection, authority)
+        source_site = None
+        if value is not None:
+            preview = (await connection.execute(select(schema.memory_transactions.c.preview).where(
+                schema.memory_transactions.c.transaction_id==row["memory_transaction_id"],
+                schema.memory_transactions.c.principal_id==authority.principal_id,
+                schema.memory_transactions.c.kind==KIND,
+            ))).scalar_one()
+            source_site = preview.get("source_site")
+            if source_site not in ("echo","victoria"):
+                raise ConflictError("preference provenance unavailable")
         # The caller must revalidate before delivering a response after this
         # transaction ends; the returned snapshot grants no subsequent access.
         return {"revision": revision, "preference": value,
-                "observed_at": row["committed_at"] if row else None}
+                "confirmed_at": row["committed_at"] if row else None,
+                "source":SOURCE,"source_site":source_site}
 
     async def propose(self, connection, authority, request):
         if type(request) is not PreferenceProposalRequest:
@@ -124,7 +164,7 @@ class PersonalMemoryStorage:
                 or candidate.get("request") != request.model_dump(mode="json")
                 or candidate.get("authority") != authority.model_dump(mode="json")):
                 raise ConflictError("preference operation already exists")
-            review = PreferenceReview.model_validate_json(json.dumps(existing["preview"]))
+            review = restore_preference_record(PreferenceReview,existing["preview"])
             if now >= review.expires_at:
                 raise ConflictError("preference review expired")
             return review
@@ -188,9 +228,9 @@ class PersonalMemoryStorage:
         if tx is None: raise NotFoundError("preference operation unavailable")
         if tx["state"] != "needs_confirmation" or tx["policy_digest"] != self.policy_digest:
             raise ConflictError("preference operation is no longer confirmable")
-        request = PreferenceProposalRequest.model_validate_json(json.dumps(tx["candidate"]["request"]))
-        retained = PreferenceAuthority.model_validate_json(json.dumps(tx["candidate"]["authority"]))
-        review = PreferenceReview.model_validate_json(json.dumps(tx["preview"]))
+        request = restore_preference_record(PreferenceProposalRequest,tx["candidate"]["request"])
+        retained = restore_preference_record(PreferenceAuthority,tx["candidate"]["authority"])
+        review = restore_preference_record(PreferenceReview,tx["preview"])
         if retained != authority:
             raise ForbiddenError("preference authority changed after review")
         old, current, revision = await self._current(connection, authority)

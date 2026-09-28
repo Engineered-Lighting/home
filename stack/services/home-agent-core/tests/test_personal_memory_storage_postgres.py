@@ -82,6 +82,12 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     assert await storage.propose(conn,authority,first[0]) == first[1]
                     assert (await confirm(first))["revision"]==1
                     assert (await storage.read(conn,authority))["preference"].value=="warm"
+                    victoria = PreferenceAuthority.model_validate({**authority.model_dump(),
+                        "issuer_id":"home-assistant:victoria","site_id":"victoria",
+                        "session_commitment":uuid4().hex*2})
+                    assert (await storage.read(conn,victoria))["preference"].value=="warm"
+                    wrong_owner = PreferenceAuthority.model_validate({**authority.model_dump(),"principal_id":uuid4()})
+                    with pytest.raises(ForbiddenError): await storage.read(conn,wrong_owner)
                     correction = await propose("correct",1,"cool")
                     competing = await propose("correct",1,"neutral")
                     assert (await confirm(correction))["revision"]==2
@@ -94,8 +100,9 @@ def test_preference_storage_correction_forgetting_and_relearning():
                     with pytest.raises(ConflictError): await propose("remember",0)
                     assert (await confirm(await propose("remember",3)))["revision"]==4
                     assert (await storage.read(conn,authority))["preference"].value=="warm"
-                    connection.execute(text("UPDATE identity.shared_source_grants SET revoked_at=clock_timestamp() WHERE source_id=:source"),{"source":SOURCE})
+                    connection.execute(text("UPDATE identity.shared_source_grants SET revoked_at=clock_timestamp() WHERE source_id=:source AND site_id='victoria' AND capability='memory.read'"),{"source":SOURCE})
                     with pytest.raises(ForbiddenError): await storage.read(conn,authority)
+                    with pytest.raises(ForbiddenError): await storage.read(conn,victoria)
 
                 asyncio.run(exercise())
             finally:

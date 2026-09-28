@@ -4211,7 +4211,7 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
         _assert_database_revision(state, phase, secrets_directory, clone, revision)
         _pytest(state, phase, secrets_directory,
                 nodes=[migration_test, "tests/test_shared_link_combined_runtime_postgres.py"]
-                    + (["tests/test_personal_preference_erasure.py", "tests/test_personal_preference_erasure_postgres.py", "tests/test_personal_memory_storage_postgres.py", "tests/test_ledger_versions.py"] if session_kernel else []),
+                    + (["tests/test_personal_preference_erasure.py", "tests/test_personal_preference_erasure_postgres.py", "tests/test_personal_memory_storage_records.py", "tests/test_personal_memory_storage_postgres.py", "tests/test_ledger_versions.py"] if session_kernel else []),
                 url_environment={url_env: clone,
                                  "TEST_PHASE3_IDENTITY_ERASURE_E1_ADMIN_DATABASE_URL": ADMIN_DATABASE},
                 environment={SENTINEL_ENV: state.sentinel, SYSTEM_ID_ENV: phase.system_identifier,

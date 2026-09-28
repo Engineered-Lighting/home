@@ -8,12 +8,12 @@ import { EchoLinkReview } from "./echo-link-review.mjs";
 // Authenticated Echo HTTP routes supply the actual sessionId after origin/CSRF.
 // Browser input supplies only a pairing handle and Victoria's one-use offer.
 export class EchoLinkStart {
-  #store; #config; #key; #journal; #handoff; #issuance; #ceremony; #review; #victoriaOrigin; #active = 0;
-  constructor({ store, config, commitmentKey, journal, handoff, issuance, ceremony, review, victoriaBrowserOrigin }) {
+  #store; #config; #key; #journal; #handoff; #issuance; #ceremony; #review; #victoriaOrigin; #fetch; #active = 0;
+  constructor({ store, config, commitmentKey, journal, handoff, issuance, ceremony, review, victoriaBrowserOrigin, fetchImpl = fetch }) {
     if (!(store instanceof SessionStore) || !store.hasSharedSessionRevocation ||
         store.siteId !== "echo" || store.haIssuerId !== "home-assistant:echo" ||
         !(journal instanceof SharedLinkPairingJournal) || !(handoff instanceof VictoriaHandoffClient) ||
-        !(issuance instanceof SharedLinkIssuanceClient) || !config) throw new Error("link_start_configuration_rejected");
+        !(issuance instanceof SharedLinkIssuanceClient) || !config || typeof fetchImpl !== "function") throw new Error("link_start_configuration_rejected");
     store.linkingContext("", commitmentKey);
     if (ceremony !== undefined && (!(ceremony instanceof EchoLinkCeremony) || !ceremony.usesGovernedStore(store))) throw new Error("link_start_configuration_rejected");
     if(review!==undefined && (!(review instanceof EchoLinkReview) || !review.usesStore(store))) throw new Error("link_start_configuration_rejected");
@@ -27,6 +27,8 @@ export class EchoLinkStart {
     this.#journal = journal; this.#handoff = handoff; this.#issuance = issuance;
     this.#ceremony = ceremony;
     this.#review=review;
+    // The legacy Echo session path verifies the HA subject with this fetch.
+    this.#fetch=fetchImpl;
   }
   get authenticationEnabled() { return Boolean(this.#ceremony); }
   get reviewEnabled() { return Boolean(this.#review && this.#ceremony); }
@@ -35,7 +37,7 @@ export class EchoLinkStart {
   async #context(sessionId) {
     const session = this.#store.get(sessionId);
     if (!session) throw new Error("link_session_unavailable");
-    await this.#store.revalidate(this.#config, sessionId, session, undefined, this.#store.now(), { forcePrincipalCheck: true });
+    await this.#store.revalidate(this.#config, sessionId, session, this.#fetch, this.#store.now(), { forcePrincipalCheck: true });
     const context = this.#store.linkingContext(sessionId, this.#key);
     if (!context) throw new Error("link_session_unavailable");
     return context;

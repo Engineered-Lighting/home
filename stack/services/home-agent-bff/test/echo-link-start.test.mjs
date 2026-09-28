@@ -36,8 +36,10 @@ function fixture(t, { unknown = false, revoke = false, authentication = false, r
   const store = new SessionStore(config), calls = [];
   const sessionId = store.retainLoginTokens({ accessToken: Buffer.from("access"), refreshToken: Buffer.from("refresh"), expiresIn: 600 });
   store.completeLogin(sessionId, { userId: "owner", isActive: true, haIssuerId: "home-assistant:echo", siteId: "echo" });
-  store.revalidate = async (configuration, id, session, _fetch, _now, options) => {
+  store.revalidate = async (configuration, id, session, fetchImpl, _now, options) => {
     assert.equal(configuration, config); assert.equal(id, sessionId); assert.equal(typeof options.forcePrincipalCheck, "boolean");
+    // Legacy (non-qualified) Echo sessions verify the HA subject with this fetch.
+    assert.equal(typeof fetchImpl, "function");
   };
   const journal = new SharedLinkPairingJournal({ databasePath: path.join(dir, "pairings.sqlite"), encryptionKey: crypto.randomBytes(32) });
   let victoriaAdmission;

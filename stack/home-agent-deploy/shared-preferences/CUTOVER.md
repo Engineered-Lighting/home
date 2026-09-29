@@ -2,9 +2,9 @@
 
 This moves the Echo Agent origin off `home-app`, activates the account-linking
 runtime in the BFF, and starts the Victoria linking service. Run it in one
-Lab-acknowledged window, and complete it before any owner sign-in. Every
-BFF or victoria-link restart cancels linking and preference authority for
-restored sessions.
+Lab-acknowledged window, and complete it before any owner sign-in. Since
+2026-09-29 a BFF or victoria-link restart keeps sessions that were already
+linked; only restored sessions without a linked record must sign in again.
 
 ## Prerequisites
 

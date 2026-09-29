@@ -215,12 +215,13 @@ then `probe`. The probe reports `listener_not_running`. Do not start it.
 
 **3. `victoria-link-ingress`, last, at a time the owner chooses.**
 
-> **Restarting victoria-link or the BFF ends account-linking use for every
-> existing session.** The page still shows the owner signed in, but linking
-> and preference authority no longer work. The owner must **Sign out** and sign
-> in again at `echo-agent` and at `victoria-agent`; a reload is not enough.
-> Restarting the Core listeners (identity, coordinator, preferences) has no
-> such effect. Leaf renewal never restarts the BFF.
+> **Restarting victoria-link or the BFF keeps sessions that were already
+> linked** (owner decision, 2026-09-29): linking and preference authority keep
+> working after the restart. Only a session restored without a linked record,
+> such as one from a backup taken before linking, must **Sign out** and sign in
+> again before it can link. Restarting the Core listeners (identity,
+> coordinator, preferences) has no effect on sessions. Leaf renewal never
+> restarts the BFF.
 
 ```sh
 sudo touch /run/tailscale-origin-hold          # keep the Victoria cert helper from restarting it mid-sign-in
@@ -273,8 +274,8 @@ its own reviewed change, because every client's trust must change:
 
 1. Create a new CA in a new root-only directory, keeping the old one.
 2. Put an old-plus-new bundle in both BFF `internal-ca.crt` copies and every
-   Core `config/ca.crt`. Restart the BFF and victoria-link; this ends linking
-   sessions, so the owner signs out and in again.
+   Core `config/ca.crt`. Restart the BFF and victoria-link; linked sessions
+   keep working.
 3. Reissue each leaf from the new CA, one listener at a time, probing each.
 4. After every leaf has moved, remove the old CA from the bundles, restart
    again, and retire the old authority.

@@ -1298,7 +1298,10 @@ class SessionStore {
         state = "revocation_pending";
       }
       const id = String(row.id || "");
-      if (this.#sharedRevocation) this.#restoredSharedSessions.add(id);
+      // A session already linked before the restart keeps linking (owner
+      // decision). One restored without an armed record, such as a snapshot
+      // taken before linking, still needs a new login before it may link.
+      if (this.#sharedRevocation && !this.#sharedRevocation.armed(id)) this.#restoredSharedSessions.add(id);
       if (this.#sharedRevocation?.retired(id) && state === "active") state = "revocation_pending";
       const session = {
         principal,

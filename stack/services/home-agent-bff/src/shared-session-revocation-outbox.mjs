@@ -33,9 +33,12 @@ export class SharedSessionRevocationOutbox {
         attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0);`);
       const fingerprint=crypto.createHmac("sha256",this.#key).update(JSON.stringify(["shared-session-outbox-v1",issuer])).digest("hex");
       db.prepare("INSERT OR IGNORE INTO bff_shared_revocation_binding VALUES(1,?,?)").run(issuer,fingerprint);
-      // A crashed process may have failed to persist a logout. Retire all
-      // sessions used for linking on restart; ordinary HA-only sessions survive.
-      db.exec("UPDATE bff_shared_revocation SET state='pending' WHERE state='armed'; COMMIT");
+      // Owner decision (single-owner install): linked sessions survive a BFF
+      // restart instead of forcing a new sign-in after every deploy. Logout
+      // moves a session to 'pending' in the same transaction as its local
+      // state, so a completed logout is never lost; only a logout interrupted
+      // mid-transaction could leave the Core commitment live until expiry.
+      db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); this.#key.fill(0); throw error; }
   }
   arm(id, key) {
@@ -54,6 +57,10 @@ export class SharedSessionRevocationOutbox {
       this.#db.exec("COMMIT");
     } catch (error) { this.#db.exec("ROLLBACK"); throw error; }
     return commitment;
+  }
+  armed(id) {
+    const row=this.#db.prepare("SELECT state FROM bff_shared_revocation WHERE session_id=?").get(id);
+    return !!row && row.state === "armed";
   }
   retired(id) {
     const row=this.#db.prepare("SELECT state FROM bff_shared_revocation WHERE session_id=?").get(id);

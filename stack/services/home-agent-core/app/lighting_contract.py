@@ -8,13 +8,12 @@ No scenes, scripts, groups or other domains are representable.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator, model_validator
-
-from .personal_memory_contract import Contract
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SOURCE = "core.lighting.v1"
 CAPABILITY = "lighting.execute"
@@ -32,15 +31,27 @@ def _brightness(operation, brightness):
         raise ValueError("brightness must be 1-100")
 
 
+class Contract(BaseModel):
+    """Strict, frozen, closed lighting contract.
+
+    Unlike the preference ``Contract``, the integer-version check is a field
+    validator: a model-level ``before`` validator would switch nested JSON
+    validation to Python mode, where strict tuples reject JSON arrays and
+    strict UUIDs reject strings.
+    """
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    @field_validator("version", mode="before", check_fields=False)
+    @classmethod
+    def integer_version(cls, value):
+        if type(value) is not int:
+            raise ValueError("integer contract version required")
+        return value
+
+
 def from_wire(model, value):
-    """Validate decoded JSON. The strict contracts accept tuples, not JSON arrays."""
-    def tuples(item):
-        if isinstance(item, list):
-            return tuple(tuples(element) for element in item)
-        if isinstance(item, dict):
-            return {key: tuples(element) for key, element in item.items()}
-        return item
-    return model.model_validate(tuples(value))
+    """Validate decoded JSON (a dict from json.loads) in JSON mode."""
+    return model.model_validate_json(json.dumps(value))
 
 
 class LightingProposalRequest(Contract):

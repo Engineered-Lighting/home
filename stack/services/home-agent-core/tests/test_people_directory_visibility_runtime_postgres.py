@@ -857,52 +857,61 @@ async def test_every_person_to_person_predicate_is_read_under_the_same_filter() 
     or edge-blocked person at either end is not.
 
     Symmetric predicates are seeded as the kernel writes them, one edge each
-    way, so each direction is checked on its own.
+    way, so each direction is checked on its own. parent_of reuses the
+    household's own four edges: uq_active_relationship admits one active edge
+    per (subject, predicate, object, perspective), and those four already
+    cover a visible pair, a directed person at each end, and a blocked
+    subject.
     """
 
     predicates = get_args(RelationshipPredicate)
     assert "parent_of" in predicates
     assert "place_social_descriptor" not in predicates
+    symmetric = [predicate for predicate in predicates if predicate != "parent_of"]
 
     async with _store() as store, _seeded_household(store) as household:
-        # fact_id -> (predicate, subject, object). Seeded under the household's
-        # memory transaction so its teardown removes them with the rest.
-        visible: dict[uuid.UUID, tuple[str, uuid.UUID, uuid.UUID]] = {}
-        hidden: dict[uuid.UUID, tuple[str, uuid.UUID, uuid.UUID]] = {}
-
-        def pairs(
-            left: uuid.UUID, right: uuid.UUID, predicate: str
-        ) -> list[tuple[uuid.UUID, uuid.UUID]]:
-            if predicate == "parent_of":
-                return [(left, right)]
-            return [(left, right), (right, left)]
-
-        for predicate in predicates:
-            for subject_id, object_id in pairs(
-                household.self_person_id, household.peer_person_id, predicate
+        # fact_id -> (predicate, subject, object).
+        visible: dict[uuid.UUID, tuple[str, uuid.UUID, uuid.UUID]] = {
+            household.edge_peer_parent_of_self: (
+                "parent_of", household.peer_person_id, household.self_person_id
+            ),
+        }
+        hidden: dict[uuid.UUID, tuple[str, uuid.UUID, uuid.UUID]] = {
+            household.edge_directed_is_subject: (
+                "parent_of", household.directed_person_id, household.peer_person_id
+            ),
+            household.edge_directed_is_object: (
+                "parent_of", household.peer_person_id, household.directed_person_id
+            ),
+            household.edge_blocked_is_subject: (
+                "parent_of", household.blocked_person_id, household.self_person_id
+            ),
+        }
+        # Only these are new rows. They go under the household's memory
+        # transaction so its teardown removes them with the rest.
+        seeded: dict[uuid.UUID, tuple[str, uuid.UUID, uuid.UUID]] = {}
+        for predicate in symmetric:
+            for left, right, bucket in (
+                (household.self_person_id, household.peer_person_id, visible),
+                # A hidden person paired with each visible one. Both
+                # directions are stored, so the hidden person is the subject
+                # of one edge and the object of the other: a filter applied
+                # to one end only must fail here.
+                (household.directed_person_id, household.peer_person_id, hidden),
+                (household.blocked_person_id, household.self_person_id, hidden),
             ):
-                visible[uuid7()] = (predicate, subject_id, object_id)
-            for other in (
-                household.directed_person_id,
-                household.blocked_person_id,
-            ):
-                # The hidden person at each end in turn, for every predicate:
-                # a filter applied to one end only must fail here.
-                for subject_id, object_id in (
-                    (other, household.peer_person_id),
-                    (household.self_person_id, other),
-                ):
-                    hidden[uuid7()] = (predicate, subject_id, object_id)
+                for subject_id, object_id in ((left, right), (right, left)):
+                    fact_id = uuid7()
+                    bucket[fact_id] = seeded[fact_id] = (
+                        predicate, subject_id, object_id
+                    )
 
         now = datetime.now(UTC)
         async with store.database.transaction(
             principal_id=household.principal["principal_id"],
             serializable=True,
         ) as connection:
-            for fact_id, (predicate, subject_id, object_id) in {
-                **visible,
-                **hidden,
-            }.items():
+            for fact_id, (predicate, subject_id, object_id) in seeded.items():
                 await connection.execute(
                     insert(schema.fact_versions).values(
                         **_fact(

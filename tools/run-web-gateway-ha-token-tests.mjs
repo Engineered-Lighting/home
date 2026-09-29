@@ -269,11 +269,19 @@ async function main() {
     children.push(second.child);
     assert("asset version is stable across restarts", second.health.assetVersion === first.health.assetVersion,
       [first.health.assetVersion, second.health.assetVersion]);
-    fs.writeFileSync(probe, "changed shell content\n");
-    const third = await startGateway(baseEnv);
-    children.push(third.child);
-    assert("asset version changes when shell content changes", third.health.assetVersion !== first.health.assetVersion,
-      [first.health.assetVersion, third.health.assetVersion]);
+    let probeWritten = false;
+    try { fs.writeFileSync(probe, "changed shell content\n"); probeWritten = true; }
+    catch (error) {
+      // The hosted gate mounts the checkout read-only; this check runs locally.
+      if (!["EROFS", "EACCES", "EPERM"].includes(error.code)) throw error;
+      process.stdout.write("  SKIP  asset version changes when shell content changes (read-only checkout)\n");
+    }
+    if (probeWritten) {
+      const third = await startGateway(baseEnv);
+      children.push(third.child);
+      assert("asset version changes when shell content changes", third.health.assetVersion !== first.health.assetVersion,
+        [first.health.assetVersion, third.health.assetVersion]);
+    }
 
     if (process.platform !== "win32") {
       fs.chmodSync(tokenFile, 0o644);

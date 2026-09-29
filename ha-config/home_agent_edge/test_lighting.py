@@ -304,6 +304,11 @@ class LightingTests(unittest.TestCase):
             {"entity_id": "light.porch", "name": "Porch", "state": "off", "brightness_pct": None, "dimmable": False},
         ])
 
+    def test_signature_matches_the_core_client_vector(self) -> None:
+        # The same vector is asserted in the Core client tests (test_lighting_kernel.py).
+        self.assertEqual(EXECUTE_URL, "/api/home_agent_edge/lighting/v1/execute")
+        self.assertEqual(sign(bytes.fromhex("ab" * 32), EXECUTE_URL, b'{"version":1}'), "032530b2b4433cff16b0a80d9716dca6291fc15ccfbd40fb5467f296b021147b")
+
     def test_duplicate_keys_and_oversized_bodies_are_refused(self) -> None:
         h = self.harness()
         body = b'{"version":1,"version":1,"site_id":"victoria","issued_at":%d}' % NOW

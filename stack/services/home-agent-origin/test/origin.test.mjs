@@ -39,6 +39,8 @@ function makeAssets() {
     ["preference-review.html", "<!doctype html><title>Preference review</title>"],
     ["preference-review.js", "globalThis.preferenceReview = true;"],
     ["preference-review.css", "body { color: white; }"],
+    ["lighting-review.html", "<!doctype html><title>Lighting review</title>"],
+    ["lighting-review.js", "globalThis.lightingReview = true;"],
   ]) fs.writeFileSync(path.join(root, name), body);
   return root;
 }
@@ -332,7 +334,7 @@ test("deployment has pinned internal ingress and no host port or egress network"
   assert.doesNotMatch(compose, /^\s+volumes:/m);
   const dockerfile = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
   const assetCopies = dockerfile.match(/^COPY --from=agent_assets .+$/gm) || [];
-  assert.equal(assetCopies.length, 7);
+  assert.equal(assetCopies.length, 9);
   assert.doesNotMatch(dockerfile, /^COPY\s+\.\s/m);
 });
 
@@ -478,6 +480,7 @@ test("shared-link origin forwards exact browser bodies and strips claimed author
     const targets = [
       ...["review", "confirm", "outcome", "start", "handoff", "issuance-outcome", "auth-begin", "auth-submit", "auth-outcome", "victoria-auth-admit", "victoria-auth-outcome", "prepare-review"].map(op => `/api/agent/shared-identity/${op}`),
       ...["read", "propose", "confirm", "outcome", "sharing-propose", "sharing-confirm", "sharing-outcome"].map(op => `/api/agent/personal-memory/${op}`),
+      ...["status", "propose", "confirm", "outcome", "consent-propose", "consent-confirm", "consent-outcome"].map(op => `/api/agent/lighting/${op}`),
     ];
     for (const target of targets) {
       const body = JSON.stringify({ ceremony_id: UUID });
@@ -499,7 +502,8 @@ test("shared-link origin forwards exact browser bodies and strips claimed author
       assert.equal(result.headers["cache-control"], "no-store");
     }
     assert.equal(f.seen.length, targets.length);
-    for (const target of ["/api/agent/personal-memory/delete", "/api/agent/personal-memory/read/", "/api/agent/shared-identity/admin"]) {
+    for (const target of ["/api/agent/personal-memory/delete", "/api/agent/personal-memory/read/", "/api/agent/shared-identity/admin",
+      "/api/agent/lighting/execute", "/api/agent/lighting/propose/"]) {
       assert.equal(browserApiRouteAllowed("POST", target), false);
     }
   } finally { await f.cleanup(); }
@@ -518,7 +522,12 @@ test("only the preference review may be framed, and only by provisioned Home ori
     assert.match(csp, /(^|; )frame-ancestors https:\/\/home\.test(;|$)/);
     assert.match(csp, /default-src 'none'/);
     assert.match(csp, /frame-src 'none'/);
-    for (const asset of ["/home-agent/", "/home-agent/preference-review.js", "/home-agent/preference-review.css", "/home-agent/api.js"]) {
+    const lighting = await request(f.originPort, "/home-agent/lighting-review.html");
+    assert.equal(lighting.status, 200);
+    assert.equal(lighting.headers["x-frame-options"], undefined);
+    assert.match(lighting.headers["content-security-policy"], /(^|; )frame-ancestors https:\/\/home\.test(;|$)/);
+    for (const asset of ["/home-agent/", "/home-agent/preference-review.js", "/home-agent/preference-review.css",
+      "/home-agent/lighting-review.js", "/home-agent/api.js"]) {
       const other = await request(f.originPort, asset);
       assert.equal(other.headers["x-frame-options"], "DENY", asset);
       assert.match(other.headers["content-security-policy"], /frame-ancestors 'none'/, asset);
@@ -528,7 +537,9 @@ test("only the preference review may be framed, and only by provisioned Home ori
   } finally { await f.cleanup(); }
   const closed = await fixture((_req, res) => res.end());
   try {
-    const review = await request(closed.originPort, "/home-agent/preference-review.html");
-    assert.match(review.headers["content-security-policy"], /frame-ancestors 'none'/);
+    for (const page of ["/home-agent/preference-review.html", "/home-agent/lighting-review.html"]) {
+      const review = await request(closed.originPort, page);
+      assert.match(review.headers["content-security-policy"], /frame-ancestors 'none'/, page);
+    }
   } finally { await closed.cleanup(); }
 });

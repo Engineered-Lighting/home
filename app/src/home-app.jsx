@@ -7304,7 +7304,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // Phase 7 destructive guard: the armed clear card was confirmed —
       // perform the wipe that Ctrl+L / /clear used to run instantly.
       stopStreaming();
-      window.HomePersonalMemory?.reset();
+      window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
       window.HomeCameraQuery?.reset({privateData:true});
       clearedEventsRef.current = eventsSnapshotRef.current.filter(
         (e) => !(e.kind === "action" && e.service === "home.clear_conversation")
@@ -9205,7 +9205,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const conversationHomeRef = useRef(conversationHome);
   const selectConversationHome = useCallback((next) => {
     if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
-    window.HomePersonalMemory?.reset();
+    window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
     conversationHomeRef.current = next;
     setConversationHome(next);
     cameraQueryGenerationRef.current++;
@@ -9215,7 +9215,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const cameraEndpointRef = useRef(endpoint);
   useEffect(() => {
     const clear = () => {
-      window.HomePersonalMemory?.reset();
+      window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
       cameraQueryGenerationRef.current += 1;
       window.HomeCameraQuery?.reset({privateData:true});
       clearedEventsRef.current = null;
@@ -9235,14 +9235,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if(next===site) return;
       site=next;
       if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
-      window.HomePersonalMemory?.reset();
+      window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
       conversationHomeRef.current=next;setConversationHome(next);
       cameraQueryGenerationRef.current++;
       window.HomeCameraQuery?.reset();
     });
   }, []);
   const clearPrivateCameraContext = useCallback(() => {
-    window.HomePersonalMemory?.reset();
+    window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
     cameraQueryGenerationRef.current++;
     window.HomeCameraQuery?.reset({privateData:true});
     clearedEventsRef.current=null;
@@ -9304,6 +9304,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const cameraQueryClient = haClientRef.current;
     const cameraQueryGeneration = cameraQueryGenerationRef.current;
     if (window.HomePersonalMemory?.run(text, {addEvent,
+      isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
+    })) {
+      window.HomeCameraQuery?.reset();
+      return;
+    }
+    // Explicit cross-home lighting: only commands that name a home (or any
+    // command in the Victoria view) are reviewed here; the rest continue below.
+    if (window.HomeLightingControl?.run(text, {addEvent, viewedHome: conversationHomeRef.current,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
     })) {
       window.HomeCameraQuery?.reset();

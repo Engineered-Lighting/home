@@ -27,7 +27,7 @@ class CrossHomeGuardTests(unittest.TestCase):
             self.assertIsNone(guard.cross_home_action_reply(text), text)
 
     def test_the_reply_points_to_confirmed_lighting_in_home(self) -> None:
-        self.assertIn("confirm", guard.REPLY)
+        self.assertIn("Home chat", guard.REPLY)
         self.assertIn("Victoria", guard.REPLY)
 
 

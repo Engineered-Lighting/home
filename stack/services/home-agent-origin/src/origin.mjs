@@ -14,10 +14,14 @@ const STATIC_ASSETS = new Map([
   ["/home-agent/preference-review.html", ["preference-review.html", "text/html; charset=utf-8", "no-store"]],
   ["/home-agent/preference-review.js", ["preference-review.js", "text/javascript; charset=utf-8", "private, no-cache"]],
   ["/home-agent/preference-review.css", ["preference-review.css", "text/css; charset=utf-8", "private, no-cache"]],
+  ["/home-agent/lighting-review.html", ["lighting-review.html", "text/html; charset=utf-8", "no-store"]],
+  ["/home-agent/lighting-review.js", ["lighting-review.js", "text/javascript; charset=utf-8", "private, no-cache"]],
   // Home's Geist faces, so the inline review card matches the Home chat.
   ["/home-agent/geist-latin.woff2", ["geist-latin.woff2", "font/woff2", "private, max-age=86400"]],
   ["/home-agent/geist-mono-latin.woff2", ["geist-mono-latin.woff2", "font/woff2", "private, max-age=86400"]],
 ]);
+// The inline reviews Home may frame, and nothing else.
+const FRAMEABLE_REVIEWS = new Set(["preference-review.html", "lighting-review.html"]);
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const BROWSER_API_ROUTES = Object.freeze([
   ["POST", /^\/api\/agent\/auth\/start$/],
@@ -29,6 +33,7 @@ const BROWSER_API_ROUTES = Object.freeze([
   ["POST", /^\/api\/agent\/shared-identity\/outcome$/],
   ["POST", /^\/api\/agent\/shared-identity\/(start|handoff|issuance-outcome|auth-begin|auth-submit|auth-outcome|victoria-auth-admit|victoria-auth-outcome|prepare-review)$/],
   ["POST", /^\/api\/agent\/personal-memory\/(read|propose|confirm|outcome|sharing-propose|sharing-confirm|sharing-outcome)$/],
+  ["POST", /^\/api\/agent\/lighting\/(status|propose|confirm|outcome|consent-propose|consent-confirm|consent-outcome)$/],
   ["GET", /^\/api\/agent\/v1\/onboarding\/status$/],
   ["GET", /^\/api\/agent\/v1\/principal-binding-proposal$/],
   ["POST", /^\/api\/agent\/v1\/principal-binding-request$/],
@@ -158,9 +163,9 @@ function configFromEnv(env = process.env) {
   });
 }
 
-// The preference review renders inline in the Home chat, so only that page may
-// be framed, and only by the provisioned Home origins. Every other Agent page
-// keeps frame-ancestors 'none' and X-Frame-Options DENY.
+// The preference and lighting reviews render inline in the Home chat, so only
+// those pages may be framed, and only by the provisioned Home origins. Every
+// other Agent page keeps frame-ancestors 'none' and X-Frame-Options DENY.
 function preferenceReviewHeaders(config) {
   const { "X-Frame-Options": _denied, ...headers } = STATIC_SECURITY_HEADERS;
   const ancestors = config.preferenceFrameAncestors.length ? config.preferenceFrameAncestors.join(" ") : "'none'";
@@ -252,7 +257,7 @@ function serveStatic(req, res, config, url) {
     return;
   }
   res.writeHead(200, {
-    ...(filename === "preference-review.html" ? preferenceReviewHeaders(config) : STATIC_SECURITY_HEADERS),
+    ...(FRAMEABLE_REVIEWS.has(filename) ? preferenceReviewHeaders(config) : STATIC_SECURITY_HEADERS),
     "Cache-Control": cacheControl,
     "Content-Type": contentType,
     "Content-Length": body.length,

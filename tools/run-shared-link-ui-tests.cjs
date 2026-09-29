@@ -169,7 +169,7 @@ const screenshot = path.join(root, ".tmp/shared-link-review.png");
       const confirm=page.getByRole("button",{name:"Confirm lighting control",exact:true});
       assert.equal(await confirm.isDisabled(),true);
       assert.equal(calls.some(c=>c.path.endsWith("lighting/consent-confirm")),false);
-      await page.getByRole("checkbox",{name:"Allow Home to switch these lights after I confirm each change."}).check();
+      await page.getByRole("checkbox",{name:"Allow Home to switch these lights when I ask."}).check();
       const card=page.locator(".agent-lighting-consent");
       assert.equal(await card.evaluate(node=>node.scrollWidth<=node.clientWidth),true);
       await card.screenshot({path:path.join(root,".tmp/lighting-consent-mobile.png")});

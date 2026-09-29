@@ -348,7 +348,7 @@ function LightingConsent({ api }) {
   }
   return <section className="agent-card agent-lighting-consent" aria-busy={busy}>
     <h2>Lighting control between homes</h2>
-    <p>Choose whether Home can switch your allowlisted lights in Los Angeles and Victoria. Every change still waits for your confirmation in the chat.</p>
+    <p>Choose whether Home can switch your allowlisted lights in Los Angeles and Victoria when you ask in the chat.</p>
     <div role="status" aria-live="polite">
       {busy && <p>{status === "loading" ? "Preparing your lighting review..." : status === "confirming" ? "Confirming lighting control..." : "Checking the original confirmation..."}</p>}
       {status === "unavailable" && <p>Lighting setup is unavailable. Check that both accounts are linked and you are signed in.</p>}
@@ -361,7 +361,7 @@ function LightingConsent({ api }) {
     {status === "review" && review && <>
       <p>Applies to Los Angeles and Victoria until {new Date(review.grants_expire_at).toLocaleString()}.</p>
       <p>Only on, off and brightness for lights you allowlisted in each home. It does not unlock doors, run scenes or change other devices.</p>
-      <label><input type="checkbox" checked={checked} disabled={expired || busy} onChange={event => setChecked(event.target.checked)} /> Allow Home to switch these lights after I confirm each change.</label>
+      <label><input type="checkbox" checked={checked} disabled={expired || busy} onChange={event => setChecked(event.target.checked)} /> Allow Home to switch these lights when I ask.</label>
       <p><button disabled={!checked || expired || busy} onClick={event => { if (event.nativeEvent.isTrusted) perform("confirm"); }}>Confirm lighting control</button></p>
       {expired && <button onClick={() => perform("propose")}>Get a new review</button>}
     </>}

@@ -64,8 +64,70 @@ function deriveRelationshipType(personId, isSelf, edges) {
   }
 }
 
-// Same-origin: the web gateway serves this app and proxies /api/agent to the
-// BFF, so the browser session cookie applies and no CORS is involved.
+// The household lives on the Home Agent's own origin. A same-origin read works
+// where the gateway still shares the Agent cookie; otherwise the invisible,
+// read-only People bridge on the Agent origin reads it with the owner's Agent
+// session and hands it back to this page (owner decision, 2026-09-29).
+const PEOPLE_BRIDGE_TIMEOUT_MS = 15000;
+
+function peopleBridgeOrigin() {
+  try {
+    const url = new URL(String(window.HG_AGENT_ORIGIN || ""));
+    return url.protocol === "https:" && url.origin === window.HG_AGENT_ORIGIN &&
+      url.origin !== window.location.origin ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function fetchHouseholdViaBridge(origin, signal) {
+  return new Promise((resolve, reject) => {
+    const nonce = window.crypto.randomUUID().replace(/-/g, "");
+    const frame = document.createElement("iframe");
+    frame.src = `${origin}/home-agent/people-bridge.html#${nonce}`;
+    frame.title = "People bridge";
+    frame.referrerPolicy = "no-referrer";
+    frame.setAttribute("aria-hidden", "true");
+    frame.tabIndex = -1;
+    frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
+    let timer, poll;
+    const finish = (fn, value) => {
+      clearTimeout(timer); clearInterval(poll);
+      window.removeEventListener("message", receive);
+      signal?.removeEventListener("abort", aborted);
+      frame.remove();
+      fn(value);
+    };
+    const fail = (message, status = null) => {
+      const error = new Error(message);
+      error.status = status;
+      finish(reject, error);
+    };
+    const receive = (event) => {
+      const value = event.data;
+      if (event.origin !== origin || event.source !== frame.contentWindow || !value ||
+          value.version !== 1 || value.type !== "home.people.result" || value.nonce !== nonce) return;
+      if (value.status === "ok" && Array.isArray(value.household?.people)) {
+        finish(resolve, { household: value.household, relationships: value.relationships || { relationships: [] } });
+      } else if (value.status === "signed_out") {
+        fail("agent_household_401", 401);
+      } else {
+        fail(`agent_household_${value.http_status || "bridge"}`, value.http_status || null);
+      }
+    };
+    const aborted = () => fail("aborted");
+    window.addEventListener("message", receive);
+    signal?.addEventListener("abort", aborted, { once: true });
+    timer = setTimeout(() => fail("agent_household_bridge_timeout"), PEOPLE_BRIDGE_TIMEOUT_MS);
+    // The bridge answers only after it has checked its session, so repeat the
+    // request until it does (it answers once).
+    poll = setInterval(() => {
+      frame.contentWindow?.postMessage({ version: 1, type: "home.people.request", nonce }, origin);
+    }, 400);
+    document.body.appendChild(frame);
+  });
+}
+
 async function fetchAgentHousehold(signal) {
   const request = (path) =>
     fetch(path, {
@@ -75,21 +137,27 @@ async function fetchAgentHousehold(signal) {
       signal,
     });
 
+  let household, relationships;
   const [householdResponse, relationshipsResponse] = await Promise.all([
     request("/api/agent/v1/household"),
     request("/api/agent/v1/relationships"),
   ]);
-  if (!householdResponse.ok) {
-    const error = new Error(`agent_household_${householdResponse.status}`);
-    error.status = householdResponse.status;
-    throw error;
+  const bridgeOrigin = peopleBridgeOrigin();
+  if (!householdResponse.ok && [401, 404].includes(householdResponse.status) && bridgeOrigin) {
+    ({ household, relationships } = await fetchHouseholdViaBridge(bridgeOrigin, signal));
+  } else {
+    if (!householdResponse.ok) {
+      const error = new Error(`agent_household_${householdResponse.status}`);
+      error.status = householdResponse.status;
+      throw error;
+    }
+    household = await householdResponse.json();
+    // Relationships are perspective-filtered and may legitimately be refused
+    // while the roster is readable. An empty edge list is a valid household.
+    relationships = relationshipsResponse.ok
+      ? await relationshipsResponse.json()
+      : { relationships: [] };
   }
-  const household = await householdResponse.json();
-  // Relationships are perspective-filtered and may legitimately be refused
-  // while the roster is readable. An empty edge list is a valid household.
-  const relationships = relationshipsResponse.ok
-    ? await relationshipsResponse.json()
-    : { relationships: [] };
 
   const edges = (relationships.relationships || []).map((edge) => ({
     id: edge.fact_id,

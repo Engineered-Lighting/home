@@ -895,9 +895,15 @@ activation. Home Assistant must be stopped so the installer can obtain an
 exclusive SQLite lock. From a reviewed checkout, run:
 
 ```text
-python3 ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py \
+python3 ha-config/extended_openai_conversation_e4_reference/freeze_legacy_identity_semantics.py \
   --database /config/extended_openai_conversation/identity.db
 ```
+
+The E4 operator modules (the freeze, its observer, `identity_store.py` and
+`legacy_identity_fence.py`) live in
+`ha-config/extended_openai_conversation_e4_reference/`, not in the integration
+directory: `ha-config/extended_openai_conversation/` mirrors the pre-E4
+integration LA Home Assistant runs.
 
 The network-free installer opens an existing database in read/write mode (it
 will not create one) and holds the same lifetime OS lock used by the integration.

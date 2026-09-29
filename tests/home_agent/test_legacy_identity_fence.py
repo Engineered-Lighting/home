@@ -15,7 +15,7 @@ import pytest
 MODULE_DIR = (
     Path(__file__).resolve().parents[2]
     / "ha-config"
-    / "extended_openai_conversation"
+    / "extended_openai_conversation_e4_reference"
 )
 sys.path.insert(0, str(MODULE_DIR))
 

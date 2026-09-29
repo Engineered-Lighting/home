@@ -287,13 +287,19 @@ test("contentful metrics conversation tracing is absent and cannot be env-enable
 });
 
 test("legacy model tools and automatic private context are locked off", () => {
+  // These assertions describe the reviewed E4/containment design, which LA
+  // Home Assistant does not run: the owner kept the live tool-enabled voice
+  // assistant, so ha-config/extended_openai_conversation/ mirrors the live
+  // runtime and the contained design is kept, unchanged, in the reference
+  // copy below. external_routing.py is identical in both and is read live.
   const root = path.join(__dirname, "..");
+  const reference = path.join(root, "ha-config", "extended_openai_conversation_e4_reference");
   const constants = fs.readFileSync(
-    path.join(root, "ha-config", "extended_openai_conversation", "const.py"),
+    path.join(reference, "const.py"),
     "utf8",
   );
   const conversation = fs.readFileSync(
-    path.join(root, "ha-config", "extended_openai_conversation", "conversation.py"),
+    path.join(reference, "conversation.py"),
     "utf8",
   );
   assert.match(constants, /MODEL_TOOL_CATALOG_ENABLED = False/);
@@ -308,7 +314,7 @@ test("legacy model tools and automatic private context are locked off", () => {
   assert.doesNotMatch(conversation, /_raw_text\[:/);
 
   const integration = fs.readFileSync(
-    path.join(root, "ha-config", "extended_openai_conversation", "__init__.py"),
+    path.join(reference, "__init__.py"),
     "utf8",
   );
   const externalRouting = fs.readFileSync(
@@ -322,11 +328,11 @@ test("legacy model tools and automatic private context are locked off", () => {
   assert.match(integration, /Legacy sensitive log purge failed closed/);
 
   const identityStore = fs.readFileSync(
-    path.join(root, "ha-config", "extended_openai_conversation", "identity_store.py"),
+    path.join(reference, "identity_store.py"),
     "utf8",
   );
   const legacyFence = fs.readFileSync(
-    path.join(root, "ha-config", "extended_openai_conversation", "legacy_identity_fence.py"),
+    path.join(reference, "legacy_identity_fence.py"),
     "utf8",
   );
   assert.match(identityStore, /scrub_legacy_audit_content\(self\._conn\)/);

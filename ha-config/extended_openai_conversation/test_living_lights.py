@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""Tests for functions/living_lights.py — presence-override layer
+"""Tests for functions/living_lights.py - presence-override layer
 (Addendum 33 Phase 4.A).
 
 Coverage:
   - Zone resolution: canonical + synonyms + substring fallback + unknown
-  - set_presence_override happy path → JSON payload shape correct
-  - Brightness clamping (0 → 5; 999 → 100; negative → 5)
-  - Color-temp clamping (1000 → 2000; 99999 → 6500)
-  - Source validation (rejects "auto", null, missing — AR33-7)
-  - Master disabled → rejected with "master_disabled" error
-  - Per-zone disabled → rejected with "zone_disabled" error
-  - Unknown zone → rejected
+  - set_presence_override happy path -> short helper payload (the six
+    HELPER_PAYLOAD_KEYS, under MAX_INPUT_TEXT) reaches the input_text;
+    the long payload (colour, prompt, baseline, ...) reaches the ledger
+    row and the tool result
+  - MAX_INPUT_TEXT guard: an oversize helper payload raises before any
+    write and the zone is reported as skipped
+  - Brightness clamping (0 -> 5; 999 -> 100; negative -> 5)
+  - Color-temp clamping (1000 -> 2000; 99999 -> 6500)
+  - Source validation (rejects "auto", null, missing - AR33-7)
+  - Master disabled -> rejected with "master_disabled" error
+  - Per-zone disabled -> rejected with "zone_disabled" error
+  - Unknown zone -> rejected
   - Remote=True flag when zone vacant at set time (AR33-2)
   - Pinned=True flag honored when arg present (AR33-3)
   - Delta brightness applied to baseline state (AR voice "brighter")
   - clear_presence_override("all") clears all 5 zones with values
   - clear_presence_override(specific zone) clears one
-  - clear with no active overrides → "nothing to clear" phrasing
-  - Unknown function name → returns error envelope
+  - clear with no active overrides -> "nothing to clear" phrasing
+  - Unknown function name -> returns error envelope
 
 Run: PYTHONIOENCODING=utf-8 py -3 test_living_lights.py
 """
@@ -36,7 +41,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-# ── Mock voluptuous + HA modules (same pattern as test_recap.py) ────
+# -- Mock voluptuous + HA modules (same pattern as test_recap.py) ----
 def _mk(name: str):
     return types.ModuleType(name)
 
@@ -110,7 +115,7 @@ sys.modules["extended_openai_conversation.functions.living_lights"] = living_lig
 _living_lights_spec.loader.exec_module(living_lights)
 
 
-# ── Mock HA state + service-call surface ────────────────────────────
+# -- Mock HA state + service-call surface ----------------------------
 class FakeState:
     __slots__ = ("state", "attributes")
 
@@ -151,7 +156,7 @@ class FakeHass:
             "on" if master_on else "off",
         )
         # Cover every actuating zone (drives off the module's canonical
-        # zone→camera map so the harness tracks new zones automatically).
+        # zone->camera map so the harness tracks new zones automatically).
         for z, cam in living_lights.ZONE_TO_CAMERA.items():
             self.states.set(
                 f"input_boolean.living_lights_zone_{z}_enabled",
@@ -191,7 +196,20 @@ async def _mirror_set_value(hass: FakeHass, domain, service, data, blocking):
     hass.services.calls.append((domain, service, data, blocking))
 
 
-# ── Test harness ────────────────────────────────────────────────────
+# -- Ledger capture: the module appends command rows through this hook;
+#    swap it for a list so tests can inspect the long payload. --------------
+LEDGER: list[dict] = []
+living_lights._append_lighting_command_event = lambda row: LEDGER.append(row)
+
+HELPER_KEYS = set(living_lights.HELPER_PAYLOAD_KEYS)
+LONG_KEYS = {
+    "command_id", "brightness_pct", "color_temp_kelvin", "started_at",
+    "hold_until", "min_hold_min", "vacancy_grace_s", "source", "prompt",
+    "remote", "pinned", "baseline",
+}
+
+
+# -- Test harness ----------------------------------------------------
 PASS = 0
 FAIL = 0
 
@@ -220,8 +238,8 @@ def run(coro):
 def main() -> int:
     fn = living_lights.LivingLightsFunction()
 
-    # ── Group 1: zone resolution ──
-    print("\n── zone resolution ──")
+    # -- Group 1: zone resolution --
+    print("\n-- zone resolution --")
     assert_eq("canonical slug 'dining_left'", living_lights._resolve_zone("dining_left"), "dining_left")
     assert_eq("synonym 'dining left'", living_lights._resolve_zone("dining left"), "dining_left")
     assert_eq("uppercase 'Sink'", living_lights._resolve_zone("Sink"), "sink")
@@ -234,31 +252,31 @@ def main() -> int:
     assert_eq("unknown 'bathroom'", living_lights._resolve_zone("bathroom"), None)
     assert_eq("empty string", living_lights._resolve_zone(""), None)
 
-    # ── Group 1b: target resolution (new zones, rooms, "all") ──
-    print("\n── target resolution ──")
+    # -- Group 1b: target resolution (new zones, rooms, "all") --
+    print("\n-- target resolution --")
     assert_eq("new zone 'sofa'", living_lights._resolve_zone("sofa"), "sofa")
     assert_eq("new zone 'office'", living_lights._resolve_zone("office"), "office")
-    assert_eq("room 'living room' → cover set",
+    assert_eq("room 'living room' -> cover set",
               living_lights._resolve_targets("living room"), ["sofa", "office"])
-    assert_eq("room 'kitchen' → 3 zones",
+    assert_eq("room 'kitchen' -> 3 zones",
               sorted(living_lights._resolve_targets("kitchen")),
               sorted(["sink", "island_left", "island_right"]))
-    assert_eq("'all' → full cover",
+    assert_eq("'all' -> full cover",
               sorted(living_lights._resolve_targets("all")),
               sorted(living_lights.ALL_TARGET_ZONES))
-    assert_eq("'my lights' → full cover",
+    assert_eq("'my lights' -> full cover",
               sorted(living_lights._resolve_targets("my lights")),
               sorted(living_lights.ALL_TARGET_ZONES))
-    assert_eq("single zone 'sink' → [sink]",
+    assert_eq("single zone 'sink' -> [sink]",
               living_lights._resolve_targets("sink"), ["sink"])
-    assert_eq("phrase 'turn the living room lights up' → LR cover",
+    assert_eq("phrase 'turn the living room lights up' -> LR cover",
               living_lights._resolve_targets("turn the living room lights up"),
               ["sofa", "office"])
-    assert_eq("unknown target → None",
+    assert_eq("unknown target -> None",
               living_lights._resolve_targets("bathroom"), None)
 
-    # ── Group 2: set_presence_override happy path ──
-    print("\n── set_presence_override happy path ──")
+    # -- Group 2: set_presence_override happy path --
+    print("\n-- set_presence_override happy path --")
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -273,23 +291,91 @@ def main() -> int:
     assert_("ok=True for valid voice override", result.get("ok") is True, result)
     assert_eq("zones list canonicalized", result["data"]["zones"], ["dining_left"])
 
+    # Short helper payload: exactly the six keys, under the 255 ceiling.
     payload_str = hass.states.get("input_text.living_lights_override_text_dining_left").state
     assert_("payload written to input_text", payload_str != "")
-    payload = json.loads(payload_str)
-    assert_eq("payload brightness_pct=95", payload["brightness_pct"], 95)
-    assert_eq("payload color_temp_kelvin=2700", payload["color_temp_kelvin"], 2700)
-    assert_eq("payload source=voice", payload["source"], "voice")
-    assert_("payload has started_at ISO", "T" in payload.get("started_at", ""))
-    assert_("payload has prompt snippet",
-            "make the dining lights brighter" in payload.get("prompt", ""))
-    assert_eq("payload pinned=False (default)", payload["pinned"], False)
-    assert_("payload remote=True (zone was vacant)", payload["remote"] is True)
-    assert_eq("payload min_hold_min=40", payload["min_hold_min"], 40)
-    assert_eq("payload vacancy_grace_s=300", payload["vacancy_grace_s"], 300)
-    assert_("payload has hold_until ISO", "T" in payload.get("hold_until", ""))
+    assert_("helper payload under MAX_INPUT_TEXT",
+            len(payload_str) <= living_lights.MAX_INPUT_TEXT, len(payload_str))
+    short = json.loads(payload_str)
+    assert_eq("helper payload has exactly the six keys", set(short), HELPER_KEYS)
+    assert_eq("helper key order is HELPER_PAYLOAD_KEYS",
+              list(short), list(living_lights.HELPER_PAYLOAD_KEYS))
+    assert_eq("helper brightness_pct=95", short["brightness_pct"], 95)
+    assert_eq("helper source=voice", short["source"], "voice")
+    assert_eq("helper pinned=False (default)", short["pinned"], False)
+    assert_eq("helper vacancy_grace_s=300", short["vacancy_grace_s"], 300)
+    assert_("helper has hold_until ISO", "T" in short.get("hold_until", ""))
+    assert_("helper carries no colour temperature", "color_temp_kelvin" not in short)
+    assert_("helper carries no baseline", "baseline" not in short)
+    assert_("helper JSON is compact", ", " not in payload_str and ": " not in payload_str)
 
-    # ── Group 2b: room fan-out writes every zone in the room ──
-    print("\n── room fan-out ──")
+    # Long payload: the ledger row and the tool result keep every old key.
+    assert_eq("one ledger row per zone write", len(LEDGER), 1)
+    row = LEDGER[-1]
+    payload = row["payload"]
+    assert_("ledger payload keeps every long key", LONG_KEYS <= set(payload),
+            LONG_KEYS - set(payload))
+    assert_eq("ledger payload brightness_pct=95", payload["brightness_pct"], 95)
+    assert_eq("ledger payload color_temp_kelvin=2700", payload["color_temp_kelvin"], 2700)
+    assert_eq("ledger payload source=voice", payload["source"], "voice")
+    assert_("ledger payload has started_at ISO", "T" in payload.get("started_at", ""))
+    assert_("ledger payload has prompt snippet",
+            "make the dining lights brighter" in payload.get("prompt", ""))
+    assert_eq("ledger payload pinned=False (default)", payload["pinned"], False)
+    assert_("ledger payload remote=True (zone was vacant)", payload["remote"] is True)
+    assert_eq("ledger payload min_hold_min=40", payload["min_hold_min"], 40)
+    assert_eq("ledger payload vacancy_grace_s=300", payload["vacancy_grace_s"], 300)
+    assert_eq("ledger payload baseline is the zone prediction",
+              payload["baseline"], {"brightness_pct": 40, "color_temp_kelvin": 3000})
+    assert_eq("ledger row helper_payload is what reached the input_text",
+              row["helper_payload"], short)
+    assert_eq("ledger row requested.color_temp_kelvin", row["requested"]["color_temp_kelvin"], 2700)
+    assert_eq("ledger row entity_id", row["entity_id"],
+              "input_text.living_lights_override_text_dining_left")
+    assert_eq("tool result carries the long payload", result["data"]["payload"], payload)
+    assert_eq("helper and ledger share command_id", short["command_id"], payload["command_id"])
+
+    # -- Group 2a: MAX_INPUT_TEXT guard --
+    print("\n-- MAX_INPUT_TEXT guard --")
+    assert_eq("MAX_INPUT_TEXT is the Home Assistant ceiling", living_lights.MAX_INPUT_TEXT, 255)
+    base = {k: short[k] for k in living_lights.HELPER_PAYLOAD_KEYS}
+    fill = living_lights.MAX_INPUT_TEXT - len(json.dumps(
+        dict(base, command_id=""), separators=(",", ":")))
+    exact = dict(base, command_id="x" * fill)
+    assert_eq("a 255-char helper payload encodes",
+              len(living_lights.encode_helper_payload(exact)), 255)
+    over = dict(base, command_id="x" * (fill + 1))
+    try:
+        living_lights.encode_helper_payload(over)
+        assert_("a 256-char helper payload raises", False)
+    except living_lights.OverridePayloadTooLong as exc:
+        assert_("a 256-char helper payload raises OverridePayloadTooLong", True)
+        assert_("guard error names the length and the ceiling",
+                "256" in str(exc) and "255" in str(exc), str(exc))
+    # Through the tool: the guard fires before any write and the zone is skipped.
+    hass = FakeHass()
+    hass.make_default_world()
+    hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
+    saved_keys = living_lights.HELPER_PAYLOAD_KEYS
+    living_lights.HELPER_PAYLOAD_KEYS = saved_keys + ("baseline", "prompt")
+    exc_log = living_lights._LOGGER.exception
+    living_lights._LOGGER.exception = lambda *a, **k: None
+    try:
+        r = run(fn._set_presence_override(hass, {
+            "zone": "sink", "brightness_pct": 100, "source": "voice",
+            "source_text": "y" * 160,
+        }))
+    finally:
+        living_lights.HELPER_PAYLOAD_KEYS = saved_keys
+        living_lights._LOGGER.exception = exc_log
+    assert_("oversize payload: tool reports no zones applied", r.get("ok") is False)
+    assert_eq("oversize payload: sink skipped", r["error"]["skipped"], ["sink"])
+    assert_eq("oversize payload: nothing written to the helper",
+              hass.states.get("input_text.living_lights_override_text_sink").state, "")
+    assert_eq("oversize payload: no service call at all", hass.services.calls, [])
+
+    # -- Group 2b: room fan-out writes every zone in the room --
+    print("\n-- room fan-out --")
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -298,14 +384,14 @@ def main() -> int:
         "source_text": "turn the kitchen to 100%",
     }))
     assert_("kitchen fan-out ok", r.get("ok") is True)
-    assert_eq("kitchen → 3 zones applied", sorted(r["data"]["zones"]),
+    assert_eq("kitchen -> 3 zones applied", sorted(r["data"]["zones"]),
               sorted(["sink", "island_left", "island_right"]))
     for z in ["sink", "island_left", "island_right"]:
         p = json.loads(hass.states.get(f"input_text.living_lights_override_text_{z}").state)
         assert_eq(f"{z} set to 100", p["brightness_pct"], 100)
     assert_("one shared command_id for the batch", bool(r["data"].get("command_id")))
 
-    # ── Group 2c: "all" / "my lights" fan-out covers every zone ──
+    # -- Group 2c: "all" / "my lights" fan-out covers every zone --
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -314,11 +400,11 @@ def main() -> int:
         "source_text": "turn my lights to 100%",
     }))
     assert_("my-lights fan-out ok", r.get("ok") is True)
-    assert_eq("my lights → full cover", sorted(r["data"]["zones"]),
+    assert_eq("my lights -> full cover", sorted(r["data"]["zones"]),
               sorted(living_lights.ALL_TARGET_ZONES))
 
-    # ── Group 3: brightness + color clamping (AR33-7) ──
-    print("\n── clamping ──")
+    # -- Group 3: brightness + color clamping (AR33-7) --
+    print("\n-- clamping --")
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -338,17 +424,18 @@ def main() -> int:
     r = run(fn._set_presence_override(hass, {
         "zone": "sink", "color_temp_kelvin": 1000, "source": "voice",
     }))
-    p = json.loads(hass.states.get("input_text.living_lights_override_text_sink").state)
-    assert_eq("kelvin=1000 clamps to 2000", p["color_temp_kelvin"], 2000)
+    p = r["data"]["payload"]
+    assert_eq("kelvin=1000 clamps to 2000 (long payload)", p["color_temp_kelvin"], 2000)
+    assert_eq("kelvin clamp reaches the ledger", LEDGER[-1]["payload"]["color_temp_kelvin"], 2000)
 
     r = run(fn._set_presence_override(hass, {
         "zone": "sink", "color_temp_kelvin": 99999, "source": "voice",
     }))
-    p = json.loads(hass.states.get("input_text.living_lights_override_text_sink").state)
-    assert_eq("kelvin=99999 clamps to 6500", p["color_temp_kelvin"], 6500)
+    p = r["data"]["payload"]
+    assert_eq("kelvin=99999 clamps to 6500 (long payload)", p["color_temp_kelvin"], 6500)
 
-    # ── Group 4: source validation (AR33-7) ──
-    print("\n── source validation ──")
+    # -- Group 4: source validation (AR33-7) --
+    print("\n-- source validation --")
     hass = FakeHass()
     hass.make_default_world()
 
@@ -367,8 +454,8 @@ def main() -> int:
     }))
     assert_("ok=False for source='system'", r.get("ok") is False)
 
-    # ── Group 5: master + zone disabled ──
-    print("\n── disabled paths ──")
+    # -- Group 5: master + zone disabled --
+    print("\n-- disabled paths --")
     hass = FakeHass()
     hass.make_default_world(master_on=False)
     r = run(fn._set_presence_override(hass, {
@@ -387,8 +474,8 @@ def main() -> int:
     assert_eq("error kind", r["error"]["kind"], "no_zones_applied")
     assert_("sink listed as skipped", "sink" in r["error"].get("skipped", []))
 
-    # ── Group 6: unknown zone ──
-    print("\n── unknown zone ──")
+    # -- Group 6: unknown zone --
+    print("\n-- unknown zone --")
     hass = FakeHass()
     hass.make_default_world()
     r = run(fn._set_presence_override(hass, {
@@ -398,8 +485,8 @@ def main() -> int:
     assert_eq("zone error kind", r["error"]["kind"], "unknown_zone")
     assert_("known_zones list present", "known_zones" in r.get("error", {}))
 
-    # ── Group 7: remote=True when vacant; remote=False when occupied (AR33-2) ──
-    print("\n── remote flag (AR33-2) ──")
+    # -- Group 7: remote=True when vacant; remote=False when occupied (AR33-2) --
+    print("\n-- remote flag (AR33-2) --")
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -408,19 +495,23 @@ def main() -> int:
     r = run(fn._set_presence_override(hass, {
         "zone": "dining_left", "source": "voice", "brightness_pct": 50,
     }))
-    p = json.loads(hass.states.get("input_text.living_lights_override_text_dining_left").state)
+    p = r["data"]["payload"]
     assert_("remote=True when zone vacant", p["remote"] is True)
+    assert_("remote is ledger-only, not in the helper",
+            "remote" not in json.loads(
+                hass.states.get("input_text.living_lights_override_text_dining_left").state))
 
     # Make zone occupied
     hass.states.set("binary_sensor.island_left_person_occupancy", "on")
     r = run(fn._set_presence_override(hass, {
         "zone": "island_left", "source": "voice", "brightness_pct": 50,
     }))
-    p = json.loads(hass.states.get("input_text.living_lights_override_text_island_left").state)
+    p = r["data"]["payload"]
     assert_("remote=False when zone occupied", p["remote"] is False)
+    assert_("remote=False reaches the ledger", LEDGER[-1]["payload"]["remote"] is False)
 
-    # ── Group 8: pinned flag (AR33-3) ──
-    print("\n── pinned flag (AR33-3) ──")
+    # -- Group 8: pinned flag (AR33-3) --
+    print("\n-- pinned flag (AR33-3) --")
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -432,8 +523,8 @@ def main() -> int:
     assert_("pinned=True written when arg present", p["pinned"] is True)
     assert_("phrasing mentions pinned", "pinned" in r["suggested_phrasing"].lower())
 
-    # ── Group 9: delta brightness (voice "brighter" pattern) ──
-    print("\n── delta brightness ──")
+    # -- Group 9: delta brightness (voice "brighter" pattern) --
+    print("\n-- delta brightness --")
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -445,16 +536,18 @@ def main() -> int:
     p = json.loads(hass.states.get("input_text.living_lights_override_text_dining_left").state)
     assert_eq("baseline 40 + delta 25 = 65", p["brightness_pct"], 65)
 
-    # Color delta — warmer = lower kelvin
+    # Color delta - warmer = lower kelvin
     r = run(fn._set_presence_override(hass, {
         "zone": "dining_right", "source": "voice",
         "color_temp_delta_kelvin": -700, "source_text": "warmer please",
     }))
-    p = json.loads(hass.states.get("input_text.living_lights_override_text_dining_right").state)
+    p = r["data"]["payload"]
     assert_eq("baseline 3000 - 700 = 2300", p["color_temp_kelvin"], 2300)
+    short = json.loads(hass.states.get("input_text.living_lights_override_text_dining_right").state)
+    assert_eq("delta command writes the six-key helper", set(short), HELPER_KEYS)
 
-    # ── Group 10: clear_presence_override ──
-    print("\n── clear_presence_override ──")
+    # -- Group 10: clear_presence_override --
+    print("\n-- clear_presence_override --")
     hass = FakeHass()
     hass.make_default_world()
     hass.services.async_call = lambda d, s, dat, blocking: _mirror_set_value(hass, d, s, dat, blocking)
@@ -491,8 +584,8 @@ def main() -> int:
     r = run(fn._clear_presence_override(hass, {"zone": "bathroom"}))
     assert_("unknown zone clear rejected", r.get("ok") is False)
 
-    # ── Group 11: dispatcher ──
-    print("\n── dispatcher ──")
+    # -- Group 11: dispatcher --
+    print("\n-- dispatcher --")
     hass = FakeHass()
     hass.make_default_world()
     r = run(fn._get_recent_overrides(FakeHass(), {}))
@@ -582,7 +675,7 @@ def main() -> int:
 
     print()
     print("=" * 60)
-    print(f"{PASS} pass · {FAIL} fail")
+    print(f"{PASS} pass . {FAIL} fail")
     return 0 if FAIL == 0 else 1
 
 

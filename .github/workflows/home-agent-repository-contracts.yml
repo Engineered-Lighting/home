@@ -5,6 +5,11 @@ name: home agent repository contracts
 # identity integration, change-note fragments) and need nothing beyond the
 # hash-pinned interpreter packages in tests/home_agent/requirements-contracts.lock.
 # PostgreSQL-backed suites stay in home-agent-e1-postgres.yml.
+#
+# It also runs the Home Assistant integration's own in-package tests, which stub
+# Home Assistant and need only the standard library: the ones for the runtime LA
+# Home Assistant runs (ha-config/extended_openai_conversation/) and the ones for
+# the reviewed E4/containment design kept in its reference copy.
 
 on:
   pull_request:
@@ -13,6 +18,7 @@ on:
       - "changes/unreleased/**"
       - "docs/HOME-AGENT-RUNBOOK.md"
       - "ha-config/extended_openai_conversation/**"
+      - "ha-config/extended_openai_conversation_e4_reference/**"
       - "stack/home-agent.env.example"
       - "stack/home-agent-compose.yml"
       - "stack/home-agent-deploy/**"
@@ -26,6 +32,7 @@ on:
       - "stack/services/home-agent-core/app/phase3_activation_probe.py"
       - "stack/services/home-agent-core/app/store.py"
       - "stack/services/home-agent-core/docker-entrypoint.sh"
+      - "stack/services/intelligence/tests/fixtures/office_override_session_automation_tail.json"
       - "tests/home_agent/requirements-contracts.lock"
       - "tests/home_agent/requirements-contracts.txt"
       - "tests/home_agent/test_apply_grants_admits_every_revision.py"
@@ -48,6 +55,7 @@ on:
       - "tests/home_agent/test_relationship_predicate_constraints_agree.py"
       - "tests/home_agent/test_worker_lease_deployment_contract.py"
       - "tools/release/release-lib.mjs"
+      - "tools/test_helpers/mock_hass.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
       - "web-gateway/server.mjs"
   push:
@@ -57,6 +65,7 @@ on:
       - "changes/unreleased/**"
       - "docs/HOME-AGENT-RUNBOOK.md"
       - "ha-config/extended_openai_conversation/**"
+      - "ha-config/extended_openai_conversation_e4_reference/**"
       - "stack/home-agent.env.example"
       - "stack/home-agent-compose.yml"
       - "stack/home-agent-deploy/**"
@@ -70,6 +79,7 @@ on:
       - "stack/services/home-agent-core/app/phase3_activation_probe.py"
       - "stack/services/home-agent-core/app/store.py"
       - "stack/services/home-agent-core/docker-entrypoint.sh"
+      - "stack/services/intelligence/tests/fixtures/office_override_session_automation_tail.json"
       - "tests/home_agent/requirements-contracts.lock"
       - "tests/home_agent/requirements-contracts.txt"
       - "tests/home_agent/test_apply_grants_admits_every_revision.py"
@@ -92,6 +102,7 @@ on:
       - "tests/home_agent/test_relationship_predicate_constraints_agree.py"
       - "tests/home_agent/test_worker_lease_deployment_contract.py"
       - "tools/release/release-lib.mjs"
+      - "tools/test_helpers/mock_hass.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
       - "web-gateway/server.mjs"
   workflow_dispatch:
@@ -154,4 +165,37 @@ jobs:
             tests/home_agent/test_property_contracts_stay_fatal.py \
             tests/home_agent/test_relationship_predicate_constraints_agree.py \
             tests/home_agent/test_worker_lease_deployment_contract.py
+          git diff --exit-code
+
+      - name: Run the Home Assistant integration in-package tests
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          suites=(
+            ha-config/extended_openai_conversation/test_entity_strict.py
+            ha-config/extended_openai_conversation/test_external_routing.py
+            ha-config/extended_openai_conversation/test_frigate_sync.py
+            ha-config/extended_openai_conversation/test_frigate_tool.py
+            ha-config/extended_openai_conversation/test_identity_store.py
+            ha-config/extended_openai_conversation/test_lifecycle.py
+            ha-config/extended_openai_conversation/test_living_lights.py
+            ha-config/extended_openai_conversation/test_native.py
+            ha-config/extended_openai_conversation/test_override_sessions.py
+            ha-config/extended_openai_conversation/test_recap.py
+            ha-config/extended_openai_conversation/test_registry.py
+            ha-config/extended_openai_conversation/test_template_helpers.py
+            ha-config/extended_openai_conversation/test_visual_preroute.py
+            ha-config/extended_openai_conversation/test_world_state.py
+            ha-config/extended_openai_conversation_e4_reference/test_action_containment.py
+            ha-config/extended_openai_conversation_e4_reference/test_cross_home_guard.py
+            ha-config/extended_openai_conversation_e4_reference/test_frigate_sync.py
+            ha-config/extended_openai_conversation_e4_reference/test_identity_store.py
+          )
+          for suite in "${suites[@]}"; do
+            echo "::group::${suite}"
+            "${RUNNER_TEMP}/home-agent-contracts/bin/python" "${suite}"
+            echo "::endgroup::"
+          done
           git diff --exit-code

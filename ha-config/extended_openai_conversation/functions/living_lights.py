@@ -5,16 +5,29 @@ Voice/agent-facing tools for the presence-override layer:
   - set_presence_override(zone, deltas, source_text)
       Apply an explicit lighting override. `zone` may be a single zone
       slug, a whole room ("living room", "kitchen"), or "all"/"my
-      lights" — the tool fans the override out across every actuating
+      lights" - the tool fans the override out across every actuating
       zone in scope. Absolute spoken commands ("set my lights to 100%")
       route here so they PERSIST, rather than to a bare light.turn_on
-      that the ambient engine immediately reverts. Writes a JSON payload
-      to input_text.living_lights_override_text_<zone> for each target;
-      the classifier transitions to `presence_override` (top of the
-      state machine, immune to the asleep cap/bypass) and the per-zone
-      pilot applies the payload brightness/color. The override-lifecycle
-      automation eases it back to automatic only after a minimum hold
-      AND the zone has been genuinely vacant for the grace window.
+      that the ambient engine immediately reverts. Writes a short JSON
+      payload to input_text.living_lights_override_text_<zone> for each
+      target; the classifier transitions to `presence_override` (top of
+      the state machine, immune to the asleep cap/bypass) and the
+      per-zone pilot applies the payload brightness. The
+      override-lifecycle automation eases it back to automatic only
+      after a minimum hold AND the zone has been genuinely vacant for
+      the grace window.
+
+Two payloads (the 255 fix): Home Assistant caps every input_text at
+255 characters and refuses a longer set_value, so the override text
+silently never landed once the payload grew a nested baseline (about
+392 characters). The helper now receives only the six keys its readers
+use (HELPER_PAYLOAD_KEYS: command_id, brightness_pct, hold_until,
+vacancy_grace_s, pinned, source - about 160 characters), guarded by
+MAX_INPUT_TEXT before the write. The long payload (color temperature,
+prompt, started_at, min_hold_min, remote, baseline) goes to the command
+ledger JSONL and to the tool result. `build_ledger_payload`,
+`helper_payload`, `encode_helper_payload` and `ledger_event` are pure
+functions so tests can import them without Home Assistant.
 
   - clear_presence_override(zone | "all")
       Clear an active override immediately. Voice "end the override" /
@@ -26,7 +39,7 @@ All actions are gated by:
 
 Per Addendum 33 AR33-7: brightness=0 from a voice override is clamped
 to 5% (lights-off must come from explicit `light.turn_off` calls, not
-overrides). source ∈ {voice, app}; "auto" / null is rejected.
+overrides). source in {voice, app}; "auto" / null is rejected.
 
 Persistence (user-chosen "leave + grace, with a minimum hold"): the
 payload carries `hold_until` (now + MIN_HOLD_MINUTES) and
@@ -51,16 +64,34 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import voluptuous as vol
+# Home Assistant, voluptuous and the component base class are always
+# present in the running integration. The fallbacks exist only so the
+# pure payload builders below can be imported by tests that run without
+# Home Assistant (tests/living_lights/test_override_payload.py).
+try:
+    import voluptuous as vol
+except ImportError:  # pragma: no cover - test import outside Home Assistant
+    vol = None  # type: ignore[assignment]
 
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import llm
+try:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers import llm
+except ImportError:  # pragma: no cover - test import outside Home Assistant
+    HomeAssistant = Any  # type: ignore[misc,assignment]
+    llm = None  # type: ignore[assignment]
 
-from .base import Function
+try:
+    from .base import Function
+except ImportError:  # pragma: no cover - test import outside Home Assistant
+    class Function:  # type: ignore[no-redef]
+        """Stand-in for the component base class outside Home Assistant."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
 
 _LOGGER = logging.getLogger(__name__)
 
-# Zone slug → set of known synonyms (used to resolve "dining room",
+# Zone slug -> set of known synonyms (used to resolve "dining room",
 # "kitchen island left", etc to canonical slug). Covers every
 # occupancy-managed light zone (the 10 LIGHT_TARGETS the pilots actuate).
 ZONE_SYNONYMS: dict[str, list[str]] = {
@@ -76,7 +107,7 @@ ZONE_SYNONYMS: dict[str, list[str]] = {
     "office": ["office", "desk", "study", "office light"],
 }
 
-# Zone slug → owning camera (room). Every actuating zone is covered.
+# Zone slug -> owning camera (room). Every actuating zone is covered.
 ZONE_TO_CAMERA: dict[str, str] = {
     "dining_left": "dining_room",
     "dining_right": "dining_room",
@@ -90,8 +121,8 @@ ZONE_TO_CAMERA: dict[str, str] = {
     "office": "living_room",
 }
 
-# Room → the minimal set of zones whose lights together cover the whole
-# room (no overlap). "the living room lights" → sofa (front_left/front_right/
+# Room -> the minimal set of zones whose lights together cover the whole
+# room (no overlap). "the living room lights" -> sofa (front_left/front_right/
 # rear_left/rear_right) + office; redundant subset-zones are intentionally
 # excluded so two pilots don't fight over a shared light.
 ROOM_TO_ZONES: dict[str, list[str]] = {
@@ -106,7 +137,7 @@ ROOM_SYNONYMS: dict[str, list[str]] = {
     "kitchen": ["kitchen"],
 }
 
-# "all" / "the house" / "my lights" → every managed zone, deduped to the
+# "all" / "the house" / "my lights" -> every managed zone, deduped to the
 # non-overlapping cover (so a house-wide command writes one override per
 # physical light, not several fighting writes).
 ALL_TARGET_ZONES: list[str] = (
@@ -120,7 +151,7 @@ ALL_PHRASES = {
 }
 
 # Minimum time an explicit override is honored before the lifecycle
-# automation is allowed to ease it back to automatic — even if the
+# automation is allowed to ease it back to automatic - even if the
 # cameras briefly lose the (still) occupant. Matches the user-chosen
 # "leave + grace, but hold at least this long" persistence model.
 MIN_HOLD_MINUTES = 40
@@ -143,6 +174,125 @@ LIGHTING_ACTIVITY_PATH = Path(os.environ.get(
     "LIVING_LIGHTS_ACTIVITY_JSONL",
     "/config/lighting_activity.jsonl",
 ))
+
+# Home Assistant's ceiling for any input_text value. A longer set_value is
+# refused by the input_text integration, so an oversize override never
+# lands - the guard in encode_helper_payload raises before the write.
+MAX_INPUT_TEXT = 255
+# The only keys the override text's readers use: the pilot override
+# branch (brightness_pct), the lifecycle automation (pinned, hold_until,
+# vacancy_grace_s) and the sim's command_id probe. Everything else lives
+# in the ledger row. Same key set as homeai_good_morning.yaml writes.
+HELPER_PAYLOAD_KEYS: tuple[str, ...] = (
+    "command_id", "brightness_pct", "hold_until", "vacancy_grace_s",
+    "pinned", "source",
+)
+
+
+class OverridePayloadTooLong(ValueError):
+    """The encoded helper payload would exceed the input_text ceiling."""
+
+
+def build_ledger_payload(
+    *,
+    baseline: dict[str, Any],
+    args: dict[str, Any],
+    source: str,
+    now: datetime,
+    command_id: str,
+    remote: bool,
+) -> dict[str, Any]:
+    """The long override payload: every field the command ledger, the
+    tool result and later analysis want, resolved from absolute or delta
+    inputs against the zone's current prediction (`baseline`). Pure: no
+    Home Assistant access."""
+    bri_abs = args.get("brightness_pct")
+    bri_delta = args.get("brightness_delta_pct")
+    ct_abs = args.get("color_temp_kelvin")
+    ct_delta = args.get("color_temp_delta_kelvin")
+
+    if bri_abs is not None:
+        brightness_pct = _clamp_brightness(bri_abs)
+    elif bri_delta is not None:
+        try:
+            brightness_pct = _clamp_brightness(baseline["brightness_pct"] + int(bri_delta))
+        except (TypeError, ValueError):
+            brightness_pct = baseline["brightness_pct"]
+    else:
+        brightness_pct = baseline["brightness_pct"]
+
+    if ct_abs is not None:
+        color_temp_kelvin = _clamp_kelvin(ct_abs)
+    elif ct_delta is not None:
+        try:
+            color_temp_kelvin = _clamp_kelvin(baseline["color_temp_kelvin"] + int(ct_delta))
+        except (TypeError, ValueError):
+            color_temp_kelvin = baseline["color_temp_kelvin"]
+    else:
+        color_temp_kelvin = baseline["color_temp_kelvin"]
+
+    hold_until = now + timedelta(minutes=MIN_HOLD_MINUTES)
+    return {
+        "command_id": command_id,
+        "brightness_pct": brightness_pct,
+        "color_temp_kelvin": color_temp_kelvin,
+        "started_at": now.isoformat(),
+        "hold_until": hold_until.isoformat(),
+        "min_hold_min": MIN_HOLD_MINUTES,
+        "vacancy_grace_s": VACANCY_GRACE_S,
+        "source": source,
+        "prompt": (args.get("source_text") or "")[:160],
+        "remote": remote,
+        "pinned": bool(args.get("pinned", False)),
+        "baseline": baseline,
+    }
+
+
+def helper_payload(ledger_payload: dict[str, Any]) -> dict[str, Any]:
+    """The short payload written to input_text.living_lights_override_text_*:
+    the HELPER_PAYLOAD_KEYS subset of the long payload, in that order."""
+    return {key: ledger_payload[key] for key in HELPER_PAYLOAD_KEYS}
+
+
+def encode_helper_payload(short: dict[str, Any]) -> str:
+    """Serialise the short payload for the input_text write (compact JSON,
+    no spaces) and refuse anything over MAX_INPUT_TEXT before it is sent -
+    Home Assistant would reject the write and the override would silently
+    never land."""
+    text = json.dumps(short, separators=(",", ":"))
+    if len(text) > MAX_INPUT_TEXT:
+        raise OverridePayloadTooLong(
+            f"override helper payload is {len(text)} chars, over the "
+            f"{MAX_INPUT_TEXT}-char input_text ceiling: {text[:80]}..."
+        )
+    return text
+
+
+def ledger_event(zone: str, entity_id: str, ledger_payload: dict[str, Any],
+                 short: dict[str, Any]) -> dict[str, Any]:
+    """The command-ledger JSONL row for one zone write: the long payload
+    plus the exact short payload that reached the helper."""
+    return {
+        "schema_version": 1,
+        "kind": "lighting_command_event",
+        "raw_event_kind": "lighting_command_event",
+        "event_id": ledger_payload["command_id"],
+        "command_id": ledger_payload["command_id"],
+        "ts": ledger_payload["started_at"],
+        "zone": zone,
+        "entity_id": entity_id,
+        "source": ledger_payload["source"],
+        "source_text": ledger_payload.get("prompt", ""),
+        "requested": {
+            "brightness_pct": ledger_payload["brightness_pct"],
+            "color_temp_kelvin": ledger_payload["color_temp_kelvin"],
+            "pinned": ledger_payload["pinned"],
+            "remote": ledger_payload["remote"],
+        },
+        "baseline": ledger_payload.get("baseline"),
+        "payload": ledger_payload,
+        "helper_payload": short,
+    }
 
 
 def _resolve_zone(raw: str) -> str | None:
@@ -211,7 +361,7 @@ def _current_zone_state(hass: HomeAssistant, zone: str) -> dict[str, Any]:
 
 
 def _camera_for_zone(zone: str) -> str:
-    """Zone → owning camera (room). Falls back to the slug itself."""
+    """Zone -> owning camera (room). Falls back to the slug itself."""
     return ZONE_TO_CAMERA.get(zone, zone)
 
 
@@ -228,7 +378,7 @@ def _resolve_targets(raw: str) -> list[str] | None:
     needle = raw.strip().lower().replace("_", " ")
     if needle in ALL_PHRASES:
         return list(ALL_TARGET_ZONES)
-    # Whole-room match (exact synonym) → that room's cover set.
+    # Whole-room match (exact synonym) -> that room's cover set.
     for room, synonyms in ROOM_SYNONYMS.items():
         if needle in (s.lower() for s in synonyms):
             return list(ROOM_TO_ZONES[room])
@@ -237,7 +387,7 @@ def _resolve_targets(raw: str) -> list[str] | None:
     if zone is not None:
         return [zone]
     # Last resort: a room name embedded in a longer phrase
-    # ("turn the living room lights up") → that room's cover set.
+    # ("turn the living room lights up") -> that room's cover set.
     for room, synonyms in ROOM_SYNONYMS.items():
         if any(s.lower() in needle for s in synonyms):
             return list(ROOM_TO_ZONES[room])
@@ -335,7 +485,7 @@ class LivingLightsFunction(Function):
         zone = args.get("zone")
         if zone is not None:
             zone = str(zone).strip().lower() or None
-        # collapse defaults True — the agent answering "what did the user
+        # collapse defaults True - the agent answering "what did the user
         # do" is always better off with sessions, not raw trigger fires.
         collapse_arg = args.get("collapse")
         if collapse_arg is None:
@@ -347,7 +497,7 @@ class LivingLightsFunction(Function):
                 "false", "0", "no", "off",
             )
 
-        # Defensive lookup — handles HA startup race + missing integration
+        # Defensive lookup - handles HA startup race + missing integration
         # entry. The DOMAIN constant lives at the integration's package
         # root; importing here keeps the test-imports clean.
         try:
@@ -421,67 +571,33 @@ class LivingLightsFunction(Function):
         now: datetime,
         command_id: str,
     ) -> dict[str, Any]:
-        """Resolve absolute/delta inputs against the zone's current
-        prediction into the override JSON payload, including the min-hold
-        lifecycle fields (`hold_until`, `vacancy_grace_s`) that the
-        override-lifecycle automation reads to decide when to ease back."""
+        """Read the zone's current prediction and occupancy from Home
+        Assistant and build the long (ledger) payload through
+        `build_ledger_payload`; `_write_zone_override` derives the short
+        helper payload from it."""
         baseline = _current_zone_state(hass, zone)
-        bri_abs = args.get("brightness_pct")
-        bri_delta = args.get("brightness_delta_pct")
-        ct_abs = args.get("color_temp_kelvin")
-        ct_delta = args.get("color_temp_delta_kelvin")
-
-        if bri_abs is not None:
-            brightness_pct = _clamp_brightness(bri_abs)
-        elif bri_delta is not None:
-            try:
-                brightness_pct = _clamp_brightness(baseline["brightness_pct"] + int(bri_delta))
-            except (TypeError, ValueError):
-                brightness_pct = baseline["brightness_pct"]
-        else:
-            brightness_pct = baseline["brightness_pct"]
-
-        if ct_abs is not None:
-            color_temp_kelvin = _clamp_kelvin(ct_abs)
-        elif ct_delta is not None:
-            try:
-                color_temp_kelvin = _clamp_kelvin(baseline["color_temp_kelvin"] + int(ct_delta))
-            except (TypeError, ValueError):
-                color_temp_kelvin = baseline["color_temp_kelvin"]
-        else:
-            color_temp_kelvin = baseline["color_temp_kelvin"]
-
-        pinned = bool(args.get("pinned", False))
-        # `remote` (zone vacant at command time) is now audit-only — the
+        # `remote` (zone vacant at command time) is audit-only - the
         # lifecycle automation owns expiry via hold_until + vacancy grace,
         # so a remote set persists the same min-hold as an in-room one.
         remote = not _zone_occupied(hass, zone)
-        hold_until = now + timedelta(minutes=MIN_HOLD_MINUTES)
-        return {
-            "command_id": command_id,
-            "brightness_pct": brightness_pct,
-            "color_temp_kelvin": color_temp_kelvin,
-            "started_at": now.isoformat(),
-            "hold_until": hold_until.isoformat(),
-            "min_hold_min": MIN_HOLD_MINUTES,
-            "vacancy_grace_s": VACANCY_GRACE_S,
-            "source": source,
-            "prompt": (args.get("source_text") or "")[:160],
-            "remote": remote,
-            "pinned": pinned,
-            "baseline": baseline,
-        }
+        return build_ledger_payload(
+            baseline=baseline, args=args, source=source, now=now,
+            command_id=command_id, remote=remote,
+        )
 
     async def _write_zone_override(
         self, hass: HomeAssistant, zone: str, payload: dict[str, Any],
     ) -> None:
-        """Write the override payload + command-id helper for one zone and
-        append the command-ledger row. Raises if the override write itself
-        fails (the caller records the zone as skipped)."""
+        """Write the short helper payload + command-id helper for one zone
+        and append the long command-ledger row. Raises before any write if
+        the short payload would exceed MAX_INPUT_TEXT, and if the override
+        write itself fails (the caller records the zone as skipped)."""
         entity_id = f"input_text.living_lights_override_text_{zone}"
+        short = helper_payload(payload)
+        text = encode_helper_payload(short)
         await hass.services.async_call(
             "input_text", "set_value",
-            {"entity_id": entity_id, "value": json.dumps(payload)},
+            {"entity_id": entity_id, "value": text},
             blocking=True,
         )
         command_helper = f"input_text.living_lights_zone_{zone}_last_command_id"
@@ -496,26 +612,7 @@ class LivingLightsFunction(Function):
                 "living_lights: command id helper write failed for %s: %s",
                 zone, exc,
             )
-        _append_lighting_command_event({
-            "schema_version": 1,
-            "kind": "lighting_command_event",
-            "raw_event_kind": "lighting_command_event",
-            "event_id": payload["command_id"],
-            "command_id": payload["command_id"],
-            "ts": payload["started_at"],
-            "zone": zone,
-            "entity_id": entity_id,
-            "source": payload["source"],
-            "source_text": payload.get("prompt", ""),
-            "requested": {
-                "brightness_pct": payload["brightness_pct"],
-                "color_temp_kelvin": payload["color_temp_kelvin"],
-                "pinned": payload["pinned"],
-                "remote": payload["remote"],
-            },
-            "baseline": payload.get("baseline"),
-            "payload": payload,
-        })
+        _append_lighting_command_event(ledger_event(zone, entity_id, payload, short))
 
     async def _set_presence_override(
         self, hass: HomeAssistant, args: dict[str, Any]
@@ -590,12 +687,12 @@ class LivingLightsFunction(Function):
                     "skipped": skipped,
                 },
                 "suggested_phrasing": (
-                    "Couldn't set those lights — that area is turned off in "
+                    "Couldn't set those lights - that area is turned off in "
                     "Living Lights right now."
                 ),
             }
 
-        # 5. Suggested phrasing — singular vs fan-out.
+        # 5. Suggested phrasing - singular vs fan-out.
         first = applied[0]["payload"]
         bri = first["brightness_pct"]
         ct = first["color_temp_kelvin"]
@@ -604,10 +701,10 @@ class LivingLightsFunction(Function):
         else:
             zlabel = f"{len(applied)} zones"
         if first["pinned"]:
-            phrasing = (f"OK — {zlabel} pinned to {bri}% at {ct}K. "
+            phrasing = (f"OK - {zlabel} pinned to {bri}% at {ct}K. "
                         f"Stays put until you clear it.")
         else:
-            phrasing = (f"OK — {zlabel} to {bri}% at {ct}K. "
+            phrasing = (f"OK - {zlabel} to {bri}% at {ct}K. "
                         f"Holds at least {MIN_HOLD_MINUTES} min, then eases back "
                         f"to automatic once you've left.")
 

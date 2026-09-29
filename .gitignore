@@ -22,6 +22,12 @@ dist/
 .env.local
 *.bak
 *.bak.*
+# Hand-made backups taken on the Home Assistant host before live edits
+# (conversation.py.bak-20260712-173717, entity.py.bak-pre-probatio-...,
+# __init__.py.before-events-proxy) must never be committed with a copy.
+ha-config/**/*-bak-*
+ha-config/**/*.bak-*
+ha-config/**/*.before-*
 *.swp
 tmp/
 .claude/worktrees/

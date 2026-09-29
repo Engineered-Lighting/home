@@ -10,7 +10,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HA_MODULES = ROOT / "ha-config/extended_openai_conversation"
+HA_MODULES = ROOT / "ha-config/extended_openai_conversation_e4_reference"
 OPERATOR = ROOT / "stack/home-agent-deploy/operator"
 
 

@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = (
-    ROOT / "ha-config" / "extended_openai_conversation" / "__init__.py"
+    ROOT / "ha-config" / "extended_openai_conversation_e4_reference" / "__init__.py"
 )
 PEOPLE_VIEWS = (
     "IdentityListView",

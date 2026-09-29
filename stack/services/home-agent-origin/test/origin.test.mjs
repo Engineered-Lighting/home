@@ -48,6 +48,8 @@ function makeAssets() {
     ["preference-review.css", "body { color: white; }"],
     ["lighting-review.html", "<!doctype html><title>Lighting review</title>"],
     ["lighting-review.js", "globalThis.lightingReview = true;"],
+    ["people-bridge.html", "<!doctype html><title>People bridge</title>"],
+    ["people-bridge.js", "globalThis.peopleBridge = true;"],
     ["geist-latin.woff2", "wOF2-sans"],
     ["geist-mono-latin.woff2", "wOF2-mono"],
   ]) fs.writeFileSync(path.join(root, name), body);
@@ -539,8 +541,13 @@ test("only the preference review may be framed, and only by provisioned Home ori
     assert.equal(lighting.status, 200);
     assert.equal(lighting.headers["x-frame-options"], undefined);
     assert.match(lighting.headers["content-security-policy"], /(^|; )frame-ancestors https:\/\/home\.test(;|$)/);
+    const people = await request(f.originPort, "/home-agent/people-bridge.html");
+    assert.equal(people.status, 200);
+    assert.equal(people.headers["cache-control"], "no-store");
+    assert.equal(people.headers["x-frame-options"], undefined);
+    assert.match(people.headers["content-security-policy"], /(^|; )frame-ancestors https:\/\/home\.test(;|$)/);
     for (const asset of ["/home-agent/", "/home-agent/preference-review.js", "/home-agent/preference-review.css", "/home-agent/api.js",
-      "/home-agent/geist-mono-latin.woff2", "/home-agent/lighting-review.js"]) {
+      "/home-agent/geist-mono-latin.woff2", "/home-agent/lighting-review.js", "/home-agent/people-bridge.js"]) {
       const other = await request(f.originPort, asset);
       assert.equal(other.headers["x-frame-options"], "DENY", asset);
       assert.match(other.headers["content-security-policy"], /frame-ancestors 'none'/, asset);

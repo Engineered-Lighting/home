@@ -16,12 +16,16 @@ const STATIC_ASSETS = new Map([
   ["/home-agent/preference-review.css", ["preference-review.css", "text/css; charset=utf-8", "private, no-cache"]],
   ["/home-agent/lighting-review.html", ["lighting-review.html", "text/html; charset=utf-8", "no-store"]],
   ["/home-agent/lighting-review.js", ["lighting-review.js", "text/javascript; charset=utf-8", "private, no-cache"]],
+  ["/home-agent/people-bridge.html", ["people-bridge.html", "text/html; charset=utf-8", "no-store"]],
+  ["/home-agent/people-bridge.js", ["people-bridge.js", "text/javascript; charset=utf-8", "private, no-cache"]],
   // Home's Geist faces, so the inline review card matches the Home chat.
   ["/home-agent/geist-latin.woff2", ["geist-latin.woff2", "font/woff2", "private, max-age=86400"]],
   ["/home-agent/geist-mono-latin.woff2", ["geist-mono-latin.woff2", "font/woff2", "private, max-age=86400"]],
 ]);
 // The inline reviews Home may frame, and nothing else.
-const FRAMEABLE_REVIEWS = new Set(["preference-review.html", "lighting-review.html"]);
+// Owner decision: the People bridge (invisible, read-only household view for
+// the Home People map) is framed by the same provisioned Home origins.
+const FRAMEABLE_REVIEWS = new Set(["preference-review.html", "lighting-review.html", "people-bridge.html"]);
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const BROWSER_API_ROUTES = Object.freeze([
   ["POST", /^\/api\/agent\/auth\/start$/],

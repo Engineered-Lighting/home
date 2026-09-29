@@ -112,8 +112,11 @@ class EdgeLightingClient:
     async def outcome(self, *, request_id: UUID, index: int) -> str:
         if type(request_id) is not UUID:
             raise TypeError("operation identity required")
-        status, value = await self._post(OUTCOME_PATH, {**self._base(), "request_id": str(request_id),
-                                                        "operation_index": index})
+        try:
+            status, value = await self._post(OUTCOME_PATH, {**self._base(), "request_id": str(request_id),
+                                                            "operation_index": index})
+        except Exception as exc:  # unreachable or garbled: the answer is still unknown
+            raise OutcomeUnknown("outcome lookup failed") from exc
         if (status != 200 or set(value) != {"version", "request_id", "operation_index", "status"}
                 or value["request_id"] != str(request_id) or value["operation_index"] != index
                 or value["status"] not in OUTCOME_STATES):

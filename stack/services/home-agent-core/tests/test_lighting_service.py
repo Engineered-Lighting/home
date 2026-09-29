@@ -255,3 +255,134 @@ def test_wire_requests_parse_json_arrays_and_uuid_strings():
     with pytest.raises(Exception):
         from_wire(LightingProposalRequest, {"version": True, "operation_id": str(uuid.UUID(int=1)),
                                             "sites": ["victoria"], "targets": "all", "operation": "off"})
+
+
+# Review fixes ------------------------------------------------------------------
+
+def succeeded(value):
+    return httpx.Response(200, json={"version": 1, "request_id": value["request_id"],
+                                     "operation_index": value["operation_index"], "status": "succeeded"})
+
+
+def two_lights(site):
+    return Home(site, lights=[
+        {"entity_id": "light.kitchen", "name": "Kitchen", "state": "on", "brightness_pct": 40, "dimmable": True},
+        {"entity_id": "light.hall", "name": "Hall", "state": "on", "brightness_pct": 40, "dimmable": True}])
+
+
+def test_authority_revoked_mid_dispatch_stops_the_remaining_operations(tmp_path):
+    echo = two_lights("echo")
+    h = Harness(tmp_path, homes={"echo": echo})
+
+    def revoke_after_first(value):
+        h.current = authority(generation=2)  # e.g. link revoked right after the first light
+        return succeeded(value)
+    echo.behaviour = revoke_after_first
+    try:
+        result = h.confirm(h.propose(sites=("echo",), targets="all"))
+        assert [r["status"] for r in result["results"]] == ["succeeded", "unknown"]
+        assert len(echo.executed) == 1
+    finally:
+        h.journal.close()
+
+
+def test_no_operation_starts_without_enough_review_time_left(harness):
+    proposal = harness.propose()
+    harness.service.now = lambda: NOW + timedelta(seconds=50)  # 10 s left, below the 14 s budget
+    result = harness.confirm(proposal)
+    assert result["status"] == "unknown"
+    assert all(home.executed == [] for home in harness.homes.values())
+    settled = asyncio.run(harness.service.outcome(SESSION, uuid.UUID(int=7)))
+    assert [r["status"] for r in settled["results"]] == ["not_sent", "not_sent"]
+    assert settled["status"] == "failed"
+
+
+def test_an_unresponsive_home_is_not_asked_again_and_does_not_block_the_other(tmp_path):
+    echo = two_lights("echo")
+    echo.behaviour = lambda value: httpx.Response(503, json={"error": "lighting_unavailable"})
+    victoria = two_lights("victoria")
+    h = Harness(tmp_path, homes={"echo": echo, "victoria": victoria})
+    try:
+        result = h.confirm(h.propose(targets="all"))
+        assert [(r["site_id"], r["status"]) for r in result["results"]] == [
+            ("echo", "unknown"), ("echo", "unknown"), ("victoria", "succeeded"), ("victoria", "succeeded")]
+        assert len(echo.executed) == 1 and len(victoria.executed) == 2
+    finally:
+        h.journal.close()
+
+
+def test_outcome_never_settles_an_operation_still_being_dispatched(harness):
+    proposal = harness.propose()
+    confirmation = LightingActionConfirmation(operation_id=uuid.UUID(int=7),
+                                              reviewed_digest=proposal["review"]["reviewed_digest"])
+    harness.journal.claim_action(confirmation, **SCOPE, commitment=harness.service.commitment, now=NOW)
+    harness.service._dispatching.add(uuid.UUID(int=7))
+    result = asyncio.run(harness.service.outcome(SESSION, uuid.UUID(int=7)))
+    assert [r["status"] for r in result["results"]] == ["unknown", "unknown"]
+    # No lookup reached a home, so nothing was tombstoned while in flight.
+    assert all(home.records == {} for home in harness.homes.values())
+
+
+def test_acknowledged_or_indeterminate_operations_never_become_not_sent(tmp_path):
+    victoria = Home("victoria", behaviour=lambda value: httpx.Response(200, json={
+        "version": 1, "request_id": value["request_id"], "operation_index": value["operation_index"],
+        "status": "indeterminate"}))
+    h = Harness(tmp_path, homes={"echo": Home("echo"), "victoria": victoria})
+    try:
+        h.confirm(h.propose())
+        victoria.records.clear()  # the home's record was pruned: a lookup now says 'absent'
+        settled = asyncio.run(h.service.outcome(SESSION, uuid.UUID(int=7)))
+        assert [r["status"] for r in settled["results"]] == ["succeeded", "unknown"]
+        assert h.journal.read_action(uuid.UUID(int=7), **SCOPE).results == ("succeeded", "indeterminate")
+    finally:
+        h.journal.close()
+
+
+def test_an_unreachable_home_during_lookup_leaves_the_other_settling(tmp_path):
+    def unreachable(request):
+        if request.url.path.endswith("/outcome"):
+            raise httpx.ConnectError("down")
+        return Home("echo")(request)
+    echo = Home("echo", behaviour=lambda value: httpx.Response(503, json={"error": "x"}))
+    victoria = Home("victoria", behaviour=lambda value: httpx.Response(503, json={"error": "x"}))
+    h = Harness(tmp_path, homes={"echo": echo, "victoria": victoria})
+    try:
+        h.confirm(h.propose())
+        h.service.clients["echo"]._client = httpx.AsyncClient(transport=httpx.MockTransport(unreachable))
+        settled = asyncio.run(h.service.outcome(SESSION, uuid.UUID(int=7)))
+        assert [r["status"] for r in settled["results"]] == ["unknown", "not_sent"]
+    finally:
+        h.journal.close()
+
+
+def test_outcome_and_repeat_proposals_recheck_the_owner(harness):
+    proposal = harness.propose()
+    harness.confirm(proposal)
+    harness.current = authority(generation=3)
+    with pytest.raises(ForbiddenError):
+        asyncio.run(harness.service.outcome(SESSION, uuid.UUID(int=7)))
+    with pytest.raises(ForbiddenError):
+        harness.propose()
+
+
+def test_consent_is_not_claimed_when_authority_changed(harness):
+    review = asyncio.run(harness.service.consent_propose(SESSION, uuid.UUID(int=9)))
+    harness.current = authority(granted=("echo",))
+    confirmation = LightingConsentConfirmation(operation_id=uuid.UUID(int=9), reviewed_digest=review["reviewed_digest"])
+    with pytest.raises(ForbiddenError):
+        asyncio.run(harness.service.consent_confirm(SESSION, confirmation))
+    assert harness.journal.read_consent(uuid.UUID(int=9), **SCOPE).state == "review"
+
+
+def test_journal_refuses_unsafe_result_transitions(harness):
+    proposal = harness.propose()
+    confirmation = LightingActionConfirmation(operation_id=uuid.UUID(int=7),
+                                              reviewed_digest=proposal["review"]["reviewed_digest"])
+    harness.journal.claim_action(confirmation, **SCOPE, commitment=harness.service.commitment, now=NOW)
+    harness.journal.record_result(uuid.UUID(int=7), 0, "dispatching", **SCOPE)
+    with pytest.raises(ValueError):
+        harness.journal.record_result(uuid.UUID(int=7), 0, "not_sent", **SCOPE)
+    with pytest.raises(ValueError):
+        harness.journal.record_result(uuid.UUID(int=7), 0, "pending", **SCOPE)
+    harness.journal.record_result(uuid.UUID(int=7), 1, "indeterminate", **SCOPE)
+    assert harness.journal.record_result(uuid.UUID(int=7), 1, "succeeded", **SCOPE).results[1] == "indeterminate"

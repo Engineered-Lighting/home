@@ -73,8 +73,10 @@ def create_lighting_ingress(*, binding, service):
         active += 1
         dispatched = False
         try:
-            # Two homes, each allowed 10 s to act and 3 s to verify, plus lookups.
-            async with asyncio.timeout(45):
+            # Homes run concurrently and an operation starts only with 14 s of review left,
+            # so a dispatch ends within ~66 s of confirmation (60 s review + 20 s client
+            # timeout - 14 s budget); lookups are shorter.
+            async with asyncio.timeout(75):
                 body = bytearray()
                 async for chunk in request.stream():
                     if len(chunk) > MAX_BODY - len(body):
@@ -101,7 +103,8 @@ def create_lighting_ingress(*, binding, service):
                 elif operation == "consent-confirm":
                     parsed = from_wire(LightingConsentConfirmation, supplied)
                 else:
-                    if set(supplied) != {"version", "operation_id"} or supplied["version"] != 1:
+                    if (set(supplied) != {"version", "operation_id"} or type(supplied["version"]) is not int
+                            or supplied["version"] != 1):
                         raise ValueError("invalid lookup")
                     parsed = _operation_id(supplied)
                 dispatched = True

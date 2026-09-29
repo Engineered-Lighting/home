@@ -138,7 +138,7 @@ def main():
         raise ValueError("lighting listener does not use operator credentials")
     app = build_listener(create_app(settings), profile)
     uvicorn.run(app, host=profile.address, port=profile.port, ssl_certfile=profile.certificate,
-        ssl_keyfile=profile.private_key, proxy_headers=False, access_log=False, workers=1, limit_concurrency=4,
+        ssl_keyfile=profile.private_key, proxy_headers=False, access_log=False, workers=1, limit_concurrency=2,
         timeout_keep_alive=5, timeout_graceful_shutdown=25)
 
 

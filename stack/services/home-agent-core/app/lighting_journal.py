@@ -4,14 +4,20 @@ Local records are bookkeeping, never authorization: the service re-resolves
 database authority before review delivery, dispatch and outcome delivery.
 
 An action moves ``review`` -> ``dispatching`` exactly once, durably, before any
-home is asked to act. Per-operation results then only move from ``pending`` or
-an uncertain state towards a definite one; a definite result never changes.
+home is asked to act. Per-operation results then only move towards a final
+state: ``succeeded``, ``failed``, ``not_sent`` and the home's own
+``indeterminate`` never change. An operation the home acknowledged
+(``dispatching`` there) can never become ``not_sent``.
+
+The journal is capped at 16 MiB. Action records older than 30 days are pruned
+when new ones are retained; consent records are kept.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 import sqlite3
+import time
 from typing import Literal
 from uuid import UUID
 
@@ -26,6 +32,14 @@ from .lighting_review import LightingActionCommitment, LightingActionConfirmatio
 PURPOSE = "lighting-journal-v1"
 Result = Literal["pending", "succeeded", "failed", "not_sent", "indeterminate", "dispatching", "unknown"]
 DEFINITE = frozenset({"succeeded", "failed", "not_sent"})
+FINAL = DEFINITE | {"indeterminate"}
+# Allowed per-operation transitions; anything else is refused.
+TRANSITIONS = {
+    "pending": {"succeeded", "failed", "not_sent", "indeterminate", "dispatching", "unknown"},
+    "unknown": {"succeeded", "failed", "not_sent", "indeterminate", "dispatching", "unknown"},
+    "dispatching": {"succeeded", "failed", "indeterminate", "dispatching"},
+}
+RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 
 
 class MissingLightingRecord(ValueError):
@@ -59,13 +73,18 @@ class LightingJournal:
             if version == 0 and self._db.execute(
                     "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone()[0]:
                 raise ValueError("unknown lighting journal contents")
+            if self._db.execute("PRAGMA page_size").fetchone()[0] != 4096:
+                raise ValueError("unsupported lighting journal page size")
             if self._db.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
                 raise ValueError("lighting journal durability unavailable")
             self._db.execute("PRAGMA synchronous=FULL")
+            if self._db.execute("PRAGMA max_page_count=4096").fetchone()[0] != 4096:
+                raise ValueError("lighting journal storage limit exceeded")
             self._db.execute("BEGIN IMMEDIATE")
             if version == 0:
+                # created_at is plaintext bookkeeping for pruning; it reveals no content.
                 self._db.execute("CREATE TABLE records (id TEXT PRIMARY KEY,nonce BLOB NOT NULL,"
-                                 "ciphertext BLOB NOT NULL,digest TEXT NOT NULL)")
+                                 "ciphertext BLOB NOT NULL,digest TEXT NOT NULL,created_at INTEGER NOT NULL)")
                 self._write("admission", PURPOSE.encode(), insert=True)
                 self._db.execute("PRAGMA user_version=1")
             if self._read("admission") != PURPOSE.encode():
@@ -83,8 +102,8 @@ class LightingJournal:
     def _write(self, identifier, payload, *, insert=False):
         sealed = self._cipher.seal(payload, purpose=PURPOSE, artifact_id=identifier)
         if insert:
-            self._db.execute("INSERT INTO records VALUES (?,?,?,?)",
-                             (identifier, sealed.nonce, sealed.ciphertext, sealed.sha256))
+            self._db.execute("INSERT INTO records VALUES (?,?,?,?,?)",
+                             (identifier, sealed.nonce, sealed.ciphertext, sealed.sha256, int(time.time() * 1000)))
         elif self._db.execute("UPDATE records SET nonce=?,ciphertext=?,digest=? WHERE id=?",
                               (sealed.nonce, sealed.ciphertext, sealed.sha256, identifier)).rowcount != 1:
             raise ValueError("lighting record unavailable")
@@ -117,6 +136,9 @@ class LightingJournal:
         def work():
             raw = self._read(identifier)
             if raw is None:
+                if kind == "action":
+                    self._db.execute("DELETE FROM records WHERE id LIKE 'action:%' AND created_at < ?",
+                                     (int(time.time() * 1000) - RETENTION_MS,))
                 self._write(identifier, value.model_dump_json().encode(), insert=True)
                 return value
             old = from_wire(type(value), json.loads(raw))
@@ -189,10 +211,14 @@ class LightingJournal:
             value = self.read_action(operation_id, subject=subject, session_commitment=session_commitment)
             if value.state == "review" or not 0 <= index < len(value.results):
                 raise ValueError("undispatched lighting operation")
-            if value.results[index] in DEFINITE:
-                return value  # a definite result never changes
+            current = value.results[index]
+            if current in FINAL:
+                return value  # a final result never changes
+            if result not in TRANSITIONS[current]:
+                raise ValueError("lighting result transition refused")
             results = value.results[:index] + (result,) + value.results[index + 1:]
-            updated = value.model_copy(update={"results": results})
+            updated = from_wire(RetainedLightingAction, json.loads(
+                value.model_copy(update={"results": results}).model_dump_json()))
             self._write(f"action:{operation_id}", updated.model_dump_json().encode())
             return updated
         return self._transaction(work)

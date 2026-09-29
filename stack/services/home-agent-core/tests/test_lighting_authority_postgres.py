@@ -82,10 +82,13 @@ def test_lighting_role_writes_only_reviewed_lighting_grants():
                     "link_id,site_id,'core.personal-preferences.v1','memory.read',source_revision,authorization_generation,"
                     "revision+1,approval_commitment,created_at,expires_at FROM identity.shared_source_grants LIMIT 1",
                     "UPDATE identity.shared_owner_links SET revision=revision+1",
+                    "UPDATE identity.shared_sources SET state='revoked'",
                 ):
                     with connection.begin_nested() as savepoint:
-                        with pytest.raises(DBAPIError):
+                        with pytest.raises(DBAPIError) as denied:
                             connection.execute(text(sql))
+                        # Permission or row-security denial, not some unrelated failure.
+                        assert denied.value.orig.sqlstate == "42501", sql
                         savepoint.rollback()
             finally:
                 transaction.rollback()

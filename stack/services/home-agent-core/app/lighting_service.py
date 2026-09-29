@@ -5,12 +5,16 @@
 * Propose: re-resolve authority, read each named home's inventory, resolve
   names (or ask a clarifying question) and retain a frozen, signed review.
 * Confirm: re-resolve authority, verify the exact review, durably claim the
-  dispatch, then ask each home once per operation. Results are recorded as
-  they arrive. Anything uncertain is looked up later, never resent.
-* Outcome: settle uncertain operations by asking each home what happened.
+  dispatch, then ask each home once per operation. Homes run concurrently;
+  within a home, authority and the review's expiry are re-checked before every
+  operation, and a home that gave an uncertain answer is not asked again. An
+  operation that could not start stays pending and is settled as not sent.
+* Outcome: settle uncertain operations by asking each home what happened,
+  never while this process is still dispatching them.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl
 from uuid import UUID
@@ -26,7 +30,11 @@ from .lighting_journal import DEFINITE, LightingJournal, MissingLightingRecord
 from .lighting_resolution import resolve
 from .lighting_review import LightingActionCommitment, LightingActionConfirmation
 
-UNSETTLED = frozenset({"pending", "dispatching", "indeterminate", "unknown"})
+# Asked again at outcome lookup. The home's own 'indeterminate' is final there.
+UNSETTLED = frozenset({"pending", "dispatching", "unknown"})
+# An operation starts only if the home can still act and verify before the review expires.
+OPERATION_BUDGET = timedelta(seconds=14)
+ANCHOR = ("principal_id", "person_id", "link_id", "link_revision", "authorization_generation")
 
 
 class LightingUnavailable(DomainError):
@@ -67,7 +75,8 @@ def _summary(value):
     shown = [result if result in DEFINITE else "unknown" for result in results]
     status = ("review" if value.state == "review" else
               "unknown" if "unknown" in shown else
-              "done" if all(result == "succeeded" for result in shown) else "partial")
+              "done" if all(result == "succeeded" for result in shown) else
+              "partial" if "succeeded" in shown else "failed")
     return {"version": 1, "operation_id": str(review.operation_id), "status": status,
             "results": [{"site_id": op.site_id, "name": op.name, "operation": op.operation,
                          "brightness": op.brightness, "status": result}
@@ -86,6 +95,7 @@ class LightingService:
             raise TypeError("provisioned lighting runtime required")
         self.database, self.storage, self.commitment, self.journal = database, storage, commitment, journal
         self.clients, self.admission, self.grant_lifetime, self.now = clients, admission, grant_lifetime, now
+        self._dispatching = set()
 
     @staticmethod
     def _scope(session):
@@ -98,6 +108,17 @@ class LightingService:
         await self.admission()
         async with self.database.transaction() as connection:
             return await self.storage.resolve(connection, **scope)
+
+    async def _same_owner(self, scope, retained):
+        """Admission and a fresh owner anchor gate every delivery of a retained record."""
+        current = await self._authority(scope)
+        if any(getattr(current, name) != getattr(retained.authority, name) for name in ANCHOR):
+            raise ForbiddenError("lighting owner changed")
+        return current
+
+    @staticmethod
+    def _unchanged(current, retained):
+        return current.model_dump(exclude={"valid_until"}) == retained.authority.model_dump(exclude={"valid_until"})
 
     # Consent ------------------------------------------------------------
 
@@ -134,7 +155,8 @@ class LightingService:
         if confirmation.reviewed_digest != retained.review.reviewed_digest:
             raise ValueError("confirmation differs from retained review")
         if retained.state == "review":
-            await self.admission()
+            if not self._unchanged(await self._authority(scope), retained):
+                raise ForbiddenError("lighting authority changed after review")
             # Durable claim precedes the writing transaction; never resend afterwards.
             retained = self.journal.claim_consent(confirmation, **scope, commitment=self.storage.commitment,
                                                   now=self.now())
@@ -167,11 +189,15 @@ class LightingService:
             raise TypeError("typed lighting request required")
         try:
             retained = self.journal.read_action(request.operation_id, **scope)
+        except MissingLightingRecord:
+            retained = None
+        if retained is not None:
+            current = await self._same_owner(scope, retained)
             if retained.state != "review":
                 return _summary(retained)
+            if not self.now() < retained.review.expires_at or not self._unchanged(current, retained):
+                raise ForbiddenError("lighting review expired or authority changed; start a new request")
             return {"version": 1, "status": "review", "review": retained.review.browser_view()}
-        except MissingLightingRecord:
-            pass
         authority = await self._authority(scope)
         if any(site not in self.clients for site in request.sites):
             raise LightingUnavailable("home lighting is not configured")
@@ -201,28 +227,51 @@ class LightingService:
             raise ValueError("confirmation differs from retained review")
         if retained.state != "review":
             return await self.outcome(session, confirmation.operation_id)
-        current = await self._authority(scope)
-        if current.model_dump(exclude={"valid_until"}) != retained.authority.model_dump(exclude={"valid_until"}):
+        if not self._unchanged(await self._authority(scope), retained):
             raise ForbiddenError("lighting authority changed after review")
         claimed = self.journal.claim_action(confirmation, **scope, commitment=self.commitment, now=self.now())
         review = claimed.review
+        self._dispatching.add(review.operation_id)
+        try:
+            sites = dict.fromkeys(operation.site_id for operation in review.operations)
+            await asyncio.gather(*(self._dispatch_site(scope, claimed, site) for site in sites))
+            return _summary(self.journal.finish_action(review.operation_id, **scope))
+        finally:
+            self._dispatching.discard(review.operation_id)
+
+    async def _dispatch_site(self, scope, claimed, site):
+        review, client = claimed.review, self.clients[site]
         expires_ms = int(review.expires_at.timestamp() * 1000)
         for index, operation in enumerate(review.operations):
+            if operation.site_id != site:
+                continue
+            # Stop, leaving the rest pending (later settled as not sent), if the review
+            # is about to expire or the owner's authority changed since the last operation.
+            if self.now() + OPERATION_BUDGET > review.expires_at:
+                return
             try:
-                result = await self.clients[operation.site_id].execute(
-                    operation, request_id=review.operation_id, index=index,
-                    revision=review.revision(operation.site_id), expires_at_ms=expires_ms)
+                current = await self._authority(scope)
+            except Exception:
+                return
+            if not self._unchanged(current, claimed):
+                return
+            try:
+                result = await client.execute(operation, request_id=review.operation_id, index=index,
+                                              revision=review.revision(site), expires_at_ms=expires_ms)
             except LightingRefused:
                 result = "not_sent"
             except OutcomeUnknown:
                 result = "unknown"
-            claimed = self.journal.record_result(review.operation_id, index, result, **scope)
-        return _summary(self.journal.finish_action(review.operation_id, **scope))
+            self.journal.record_result(review.operation_id, index, result, **scope)
+            if result == "unknown":
+                return  # an unresponsive home is not asked again in this dispatch
 
     async def outcome(self, session, operation_id):
         scope = self._scope(session)
         retained = self.journal.read_action(operation_id, **scope)
-        if retained.state == "review":
+        await self._same_owner(scope, retained)
+        if retained.state == "review" or operation_id in self._dispatching:
+            # Never settle operations this process may still be sending.
             return _summary(retained)
         review = retained.review
         for index, (operation, result) in enumerate(zip(review.operations, retained.results)):
@@ -232,7 +281,11 @@ class LightingService:
                 found = await self.clients[operation.site_id].outcome(request_id=review.operation_id, index=index)
             except OutcomeUnknown:
                 continue
-            # 'absent' is final at the home: this operation was never and will never be sent.
-            settled = {"absent": "not_sent"}.get(found, found)
-            retained = self.journal.record_result(review.operation_id, index, settled, **scope)
+            if found == "absent":
+                # 'absent' is final at the home: never sent, and now never will be. It proves
+                # nothing for an operation the home already acknowledged (its record may be pruned).
+                if result not in ("pending", "unknown"):
+                    continue
+                found = "not_sent"
+            retained = self.journal.record_result(review.operation_id, index, found, **scope)
         return _summary(retained)

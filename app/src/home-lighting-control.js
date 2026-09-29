@@ -12,6 +12,10 @@
   // acted on. That choice is a default target, never an authority.
   let active=null,located=null;
   const LAST_SITE="home.lastActedSite",LOCATION_TTL_MS=30000,LOCATION_TIMEOUT_MS=1500;
+  // The card works out of sight; it appears only when the owner is needed: an
+  // unconfirmed result to look up, or no answer within REVEAL_MS (for example
+  // an expired Home Agent sign-in, which only the card can show).
+  const REVEAL_MS=5000;
   const HOME={echo:"Los Angeles",victoria:"Victoria"};
   const SITES=["echo","victoria"], OPERATIONS=["on","off","brightness"];
   const RESULTS=["succeeded","failed","not_sent","unknown","pending"];
@@ -109,11 +113,15 @@
     frame.title="Lighting review";
     frame.referrerPolicy="no-referrer";
     frame.setAttribute("allow","");
-    frame.style.cssText="display:block;width:100%;max-width:520px;height:176px;border:0;border-radius:10px;background:#141a18;color-scheme:dark";
-    let timer,deadline,done=false,loads=0,confirming=false;
+    frame.style.cssText="display:block;width:100%;max-width:520px;height:0;border:0;border-radius:10px;background:#141a18;color-scheme:dark;opacity:0;transition:opacity .15s ease";
+    let timer,deadline,revealTimer,done=false,loads=0,confirming=false,revealed=false,height=176;
+    const reveal=()=>{
+      if(revealed || done) return;
+      revealed=true;frame.style.height=height+"px";frame.style.opacity="1";
+    };
     const valid=()=>!done && options.isCurrent();
     const dispose=()=>{
-      done=true;clearInterval(timer);clearTimeout(deadline);root.removeEventListener("message",receive);
+      done=true;clearInterval(timer);clearTimeout(deadline);clearTimeout(revealTimer);root.removeEventListener("message",receive);
       frame.remove();
       if(active===handle) active=null;
     };
@@ -122,7 +130,10 @@
       const value=event.data;
       if(!valid() || event.origin!==origin || event.source!==frame.contentWindow || !value || value.version!==1 || value.nonce!==nonce) return;
       if(value.type==="home.lighting.size") {
-        if(exact(value,["version","type","nonce","height"]) && Number.isInteger(value.height) && value.height>=48 && value.height<=640) frame.style.height=value.height+"px";
+        if(exact(value,["version","type","nonce","height"]) && Number.isInteger(value.height) && value.height>=48 && value.height<=640) {
+          height=value.height;
+          if(revealed) frame.style.height=height+"px";
+        }
         return;
       }
       if(value.type!=="home.lighting.result" || typeof value.status!=="string") return;
@@ -159,8 +170,9 @@
       };
       if(!messages[status]) return;
       reply(messages[status]);
-      // A pending outcome keeps the card so its lookup stays reachable.
-      if(status!=="pending") dispose();
+      // A pending outcome keeps the card, now shown, so its lookup stays reachable.
+      if(status==="pending") reveal();
+      else dispose();
     };
     frame.addEventListener("load",()=>{
       // A reloaded or re-attached frame lost its nonce; never re-bind it.
@@ -175,6 +187,7 @@
       if(!valid()) {handle.cancel();return;}
       frame.contentWindow?.postMessage({version:1,type:"home.lighting.request",nonce,request},origin);
     },500);
+    revealTimer=setTimeout(reveal,REVEAL_MS);
     deadline=setTimeout(()=>{
       if(valid()) reply(confirming ? "The lighting card timed out after the request was sent. Lights may have changed; check them before asking again." :
         "The lighting card timed out. Nothing was changed.");

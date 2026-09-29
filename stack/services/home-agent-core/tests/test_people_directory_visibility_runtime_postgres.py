@@ -51,7 +51,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from psycopg.types.range import Range
@@ -63,6 +63,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app import schema
 from app.config import Settings
+from app.context import RelationshipPredicate
 from app.db import Database
 from app.ids import uuid7
 from app.models import PersonCreate, ReviewedPrivacyDirectiveImport
@@ -798,10 +799,10 @@ async def test_non_person_predicates_never_reach_the_relationships_view() -> Non
     """place_social_descriptor is a ContextPredicate, so nothing downstream stops it.
 
     ``RelationshipEntry.predicate`` is typed ``ContextPredicate``
-    (app/context.py:18), which admits ``place_social_descriptor``. The model
+    (app/context.py), which admits ``place_social_descriptor``. The model
     would therefore validate such a row happily. The only thing keeping a
     place-shaped fact out of a person-to-person view is
-    ``CoreStore._RELATIONSHIP_PREDICATES`` (app/store.py:3354), and the seeded
+    ``CoreStore._RELATIONSHIP_PREDICATES`` (app/store.py), and the seeded
     descriptor fact carries a resolvable person_id in its object so the join
     cannot be what excludes it.
     """
@@ -816,7 +817,8 @@ async def test_non_person_predicates_never_reach_the_relationships_view() -> Non
                 entry.fact_id for entry in view.relationships
             }
             assert all(
-                entry.predicate == "parent_of" for entry in view.relationships
+                entry.predicate in get_args(RelationshipPredicate)
+                for entry in view.relationships
             ), "the relationships view is person-to-person only"
 
         # The row really is there and really would resolve: without this the
@@ -841,3 +843,128 @@ async def test_non_person_predicates_never_reach_the_relationships_view() -> Non
                 )
             ).scalar_one()
         assert resolvable == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _configured(), reason="E5n URLs are not configured")
+async def test_every_person_to_person_predicate_is_read_under_the_same_filter() -> None:
+    """Each relationship predicate is returned, and none escapes the filter.
+
+    The household read once listed parent_of alone, so a partner, sibling or
+    friend recorded by the kernel never reached the People tab. Widening the
+    predicate list must not widen who can be named: for every predicate an
+    edge between two visible people is returned, and an edge with a directed
+    or edge-blocked person at either end is not.
+
+    Symmetric predicates are seeded as the kernel writes them, one edge each
+    way, so each direction is checked on its own.
+    """
+
+    predicates = get_args(RelationshipPredicate)
+    assert "parent_of" in predicates
+    assert "place_social_descriptor" not in predicates
+
+    async with _store() as store, _seeded_household(store) as household:
+        # fact_id -> (predicate, subject, object). Seeded under the household's
+        # memory transaction so its teardown removes them with the rest.
+        visible: dict[uuid.UUID, tuple[str, uuid.UUID, uuid.UUID]] = {}
+        hidden: dict[uuid.UUID, tuple[str, uuid.UUID, uuid.UUID]] = {}
+
+        def pairs(
+            left: uuid.UUID, right: uuid.UUID, predicate: str
+        ) -> list[tuple[uuid.UUID, uuid.UUID]]:
+            if predicate == "parent_of":
+                return [(left, right)]
+            return [(left, right), (right, left)]
+
+        for predicate in predicates:
+            for subject_id, object_id in pairs(
+                household.self_person_id, household.peer_person_id, predicate
+            ):
+                visible[uuid7()] = (predicate, subject_id, object_id)
+            for other in (
+                household.directed_person_id,
+                household.blocked_person_id,
+            ):
+                # The hidden person at each end in turn, for every predicate:
+                # a filter applied to one end only must fail here.
+                for subject_id, object_id in (
+                    (other, household.peer_person_id),
+                    (household.self_person_id, other),
+                ):
+                    hidden[uuid7()] = (predicate, subject_id, object_id)
+
+        now = datetime.now(UTC)
+        async with store.database.transaction(
+            principal_id=household.principal["principal_id"],
+            serializable=True,
+        ) as connection:
+            for fact_id, (predicate, subject_id, object_id) in {
+                **visible,
+                **hidden,
+            }.items():
+                await connection.execute(
+                    insert(schema.fact_versions).values(
+                        **_fact(
+                            fact_id=fact_id,
+                            subject_id=subject_id,
+                            predicate=predicate,
+                            object_person_id=object_id,
+                            principal_id=household.principal["principal_id"],
+                            transaction_id=household.transaction_id,
+                            authority="authorized_administrator",
+                            now=now,
+                        )
+                    )
+                )
+
+        # Before anyone is hidden, every seeded edge comes back. Without this
+        # the exclusions below could pass because the seed silently failed.
+        before = await store.relationships(
+            household.principal, household.viewer_ha_user_id
+        )
+        before_ids = {entry.fact_id for entry in before.relationships}
+        assert set(visible) | set(hidden) <= before_ids
+        assert {
+            entry.predicate
+            for entry in before.relationships
+            if entry.fact_id in visible
+        } == set(predicates)
+
+        await store.import_reviewed_privacy_directive(
+            household.directed_person_id,
+            ReviewedPrivacyDirectiveImport(
+                directive="do_not_track",
+                source_ref=f"test:people-directory:{household.viewer_ha_user_id}",
+                source_version=1,
+                source_snapshot_sha256="d" * 64,
+            ),
+        )
+        await _block_user(
+            store,
+            ha_user_id=household.block_holder_ha_user_id,
+            person_id=household.blocked_person_id,
+        )
+
+        after = await store.relationships(
+            household.principal, household.viewer_ha_user_id
+        )
+        returned = {entry.fact_id: entry for entry in after.relationships}
+        for fact_id, (predicate, subject_id, object_id) in visible.items():
+            assert fact_id in returned, predicate
+            entry = returned[fact_id]
+            assert entry.predicate == predicate
+            assert entry.subject_person_id == subject_id
+            assert entry.object_person_id == object_id
+            assert entry.subject_display_name == household.display_names[
+                subject_id
+            ]
+            assert entry.object_display_name == household.display_names[
+                object_id
+            ]
+        for fact_id, (predicate, _subject_id, _object_id) in hidden.items():
+            assert fact_id not in returned, (
+                f"a {predicate} edge naming a hidden person must not be read"
+            )
+        assert household.directed_person_id not in _named(after)
+        assert household.blocked_person_id not in _named(after)

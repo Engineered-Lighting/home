@@ -7,6 +7,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyAgentOrigin, parseAgentOriginBoundary } from "./agent-origin.mjs";
+import { CLIENT_ADDRESS, homeLocatorFromEnv, proxyProtocolListener } from "./home-location.mjs";
 import { safeFile } from "./path-security.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -219,6 +220,26 @@ const stackTokenProxy = loadStackTokenProxy();
 const legacyHaProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_HA_PROXY");
 const haTokenProxy = loadHaTokenProxy();
 const legacyVisionProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_VISION_PROXY");
+// Default home for Home chat commands that name none (never an authority).
+const homeLocator = (() => {
+  try {
+    return homeLocatorFromEnv(process.env, {
+      haTarget: envTarget("HOME_WEB_HA_TARGET", "http://192.168.0.125:8123"),
+      haToken: haTokenProxy.enabled ? haTokenProxy.token : "",
+    });
+  } catch (error) {
+    console.warn(`[home-location] disabled: ${error.message}`);
+    return homeLocatorFromEnv({ HOME_WEB_SITE_ZONES: "" }, { haTarget: "", haToken: "" });
+  }
+})();
+
+async function handleHomeLocation(req, res) {
+  if (req.method !== "GET") {
+    sendJson(res, 405, { ok: false, error: "method_not_allowed" }, { Allow: "GET" });
+    return;
+  }
+  sendJson(res, 200, await homeLocator.locate(req.socket[CLIENT_ADDRESS] || ""));
+}
 
 function rx(pattern) {
   return (suffix) => pattern.test(suffix.split("?")[0]);
@@ -1701,6 +1722,7 @@ function checkConfig() {
     stackTokenProxySource: stackTokenProxy.source,
     haTokenProxyEnabled: haTokenProxy.enabled,
     haTokenProxySource: haTokenProxy.source,
+    homeLocation: homeLocator.enabled,
     agentOriginBoundary: {
       configured: agentOriginBoundary.configured,
       valid: agentOriginBoundary.valid,
@@ -1798,6 +1820,10 @@ const server = http.createServer({
   }
 
   if (!requireAuth(req, res)) return;
+  if (parsed.pathname === "/api/home/location") {
+    await handleHomeLocation(req, res);
+    return;
+  }
   const disabledRoute = findDisabledRoute(parsed.pathname);
   if (disabledRoute) {
     sendCapabilityDisabled(res, `legacy_proxy:${disabledRoute.prefix.slice("/proxy/".length)}`);
@@ -1835,7 +1861,8 @@ server.on("upgrade", (req, socket, head) => {
   proxyUpgrade(req, socket, head, route);
 });
 
-server.listen(PORT, HOST, () => {
+// Tailscale Serve may prepend a PROXY protocol line naming the tailnet client.
+proxyProtocolListener(server).listen(PORT, HOST, () => {
   console.log(`Home web gateway listening on http://${HOST}:${PORT}`);
   console.log("Use Tailscale Serve to expose this privately to your tailnet.");
 });

@@ -29,6 +29,9 @@ on:
       - "tools/run-web-gateway-path-security-tests.mjs"
       - "tools/run-web-gateway-stack-token-tests.js"
       - "tools/run-web-gateway-ha-token-tests.mjs"
+      - "tools/run-web-gateway-home-location-tests.mjs"
+      - "tools/run-lighting-intent-tests.js"
+      - "app/src/home-lighting-intent.js"
       - "web-gateway/**"
   push:
     branches: [main, codex/home-agent-integration]
@@ -59,6 +62,9 @@ on:
       - "tools/run-web-gateway-path-security-tests.mjs"
       - "tools/run-web-gateway-stack-token-tests.js"
       - "tools/run-web-gateway-ha-token-tests.mjs"
+      - "tools/run-web-gateway-home-location-tests.mjs"
+      - "tools/run-lighting-intent-tests.js"
+      - "app/src/home-lighting-intent.js"
       - "web-gateway/**"
   workflow_dispatch:
 
@@ -143,6 +149,8 @@ jobs:
           node_run node tools/run-web-gateway-path-security-tests.mjs
           node_run node tools/run-web-gateway-stack-token-tests.js
           node_run node tools/run-web-gateway-ha-token-tests.mjs
+          node_run node tools/run-web-gateway-home-location-tests.mjs
+          node_run node tools/run-lighting-intent-tests.js
           node_run npm --prefix stack/services/home-agent-bff run check
           node_run npm --prefix stack/services/home-agent-bff test
           node_run npm --prefix stack/services/home-agent-origin run check

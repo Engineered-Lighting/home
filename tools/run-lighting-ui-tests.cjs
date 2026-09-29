@@ -7,9 +7,15 @@ const {chromium}=require("playwright");
 const http=require("node:http");
 const root=path.resolve(__dirname,"..");
 const VIEWPORTS={desktop:{width:1280,height:800},phone:{width:375,height:812}};
-const MODES=["direct","both-homes","partial","unknown","clarify","not-permitted","ask-home","la-view"];
-const PROMPTS={"both-homes":"Turn off the lights in both homes","clarify":"Turn off the attic light in Victoria",
-  "ask-home":"Turn off the kitchen light","la-view":"Turn off the kitchen light"};
+const MODES=["direct","both-homes","partial","unknown","clarify","not-permitted",
+  "manual-victoria","auto-victoria","auto-la","fallback-last","fallback-default"];
+// Commands naming no home: the default home comes from the hand-picked choice,
+// then the gateway's location, then the last home acted on.
+const UNNAMED=["manual-victoria","auto-victoria","auto-la","fallback-last","fallback-default"];
+const PROMPTS={"both-homes":"Turn off the lights in both homes","clarify":"Turn off the attic light in Victoria"};
+for(const mode of UNNAMED) PROMPTS[mode]="Turn off the kitchen light";
+const LOCATION={"auto-victoria":{version:1,site:"victoria",basis:"network",label:"on the Victoria network"},
+  "auto-la":{version:1,site:"echo",basis:"phone",label:"your phone is in Los Angeles"}};
 const homePage=(mode,text)=>`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{margin:0;font:15px system-ui;background:#0b0f0e;color:#eee}main{padding:16px}#ask{min-height:44px}</style>
 <main><button id="ask">Ask Home</button><div id="thread"></div></main>
@@ -19,8 +25,8 @@ const homePage=(mode,text)=>`<!doctype html><meta name="viewport" content="width
 const thread=document.getElementById('thread');
 const addEvent=e=>{events.push(e);const row=document.createElement('div');row.className='event '+e.kind;row.textContent=e.text;thread.appendChild(row);
   if(e.mountReview){const slot=document.createElement('div');row.appendChild(slot);e.mountReview(slot);}};
-document.getElementById('ask').onclick=()=>{handled=HomeLightingControl.run(${JSON.stringify(text)},
-  {addEvent,viewedHome:${JSON.stringify(mode==="la-view" ? "echo" : "victoria")},isCurrent:()=>current});};
+document.getElementById('ask').onclick=async()=>{handled=await HomeLightingControl.run(${JSON.stringify(text)},
+  {addEvent,homeChoice:${JSON.stringify(mode==="manual-victoria" ? "victoria" : "auto")},isCurrent:()=>current});};
 </script>`;
 
 function served(originServer,pathname) {
@@ -41,6 +47,10 @@ async function scenario(browser,originServer,mode,viewportName) {
     const request=route.request(),url=new URL(request.url());
     const reply=(value,status=200)=>route.fulfill({status,contentType:"application/json",body:JSON.stringify(value)});
     assert.ok(["https://home.test","https://agent.test"].includes(url.origin),url.href);
+    if(url.origin==="https://home.test" && url.pathname==="/api/home/location") {
+      calls.push({operation:"location"});
+      return reply(LOCATION[mode] || {version:1,site:null,basis:null,label:"location unknown"});
+    }
     if(url.origin==="https://home.test") {
       const file={"/home-lighting-intent.js":"home-lighting-intent.js","/home-lighting-control.js":"home-lighting-control.js"}[url.pathname];
       if(file) return route.fulfill({contentType:"text/javascript",body:fs.readFileSync(path.join(root,"app/src",file),"utf8")});
@@ -83,19 +93,21 @@ async function scenario(browser,originServer,mode,viewportName) {
   const count=operation=>calls.filter(c=>c.operation===operation).length;
   try {
     const page=await context.newPage();await page.goto("https://home.test/");
+    if(mode==="fallback-last") await page.evaluate(()=>localStorage.setItem("home.lastActedSite","victoria"));
     await page.getByRole("button",{name:"Ask Home"}).click();
+    await page.waitForFunction(()=>handled!==null);
     assert.equal(context.pages().length,1,"no popup window may open");
     const frame=page.frameLocator("iframe[title='Lighting review']");
     const check=frame.getByRole("button",{name:"Check outcome"});
     const replied=prefix=>page.waitForFunction(p=>events.some(e=>e.kind==="home" && e.text.startsWith(p)),prefix);
     const frameGone=()=>page.waitForFunction(()=>!document.querySelector("iframe"));
-    if(mode==="la-view") {
-      // Unnamed commands in the Los Angeles view stay on the existing path.
+    const stored=()=>page.evaluate(()=>localStorage.getItem("home.lastActedSite"));
+    if(mode==="auto-la" || mode==="fallback-default") {
+      // Unnamed commands for Los Angeles stay on the existing path.
       assert.equal(await page.evaluate(()=>handled),false);
       assert.equal(await page.locator("iframe").count(),0);
-    } else if(mode==="ask-home") {
-      await replied("Which home do you mean");
-      assert.equal(await page.locator("iframe").count(),0);
+      assert.equal(count("propose"),0);
+      assert.equal(await stored(),"echo");
     } else if(mode==="clarify") {
       await replied("I couldn't find \"attic\" in Victoria. Lights there: Kitchen, Porch.");
       await frameGone();
@@ -111,9 +123,17 @@ async function scenario(browser,originServer,mode,viewportName) {
         assert.equal(await page.evaluate(()=>{try {return !!document.querySelector("iframe").contentWindow.document;} catch {return "blocked";}}),"blocked");
         await check.click();
       }
+      const done="Done. Kitchen (Victoria): turned off.";
       await replied(mode==="partial" ? "Some lights were not changed. Kitchen (Victoria): not changed." :
-        mode==="both-homes" ? "Done. Kitchen (Los Angeles): turned off; Kitchen (Victoria): turned off." :
-        "Done. Kitchen (Victoria): turned off.");
+        mode==="both-homes" ? "Done. Kitchen (Los Angeles): turned off; Kitchen (Victoria): turned off." : done);
+      const last=await page.evaluate(()=>events.filter(e=>e.kind==="home").at(-1).text);
+      if(mode==="auto-victoria") assert.equal(last,done+" (You're in Victoria.)");
+      else if(mode==="fallback-last") assert.equal(last,done+" (I couldn't tell where you are, so I used Victoria, the last home you used.)");
+      else if(!["partial","both-homes"].includes(mode)) assert.equal(last,done);
+      if(UNNAMED.includes(mode)) assert.deepEqual(calls.find(c=>c.operation==="propose").body.sites,["victoria"]);
+      assert.equal(count("location"),["auto-victoria","fallback-last"].includes(mode) ? 1 : 0);
+      // Only a single home that actually changed becomes the "last home acted on".
+      assert.equal(await stored(),["both-homes","partial"].includes(mode) ? null : "victoria");
       if(mode==="direct") await page.screenshot({path:path.join(root,`.tmp/lighting-inline-${viewportName}.png`)});
       await frameGone();
       assert.equal(count("confirm"),1);

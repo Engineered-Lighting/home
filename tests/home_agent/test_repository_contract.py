@@ -640,9 +640,10 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("confirmPrincipalBinding", panel)
         # Principal-binding confirmation stays disabled, so the panel must not
         # mint a binding confirmation nonce. Every client-minted UUID has to be
-        # one of the reviewed uses: the shared-preference proposal operation_id
-        # (an idempotency key; confirmation still needs the Core-issued
-        # reviewed_digest) and the v4 relationship attestation nonces.
+        # one of the reviewed uses: the shared-preference and lighting consent
+        # proposal operation_ids (idempotency keys; confirmation still needs
+        # the Core-issued reviewed_digest) and the v4 relationship attestation
+        # nonces.
         self.assertEqual(
             sorted(
                 line.strip()
@@ -653,7 +654,14 @@ class RepositoryBoundaryTests(unittest.TestCase):
                 "attestation_nonce: crypto.randomUUID(),",
                 "attestation_nonce: crypto.randomUUID(),",
                 "const operation_id = window.crypto.randomUUID();",
+                "const operation_id = window.crypto.randomUUID();",
             ],
+        )
+        self.assertRegex(
+            panel,
+            r"const operation_id = window\.crypto\.randomUUID\(\);\n\s*"
+            r"const result = \(await api\.lighting\(\"consent-propose\", "
+            r"\{version:1, operation_id\}",
         )
         self.assertRegex(
             panel,

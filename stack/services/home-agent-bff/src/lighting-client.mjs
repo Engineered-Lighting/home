@@ -109,8 +109,8 @@ export class LightingClient {
     const controller=new AbortController();
     const abort=()=>controller.abort();
     signal?.addEventListener("abort",abort,{once:true});
-    // Core allows each home 10 s to act and 3 s to verify; two homes plus lookups.
-    const timer=setTimeout(abort,45000);
+    // Core's lighting ingress allows 75 s: a dispatch ends within ~66 s of confirmation.
+    const timer=setTimeout(abort,80000);
     let onAbort;
     const cancelled=new Promise((_,reject)=>{
       onAbort=()=>reject(new Error("lighting_outcome_unknown"));

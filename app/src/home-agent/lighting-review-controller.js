@@ -1,23 +1,26 @@
 (function(root) {
   "use strict";
-  // Inline cross-home lighting review. Home frames this Agent-origin page inside
-  // the chat card; only the provisioned Home origins may frame it (Origin CSP
-  // frame-ancestors). The Agent session cookie, CSRF token and API calls stay
-  // on this origin: Home sends only a typed request and receives only
-  // nonce-bound result messages. Nothing is sent to a home before an armed,
-  // trusted click on Confirm.
+  // Inline cross-home lighting. Home frames this Agent-origin page inside the
+  // chat card; only the provisioned Home origins may frame it (Origin CSP
+  // frame-ancestors). The Agent session cookie, CSRF token and API calls stay on
+  // this origin: Home sends only a typed request and receives only nonce-bound
+  // result messages.
+  //
+  // The owner chose (2026-09-29) direct execution, like Los Angeles's own chat:
+  // once lighting control is allowed in the Agent panel, a request that resolves
+  // to exact allowlisted lights is carried out immediately, without a second
+  // click. Unclear requests still come back as questions, and an uncertain
+  // result offers a status check only; nothing is ever sent twice.
   const document=root.document, api=new root.HomeAgentApi();
-  const elements=Object.fromEntries(["status","changes","detail","confirm","check","cancel","sign-in","retry-session"]
+  const elements=Object.fromEntries(["status","changes","detail","check","sign-in","retry-session"]
     .map(id=>[id,document.getElementById(id)]));
   const nonce=root.location.hash.slice(1);
   const parent=root.parent;
-  const ARM_DELAY_MS=500;
   const SITES=["echo","victoria"], OPERATIONS=["on","off","brightness"];
   const HOME={echo:"Los Angeles",victoria:"Victoria"};
   const RESULTS=["succeeded","failed","not_sent","unknown","pending"];
   const CLARIFY=["unknown_light","ambiguous_light","no_eligible_lights","not_dimmable","light_unavailable","too_many_lights"];
-  let origins=[], bound=null, review=null, confirmation=null, busy=false, finished=false;
-  let expiryTimer, armTimer, armed=false, lastHeight=0;
+  let origins=[], bound=null, operationId=null, busy=false, finished=false, lastHeight=0;
   const exact=(v,keys)=>v && typeof v==="object" && !Array.isArray(v) && Object.keys(v).sort().join()===[...keys].sort().join();
   const name=v=>typeof v==="string" && v.length>=1 && v.length<=120 && !/[\u0000-\u001f\u007f]/.test(v);
   const change=op=>op.operation==="brightness" ? `set to ${op.brightness}%` : `turn ${op.operation}`;
@@ -30,9 +33,7 @@
     lastHeight=height;post({type:"home.lighting.size",height});
   }
   function end(status,text,extra={}) {
-    finished=true;clearTimeout(expiryTimer);disarm();
-    elements.confirm.hidden=true;elements.check.hidden=true;elements.cancel.hidden=true;
-    setStatus(text);send({status,...extra});
+    finished=true;elements.check.hidden=true;setStatus(text);send({status,...extra});
   }
   function validRequest(v) {
     return exact(v,["sites","targets","operation","brightness"]) && Array.isArray(v.sites) && v.sites.length>=1 &&
@@ -42,9 +43,6 @@
       OPERATIONS.includes(v.operation) &&
       (v.operation==="brightness" ? Number.isInteger(v.brightness) && v.brightness>=1 && v.brightness<=100 : v.brightness===null);
   }
-  function results(summary) {
-    return summary.results.map(r=>({site_id:r.site_id,name:r.name,operation:r.operation,brightness:r.brightness,status:r.status}));
-  }
   function validSummary(value) {
     return exact(value,["version","operation_id","status","results"]) && value.version===1 &&
       ["done","partial","failed","unknown"].includes(value.status) && Array.isArray(value.results) &&
@@ -52,25 +50,6 @@
         exact(r,["site_id","name","operation","brightness","status"]) && SITES.includes(r.site_id) && name(r.name) &&
         OPERATIONS.includes(r.operation) && RESULTS.includes(r.status));
   }
-  // Confirm accepts only a trusted click after the button has been fully on
-  // screen for a moment. This blocks instant or off-screen click placement; it
-  // cannot stop a script already running in Home from styling the frame.
-  function disarm() {armed=false;clearTimeout(armTimer);elements.confirm.disabled=true;}
-  const visibility=new root.IntersectionObserver(entries=>{
-    const entry=entries.at(-1);
-    disarm();
-    if(entry.isIntersecting && entry.intersectionRatio>=0.99 && document.visibilityState==="visible" && !elements.confirm.hidden) {
-      armTimer=setTimeout(()=>{if(!elements.confirm.hidden && !finished) {armed=true;elements.confirm.disabled=false;}},ARM_DELAY_MS);
-    }
-  },{threshold:[0,0.99,1]});
-  function showConfirm() {
-    elements.confirm.textContent="Confirm";elements.confirm.hidden=false;elements.cancel.hidden=false;disarm();
-    visibility.unobserve(elements.confirm);visibility.observe(elements.confirm);resize();
-  }
-  document.addEventListener("visibilitychange",()=>{
-    if(document.visibilityState!=="visible") disarm();
-    else if(!elements.confirm.hidden) {visibility.unobserve(elements.confirm);visibility.observe(elements.confirm);}
-  });
   async function session() {
     const value=await api.session();
     if(!value.authenticated || value.lighting_enabled!==true ||
@@ -100,6 +79,20 @@
     }));
     elements.changes.hidden=false;
   }
+  function outcome(summary) {
+    if(finished) return;
+    if(summary && validSummary(summary) && summary.status!=="unknown") {
+      showChanges(summary.results);
+      end(summary.status,summary.status==="done" ? "Done." : summary.status==="failed" ? "No light was changed." :
+        "Some lights were not changed.",{results:summary.results.map(r=>({site_id:r.site_id,name:r.name,
+          operation:r.operation,brightness:r.brightness,status:r.status}))});
+      return;
+    }
+    // An uncertain result offers lookup only; the request is never sent again.
+    elements.check.hidden=false;
+    setStatus("The result is not confirmed yet. Check its status; do not ask again.");
+    send({status:"pending"});
+  }
   async function receive(event) {
     const value=event.data;
     if(finished || bound || event.source!==parent || !origins.includes(event.origin) ||
@@ -107,6 +100,7 @@
         value.type!=="home.lighting.request" || value.nonce!==nonce || !validRequest(value.request)) return;
     bound={origin:event.origin,request:structuredClone(value.request)};
     busy=true;setStatus("Checking the lights…");
+    let review=null;
     try {
       await session();
       const result=(await api.lighting("propose",{version:1,operation_id:root.crypto.randomUUID(),...bound.request})).result;
@@ -122,58 +116,35 @@
       if(result?.status!=="review" || !exact(result.review,["version","operation_id","expires_at","reviewed_digest","operations"]) ||
           !Array.isArray(result.review.operations) || !result.review.operations.length) throw new Error("invalid");
       review=result.review;
-      showChanges(review.operations);
-      setStatus(review.operations.length===1 ? "Change this light?" : `Change these ${review.operations.length} lights?`);
-      showConfirm();
-      send({status:"review_pending"});
-      expiryTimer=setTimeout(()=>{
-        if(!confirmation && !finished) end("expired","This review expired. Nothing was changed.");
-      },Math.max(0,Date.parse(review.expires_at)-Date.now()));
     } catch (error) {
+      busy=false;
       if(finished) return;
       if(error?.status===403 && error.message==="lighting_not_permitted") {
         end("not_permitted","Lighting control is not allowed yet. Nothing was changed.");
       } else end("unavailable","Lighting is unavailable. Nothing was changed.");
-    } finally {busy=false;}
-  }
-  function outcome(summary) {
-    if(finished) return;
-    if(summary && validSummary(summary) && summary.status!=="unknown") {
-      finished=true;elements.check.hidden=true;
-      showChanges(summary.results);
-      setStatus(summary.status==="done" ? "Done." : summary.status==="failed" ? "No light was changed." : "Some lights were not changed.");
-      send({status:summary.status,results:results(summary)});
       return;
     }
-    // An unknown outcome offers lookup only: never a second confirm or a cancel.
-    elements.cancel.hidden=true;elements.check.hidden=false;
-    setStatus("The result is not confirmed yet. Check its status; do not ask again.");
-    send({status:"pending"});
-  }
-  elements.confirm.addEventListener("click",async event=>{
-    if(!event.isTrusted || !armed || busy || finished || confirmation || !review || Date.now()>=Date.parse(review.expires_at)) return;
-    busy=true;elements.confirm.hidden=true;elements.cancel.hidden=true;disarm();clearTimeout(expiryTimer);
-    confirmation={version:1,operation_id:review.operation_id,reviewed_digest:review.reviewed_digest};
-    setStatus("Switching…");send({status:"confirming"});
-    try {await session();outcome((await api.lighting("confirm",confirmation)).result);}
-    catch {outcome(null);}
+    showChanges(review.operations);
+    setStatus("Switching…");
+    operationId=review.operation_id;
+    send({status:"confirming"});
+    try {
+      outcome((await api.lighting("confirm",{version:1,operation_id:review.operation_id,
+        reviewed_digest:review.reviewed_digest})).result);
+    } catch { outcome(null); }
     finally {busy=false;}
-  });
+  }
   elements.check.addEventListener("click",async event=>{
-    if(!event.isTrusted || busy || finished || !confirmation) return;
+    if(!event.isTrusted || busy || finished || !operationId) return;
     busy=true;elements.check.disabled=true;
-    try {await session();outcome((await api.lighting("outcome",{version:1,operation_id:confirmation.operation_id})).result);}
+    try {await session();outcome((await api.lighting("outcome",{version:1,operation_id:operationId})).result);}
     catch {outcome(null);}
     finally {busy=false;elements.check.disabled=false;}
-  });
-  elements.cancel.addEventListener("click",event=>{
-    if(!event.isTrusted || busy || finished || confirmation || !bound) return;
-    end("cancelled","Cancelled. Nothing was changed.");
   });
   elements["retry-session"].addEventListener("click",authenticate);
   root.addEventListener("message",receive);
   root.addEventListener("resize",resize);
-  root.addEventListener("pagehide",()=>{finished=true;clearTimeout(expiryTimer);disarm();api.invalidateAuthority?.();});
-  if(root.top===root || root.top!==parent || !/^[a-f0-9]{32}$/.test(nonce)) end("unavailable","Open this review from a lighting request in the Home chat.");
+  root.addEventListener("pagehide",()=>{finished=true;api.invalidateAuthority?.();});
+  if(root.top===root || root.top!==parent || !/^[a-f0-9]{32}$/.test(nonce)) end("unavailable","Open this from a lighting request in the Home chat.");
   else {root.history.replaceState(null,"",root.location.pathname);authenticate();}
 })(window);

@@ -7,7 +7,7 @@ const {chromium}=require("playwright");
 const http=require("node:http");
 const root=path.resolve(__dirname,"..");
 const VIEWPORTS={desktop:{width:1280,height:800},phone:{width:375,height:812}};
-const MODES=["confirm","both-homes","partial","unknown","clarify","not-permitted","cancel","untrusted","ask-home","la-view"];
+const MODES=["direct","both-homes","partial","unknown","clarify","not-permitted","ask-home","la-view"];
 const PROMPTS={"both-homes":"Turn off the lights in both homes","clarify":"Turn off the attic light in Victoria",
   "ask-home":"Turn off the kitchen light","la-view":"Turn off the kitchen light"};
 const homePage=(mode,text)=>`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -86,7 +86,7 @@ async function scenario(browser,originServer,mode,viewportName) {
     await page.getByRole("button",{name:"Ask Home"}).click();
     assert.equal(context.pages().length,1,"no popup window may open");
     const frame=page.frameLocator("iframe[title='Lighting review']");
-    const confirm=frame.locator("#confirm"),check=frame.getByRole("button",{name:"Check outcome"});
+    const check=frame.getByRole("button",{name:"Check outcome"});
     const replied=prefix=>page.waitForFunction(p=>events.some(e=>e.kind==="home" && e.text.startsWith(p)),prefix);
     const frameGone=()=>page.waitForFunction(()=>!document.querySelector("iframe"));
     if(mode==="la-view") {
@@ -102,32 +102,19 @@ async function scenario(browser,originServer,mode,viewportName) {
     } else if(mode==="not-permitted") {
       await replied("Lighting control between homes is not allowed yet.");
       await frameGone();
-    } else if(mode==="cancel") {
-      await frame.getByRole("button",{name:"Cancel"}).click();
-      await replied("Cancelled. Nothing was changed.");await frameGone();
-    } else if(mode==="untrusted") {
-      await frame.locator("#confirm:not([disabled])").waitFor();
-      const agent=page.frames().find(f=>f.url().startsWith("https://agent.test/"));
-      await agent.evaluate(()=>{const b=document.getElementById("confirm");b.click();b.dispatchEvent(new MouseEvent("click",{bubbles:true}));});
-      assert.equal(await page.evaluate(()=>{try {return !!document.querySelector("iframe").contentWindow.document;} catch {return "blocked";}}),"blocked");
-      await page.waitForTimeout(400);
-      assert.equal(count("confirm"),0);
-      await confirm.click();
-      await replied("Done.");
     } else {
-      await frame.locator("#confirm:not([disabled])").waitFor();
-      assert.equal(count("confirm"),0);
-      const listed=await frame.locator("#changes li").allTextContents();
-      assert.deepEqual(listed,mode==="both-homes" ? ["Los Angeles · Kitchen: turn off","Victoria · Kitchen: turn off"] : ["Victoria · Kitchen: turn off"]);
-      if(mode==="confirm") await page.screenshot({path:path.join(root,`.tmp/lighting-inline-${viewportName}.png`)});
-      await confirm.click();
+      // Direct execution: a clear request is carried out without a second click.
       if(mode==="unknown") {
         await check.waitFor();
         await replied("The lighting result is not confirmed yet");
-        assert.equal(await confirm.isVisible(),false);
+        assert.equal(count("confirm"),1);
+        assert.equal(await page.evaluate(()=>{try {return !!document.querySelector("iframe").contentWindow.document;} catch {return "blocked";}}),"blocked");
         await check.click();
       }
-      await replied(mode==="partial" ? "Some lights were not changed. Kitchen (Victoria): not changed." : "Done.");
+      await replied(mode==="partial" ? "Some lights were not changed. Kitchen (Victoria): not changed." :
+        mode==="both-homes" ? "Done. Kitchen (Los Angeles): turned off; Kitchen (Victoria): turned off." :
+        "Done. Kitchen (Victoria): turned off.");
+      if(mode==="direct") await page.screenshot({path:path.join(root,`.tmp/lighting-inline-${viewportName}.png`)});
       await frameGone();
       assert.equal(count("confirm"),1);
       if(mode==="both-homes") assert.deepEqual(calls.find(c=>c.operation==="propose").body.sites,["echo","victoria"]);

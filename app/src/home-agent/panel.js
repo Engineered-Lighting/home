@@ -733,7 +733,7 @@ function LightingConsent({
   return React.createElement("section", {
     className: "agent-card agent-lighting-consent",
     "aria-busy": busy
-  }, React.createElement("h2", null, "Lighting control between homes"), React.createElement("p", null, "Choose whether Home can switch your allowlisted lights in Los Angeles and Victoria. Every change still waits for your confirmation in the chat."), React.createElement("div", {
+  }, React.createElement("h2", null, "Lighting control between homes"), React.createElement("p", null, "Choose whether Home can switch your allowlisted lights in Los Angeles and Victoria when you ask in the chat."), React.createElement("div", {
     role: "status",
     "aria-live": "polite"
   }, busy && React.createElement("p", null, status === "loading" ? "Preparing your lighting review..." : status === "confirming" ? "Confirming lighting control..." : "Checking the original confirmation..."), status === "unavailable" && React.createElement("p", null, "Lighting setup is unavailable. Check that both accounts are linked and you are signed in."), status === "unknown" && React.createElement("p", null, "The outcome is not confirmed. Check its status instead of submitting again."), status === "committed" && React.createElement("p", null, "Lighting control was allowed. In Home, try \"turn off the kitchen light in Victoria\"."), expired && status === "review" && React.createElement("p", null, "This review expired. Request a new review to continue.")), ["idle", "unavailable"].includes(status) && !blocked.current && !dispatched.current && React.createElement("button", {
@@ -744,7 +744,7 @@ function LightingConsent({
     checked: checked,
     disabled: expired || busy,
     onChange: event => setChecked(event.target.checked)
-  }), " Allow Home to switch these lights after I confirm each change."), React.createElement("p", null, React.createElement("button", {
+  }), " Allow Home to switch these lights when I ask."), React.createElement("p", null, React.createElement("button", {
     disabled: !checked || expired || busy,
     onClick: event => {
       if (event.nativeEvent.isTrusted) perform("confirm");

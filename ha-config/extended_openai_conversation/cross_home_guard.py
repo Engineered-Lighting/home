@@ -21,8 +21,8 @@ _ACTION = re.compile(
 )
 _QUESTION = re.compile(r"^(?:is|are|was|were|what|which|who|when|where|why|how|did|does|do|can you tell|tell me)\b")
 
-REPLY = ("I can't control devices in Victoria from here. In Home, ask for example "
-         "\"turn off the kitchen light in Victoria\", and confirm the change there.")
+REPLY = ("I can't control devices in Victoria from here. In the Home chat, ask for example "
+         "\"turn off the kitchen light in Victoria\".")
 
 
 def cross_home_action_reply(text: str | None) -> str | None:

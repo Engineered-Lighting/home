@@ -3,7 +3,7 @@
 Milestone 2 of shared intelligence, after shared preferences (see
 `SHARED-PREFERENCES-RELEASE-2026-09-28.md`). From Home in either house, the
 owner can switch lights in Los Angeles (`echo`), Victoria (`victoria`) or both
-homes, and nothing moves until they confirm the exact change in the chat.
+homes by asking in the chat.
 
 ## Rules
 
@@ -11,9 +11,13 @@ homes, and nothing moves until they confirm the exact change in the chat.
   brightness 1–100 % (brightness only on dimmable lights). No scenes, scripts,
   locks or other domains. Light groups are refused, even if allowlisted: a
   group would switch member lights that are not on the list.
-- The owner confirms a frozen proposal. It fixes the site, entity and operation
-  for each light, the allowlist revision, the authorization generation and a
-  60-second expiry.
+- After a one-time consent in the Agent panel, a request that resolves to exact
+  allowlisted lights is carried out directly, like Los Angeles's own chat (the
+  owner's choice, 2026-09-29; it is a hobby project and the stakes are low).
+  Core still freezes each request (site, entity and operation for each light,
+  the allowlist revision, the authorization generation and a 60-second
+  expiry) and the Agent page confirms that exact review immediately, so every
+  execution is signed, recorded and sent once.
 - "Both homes" produces separate operations and separate outcomes for each home.
   "Turn them off" with no clear referent, or a request that names no home, gets
   a clarifying question instead of a guess.

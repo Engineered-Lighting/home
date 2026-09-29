@@ -5,7 +5,8 @@
   // framed inline in the chat card (like the shared-preference review). Its
   // session, CSRF token and API calls never reach this page: Home sends only the
   // typed request and receives only results bound to this card's nonce, from
-  // that exact frame and origin. Nothing changes before Confirm in the frame.
+  // that exact frame and origin. At the owner's choice, a clear request is
+  // carried out directly (after the one-time consent); unclear ones are asked.
   let active=null;
   const HOME={echo:"Los Angeles",victoria:"Victoria"};
   const SITES=["echo","victoria"], OPERATIONS=["on","off","brightness"];
@@ -99,8 +100,7 @@
       const messages={
         pending:"The lighting result is not confirmed yet. Use Check outcome in the card; do not ask again.",
         not_permitted:"Lighting control between homes is not allowed yet. In the Home Agent panel, choose Review lighting control. Nothing was changed.",
-        cancelled:"Cancelled. Nothing was changed.",
-        expired:"That review expired before it was confirmed. Nothing was changed; ask again to continue.",
+        expired:"That request expired before it was sent. Nothing was changed; ask again to continue.",
         unavailable:"Lighting is unavailable right now. Nothing was changed.",
       };
       if(!messages[status]) return;
@@ -111,8 +111,8 @@
     frame.addEventListener("load",()=>{
       // A reloaded or re-attached frame lost its nonce; never re-bind it.
       if(++loads===1 || done) return;
-      if(valid()) reply(confirming ? "The lighting review closed after a confirmation was sent. Lights may have changed; check them before asking again." :
-        "The lighting review closed. Nothing was changed.");
+      if(valid()) reply(confirming ? "The lighting card closed after the request was sent. Lights may have changed; check them before asking again." :
+        "The lighting card closed. Nothing was changed.");
       dispose();
     });
     const handle={cancel(){dispose();}};
@@ -122,12 +122,12 @@
       frame.contentWindow?.postMessage({version:1,type:"home.lighting.request",nonce,request},origin);
     },500);
     deadline=setTimeout(()=>{
-      if(valid()) reply(confirming ? "The lighting review timed out after a confirmation was sent. Lights may have changed; check them before asking again." :
-        "The lighting review timed out. Nothing was changed.");
+      if(valid()) reply(confirming ? "The lighting card timed out after the request was sent. Lights may have changed; check them before asking again." :
+        "The lighting card timed out. Nothing was changed.");
       dispose();
     },300000);
     // The generic inline-review card (shared with preference reviews) mounts the frame.
-    emit({kind:"personal-memory-review",text:"Review below. Nothing changes until you confirm.",mountReview(container) {
+    emit({kind:"personal-memory-review",text:"Switching lights…",mountReview(container) {
       if(done || !container) return ()=>{};
       if(frame.parentNode!==container) container.appendChild(frame);
       return ()=>{if(frame.parentNode===container && !done) frame.remove();};

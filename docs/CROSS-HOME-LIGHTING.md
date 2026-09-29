@@ -125,7 +125,10 @@ restart. On Victoria, coordinate that restart with the Lab owner.
 3. **Home**. A lighting intent runs before camera and Home Assistant routing.
    Its confirmation uses the same framed Agent-origin card as in-chat preference
    review (#156), not a popup.
-4. **LA conversation guard** in `extended_openai_conversation`, refusing
-   actuation that names Victoria or both homes.
+4. **LA conversation guard** (`cross_home_guard.py` in
+   `extended_openai_conversation`), refusing actuation that names Victoria or
+   both homes. It is hooked into the live integration's conversation agent;
+   deploy it to LA Home Assistant, then check that "turn off the kitchen light
+   in Victoria" gets the fixed reply.
 5. **Live acceptance** in both homes. The owner must first pair at least one
    Victoria light and allowlist it.

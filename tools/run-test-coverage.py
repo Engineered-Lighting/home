@@ -123,11 +123,10 @@ SUITES: list[Suite] = [
              desc="world state aggregator + identity context"),
     _py_test("ha-config/extended_openai_conversation/test_external_routing.py",
              desc="external routing classifier + privacy"),
+    _py_test("ha-config/extended_openai_conversation/test_cross_home_guard.py",
+             desc="LA assistant declines actions on Victoria or both homes, before the model"),
     # The reviewed E4/containment design, which LA Home Assistant does not run,
     # is kept testable in its own reference copy beside the live integration.
-    _cmd_test("test_cross_home_guard_e4_reference",
-              ["py", "-3", str(REPO_ROOT / "ha-config/extended_openai_conversation_e4_reference/test_cross_home_guard.py")],
-              desc="E4 reference: LA assistant declines actions on Victoria or both homes"),
     _cmd_test("test_action_containment_e4_reference",
               ["py", "-3", str(REPO_ROOT / "ha-config/extended_openai_conversation_e4_reference/test_action_containment.py")],
               desc="E4 reference: model action tools removed from the catalog"),
@@ -158,6 +157,8 @@ SUITES: list[Suite] = [
              desc="_friendly_error_speech caps raw error JSON before TTS reads it"),
     _py_test("ha-config/extended_openai_conversation/test_visual_preroute.py",
              desc="live-camera preroute accepts mobile Unicode punctuation and rejects memory queries"),
+    _py_test("ha-config/extended_openai_conversation/test_grounded_look.py",
+             desc="grounded look captures with mapped lights and restores them"),
 
     # ── Addendum 31: production-QA orchestrator meta-tests + helpers ──
     _py_test("tools/qa_common.py",

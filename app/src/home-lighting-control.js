@@ -7,7 +7,11 @@
   // typed request and receives only results bound to this card's nonce, from
   // that exact frame and origin. At the owner's choice, a clear request is
   // carried out directly (after the one-time consent); unclear ones are asked.
-  let active=null;
+  // A command naming no home goes to the home the owner is in (the gateway's
+  // /api/home/location: device network, then phone zone), else the last home
+  // acted on. That choice is a default target, never an authority.
+  let active=null,located=null;
+  const LAST_SITE="home.lastActedSite",LOCATION_TTL_MS=30000,LOCATION_TIMEOUT_MS=1500;
   const HOME={echo:"Los Angeles",victoria:"Victoria"};
   const SITES=["echo","victoria"], OPERATIONS=["on","off","brightness"];
   const RESULTS=["succeeded","failed","not_sent","unknown","pending"];
@@ -15,6 +19,39 @@
   const clean=v=>String(v).replace(/[\u0000-\u001f\u007f*_`[\]<>#]/g,"").slice(0,120);
   const quote=v=>`"${clean(v)}"`;
   function reset() {active?.cancel();active=null;}
+
+  function lastActed() {
+    try {const site=root.localStorage.getItem(LAST_SITE);return SITES.includes(site) ? site : null;} catch {return null;}
+  }
+  function remember(site) {
+    try {if(SITES.includes(site)) root.localStorage.setItem(LAST_SITE,site);} catch {/* storage unavailable */}
+  }
+  async function locate() {
+    if(located && Date.now()-located.at<LOCATION_TTL_MS) return located.value;
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),LOCATION_TIMEOUT_MS);
+    try {
+      const response=await root.fetch("/api/home/location",{credentials:"same-origin",cache:"no-store",signal:controller.signal});
+      const body=response.ok ? await response.json() : null;
+      const value=body && body.version===1 && SITES.includes(body.site) && ["network","phone"].includes(body.basis) ?
+        {site:body.site,basis:body.basis,label:typeof body.label==="string" ? clean(body.label) : ""} : null;
+      located={at:Date.now(),value};
+      return value;
+    } catch {return null;} finally {clearTimeout(timer);}
+  }
+  // choice: "auto" (default), or "echo"/"victoria" picked by hand in Home.
+  async function resolveHome(choice) {
+    if(SITES.includes(choice)) return {site:choice,basis:"manual",label:""};
+    const found=await locate();
+    if(found) return found;
+    const last=lastActed();
+    return last ? {site:last,basis:"last",label:"last home used"} : {site:"echo",basis:"default",label:"location unknown"};
+  }
+  function homeNote(home) {
+    if(!home) return "";
+    if(home.basis==="network" || home.basis==="phone") return ` (You're in ${HOME[home.site]}.)`;
+    if(home.basis==="last") return ` (I couldn't tell where you are, so I used ${HOME[home.site]}, the last home you used.)`;
+    return "";
+  }
 
   function clarification(c) {
     const home=HOME[c.site_id], names=c.candidates.map(clean).join(", ");
@@ -35,10 +72,24 @@
     return `${head} ${results.map(line).join("; ")}.`;
   }
 
+  // Returns false when the command is not for this path, true when handled, or
+  // a Promise of either while the default home is worked out.
   function run(text,options) {
-    const parsed=root.HomeLightingIntent?.parse(text,options.viewedHome);
+    const parsed=root.HomeLightingIntent?.parse(text,null);
     reset();
     if(!parsed) return false;
+    if(!parsed.needsHome) return start(text,parsed,options,null);
+    if(!root.HG_WEB_MODE) return false;
+    return resolveHome(options.homeChoice).then(home=>{
+      if(!options.isCurrent()) return true;
+      const resolved=root.HomeLightingIntent.parse(text,home.site);
+      if(!resolved) {remember(home.site);return false;}
+      return start(text,resolved,options,home);
+    });
+  }
+
+  function start(text,parsed,options,home) {
+    reset();
     const emit=event=>options.addEvent({...event,privateMemoryContext:true,privateCameraContext:true});
     emit({kind:"user",text});
     if(parsed.clarify) {emit({kind:"home",text:parsed.message});return true;}
@@ -94,7 +145,10 @@
         if(!exact(value,["version","type","nonce","status","results"]) || !Array.isArray(results) || !results.length ||
             results.length>16 || !results.every(r=>exact(r,["site_id","name","operation","brightness","status"]) &&
               SITES.includes(r.site_id) && typeof r.name==="string" && OPERATIONS.includes(r.operation) && RESULTS.includes(r.status))) return;
-        reply(summary(status,results));dispose();return;
+        reply(summary(status,results)+(parsed.inferred ? homeNote(home) : ""));
+        const acted=new Set(results.filter(r=>r.status==="succeeded").map(r=>r.site_id));
+        if(acted.size===1) remember([...acted][0]);
+        dispose();return;
       }
       if(!exact(value,["version","type","nonce","status"])) return;
       const messages={
@@ -135,5 +189,5 @@
     return true;
   }
   root.addEventListener("pagehide",reset);
-  root.HomeLightingControl=Object.freeze({run,reset});
+  root.HomeLightingControl=Object.freeze({run,reset,resolveHome});
 })(window);

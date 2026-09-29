@@ -9222,6 +9222,33 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     window.HomeCameraQuery?.reset();
     window.HomeSpatialViewport?.selectSite?.(next);
   }, []);
+  // "auto": a command naming no home goes to the home you are in (device
+  // network, then phone zone), else the last home acted on. A hand-picked home
+  // lasts for this tab only.
+  const [homeChoice, setHomeChoice] = useState('auto');
+  const homeChoiceRef = useRef('auto');
+  const [autoHome, setAutoHome] = useState(null);
+  const chooseHome = useCallback((next) => {
+    if (!['auto', 'echo', 'victoria'].includes(next)) return;
+    homeChoiceRef.current = next;
+    setHomeChoice(next);
+    if (next !== 'auto') selectConversationHome(next);
+  }, [selectConversationHome]);
+  useEffect(() => {
+    if (!window.HG_WEB_MODE || !window.HomeLightingControl?.resolveHome) return;
+    let live = true;
+    const refresh = () => {
+      if (homeChoiceRef.current !== 'auto') return;
+      window.HomeLightingControl.resolveHome('auto').then(home => {
+        if (!live || homeChoiceRef.current !== 'auto') return;
+        setAutoHome(home);
+      }).catch(() => {});
+    };
+    refresh();
+    const timer = setInterval(refresh, 60000);
+    window.addEventListener('focus', refresh);
+    return () => { live = false; clearInterval(timer); window.removeEventListener('focus', refresh); };
+  }, [homeChoice]);
   const cameraEndpointRef = useRef(endpoint);
   useEffect(() => {
     const clear = () => {
@@ -9319,9 +9346,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       window.HomeCameraQuery?.reset();
       return;
     }
-    // Explicit cross-home lighting: only commands that name a home (or any
-    // command in the Victoria view) are reviewed here; the rest continue below.
-    if (window.HomeLightingControl?.run(text, {addEvent, viewedHome: conversationHomeRef.current,
+    // Cross-home lighting: commands that name a home, or name none while the
+    // default home is Victoria, are handled here; the rest continue below.
+    if (await window.HomeLightingControl?.run(text, {addEvent, homeChoice: homeChoiceRef.current,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
     })) {
       window.HomeCameraQuery?.reset();
@@ -11835,14 +11862,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       )}
       {window.HG_WEB_MODE && window.HomeCameraQuery && (
         <div style={{display:'flex',alignItems:'center',gap:10,padding:'6px 16px',fontSize:12,color:'var(--hg-fg-2)',flexShrink:0}}>
-          <label htmlFor="conversation-home-view">Home view</label>
-          <select id="conversation-home-view" aria-label="Conversation home view" value={conversationHome}
-            onChange={event=>selectConversationHome(event.target.value)}
+          <label htmlFor="conversation-home-view">Home</label>
+          <select id="conversation-home-view" aria-label="Default home for commands" value={homeChoice}
+            onChange={event=>chooseHome(event.target.value)}
             style={{background:'var(--hg-bg)',color:'var(--hg-fg-1)',border:'1px solid var(--hg-border)',borderRadius:5,padding:'5px 8px',font:'inherit'}}>
+            <option value="auto">Auto</option>
             <option value="echo">Los Angeles</option>
             <option value="victoria">Victoria</option>
           </select>
-          <span style={{fontSize:11}}>Name a home for commands</span>
+          <span style={{fontSize:11,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+            {homeChoice !== 'auto' ? `Light commands without a home go to ${homeChoice === 'victoria' ? 'Victoria' : 'Los Angeles'}`
+              : !autoHome ? 'Finding where you are…'
+              : `${autoHome.site === 'victoria' ? 'Victoria' : 'Los Angeles'}${autoHome.label ? ` — ${autoHome.label}` : ''}`}
+          </span>
         </div>
       )}
       <InputRow

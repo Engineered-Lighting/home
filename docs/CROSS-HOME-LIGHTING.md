@@ -19,12 +19,43 @@ homes by asking in the chat.
   expiry) and the Agent page confirms that exact review immediately, so every
   execution is signed, recorded and sent once.
 - "Both homes" produces separate operations and separate outcomes for each home.
-  "Turn them off" with no clear referent, or a request that names no home, gets
-  a clarifying question instead of a guess.
+  "Turn them off" with no clear referent gets a clarifying question instead of
+  a guess. A request that names no home goes to the home the owner is in (see
+  "Choosing the home").
 - Nothing is retried automatically. An ambiguous result is looked up, never
   resent.
 - The LA conversation agent keeps all model-originated actuation disabled, and
   it refuses requests that name Victoria or both homes.
+
+## Choosing the home
+
+A named home ("in Victoria", "in LA", "in both homes") always wins. For a
+light command that names no home, Home's **Home** selector decides:
+
+- **Auto** (the default) asks the gateway's `GET /api/home/location`:
+  1. **Network.** The requesting device's direct Tailscale path, as the LA
+     node sees it (`tailscale status` `CurAddr`), lies on a home LAN
+     (`HOME_WEB_SITE_LANS`). Tailscale Serve names the device with a PROXY
+     protocol line.
+  2. **Phone.** LA HA's `HOME_WEB_LOCATION_PERSON` is in a home zone
+     (`HOME_WEB_SITE_ZONES`, for example `home` and a `Victoria` zone added in
+     LA HA). HA's own zone logic decides, so the gateway never sees
+     coordinates.
+  3. Otherwise **the last home a light command changed** (one home only,
+     stored in the browser), and failing that Los Angeles.
+
+  Home never asks which home (the owner's choice, 2026-09-29). When it
+  inferred Victoria, the reply says why, for example "(You're in Victoria.)".
+- **Los Angeles** or **Victoria** picked by hand applies to this tab until it is
+  reloaded.
+
+A command whose home resolves to Los Angeles stays on Los Angeles's own chat
+path, as before. This is a choice of target only, never an authority: either
+home can already be named explicitly. It replaces, for target choice, the
+earlier plan's "fresh fix within five minutes; network only corroborates" rule.
+The endpoint returns only a site, how it was decided and a short label; never
+coordinates, addresses or entity ids. Only light commands use it today, since
+other commands have no Victoria path yet.
 
 ## Access to each home
 

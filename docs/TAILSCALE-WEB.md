@@ -174,6 +174,16 @@ Use `--tls-terminated-tcp` rather than the default HTTPS web proxy mode. The
 Home app needs HA, tracker, and S2S WebSocket upgrades, and this mode preserves
 those upgrades while still giving browsers the Tailscale HTTPS URL.
 
+To let Home tell which home a device is in (see
+`docs/CROSS-HOME-LIGHTING.md`, "Choosing the home"), add
+`--proxy-protocol=1`. Tailscale then names the tailnet client in a PROXY
+protocol line; the gateway reads it only from loopback and also accepts
+connections without it, so the option can be turned on or off at any time:
+
+```bash
+tailscale serve --bg --tls-terminated-tcp=443 --proxy-protocol=1 127.0.0.1:5181
+```
+
 Reference: https://tailscale.com/docs/reference/tailscale-cli/serve
 
 ## Service targets

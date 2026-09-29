@@ -32,14 +32,20 @@ const cases = [
   ["set the Victoria kitchen light to 100 percent", "echo", request(["victoria"], ["kitchen light"], "brightness", 100)],
   ["turn off Victoria's lights", "echo", request(["victoria"], "all", "off")],
   ["turn on the lights in los angeles", "victoria", request(["echo"], "all", "on")],
-  ["Turn off the kitchen light", "echo", null],                   // LA view: existing path
+  ["Turn off the kitchen light", "echo", null],                   // defaults to LA: existing path
   ["what lighting do I prefer in the evening", "victoria", null], // not a command
-  ["turn off the tv in the den", "echo", null],                   // no home named, LA view
+  ["turn off the tv in the den", "echo", null],                   // no home named, LA default
+  ["Turn off the kitchen light", null, {needsHome: true}],        // the caller works out the home
+  ["turn on the lights", undefined, {needsHome: true}],
+  ["what lighting do I prefer in the evening", null, null],
+  ["turn on the lights", "victoria", {...request(["victoria"], "all", "on"), inferred: true}],
+  ["dim the den lamp to 40%", "victoria", {...request(["victoria"], ["den lamp"], "brightness", 40), inferred: true}],
+  ["turn off the kitchen light in LA", "victoria", request(["echo"], ["kitchen light"], "off")], // named beats default
 ];
 for (const [text, viewed, expected] of cases) check(`${text} [${viewed}]`, parse(text, viewed), expected);
 
 const clarifications = [
-  ["turn off the kitchen light", "victoria", "which_home"],
+  ["turn them off", "victoria", "which_lights"],
   ["turn them off in victoria", "echo", "which_lights"],
   ["turn it on in both homes", "echo", "which_lights"],
   ["set the kitchen light to 0% in victoria", "echo", "brightness_range"],

@@ -1,14 +1,16 @@
 /* Explicit cross-home lighting: turn the owner's words into a typed request.
  *
  * Pure and deterministic; no model output chooses a home, a light or a change.
- * parse(text, viewedHome) returns:
+ * parse(text, defaultHome) returns:
  *   null                       not a cross-home lighting command (existing routing continues)
- *   {request}                  { sites, targets, operation, brightness } for Core to resolve
+ *   {request[, inferred]}      { sites, targets, operation, brightness } for Core to resolve
  *   {clarify, message}         a question for the owner instead of a guess
- * A home must be named ("in Victoria", "in LA", "in both homes"). With no home
- * named, a command in the Victoria view asks which home; in the Los Angeles
- * view it is left to the existing Los Angeles path. Only on, off and
- * brightness 1-100% are representable: no scenes, colors, scripts or devices.
+ *   {needsHome: true}          a lighting command naming no home, when no defaultHome is given
+ * A named home ("in Victoria", "in LA", "in both homes") always wins. With no
+ * home named, defaultHome decides (HomeLightingControl works it out from where
+ * the owner is): "victoria" targets Victoria (inferred: true); "echo" leaves the
+ * command to the existing Los Angeles path. Only on, off and brightness 1-100%
+ * are representable: no scenes, colors, scripts or devices.
  */
 (function (root) {
   "use strict";
@@ -36,12 +38,12 @@
     return null;
   }
 
-  function parse(text, viewedHome) {
+  function parse(text, defaultHome) {
     const value = normalize(text);
     if (!value || value.length > 180) return null;
     const found = command(value);
     if (!found) return null;
-    let object = found.object.trim(), sites = null;
+    let object = found.object.trim(), sites = null, inferred = false;
     const suffix = HOME.exec(object);
     if (suffix) {
       sites = SITES[suffix[1]];
@@ -54,16 +56,20 @@
       object = object.replace(/^the\s+/, "").slice(prefix[0].length).trim();
     }
     if (!sites) {
-      // Leave unnamed commands in the Los Angeles view to the existing path.
-      return viewedHome === "victoria" ? {clarify: "which_home", message: WHICH_HOME} : null;
+      if (defaultHome == null) return {needsHome: true};
+      // Unnamed commands for Los Angeles stay on the existing path.
+      if (defaultHome !== "victoria") return null;
+      sites = ["victoria"];
+      inferred = true;
     }
+    const result = request => inferred ? {request, inferred} : {request};
     if (found.operation === "brightness" && !(found.brightness >= 1 && found.brightness <= 100)) {
       return {clarify: "brightness_range", message: "Brightness can be set from 1 to 100 percent."};
     }
     object = object.replace(/^the\s+/, "").trim();
     if (!object) return {clarify: "which_lights", message: WHICH_LIGHTS};
     if (ALL.test(object) || ALL.test("the " + object)) {
-      return {request: {sites, targets: "all", operation: found.operation, brightness: found.brightness}};
+      return result({sites, targets: "all", operation: found.operation, brightness: found.brightness});
     }
     const names = object.split(/\s*(?:,|\band\b|&)\s*/).map(name => name.replace(/^(?:the|my)\s+/, "").trim())
       .filter(Boolean);
@@ -71,7 +77,7 @@
     if (names.length > 8 || new Set(names).size !== names.length || !names.every(name => TARGET.test(name))) {
       return {clarify: "which_lights", message: WHICH_LIGHTS};
     }
-    return {request: {sites, targets: names, operation: found.operation, brightness: found.brightness}};
+    return result({sites, targets: names, operation: found.operation, brightness: found.brightness});
   }
 
   root.HomeLightingIntent = Object.freeze({parse});

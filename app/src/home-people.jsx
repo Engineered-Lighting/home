@@ -17,6 +17,14 @@
  * to the same domain. All requests use the HA bearer token from prefs,
  * same pattern as MetricsStrip's metricsBase calls.
  *
+ * Home Agent household (when the legacy store reports ready:false): the
+ * roster and relationships come from the Agent (same-origin, else the
+ * Agent-origin People bridge); headshots, subroles, notes, and each
+ * person's ring come from HA's profile store (agent_profiles /
+ * agent_profile/{id}[/avatar]); Frigate sightings and enrolled photos come
+ * only through HA's typed frigate_proxy routes. Adding a person or a
+ * relationship goes through the bridge's CSRF-bound write path.
+ *
  * Disable knob: if the HA integration reports `enabled: false`, the
  * overlay shows a clear "Identity store is disabled" state so the user
  * knows the env flag is set, rather than silently empty.
@@ -42,32 +50,118 @@ function agentPredicateToRelType(predicate) {
   return AGENT_PREDICATE_TO_REL_TYPE[predicate] || String(predicate || "").replace(/_of$/, "");
 }
 
+// The relationships the tab can record, in Core's closed vocabulary. The
+// subject (or the account holder, when omitted) is the first person named.
+const AGENT_RELATIONSHIP_PREDICATES = [
+  { value: "partner_of", label: "partner of" },
+  { value: "parent_of", label: "parent of" },
+  { value: "sibling_of", label: "sibling of" },
+  { value: "friend_of", label: "friend of" },
+  { value: "roommate_of", label: "roommate of" },
+  { value: "neighbor_of", label: "neighbor of" },
+  { value: "colleague_of", label: "colleague of" },
+];
+
+// Strongest first: when the account holder has more than one edge to someone,
+// the closer relationship decides their ring.
+const AGENT_REL_TYPE_TO_PERSON_TYPE = [
+  ["partner", "partner"],
+  ["parent", "family_immediate"],
+  ["sibling", "family_immediate"],
+  ["roommate", "roommate"],
+  ["friend", "friend"],
+  ["colleague", "friend"],
+  ["neighbor", "neighbor"],
+];
+
 // The agent authority does not carry the legacy per-person relationship_type,
-// so it is derived from the edges actually recorded against the account holder.
-// Anyone with no recorded edge to them stays "unknown" rather than being
-// assigned a category nobody asserted.
-function deriveRelationshipType(personId, isSelf, edges) {
+// so it is derived from the edges recorded between this person and the
+// account holder only. An edge between two other people says nothing about
+// how either relates to the account holder. Anyone with no edge to the account
+// holder stays "unknown" rather than being assigned a category nobody asserted.
+function deriveRelationshipType(personId, isSelf, edges, selfId) {
   if (isSelf) return "me";
-  const selfEdge = edges.find(
-    (edge) => edge.from_uuid === personId || edge.to_uuid === personId,
+  if (!selfId || personId === selfId) return "unknown";
+  const toSelf = new Set(
+    edges
+      .filter((edge) =>
+        (edge.from_uuid === selfId && edge.to_uuid === personId) ||
+        (edge.to_uuid === selfId && edge.from_uuid === personId))
+      .map((edge) => edge.rel_type),
   );
-  if (!selfEdge) return "unknown";
-  switch (selfEdge.rel_type) {
-    case "partner": return "partner";
-    case "parent": return "family_immediate";
-    case "sibling": return "family_immediate";
-    case "friend": return "friend";
-    case "roommate": return "roommate";
-    case "neighbor": return "neighbor";
-    case "colleague": return "friend";
-    default: return "unknown";
+  for (const [relType, personType] of AGENT_REL_TYPE_TO_PERSON_TYPE) {
+    if (toSelf.has(relType)) return personType;
   }
+  return "unknown";
+}
+
+// Every agent predicate except parent_of is symmetric, and the authority
+// stores a symmetric relationship as two edges, one each way. Keep one per
+// pair so the map draws one line and the tray lists the relationship once.
+function dedupeAgentEdges(edges) {
+  const seen = new Set();
+  return edges.filter((edge) => {
+    const pair = edge.rel_type === "parent"
+      ? `${edge.from_uuid}>${edge.to_uuid}`
+      : [edge.from_uuid, edge.to_uuid].sort().join("|");
+    const key = `${edge.rel_type}:${pair}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Detail for a person read from the Home Agent. The legacy HA identity route
+// does not know agent person ids, so the tray is built from what the overlay
+// already holds: the roster entry and the edges touching this person, read
+// from their side ("child of" for the object of parent_of).
+function buildAgentPersonDetail(identity, identities, edges) {
+  if (!identity) return null;
+  const names = new Map(
+    (identities || []).map((person) => [person.uuid, person.display_name]),
+  );
+  const relationships = [];
+  for (const edge of edges || []) {
+    const outgoing = edge.from_uuid === identity.uuid;
+    if (!outgoing && edge.to_uuid !== identity.uuid) continue;
+    const otherUuid = outgoing ? edge.to_uuid : edge.from_uuid;
+    relationships.push({
+      id: edge.id,
+      label: edge.rel_type === "parent" && !outgoing ? "child of" : `${edge.rel_type} of`,
+      other_uuid: otherUuid,
+      other_display_name: names.get(otherUuid) || "someone not in this view",
+    });
+  }
+  relationships.sort((a, b) =>
+    a.label.localeCompare(b.label) || a.other_display_name.localeCompare(b.other_display_name));
+  return { identity, relationships, source: "agent_authority" };
+}
+
+// Legacy people keep their avatars in the legacy HA store; a legacy record
+// that reports avatar_present: false has nothing to fetch. Agent people keep
+// theirs in the profile store, which states presence outright, so they are
+// never probed.
+function peopleIdentityMayHaveAvatar(identity) {
+  if (!identity) return false;
+  if (identity.source === "agent_authority") return identity.avatar_present === true;
+  return identity.avatar_present !== false;
+}
+
+// Headshots for people the agent authority owns live in the writable profile
+// store, keyed by person_id. Everyone else uses the legacy identity route.
+function avatarUrlFor(endpoint, identity) {
+  const base = String(endpoint || "").replace(/\/+$/, "");
+  const id = encodeURIComponent(identity?.uuid || "");
+  return identity?.source === "agent_authority"
+    ? `${base}/api/extended_openai_conversation/agent_profile/${id}/avatar`
+    : `${base}/api/extended_openai_conversation/identity/${id}/avatar`;
 }
 
 // The household lives on the Home Agent's own origin. A same-origin read works
-// where the gateway still shares the Agent cookie; otherwise the invisible,
-// read-only People bridge on the Agent origin reads it with the owner's Agent
-// session and hands it back to this page (owner decision, 2026-09-29).
+// where the gateway still shares the Agent cookie; otherwise the invisible
+// People bridge on the Agent origin reads it with the owner's Agent session
+// and hands it back to this page (owner decision, 2026-09-29). Adding a person
+// or a relationship goes only through the bridge, which holds the CSRF token.
 const PEOPLE_BRIDGE_TIMEOUT_MS = 15000;
 
 function peopleBridgeOrigin() {
@@ -80,7 +174,8 @@ function peopleBridgeOrigin() {
   }
 }
 
-function fetchHouseholdViaBridge(origin, signal) {
+// One invisible frame, one nonce, one answer. The frame is always removed.
+function callPeopleBridge(origin, message, resultType, { signal, timeoutMs, timeoutError }) {
   return new Promise((resolve, reject) => {
     const nonce = window.crypto.randomUUID().replace(/-/g, "");
     const frame = document.createElement("iframe");
@@ -98,34 +193,96 @@ function fetchHouseholdViaBridge(origin, signal) {
       frame.remove();
       fn(value);
     };
-    const fail = (message, status = null) => {
-      const error = new Error(message);
-      error.status = status;
+    const fail = (text) => {
+      const error = new Error(text);
+      error.status = null;
       finish(reject, error);
     };
     const receive = (event) => {
       const value = event.data;
       if (event.origin !== origin || event.source !== frame.contentWindow || !value ||
-          value.version !== 1 || value.type !== "home.people.result" || value.nonce !== nonce) return;
-      if (value.status === "ok" && Array.isArray(value.household?.people)) {
-        finish(resolve, { household: value.household, relationships: value.relationships || { relationships: [] } });
-      } else if (value.status === "signed_out") {
-        fail("agent_household_401", 401);
-      } else {
-        fail(`agent_household_${value.http_status || "bridge"}`, value.http_status || null);
-      }
+          value.version !== 1 || value.type !== resultType || value.nonce !== nonce) return;
+      finish(resolve, value);
     };
     const aborted = () => fail("aborted");
     window.addEventListener("message", receive);
     signal?.addEventListener("abort", aborted, { once: true });
-    timer = setTimeout(() => fail("agent_household_bridge_timeout"), PEOPLE_BRIDGE_TIMEOUT_MS);
+    timer = setTimeout(() => fail(timeoutError), timeoutMs);
     // The bridge answers only after it has checked its session, so repeat the
-    // request until it does (it answers once).
+    // request until it does (it answers once, and acts once).
     poll = setInterval(() => {
-      frame.contentWindow?.postMessage({ version: 1, type: "home.people.request", nonce }, origin);
+      frame.contentWindow?.postMessage({ version: 1, ...message, nonce }, origin);
     }, 400);
     document.body.appendChild(frame);
   });
+}
+
+async function fetchHouseholdViaBridge(origin, signal) {
+  const value = await callPeopleBridge(origin, { type: "home.people.request" }, "home.people.result", {
+    signal, timeoutMs: PEOPLE_BRIDGE_TIMEOUT_MS, timeoutError: "agent_household_bridge_timeout",
+  });
+  if (value.status === "ok" && Array.isArray(value.household?.people)) {
+    return { household: value.household, relationships: value.relationships || { relationships: [] } };
+  }
+  const status = value.status === "signed_out" ? 401 : (value.http_status || null);
+  const error = new Error(`agent_household_${status || "bridge"}`);
+  error.status = status;
+  throw error;
+}
+
+// A write the bridge refused, or Core declined, carries the bridge's own
+// {status, http_status, body}. Never retried: a repeat could record twice.
+async function writeAgentViaBridge(operation, body, signal) {
+  const origin = peopleBridgeOrigin();
+  if (!origin) throw new Error("the Home Agent bridge is not configured");
+  const value = await callPeopleBridge(origin, { type: "home.people.write", operation, body }, "home.people.write_result", {
+    signal, timeoutMs: PEOPLE_BRIDGE_TIMEOUT_MS * 2, timeoutError: "agent_write_bridge_timeout",
+  });
+  if (value.status === "ok") return value.body || {};
+  const detail = value.body?.message || value.body?.error;
+  const error = new Error(
+    value.status === "signed_out" ? "sign in to the Home Agent to add people"
+      : value.status === "refused" ? "the Home Agent bridge refused this request"
+      : `${detail || "the Home Agent declined this request"} (HTTP ${value.http_status || "?"})`,
+  );
+  error.status = value.http_status || null;
+  throw error;
+}
+
+// A UUIDv7 ceremony seed: 48-bit Unix milliseconds, then random bits. Core
+// rejects any other version and derives identifiers from the timestamp.
+function newCeremonyId() {
+  const bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  let ms = Date.now();
+  for (let i = 5; i >= 0; i -= 1) { bytes[i] = ms % 256; ms = Math.floor(ms / 256); }
+  bytes[6] = (bytes[6] & 0x0f) | 0x70;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+// Records a person in the agent authority. The legacy store is frozen and
+// refuses writes, so this is the only path that can add someone.
+function createAgentPerson({ display_name, pronouns = null }, signal) {
+  return writeAgentViaBridge("add_person", {
+    ceremony_id: newCeremonyId(),
+    display_name,
+    pronouns: pronouns || null,
+    privacy_scope: "household",
+  }, signal);
+}
+
+// subjectId null means the account holder is the first person named.
+function recordAgentRelationship({ subjectId = null, predicate, partnerId }, signal) {
+  const body = {
+    ceremony_id: newCeremonyId(),
+    partner_person_id: partnerId,
+    attestation_nonce: window.crypto.randomUUID(),
+    predicate,
+  };
+  if (subjectId) body.subject_person_id = subjectId;
+  return writeAgentViaBridge("add_relationship", body, signal);
 }
 
 async function fetchAgentHousehold(signal) {
@@ -159,25 +316,31 @@ async function fetchAgentHousehold(signal) {
       : { relationships: [] };
   }
 
-  const edges = (relationships.relationships || []).map((edge) => ({
+  const edges = dedupeAgentEdges((relationships.relationships || []).map((edge) => ({
     id: edge.fact_id,
     from_uuid: edge.subject_person_id,
     to_uuid: edge.object_person_id,
     rel_type: agentPredicateToRelType(edge.predicate),
     status: "active",
-  }));
+  })));
 
+  const selfId = (household.people || []).find((person) => person.is_self === true)?.person_id || null;
   const identities = (household.people || []).map((person) => ({
     uuid: person.person_id,
     display_name: person.display_name,
     pronouns: person.pronouns || null,
+    is_self: person.is_self === true,
     relationship_type: deriveRelationshipType(
-      person.person_id, person.is_self === true, edges,
+      person.person_id, person.is_self === true, edges, selfId,
     ),
     relationship_subrole: null,
-    // The agent authority carries no enrolment or face data. Declaring these
-    // empty keeps the avatar and queue paths from treating absence as
-    // "not loaded yet" and retrying against a store that cannot answer.
+    // Frigate keys its face library by name. Record the binding explicitly
+    // (the lower-cased display name) so the gallery and sightings look up the
+    // same bucket the recogniser writes to.
+    aliases: [{ kind: "frigate_name", alias: String(person.display_name || "").trim().toLowerCase() }],
+    // The agent authority carries no enrolment data. Declaring these empty
+    // keeps the queue paths from treating absence as "not loaded yet"; the
+    // profile store states headshot presence (decorateAgentIdentities).
     enrollment_count: 0,
     avatar_present: false,
     source: "agent_authority",
@@ -185,12 +348,118 @@ async function fetchAgentHousehold(signal) {
 
   return { identities, edges };
 }
+// ── end of the Home Agent household client ──
 
+// Profile material the authority does not carry -- headshot, subrole, notes,
+// and the relationship_type that decides a person's ring -- lives in Home
+// Assistant's writable profile store, keyed by person_id. It is optional: a
+// failure there costs decoration, never the household.
+const AGENT_PROFILE_RELATIONSHIP_TYPES = new Set([
+  "partner", "family_immediate", "family_extended", "roommate",
+  "friend", "neighbor", "service", "guest", "unknown", "do_not_identify",
+]);
+
+async function fetchAgentProfiles(endpoint, token, signal) {
+  const url = `${String(endpoint || "").replace(/\/+$/, "")}/api/extended_openai_conversation/agent_profiles`;
+  const resp = await window.tauriFetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+    signal,
+  });
+  if (!resp.ok) throw new Error(`agent_profiles_${resp.status}`);
+  const payload = await resp.json();
+  // Only these two fields are read. Images are never addressed by a Frigate
+  // origin, whatever else the response carries.
+  const profiles = payload && typeof payload.profiles === "object" && payload.profiles && !Array.isArray(payload.profiles)
+    ? payload.profiles
+    : {};
+  return { profiles, frigateFacesAvailable: payload?.frigate_faces_available === true };
+}
+
+function decorateAgentIdentities(identities, profiles) {
+  return (identities || []).map((person) => {
+    const profile = profiles && Object.prototype.hasOwnProperty.call(profiles, person.uuid)
+      ? profiles[person.uuid]
+      : null;
+    const derived = person.relationship_type;
+    if (!profile || typeof profile !== "object") {
+      return { ...person, derived_relationship_type: derived, profile_relationship_type: null };
+    }
+    const recorded = AGENT_PROFILE_RELATIONSHIP_TYPES.has(profile.relationship_type)
+      ? profile.relationship_type
+      : null;
+    const aliases = [...(person.aliases || [])];
+    const profileName = String(profile.display_name || "").trim().toLowerCase();
+    if (profileName && !aliases.some((a) => a.kind === "frigate_name" && a.alias === profileName)) {
+      aliases.push({ kind: "frigate_name", alias: profileName });
+    }
+    return {
+      ...person,
+      // Prefer what was recorded about the person over what their edges to
+      // the account holder imply: a friend may have no edge yet, and deriving
+      // alone would drop them out of the graph.
+      relationship_type: person.is_self ? "me" : (recorded || derived),
+      derived_relationship_type: derived,
+      profile_relationship_type: recorded,
+      relationship_subrole: typeof profile.relationship_subrole === "string" && profile.relationship_subrole
+        ? profile.relationship_subrole : null,
+      pronouns: person.pronouns || (typeof profile.pronouns === "string" && profile.pronouns) || null,
+      notes: typeof profile.notes === "string" && profile.notes ? profile.notes : null,
+      avatar_present: profile.avatar_present === true,
+      aliases,
+    };
+  });
+}
+
+// The profile store refreshes display_name on every write, so it is always sent.
+async function saveAgentProfile(endpoint, token, identity, values, signal) {
+  const url = `${String(endpoint || "").replace(/\/+$/, "")}/api/extended_openai_conversation/agent_profile/${encodeURIComponent(identity.uuid)}`;
+  const resp = await window.tauriFetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: identity.display_name || "", ...values }),
+    signal,
+  });
+  const result = await resp.json().catch(() => ({}));
+  if (!resp.ok || result?.error) {
+    throw new Error(result?.error ? String(result.error) : `HTTP ${resp.status}`);
+  }
+  return result;
+}
+
+// Recent sightings for one Frigate face-library name, through the typed HA
+// proxy only. Newest first.
+async function fetchPersonSightings(endpoint, token, frigateName, signal) {
+  const H = window.HomePeopleHelpers;
+  const url = H.frigateSightingsUrl(endpoint, frigateName, 200);
+  if (!url) return [];
+  const resp = await window.tauriFetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+    signal,
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return H.normalizeFrigateSightings(await resp.json());
+}
+
+function relativeAge(unixSeconds) {
+  if (!unixSeconds) return "";
+  const seconds = Math.max(0, Date.now() / 1000 - unixSeconds);
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86400)}d ago`;
+}
 
 
 const PEOPLE_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
 const EMPTY_PEOPLE_MAP = Object.freeze({});
+const peopleToolbarButtonStyle = Object.freeze({
+  background: "transparent", border: "1px solid var(--hg-border-soft)",
+  color: "var(--hg-fg-1)", padding: "5px 11px",
+  fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 10, letterSpacing: "0.12em",
+  cursor: "pointer", textTransform: "lowercase",
+});
 const EMPTY_FACES_STATUS = Object.freeze({ state: "idle" });
 
 function peopleCredentialScopeKey(open, endpoint, token) {
@@ -353,6 +622,17 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // reachable but the identity_store didn't initialize.
   const [notReady, setNotReady] = useState(null);
   const [agentEdges, setAgentEdges] = useState([]);
+  // Which store the roster came from: "legacy" (HA identity store) or
+  // "agent_authority" (the Home Agent fallback). null while loading, in sim
+  // mode, or after a failure. Drives the banner and the read-only detail tray.
+  const [storedHouseholdSource, setHouseholdSource] = useState(null);
+  // The undecorated Agent roster, kept so a profile edit can re-decorate it
+  // without re-reading the household (which would close the open tray).
+  const agentBaseRef = useRef([]);
+  // Add-person / add-relationship dialogs. addingRelationship holds the
+  // person the dialog opens on ({ subjectId }), or null when closed.
+  const [addingPerson, setAddingPerson] = useState(false);
+  const [addingRelationship, setAddingRelationship] = useState(null);
   // Set only from the authenticated HA identity-list response. The legacy
   // People UI becomes read-only only after the explicit E4 SQLite fence is
   // present and verified server-side.
@@ -390,6 +670,9 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   );
   const legacyBoundary = peoplePrincipalScopedValue(
     credentialScopeKey, principalDataScopeRef.current, storedLegacyBoundary, null,
+  );
+  const householdSource = peoplePrincipalScopedValue(
+    credentialScopeKey, principalDataScopeRef.current, storedHouseholdSource, null,
   );
   const facesByPerson = peoplePrincipalScopedValue(
     credentialScopeKey, principalDataScopeRef.current, storedFacesByPerson, null,
@@ -482,6 +765,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     // decision while a fresh HA-admin request is pending.
     setIdentities(null);
     setLegacyBoundary(null);
+    setHouseholdSource(null);
     setFrigateDiagnostics(null);
     setFacesByPerson(null);
     setFacesStatus({ state: "idle" });
@@ -514,6 +798,41 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       operation.finish();
       return;
     }
+    // The face library listing, through the one typed HA route. Enrolled
+    // photos and sightings are fetched per person through their own typed
+    // routes; the browser is never given a Frigate address.
+    const loadFaceLibrary = async () => {
+      setFacesStatus({ state: "loading" });
+      const proxyUrl = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy/faces`;
+      try {
+        const fresp = await window.tauriFetch(proxyUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+          signal: operation.signal,
+        });
+        if (!isCurrent()) return;
+        if (fresp.ok) {
+          const fpayload = await fresp.json();
+          if (!isCurrent()) return;
+          if (fpayload && typeof fpayload === "object") {
+            setFacesByPerson(fpayload);
+            setFacesStatus({
+              state: "loaded",
+              bucketCount: Object.keys(fpayload).length,
+              loadedAt: Date.now(),
+            });
+          }
+        } else {
+          setFacesByPerson(null);
+          setFacesStatus({ state: "error", error: `HTTP ${fresp.status}` });
+        }
+      } catch (e) {
+        if (!isCurrent()) return;
+        // Proxy unreachable — gallery shows empty state.
+        setFacesByPerson(null);
+        setFacesStatus({ state: "error", error: e?.message || String(e) });
+      }
+    };
     try {
       const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities`;
       // fetchWithRetry rides out the AI-box reboot window: while it is still
@@ -561,12 +880,30 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         try {
           const fromAgent = await fetchAgentHousehold(operation.signal);
           if (!isCurrent()) return;
+          // Decoration from the profile store is optional: without it the
+          // household still renders, just without headshots or subroles.
+          let fromProfiles = { profiles: {}, frigateFacesAvailable: false };
+          try {
+            fromProfiles = await fetchAgentProfiles(endpoint, token, operation.signal);
+          } catch (profileError) {
+            if (peopleOperationAborted(profileError, operation)) return;
+            console.warn("[people] profile store unavailable:", profileError?.message || profileError);
+          }
+          if (!isCurrent()) return;
           if (!publishCurrentScope()) return;
+          agentBaseRef.current = fromAgent.identities;
           setNotReady(null);
           setAgentEdges(fromAgent.edges);
-          setIdentities(fromAgent.identities);
+          setIdentities(decorateAgentIdentities(fromAgent.identities, fromProfiles.profiles));
+          setHouseholdSource("agent_authority");
           setLegacyBoundary(payload.legacy_identity_boundary || null);
           setLoadedAt(Date.now());
+          if (fromProfiles.frigateFacesAvailable) {
+            await loadFaceLibrary();
+          } else {
+            setFacesByPerson(null);
+            setFacesStatus({ state: "missing_url" });
+          }
           return;
         } catch (agentError) {
           if (peopleOperationAborted(agentError, operation)) return;
@@ -586,6 +923,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       if (!publishCurrentScope()) return;
       setAgentEdges([]);
       setIdentities(payload.identities || []);
+      setHouseholdSource("legacy");
       setLegacyBoundary(payload.legacy_identity_boundary || null);
       setFrigateDiagnostics({
         seedReport: payload.frigate_seed_report || null,
@@ -595,36 +933,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       // Fetch only the exact typed metadata operation. The browser never
       // receives a Frigate base URL and never loads crop bytes directly.
       if (payload.frigate_faces_available === true) {
-        setFacesStatus({ state: "loading" });
-        const proxyUrl = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy/faces`;
-        try {
-          const fresp = await window.tauriFetch(proxyUrl, {
-            headers: { Authorization: `Bearer ${token}` },
-            cache: "no-store",
-            signal: operation.signal,
-          });
-          if (!isCurrent()) return;
-          if (fresp.ok) {
-            const fpayload = await fresp.json();
-            if (!isCurrent()) return;
-            if (fpayload && typeof fpayload === "object") {
-              setFacesByPerson(fpayload);
-              setFacesStatus({
-                state: "loaded",
-                bucketCount: Object.keys(fpayload).length,
-                loadedAt: Date.now(),
-              });
-            }
-          } else {
-            setFacesByPerson(null);
-            setFacesStatus({ state: "error", error: `HTTP ${fresp.status}` });
-          }
-        } catch (e) {
-          if (!isCurrent()) return;
-          // Proxy unreachable — gallery shows empty state.
-          setFacesByPerson(null);
-          setFacesStatus({ state: "error", error: e?.message || String(e) });
-        }
+        await loadFaceLibrary();
       } else {
         setFacesByPerson(null);
         setFacesStatus({ state: "missing_url" });
@@ -664,11 +973,41 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
 
   const legacyFrozenPendingCutover =
     legacyBoundary?.semantic_write_fence_installed === true;
+  const showingAgentHousehold = householdSource === "agent_authority";
+  // Agent-sourced people have no legacy record to write to, so the fallback is
+  // read-only whatever the legacy boundary reports.
   const legacyMutationsReadOnly =
-    !sim?.active && !(
+    !sim?.active && (showingAgentHousehold || !(
       legacyBoundary?.state === "legacy_migration_only"
       && legacyBoundary?.semantic_writes_frozen === false
-    );
+    ));
+  const selectedAgentDetail = useMemo(() => {
+    if (!selectedUuid || !Array.isArray(identities)) return null;
+    const selected = identities.find((identity) => identity.uuid === selectedUuid);
+    return selected?.source === "agent_authority"
+      ? buildAgentPersonDetail(selected, identities, agentEdges)
+      : null;
+  }, [selectedUuid, identities, agentEdges]);
+  // Adding people and relationships goes through the Agent-origin bridge,
+  // which is the only holder of the Agent session's CSRF token.
+  const agentWritesAvailable = showingAgentHousehold && !sim?.active && !!peopleBridgeOrigin();
+
+  // After a profile or headshot edit: re-read the profile store and
+  // re-decorate the roster already on screen, keeping the tray open.
+  const reloadAgentProfiles = useCallback(async () => {
+    const operation = beginPeopleOperation("agent-profiles");
+    try {
+      const { profiles } = await fetchAgentProfiles(endpoint, token, operation.signal);
+      if (!operation.isCurrent()) return;
+      setIdentities(decorateAgentIdentities(agentBaseRef.current, profiles));
+    } catch (e) {
+      if (!peopleOperationAborted(e, operation)) {
+        console.warn("[people] profile reload failed:", e?.message || e);
+      }
+    } finally {
+      operation.finish();
+    }
+  }, [endpoint, token, beginPeopleOperation]);
 
   useEffect(() => {
     if (legacyMutationsReadOnly && view === "queue") setView("graph");
@@ -682,7 +1021,11 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     requestGenerationRef.current += 1;
     setIdentities(null);
     setLegacyBoundary(null);
+    setHouseholdSource(null);
     setSelectedUuid(null);
+    setAddingPerson(false);
+    setAddingRelationship(null);
+    agentBaseRef.current = [];
     setFacesByPerson(null);
     setFrigateDiagnostics(null);
     setAvatarPresence({});
@@ -713,8 +1056,15 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       const next = {};
       for (const i of identities) {
         if (cancelled) return;
+        // The profile store already states whether an Agent person has a
+        // headshot (and its avatar route serves no HEAD), and a legacy record
+        // that says it has no avatar needs no probe either.
+        if (i.source === "agent_authority" || !peopleIdentityMayHaveAvatar(i)) {
+          next[i.uuid] = peopleIdentityMayHaveAvatar(i);
+          continue;
+        }
         try {
-          const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(i.uuid)}/avatar`;
+          const url = avatarUrlFor(endpoint, i);
           const resp = await window.tauriFetch(url, {
             method: "HEAD",
             headers: { Authorization: `Bearer ${token}` },
@@ -755,6 +1105,11 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     let cancelled = false;
     const generation = requestGenerationRef.current;
     const operation = beginPeopleOperation("avatar-blobs");
+    // Keys this run claimed. A re-run (for example the roster re-decorated
+    // after a headshot upload) aborts this run's fetch synchronously, but the
+    // aborted fetch releases its key only later, so the re-run would skip that
+    // person and never fetch them. Cleanup releases the claims itself.
+    const claimed = [];
     // CRITICAL: avatarBlobUrls is INTENTIONALLY NOT in the dep list. If
     // it were, every setAvatarBlobUrls call (one per identity fetched)
     // would re-run this effect, run cleanup → cancelled=true → and the
@@ -771,13 +1126,17 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     (async () => {
       for (const i of ids) {
         if (cancelled) return;
+        // avatarPresence is the live answer: an upload in this session sets
+        // it before the roster's avatar_present catches up.
         if (!avatarPresence[i.uuid]) continue;
+        if (i.source !== "agent_authority" && !peopleIdentityMayHaveAvatar(i)) continue;
         const inflightKey = `${generation}:${i.uuid}:${avatarCacheBust || "init"}`;
         if (blobFetchInFlightRef.current[inflightKey]) continue;
         if (avatarBlobUrls[i.uuid]) continue;
         blobFetchInFlightRef.current[inflightKey] = true;
+        claimed.push(inflightKey);
         try {
-          const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(i.uuid)}/avatar`;
+          const url = avatarUrlFor(endpoint, i);
           const resp = await window.tauriFetch(url, {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
@@ -813,6 +1172,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     return () => {
       cancelled = true;
       operation.cancel();
+      for (const key of claimed) delete blobFetchInFlightRef.current[key];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sim?.active, identities, endpoint, token, avatarPresence, avatarCacheBust, beginPeopleOperation]);
@@ -1020,7 +1380,57 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             </div>
           </div>
         )}
-        {legacyFrozenPendingCutover && !notReady && (
+        {showingAgentHousehold && !notReady && (
+          <div style={{
+            border: "1px solid var(--hg-border-soft)",
+            background: "var(--hg-bg-1)",
+            padding: "10px 14px",
+            color: "var(--hg-fg-2)",
+            fontSize: 11, letterSpacing: "0.04em",
+            marginBottom: 16,
+          }}>
+            <strong style={{ marginRight: 8 }}>home agent</strong>
+            The legacy identity store is unavailable, so this household is read
+            from the Home Agent. People and their relationships are recorded
+            there{agentWritesAvailable ? " and can be added here" : ""}.
+            Headshots, subroles, and notes are kept in Home Assistant's profile
+            store; Frigate sightings and enrolled photos come through Home
+            Assistant.
+            {agentWritesAvailable && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                <button
+                  onClick={() => { setAddingRelationship(null); setAddingPerson(true); }}
+                  className="hg-focusable hg-mobile-touch"
+                  style={peopleToolbarButtonStyle}
+                >+ add person</button>
+                <button
+                  onClick={() => { setAddingPerson(false); setAddingRelationship({ subjectId: null }); }}
+                  className="hg-focusable hg-mobile-touch"
+                  style={peopleToolbarButtonStyle}
+                >+ add relationship</button>
+              </div>
+            )}
+          </div>
+        )}
+        {showingAgentHousehold && addingPerson && agentWritesAvailable && (
+          <AgentAddPersonDialog
+            endpoint={endpoint}
+            token={token}
+            operationScopeKey={credentialScopeKey}
+            onCancel={() => setAddingPerson(false)}
+            onAdded={() => { setAddingPerson(false); refresh(); }}
+          />
+        )}
+        {showingAgentHousehold && addingRelationship && agentWritesAvailable && Array.isArray(identities) && (
+          <AgentAddRelationshipDialog
+            identities={identities}
+            initialSubjectId={addingRelationship.subjectId}
+            operationScopeKey={credentialScopeKey}
+            onCancel={() => setAddingRelationship(null)}
+            onAdded={() => { setAddingRelationship(null); refresh(); }}
+          />
+        )}
+        {legacyFrozenPendingCutover && !notReady && !showingAgentHousehold && (
           <div style={{
             border: "1px solid var(--hg-border-soft)",
             background: "var(--hg-bg-1)",
@@ -1095,10 +1505,24 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         sim={sim}
         avatarPresence={avatarPresence}
         avatarBlobUrls={avatarBlobUrls}
-        onAvatarChanged={(uuid, present) => refreshAvatars(uuid, present)}
+        onAvatarChanged={(uuid, present) => {
+          refreshAvatars(uuid, present);
+          if (showingAgentHousehold) reloadAgentProfiles();
+        }}
         onClose={() => setSelectedUuid(null)}
         onChanged={refresh}
         readOnly={legacyMutationsReadOnly}
+        agentDetail={selectedAgentDetail}
+        facesByPerson={facesByPerson}
+        facesStatus={facesStatus}
+        onAgentProfileSaved={reloadAgentProfiles}
+        onAddRelationship={agentWritesAvailable
+          ? (subjectId) => {
+              setSelectedUuid(null);
+              setAddingPerson(false);
+              setAddingRelationship({ subjectId });
+            }
+          : null}
       />
     </div>
   );
@@ -1110,7 +1534,59 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: PeopleGraphView — radial relationship visualization
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleGraphView({ identities, relationships, endpoint, avatarPresence, avatarBlobUrls, onNodeClick }) {
+// PeopleGraphView is split in two on purpose. The body calls hooks after the
+// point where the empty and helpers-missing states used to return early, so
+// deciding them inside it changed the hook count between renders -- React
+// #310, the first time the graph actually had people in it. This wrapper
+// calls no hooks, so the branch is settled before any hook runs.
+function PeopleGraphView(props) {
+  const { identities } = props;
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const graphable = (identities || []).filter((i) => {
+    if (!H) return false;
+    return H.ringForIdentity(i) !== null;
+  });
+
+  if (graphable.length === 0) {
+    const hasUnknown = (identities || []).some((i) => i.relationship_type === "unknown");
+    return (
+      <div style={{
+        textAlign: "center", padding: "60px 20px",
+        color: "var(--hg-fg-3)",
+      }}>
+        <div style={{
+          fontSize: 32, marginBottom: 12, color: "var(--hg-fg-5)",
+        }}>＋</div>
+        <div style={{
+          fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
+          textTransform: "uppercase", color: "var(--hg-fg-3)",
+          marginBottom: 8,
+        }}>
+          {hasUnknown ? "tag identities to populate the graph" : "tag your first face"}
+        </div>
+        <div style={{
+          fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.6, maxWidth: 420,
+          margin: "0 auto",
+        }}>
+          {hasUnknown
+            ? "Open the queue tab and assign a relationship to bring a face into the web."
+            : "The system detects faces from your cameras and surfaces them in the queue tab."}
+        </div>
+      </div>
+    );
+  }
+
+  if (!H) {
+    return (
+      <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>
+        helpers not loaded — check home-people-helpers.js
+      </div>
+    );
+  }
+  return <PeopleGraphViewBody {...props} />;
+}
+
+function PeopleGraphViewBody({ identities, relationships, endpoint, avatarPresence, avatarBlobUrls, onNodeClick }) {
   const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
   const peopleViewport = usePeopleViewport();
   const isMobile = peopleViewport.mobile;
@@ -1160,48 +1636,9 @@ function PeopleGraphView({ identities, relationships, endpoint, avatarPresence, 
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
   }, []);
 
-  // Empty state — no identities at all OR no in-graph identities
-  const graphable = (identities || []).filter((i) => {
-    if (!H) return false;
-    return H.ringForIdentity(i) !== null;
-  });
-
-  if (graphable.length === 0) {
-    const hasUnknown = (identities || []).some((i) => i.relationship_type === "unknown");
-    return (
-      <div style={{
-        textAlign: "center", padding: "60px 20px",
-        color: "var(--hg-fg-3)",
-      }}>
-        <div style={{
-          fontSize: 32, marginBottom: 12, color: "var(--hg-fg-5)",
-        }}>＋</div>
-        <div style={{
-          fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
-          textTransform: "uppercase", color: "var(--hg-fg-3)",
-          marginBottom: 8,
-        }}>
-          {hasUnknown ? "tag identities to populate the graph" : "tag your first face"}
-        </div>
-        <div style={{
-          fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.6, maxWidth: 420,
-          margin: "0 auto",
-        }}>
-          {hasUnknown
-            ? "Open the queue tab and assign a relationship to bring a face into the web."
-            : "The system detects faces from your cameras and surfaces them in the queue tab."}
-        </div>
-      </div>
-    );
-  }
-
-  if (!H) {
-    return (
-      <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>
-        helpers not loaded — check home-people-helpers.js
-      </div>
-    );
-  }
+  // The wrapper (PeopleGraphView) has already ruled out the empty and
+  // helpers-missing states, so every hook below runs on every render.
+  const graphable = (identities || []).filter((i) => H.ringForIdentity(i) !== null);
 
   // Layout. Mobile gets a slightly larger, tighter graph: larger faces
   // make the relationship web legible, while reduced radii keep every
@@ -1222,10 +1659,25 @@ function PeopleGraphView({ identities, relationships, endpoint, avatarPresence, 
   // Edge geometry. In addition to HA relationship rows, overlay a small
   // trusted-family map from the seeded face folders so the graph can show
   // parent/partner branches immediately after identities sync.
-  const knownFamilyRelationships = H.buildKnownFamilyRelationships
-    ? H.buildKnownFamilyRelationships(graphable)
-    : [];
-  const relationshipRows = [...(relationships || []), ...knownFamilyRelationships];
+  // The name-derived map only bridges the window before real relationships
+  // arrive. Once the authority supplies them it stands down: it matches people
+  // by first name, so it would double-draw real edges and invent ones nobody
+  // recorded.
+  const knownFamilyRelationships =
+    (relationships || []).length === 0 && H.buildKnownFamilyRelationships
+      ? H.buildKnownFamilyRelationships(graphable)
+      : [];
+  // A pair is drawn once per relationship type, whichever direction each
+  // source stated it in, so a symmetric relationship is one stroke.
+  const seenEdgePairs = new Set();
+  const relationshipRows = [...(relationships || []), ...knownFamilyRelationships]
+    .filter((row) => {
+      if (!row || !row.from_uuid || !row.to_uuid) return false;
+      const key = `${[row.from_uuid, row.to_uuid].sort().join("::")}::${row.rel_type || ""}`;
+      if (seenEdgePairs.has(key)) return false;
+      seenEdgePairs.add(key);
+      return true;
+    });
   const edges = H.buildEdgeGeometry(layout, relationshipRows);
 
   // SVG sizing. Desktop keeps the full relationship-ring field; mobile
@@ -2107,14 +2559,21 @@ function identityFrigateNames(identity) {
 
 function unlinkedFaceBuckets(facesByPerson, identities) {
   if (!facesByPerson || typeof facesByPerson !== "object") return [];
+  // "train" is Frigate's live recognition bucket, not a person. Listing it as
+  // an unlinked identity made fresh captures look like a phantom stranger.
+  const IGNORED_BUCKETS = new Set(["train"]);
   const linked = new Set();
   for (const identity of identities || []) {
     for (const name of identityFrigateNames(identity)) linked.add(name);
   }
+  // A bucket is a capture count (metadata listing) or a file list.
+  const countOf = (value) => (Array.isArray(value) ? value.length : value);
   return Object.entries(facesByPerson)
+    .map(([name, value]) => [name, countOf(value)])
     .filter(([name, captureCount]) => {
       const key = String(name || "").trim().toLowerCase();
       return key
+        && !IGNORED_BUCKETS.has(key)
         && !linked.has(key)
         && Number.isInteger(captureCount)
         && captureCount > 0;
@@ -2134,6 +2593,7 @@ function peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigat
   }
   const buckets = facesByPerson && typeof facesByPerson === "object"
     ? Object.entries(facesByPerson)
+      .map(([name, value]) => [name, Array.isArray(value) ? value.length : value])
       .filter(([, captureCount]) => (
         Number.isInteger(captureCount) && captureCount >= 0
       ))
@@ -2555,7 +3015,12 @@ function PeopleQueueView({ identities, facesByPerson, facesStatus, frigateDiagno
  * GET /api/extended_openai_conversation/identity/{uuid} so we don't
  * have to compose from the list endpoint's lighter projection.
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, sim, avatarPresence, avatarBlobUrls, onAvatarChanged, onClose, onChanged, readOnly = false }) {
+function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, sim, avatarPresence, avatarBlobUrls, onAvatarChanged, onClose, onChanged, readOnly: legacyReadOnly = false, agentDetail = null, facesByPerson = null, facesStatus = null, onAgentProfileSaved = null, onAddRelationship = null }) {
+  // An agent-sourced person is never edited through the legacy HA identity
+  // routes, which do not know their id. The tray renders agentDetail instead
+  // of fetching, and edits go to the profile store and the Agent bridge.
+  const agentSourced = !!agentDetail;
+  const readOnly = legacyReadOnly || agentSourced;
   const detailScopeKey =
     `${operationScopeKey}:detail:${identityUuid || "closed"}`;
   const payloadScopeRef = useRef(null);
@@ -2626,6 +3091,12 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
     if (!identityUuid) {
       return undefined;
     }
+    if (agentSourced) {
+      setLoading(false);
+      setError(null);
+      setDirty(null);
+      return undefined;
+    }
     const operation = beginOperation("load");
     setLoading(true);
     setError(null);
@@ -2684,6 +3155,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
     sim?.active,
     beginOperation,
     detailScopeKey,
+    agentSourced,
   ]);
 
   function patch(field, value) {
@@ -2828,7 +3300,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
       className="hg-scroll"
       style={{
         position: "fixed", top: 0, right: 0, bottom: 0,
-        width: 360,
+        width: "min(360px, 100vw)",
         background: "var(--hg-bg-1)",
         borderLeft: "1px solid var(--hg-border)",
         zIndex: 1100,
@@ -2876,7 +3348,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
             marginLeft: ident ? 8 : "auto",
             fontSize: 8, letterSpacing: "0.12em",
             color: "var(--hg-fg-3)", textTransform: "uppercase",
-          }}>legacy read-only · cutover pending</span>
+          }}>{agentSourced ? "home agent" : "legacy read-only · cutover pending"}</span>
         )}
       </div>
 
@@ -2929,10 +3401,26 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
         }}>{error}</div>
       )}
 
-      {!loading && !ident && !error && (
+      {!loading && !ident && !error && !agentSourced && (
         <div style={{ padding: 18, color: "var(--hg-fg-3)", fontSize: 11 }}>
           identity not found
         </div>
+      )}
+
+      {agentSourced && (
+        <AgentPersonDetail
+          key={agentDetail.identity.uuid}
+          detail={agentDetail}
+          endpoint={endpoint}
+          token={token}
+          operationScopeKey={operationScopeKey}
+          avatarBlobUrls={avatarBlobUrls}
+          facesByPerson={facesByPerson}
+          facesStatus={facesStatus}
+          onAvatarChanged={onAvatarChanged}
+          onProfileSaved={onAgentProfileSaved}
+          onAddRelationship={onAddRelationship}
+        />
       )}
 
       {merged && (
@@ -3282,6 +3770,833 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: AgentPersonDetail — tray body for a person read from the
+ * Home Agent (see buildAgentPersonDetail). Name, pronouns, and
+ * relationships come from the Agent authority and are shown as recorded;
+ * relationship type, subrole, notes, and the headshot are edited in Home
+ * Assistant's profile store; Frigate images come through the typed HA proxy.
+ * ──────────────────────────────────────────────────────────────────── */
+const AGENT_FIELD_LABEL_STYLE = Object.freeze({
+  display: "block", fontSize: 9, letterSpacing: "0.18em",
+  textTransform: "uppercase", color: "var(--hg-fg-3)",
+  marginBottom: 6,
+});
+const AGENT_FIELD_STYLE = Object.freeze({
+  width: "100%", boxSizing: "border-box",
+  background: "var(--hg-input-bg)",
+  border: "1px solid var(--hg-border-soft)",
+  padding: "6px 9px",
+  fontFamily: PEOPLE_FONT_MONO,
+  fontSize: 11, color: "var(--hg-fg-1)",
+});
+const AGENT_PROFILE_TYPE_OPTIONS = REL_TYPE_OPTIONS.filter((o) => AGENT_PROFILE_RELATIONSHIP_TYPES.has(o.value));
+
+function agentProfileForm(person) {
+  return {
+    relationship_type: person.profile_relationship_type || "",
+    relationship_subrole: person.relationship_subrole || "",
+    notes: person.notes || "",
+  };
+}
+
+function AgentPersonDetail({ detail, endpoint, token, operationScopeKey, avatarBlobUrls, facesByPerson, facesStatus, onAvatarChanged, onProfileSaved, onAddRelationship }) {
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const person = detail.identity;
+  const isSelf = person.relationship_type === "me";
+  const initials = H && H.initialsFor
+    ? H.initialsFor(person.display_name || "?")
+    : (person.display_name || "?").charAt(0).toUpperCase();
+  const headshotUrl = avatarBlobUrls && avatarBlobUrls[person.uuid];
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
+  const [form, setForm] = useState(() => agentProfileForm(person));
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState(null);   // { tone, text }
+  const beginOperation = usePeopleOperationGuard(`${operationScopeKey}:agent-profile:${person.uuid}`);
+  const saved = agentProfileForm(person);
+  const profileKey = `${saved.relationship_type}\u0000${saved.relationship_subrole}\u0000${saved.notes}`;
+  // A reload after a save brings the stored values back; show those.
+  useEffect(() => { setForm(agentProfileForm(person)); }, [profileKey]);
+  const dirty = form.relationship_type !== saved.relationship_type
+    || form.relationship_subrole !== saved.relationship_subrole
+    || form.notes !== saved.notes;
+  const derivedLabel = String(person.derived_relationship_type || "unknown").replace(/_/g, " ");
+  const inputId = (field) => `agent-profile-${field}-${person.uuid}`;
+
+  async function saveProfile() {
+    if (!dirty || saving) return;
+    const operation = beginOperation("save");
+    setSaving(true);
+    setSaveMessage(null);
+    try {
+      const values = {
+        relationship_subrole: form.relationship_subrole.trim() || null,
+        notes: form.notes.trim() || null,
+      };
+      if (!isSelf) values.relationship_type = form.relationship_type || null;
+      await saveAgentProfile(endpoint, token, person, values, operation.signal);
+      if (!operation.isCurrent()) return;
+      setSaveMessage({ tone: "ok", text: "saved" });
+      onProfileSaved?.();
+    } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
+      setSaveMessage({ tone: "error", text: `could not save: ${e.message || e}` });
+    } finally {
+      if (operation.isCurrent()) setSaving(false);
+      operation.finish();
+    }
+  }
+
+  return (
+    <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        {headshotUrl ? (
+          <img src={headshotUrl} alt="" data-people-headshot={person.uuid} style={{
+            width: 56, height: 56, borderRadius: "50%", flexShrink: 0,
+            objectFit: "cover", border: "1px solid var(--hg-border-soft)",
+          }} />
+        ) : (
+          <div aria-hidden="true" style={{
+            width: 56, height: 56, borderRadius: "50%", flexShrink: 0,
+            background: "var(--hg-bg-2)",
+            border: "1px solid var(--hg-border-soft)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: PEOPLE_FONT_SANS,
+            fontSize: 20, color: "var(--hg-fg-1)",
+            fontWeight: 300,
+          }}>{initials}</div>
+        )}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{
+            fontFamily: PEOPLE_FONT_SANS, fontSize: 16, color: "var(--hg-fg-0)",
+            overflowWrap: "anywhere",
+          }}>{person.display_name}</div>
+          {(person.pronouns || isSelf) && (
+            <div style={{ marginTop: 3, fontSize: 10, color: "var(--hg-fg-3)", letterSpacing: "0.04em" }}>
+              {[isSelf ? "you" : null, person.pronouns].filter(Boolean).join(" · ")}
+            </div>
+          )}
+          <button
+            onClick={() => setShowAvatarModal(true)}
+            className="hg-focusable hg-mobile-touch"
+            style={{ ...peopleToolbarButtonStyle, marginTop: 8, color: "var(--hg-fg-2)" }}
+          >{headshotUrl || person.avatar_present ? "change headshot" : "set headshot"}</button>
+        </div>
+      </div>
+
+      {!isSelf && (
+        <div>
+          <label htmlFor={inputId("type")} style={AGENT_FIELD_LABEL_STYLE}>relationship to you</label>
+          <select
+            id={inputId("type")}
+            value={form.relationship_type}
+            disabled={saving}
+            onChange={(e) => setForm((f) => ({ ...f, relationship_type: e.target.value }))}
+            className="hg-focusable"
+            style={{ ...AGENT_FIELD_STYLE, cursor: saving ? "default" : "pointer" }}
+          >
+            <option value="">from recorded relationships ({derivedLabel})</option>
+            {AGENT_PROFILE_TYPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div>
+        <label htmlFor={inputId("subrole")} style={AGENT_FIELD_LABEL_STYLE}>subrole (optional)</label>
+        <input
+          id={inputId("subrole")}
+          type="text"
+          value={form.relationship_subrole}
+          disabled={saving}
+          maxLength={80}
+          placeholder="e.g. mother, brother, coworker"
+          onChange={(e) => setForm((f) => ({ ...f, relationship_subrole: e.target.value }))}
+          className="hg-focusable"
+          style={AGENT_FIELD_STYLE}
+        />
+      </div>
+
+      <div>
+        <label htmlFor={inputId("notes")} style={AGENT_FIELD_LABEL_STYLE}>notes (visible to the assistant)</label>
+        <textarea
+          id={inputId("notes")}
+          value={form.notes}
+          disabled={saving}
+          rows={3}
+          maxLength={2000}
+          onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+          className="hg-focusable"
+          style={{ ...AGENT_FIELD_STYLE, fontFamily: PEOPLE_FONT_SANS, fontSize: 12, resize: "vertical" }}
+        />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={saveProfile}
+          disabled={!dirty || saving}
+          className="hg-focusable hg-mobile-touch"
+          style={{
+            background: dirty ? "var(--hg-ice)" : "transparent",
+            border: `1px solid ${dirty ? "var(--hg-ice)" : "var(--hg-border-soft)"}`,
+            color: dirty ? "var(--hg-bg-0)" : "var(--hg-fg-4)",
+            padding: "7px 12px",
+            fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
+            letterSpacing: "0.16em", textTransform: "lowercase",
+            cursor: (!dirty || saving) ? "default" : "pointer",
+          }}
+        >{saving ? "saving…" : "save profile"}</button>
+        {saveMessage && (
+          <span role="status" style={{
+            fontSize: 10,
+            color: saveMessage.tone === "error" ? "var(--hg-crit)" : "var(--hg-fg-3)",
+          }}>{saveMessage.text}</span>
+        )}
+      </div>
+
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <div style={{ ...AGENT_FIELD_LABEL_STYLE, marginBottom: 0, flex: 1 }}>
+            relationships ({detail.relationships.length})
+          </div>
+          {onAddRelationship && (
+            <button
+              onClick={() => onAddRelationship(person.uuid)}
+              className="hg-focusable hg-mobile-touch"
+              style={{ ...peopleToolbarButtonStyle, padding: "3px 8px", color: "var(--hg-fg-2)" }}
+            >+ add relationship</button>
+          )}
+        </div>
+        {detail.relationships.length === 0 ? (
+          <div style={{ fontSize: 11, color: "var(--hg-fg-3)" }}>
+            no relationships recorded for this person
+          </div>
+        ) : (
+          <ul style={{
+            margin: 0, padding: 0, listStyle: "none",
+            fontSize: 11, color: "var(--hg-fg-1)",
+          }}>
+            {detail.relationships.map((r) => (
+              <li key={r.id} style={{ padding: "4px 0" }}>
+                <span style={{ color: "var(--hg-fg-3)" }}>{r.label}</span>
+                {" "}
+                {r.other_display_name}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <AgentFrigateSection
+        identity={person}
+        facesByPerson={facesByPerson}
+        facesStatus={facesStatus}
+        endpoint={endpoint}
+        token={token}
+        operationScopeKey={operationScopeKey}
+      />
+
+      <div role="note" style={{
+        paddingTop: 14,
+        borderTop: "1px solid var(--hg-border-soft)",
+        fontSize: 10, lineHeight: 1.5, color: "var(--hg-fg-3)",
+      }}>
+        Name, pronouns, and relationships are read from the Home Agent. The
+        headshot, relationship type, subrole, and notes are kept in Home
+        Assistant's profile store.
+      </div>
+
+      {showAvatarModal && (
+        <AvatarCropModal
+          identity={person}
+          endpoint={endpoint}
+          token={token}
+          operationScopeKey={operationScopeKey}
+          onClose={() => setShowAvatarModal(false)}
+          onUploaded={(uuid, present) => onAvatarChanged?.(uuid, present)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: PeopleAuthedImage — an image from a typed Home Assistant
+ * route. <img src> cannot send the HA bearer token, so the bytes are fetched
+ * with it (no-store), shown from a blob URL, and the blob URL is revoked when
+ * the image leaves. Off-screen images are not fetched until they scroll in.
+ * ──────────────────────────────────────────────────────────────────── */
+function PeopleAuthedImage({ url, token, alt = "", style, eager = false }) {
+  const holderRef = useRef(null);
+  const [visible, setVisible] = useState(eager || typeof IntersectionObserver === "undefined");
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (visible || !holderRef.current) return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: "200px" });
+    observer.observe(holderRef.current);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !url) return undefined;
+    const controller = new AbortController();
+    let created = null;
+    setFailed(false);
+    (async () => {
+      try {
+        const resp = await window.tauriFetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        if (controller.signal.aborted) return;
+        created = URL.createObjectURL(blob);
+        setBlobUrl(created);
+      } catch {
+        if (!controller.signal.aborted) setFailed(true);
+      }
+    })();
+    return () => {
+      controller.abort();
+      if (created) try { URL.revokeObjectURL(created); } catch {}
+      setBlobUrl(null);
+    };
+  }, [url, token, visible]);
+
+  if (blobUrl) return <img src={blobUrl} alt={alt} style={style} />;
+  return (
+    <span
+      ref={holderRef}
+      role={alt ? "img" : undefined}
+      aria-label={alt || undefined}
+      style={{
+        ...style,
+        display: "block",
+        background: failed ? "var(--hg-bg-2)" : "var(--hg-bg-1)",
+      }}
+    />
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: CaptureViewer — full-screen browser over a set of
+ * captures: arrows, a filmstrip, and a counter. Escape closes only the
+ * viewer (it is its own overlay layer).
+ * ──────────────────────────────────────────────────────────────────── */
+function CaptureViewer({ items, index, token, onIndex, onClose }) {
+  const current = items[index];
+  const rootRef = useRef(null);
+  const stripRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "people-capture-viewer",
+    active: true,
+    onEscape: () => onClose(),
+    rootRef,
+    trap: true,
+    initialFocus: "root",
+  });
+
+  useEffect(() => {
+    const strip = stripRef.current;
+    const thumb = strip && strip.children[index];
+    if (thumb && thumb.scrollIntoView) thumb.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [index]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "ArrowRight") { e.preventDefault(); onIndex(Math.min(index + 1, items.length - 1)); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); onIndex(Math.max(index - 1, 0)); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [index, items.length, onIndex]);
+
+  if (!current) return null;
+
+  const step = (delta) => (e) => {
+    e.stopPropagation();
+    onIndex(Math.min(Math.max(index + delta, 0), items.length - 1));
+  };
+  const arrow = {
+    position: "absolute", top: "50%", transform: "translateY(-50%)",
+    background: "rgba(0,0,0,0.5)", border: "1px solid var(--hg-border-soft)",
+    color: "var(--hg-fg-0)", fontSize: 22, lineHeight: 1,
+    padding: "14px 18px", cursor: "pointer", borderRadius: 4,
+  };
+
+  return ReactDOM.createPortal(
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Capture browser"
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)",
+        display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", zIndex: 2000,
+        animation: "people-fade-in 160ms ease-out",
+      }}
+    >
+      <div style={{
+        position: "absolute", top: 16, left: 48, right: 48, textAlign: "center",
+        fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.12em",
+        color: "var(--hg-fg-2)",
+      }}>
+        {index + 1} / {items.length}{current.caption ? ` · ${current.caption}` : ""}
+      </div>
+
+      {index > 0 && (
+        <button onClick={step(-1)} aria-label="Previous" className="hg-focusable" style={{ ...arrow, left: 12 }}>‹</button>
+      )}
+      {index < items.length - 1 && (
+        <button onClick={step(1)} aria-label="Next" className="hg-focusable" style={{ ...arrow, right: 12 }}>›</button>
+      )}
+
+      <div onClick={(e) => e.stopPropagation()}>
+        <PeopleAuthedImage
+          key={current.url}
+          url={current.url}
+          token={token}
+          eager
+          alt={current.caption || "capture"}
+          style={{
+            maxWidth: "88vw", maxHeight: "70vh",
+            minWidth: 120, minHeight: 120,
+            objectFit: "contain",
+            boxShadow: "0 0 40px rgba(0,0,0,0.6)", borderRadius: 3,
+          }}
+        />
+      </div>
+
+      {items.length > 1 && (
+        <div
+          ref={stripRef}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute", bottom: 14, left: 0, right: 0,
+            display: "flex", gap: 6, overflowX: "auto",
+            padding: "8px 20px", justifyContent: items.length < 14 ? "center" : "flex-start",
+          }}
+        >
+          {items.map((it, i) => (
+            <button
+              key={it.url}
+              onClick={() => onIndex(i)}
+              aria-label={`capture ${i + 1}`}
+              className="hg-focusable"
+              style={{
+                padding: 0, flex: "0 0 auto", cursor: "pointer", borderRadius: 3,
+                background: "transparent",
+                border: i === index ? "2px solid var(--hg-fg-0)" : "1px solid var(--hg-border-soft)",
+                opacity: i === index ? 1 : 0.55,
+              }}
+            >
+              <PeopleAuthedImage url={it.url} token={token} style={{ width: 54, height: 54, objectFit: "cover" }} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      <button
+        onClick={onClose}
+        aria-label="Close capture browser"
+        className="hg-focusable"
+        style={{
+          position: "absolute", top: 12, right: 16, background: "transparent",
+          border: "none", color: "var(--hg-fg-2)", fontSize: 22, cursor: "pointer",
+        }}
+      >×</button>
+    </div>,
+    document.body,
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: AgentFrigateSection — recent sightings and enrolled
+ * reference photos for one person, both only through the typed HA Frigate
+ * proxy (frigate_proxy/events, /events/<id>/thumbnail.jpg, /faces/<name>/
+ * <file>). Sightings answer "when was this person last seen"; enrolled
+ * photos answer "what does recognition compare against", which changes only
+ * when someone is deliberately enrolled.
+ * ──────────────────────────────────────────────────────────────────── */
+const AGENT_GALLERY_PREVIEW = 12;
+
+function AgentFrigateSection({ identity, facesByPerson, facesStatus, endpoint, token, operationScopeKey }) {
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const gallery = useMemo(
+    () => (H && H.frigateFaceCropUrls
+      ? H.frigateFaceCropUrls(facesByPerson, identity, endpoint)
+      : { count: 0, urls: [], files: [], frigateName: null }),
+    [H, facesByPerson, identity, endpoint],
+  );
+  const [sightings, setSightings] = useState(null);
+  const [sightingsError, setSightingsError] = useState(null);
+  const [viewer, setViewer] = useState(null);    // { items, index }
+  const beginOperation = usePeopleOperationGuard(`${operationScopeKey}:sightings:${identity.uuid}`);
+
+  useEffect(() => {
+    const name = gallery.frigateName;
+    setSightingsError(null);
+    if (!name || !endpoint || !token) { setSightings([]); return undefined; }
+    const operation = beginOperation("load");
+    setSightings(null);
+    fetchPersonSightings(endpoint, token, name, operation.signal)
+      .then((rows) => { if (operation.isCurrent()) setSightings(rows); })
+      .catch((e) => {
+        if (peopleOperationAborted(e, operation)) return;
+        setSightings([]);
+        setSightingsError(e.message || String(e));
+      })
+      .finally(operation.finish);
+    return operation.cancel;
+  }, [gallery.frigateName, endpoint, token, beginOperation]);
+
+  const sightingItems = (sightings || [])
+    .map((s) => ({
+      url: H ? H.frigateEventThumbnailUrl(endpoint, s.id) : null,
+      caption: `${s.camera || "camera"} · ${relativeAge(s.startedAt)}`,
+    }))
+    .filter((item) => item.url);
+  const enrolledItems = gallery.urls.map((url, i) => {
+    const at = H && H.frigateCropTimestamp ? H.frigateCropTimestamp(gallery.files[i]) : 0;
+    return { url, caption: at ? `enrolled reference · ${relativeAge(at)}` : "enrolled reference" };
+  });
+
+  const faceState = facesStatus?.state || "idle";
+  const unavailable = faceState !== "loaded"
+    ? (faceState === "loading" ? "loading the Frigate face library…"
+      : faceState === "error" ? `the Frigate face library could not be read (${facesStatus.error || "error"})`
+      : "Frigate faces are not available from Home Assistant.")
+    : null;
+  const labelStyle = { ...AGENT_FIELD_LABEL_STYLE, marginBottom: 8 };
+  const emptyStyle = { fontSize: 11, color: "var(--hg-fg-4)", fontStyle: "italic", marginBottom: 12 };
+  const grid = { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 8 };
+  const tile = {
+    padding: 0, border: "1px solid var(--hg-border-soft)", borderRadius: 3,
+    overflow: "hidden", background: "transparent", cursor: "pointer", position: "relative",
+  };
+  const tileImage = { width: "100%", aspectRatio: "1 / 1", objectFit: "cover", display: "block" };
+  const viewAll = (items, noun) => items.length > AGENT_GALLERY_PREVIEW && (
+    <button
+      onClick={() => setViewer({ items, index: 0 })}
+      className="hg-focusable hg-mobile-touch"
+      style={{ ...peopleToolbarButtonStyle, marginBottom: 12, color: "var(--hg-fg-2)" }}
+    >view all {items.length} {noun} →</button>
+  );
+
+  return (
+    <div style={{ paddingTop: 14, borderTop: "1px solid var(--hg-border-soft)" }} data-people-frigate-section="">
+      <div style={labelStyle}>recent sightings{sightings === null || unavailable ? "" : ` (${sightingItems.length})`}</div>
+      {unavailable && <div style={emptyStyle}>{unavailable}</div>}
+      {!unavailable && !gallery.frigateName && (
+        <div style={emptyStyle}>No Frigate face-library entry matches this person.</div>
+      )}
+      {!unavailable && gallery.frigateName && sightings === null && (
+        <div style={emptyStyle}>loading sightings…</div>
+      )}
+      {!unavailable && gallery.frigateName && sightings !== null && sightingItems.length === 0 && (
+        <div style={emptyStyle}>{sightingsError ? `sightings could not be read (${sightingsError})` : "No sightings recorded for this person yet."}</div>
+      )}
+      {sightingItems.length > 0 && (
+        <div style={grid} data-people-gallery="sightings">
+          {sightingItems.slice(0, AGENT_GALLERY_PREVIEW).map((item, i) => (
+            <button
+              key={item.url}
+              onClick={() => setViewer({ items: sightingItems, index: i })}
+              title={item.caption}
+              aria-label={`sighting · ${item.caption}`}
+              className="hg-focusable"
+              style={tile}
+            >
+              <PeopleAuthedImage url={item.url} token={token} style={tileImage} />
+              <span style={{
+                position: "absolute", left: 0, right: 0, bottom: 0,
+                background: "rgba(0,0,0,0.55)", color: "var(--hg-fg-1)",
+                fontSize: 9, padding: "2px 3px",
+              }}>{relativeAge((sightings || [])[i]?.startedAt)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {viewAll(sightingItems, "sightings")}
+
+      <div style={{ ...labelStyle, marginTop: 8 }}>enrolled reference photos{unavailable ? "" : ` (${gallery.count})`}</div>
+      {!unavailable && gallery.count === 0 && (
+        <div style={emptyStyle}>No enrolled reference photos for this person.</div>
+      )}
+      {enrolledItems.length > 0 && (
+        <div style={grid} data-people-gallery="enrolled">
+          {enrolledItems.slice(0, AGENT_GALLERY_PREVIEW).map((item, i) => (
+            <button
+              key={item.url}
+              onClick={() => setViewer({ items: enrolledItems, index: i })}
+              title={item.caption}
+              aria-label={`enrolled photo ${i + 1}`}
+              className="hg-focusable"
+              style={tile}
+            >
+              <PeopleAuthedImage url={item.url} token={token} style={tileImage} />
+            </button>
+          ))}
+        </div>
+      )}
+      {viewAll(enrolledItems, "enrolled photos")}
+
+      {viewer && (
+        <CaptureViewer
+          items={viewer.items}
+          index={viewer.index}
+          token={token}
+          onIndex={(i) => setViewer((v) => (v ? { ...v, index: i } : v))}
+          onClose={() => setViewer(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-components: AgentAddPersonDialog / AgentAddRelationshipDialog —
+ * inline forms for the Agent household. Both write through the Agent-origin
+ * People bridge (writeAgentViaBridge); a person's ring is then recorded in
+ * the profile store. Neither retries: a repeat could record twice.
+ * ──────────────────────────────────────────────────────────────────── */
+function AgentDialogFrame({ title, children, error, note }) {
+  return (
+    <div role="group" aria-label={title} style={{
+      margin: "0 0 16px", padding: 14,
+      border: "1px solid var(--hg-border-soft)",
+      background: "var(--hg-bg-1)",
+    }}>
+      <div style={{
+        fontFamily: PEOPLE_FONT_MONO, fontSize: 10, letterSpacing: "0.16em",
+        textTransform: "lowercase", color: "var(--hg-fg-2)", marginBottom: 10,
+      }}>{title}</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {children}
+      </div>
+      {error && (
+        <div role="alert" style={{ marginTop: 10, fontSize: 11, color: "var(--hg-crit)" }}>{error}</div>
+      )}
+      {note && (
+        <div style={{ marginTop: 10, fontSize: 10.5, color: "var(--hg-fg-4)", lineHeight: 1.5 }}>{note}</div>
+      )}
+    </div>
+  );
+}
+
+const AGENT_DIALOG_FIELD_STYLE = Object.freeze({
+  ...AGENT_FIELD_STYLE, width: "auto", flex: "1 1 160px", minWidth: 0, padding: "7px 10px",
+});
+
+function AgentAddPersonDialog({ endpoint, token, operationScopeKey, onCancel, onAdded }) {
+  const [displayName, setDisplayName] = useState("");
+  const [pronouns, setPronouns] = useState("");
+  const [relationshipType, setRelationshipType] = useState("friend");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const beginOperation = usePeopleOperationGuard(`${operationScopeKey}:agent-add-person`);
+  const trimmed = displayName.trim();
+
+  async function submit() {
+    if (!trimmed || busy) return;
+    const operation = beginOperation("add");
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createAgentPerson({ display_name: trimmed, pronouns: pronouns.trim() || null }, operation.signal);
+      if (!operation.isCurrent()) return;
+      if (created.person_id && relationshipType) {
+        try {
+          await saveAgentProfile(endpoint, token, { uuid: created.person_id, display_name: trimmed },
+            { relationship_type: relationshipType }, operation.signal);
+        } catch (profileError) {
+          if (peopleOperationAborted(profileError, operation)) return;
+          // The person exists now; only their ring is missing. Say so rather
+          // than offering a retry that would add them twice.
+          console.warn("[people] relationship type not recorded:", profileError?.message || profileError);
+        }
+      }
+      if (!operation.isCurrent()) return;
+      onAdded?.(created);
+    } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
+      setError(`could not add ${trimmed}: ${e.message || e}`);
+    } finally {
+      if (operation.isCurrent()) setBusy(false);
+      operation.finish();
+    }
+  }
+
+  return (
+    <AgentDialogFrame
+      title="add someone to your household"
+      error={error}
+      note="This records that your household knows them in the Home Agent. It gives them no account and no authority here. A headshot, subrole, and notes can be added from their tray."
+    >
+      <input
+        autoFocus
+        aria-label="name"
+        value={displayName}
+        placeholder="name"
+        maxLength={255}
+        disabled={busy}
+        onChange={(e) => setDisplayName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+        className="hg-focusable"
+        style={AGENT_DIALOG_FIELD_STYLE}
+      />
+      <input
+        aria-label="pronouns"
+        value={pronouns}
+        placeholder="pronouns (optional)"
+        maxLength={64}
+        disabled={busy}
+        onChange={(e) => setPronouns(e.target.value)}
+        className="hg-focusable"
+        style={{ ...AGENT_DIALOG_FIELD_STYLE, flex: "1 1 110px" }}
+      />
+      <select
+        aria-label="relationship to you"
+        value={relationshipType}
+        disabled={busy}
+        onChange={(e) => setRelationshipType(e.target.value)}
+        className="hg-focusable"
+        style={{ ...AGENT_DIALOG_FIELD_STYLE, flex: "1 1 140px" }}
+      >
+        {AGENT_PROFILE_TYPE_OPTIONS.filter((o) => o.value !== "do_not_identify").map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      <button
+        onClick={submit}
+        disabled={busy || !trimmed}
+        className="hg-focusable hg-mobile-touch"
+        style={{ ...peopleToolbarButtonStyle, color: trimmed && !busy ? "var(--hg-fg-0)" : "var(--hg-fg-4)" }}
+      >{busy ? "adding…" : "add person"}</button>
+      <button
+        onClick={onCancel}
+        disabled={busy}
+        className="hg-focusable hg-mobile-touch"
+        style={{ ...peopleToolbarButtonStyle, border: "none", color: "var(--hg-fg-3)" }}
+      >cancel</button>
+    </AgentDialogFrame>
+  );
+}
+
+function AgentAddRelationshipDialog({ identities, initialSubjectId, operationScopeKey, onCancel, onAdded }) {
+  const people = useMemo(() => (identities || [])
+    .filter((i) => i.source === "agent_authority")
+    .slice()
+    .sort((a, b) => (b.is_self === true) - (a.is_self === true)
+      || String(a.display_name || "").localeCompare(String(b.display_name || ""))), [identities]);
+  const selfId = people.find((p) => p.is_self === true)?.uuid || null;
+  const [subjectId, setSubjectId] = useState(() => initialSubjectId || selfId || people[0]?.uuid || "");
+  const [predicate, setPredicate] = useState("friend_of");
+  const [otherId, setOtherId] = useState(() => {
+    const first = initialSubjectId || selfId || people[0]?.uuid;
+    return people.find((p) => p.uuid !== first)?.uuid || "";
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const beginOperation = usePeopleOperationGuard(`${operationScopeKey}:agent-add-relationship`);
+  const nameOf = (id) => people.find((p) => p.uuid === id)?.display_name || "?";
+  const label = AGENT_RELATIONSHIP_PREDICATES.find((p) => p.value === predicate)?.label || predicate;
+  const valid = subjectId && otherId && subjectId !== otherId;
+
+  async function submit() {
+    if (!valid || busy) return;
+    const operation = beginOperation("add");
+    setBusy(true);
+    setError(null);
+    try {
+      await recordAgentRelationship({
+        // The account holder is the default first party, so it is not named.
+        subjectId: subjectId === selfId ? null : subjectId,
+        predicate,
+        partnerId: otherId,
+      }, operation.signal);
+      if (!operation.isCurrent()) return;
+      onAdded?.();
+    } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
+      setError(`could not record the relationship: ${e.message || e}`);
+    } finally {
+      if (operation.isCurrent()) setBusy(false);
+      operation.finish();
+    }
+  }
+
+  return (
+    <AgentDialogFrame
+      title="add a relationship"
+      error={error}
+      note={valid ? `Records: ${nameOf(subjectId)} is ${label} ${nameOf(otherId)}.` : "Choose two different people."}
+    >
+      <select
+        aria-label="first person"
+        value={subjectId}
+        disabled={busy}
+        onChange={(e) => setSubjectId(e.target.value)}
+        className="hg-focusable"
+        style={AGENT_DIALOG_FIELD_STYLE}
+      >
+        {people.map((p) => (
+          <option key={p.uuid} value={p.uuid}>{p.display_name}{p.is_self ? " (you)" : ""}</option>
+        ))}
+      </select>
+      <select
+        aria-label="relationship"
+        value={predicate}
+        disabled={busy}
+        onChange={(e) => setPredicate(e.target.value)}
+        className="hg-focusable"
+        style={{ ...AGENT_DIALOG_FIELD_STYLE, flex: "1 1 120px" }}
+      >
+        {AGENT_RELATIONSHIP_PREDICATES.map((p) => (
+          <option key={p.value} value={p.value}>{p.label}</option>
+        ))}
+      </select>
+      <select
+        aria-label="second person"
+        value={otherId}
+        disabled={busy}
+        onChange={(e) => setOtherId(e.target.value)}
+        className="hg-focusable"
+        style={AGENT_DIALOG_FIELD_STYLE}
+      >
+        {people.map((p) => (
+          <option key={p.uuid} value={p.uuid}>{p.display_name}{p.is_self ? " (you)" : ""}</option>
+        ))}
+      </select>
+      <button
+        onClick={submit}
+        disabled={busy || !valid}
+        className="hg-focusable hg-mobile-touch"
+        style={{ ...peopleToolbarButtonStyle, color: valid && !busy ? "var(--hg-fg-0)" : "var(--hg-fg-4)" }}
+      >{busy ? "recording…" : "add relationship"}</button>
+      <button
+        onClick={onCancel}
+        disabled={busy}
+        className="hg-focusable hg-mobile-touch"
+        style={{ ...peopleToolbarButtonStyle, border: "none", color: "var(--hg-fg-3)" }}
+      >cancel</button>
+    </AgentDialogFrame>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
  * Sub-component: FaceCapturesSection (Addendum 24 Phase 1b)
  *
  * Face thumbnails are deliberately absent from the legacy inspector.
@@ -3480,7 +4795,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
       if (!operation.isCurrent()) return;
       // POST as raw body (AR24-6: simpler than multipart; AvatarView
       // accepts both shapes).
-      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
+      const url = avatarUrlFor(endpoint, identity);
       const resp = await window.tauriFetch(url, {
         method: "POST",
         headers: {
@@ -3517,7 +4832,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
     setError(null);
     setBusy(true);
     try {
-      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
+      const url = avatarUrlFor(endpoint, identity);
       const resp = await window.tauriFetch(url, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },

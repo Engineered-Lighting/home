@@ -64,6 +64,55 @@ function deriveRelationshipType(personId, isSelf, edges) {
   }
 }
 
+// Every agent predicate except parent_of is symmetric, and the authority
+// stores a symmetric relationship as two edges, one each way. Keep one per
+// pair so the map draws one line and the tray lists the relationship once.
+function dedupeAgentEdges(edges) {
+  const seen = new Set();
+  return edges.filter((edge) => {
+    const pair = edge.rel_type === "parent"
+      ? `${edge.from_uuid}>${edge.to_uuid}`
+      : [edge.from_uuid, edge.to_uuid].sort().join("|");
+    const key = `${edge.rel_type}:${pair}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Detail for a person read from the Home Agent. The legacy HA identity route
+// does not know agent person ids, so the tray is built from what the overlay
+// already holds: the roster entry and the edges touching this person, read
+// from their side ("child of" for the object of parent_of). The agent read
+// carries no photos, preferences, notes, or Frigate faces, so none are faked.
+function buildAgentPersonDetail(identity, identities, edges) {
+  if (!identity) return null;
+  const names = new Map(
+    (identities || []).map((person) => [person.uuid, person.display_name]),
+  );
+  const relationships = [];
+  for (const edge of edges || []) {
+    const outgoing = edge.from_uuid === identity.uuid;
+    if (!outgoing && edge.to_uuid !== identity.uuid) continue;
+    const otherUuid = outgoing ? edge.to_uuid : edge.from_uuid;
+    relationships.push({
+      id: edge.id,
+      label: edge.rel_type === "parent" && !outgoing ? "child of" : `${edge.rel_type} of`,
+      other_uuid: otherUuid,
+      other_display_name: names.get(otherUuid) || "someone not in this view",
+    });
+  }
+  relationships.sort((a, b) =>
+    a.label.localeCompare(b.label) || a.other_display_name.localeCompare(b.other_display_name));
+  return { identity, relationships, source: "agent_authority" };
+}
+
+// Avatars live in the legacy HA store. An agent-sourced person has no record
+// there, and a record that reports avatar_present: false has nothing to fetch.
+function peopleIdentityMayHaveAvatar(identity) {
+  return !!identity && identity.source !== "agent_authority" && identity.avatar_present !== false;
+}
+
 // The household lives on the Home Agent's own origin. A same-origin read works
 // where the gateway still shares the Agent cookie; otherwise the invisible,
 // read-only People bridge on the Agent origin reads it with the owner's Agent
@@ -159,13 +208,13 @@ async function fetchAgentHousehold(signal) {
       : { relationships: [] };
   }
 
-  const edges = (relationships.relationships || []).map((edge) => ({
+  const edges = dedupeAgentEdges((relationships.relationships || []).map((edge) => ({
     id: edge.fact_id,
     from_uuid: edge.subject_person_id,
     to_uuid: edge.object_person_id,
     rel_type: agentPredicateToRelType(edge.predicate),
     status: "active",
-  }));
+  })));
 
   const identities = (household.people || []).map((person) => ({
     uuid: person.person_id,
@@ -353,6 +402,10 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // reachable but the identity_store didn't initialize.
   const [notReady, setNotReady] = useState(null);
   const [agentEdges, setAgentEdges] = useState([]);
+  // Which store the roster came from: "legacy" (HA identity store) or
+  // "agent_authority" (the Home Agent fallback). null while loading, in sim
+  // mode, or after a failure. Drives the banner and the read-only detail tray.
+  const [storedHouseholdSource, setHouseholdSource] = useState(null);
   // Set only from the authenticated HA identity-list response. The legacy
   // People UI becomes read-only only after the explicit E4 SQLite fence is
   // present and verified server-side.
@@ -390,6 +443,9 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   );
   const legacyBoundary = peoplePrincipalScopedValue(
     credentialScopeKey, principalDataScopeRef.current, storedLegacyBoundary, null,
+  );
+  const householdSource = peoplePrincipalScopedValue(
+    credentialScopeKey, principalDataScopeRef.current, storedHouseholdSource, null,
   );
   const facesByPerson = peoplePrincipalScopedValue(
     credentialScopeKey, principalDataScopeRef.current, storedFacesByPerson, null,
@@ -482,6 +538,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     // decision while a fresh HA-admin request is pending.
     setIdentities(null);
     setLegacyBoundary(null);
+    setHouseholdSource(null);
     setFrigateDiagnostics(null);
     setFacesByPerson(null);
     setFacesStatus({ state: "idle" });
@@ -565,6 +622,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           setNotReady(null);
           setAgentEdges(fromAgent.edges);
           setIdentities(fromAgent.identities);
+          setHouseholdSource("agent_authority");
           setLegacyBoundary(payload.legacy_identity_boundary || null);
           setLoadedAt(Date.now());
           return;
@@ -586,6 +644,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       if (!publishCurrentScope()) return;
       setAgentEdges([]);
       setIdentities(payload.identities || []);
+      setHouseholdSource("legacy");
       setLegacyBoundary(payload.legacy_identity_boundary || null);
       setFrigateDiagnostics({
         seedReport: payload.frigate_seed_report || null,
@@ -664,11 +723,21 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
 
   const legacyFrozenPendingCutover =
     legacyBoundary?.semantic_write_fence_installed === true;
+  const showingAgentHousehold = householdSource === "agent_authority";
+  // Agent-sourced people have no legacy record to write to, so the fallback is
+  // read-only whatever the legacy boundary reports.
   const legacyMutationsReadOnly =
-    !sim?.active && !(
+    !sim?.active && (showingAgentHousehold || !(
       legacyBoundary?.state === "legacy_migration_only"
       && legacyBoundary?.semantic_writes_frozen === false
-    );
+    ));
+  const selectedAgentDetail = useMemo(() => {
+    if (!selectedUuid || !Array.isArray(identities)) return null;
+    const selected = identities.find((identity) => identity.uuid === selectedUuid);
+    return selected?.source === "agent_authority"
+      ? buildAgentPersonDetail(selected, identities, agentEdges)
+      : null;
+  }, [selectedUuid, identities, agentEdges]);
 
   useEffect(() => {
     if (legacyMutationsReadOnly && view === "queue") setView("graph");
@@ -682,6 +751,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     requestGenerationRef.current += 1;
     setIdentities(null);
     setLegacyBoundary(null);
+    setHouseholdSource(null);
     setSelectedUuid(null);
     setFacesByPerson(null);
     setFrigateDiagnostics(null);
@@ -713,6 +783,12 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       const next = {};
       for (const i of identities) {
         if (cancelled) return;
+        // Agent-sourced people have no HA avatar route to ask, and a record
+        // that already says it has no avatar needs no probe.
+        if (!peopleIdentityMayHaveAvatar(i)) {
+          next[i.uuid] = false;
+          continue;
+        }
         try {
           const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(i.uuid)}/avatar`;
           const resp = await window.tauriFetch(url, {
@@ -771,7 +847,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     (async () => {
       for (const i of ids) {
         if (cancelled) return;
-        if (!avatarPresence[i.uuid]) continue;
+        if (!avatarPresence[i.uuid] || !peopleIdentityMayHaveAvatar(i)) continue;
         const inflightKey = `${generation}:${i.uuid}:${avatarCacheBust || "init"}`;
         if (blobFetchInFlightRef.current[inflightKey]) continue;
         if (avatarBlobUrls[i.uuid]) continue;
@@ -1020,7 +1096,23 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             </div>
           </div>
         )}
-        {legacyFrozenPendingCutover && !notReady && (
+        {showingAgentHousehold && !notReady && (
+          <div style={{
+            border: "1px solid var(--hg-border-soft)",
+            background: "var(--hg-bg-1)",
+            padding: "10px 14px",
+            color: "var(--hg-fg-2)",
+            fontSize: 11, letterSpacing: "0.04em",
+            marginBottom: 16,
+          }}>
+            <strong style={{ marginRight: 8 }}>home agent · read-only</strong>
+            The legacy identity store is unavailable, so this household is read
+            from the Home Agent. People and their relationships are shown as
+            recorded there. Photos, preferences, and Frigate faces are not
+            available here, and nothing can be edited.
+          </div>
+        )}
+        {legacyFrozenPendingCutover && !notReady && !showingAgentHousehold && (
           <div style={{
             border: "1px solid var(--hg-border-soft)",
             background: "var(--hg-bg-1)",
@@ -1099,6 +1191,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         onClose={() => setSelectedUuid(null)}
         onChanged={refresh}
         readOnly={legacyMutationsReadOnly}
+        agentDetail={selectedAgentDetail}
       />
     </div>
   );
@@ -2555,7 +2648,11 @@ function PeopleQueueView({ identities, facesByPerson, facesStatus, frigateDiagno
  * GET /api/extended_openai_conversation/identity/{uuid} so we don't
  * have to compose from the list endpoint's lighter projection.
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, sim, avatarPresence, avatarBlobUrls, onAvatarChanged, onClose, onChanged, readOnly = false }) {
+function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, sim, avatarPresence, avatarBlobUrls, onAvatarChanged, onClose, onChanged, readOnly: legacyReadOnly = false, agentDetail = null }) {
+  // An agent-sourced person is never edited here: the HA identity routes do
+  // not know their id. The tray renders agentDetail instead of fetching.
+  const agentSourced = !!agentDetail;
+  const readOnly = legacyReadOnly || agentSourced;
   const detailScopeKey =
     `${operationScopeKey}:detail:${identityUuid || "closed"}`;
   const payloadScopeRef = useRef(null);
@@ -2626,6 +2723,12 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
     if (!identityUuid) {
       return undefined;
     }
+    if (agentSourced) {
+      setLoading(false);
+      setError(null);
+      setDirty(null);
+      return undefined;
+    }
     const operation = beginOperation("load");
     setLoading(true);
     setError(null);
@@ -2684,6 +2787,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
     sim?.active,
     beginOperation,
     detailScopeKey,
+    agentSourced,
   ]);
 
   function patch(field, value) {
@@ -2876,7 +2980,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
             marginLeft: ident ? 8 : "auto",
             fontSize: 8, letterSpacing: "0.12em",
             color: "var(--hg-fg-3)", textTransform: "uppercase",
-          }}>legacy read-only · cutover pending</span>
+          }}>{agentSourced ? "home agent · read-only" : "legacy read-only · cutover pending"}</span>
         )}
       </div>
 
@@ -2929,11 +3033,13 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
         }}>{error}</div>
       )}
 
-      {!loading && !ident && !error && (
+      {!loading && !ident && !error && !agentSourced && (
         <div style={{ padding: 18, color: "var(--hg-fg-3)", fontSize: 11 }}>
           identity not found
         </div>
       )}
+
+      {agentSourced && <AgentPersonDetail detail={agentDetail} />}
 
       {merged && (
         <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
@@ -3279,6 +3385,82 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
   return typeof document !== "undefined" && document.body
     ? ReactDOM.createPortal(panel, document.body)
     : panel;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: AgentPersonDetail — read-only tray body for a person
+ * read from the Home Agent (see buildAgentPersonDetail). No inputs, no
+ * avatar control, no preferences or faces: the agent read has none.
+ * ──────────────────────────────────────────────────────────────────── */
+function AgentPersonDetail({ detail }) {
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const person = detail.identity;
+  const initials = H && H.initialsFor
+    ? H.initialsFor(person.display_name || "?")
+    : (person.display_name || "?").charAt(0).toUpperCase();
+  const labelStyle = {
+    display: "block", fontSize: 9, letterSpacing: "0.18em",
+    textTransform: "uppercase", color: "var(--hg-fg-3)",
+    marginBottom: 6,
+  };
+  return (
+    <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div aria-hidden="true" style={{
+          width: 56, height: 56, borderRadius: "50%", flexShrink: 0,
+          background: "var(--hg-bg-2)",
+          border: "1px solid var(--hg-border-soft)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontFamily: PEOPLE_FONT_SANS,
+          fontSize: 20, color: "var(--hg-fg-1)",
+          fontWeight: 300,
+        }}>{initials}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            fontFamily: PEOPLE_FONT_SANS, fontSize: 16, color: "var(--hg-fg-0)",
+            overflowWrap: "anywhere",
+          }}>{person.display_name}</div>
+          {(person.pronouns || person.relationship_type === "me") && (
+            <div style={{ marginTop: 3, fontSize: 10, color: "var(--hg-fg-3)", letterSpacing: "0.04em" }}>
+              {[person.relationship_type === "me" ? "you" : null, person.pronouns]
+                .filter(Boolean).join(" · ")}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <div style={labelStyle}>relationships ({detail.relationships.length})</div>
+        {detail.relationships.length === 0 ? (
+          <div style={{ fontSize: 11, color: "var(--hg-fg-3)" }}>
+            no relationships recorded for this person
+          </div>
+        ) : (
+          <ul style={{
+            margin: 0, padding: 0, listStyle: "none",
+            fontSize: 11, color: "var(--hg-fg-1)",
+          }}>
+            {detail.relationships.map((r) => (
+              <li key={r.id} style={{ padding: "4px 0" }}>
+                <span style={{ color: "var(--hg-fg-3)" }}>{r.label}</span>
+                {" "}
+                {r.other_display_name}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div role="note" style={{
+        paddingTop: 14,
+        borderTop: "1px solid var(--hg-border-soft)",
+        fontSize: 10, lineHeight: 1.5, color: "var(--hg-fg-3)",
+      }}>
+        Read from the Home Agent. Photos, preferences, and Frigate faces are not
+        available from the Home Agent, so they are not shown here.
+      </div>
+    </div>
+  );
 }
 
 /* ─────────────────────────────────────────────────────────────────────

@@ -380,4 +380,34 @@ test("the reviewed containment design keeps model tools and private context lock
   assert.doesNotMatch(identityStore, /json\.dumps\(before\) if before is not None/);
 });
 
+test("the reference copy is an overlay whose relative imports resolve", () => {
+  // Files in the reference copy import every module they share with the live
+  // integration from the live directory (see its README.md).
+  const root = path.join(__dirname, "..", "ha-config");
+  const reference = path.join(root, "extended_openai_conversation_e4_reference");
+  const live = path.join(root, "extended_openai_conversation");
+  const exists = (rel) => [reference, live].some((dir) =>
+    fs.existsSync(path.join(dir, `${rel}.py`)) || fs.existsSync(path.join(dir, rel, "__init__.py")));
+  const unresolved = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".py")) {
+        const pkg = path.relative(reference, dir).split(path.sep).filter(Boolean);
+        const source = fs.readFileSync(full, "utf8");
+        for (const match of source.matchAll(/^\s*from (\.+)([\w.]*) import ([\w, ()]+)/gm)) {
+          const base = pkg.slice(0, pkg.length - (match[1].length - 1));
+          if (match[2]) {
+            const rel = [...base, ...match[2].split(".")].join("/");
+            if (!exists(rel)) unresolved.push(`${path.relative(reference, full)}: ${match[0].trim()}`);
+          }
+        }
+      }
+    }
+  };
+  walk(reference);
+  assert.deepStrictEqual(unresolved, []);
+});
+
 process.stdout.write(`# ${passed} security containment tests passed\n`);

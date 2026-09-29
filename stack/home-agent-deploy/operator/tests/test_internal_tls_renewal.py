@@ -388,7 +388,7 @@ def test_check_expiry_warns_on_missing_leaf_and_trust_drift(prepared):
 def test_check_expiry_exit_status_drives_the_systemd_alert(prepared, capsys, monkeypatch):
     monkeypatch.setattr(tool, "Context", lambda root: ctx(root))
     assert tool.main(["check-expiry", "--root", str(prepared)]) == 0
-    assert tool.main(["check-expiry", "--root", str(prepared), "--warn-days", "120"]) == 1
+    assert tool.main(["check-expiry", "--root", str(prepared), "--warn-days", "120"]) == tool.EXIT_WARNINGS == 10
     assert "internal TLS: echo-identity: live leaf expires" in capsys.readouterr().err
 
 
@@ -489,6 +489,8 @@ def test_expiry_units_follow_the_host_alert_convention():
         "check-expiry --root /srv/home-agent/shared-preferences/prepared-20260928")
     assert service["Service"]["ProtectSystem"] == "strict"
     assert "ReadWritePaths" not in service["Service"]
+    # Warnings must not leave the unit failed: the Lab preflight stops GPU work on any failed unit.
+    assert service["Service"]["SuccessExitStatus"] == str(tool.EXIT_WARNINGS)
     timer = configparser.ConfigParser(strict=False, interpolation=None)
     timer.optionxform = str
     timer.read(systemd / "home-agent-internal-tls-expiry.timer")
@@ -532,3 +534,47 @@ def test_a_planted_staging_symlink_is_replaced_not_followed(prepared, tmp_path):
     assert decoy.read_text() == "untouched"
     assert not [p for p in target.iterdir() if p.name.startswith(".")]
     assert tool.key_matches((target / "server.key").read_bytes(), info(target / "server.crt"))
+
+
+def _warning_page_command(tmp_path: Path, root: Path) -> list[str]:
+    """The unit's ExecStopPost, pointed at the checkout's tool, a test root and a fake ntfy-send."""
+    import shlex
+
+    unit = (DEPLOY / "operator/systemd/home-agent-internal-tls-expiry.service").read_text()
+    line = next(l for l in unit.splitlines() if l.startswith("ExecStopPost="))
+    assert line.startswith("ExecStopPost=+/bin/sh -c ")
+    argv = shlex.split(line[len("ExecStopPost=+"):].replace("$$", "$"))
+    fake = tmp_path / "ntfy-send"
+    fake.write_text('#!/bin/sh\nprintf "%s|" "$@" > "$0.args"\ncat > "$0.body"\n')
+    fake.chmod(0o755)
+    shim = tmp_path / "check.py"  # the real tool, with the test's trusted uid and openssl
+    shim.write_text(
+        "import os, shutil, sys\n"
+        f"sys.path.insert(0, {str(DEPLOY / 'shared-preferences')!r})\n"
+        "import renew_internal_tls as t\n"
+        "t.OPENSSL = shutil.which('openssl')\n"
+        "real = t.Context\n"
+        "t.Context = lambda root: real(root, trusted_uid=os.getuid(), check_parents=False)\n"
+        "sys.exit(t.main(sys.argv[1:]))\n")
+    script = (argv[2]
+              .replace("/usr/bin/python3 -I -s /usr/local/libexec/home-agent/shared-preferences/renew_internal_tls.py",
+                       f"{sys.executable} {shim}")
+              .replace("/srv/home-agent/shared-preferences/prepared-20260928", str(root))
+              .replace("/usr/local/sbin/ntfy-send", str(fake))
+              .replace("/usr/bin/sed", shutil.which("sed")))
+    return ["/bin/sh", "-c", script]
+
+
+def test_expiry_warning_pages_without_failing_the_unit(prepared, tmp_path):
+    leaf = tool.LEAVES["echo-identity"]
+    issue(prepared / "authority", prepared / leaf.directory, cn=leaf.common_name, ip=f"IP:{leaf.address}",
+          usage="digitalSignature", days=10)
+    set_modes(prepared, leaf)
+    command = _warning_page_command(tmp_path, prepared)
+    for status in ("0", "1", "3", "78"):  # success or a real failure: OnFailure owns those
+        subprocess.run(command, check=True, env={**os.environ, "EXIT_STATUS": status})
+        assert not (tmp_path / "ntfy-send.args").exists()
+    subprocess.run(command, check=True, env={**os.environ, "EXIT_STATUS": "10"})
+    assert (tmp_path / "ntfy-send.args").read_text() == "internal-tls-expiry|page|Internal TLS renewal due|default|warning|"
+    body = (tmp_path / "ntfy-send.body").read_text()
+    assert body.startswith("echo-identity: live leaf expires in 9 days") and "PRIVATE" not in body

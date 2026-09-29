@@ -371,12 +371,15 @@ Order, in one Lab-acknowledged window:
    64-hex secret in `secrets.yaml` and an allowlist of real lights; restart HA.
    Verify an unsigned request to `/api/home_agent_edge/lighting/v1/inventory`
    returns 401.
-2. Stage `lighting/secrets/` (root-owned, readable by UID 10001):
+2. Stage `lighting/secrets/` (directory `10001:10001 0700`, files `0400`):
    `credential` (identical to `echo-bff/secrets/lighting_credential`),
-   `database_url` (`home_agent_lighting` with `sslmode=verify-full` like the
-   other private roles), `action_key`, `consent_key`, `journal_key` (distinct,
-   64 hex) and `<home>_home_secret` (identical to that home's HA secret).
-   Create empty `lighting/config` and `lighting/journals` (UID 10001, 0700).
+   `lighting_database_url` (`postgresql+psycopg://home_agent_lighting:<password>@postgres:5432/home_agent`,
+   the same shape as the other private roles), `action_key`, `consent_key`,
+   `journal_key` (distinct, 64 hex), `<home>_home_secret` (identical to that
+   home's HA secret), and Core's own API secrets as for every Core listener:
+   `database_url`, `knowledge_encryption_key`, `service_token`. Create
+   `lighting/config` (`root:10001 0750`) and `lighting/journals`
+   (`10001:10001 0700`).
 3. As the owner in the `migrate` operator service:
    `python -m app.lighting_permissions prepare`, then
    `activate --password-file <staged>`; `status` must show one login role.

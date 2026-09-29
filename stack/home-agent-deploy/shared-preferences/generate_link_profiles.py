@@ -35,7 +35,11 @@ BROWSER_PORT, INGRESS_PORT, CORE_PORT = 9450, 9451, 9448
 CALLBACK = "/api/agent/auth/callback"
 ECHO_SECRETS = ("commitment_key", "journal_key", "handoff_credential", "proof_credential",
                 "session_credential", "issuance_credential", "review_credential", "preference_credential")
-LIGHTING_SECRETS = ("credential", "database_url", "action_key", "consent_key", "journal_key")
+# database_url, knowledge_encryption_key and service_token are Core's own API
+# secrets (HOME_AGENT_*_FILE), as for every Core listener; the lighting role's
+# login is a separate lighting_database_url.
+LIGHTING_SECRETS = ("credential", "lighting_database_url", "action_key", "consent_key", "journal_key",
+                    "database_url", "knowledge_encryption_key", "service_token")
 LIGHTING_HOME_PORTS = {"echo": 10000, "victoria": 10001}
 LIGHTING_GRANT_SECONDS = 30 * 86400  # the same displayed lifetime as preference sharing
 VICTORIA_SECRETS = ("commitment_key", "journal_key", "session_encryption_key", "handoff_credential",
@@ -124,7 +128,7 @@ def build_lighting_profile(tailnet, homes, *, secrets="/run/secrets", config="/c
         "consent_key_file": f"{secrets}/consent_key",
         "journal_key_file": f"{secrets}/journal_key",
         "journal_path": f"{journals}/lighting.sqlite",
-        "database_url_file": f"{secrets}/database_url",
+        "database_url_file": f"{secrets}/lighting_database_url",
         "grant_lifetime_seconds": LIGHTING_GRANT_SECONDS,
         # Each home's light-only endpoint is reached through its Tailscale Serve port.
         "homes": {site: {"origin": f"https://home-app.{tailnet}:{LIGHTING_HOME_PORTS[site]}",

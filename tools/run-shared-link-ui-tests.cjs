@@ -34,7 +34,7 @@ const screenshot = path.join(root, ".tmp/shared-link-review.png");
       const reply = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
       if (url.pathname.endsWith("auth/session")) return reply({ authenticated: true, user_id: "owner",
         csrf_token: "csrf", authority, shared_link_review_enabled: overrides.enabled !== false,
-        personal_memory_enabled: overrides.sharing === true });
+        personal_memory_enabled: overrides.sharing === true, lighting_enabled: overrides.lighting === true });
       if (url.pathname.endsWith("onboarding/status")) return reply({ state: "bound" });
       if (url.pathname.endsWith("snapshot")) return reply({ rollout_mode: "shadow", capabilities: {}, preferences: {} });
       if (url.pathname.endsWith("auth/logout")) return reply({ ok: true });
@@ -46,6 +46,15 @@ const screenshot = path.join(root, ".tmp/shared-link-review.png");
       }
       if (url.pathname.endsWith("personal-memory/sharing-confirm") || url.pathname.endsWith("personal-memory/sharing-outcome")) {
         if(overrides.uncertain && url.pathname.endsWith("sharing-confirm")) return reply({error:"unknown"},503);
+        return reply({version:1,result:{version:1,operation_id:sharingOperation,status:"committed"}});
+      }
+      if (url.pathname.endsWith("lighting/consent-propose")) {
+        sharingOperation=route.request().postDataJSON().operation_id;
+        return reply({version:1,result:{version:1,operation_id:sharingOperation,source:"core.lighting.v1",
+          applies_to:"both_homes",effect:"switch_allowlisted_lights_after_each_confirmation",reviewed_digest:digest,
+          grants_expire_at:new Date(Date.now()+86400000).toISOString(),expires_at:new Date(Date.now()+60000).toISOString()}});
+      }
+      if (url.pathname.endsWith("lighting/consent-confirm") || url.pathname.endsWith("lighting/consent-outcome")) {
         return reply({version:1,result:{version:1,operation_id:sharingOperation,status:"committed"}});
       }
       if (url.pathname.endsWith("shared-identity/review")) return reply({ version: 1, ceremony_id: id,
@@ -153,6 +162,25 @@ const screenshot = path.join(root, ".tmp/shared-link-review.png");
       await page.getByText(/Preference sharing was confirmed/).waitFor();
       assert.equal(calls.filter(c=>c.path.endsWith("sharing-confirm")).length,1);
       assert.equal(calls.filter(c=>c.path.endsWith("sharing-outcome")).length,1);
+    });
+    await scenario("lighting control requires its own explicit consent", {lighting:true}, async(page,calls)=>{
+      await page.setViewportSize({width:390,height:844});
+      await page.getByRole("button",{name:"Review lighting control",exact:true}).click();
+      const confirm=page.getByRole("button",{name:"Confirm lighting control",exact:true});
+      assert.equal(await confirm.isDisabled(),true);
+      assert.equal(calls.some(c=>c.path.endsWith("lighting/consent-confirm")),false);
+      await page.getByRole("checkbox",{name:"Allow Home to switch these lights after I confirm each change."}).check();
+      const card=page.locator(".agent-lighting-consent");
+      assert.equal(await card.evaluate(node=>node.scrollWidth<=node.clientWidth),true);
+      await card.screenshot({path:path.join(root,".tmp/lighting-consent-mobile.png")});
+      await confirm.click();
+      await page.getByText(/Lighting control was allowed/).waitFor();
+      const sent=calls.filter(c=>c.path.endsWith("lighting/consent-confirm"));
+      assert.equal(sent.length,1);assert.equal(sent[0].headers["x-csrf-token"],"csrf");
+      assert.deepEqual(Object.keys(sent[0].body).sort(),["operation_id","reviewed_digest","version"]);
+    });
+    await scenario("lighting consent is hidden unless the session enables lighting", {}, async(page)=>{
+      assert.equal(await page.getByRole("heading",{name:"Lighting control between homes"}).count(),0);
     });
     process.stdout.write(`${passed} browser scenarios passed; screenshot ${screenshot}\n`);
   } finally { await browser.close(); }

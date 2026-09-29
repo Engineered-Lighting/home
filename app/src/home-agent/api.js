@@ -9,6 +9,7 @@
       POST: ["auth/(?:start|logout)", "v1/(?:principal-binding-request(?:/cancel)?|principal-binding-proposal/confirm|parent-relationship-proposal(?:/confirm)?|partner-attestation|household-person|memory-transactions)",
         "shared-identity/(?:review|confirm|outcome|start|handoff|issuance-outcome|auth-begin|auth-submit|auth-outcome|victoria-auth-admit|victoria-auth-outcome|prepare-review)",
         "personal-memory/(?:read|propose|confirm|outcome|sharing-propose|sharing-confirm|sharing-outcome)",
+        "lighting/(?:status|propose|confirm|outcome|consent-propose|consent-confirm|consent-outcome)",
         `v1/memory-transactions/${id}/confirm`, `v1/facts/${id}/(?:correction|retraction|forget)-preview`,
         `v1/(?:descriptor-corrections|descriptor-retractions|erasure-requests)/${id}/confirm`],
       PUT: ["v1/preferences/(?:location_memory|travel_greetings)"],
@@ -255,6 +256,19 @@
         return Promise.reject(new Error("invalid_personal_memory_request"));
       }
       return this.request(`/api/agent/personal-memory/${operation}`, {method:"POST",body:structuredClone(body),signal});
+    }
+    lighting(operation, body = {}, { signal } = {}) {
+      if (this.invoke) return Promise.reject(new Error("native_lighting_unavailable"));
+      const shapes = { status: [], propose: ["version","operation_id","sites","targets","operation","brightness"],
+        confirm: ["version","operation_id","reviewed_digest"], outcome: ["version","operation_id"],
+        "consent-propose": ["version","operation_id"], "consent-confirm": ["version","operation_id","reviewed_digest"],
+        "consent-outcome": ["version","operation_id"] };
+      const fields = shapes[operation];
+      if (!fields || !body || typeof body !== "object" || Array.isArray(body) ||
+          Object.keys(body).length !== fields.length || !fields.every(field => Object.hasOwn(body,field))) {
+        return Promise.reject(new Error("invalid_lighting_request"));
+      }
+      return this.request(`/api/agent/lighting/${operation}`, {method:"POST",body:structuredClone(body),signal});
     }
     sharedLinkSetup(operation, body, { signal } = {}) {
       if (this.invoke) return Promise.reject(new Error("native_shared_link_unavailable"));

@@ -72,10 +72,12 @@ READ_PATHS = (
 HA_INTEGRATION = "ha-config/extended_openai_conversation"
 HA_E4_REFERENCE = "ha-config/extended_openai_conversation_e4_reference"
 IN_PACKAGE_SUITES = (
+    f"{HA_INTEGRATION}/test_cross_home_guard.py",
     f"{HA_INTEGRATION}/test_entity_strict.py",
     f"{HA_INTEGRATION}/test_external_routing.py",
     f"{HA_INTEGRATION}/test_frigate_sync.py",
     f"{HA_INTEGRATION}/test_frigate_tool.py",
+    f"{HA_INTEGRATION}/test_grounded_look.py",
     f"{HA_INTEGRATION}/test_identity_store.py",
     f"{HA_INTEGRATION}/test_lifecycle.py",
     f"{HA_INTEGRATION}/test_living_lights.py",
@@ -87,17 +89,16 @@ IN_PACKAGE_SUITES = (
     f"{HA_INTEGRATION}/test_visual_preroute.py",
     f"{HA_INTEGRATION}/test_world_state.py",
     f"{HA_E4_REFERENCE}/test_action_containment.py",
-    f"{HA_E4_REFERENCE}/test_cross_home_guard.py",
     f"{HA_E4_REFERENCE}/test_frigate_sync.py",
     f"{HA_E4_REFERENCE}/test_identity_store.py",
 )
 # Already failing on main before the integration was reconciled with LA Home
-# Assistant, for reasons in the test harness itself (an exec'd slice that lost
-# its `re` import; a stubbed vision call that is never reached). Listed so a new
-# test cannot go unrun by accident; fixing them is separate work.
+# Assistant, for a reason in the test harness itself (an exec'd slice that lost
+# its `re` import). Listed so a new test cannot go unrun by accident; fixing it
+# is separate work. test_grounded_look.py failed only against main's contained
+# const.py and passes against the live one, so it runs above.
 IN_PACKAGE_KNOWN_BROKEN = (
     f"{HA_INTEGRATION}/test_friendly_error_speech.py",
-    f"{HA_INTEGRATION}/test_grounded_look.py",
 )
 
 

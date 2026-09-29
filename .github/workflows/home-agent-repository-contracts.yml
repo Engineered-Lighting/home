@@ -174,10 +174,12 @@ jobs:
         run: |
           set -euo pipefail
           suites=(
+            ha-config/extended_openai_conversation/test_cross_home_guard.py
             ha-config/extended_openai_conversation/test_entity_strict.py
             ha-config/extended_openai_conversation/test_external_routing.py
             ha-config/extended_openai_conversation/test_frigate_sync.py
             ha-config/extended_openai_conversation/test_frigate_tool.py
+            ha-config/extended_openai_conversation/test_grounded_look.py
             ha-config/extended_openai_conversation/test_identity_store.py
             ha-config/extended_openai_conversation/test_lifecycle.py
             ha-config/extended_openai_conversation/test_living_lights.py
@@ -189,7 +191,6 @@ jobs:
             ha-config/extended_openai_conversation/test_visual_preroute.py
             ha-config/extended_openai_conversation/test_world_state.py
             ha-config/extended_openai_conversation_e4_reference/test_action_containment.py
-            ha-config/extended_openai_conversation_e4_reference/test_cross_home_guard.py
             ha-config/extended_openai_conversation_e4_reference/test_frigate_sync.py
             ha-config/extended_openai_conversation_e4_reference/test_identity_store.py
           )

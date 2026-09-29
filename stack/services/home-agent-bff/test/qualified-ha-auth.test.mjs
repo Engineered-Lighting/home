@@ -76,6 +76,11 @@ test("qualified refresh fixes issuer endpoint and clears the submitted credentia
 });
 
 test("qualified refresh failure does not reflect credentials or endpoint details", async () => {
-  const auth = new QualifiedHaAuth({ ...config("victoria"), fetchImpl: async () => { throw new Error("private credential details"); } });
-  await assert.rejects(auth.refresh(Buffer.from("fixture")), /^Error: ha_token_refresh_failed$/);
+  const unreachable = new QualifiedHaAuth({ ...config("victoria"), fetchImpl: async () => { throw new Error("private credential details"); } });
+  await assert.rejects(unreachable.refresh(Buffer.from("fixture")), /^HaUnavailableError: home_assistant_unavailable$/);
+  await assert.rejects(unreachable.verify(Buffer.from("fixture")), /^HaUnavailableError: home_assistant_unavailable$/);
+  const denied = new QualifiedHaAuth({ ...config("victoria"), fetchImpl: async () => new Response("private credential details", { status: 400 }) });
+  await assert.rejects(denied.refresh(Buffer.from("fixture")), /^Error: ha_token_refresh_failed$/);
+  const restarting = new QualifiedHaAuth({ ...config("victoria"), fetchImpl: async () => new Response("private", { status: 503 }) });
+  await assert.rejects(restarting.refresh(Buffer.from("fixture")), /^HaUnavailableError: home_assistant_unavailable$/);
 });

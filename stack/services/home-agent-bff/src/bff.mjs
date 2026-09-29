@@ -3,7 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { asTokenBuffer, exchangeCode, refreshAccessToken, revokeRefreshToken, fetchHaSubject } from "./ha-token-transport.mjs";
+import { HaUnavailableError, asTokenBuffer, exchangeCode, refreshAccessToken, revokeRefreshToken, fetchHaSubject } from "./ha-token-transport.mjs";
 import { QualifiedHaAuth } from "./qualified-ha-auth.mjs";
 import { EchoLinkReview } from "./echo-link-review.mjs";
 import { EchoLinkStart } from "./echo-link-start.mjs";
@@ -916,10 +916,13 @@ function configFromEnv(env = process.env) {
     allowInsecureTestUrls,
     secureCookie: env.HOME_AGENT_INSECURE_TEST_COOKIE !== "1",
     idleTtlMs: boundedIntegerFromEnv(
-      env, "HOME_AGENT_SESSION_IDLE_MS", 30 * 60_000, 60_000, 24 * 60 * 60_000,
+      // Defaults stay short; a single-owner hobby install may opt into
+      // sessions of up to 400 days, the longest cookie browsers keep. HA
+      // access tokens still refresh and the principal is still revalidated.
+      env, "HOME_AGENT_SESSION_IDLE_MS", 30 * 60_000, 60_000, 400 * 24 * 60 * 60_000,
     ),
     absoluteTtlMs: boundedIntegerFromEnv(
-      env, "HOME_AGENT_SESSION_ABSOLUTE_MS", 12 * 60 * 60_000, 60_000, 7 * 24 * 60 * 60_000,
+      env, "HOME_AGENT_SESSION_ABSOLUTE_MS", 12 * 60 * 60_000, 60_000, 400 * 24 * 60 * 60_000,
     ),
     // Re-check HA on every private request by default. A bounded non-zero
     // interval is available for constrained installations, but revocation is
@@ -1295,7 +1298,10 @@ class SessionStore {
         state = "revocation_pending";
       }
       const id = String(row.id || "");
-      if (this.#sharedRevocation) this.#restoredSharedSessions.add(id);
+      // A session already linked before the restart keeps linking (owner
+      // decision). One restored without an armed record, such as a snapshot
+      // taken before linking, still needs a new login before it may link.
+      if (this.#sharedRevocation && !this.#sharedRevocation.armed(id)) this.#restoredSharedSessions.add(id);
       if (this.#sharedRevocation?.retired(id) && state === "active") state = "revocation_pending";
       const session = {
         principal,
@@ -1725,6 +1731,16 @@ class SessionStore {
           this.#persist(String(id || ""), session);
         }
       } catch (error) {
+        if (error instanceof HaUnavailableError) {
+          // HA is briefly unreachable: keep the session. A refresh that already
+          // rotated the tokens must be kept, or the old refresh token is dead.
+          if (refreshed) {
+            try {
+              this.#replaceTokens(id, session, activeAccessToken, activeRefreshToken, refreshed.expiresIn, now);
+            } catch { /* the next successful refresh or HA denial decides */ }
+          }
+          throw error;
+        }
         if (this.#qualifiedProfile) this.scheduleRevocation(id, session, "failed_revalidation");
         if (this.#qualifiedProfile && refreshed) {
           // A refresh may have rotated the token before verification failed or
@@ -1744,7 +1760,9 @@ class SessionStore {
         refreshed?.refreshToken.fill(0);
       }
     }); } catch (error) {
-      if (this.#qualifiedProfile) this.scheduleRevocation(id, session, "failed_revalidation");
+      if (this.#qualifiedProfile && !(error instanceof HaUnavailableError)) {
+        this.scheduleRevocation(id, session, "failed_revalidation");
+      }
       throw error;
     } finally { this.#qualifiedChecks.delete(qualifiedKey); }
     return session;
@@ -1869,8 +1887,11 @@ async function readBody(req) {
   return Buffer.concat(chunks);
 }
 
-function sessionCookie(id, secure) {
-  return `${COOKIE_NAME}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200${secure ? "; Secure" : ""}`;
+// The browser keeps the cookie exactly as long as the server keeps the session.
+function sessionCookie(id, secure, absoluteTtlMs) {
+  const maxAge = Math.floor(absoluteTtlMs / 1000);
+  if (!Number.isSafeInteger(maxAge) || maxAge <= 0) throw new Error("session cookie lifetime required");
+  return `${COOKIE_NAME}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 }
 
 function clearSessionCookie(secure) {
@@ -2146,7 +2167,7 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
           const session = sessions.completeLogin(pendingId, principal);
           return redirect(res, config.postLoginRedirect, {
             "Set-Cookie": [
-              sessionCookie(session.id, config.secureCookie),
+              sessionCookie(session.id, config.secureCookie, config.absoluteTtlMs),
               clearOauthCookie(config.secureCookie),
             ],
           });
@@ -2309,7 +2330,10 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
         Date.now(),
         { forcePrincipalCheck: isFreshIdentityRoute },
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof HaUnavailableError) {
+        return json(res, 503, { error: "home_assistant_unavailable", retryable: true });
+      }
       sessions.scheduleRevocation(sessionId, session, "authentication_revoked");
       return json(
         res,

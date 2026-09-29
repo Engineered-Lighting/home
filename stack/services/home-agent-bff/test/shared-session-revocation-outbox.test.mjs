@@ -51,11 +51,16 @@ test("logout retains a Core tombstone after HA cleanup and retries exact ID acro
   await f.cleanup();assert.equal(f.requests.length,2);
 });
 
-test("restart retires armed linking sessions while preserving ordinary sessions",async t=>{
-  const f=fixture(t),linked=f.login(),ordinary=f.login();f.store.linkingContext(linked,f.key);
+test("restart keeps linked sessions linked; restored unlinked sessions must sign in again to link",async t=>{
+  // Owner decision: a BFF restart no longer ends linked sessions.
+  const f=fixture(t),linked=f.login(),ordinary=f.login();
+  const before=f.store.linkingContext(linked,f.key);
   f.store.close();f.open();
-  assert.equal(f.store.get(linked),null);assert.ok(f.store.get(ordinary));
-  await f.cleanup();assert.equal(f.requests.length,1);
+  assert.ok(f.store.get(linked));assert.ok(f.store.get(ordinary));
+  assert.equal(f.store.linkingContext(linked,f.key).sessionCommitment,before.sessionCommitment);
+  assert.equal(f.store.linkingContext(ordinary,f.key),null);
+  assert.equal(f.db.prepare("SELECT state FROM bff_shared_revocation").get().state,"armed");
+  await f.cleanup();assert.equal(f.requests.length,0);
 });
 
 test("omitted or changed commitment binding rejects reopen without consuming queue",t=>{
@@ -67,14 +72,16 @@ test("omitted or changed commitment binding rejects reopen without consuming que
   f.open();
 });
 
-test("failed logout persistence cannot delete or revive tracked authority after restart",async t=>{
+test("a logout whose storage failed is reported, closes authority now, and is not replayed after restart",async t=>{
   const f=fixture(t),id=f.login();f.store.linkingContext(id,f.key);
   f.db.exec("CREATE TRIGGER fail_shared_revocation BEFORE UPDATE ON bff_shared_revocation BEGIN SELECT RAISE(ABORT,'storage failure'); END");
   assert.equal(await f.store.revoke(f.config,id,f.store.getForRevocation(id),async()=>new Response("",{status:200})),false);
   assert.equal(f.store.get(id),null);
   assert.equal(f.db.prepare("SELECT count(*) n FROM bff_session").get().n,1);
   f.db.exec("DROP TRIGGER fail_shared_revocation");f.store.close();f.open();
-  assert.equal(f.store.get(id),null);await f.cleanup();assert.equal(f.requests.length,1);
+  // Owner-accepted trade-off: nothing durable recorded the failed logout, so
+  // the persisted session is restored by a restart like any other.
+  assert.ok(f.store.get(id));await f.cleanup();assert.equal(f.requests.length,0);
 });
 
 test("arming failure or wrong key prevents commitment disclosure",t=>{
@@ -108,21 +115,24 @@ test("idle expiry queues and delivers the tracked session without explicit logou
   assert.equal(f.db.prepare("SELECT state FROM bff_shared_revocation").get().state,"delivered");
 });
 
-test("session write failure rolls back queue transition and restart closes authority",t=>{
+test("session write failure rolls back the queue transition and closes authority until restart",t=>{
   const f=fixture(t),id=f.login();f.store.linkingContext(id,f.key);
   f.db.exec("CREATE TRIGGER fail_session BEFORE UPDATE ON bff_session BEGIN SELECT RAISE(ABORT,'session storage failed'); END");
   assert.equal(f.store.scheduleRevocation(id,f.store.getForRevocation(id),"logout"),false);
   assert.equal(f.db.prepare("SELECT state FROM bff_shared_revocation").get().state,"armed");
   assert.equal(f.store.get(id),null);f.db.exec("DROP TRIGGER fail_session");
-  f.store.close();f.open();assert.equal(f.store.get(id),null);
-  assert.equal(f.db.prepare("SELECT state FROM bff_shared_revocation").get().state,"pending");
+  // Owner-accepted trade-off: the rolled-back transition leaves the session
+  // armed, and a restart restores it rather than retiring it.
+  f.store.close();f.open();assert.ok(f.store.get(id));
+  assert.equal(f.db.prepare("SELECT state FROM bff_shared_revocation").get().state,"armed");
 });
 
 test("a second owner cannot retire or overwrite the active process's sessions",t=>{
   const f=fixture(t),id=f.login();f.store.linkingContext(id,f.key);
   assert.throws(()=>new SessionStore(f.config),/locked/);
   assert.ok(f.store.get(id));assert.equal(f.db.prepare("SELECT state FROM bff_shared_revocation").get().state,"armed");
-  f.store.close();f.open();assert.equal(f.store.get(id),null);
+  f.store.close();f.open();assert.ok(f.store.get(id));
+  assert.equal(f.db.prepare("SELECT state FROM bff_shared_revocation").get().state,"armed");
 });
 
 test("shutdown during delivery leaves a retryable tombstone without touching a closed database",async t=>{

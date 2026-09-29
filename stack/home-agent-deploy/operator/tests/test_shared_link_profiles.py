@@ -116,7 +116,7 @@ def test_lighting_listener_profile_names_only_paths_and_the_serve_ports():
         "echo": {"origin": "https://home-app.taild52a15.ts.net:10000", "secret_file": "/run/secrets/echo_home_secret"},
         "victoria": {"origin": "https://home-app.taild52a15.ts.net:10001",
                      "secret_file": "/run/secrets/victoria_home_secret"}}
-    assert profile["grant_lifetime_seconds"] == 30 * 86400
+    assert profile["grant_lifetime_seconds"] == 365 * 86400
     # Never Core's own API login, which every Core listener reads from database_url.
     assert profile["database_url_file"] == "/run/secrets/lighting_database_url"
     assert generator.build_lighting_profile(TAILNET, ["echo"])["homes"].keys() == {"echo"}
@@ -148,7 +148,7 @@ def test_lighting_profile_passes_the_actual_core_loader(tmp_path):
     loaded = load_profile(str(path))
     assert loaded.address == "172.23.0.37" and set(loaded.homes) == {"echo", "victoria"}
     assert loaded.homes["victoria"].origin == "https://home-app.taild52a15.ts.net:10001"
-    assert loaded.grant_lifetime_seconds == 30 * 86400
+    assert loaded.grant_lifetime_seconds == 365 * 86400
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node required")

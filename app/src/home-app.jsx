@@ -5055,11 +5055,21 @@ function isLightOrLampState(state, apartmentSwitchIds) {
   return /\b(light|lamp|lamps|ambient)\b/.test(haystack);
 }
 
+// When the web gateway holds the HA token it hands the page only a marker,
+// which it swaps for the real token on /proxy/ha. Home then connects without
+// asking. The marker is never persisted and never sent anywhere but the proxy.
+function withGatewayHaToken(prefs) {
+  if (typeof window === "undefined" || window.__HOME_WEB_HA_TOKEN_PROXY !== true ||
+      typeof window.__HOME_WEB_HA_TOKEN !== "string" || !window.__HOME_WEB_HA_TOKEN ||
+      prefs.token || prefs.endpoint !== window.HG_DEFAULT_HA_BASE) return prefs;
+  return { ...prefs, token: window.__HOME_WEB_HA_TOKEN };
+}
+
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const viewport = useViewportProfile();
   const mobile = viewport.mobile;
   const videoLabelerAvailable = !mobile;
-  const initialPrefs = useMemo(() => loadPrefs({
+  const initialPrefs = useMemo(() => withGatewayHaToken(loadPrefs({
     endpoint: webDefaultBase("HG_DEFAULT_HA_BASE"),
     token: "",
     model: "",
@@ -5075,7 +5085,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     s2sVoice: "",       // default voice prompt; empty = bridge default (NATM2.pt)
     kokoroVoice: "",    // Kokoro TTS voice — set via /voice <name>; empty = bridge default (am_eric)
     debugMode: false,   // Show internal diag events ([parakeet], [direct], [kokoro], etc.) in feed
-  }), []);
+  })), []);
   const initialEventsFromStorage = useMemo(
     () => {
       const restored = coalesceAssistantTurnEvents(

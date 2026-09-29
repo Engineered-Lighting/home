@@ -216,8 +216,10 @@
     else if(!elements.confirm.hidden) {visibility.unobserve(elements.confirm);visibility.observe(elements.confirm);}
   });
   async function session() {
-    const value=await api.session();
-    if(!value.authenticated) throw Object.assign(new Error("signed out"),{signedOut:true});
+    const signedOut=()=>Object.assign(new Error("signed out"),{signedOut:true});
+    // The BFF answers an expired or missing sign-in with 401.
+    const value=await api.session().catch(error=>{throw error?.status===401 ? signedOut() : error;});
+    if(!value.authenticated) throw signedOut();
     if(value.personal_memory_enabled!==true ||
         !Array.isArray(value.personal_memory_home_origins) || !value.personal_memory_home_origins.length) throw new Error("unavailable");
     origins=value.personal_memory_home_origins.filter(origin=>{

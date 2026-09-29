@@ -215,6 +215,24 @@ remains unauthenticated and receives no bearer token.
 Gateway `/healthz` reports only `stackTokenProxy.enabled` and `source`; it never
 returns the token value.
 
+## Home Assistant token and sign-in lifetime
+
+With `HOME_WEB_ENABLE_LEGACY_HA_PROXY=1`, the gateway can also hold the owner's
+long-lived HA token so Home never asks for it. Create the token in HA (Profile →
+Security → Long-lived access tokens), save it alone in a file readable only by
+the gateway user (`chmod 600`), and set `HOME_WEB_HA_TOKEN_FILE` to its path.
+The page receives only a placeholder; the gateway puts the real token on
+`/proxy/ha` REST requests and into the first (auth) websocket message, and
+disables websocket compression on that route so it can do so. `/healthz`
+reports `haTokenProxy.enabled` and `source`, never the value. A group- or
+world-readable file disables the proxy. Anyone who passes the gateway login
+gets the gateway's HA access, as with the stack token.
+
+The gateway login cookie lasts 400 days; changing the gateway password signs
+every browser out. The asset version now follows the shell files' content, so
+a plain gateway restart no longer reloads open tabs; set
+`HOME_WEB_ASSET_VERSION` only to force a specific value.
+
 ## Proxy policy
 
 The broad legacy service proxies are quarantined by default. Configuring a

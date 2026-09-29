@@ -80,8 +80,32 @@ function readGitCommit() {
 
 const BUILD_VERSION = process.env.HOME_BUILD_VERSION || PACKAGE_JSON.version || "0.1.0";
 const BUILD_COMMIT = process.env.HOME_BUILD_COMMIT || process.env.GITHUB_SHA || readGitCommit();
-const BUILD_STARTED_AT = Date.now().toString(36);
-const BUILD_ASSET_VERSION = process.env.HOME_WEB_ASSET_VERSION || `${BUILD_COMMIT}-${BUILD_STARTED_AT}`;
+// The asset version follows the served shell's content, not the process start
+// time: a plain restart keeps it (no service-worker takeover or tab reload),
+// while any changed file, including a patched file on a dirty checkout, bumps it.
+function shellContentVersion(root) {
+  const hash = crypto.createHash("sha256");
+  const walk = (dir, rel) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const relative = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!rel && ["assets", "data", "node_modules"].includes(entry.name)) continue;
+        walk(path.join(dir, entry.name), relative);
+      } else if (entry.isFile()) {
+        try {
+          hash.update(`${relative}\0`).update(fs.readFileSync(path.join(dir, entry.name))).update("\0");
+        } catch { hash.update(`${relative}\0unreadable\0`); }
+      }
+    }
+  };
+  walk(root, "");
+  return hash.digest("hex").slice(0, 16);
+}
+const BUILD_ASSET_VERSION = process.env.HOME_WEB_ASSET_VERSION ||
+  `${BUILD_COMMIT}-${shellContentVersion(APP_DIR)}`;
 const STATIC_VERSIONED_CACHE = "private, max-age=31536000, immutable";
 const STATIC_REVALIDATE_CACHE = "private, no-cache";
 const APARTMENT_HEAVY_CACHE = "private, max-age=604800, stale-while-revalidate=86400";
@@ -149,6 +173,33 @@ function readStackTokenFile(filePath) {
   return "";
 }
 
+// Single-owner convenience: the gateway may hold a long-lived HA token so the
+// browser never asks for one. The page only ever sees HA_TOKEN_PROXY_MARKER;
+// the gateway substitutes the real token on /proxy/ha REST and in the first
+// (auth) websocket frame. The file must be private to the gateway user.
+const HA_TOKEN_PROXY_MARKER = "__home_web_gateway_ha_token__";
+const HA_TOKEN_MAX_BYTES = 4096;
+
+function loadHaTokenProxy() {
+  const disabled = { enabled: false, source: "none", token: "" };
+  const file = String(process.env.HOME_WEB_HA_TOKEN_FILE || "").trim();
+  if (!file || !envEnabled("HOME_WEB_ENABLE_LEGACY_HA_PROXY")) return disabled;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > HA_TOKEN_MAX_BYTES) throw new Error("invalid");
+    if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+      console.warn("[ha-token] HOME_WEB_HA_TOKEN_FILE must not be readable by group or others; HA token proxy disabled");
+      return disabled;
+    }
+    const token = fs.readFileSync(file, "utf8").trim();
+    if (!/^[A-Za-z0-9._-]{20,4000}$/.test(token)) throw new Error("invalid");
+    return { enabled: true, source: "file", token };
+  } catch {
+    console.warn("[ha-token] HOME_WEB_HA_TOKEN_FILE is missing or invalid; HA token proxy disabled");
+    return disabled;
+  }
+}
+
 function loadStackTokenProxy() {
   const direct = parseEnvValue(process.env.HOME_WEB_STACK_TOKEN || process.env.STACK_TOKEN || "");
   if (direct) {
@@ -166,6 +217,7 @@ function loadStackTokenProxy() {
 
 const stackTokenProxy = loadStackTokenProxy();
 const legacyHaProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_HA_PROXY");
+const haTokenProxy = loadHaTokenProxy();
 const legacyVisionProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_VISION_PROXY");
 
 function rx(pattern) {
@@ -408,6 +460,10 @@ function gatewayHealth() {
       enabled: stackTokenProxy.enabled,
       source: stackTokenProxy.source,
     },
+    haTokenProxy: {
+      enabled: haTokenProxy.enabled,
+      source: haTokenProxy.source,
+    },
     agentOriginBoundary: {
       configured: agentOriginBoundary.configured,
       valid: agentOriginBoundary.valid,
@@ -507,7 +563,9 @@ function authCookieValue() {
 }
 
 function setAuthCookie(res) {
-  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=${encodeURIComponent(authCookieValue())}; HttpOnly; Secure; SameSite=Lax; Path=/`);
+  // 400 days, the longest cookie browsers keep. The value is a hash of the
+  // password record, so only a password change signs every browser out.
+  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=${encodeURIComponent(authCookieValue())}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=34560000`);
 }
 
 function clearAuthCookie(res) {
@@ -978,6 +1036,11 @@ function proxyHeaders(reqHeaders, route, suffix) {
     // the untrusted vision adapter.
     delete headers.authorization;
   }
+  if (route.prefix === "/proxy/ha" && haTokenProxy.enabled) {
+    headers.authorization = `Bearer ${haTokenProxy.token}`;
+    // Keep websocket frames uncompressed so the auth frame can be rewritten.
+    delete headers["sec-websocket-extensions"];
+  }
   if (route.prefix === "/proxy/supervisor") {
     delete headers.authorization;
     if (isSupervisorStackApi(route, suffix) && stackTokenProxy.enabled) {
@@ -1087,7 +1150,10 @@ function sendIndex(req, res, filePath) {
     const stackProxyRuntime = stackTokenProxy.enabled
       ? `window.__HOME_WEB_STACK_TOKEN_PROXY=true;window.__STACK_TOKEN=${jsString(STACK_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_STACK_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}</script>`;
+    const haProxyRuntime = haTokenProxy.enabled
+      ? `window.__HOME_WEB_HA_TOKEN_PROXY=true;window.__HOME_WEB_HA_TOKEN=${jsString(HA_TOKEN_PROXY_MARKER)};`
+      : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -1492,6 +1558,87 @@ function proxyHttp(req, res, route) {
   req.pipe(upstream);
 }
 
+// Browser-to-server websocket frames are always masked. Parse exactly one
+// frame from the front of `buffer`; null means more bytes are needed.
+const HA_AUTH_FRAME_MAX = 16 * 1024;
+function parseMaskedFrame(buffer) {
+  if (buffer.length < 2) return null;
+  const masked = (buffer[1] & 0x80) !== 0;
+  let length = buffer[1] & 0x7f;
+  let offset = 2;
+  if (length === 126) {
+    if (buffer.length < 4) return null;
+    length = buffer.readUInt16BE(2);
+    offset = 4;
+  } else if (length === 127) {
+    if (buffer.length < 10) return null;
+    const big = buffer.readBigUInt64BE(2);
+    if (big > BigInt(HA_AUTH_FRAME_MAX)) return { error: "too_large" };
+    length = Number(big);
+    offset = 10;
+  }
+  if (length > HA_AUTH_FRAME_MAX) return { error: "too_large" };
+  if (!masked) return { error: "unmasked" };
+  if (buffer.length < offset + 4 + length) return null;
+  const mask = buffer.subarray(offset, offset + 4);
+  const payload = Buffer.alloc(length);
+  for (let i = 0; i < length; i += 1) payload[i] = buffer[offset + 4 + i] ^ mask[i % 4];
+  return { fin: (buffer[0] & 0x80) !== 0, rsv: buffer[0] & 0x70, opcode: buffer[0] & 0x0f, payload, size: offset + 4 + length };
+}
+
+function encodeMaskedTextFrame(payload) {
+  const length = payload.length;
+  let header;
+  if (length < 126) {
+    header = Buffer.from([0x81, 0x80 | length]);
+  } else if (length < 65536) {
+    header = Buffer.from([0x81, 0x80 | 126, length >> 8, length & 0xff]);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(length), 2);
+  }
+  const mask = crypto.randomBytes(4);
+  const body = Buffer.alloc(length);
+  for (let i = 0; i < length; i += 1) body[i] = payload[i] ^ mask[i % 4];
+  return Buffer.concat([header, mask, body]);
+}
+
+// Replace the token in HA's websocket auth message ({type:"auth"}), which is
+// always the browser's first frame. Everything after it is piped unchanged.
+function rewriteHaAuthFrame(frame) {
+  if (!frame.fin || frame.rsv !== 0 || frame.opcode !== 1) return null;
+  let message;
+  try { message = JSON.parse(frame.payload.toString("utf8")); } catch { return null; }
+  if (!message || typeof message !== "object" || message.type !== "auth") return null;
+  return encodeMaskedTextFrame(Buffer.from(JSON.stringify({ ...message, access_token: haTokenProxy.token }), "utf8"));
+}
+
+function pipeWithHaAuth(socket, upstream, head) {
+  let pending = head?.length ? Buffer.from(head) : Buffer.alloc(0);
+  const fail = () => { socket.destroy(); upstream.destroy(); };
+  socket.once("close", () => upstream.destroy());
+  const onData = (chunk) => {
+    pending = Buffer.concat([pending, chunk]);
+    const frame = parseMaskedFrame(pending);
+    if (frame === null) {
+      if (pending.length > HA_AUTH_FRAME_MAX + 14) fail();
+      return;
+    }
+    if (frame.error) { fail(); return; }
+    socket.off("data", onData);
+    const rewritten = rewriteHaAuthFrame(frame);
+    upstream.write(rewritten || pending.subarray(0, frame.size));
+    const rest = pending.subarray(frame.size);
+    if (rest.length) upstream.write(rest);
+    pending = null;
+    socket.pipe(upstream);
+  };
+  socket.on("data", onData);
+  if (pending.length) onData(Buffer.alloc(0));
+}
+
 function proxyUpgrade(req, socket, head, route) {
   if (!route.ws) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -1523,8 +1670,12 @@ function proxyUpgrade(req, socket, head, route) {
     }
     request += "\r\n";
     upstream.write(request);
-    if (head?.length) upstream.write(head);
     upstream.pipe(socket);
+    if (route.prefix === "/proxy/ha" && haTokenProxy.enabled) {
+      pipeWithHaAuth(socket, upstream, head);
+      return;
+    }
+    if (head?.length) upstream.write(head);
     socket.pipe(upstream);
   });
   upstream.on("error", () => {
@@ -1548,6 +1699,8 @@ function checkConfig() {
     authFile: AUTH_FILE,
     stackTokenProxyEnabled: stackTokenProxy.enabled,
     stackTokenProxySource: stackTokenProxy.source,
+    haTokenProxyEnabled: haTokenProxy.enabled,
+    haTokenProxySource: haTokenProxy.source,
     agentOriginBoundary: {
       configured: agentOriginBoundary.configured,
       valid: agentOriginBoundary.valid,

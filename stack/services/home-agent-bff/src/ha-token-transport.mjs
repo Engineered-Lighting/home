@@ -3,6 +3,27 @@
 import { readHaJson } from "./ha-response.mjs";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+
+// HA could not answer (network error, timeout, restart, overload). This is not
+// a revocation: callers keep the session and ask the browser to retry.
+export class HaUnavailableError extends Error {
+  constructor(message = "home_assistant_unavailable") {
+    super(message);
+    this.name = "HaUnavailableError";
+  }
+}
+
+function transientStatus(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function haFetch(fetchImpl, url, init) {
+  try {
+    return await fetchImpl(url, init);
+  } catch {
+    throw new HaUnavailableError();
+  }
+}
 const MAX_HA_TOKEN_BYTES = 64 * 1024;
 const MAX_HA_AUTH_RESPONSE_BYTES = 2 * MAX_HA_TOKEN_BYTES + 4096;
 
@@ -49,14 +70,17 @@ async function refreshAccessToken(config, refreshToken, fetchImpl) {
     client_id: config.clientId,
   });
   try {
-    const response = await fetchImpl(`${config.haUrl}/auth/token`, {
+    const response = await haFetch(fetchImpl, `${config.haUrl}/auth/token`, {
       method: "POST",
       redirect: "error",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`HA token refresh failed (${response.status})`);
+    if (!response.ok) {
+      if (transientStatus(response.status)) throw new HaUnavailableError(`HA token refresh unavailable (${response.status})`);
+      throw new Error(`HA token refresh failed (${response.status})`);
+    }
     return tokenBuffersFromResponse(await readHaJson(response, MAX_HA_AUTH_RESPONSE_BYTES), "refresh");
   } finally {
     // Remove the only mutable request-side plaintext reference available to
@@ -129,7 +153,7 @@ async function fetchHaSubject(config, accessToken, fetchImpl) {
   });
   let response;
   try {
-    response = await fetchImpl(`${config.haUrl}/api/home_agent_edge/whoami`, {
+    response = await haFetch(fetchImpl, `${config.haUrl}/api/home_agent_edge/whoami`, {
       headers,
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -137,7 +161,10 @@ async function fetchHaSubject(config, accessToken, fetchImpl) {
   } finally {
     headers.delete("Authorization");
   }
-  if (!response.ok) throw new Error(`HA whoami failed (${response.status})`);
+  if (!response.ok) {
+    if (transientStatus(response.status)) throw new HaUnavailableError(`HA whoami unavailable (${response.status})`);
+    throw new Error(`HA whoami failed (${response.status})`);
+  }
   const value = await readHaJson(response, 16 * 1024);
   if (!value || typeof value.user_id !== "string" || !value.user_id) {
     throw new Error("HA whoami returned no user_id");

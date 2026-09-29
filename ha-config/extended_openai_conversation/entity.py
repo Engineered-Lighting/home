@@ -16,7 +16,13 @@ from openai.types.chat import (
 )
 import orjson
 import voluptuous as vol
-from voluptuous_openapi import convert
+
+try:
+    # HA 2026.9 replaced voluptuous-openapi with probatio in core's
+    # requirements, so the old module is no longer installed.
+    from probatio import to_openapi as convert
+except ImportError:  # HA 2026.8 and earlier
+    from voluptuous_openapi import convert
 
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigSubentry

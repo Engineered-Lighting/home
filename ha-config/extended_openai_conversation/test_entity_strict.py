@@ -339,6 +339,45 @@ def _registry_tool_with_optional_args():
 t("find_entity-shape spec: optional area/domain become nullable+required", _registry_tool_with_optional_args)
 
 
+section("schema converter import (HA 2026.9 probatio vs older voluptuous_openapi)")
+
+
+def _load_entity_with(modules):
+    saved = {n: sys.modules.get(n) for n in ("probatio", "voluptuous_openapi")}
+    try:
+        for n in saved:
+            sys.modules.pop(n, None)
+        sys.modules.update(modules)
+        s = importlib.util.spec_from_file_location(
+            "extended_openai_conversation_test_pkg.entity_import_probe", ENTITY_PATH,
+        )
+        m = importlib.util.module_from_spec(s)
+        s.loader.exec_module(m)
+        return m
+    finally:
+        for n, v in saved.items():
+            if v is None:
+                sys.modules.pop(n, None)
+            else:
+                sys.modules[n] = v
+
+
+def _probatio_used_when_voluptuous_openapi_missing():
+    probatio = _mk("probatio")
+    probatio.to_openapi = lambda *a, **k: {"from": "probatio"}
+    m = _load_entity_with({"probatio": probatio, "voluptuous_openapi": None})
+    assert m.convert is probatio.to_openapi
+t("HA 2026.9: loads with probatio and no voluptuous_openapi", _probatio_used_when_voluptuous_openapi_missing)
+
+
+def _voluptuous_openapi_used_before_2026_9():
+    vo = _mk("voluptuous_openapi")
+    vo.convert = lambda *a, **k: {"from": "voluptuous_openapi"}
+    m = _load_entity_with({"probatio": None, "voluptuous_openapi": vo})
+    assert m.convert is vo.convert
+t("HA 2026.8: falls back to voluptuous_openapi", _voluptuous_openapi_used_before_2026_9)
+
+
 # ── Summary ──────────────────────────────────────────────────────────
 print(f"\n{passes} pass · {fails} fail")
 if fails:

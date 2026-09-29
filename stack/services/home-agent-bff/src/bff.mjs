@@ -3,7 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { asTokenBuffer, exchangeCode, refreshAccessToken, revokeRefreshToken, fetchHaSubject } from "./ha-token-transport.mjs";
+import { HaUnavailableError, asTokenBuffer, exchangeCode, refreshAccessToken, revokeRefreshToken, fetchHaSubject } from "./ha-token-transport.mjs";
 import { QualifiedHaAuth } from "./qualified-ha-auth.mjs";
 import { EchoLinkReview } from "./echo-link-review.mjs";
 import { EchoLinkStart } from "./echo-link-start.mjs";
@@ -1728,6 +1728,16 @@ class SessionStore {
           this.#persist(String(id || ""), session);
         }
       } catch (error) {
+        if (error instanceof HaUnavailableError) {
+          // HA is briefly unreachable: keep the session. A refresh that already
+          // rotated the tokens must be kept, or the old refresh token is dead.
+          if (refreshed) {
+            try {
+              this.#replaceTokens(id, session, activeAccessToken, activeRefreshToken, refreshed.expiresIn, now);
+            } catch { /* the next successful refresh or HA denial decides */ }
+          }
+          throw error;
+        }
         if (this.#qualifiedProfile) this.scheduleRevocation(id, session, "failed_revalidation");
         if (this.#qualifiedProfile && refreshed) {
           // A refresh may have rotated the token before verification failed or
@@ -1747,7 +1757,9 @@ class SessionStore {
         refreshed?.refreshToken.fill(0);
       }
     }); } catch (error) {
-      if (this.#qualifiedProfile) this.scheduleRevocation(id, session, "failed_revalidation");
+      if (this.#qualifiedProfile && !(error instanceof HaUnavailableError)) {
+        this.scheduleRevocation(id, session, "failed_revalidation");
+      }
       throw error;
     } finally { this.#qualifiedChecks.delete(qualifiedKey); }
     return session;
@@ -2315,7 +2327,10 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
         Date.now(),
         { forcePrincipalCheck: isFreshIdentityRoute },
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof HaUnavailableError) {
+        return json(res, 503, { error: "home_assistant_unavailable", retryable: true });
+      }
       sessions.scheduleRevocation(sessionId, session, "authentication_revoked");
       return json(
         res,

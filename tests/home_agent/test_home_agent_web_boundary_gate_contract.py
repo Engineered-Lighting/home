@@ -84,6 +84,7 @@ class HomeAgentWebBoundaryGateContractTests(unittest.TestCase):
             "node tools/run-native-agent-gateway-tests.js",
             "node tools/run-web-gateway-path-security-tests.mjs",
             "node tools/run-web-gateway-stack-token-tests.js",
+            "node tools/run-web-gateway-ha-token-tests.mjs",
             "npm --prefix stack/services/home-agent-bff test",
             "npm --prefix stack/services/home-agent-origin test",
             "test_network_contract.py",

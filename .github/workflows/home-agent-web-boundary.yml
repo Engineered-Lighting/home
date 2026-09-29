@@ -28,6 +28,7 @@ on:
       - "tools/run-native-agent-security-tests.js"
       - "tools/run-web-gateway-path-security-tests.mjs"
       - "tools/run-web-gateway-stack-token-tests.js"
+      - "tools/run-web-gateway-ha-token-tests.mjs"
       - "web-gateway/**"
   push:
     branches: [main, codex/home-agent-integration]
@@ -57,6 +58,7 @@ on:
       - "tools/run-native-agent-security-tests.js"
       - "tools/run-web-gateway-path-security-tests.mjs"
       - "tools/run-web-gateway-stack-token-tests.js"
+      - "tools/run-web-gateway-ha-token-tests.mjs"
       - "web-gateway/**"
   workflow_dispatch:
 
@@ -140,6 +142,7 @@ jobs:
           node_run node tools/run-native-agent-gateway-tests.js
           node_run node tools/run-web-gateway-path-security-tests.mjs
           node_run node tools/run-web-gateway-stack-token-tests.js
+          node_run node tools/run-web-gateway-ha-token-tests.mjs
           node_run npm --prefix stack/services/home-agent-bff run check
           node_run npm --prefix stack/services/home-agent-bff test
           node_run npm --prefix stack/services/home-agent-origin run check

@@ -644,7 +644,9 @@ services:
       HOME_AGENT_SESSION_ENCRYPTION_KEY_FILE: /run/secrets/session_encryption_key
       HOME_AGENT_NATIVE_INSTALLATIONS_FILE: /run/secrets/native_installations
       HOME_AGENT_SESSION_DB_PATH: /sessions/sessions.sqlite
-      HOME_AGENT_PRINCIPAL_REVALIDATE_MS: "0"
+      # 0 re-checks the HA user on every request. Up to 900000 (15 min) keeps
+      # routine reads off HA; linking, preference and lighting still force a check.
+      HOME_AGENT_PRINCIPAL_REVALIDATE_MS: "${HOME_AGENT_PRINCIPAL_REVALIDATE_MS:-0}"
       # Empty keeps the short defaults (30 min idle, 12 h total). A single-owner
       # install may set up to 34560000000 (400 days) for each.
       HOME_AGENT_SESSION_IDLE_MS: "${HOME_AGENT_SESSION_IDLE_MS:-}"

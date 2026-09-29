@@ -41,7 +41,7 @@ ECHO_SECRETS = ("commitment_key", "journal_key", "handoff_credential", "proof_cr
 LIGHTING_SECRETS = ("credential", "lighting_database_url", "action_key", "consent_key", "journal_key",
                     "database_url", "knowledge_encryption_key", "service_token")
 LIGHTING_HOME_PORTS = {"echo": 10000, "victoria": 10001}
-LIGHTING_GRANT_SECONDS = 30 * 86400  # the same displayed lifetime as preference sharing
+LIGHTING_GRANT_SECONDS = 365 * 86400  # one consent a year, like preference sharing on the owner install
 VICTORIA_SECRETS = ("commitment_key", "journal_key", "session_encryption_key", "handoff_credential",
                     "proof_credential", "session_credential")
 

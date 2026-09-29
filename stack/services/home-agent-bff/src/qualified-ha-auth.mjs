@@ -1,5 +1,5 @@
 // Provisioned server-side issuer transport; does not link accounts or grant access.
-import { exchangeCode, fetchHaSubject, refreshAccessToken, revokeRefreshToken } from "./ha-token-transport.mjs";
+import { HaUnavailableError, exchangeCode, fetchHaSubject, refreshAccessToken, revokeRefreshToken } from "./ha-token-transport.mjs";
 
 function https(value, root = false) {
   const url = new URL(value);
@@ -39,12 +39,18 @@ export class QualifiedHaAuth {
       if (subject.userId.trim() !== subject.userId || [...subject.userId].length > 64 ||
           /[\x00-\x1f\x7f]/.test(subject.userId)) throw new Error();
       return Object.freeze({ ...subject, haIssuerId: this.#issuer, siteId: this.#site });
-    } catch { throw new Error("ha_subject_verification_failed"); }
+    } catch (error) {
+      if (error instanceof HaUnavailableError) throw new HaUnavailableError();
+      throw new Error("ha_subject_verification_failed");
+    }
   }
 
   async refresh(refreshToken) {
     try { return await refreshAccessToken(this.#config, refreshToken, this.#fetch); }
-    catch { throw new Error("ha_token_refresh_failed"); }
+    catch (error) {
+      if (error instanceof HaUnavailableError) throw new HaUnavailableError();
+      throw new Error("ha_token_refresh_failed");
+    }
   }
 
   async revoke(refreshToken) {

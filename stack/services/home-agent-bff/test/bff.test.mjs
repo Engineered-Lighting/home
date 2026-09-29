@@ -1849,6 +1849,59 @@ test("revoked browser sessions cannot return authority metadata or a CSRF token"
   assert.equal(store.get(session.id), null);
 });
 
+test("an unreachable or restarting HA keeps the session and asks the browser to retry", async () => {
+  for (const failure of [
+    async () => { throw new TypeError("fetch failed"); },
+    async () => new Response("", { status: 503 }),
+    async () => new Response("", { status: 502 }),
+  ]) {
+    const config = configured({ principalRevalidateMs: 0 });
+    const store = new SessionStore(config);
+    const session = store.createSession({ principal: { userId: "owner" }, accessToken: "private-access", refreshToken: "private-refresh" });
+    let haUp = false, revokes = 0;
+    const base = await listen(createBff(config, { store, fetchImpl: async (url, init) => {
+      if (init?.body?.get?.("action") === "revoke") { revokes++; return new Response(null, { status: 200 }); }
+      if (!haUp) return failure();
+      return new Response(JSON.stringify({ user_id: "owner", is_active: true }), { headers: { "content-type": "application/json" } });
+    } }));
+    const during = await fetch(`${base}/api/agent/auth/session`, { headers: { cookie: `${COOKIE_NAME}=${session.id}` } });
+    assert.equal(during.status, 503);
+    assert.deepEqual(await during.json(), { error: "home_assistant_unavailable", retryable: true });
+    assert.equal(during.headers.get("set-cookie"), null);
+    assert.equal(store.get(session.id)?.state, "active");
+    haUp = true;
+    const after = await fetch(`${base}/api/agent/auth/session`, { headers: { cookie: `${COOKIE_NAME}=${session.id}` } });
+    assert.equal(after.status, 200);
+    assert.equal((await after.json()).user_id, "owner");
+    assert.equal(revokes, 0);
+    store.close();
+  }
+});
+
+test("a refresh that succeeds before HA becomes unreachable keeps the rotated tokens", async () => {
+  const config = configured({ principalRevalidateMs: 0 });
+  const store = new SessionStore(config);
+  const session = store.createSession({ principal: { userId: "owner" }, accessToken: "old-access", refreshToken: "old-refresh", expiresIn: 1 });
+  const refreshTokensSeen = [];
+  let whoamiUp = false;
+  const base = await listen(createBff(config, { store, fetchImpl: async (url, init) => {
+    if (String(url).endsWith("/auth/token")) {
+      refreshTokensSeen.push(init.body.get("refresh_token"));
+      return new Response(JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 1 }),
+        { headers: { "content-type": "application/json" } });
+    }
+    if (!whoamiUp) return new Response("", { status: 504 });
+    return new Response(JSON.stringify({ user_id: "owner", is_active: true }), { headers: { "content-type": "application/json" } });
+  } }));
+  const first = await fetch(`${base}/api/agent/auth/session`, { headers: { cookie: `${COOKIE_NAME}=${session.id}` } });
+  assert.equal(first.status, 503);
+  whoamiUp = true;
+  const second = await fetch(`${base}/api/agent/auth/session`, { headers: { cookie: `${COOKIE_NAME}=${session.id}` } });
+  assert.equal(second.status, 200);
+  assert.deepEqual(refreshTokensSeen, ["old-refresh", "new-refresh"]);
+  store.close();
+});
+
 test("BFF constructs trusted upstream headers instead of forwarding actor headers", async () => {
   const config = configured();
   const store = new SessionStore(config);

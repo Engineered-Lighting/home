@@ -1,18 +1,43 @@
-:root { color-scheme:dark; font-family:system-ui,sans-serif; background:#141a18; color:#edf1eb; }
-html,body { overflow:hidden; }
-body { margin:0; }
-main { padding:14px 16px 12px; border:1px solid #33413a; border-radius:10px; }
-p { margin:0; line-height:1.45; }
-.eyebrow { font-size:11px; letter-spacing:.14em; color:#9fab98; margin-bottom:6px; }
-#status { font-size:15px; font-weight:600; }
-#detail { font-size:14px; color:#c5cec2; margin-top:4px; }
+/* Inline preference review, drawn in the Home chat's design language
+ * (home-tokens.css + home-events.jsx T_META/T_PROSE). The frame background is
+ * transparent so the card sits on Home's own surface; Home passes its theme. */
+@font-face { font-family:"Geist"; font-style:normal; font-weight:400 600; font-display:swap; src:url("geist-latin.woff2") format("woff2"); }
+@font-face { font-family:"Geist Mono"; font-style:normal; font-weight:400 500; font-display:swap; src:url("geist-mono-latin.woff2") format("woff2"); }
+:root {
+  color-scheme:dark;
+  --hg-fg-0:#FFFFFF; --hg-fg-1:#EDEDED; --hg-fg-2:#A1A1A1; --hg-fg-3:#8F8F8F; --hg-fg-4:#767676; --hg-fg-5:#404040;
+  --hg-border:rgba(255,255,255,0.10); --hg-ice:#B8D8FF; --hg-ice-bright:#DDEAFF; --hg-blue:#4D9CFF;
+  --sans:"Geist",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+:root[data-theme="light"] {
+  color-scheme:light;
+  --hg-fg-0:#1A1812; --hg-fg-1:#28251C; --hg-fg-2:#6A6353; --hg-fg-3:#6A6454; --hg-fg-4:#8A8270; --hg-fg-5:#C7BFAD;
+  --hg-border:rgba(26,24,18,0.12); --hg-ice:#1F4FA8; --hg-ice-bright:#143C8C; --hg-blue:#1F4FA8;
+}
+html,body { margin:0; overflow:hidden; background:transparent; }
+body { font-family:var(--sans); color:var(--hg-fg-1); -webkit-font-smoothing:antialiased; }
+main { padding:12px 14px; border:1px solid var(--hg-border); }
+p { margin:0; }
+.eyebrow { font-family:var(--mono); font-size:10.5px; letter-spacing:.20em; text-transform:uppercase; font-weight:500; line-height:1.5; color:var(--hg-fg-3); margin-bottom:6px; }
+#status { font-size:14.5px; line-height:1.7; letter-spacing:-.005em; color:var(--hg-fg-0); }
+#detail { font-size:14.5px; line-height:1.7; letter-spacing:-.005em; color:var(--hg-fg-2); }
 #detail:empty { display:none; }
-.actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:12px 0 8px; }
-button,.actions a { border:1px solid #71846d; border-radius:8px; background:#263629; color:inherit; padding:10px 16px; font:inherit; font-size:14px; min-height:44px; cursor:pointer; box-sizing:border-box; }
-.actions a { display:inline-flex; align-items:center; text-decoration:none; color:#d6e59d; }
-#confirm { background:#3b5a36; border-color:#9dbb8a; font-weight:600; }
-button.quiet { background:transparent; border-color:#46534a; }
-button:disabled { opacity:.5; cursor:default; }
-button:focus-visible,a:focus-visible { outline:3px solid #d6e59d; outline-offset:2px; }
-.note { color:#98a296; font-size:12px; }
+.actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; }
+.actions:not(:has(> :not([hidden]))) { display:none; }
+button,.actions a {
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  background:transparent; border:1px solid var(--hg-border); border-radius:0; color:var(--hg-fg-2);
+  padding:4px 10px; font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+  line-height:1.5; cursor:pointer; text-decoration:none;
+}
+button.primary { border-color:var(--hg-ice); color:var(--hg-ice-bright); }
+button:disabled { border-color:var(--hg-fg-5); color:var(--hg-fg-4); cursor:default; }
+button:not(:disabled):active { transform:scale(.97); }
+button:focus-visible,a:focus-visible { outline:1px solid var(--hg-blue); outline-offset:1px; }
+.note { margin-top:10px; font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--hg-fg-4); }
+/* Frame media queries see the frame width, so size touch targets by pointer. */
+@media (pointer:coarse) {
+  button,.actions a { min-height:44px; min-width:44px; padding:4px 14px; }
+}
 [hidden] { display:none!important; }

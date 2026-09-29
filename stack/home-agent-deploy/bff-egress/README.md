@@ -218,8 +218,8 @@ tool with `--profile victoria-link`. The profile has its own values:
 
 It publishes no host port, so its guard has no return-flow rule: just the exact
 HA allow and a terminal drop. Each profile's first-hop jump must lead `INPUT`.
-The only thing allowed in front of it is the other reviewed profile's jump, which
-matches a different bridge.
+The only things allowed in front of it are the other reviewed profiles' exact
+jumps (BFF, Victoria linking, lighting), each matching a different bridge.
 
 Provision in `/srv/home-agent/config/home-agent.env`:
 
@@ -256,3 +256,83 @@ sudo systemctl enable --now home-agent-victoria-link-egress-verify.timer
 `apply` probes Victoria HA's token endpoint from inside the container with an
 empty GET, which must return 405. Roll back with `remove --profile victoria-link`
 after disabling its timer. That leaves the BFF profile untouched.
+
+## Lighting profile
+
+The private Core lighting service (compose service `lighting` in project
+`home-shared-preferences`, container `home-shared-preferences-lighting-1`)
+dispatches to both homes, so it must reach both Serve ports on this node:
+
+- Echo HA at `HOME_AGENT_HA_URL` (`home-app.<tailnet>.ts.net:10000`)
+- Victoria HA at `HOME_AGENT_VICTORIA_HA_URL` (`home-app.<tailnet>.ts.net:10001`)
+
+It uses the same reviewed tool with `--profile lighting`. A profile lists a
+fixed, ordered tuple of HA URL keys. Each URL must be a canonical HTTPS root, and
+all of them must name the same host: this online Tailscale node, which resolves
+only to the pinned `HOME_AGENT_HA_TAILSCALE_IPV4`. Two URLs on the same port are
+refused. Each URL gets its own exact accept, in key order. The BFF and Victoria
+linking profiles each list one key, and their rules are byte-for-byte unchanged.
+
+The profile has its own values:
+
+- network `home-agent_lighting-egress`, bridge `ha-light-egr0`, subnet
+  `172.27.0.0/24`, gateway `172.27.0.1`, source address `172.27.0.10`
+- guard chain `HOME_AGENT_LIGHT_INPUT`
+- UFW comment `home-agent-lighting-to-home-ha`, on one rule per HA port
+
+Like victoria-link it publishes no host port, so it has no return-flow rule.
+With the example Tailscale IPv4 `100.87.94.18`, the whole guard is:
+
+```text
+-A INPUT -i ha-light-egr0 -j HOME_AGENT_LIGHT_INPUT
+-N HOME_AGENT_LIGHT_INPUT
+-A HOME_AGENT_LIGHT_INPUT -s 172.27.0.10/32 -d 100.87.94.18/32 -p tcp -m tcp --dport 10000 -j ACCEPT
+-A HOME_AGENT_LIGHT_INPUT -s 172.27.0.10/32 -d 100.87.94.18/32 -p tcp -m tcp --dport 10001 -j ACCEPT
+-A HOME_AGENT_LIGHT_INPUT -j DROP
+```
+
+Any extra, missing, duplicated or reordered rule fails `verify`, and `apply`
+refuses to adopt it. The container must be attached only to
+`home-agent_api-net` and `home-agent_lighting-egress`, and must publish no port.
+Like victoria-link, it resolves the HA host name through an `extra_hosts` entry
+that maps to the pinned Tailscale IPv4.
+
+Both HA URL keys already exist for the other profiles, so they do not decide
+whether lighting is provisioned. `HOME_AGENT_LIGHTING_EGRESS_IP` does. Add these
+to `/srv/home-agent/config/home-agent.env` only when provisioning lighting:
+
+```text
+HOME_AGENT_LIGHTING_EGRESS_SUBNET=172.27.0.0/24
+HOME_AGENT_LIGHTING_EGRESS_GATEWAY=172.27.0.1
+HOME_AGENT_LIGHTING_EGRESS_IP=172.27.0.10
+```
+
+The lifecycle hook runs `guard --profile lighting --if-configured` after the
+other two profiles. It skips lighting while `HOME_AGENT_LIGHTING_EGRESS_IP` is
+unset. Once that key is set, both HA URLs are required, and a missing one fails
+the hook rather than skipping it.
+
+This hook change moves its reviewed SHA-256, pinned in `firewall_contract.py` as
+`UFW_HOOK_SHA256`, to
+`42e83a0338b531c216f98f5d49d7271a5f21db5e2c4fad8838e1b3a2499da5bc`. As with
+victoria-link, install the new helper and hook together, compare both blob
+digests, reload UFW, and check that the BFF guard verifies. Then, with lighting
+running:
+
+```bash
+sudo /usr/bin/python3 -I /usr/local/libexec/home-agent-bff-egress/firewall_contract.py \
+  apply --profile lighting --env /srv/home-agent/config/home-agent.env
+sudo install -m 0644 -o root -g root \
+  stack/home-agent-deploy/operator/systemd/home-agent-lighting-egress-verify.service \
+  stack/home-agent-deploy/operator/systemd/home-agent-lighting-egress-verify.timer \
+  /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now home-agent-lighting-egress-verify.timer
+```
+
+The lighting container is a Python Core image, so `apply` and `verify` probe
+with `python3 -I` instead of Node. Each HA URL gets an empty GET to
+`/auth/token`, with no redirects and no proxy. Each must return 405. To roll
+back, disable the lighting timer, then run `remove --profile lighting` while the
+container is still running. That removes the guard chain and both UFW rules, and
+leaves the other profiles untouched.

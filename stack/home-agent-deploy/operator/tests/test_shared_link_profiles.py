@@ -99,3 +99,68 @@ def test_generated_profiles_pass_the_actual_bff_loaders(tmp_path):
         "echo": ["https://echo-agent.taild52a15.ts.net"],
         "listener": {"address": "172.23.0.36", "port": 9450},
     }
+
+
+def test_lighting_is_opt_in_and_leaves_existing_profiles_byte_identical():
+    plain, _ = generator.build_profiles(TAILNET)
+    assert "lighting" not in plain
+    lit, _ = generator.build_profiles(TAILNET, lighting=True)
+    assert lit["lighting"] == {"origin": "https://172.23.0.37:9448", "credentialFile": "/link/secrets/lighting_credential"}
+    assert {k: v for k, v in lit.items() if k != "lighting"} == plain
+
+
+def test_lighting_listener_profile_names_only_paths_and_the_serve_ports():
+    profile = generator.build_lighting_profile(TAILNET, ["echo", "victoria"])
+    assert profile["address"] == "172.23.0.37" and profile["port"] == 9448
+    assert profile["homes"] == {
+        "echo": {"origin": "https://home-app.taild52a15.ts.net:10000", "secret_file": "/run/secrets/echo_home_secret"},
+        "victoria": {"origin": "https://home-app.taild52a15.ts.net:10001",
+                     "secret_file": "/run/secrets/victoria_home_secret"}}
+    assert profile["grant_lifetime_seconds"] == 30 * 86400
+    assert generator.build_lighting_profile(TAILNET, ["echo"])["homes"].keys() == {"echo"}
+    for homes in ([], ["paris"], ["echo", "echo"]):
+        with pytest.raises(ValueError):
+            generator.build_lighting_profile(TAILNET, homes)
+
+
+def test_lighting_profile_passes_the_actual_core_loader(tmp_path):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("sqlalchemy")
+    sys.path.insert(0, str(REPO / "stack/services/home-agent-core"))
+    try:
+        from app.lighting_server import load_profile
+    finally:
+        sys.path.pop(0)
+    secrets_dir, config, journals = tmp_path / "secrets", tmp_path / "config", tmp_path / "journals"
+    for directory in (secrets_dir, config, journals):
+        directory.mkdir()
+    for name in ("credential", "action_key", "consent_key", "journal_key", "echo_home_secret", "victoria_home_secret"):
+        (secrets_dir / name).write_bytes(secrets.token_hex(32).encode())
+    (secrets_dir / "database_url").write_bytes(b"postgresql://home_agent_lighting@db/home")
+    for name in ("server.crt", "server.key"):
+        (config / name).write_bytes(b"placeholder")
+    profile = generator.build_lighting_profile(TAILNET, ["echo", "victoria"], secrets=secrets_dir.as_posix(),
+                                               config=config.as_posix(), journals=journals.as_posix())
+    path = tmp_path / "listener.json"
+    path.write_bytes(generator._render(profile))
+    loaded = load_profile(str(path))
+    assert loaded.address == "172.23.0.37" and set(loaded.homes) == {"echo", "victoria"}
+    assert loaded.homes["victoria"].origin == "https://home-app.taild52a15.ts.net:10001"
+    assert loaded.grant_lifetime_seconds == 30 * 86400
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node required")
+def test_echo_profile_with_lighting_passes_the_actual_bff_loader(tmp_path):
+    echo_root, _ = _stage(tmp_path)
+    (echo_root / "secrets" / "lighting_credential").write_text(secrets.token_hex(32), encoding="utf-8")
+    echo, _ = generator.build_profiles(TAILNET, echo_root=echo_root.as_posix(), lighting=True)
+    echo_file = tmp_path / "echo.json"
+    echo_file.write_bytes(generator._render(echo))
+    src = (REPO / "stack/services/home-agent-bff/src").as_uri()
+    script = (f"const e=await import('{src}/echo-link-provision.mjs');"
+              "const a=e.loadEchoLinkProvision(process.argv[1]);"
+              "console.log(JSON.stringify({origin:a.lighting.origin,credential:/^[a-f0-9]{64}$/.test(a.lighting.credential)}));")
+    result = subprocess.run(["node", "--input-type=module", "-e", script, str(echo_file)],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"origin": "https://172.23.0.37:9448", "credential": True}

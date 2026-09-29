@@ -124,3 +124,52 @@ image or restore the database; fix forward, or use the owner-approved reviewed
 registration or CONNECT grants. After `migration_state_unverified` Core roles
 remain stopped until the live revision is verified. `failed_source_unready`
 means the schema stayed at 0031 but the restarted 0031 runtime is not ready.
+
+## Explicit cross-home lighting
+
+Design: `docs/CROSS-HOME-LIGHTING.md`. The private `lighting` listener
+(`app.lighting_server`, Core image, command `lighting-api`) is defined in
+`lighting.json`, an override used only when deploying it, so existing
+`compose.json` commands keep working without lighting variables:
+
+```sh
+docker compose --project-name home-shared-preferences --env-file <commissioning.env> \
+  -f compose.json -f lighting.json --profile shared-preferences \
+  up -d --no-build --no-deps --pull never lighting
+```
+
+It listens on `172.23.0.37:9448` (TLS leaf issued by the retained internal CA),
+reaches PostgreSQL as `home_agent_lighting`, and reaches each home's light-only
+endpoint through its Tailscale Serve port (LA `:10000`, Victoria `:10001`) over
+the `home-agent_lighting-egress` bridge (`ha-light-egr0`, `172.27.0.10`), which
+the `lighting` firewall profile confines to exactly those two ports. It starts
+with `restart: no` until a sustained check.
+
+Order, in one Lab-acknowledged window:
+
+1. Each home: install the `home_agent_edge` lighting block with its own
+   64-hex secret in `secrets.yaml` and an allowlist of real lights; restart HA.
+   Verify an unsigned request to `/api/home_agent_edge/lighting/v1/inventory`
+   returns 401.
+2. Stage `lighting/secrets/` (root-owned, readable by UID 10001):
+   `credential` (identical to `echo-bff/secrets/lighting_credential`),
+   `database_url` (`home_agent_lighting` with `sslmode=verify-full` like the
+   other private roles), `action_key`, `consent_key`, `journal_key` (distinct,
+   64 hex) and `<home>_home_secret` (identical to that home's HA secret).
+   Create empty `lighting/config` and `lighting/journals` (UID 10001, 0700).
+3. As the owner in the `migrate` operator service:
+   `python -m app.lighting_permissions prepare`, then
+   `activate --password-file <staged>`; `status` must show one login role.
+4. `generate_link_profiles.py --root <prepared> --tailnet <tailnet> --lighting echo,victoria`.
+   It adds the Echo BFF's `lighting` transport, which changes the write-once
+   `echo-bff/config/link.json`: move the old file into the rollback set after
+   review first. It also writes `lighting/config/listener.json` and the leaf.
+5. Apply the `lighting` firewall profile, start `lighting`, and check TLS and
+   admission from a client container.
+6. Recreate the Echo BFF so it loads the new link profile. This ends linking
+   use of current sessions: the owner signs out and in again at `echo-agent`.
+7. The owner allows lighting once in the Agent panel, then accepts in Home.
+
+Rollback: stop `lighting`, `lighting_permissions deactivate`, remove the
+firewall profile, and restore the previous Echo link profile and BFF image.
+Journals and grants are retained; nothing restores the database.

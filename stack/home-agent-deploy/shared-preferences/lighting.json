@@ -1,0 +1,133 @@
+{
+  "services": {
+    "lighting": {
+      "image": "${HOME_AGENT_SHARED_CORE_IMAGE:?set verified immutable Core image}",
+      "command": [
+        "lighting-api"
+      ],
+      "profiles": [
+        "shared-preferences"
+      ],
+      "restart": "no",
+      "init": true,
+      "user": "10001:10001",
+      "read_only": true,
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "cpus": "${HOME_AGENT_LIGHTING_CPUS:?set admitted CPU limit}",
+      "mem_limit": "${HOME_AGENT_LIGHTING_MEMORY:?set admitted RAM limit}",
+      "memswap_limit": "${HOME_AGENT_LIGHTING_MEMORY:?disable swap with equal RAM limit}",
+      "pids_limit": "${HOME_AGENT_LIGHTING_PIDS:?set admitted process limit}",
+      "tmpfs": [
+        "/tmp:size=16m,mode=1777"
+      ],
+      "environment": {
+        "HOME_AGENT_ROLE": "api",
+        "HOME_AGENT_DATABASE_URL_FILE": "/run/secrets/database_url",
+        "HOME_AGENT_KNOWLEDGE_ENCRYPTION_KEY_FILE": "/run/secrets/knowledge_encryption_key",
+        "HOME_AGENT_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "HOME_AGENT_POLICY_VERSION": "home-agent-mvp-v1",
+        "HOME_AGENT_POLICY_DIGEST": "${HOME_AGENT_POLICY_DIGEST:?set commissioned policy digest}",
+        "HOME_AGENT_ROLLOUT_MODE": "${HOME_AGENT_SHARED_ROLLOUT_MODE:?set reviewed shadow or canary mode}",
+        "HOME_AGENT_READINESS_MIGRATION": "0047_personal_pref_authority_v1",
+        "HOME_AGENT_STORAGE_MONITOR_PATH": "/storage-monitor/durable",
+        "HOME_AGENT_ERASURE_LEDGER_HEAD_PATH": "/erasure-ledger/ledger.head.json",
+        "HOME_AGENT_LIGHTING_PROFILE_FILE": "/config/listener.json"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_LIGHTING_SECRETS:?set isolated service-only secret directory}",
+          "target": "/run/secrets",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_LIGHTING_CONFIG:?set reviewed profile and TLS directory}",
+          "target": "/config",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_LIGHTING_JOURNALS:?set private durable journal directory}",
+          "target": "/journals",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_RESOURCE_MONITOR_ROOT:?set commissioned resource monitor}",
+          "target": "/storage-monitor/durable",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${HOME_AGENT_ERASURE_LEDGER_ROOT:?set current authoritative ledger directory}",
+          "target": "/erasure-ledger",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/dev/null",
+          "target": "/erasure-ledger/ledger.jsonl",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ],
+      "networks": {
+        "api": {
+          "ipv4_address": "${HOME_AGENT_LIGHTING_IP:?set reserved private API-network address}"
+        },
+        "database": {},
+        "lighting-egress": {
+          "ipv4_address": "${HOME_AGENT_LIGHTING_EGRESS_IP:-172.27.0.10}"
+        }
+      },
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-size": "1m",
+          "max-file": "2"
+        }
+      }
+    }
+  },
+  "networks": {
+    "lighting-egress": {
+      "name": "home-agent_lighting-egress",
+      "driver": "bridge",
+      "enable_ipv6": false,
+      "driver_opts": {
+        "com.docker.network.bridge.name": "${HOME_AGENT_LIGHTING_EGRESS_BRIDGE:-ha-light-egr0}"
+      },
+      "ipam": {
+        "config": [
+          {
+            "subnet": "${HOME_AGENT_LIGHTING_EGRESS_SUBNET:-172.27.0.0/24}",
+            "gateway": "${HOME_AGENT_LIGHTING_EGRESS_GATEWAY:-172.27.0.1}"
+          }
+        ]
+      }
+    }
+  }
+}

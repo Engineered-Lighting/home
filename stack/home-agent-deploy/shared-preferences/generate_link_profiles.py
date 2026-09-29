@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Write the Echo and Victoria account-linking profiles and Victoria ingress TLS.
 
+With ``--lighting echo[,victoria]`` it also adds the Echo BFF's lighting
+transport, writes the private lighting listener profile for the named homes
+and issues that listener's TLS leaf. Without it, output is byte-identical to
+before, so existing live profiles keep verifying.
+
 Root-run on the LA host against the prepared shared-preferences directory. The
 profiles contain only fixed endpoints, origins and container paths; secrets
 stay in their separate staged files and are never read or printed here.
@@ -23,18 +28,22 @@ LISTENERS = {
     "echo-identity": "172.23.0.33",
     "victoria-identity": "172.23.0.34",
     "link-coordinator": "172.23.0.35",
+    "lighting": "172.23.0.37",
 }
 VICTORIA_LINK_IP = "172.23.0.36"
 BROWSER_PORT, INGRESS_PORT, CORE_PORT = 9450, 9451, 9448
 CALLBACK = "/api/agent/auth/callback"
 ECHO_SECRETS = ("commitment_key", "journal_key", "handoff_credential", "proof_credential",
                 "session_credential", "issuance_credential", "review_credential", "preference_credential")
+LIGHTING_SECRETS = ("credential", "database_url", "action_key", "consent_key", "journal_key")
+LIGHTING_HOME_PORTS = {"echo": 10000, "victoria": 10001}
+LIGHTING_GRANT_SECONDS = 30 * 86400  # the same displayed lifetime as preference sharing
 VICTORIA_SECRETS = ("commitment_key", "journal_key", "session_encryption_key", "handoff_credential",
                     "proof_credential", "session_credential")
 
 
 def build_profiles(tailnet, *, echo_root="/link", victoria_secrets="/run/secrets",
-                   victoria_config="/config", victoria_journals="/journals", victoria_tls="/tls"):
+                   victoria_config="/config", victoria_journals="/journals", victoria_tls="/tls", lighting=False):
     if not re.fullmatch(r"[a-z0-9-]+\.ts\.net", tailnet):
         raise ValueError("tailnet domain rejected")
     home = f"https://home-app.{tailnet}"
@@ -64,6 +73,8 @@ def build_profiles(tailnet, *, echo_root="/link", victoria_secrets="/run/secrets
         "personalMemoryHomeOrigins": [home],
         "victoriaBrowserOrigin": victoria,
     }
+    if lighting:
+        echo["lighting"] = {"origin": core("lighting"), "credentialFile": f"{echo_root}/secrets/lighting_credential"}
     victoria_profile = {
         "version": 1,
         "browserOrigin": victoria,
@@ -96,6 +107,31 @@ def build_profiles(tailnet, *, echo_root="/link", victoria_secrets="/run/secrets
     return echo, victoria_profile
 
 
+def build_lighting_profile(tailnet, homes, *, secrets="/run/secrets", config="/config", journals="/journals"):
+    """The private lighting listener (app.lighting_server). Paths only, never values."""
+    if not re.fullmatch(r"[a-z0-9-]+\.ts\.net", tailnet):
+        raise ValueError("tailnet domain rejected")
+    if not homes or len(set(homes)) != len(homes) or set(homes) - set(LIGHTING_HOME_PORTS):
+        raise ValueError("lighting homes must be echo and/or victoria")
+    return {
+        "version": 1,
+        "address": LISTENERS["lighting"],
+        "port": CORE_PORT,
+        "credential_file": f"{secrets}/credential",
+        "certificate_file": f"{config}/server.crt",
+        "private_key_file": f"{config}/server.key",
+        "action_key_file": f"{secrets}/action_key",
+        "consent_key_file": f"{secrets}/consent_key",
+        "journal_key_file": f"{secrets}/journal_key",
+        "journal_path": f"{journals}/lighting.sqlite",
+        "database_url_file": f"{secrets}/database_url",
+        "grant_lifetime_seconds": LIGHTING_GRANT_SECONDS,
+        # Each home's light-only endpoint is reached through its Tailscale Serve port.
+        "homes": {site: {"origin": f"https://home-app.{tailnet}:{LIGHTING_HOME_PORTS[site]}",
+                         "secret_file": f"{secrets}/{site}_home_secret"} for site in homes},
+    }
+
+
 def _render(profile):
     return (json.dumps(profile, indent=2) + "\n").encode("utf-8")
 
@@ -122,7 +158,11 @@ def _require_staged(directory: Path, names):
 
 
 def issue_ingress_certificate(root: Path, uid: int, days: int = 90) -> str:
-    target = root / "victoria-bff/config/ingress-tls"
+    return issue_leaf(root, root / "victoria-bff/config/ingress-tls", VICTORIA_LINK_IP,
+                      "victoria-link-ingress", uid, days=days)
+
+
+def issue_leaf(root: Path, target: Path, address: str, common_name: str, uid: int, days: int = 90) -> str:
     if (target / "server.crt").exists():
         return "unchanged"
     authority = root / "authority"
@@ -130,10 +170,10 @@ def issue_ingress_certificate(root: Path, uid: int, days: int = 90) -> str:
     with tempfile.TemporaryDirectory(dir=root / "authority") as work:
         work = Path(work)
         (work / "ext.cnf").write_text(
-            f"subjectAltName=IP:{VICTORIA_LINK_IP}\nextendedKeyUsage=serverAuth\n"
+            f"subjectAltName=IP:{address}\nextendedKeyUsage=serverAuth\n"
             "keyUsage=critical,digitalSignature,keyEncipherment\nbasicConstraints=critical,CA:FALSE\n")
         subprocess.run(["openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-                        "-nodes", "-subj", "/CN=victoria-link-ingress", "-keyout", str(work / "server.key"),
+                        "-nodes", "-subj", f"/CN={common_name}", "-keyout", str(work / "server.key"),
                         "-out", str(work / "server.csr")], check=True, capture_output=True)
         subprocess.run(["openssl", "x509", "-req", "-in", str(work / "server.csr"),
                         "-CA", str(authority / "ca.crt"), "-CAkey", str(authority / "ca.key"),
@@ -156,25 +196,38 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--tailnet", required=True)
+    parser.add_argument("--lighting", default="", help="comma-separated homes with lighting (echo,victoria)")
     args = parser.parse_args(argv)
+    homes = [home for home in args.lighting.split(",") if home]
     if os.geteuid() != 0:
         raise SystemExit("link profile generation requires root")
     root = args.root
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise ValueError("prepared root must be an absolute directory")
     uid = 1000
-    _require_staged(root / "echo-bff/secrets", ECHO_SECRETS)
+    _require_staged(root / "echo-bff/secrets", ECHO_SECRETS + (("lighting_credential",) if homes else ()))
+    if homes:
+        _require_staged(root / "lighting/secrets", LIGHTING_SECRETS + tuple(f"{h}_home_secret" for h in homes))
+        for name in ("lighting/config", "lighting/journals"):
+            if not (root / name).is_dir():
+                raise ValueError(f"staged directory missing: {name}")
     _require_staged(root / "victoria-bff/secrets", VICTORIA_SECRETS)
     for name in ("echo-bff/config/internal-ca.crt", "victoria-bff/config/internal-ca.crt",
                  "authority/ca.crt", "authority/ca.key"):
         if not (root / name).is_file():
             raise ValueError(f"staged file missing: {name}")
-    echo, victoria = build_profiles(args.tailnet)
+    echo, victoria = build_profiles(args.tailnet, lighting=bool(homes))
     results = {
         "echo-bff/config/link.json": _write_once(root / "echo-bff/config/link.json", _render(echo), uid),
         "victoria-bff/config/link.json": _write_once(root / "victoria-bff/config/link.json", _render(victoria), uid),
         "victoria-bff/config/ingress-tls": issue_ingress_certificate(root, uid),
     }
+    if homes:
+        # The lighting listener runs as the Core UID, like the other private listeners.
+        results["lighting/config/listener.json"] = _write_once(
+            root / "lighting/config/listener.json", _render(build_lighting_profile(args.tailnet, homes)), 10001)
+        results["lighting/config/server"] = issue_leaf(root, root / "lighting/config", LISTENERS["lighting"],
+                                                       "lighting", 10001)
     print(json.dumps(results, sort_keys=True))
 
 

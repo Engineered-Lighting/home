@@ -75,6 +75,39 @@ Pilot semantic triggers, review MQTT events, indoor-only face recognition,
 driveway LPR, and AI Tasks as enrichment. Do not move safety-critical control
 into experimental AI features.
 
+#### Frigate Integration Version Before Home Assistant Core Upgrades
+
+Home Assistant 2026.9 deprecated the `via_device` device-registry parameter
+(core PR #178465). The Frigate custom integration (HACS,
+`blakeblackshear/frigate-hass-integration`) must be **5.15.5 or newer, and
+5.15.6 is preferred**, before a home runs HA 2026.9 or later:
+
+- 5.15.4 and older crash on HA 2026.9. Only the first camera in Frigate's
+  config order loads; every other `camera.*` entity fails with
+  `RuntimeError: Detected code that calls device_registry.async_get_or_create
+  with a deprecated via_device parameter` and `Error adding entity None for
+  domain camera with platform frigate`. HA `camera_proxy` then returns 404 for
+  those cameras, which breaks the Home camera carousel, the vision sidecar
+  `camera_proxy` paths, and `multimodal.py`. Other Frigate entities only log a
+  `homeassistant.helpers.frame` warning.
+- 5.15.5 fixes the crash (integration PR #1116) but still logs an
+  `async_get_device` deprecation warning. 5.15.6 fixes that too (PR #1117).
+- The 5.15.5 release still reports `5.15.4` in its manifest. To tell which code
+  is installed, check whether
+  `custom_components/frigate/__init__.py` defines `get_frigate_via_device`.
+
+Update path: take a Home Assistant backup, update Frigate in HACS, run
+`ha core check`, then restart core in a window coordinated with the sessions
+that depend on HA. The Frigate add-on does not restart, so go2rtc RTSP on 8554
+and the Frigate API on 5000 stay up. Verify with `ha core logs` (no
+`via_device` or `Error adding entity` lines) and a 200 from `camera_proxy` for
+a camera that is not first in Frigate's config.
+
+Upgrade the Frigate server add-on separately from the integration. Frigate
+0.18 migrates the config and `frigate.db` and restarts go2rtc, and the Perception
+Lab observer reads Frigate occupancy and RTSP directly, so coordinate that
+window with Perception Lab first.
+
 ### Runtime And Frontend
 
 CUDA/PyTorch/vLLM runtime modernization is a separate maintenance-window-only

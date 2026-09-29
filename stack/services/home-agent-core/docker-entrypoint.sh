@@ -101,7 +101,7 @@ role="${1:-${HOME_AGENT_ROLE:-api}}"
 
 if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ] && [ "$role" != "migrate" ]; then
   case "$role" in
-    phase3-migrate-*|personal-memory-api|site-identity-api|link-coordinator-api)
+    phase3-migrate-*|personal-memory-api|site-identity-api|link-coordinator-api|lighting-api)
       echo "phase3 migration cannot use automatic startup migration" >&2
       exit 78
       ;;
@@ -125,6 +125,13 @@ case "$role" in
       exit 64
     }
     exec python -m app.shared_identity_site_server
+    ;;
+  lighting-api)
+    [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
+      echo "private lighting listener requires one command and the API role" >&2
+      exit 64
+    }
+    exec python -m app.lighting_server
     ;;
   personal-memory-api)
     [ "$#" -eq 1 ] && [ "${HOME_AGENT_ROLE:-}" = "api" ] || {

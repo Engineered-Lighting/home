@@ -7,7 +7,7 @@ import secrets
 import uuid
 import unicodedata
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, get_args
 
 from psycopg.types.range import Range
 from sqlalchemy import and_, delete, func, literal, or_, select, text, update
@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import schema
 from .config import Settings
+from .context import RelationshipPredicate
 from .crypto import FieldCipher, SealedValue, canonical_json, sha256_json
 from .db import Database
 from .erasure import apply_descriptor_erasure, invalidate_descriptor_dependents
@@ -3347,11 +3348,13 @@ class CoreStore:
         )
     """
 
-    # Person-to-person predicates only. place_social_descriptor is also a
-    # ContextPredicate but its object is a place, so it would not survive the
-    # join to identity.people -- naming it here would be a silent no-op that
-    # looks like support.
-    _RELATIONSHIP_PREDICATES = ("parent_of",)
+    # Person-to-person predicates only, taken from the vocabulary the context
+    # layer defines rather than restated, so a predicate admitted there is read
+    # here too. place_social_descriptor is also a ContextPredicate but its
+    # object is a place, and RelationshipPredicate deliberately excludes it.
+    # Every predicate but parent_of is symmetric and stored as two edges, one
+    # each way; both are returned, and each is filtered on both ends.
+    _RELATIONSHIP_PREDICATES: tuple[str, ...] = get_args(RelationshipPredicate)
 
     async def people_directory(
         self, principal: dict[str, Any], ha_user_id: str

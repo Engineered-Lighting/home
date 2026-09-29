@@ -10,13 +10,17 @@ These tests therefore care much more about who is ABSENT than who is present.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
+from contextlib import asynccontextmanager
+from typing import get_args
 
 import pytest
 from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
+from app.context import ContextPredicate, RelationshipPredicate
 from app.models import (
     PeopleDirectoryEntry,
     PeopleDirectoryView,
@@ -143,15 +147,109 @@ def test_reads_are_refused_below_shadow() -> None:
         asyncio.run(store.relationships(principal, "ha-user"))
 
 
-def test_relationship_predicates_exclude_non_person_objects() -> None:
-    """place_social_descriptor is a ContextPredicate but its object is a place.
+PERSON_TO_PERSON_PREDICATES = (
+    "parent_of",
+    "partner_of",
+    "friend_of",
+    "sibling_of",
+    "roommate_of",
+    "neighbor_of",
+    "colleague_of",
+)
 
-    Listing it would join to identity.people and silently return nothing, which
-    looks like support for a predicate that is not supported.
+
+def test_relationship_predicates_are_every_person_to_person_predicate() -> None:
+    """The household read lists every relationship the kernel can record.
+
+    It once listed parent_of alone, so a partner or sibling committed by the
+    relationship kernel never reached the People tab. place_social_descriptor
+    is a ContextPredicate but its object is a place, so it stays out: listing
+    it would join to identity.people and look like support that is not there.
     """
 
-    assert CoreStore._RELATIONSHIP_PREDICATES == ("parent_of",)
+    assert set(CoreStore._RELATIONSHIP_PREDICATES) == set(
+        PERSON_TO_PERSON_PREDICATES
+    )
+    assert len(CoreStore._RELATIONSHIP_PREDICATES) == len(
+        PERSON_TO_PERSON_PREDICATES
+    )
+    assert set(CoreStore._RELATIONSHIP_PREDICATES) == set(
+        get_args(RelationshipPredicate)
+    )
     assert "place_social_descriptor" not in CoreStore._RELATIONSHIP_PREDICATES
+    assert set(CoreStore._RELATIONSHIP_PREDICATES) < set(
+        get_args(ContextPredicate)
+    )
+
+
+class _RecordingConnection:
+    """Answers the relationships query with fixed rows and keeps what it got."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def execute(self, statement: object, params: dict[str, object]):
+        self.calls.append((str(statement), params))
+        rows = self.rows
+
+        class _Result:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return rows
+
+        return _Result()
+
+
+class _RecordingDatabase:
+    def __init__(self, connection: _RecordingConnection) -> None:
+        self.connection = connection
+
+    @asynccontextmanager
+    async def transaction(self, **_: object):
+        yield self.connection
+
+
+def test_relationships_asks_for_every_predicate_under_both_end_filters() -> None:
+    """Each predicate is requested, returned, and still filtered at both ends.
+
+    Which rows survive the filter is proven against PostgreSQL in
+    test_people_directory_visibility_runtime_postgres.py. This checks the
+    request itself: all seven predicates are bound, and the widened query still
+    applies the shared visibility filter to the subject AND the object.
+    """
+
+    subject, target = uuid.uuid4(), uuid.uuid4()
+    rows = [
+        {
+            "fact_id": uuid.uuid4(),
+            "predicate": predicate,
+            "subject_person_id": subject,
+            "subject_display_name": "Ada",
+            "object_person_id": target,
+            "object_display_name": "Bruno",
+            "authority": "authorized_administrator",
+            "committed_at": "2026-09-29T00:00:00+00:00",
+        }
+        for predicate in PERSON_TO_PERSON_PREDICATES
+    ]
+    connection = _RecordingConnection(rows)
+    store = CoreStore(_RecordingDatabase(connection), DisabledRuntimeSpool(), _settings())  # type: ignore[arg-type]
+    principal = {"principal_id": uuid.uuid4(), "person_id": subject}
+
+    view = asyncio.run(store.relationships(principal, "ha-viewer"))
+
+    assert [entry.predicate for entry in view.relationships] == list(
+        PERSON_TO_PERSON_PREDICATES
+    )
+    [(sql, params)] = connection.calls
+    assert set(params["predicates"]) == set(PERSON_TO_PERSON_PREDICATES)
+    assert params["viewer_ha_user_id"] == "ha-viewer"
+    visible = CoreStore._PERSON_VISIBLE
+    assert visible.replace("person.", "subject.") in sql
+    assert visible.replace("person.", "object_person.") in sql
 
 
 def test_the_visibility_filter_is_shared_by_both_reads() -> None:

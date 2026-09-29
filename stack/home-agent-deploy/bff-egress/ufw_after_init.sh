@@ -16,7 +16,12 @@ case "${1:-}" in
     /usr/bin/python3 -I "$helper" guard --env "$environment"
     # The separately provisioned Victoria linking service has its own bridge
     # and guard; it is skipped until its HA origin is provisioned.
-    exec /usr/bin/python3 -I "$helper" guard --profile victoria-link       --if-configured --env "$environment"
+    /usr/bin/python3 -I "$helper" guard --profile victoria-link \
+      --if-configured --env "$environment"
+    # The private Core lighting service reaches both HA origins through its own
+    # bridge and guard; it is skipped until its egress address is provisioned.
+    exec /usr/bin/python3 -I "$helper" guard --profile lighting \
+      --if-configured --env "$environment"
     ;;
   status)
     exit 0

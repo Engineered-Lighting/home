@@ -293,7 +293,9 @@ With the example Tailscale IPv4 `100.87.94.18`, the whole guard is:
 
 Any extra, missing, duplicated or reordered rule fails `verify`, and `apply`
 refuses to adopt it. The container must be attached only to
-`home-agent_api-net` and `home-agent_lighting-egress`, and must publish no port.
+`home-agent_api-net`, `home-agent_lighting-egress` and, because it is a Core
+service, `home-agent_postgres-net`, which must be live-verified as an
+`Internal` network (no route out). It must publish no port.
 Like victoria-link, it resolves the HA host name through an `extra_hosts` entry
 that maps to the pinned Tailscale IPv4.
 

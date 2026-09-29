@@ -81,6 +81,10 @@ class Profile:
     published_port: int | None
     # The runtime inside the container that performs the anonymous HA probe.
     probe_runtime: str = "node"
+    # Further attachments this container may have. Each must be a Docker
+    # network with Internal=true (no route out), verified live; they can never
+    # carry the default route or reach Home Assistant.
+    internal_networks: tuple[str, ...] = ()
 
 
 BFF = Profile(
@@ -138,6 +142,8 @@ LIGHTING = Profile(
     default_bridge="ha-light-egr0",
     published_port=None,
     probe_runtime="python",
+    # Core services reach PostgreSQL over this internal network.
+    internal_networks=("home-agent_postgres-net",),
 )
 PROFILES = {profile.name: profile for profile in (BFF, VICTORIA_LINK, LIGHTING)}
 
@@ -468,7 +474,7 @@ def validate_container(contract: Contract, value: dict) -> None:
     ):
         raise ContractError("live BFF does not have the reviewed Compose identity")
     networks = ((value.get("NetworkSettings") or {}).get("Networks") or {})
-    if set(networks) != {API_NETWORK_NAME, profile.network}:
+    if set(networks) != {API_NETWORK_NAME, profile.network, *profile.internal_networks}:
         raise ContractError("live BFF has an unreviewed network attachment")
     if networks[profile.network].get("IPAddress") != str(contract.bff_ip):
         raise ContractError("live BFF source address differs from policy")
@@ -528,8 +534,23 @@ def live_contract(contract: Contract) -> ipaddress.IPv4Address:
         raise ContractError("HA OAuth DNS resolution failed") from exc
     tail_ip = validate_tailnet_endpoint(contract, status, resolved)
     validate_network(contract, network_payload[0])
+    for name in contract.profile.internal_networks:
+        validate_internal_network(name, _json_command(
+            ["docker", "network", "inspect", name], "Docker internal network inspection"))
     validate_container(contract, container_payload[0])
     return tail_ip
+
+
+def validate_internal_network(name: str, payload) -> None:
+    """An extra attachment must exist, be the reviewed network, and have no route out."""
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 1
+        or not isinstance(payload[0], dict)
+        or payload[0].get("Name") != name
+        or payload[0].get("Internal") is not True
+    ):
+        raise ContractError("an extra container network is not a reviewed internal network")
 
 
 def _rule_command(

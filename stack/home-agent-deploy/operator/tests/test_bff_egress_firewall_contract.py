@@ -38,6 +38,7 @@ from firewall_contract import (  # noqa: E402
     remove_rule,
     rule_present,
     validate_container,
+    validate_internal_network,
     validate_guard_rules,
     validate_network,
     validate_tailnet_endpoint,
@@ -715,7 +716,8 @@ def lighting_container_shape():
     }, "Env": []}
     shape["HostConfig"]["PortBindings"] = {}
     shape["NetworkSettings"] = {"Networks": {
-        "home-agent_api-net": {"IPAddress": "172.23.0.40", "GlobalIPv6Address": ""},
+        "home-agent_api-net": {"IPAddress": "172.23.0.37", "GlobalIPv6Address": ""},
+        "home-agent_postgres-net": {"IPAddress": "172.24.0.12", "GlobalIPv6Address": ""},
         "home-agent_lighting-egress": {"IPAddress": "172.27.0.10", "GlobalIPv6Address": ""},
     }}
     return shape
@@ -865,6 +867,22 @@ class LightingEgressTests(unittest.TestCase):
         for shape in (victoria_network_shape(), network_shape()):
             with self.subTest(shape=shape["Name"]), self.assertRaises(ContractError):
                 validate_network(self.contract, shape)
+
+    def test_postgres_attachment_is_required_and_must_be_internal(self) -> None:
+        missing = lighting_container_shape()
+        del missing["NetworkSettings"]["Networks"]["home-agent_postgres-net"]
+        with self.assertRaises(ContractError):
+            validate_container(self.contract, missing)
+        # Only the lighting profile may attach PostgreSQL's network.
+        self.assertEqual(LIGHTING.internal_networks, ("home-agent_postgres-net",))
+        self.assertEqual(BFF.internal_networks, ())
+        self.assertEqual(VICTORIA_LINK.internal_networks, ())
+        validate_internal_network(
+            "home-agent_postgres-net", [{"Name": "home-agent_postgres-net", "Internal": True}])
+        for payload in ([{"Name": "home-agent_postgres-net", "Internal": False}],
+                        [{"Name": "home-agent_postgres-net"}], [{"Name": "other", "Internal": True}], [], None):
+            with self.assertRaises(ContractError):
+                validate_internal_network("home-agent_postgres-net", payload)
 
     def test_ufw_has_one_commented_rule_per_ha_url(self) -> None:
         def check(port: str) -> list[str]:

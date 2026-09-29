@@ -916,10 +916,13 @@ function configFromEnv(env = process.env) {
     allowInsecureTestUrls,
     secureCookie: env.HOME_AGENT_INSECURE_TEST_COOKIE !== "1",
     idleTtlMs: boundedIntegerFromEnv(
-      env, "HOME_AGENT_SESSION_IDLE_MS", 30 * 60_000, 60_000, 24 * 60 * 60_000,
+      // Defaults stay short; a single-owner hobby install may opt into
+      // sessions of up to 400 days, the longest cookie browsers keep. HA
+      // access tokens still refresh and the principal is still revalidated.
+      env, "HOME_AGENT_SESSION_IDLE_MS", 30 * 60_000, 60_000, 400 * 24 * 60 * 60_000,
     ),
     absoluteTtlMs: boundedIntegerFromEnv(
-      env, "HOME_AGENT_SESSION_ABSOLUTE_MS", 12 * 60 * 60_000, 60_000, 7 * 24 * 60 * 60_000,
+      env, "HOME_AGENT_SESSION_ABSOLUTE_MS", 12 * 60 * 60_000, 60_000, 400 * 24 * 60 * 60_000,
     ),
     // Re-check HA on every private request by default. A bounded non-zero
     // interval is available for constrained installations, but revocation is
@@ -1869,8 +1872,11 @@ async function readBody(req) {
   return Buffer.concat(chunks);
 }
 
-function sessionCookie(id, secure) {
-  return `${COOKIE_NAME}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200${secure ? "; Secure" : ""}`;
+// The browser keeps the cookie exactly as long as the server keeps the session.
+function sessionCookie(id, secure, absoluteTtlMs) {
+  const maxAge = Math.floor(absoluteTtlMs / 1000);
+  if (!Number.isSafeInteger(maxAge) || maxAge <= 0) throw new Error("session cookie lifetime required");
+  return `${COOKIE_NAME}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 }
 
 function clearSessionCookie(secure) {
@@ -2146,7 +2152,7 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
           const session = sessions.completeLogin(pendingId, principal);
           return redirect(res, config.postLoginRedirect, {
             "Set-Cookie": [
-              sessionCookie(session.id, config.secureCookie),
+              sessionCookie(session.id, config.secureCookie, config.absoluteTtlMs),
               clearOauthCookie(config.secureCookie),
             ],
           });

@@ -5,7 +5,7 @@ const http=require("node:http");
 const root=path.resolve(__dirname,".."),fact="00000000-0000-0000-0000-000000000001";
 const preference=tone=>({version:1,kind:"personal_preference",key:"lighting.evening.tone",scope:"owner",value:tone});
 const VIEWPORTS={desktop:{width:1280,height:800},phone:{width:375,height:812}};
-const MODES=["remember","light","correct","read","forget","unknown","untrusted","expired","cancel","offscreen","wrong-origin","foreign-embedder","cancel-context","clear-review"];
+const MODES=["remember","light","signed-out","correct","read","forget","unknown","untrusted","expired","cancel","offscreen","wrong-origin","foreign-embedder","cancel-context","clear-review"];
 const PROMPTS={read:"What lighting do I prefer in the evening?",forget:"Forget my evening lighting preference.",correct:"Actually, I prefer neutral lighting in the evening."};
 // A minimal Home chat: user text, replies, and an inline slot for the review card.
 const homePage=(mode,text)=>`<!doctype html><html data-theme="${mode==="light"?"light":"dark"}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -52,6 +52,7 @@ async function scenario(browser,originServer,mode,viewportName) {
       return route.fulfill(response);
     }
     const operation=url.pathname.split("/").at(-1),body=request.postDataJSON();calls.push({operation,body});
+    if(operation==="session" && mode==="signed-out") return reply({error:"authentication_required"},401);
     if(operation==="session") return reply({authenticated:true,user_id:"owner",csrf_token:"private-csrf",authority:{version:1,site_id:"echo",ha_issuer_id:"home-assistant:echo"},personal_memory_enabled:true,
       personal_memory_home_origins:[mode==="wrong-origin" ? "https://another-home.test" : "https://home.test"]});
     assert.equal(request.headers()["x-csrf-token"],"private-csrf");
@@ -88,6 +89,11 @@ async function scenario(browser,originServer,mode,viewportName) {
       // frame-ancestors refuses the embed: the review never runs, so it never calls the Agent API.
       await page.waitForTimeout(1500);
       assert.equal(calls.length,0);
+    } else if(mode==="signed-out") {
+      await frame.getByText("Your Home Agent sign-in has expired. Sign in, then check sign-in here.").waitFor();
+      assert.equal(await frame.getByRole("link",{name:"sign in"}).isVisible(),true);
+      assert.equal(await frame.getByRole("button",{name:"check sign-in"}).isVisible(),true);
+      assert.equal(calls.filter(call=>call.operation!=="session").length,0);
     } else if(mode==="wrong-origin") {
       await frame.getByText("Connecting to your Home conversation…").waitFor();await page.waitForTimeout(1100);
       assert.equal(calls.filter(call=>call.operation!=="session").length,0);

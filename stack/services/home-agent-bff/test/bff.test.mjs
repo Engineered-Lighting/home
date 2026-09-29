@@ -193,6 +193,47 @@ for (const endpoint of ["token", "whoami"]) {
   });
 }
 
+test("session cookie lives exactly as long as the configured absolute session", async () => {
+  const config = configured({ idleTtlMs: 400 * 24 * 60 * 60_000, absoluteTtlMs: 400 * 24 * 60 * 60_000 });
+  const store = new SessionStore(config);
+  const base = await listen(createBff(config, { store, fetchImpl: async (url) => {
+    const token = String(url).endsWith("/auth/token");
+    return new Response(JSON.stringify(token ? { access_token: "test-access", refresh_token: "test-refresh", expires_in: 300 } :
+      { user_id: "test-user", is_active: true }), { headers: { "content-type": "application/json" } });
+  } }));
+  const started = await fetch(`${base}/api/agent/auth/start`, { method: "POST", headers: { origin: "https://home.test" } });
+  const state = new URL((await started.json()).authorize_url).searchParams.get("state");
+  const callback = await fetch(`${base}/api/agent/auth/callback?state=${state}&code=code`, {
+    headers: { cookie: started.headers.get("set-cookie").split(";")[0] }, redirect: "manual",
+  });
+  assert.equal(callback.status, 302);
+  const cookie = callback.headers.getSetCookie().find((value) => value.startsWith(`${COOKIE_NAME}=`));
+  assert.match(cookie, /; HttpOnly; SameSite=Strict; Max-Age=34560000$/);
+  assert.equal(store.sessions.size, 1);
+  store.close();
+});
+
+test("long hobby sessions are bounded at the 400-day browser cookie limit", () => {
+  const base = {
+    NODE_ENV: "test", HOME_AGENT_ALLOW_TEST_SESSION_KEY_ENV: "1", HOME_AGENT_ALLOW_IN_MEMORY_SESSIONS: "1",
+    HOME_AGENT_SESSION_ENCRYPTION_KEY: crypto.randomBytes(32).toString("base64url"),
+    HOME_AGENT_ALLOWED_ORIGINS: "https://agent.home.test", HOME_AGENT_HA_URL: "https://ha.test/",
+    HOME_AGENT_OAUTH_CLIENT_ID: "https://agent.home.test",
+    HOME_AGENT_OAUTH_REDIRECT_URI: "https://agent.home.test/api/agent/auth/callback",
+    HOME_AGENT_CORE_URL: "http://core.internal:8096/", HOME_AGENT_CORE_TOKEN: "internal-secret",
+  };
+  const day = 24 * 60 * 60_000;
+  const defaults = configFromEnv(base);
+  assert.equal(defaults.idleTtlMs, 30 * 60_000);
+  assert.equal(defaults.absoluteTtlMs, 12 * 60 * 60_000);
+  const hobby = configFromEnv({ ...base, HOME_AGENT_SESSION_IDLE_MS: String(400 * day), HOME_AGENT_SESSION_ABSOLUTE_MS: String(400 * day) });
+  assert.equal(hobby.ready, true);
+  assert.equal(hobby.idleTtlMs, 400 * day);
+  assert.equal(hobby.absoluteTtlMs, 400 * day);
+  assert.equal(configFromEnv({ ...base, HOME_AGENT_SESSION_IDLE_MS: String(400 * day + 1) }).ready, false);
+  assert.equal(configFromEnv({ ...base, HOME_AGENT_SESSION_ABSOLUTE_MS: String(400 * day + 1) }).ready, false);
+});
+
 test("issuer registration is stable across transport selection and rejects other authority namespaces", () => {
   for (const change of [
     { haIssuerId: "home-assistant:victoria", siteId: "victoria" },
@@ -921,8 +962,10 @@ test("offline native registry is strict, validates the P-256 point, and is not a
 
 test("tokens and cookies are random and strict", () => {
   assert.notEqual(randomToken(), randomToken());
-  const cookie = sessionCookie("id", true);
+  const cookie = sessionCookie("id", true, 12 * 60 * 60_000);
   assert.match(cookie, new RegExp(`^${COOKIE_NAME}=`));
+  assert.match(cookie, /Max-Age=43200/);
+  assert.throws(() => sessionCookie("id", true, 0), /lifetime required/);
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Strict/);
   assert.match(cookie, /Secure/);

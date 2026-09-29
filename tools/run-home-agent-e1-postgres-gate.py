@@ -4244,7 +4244,7 @@ def _run_shared_link_combined_gate(state, phase, secrets_directory, *, lookup=Fa
                         "tests/test_shared_link_coordinator_runtime.py", "tests/test_shared_link_coordinator_server.py",
                         "tests/test_startup_admission.py", "tests/test_shared_preference_roles.py",
                         "tests/test_shared_link_key_admission.py", "tests/test_shared_link_key_admission_postgres.py",
-                        "tests/test_lighting_kernel.py", "tests/test_lighting_service.py", "tests/test_lighting_api.py",
+                        "tests/test_lighting_kernel.py", "tests/test_lighting_service.py", "tests/test_lighting_api.py", "tests/test_runtime_dependencies.py",
                         "tests/test_lighting_authority_postgres.py",
                         # Commits real logins and restores the dormant roles; keep it last.
                         "tests/test_shared_preference_roles_postgres.py"] if preference_authority else []),

@@ -62,6 +62,215 @@ Rollback stops these new services and revokes their new credentials while
 retaining journals, current data and deletion history. It must not restore an
 older database. Live acceptance passed on 2026-09-28; see `docs/SHARED-PREFERENCES-RELEASE-2026-09-28.md`.
 
+## Internal TLS renewal
+
+The private listeners use 90-day EC P-256 leaves, each with one IP SAN, issued
+by the retained internal CA (`authority/ca.crt`, CN "Home Shared Preferences
+Internal CA", valid to 2027-09-28). `renew_internal_tls.py` reissues them from
+that CA with the same subject, SAN and key usage. It never creates, replaces or
+re-signs the CA. Leaves as inspected on 2026-09-29, under `prepared-20260928/`:
+
+| Leaf (`--leaf`) | Directory | SAN | Owner, modes | Expires (UTC) | Probed from |
+| --- | --- | --- | --- | --- | --- |
+| `echo-preferences` | `echo-preferences/config` | 172.23.0.31:9448 | root:10001, dir 0750, files 0440 | 2026-12-27 12:50 | BFF |
+| `victoria-preferences` (staged) | `victoria-preferences/config` | 172.23.0.32:9448 | root:10001, dir 0750, files 0440 | 2026-12-27 12:50 | not running |
+| `echo-identity` | `echo-identity/config` | 172.23.0.33:9448 | root:10001, dir 0750, files 0440 | 2026-12-27 12:50 | BFF |
+| `victoria-identity` | `victoria-identity/config` | 172.23.0.34:9448 | root:10001, dir 0750, files 0440 | 2026-12-27 12:50 | victoria-link |
+| `link-coordinator` | `link-coordinator/config` | 172.23.0.35:9448 | root:10001, dir 0750, files 0440 | 2026-12-27 12:50 | BFF |
+| `victoria-link-ingress` | `victoria-bff/config/ingress-tls` | 172.23.0.36:9451 | 1000:1000, dir 0700, crt 0444, key 0400 | 2026-12-27 20:09 | BFF |
+| `lighting` (when deployed) | `lighting/config` | 172.23.0.37:9448 | as issued by `generate_link_profiles.py` | — | BFF |
+
+The Core leaves carry keyUsage `digitalSignature`. The ingress and lighting
+leaves, issued by `generate_link_profiles.py`, also carry `keyEncipherment`.
+Each keeps its own policy. Renewal preserves each file's owner, group and
+mode. Clients trust the CA, not the leaves: the BFF through
+`echo-bff/config/internal-ca.crt` and victoria-link through
+`victoria-bff/config/internal-ca.crt`, both via `NODE_EXTRA_CA_CERTS`. So a
+leaf renewal never touches a client or restarts the BFF.
+
+### Commands
+
+All four commands take `--root /srv/home-agent/shared-preferences/prepared-20260928`.
+
+- `check-expiry` is read-only. It exits 1 if any of these holds:
+  - a live leaf expires within 30 days
+  - the CA has fewer than 120 days left
+  - a required leaf is missing
+  - a client trust copy differs from `authority/ca.crt`
+  - a leaf no longer verifies against the CA or its reviewed policy
+  - a change has been on disk for more than a day without a passing probe
+  - a leftover `.server.*.renew` file shows an interrupted change
+- `renew --leaf L` refuses, changing nothing, in any of these cases:
+  - the CA key does not match the CA certificate
+  - the CA has fewer than 120 days left, so a new leaf plus the warning window
+    could outlive it
+  - any trust copy differs from the CA
+  - the current leaf does not verify against the CA, has drifted from the
+    reviewed policy, or does not match its key
+  - the previous change to that leaf still awaits a restart and probe
+
+  Otherwise it does the following:
+  - issues a fresh key and a 90-day leaf in a root-only work directory on the
+    encrypted volume
+  - saves the displaced pair and a receipt to
+    `tls-renewal/<leaf>/<stamp>-renew/` (root 0700; files 0400)
+  - stages `.server.key.renew` and `.server.crt.renew` beside the live files,
+    with the live owner and mode
+  - renames them over the live files
+  - records a restart-pending marker
+
+  It prints the rollback stamp and never prints key material.
+- `probe --leaf L` runs a TLS handshake with `node` inside the listener's real
+  client container, which trusts the CA through `NODE_EXTRA_CA_CERTS`. It
+  succeeds only if the client authorizes the served leaf and the leaf's SHA-256
+  equals the on-disk file. Then it clears the marker. If the listener is
+  stopped, it clears the marker, because the listener loads the file at its
+  next start.
+- `rollback --leaf L --stamp S` restores a saved pair byte-for-byte with its
+  original owner and mode. It saves the displaced pair as a new `-rollback`
+  stamp, so a rollback can itself be reversed. It refuses a saved leaf that has
+  expired, fails to verify, or does not match its receipt.
+
+Until a probe confirms a change, `check-expiry` uses the displaced leaf's
+expiry, because the running listener still serves it. `tls-renewal/` is outside
+the shared-runtime backup, and that is intended: the live leaf in each `config/`
+directory is backed up, and saved leaves are needed only until a probe passes.
+
+### Install the tool and expiry alert
+
+Install only from the reviewed merge commit, and record the digests.
+`home-agent-internal-tls-expiry.timer` runs `check-expiry` daily at about
+09:20 local time. Like `observer-health` and `ha-health`, the unit fails on any
+warning, so `OnFailure=ntfy-alert@%n.service` pages, and
+`ntfy-alert-reset` clears the streak after a clean run. The check runs in a
+read-only sandbox and never reads a private key. Only the reset runs outside the
+sandbox (`ExecStartPost=+`), because it must clear `/run/ntfy-alert` and may
+send the RECOVERED notice. The journal names each warning.
+
+```sh
+cd /opt/home/home-github            # checkout at the reviewed merge commit
+reviewed=<merge commit sha>
+test "$(git rev-parse HEAD)" = "$reviewed"
+src=stack/home-agent-deploy
+tool=/usr/local/libexec/home-agent/shared-preferences/renew_internal_tls.py
+sudo install -m 0555 -o root -g root "$src/shared-preferences/renew_internal_tls.py" "$tool"
+for unit in home-agent-internal-tls-expiry.service home-agent-internal-tls-expiry.timer; do
+  sudo install -m 0644 -o root -g root "$src/operator/systemd/$unit" /etc/systemd/system/
+done
+check() { test "$(git rev-parse "$reviewed:$1")" = "$(sudo git hash-object "$2")" || { echo "digest mismatch: $1" >&2; return 1; }; }
+check "$src/shared-preferences/renew_internal_tls.py" "$tool"
+check "$src/operator/systemd/home-agent-internal-tls-expiry.service" /etc/systemd/system/home-agent-internal-tls-expiry.service
+check "$src/operator/systemd/home-agent-internal-tls-expiry.timer" /etc/systemd/system/home-agent-internal-tls-expiry.timer
+receipt=/srv/home-agent/config/internal-tls-renewal-install.sha256
+sudo sh -c "{ echo '# reviewed $reviewed'; cd / && sha256sum ${tool#/} \
+  etc/systemd/system/home-agent-internal-tls-expiry.service \
+  etc/systemd/system/home-agent-internal-tls-expiry.timer; } > $receipt"
+sudo chmod 0600 "$receipt"
+sudo systemctl daemon-reload
+sudo systemctl start home-agent-internal-tls-expiry.service     # must succeed
+sudo journalctl -u home-agent-internal-tls-expiry.service -n 5 --no-pager
+sudo systemctl enable --now home-agent-internal-tls-expiry.timer
+```
+
+### Renew (before 2026-12-27; the alert starts about 2026-11-27)
+
+Run this in one Lab-acknowledged window: message the Perception Lab session
+first. Complete the AGENTS.md pre-operation checks (`systemctl
+is-system-running`, healthy containers, storage headroom, temperatures, no new
+kernel faults). Then set:
+
+```sh
+T=/usr/local/libexec/home-agent/shared-preferences/renew_internal_tls.py
+R=/srv/home-agent/shared-preferences/prepared-20260928
+sudo python3 -I "$T" check-expiry --root "$R"   # CA > 120 days, no trust drift
+```
+
+**1. Core listeners, one at a time.** Order: `echo-preferences`,
+`echo-identity`, `victoria-identity`, `link-coordinator`. Restarting a Core
+listener does not end any browser session. Requests in flight during the few
+seconds of restart can fail and be retried. Move to the next leaf only after
+`probe` prints `"outcome": "serving"`.
+
+```sh
+L=echo-preferences
+sudo python3 -I "$T" renew --root "$R" --leaf "$L"     # note rollback_stamp
+sudo docker restart --time 20 "home-shared-preferences-$L-1"
+sudo docker logs --since 2m "home-shared-preferences-$L-1"   # listening, no TLS or key errors
+sudo python3 -I "$T" probe --root "$R" --leaf "$L"
+```
+
+**2. `victoria-preferences`.** It is staged and not running. Run `renew` and
+then `probe`. The probe reports `listener_not_running`. Do not start it.
+
+**3. `victoria-link-ingress`, last, at a time the owner chooses.**
+
+> **Restarting victoria-link or the BFF ends account-linking use for every
+> existing session.** The page still shows the owner signed in, but linking
+> and preference authority no longer work. The owner must **Sign out** and sign
+> in again at `echo-agent` and at `victoria-agent`; a reload is not enough.
+> Restarting the Core listeners (identity, coordinator, preferences) has no
+> such effect. Leaf renewal never restarts the BFF.
+
+```sh
+sudo touch /run/tailscale-origin-hold          # keep the Victoria cert helper from restarting it mid-sign-in
+sudo python3 -I "$T" renew --root "$R" --leaf victoria-link-ingress
+sudo docker restart --time 20 home-shared-preferences-victoria-link-1
+sudo docker logs --since 2m home-shared-preferences-victoria-link-1   # "Victoria linking listeners ready"
+sudo python3 -I "$T" probe --root "$R" --leaf victoria-link-ingress   # from the BFF
+sudo python3 -I "$T" probe --root "$R" --leaf victoria-identity        # victoria-link is its client
+sudo systemctl start home-agent-victoria-link-egress-verify.service    # egress contract still holds
+```
+
+The owner then signs out and in at both origins. Afterwards, remove the hold
+with `sudo rm -f /run/tailscale-origin-hold`. If a Victoria browser-certificate
+restart is pending, this one restart covers both.
+
+**4.** Run `check-expiry` again. It must exit 0 with no warnings.
+
+### Rollback
+
+The displaced leaf stays valid until its original expiry, so a rollback is
+safe until then. Use the stamp that `renew` printed; `sudo ls "$R/tls-renewal/$L"`
+lists all stamps. `rollback` prints the container to restart as `restart`.
+
+```sh
+sudo python3 -I "$T" rollback --root "$R" --leaf "$L" --stamp <stamp>
+```
+
+Then:
+
+- **Core leaves:** `sudo docker restart --time 20 "home-shared-preferences-$L-1"`,
+  then `probe`.
+- **`victoria-preferences`:** no restart; `probe` only. `docker restart` would
+  start the staged service.
+- **`victoria-link-ingress`:** repeat the whole of step 3 for
+  `home-shared-preferences-victoria-link-1`: the hold file, the restart, both
+  probes and the egress check. The owner signs out and in again afterwards.
+
+If `renew` fails before its first rename, the live files are unchanged and no
+staged file or marker remains. If it is interrupted between the key and
+certificate renames, the pair is torn and `.server.crt.renew` is left behind
+(`check-expiry` reports it). The listener keeps serving from memory. Do not
+restart it; run `rollback` with the printed stamp first. `renew` ignores
+hang-ups and ^C while it renames, so a dropped SSH session cannot cause this.
+
+### CA rotation (separate procedure; not automated)
+
+Renewal refuses from about 2027-05-31, when the CA has fewer than 120 days
+left, and the alert starts warning at that point. Before then, rotation needs
+its own reviewed change, because every client's trust must change:
+
+1. Create a new CA in a new root-only directory, keeping the old one.
+2. Put an old-plus-new bundle in both BFF `internal-ca.crt` copies and every
+   Core `config/ca.crt`. Restart the BFF and victoria-link; this ends linking
+   sessions, so the owner signs out and in again.
+3. Reissue each leaf from the new CA, one listener at a time, probing each.
+4. After every leaf has moved, remove the old CA from the bundles, restart
+   again, and retire the old authority.
+
+Until that change updates them, `renew` and `check-expiry` treat any bundle or
+new CA as trust drift and refuse or warn. Nothing rotates the CA implicitly.
+
 ## Migration 0031 -> 0047
 
 `operator/shared_preferences_migration.py` migrates live Core from

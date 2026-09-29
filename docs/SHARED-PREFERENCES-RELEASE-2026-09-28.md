@@ -275,6 +275,7 @@ remain outside this release's replacement scope.
 - After a sustained resource check, move the five private services (`echo-identity`, `victoria-identity`, `link-coordinator`,
   `echo-preferences`, `victoria-link`) from `restart: no` to a restarting policy, through a reviewed compose change.
 - In-chat preference confirmation, to replace the separate Agent window.
-- Internal TLS leaves expire around 2026-12-27; renewal is required before then.
+- Internal TLS leaves expire 2026-12-27; renew them before then with `renew_internal_tls.py`, following the
+  shared-preferences README (Internal TLS renewal). The daily expiry alert warns from about 2026-11-27.
 
 Lighting and travel defaults remain inactive milestones.

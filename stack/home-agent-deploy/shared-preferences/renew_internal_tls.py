@@ -3,7 +3,7 @@
 
 Root-run on the LA host against the prepared shared-preferences directory.
 
-  check-expiry  read-only; exits 1 when any leaf, or the CA, needs attention
+  check-expiry  read-only; exits 10 when any leaf, or the CA, needs attention
   renew         reissue one leaf with its reviewed subject, IP SAN and key
                 policy, staged beside the live files and renamed into place
   rollback      put back the leaf that a renew (or rollback) displaced
@@ -82,6 +82,9 @@ LEAF_DAYS = 90  # the original issuance lifetime
 WARN_DAYS = 30
 PENDING_WARN = timedelta(days=1)  # a renew is followed by its restart and probe in the same window
 STAGED = (".server.key.renew", ".server.crt.renew")
+# Distinct from 1 (an uncaught traceback) so the unit can treat warnings as
+# success: a failed unit stops Lab GPU work, an expiry warning must not.
+EXIT_WARNINGS = 10
 CA_MIN_DAYS = LEAF_DAYS + WARN_DAYS  # renewal refuses below this; the alert warns from it
 STORE = "tls-renewal"
 STAMP = re.compile(r"^[0-9]{8}T[0-9]{6}Z-(renew|rollback)(-[0-9]{1,2})?$")
@@ -792,7 +795,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, sort_keys=True))
             for warning in report["warnings"]:
                 print(f"internal TLS: {warning}", file=sys.stderr)
-            return 1 if report["warnings"] else 0
+            return EXIT_WARNINGS if report["warnings"] else 0
         if args.command == "renew":
             result = renew(ctx, args.leaf)
         elif args.command == "rollback":

@@ -92,7 +92,7 @@ leaf renewal never touches a client or restarts the BFF.
 
 All four commands take `--root /srv/home-agent/shared-preferences/prepared-20260928`.
 
-- `check-expiry` is read-only. It exits 1 if any of these holds:
+- `check-expiry` is read-only. It exits 10 if any of these holds:
   - a live leaf expires within 30 days
   - the CA has fewer than 120 days left
   - a required leaf is missing
@@ -140,12 +140,23 @@ directory is backed up, and saved leaves are needed only until a probe passes.
 
 Install only from the reviewed merge commit, and record the digests.
 `home-agent-internal-tls-expiry.timer` runs `check-expiry` daily at about
-09:20 local time. Like `observer-health` and `ha-health`, the unit fails on any
-warning, so `OnFailure=ntfy-alert@%n.service` pages, and
-`ntfy-alert-reset` clears the streak after a clean run. The check runs in a
-read-only sandbox and never reads a private key. Only the reset runs outside the
-sandbox (`ExecStartPost=+`), because it must clear `/run/ntfy-alert` and may
-send the RECOVERED notice. The journal names each warning.
+09:20 local time. The check runs in a read-only sandbox and never reads a
+private key. Its results are handled differently:
+
+- **Warnings** (exit 10) leave the unit successful. `ExecStopPost=+` reruns the
+  check and pages the warning lines through `ntfy-send` (tag
+  `internal-tls-expiry`), once a day until they clear. The unit never enters
+  the failed state for a warning, because the Lab worker preflight refuses GPU
+  work while any unit outside its allowlist is failed.
+- **Real errors** fail the unit: an unreadable or unsafe layout, a CA that
+  fails to load, or a crash. `OnFailure=ntfy-alert@%n.service` pages, as for
+  `observer-health`, and Lab GPU work stops until someone investigates. Do not
+  add this unit to the Lab allowlist.
+- `ntfy-alert-reset` clears the failure streak after each run that is not a
+  failure.
+
+Only these host alert helpers run outside the sandbox (`+`), because they write
+`/run/ntfy-alert` and the ntfy spool. The journal names each warning.
 
 ```sh
 cd /opt/home/home-github            # checkout at the reviewed merge commit

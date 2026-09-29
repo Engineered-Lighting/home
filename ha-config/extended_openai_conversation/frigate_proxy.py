@@ -24,6 +24,7 @@ module imports nothing from Home Assistant so it can be tested on its own.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -56,6 +57,17 @@ TRAIN_BUCKET = "train"
 # Raster formats only. SVG is an image type that can carry script, and it
 # would run on Home Assistant's origin if someone opened the URL directly.
 IMAGE_CONTENT_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+
+# Frigate 0.17 serves enrolled face files as application/octet-stream. For that
+# generic type only, a face file's type comes from its leading bytes, and only
+# when that signature is the one its own extension names.
+_GENERIC_CONTENT_TYPES = frozenset({"", "application/octet-stream"})
+_FACE_FILE_MEDIA = {
+    "webp": "image/webp",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+}
 
 UPSTREAM_TIMEOUT_S = 5.0
 MAX_JSON_BYTES = 4 * 1024 * 1024
@@ -102,6 +114,29 @@ def _default_client_factory(**kwargs: Any):
 
 _client_factory: ClientFactory = _default_client_factory
 _face_library_cache: dict[str, Any] = {"at": None, "library": None}
+_ssl_context_cache: dict[str, Any] = {"context": None}
+
+
+def _build_ssl_context():
+    import ssl
+
+    return ssl.create_default_context()
+
+
+async def _client_ssl_context():
+    """Build the TLS context once, off the event loop.
+
+    httpx.AsyncClient() otherwise loads the CA bundle on every construction,
+    which Home Assistant reports as a blocking call inside the event loop.
+    """
+
+    context = _ssl_context_cache["context"]
+    if context is None:
+        context = await asyncio.get_running_loop().run_in_executor(
+            None, _build_ssl_context
+        )
+        _ssl_context_cache["context"] = context
+    return context
 
 
 def reset_face_library_cache() -> None:
@@ -195,9 +230,10 @@ async def _fetch(path: str, *, max_bytes: int) -> tuple[str, bytes]:
     base = (_frigate_base_url() or "").rstrip("/")
     if not base:
         raise ProxyRejected(503, "frigate_not_configured")
+    verify = await _client_ssl_context()
     try:
         async with _client_factory(
-            timeout=UPSTREAM_TIMEOUT_S, follow_redirects=False
+            timeout=UPSTREAM_TIMEOUT_S, follow_redirects=False, verify=verify
         ) as client:
             response = await client.get(f"{base}/{path}")
     except Exception as error:  # noqa: BLE001 - any transport failure
@@ -263,6 +299,25 @@ def _image_response(media: str, body: bytes) -> web.Response:
     return web.Response(
         status=200, body=body, content_type=media, headers=dict(_IMAGE_HEADERS)
     )
+
+
+def _sniffed_image_media(body: bytes) -> str | None:
+    if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return "image/webp"
+    if body[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if body[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    return None
+
+
+def _face_file_media(media: str, body: bytes, file: str) -> str:
+    if media not in _GENERIC_CONTENT_TYPES:
+        return media
+    expected = _FACE_FILE_MEDIA[file.rsplit(".", 1)[1]]
+    if _sniffed_image_media(body) != expected:
+        raise ProxyRejected(502, "frigate_not_an_image")
+    return expected
 
 
 def _json_response(body: bytes) -> web.Response:
@@ -340,6 +395,6 @@ async def face_file(request: web.Request, name: str, file: str) -> web.Response:
             f"{quote(checked_name, safe='')}/{quote(checked_file, safe='')}",
             max_bytes=MAX_IMAGE_BYTES,
         )
-        return _image_response(media, body)
+        return _image_response(_face_file_media(media, body, checked_file), body)
 
     return await _guard(run)

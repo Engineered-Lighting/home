@@ -536,6 +536,68 @@ for label, content_type in (
     check(f"thumbnail: a {label} answer is refused with 502", response.status == 502,
           response.status)
 
+# Frigate 0.17 serves enrolled face files as application/octet-stream.
+WEBP_BYTES = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x00" * 16
+JPEG_BYTES = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 16
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+def _face_file_answer(name, file, body, content_type):
+    fresh()
+    from urllib.parse import quote
+    upstream.routes[f"clips/faces/{quote(name)}/{quote(file)}"] = _UpstreamResponse(
+        body=body, content_type=content_type
+    )
+    return _run(proxy.face_file(
+        _Request(proxy.URL_PREFIX + f"/faces/{quote(name)}/{quote(file)}"), name, file
+    ))
+
+
+for name, file, body, media in (
+    ("Alex", "alex-1.webp", WEBP_BYTES, "image/webp"),
+    ("Alex", "alex-2.jpg", JPEG_BYTES, "image/jpeg"),
+    ("Sam Lee", "sam.png", PNG_BYTES, "image/png"),
+):
+    response = _face_file_answer(name, file, body, "application/octet-stream")
+    check(f"face file: an octet-stream {file} is served as {media} from its signature",
+          response.status == 200 and response.body == body
+          and response.content_type == media
+          and response.headers.get("X-Content-Type-Options") == "nosniff"
+          and "sandbox" in response.headers.get("Content-Security-Policy", ""),
+          (response.status, response.content_type))
+
+response = _face_file_answer("Alex", "alex-1.webp", WEBP_BYTES, "")
+check("face file: a webp with no content type is served from its signature",
+      response.status == 200 and response.content_type == "image/webp",
+      (response.status, response.content_type))
+
+for label, body in (
+    ("HTML", b"<html><script>alert(1)</script></html>"),
+    ("SVG", b"<svg onload=alert(1)>"),
+    ("a RIFF that is not WEBP", b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 16),
+    ("JPEG bytes named .webp", JPEG_BYTES),
+    ("PNG bytes named .webp", PNG_BYTES),
+):
+    response = _face_file_answer("Alex", "alex-1.webp", body, "application/octet-stream")
+    check(f"face file: octet-stream {label} is refused with 502",
+          response.status == 502 and _body_json(response) == {"error": "frigate_not_an_image"},
+          response.status)
+
+response = _face_file_answer("Alex", "alex-2.jpg", WEBP_BYTES, "application/octet-stream")
+check("face file: WEBP bytes named .jpg are refused with 502", response.status == 502,
+      response.status)
+
+fresh()
+upstream.routes["api/events/1727650000.123456-abcd12/thumbnail.jpg"] = _UpstreamResponse(
+    body=JPEG_BYTES, content_type="application/octet-stream"
+)
+response = _run(proxy.thumbnail(
+    _Request(proxy.URL_PREFIX + "/events/1727650000.123456-abcd12/thumbnail.jpg"),
+    "1727650000.123456-abcd12",
+))
+check("thumbnail: octet-stream is still refused (signature fallback is face files only)",
+      response.status == 502, response.status)
+
 fresh()
 upstream.routes["api/events?sub_labels=Alex&limit=50&include_thumbnails=0"] = _UpstreamResponse(
     body=b'{"not": "a list"}'
@@ -607,14 +669,44 @@ _fake_httpx.AsyncClient = lambda **kwargs: recorded.append(kwargs) or "client"
 _saved_httpx = sys.modules.get("httpx")
 sys.modules["httpx"] = _fake_httpx
 try:
-    proxy._default_client_factory(timeout=proxy.UPSTREAM_TIMEOUT_S, follow_redirects=False)
+    proxy._default_client_factory(
+        timeout=proxy.UPSTREAM_TIMEOUT_S, follow_redirects=False, verify="ctx"
+    )
 finally:
     if _saved_httpx is None:
         sys.modules.pop("httpx", None)
     else:
         sys.modules["httpx"] = _saved_httpx
 check("the httpx client is built with follow_redirects=False",
-      recorded == [{"timeout": proxy.UPSTREAM_TIMEOUT_S, "follow_redirects": False}], recorded)
+      recorded == [{"timeout": proxy.UPSTREAM_TIMEOUT_S, "follow_redirects": False,
+                    "verify": "ctx"}], recorded)
+
+# The TLS context: built once, in an executor thread, and handed to every client.
+import threading
+
+_built_in: list[str] = []
+_saved_builder = proxy._build_ssl_context
+
+
+def _recording_builder():
+    _built_in.append(threading.current_thread().name)
+    return "tls-context"
+
+
+proxy._build_ssl_context = _recording_builder
+proxy._ssl_context_cache["context"] = None
+try:
+    fresh()
+    _run(proxy.faces(_Request(proxy.FACES_URL)))
+    _run(proxy.face_file(_Request(proxy.URL_PREFIX + "/faces/Alex/alex-1.webp"), "Alex", "alex-1.webp"))
+finally:
+    proxy._build_ssl_context = _saved_builder
+check("the TLS context is built once, off the event loop thread",
+      len(_built_in) == 1 and _built_in[0] != threading.main_thread().name, _built_in)
+check("every upstream client receives that cached TLS context",
+      upstream.client_kwargs
+      and all(kw.get("verify") == "tls-context" for kw in upstream.client_kwargs),
+      upstream.client_kwargs)
 
 
 # -- the views in __init__.py ----------------------------------------------

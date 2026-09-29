@@ -20,6 +20,9 @@ class _vol:
 
 
 sys.modules.setdefault("voluptuous", _vol)
+# _grounded_look imports aiohttp only to hand it to _reason_zoom, which the
+# tests replace; without a stub it returns early where aiohttp is absent (CI).
+sys.modules.setdefault("aiohttp", _mk("aiohttp"))
 ha = _mk("homeassistant")
 ha_core = _mk("homeassistant.core")
 ha_helpers = _mk("homeassistant.helpers")

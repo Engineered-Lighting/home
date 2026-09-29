@@ -95,8 +95,8 @@ IN_PACKAGE_SUITES = (
 # Already failing on main before the integration was reconciled with LA Home
 # Assistant, for a reason in the test harness itself (an exec'd slice that lost
 # its `re` import). Listed so a new test cannot go unrun by accident; fixing it
-# is separate work. test_grounded_look.py failed only against main's contained
-# const.py and passes against the live one, so it runs above.
+# is separate work. test_grounded_look.py needed aiohttp installed; it now stubs
+# it, so it runs above.
 IN_PACKAGE_KNOWN_BROKEN = (
     f"{HA_INTEGRATION}/test_friendly_error_speech.py",
 )

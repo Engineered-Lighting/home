@@ -117,6 +117,8 @@ def test_lighting_listener_profile_names_only_paths_and_the_serve_ports():
         "victoria": {"origin": "https://home-app.taild52a15.ts.net:10001",
                      "secret_file": "/run/secrets/victoria_home_secret"}}
     assert profile["grant_lifetime_seconds"] == 30 * 86400
+    # Never Core's own API login, which every Core listener reads from database_url.
+    assert profile["database_url_file"] == "/run/secrets/lighting_database_url"
     assert generator.build_lighting_profile(TAILNET, ["echo"])["homes"].keys() == {"echo"}
     for homes in ([], ["paris"], ["echo", "echo"]):
         with pytest.raises(ValueError):
@@ -136,7 +138,7 @@ def test_lighting_profile_passes_the_actual_core_loader(tmp_path):
         directory.mkdir()
     for name in ("credential", "action_key", "consent_key", "journal_key", "echo_home_secret", "victoria_home_secret"):
         (secrets_dir / name).write_bytes(secrets.token_hex(32).encode())
-    (secrets_dir / "database_url").write_bytes(b"postgresql://home_agent_lighting@db/home")
+    (secrets_dir / "lighting_database_url").write_bytes(b"postgresql://home_agent_lighting@db/home")
     for name in ("server.crt", "server.key"):
         (config / name).write_bytes(b"placeholder")
     profile = generator.build_lighting_profile(TAILNET, ["echo", "victoria"], secrets=secrets_dir.as_posix(),

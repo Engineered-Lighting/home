@@ -32,6 +32,7 @@ from .const import (
 from .helpers import get_authenticated_client
 from .identity_store import IdentityStore
 from .lighting_evidence import all_source_status, export_source_lines
+from . import frigate_proxy as _frigate_proxy
 from .frigate_sync import (
     auto_seed_identities_from_frigate,
     drain_pending_writes,
@@ -1446,51 +1447,72 @@ class PreferencesView(CORSHomeAssistantView):
         return self.json(result)
 
 
-class FrigateProxyView(CORSHomeAssistantView):
-    """GET /api/extended_openai_conversation/frigate_proxy?path=api/faces
+class FrigateEventsProxyView(CORSHomeAssistantView):
+    """GET /api/extended_openai_conversation/frigate_proxy/events?person=&limit=
 
-    Tauri ↔ Frigate cross-origin proxy. Frigate's nginx doesn't send
-    CORS headers, so the WebView2 fetch from tauri.localhost is blocked.
-    This view fetches Frigate server-side (no CORS gate) and returns the
-    response with our CORS-enabled view headers.
-
-    Whitelisted paths only — never an arbitrary URL passthrough. The
-    `clips/faces/<name>/<file>` images don't need proxying because
-    <img> tag loads don't trigger CORS preflight.
+    One person's Frigate sightings, newest first (Frigate's own order), for the
+    People tab. `person` must be an enrolled face-library name; `limit` is
+    1..200 (default 50). Returns Frigate's event list unchanged. See
+    `frigate_proxy.py` for the exact contract; this replaced a `?path=`
+    prefix passthrough that let `api/events/../config` reach Frigate's config.
     """
 
-    url = "/api/extended_openai_conversation/frigate_proxy"
-    name = "api:extended_openai_conversation:frigate_proxy"
+    url = _frigate_proxy.EVENTS_URL
+    name = "api:extended_openai_conversation:frigate_proxy_events"
     requires_auth = True
 
-    # Whitelist of allowed proxy paths (exact match or prefix match).
-    # api/events is the per-person sighting history. The face library is an
-    # ENROLLMENT set -- it only gains files when a human enrols someone, so
-    # reading it as "recent captures" showed people as last seen months ago
-    # while recognition was working fine. Still an exact prefix allowlist,
-    # never an arbitrary passthrough.
-    _ALLOWED_PREFIXES = ("api/faces", "api/events")
+    async def get(self, request: web.Request) -> web.Response:
+        return await _frigate_proxy.events(request)
+
+
+class FrigateEventThumbnailProxyView(CORSHomeAssistantView):
+    """GET /api/extended_openai_conversation/frigate_proxy/events/{event_id}/thumbnail.jpg"""
+
+    url = _frigate_proxy.THUMBNAIL_URL
+    name = "api:extended_openai_conversation:frigate_proxy_event_thumbnail"
+    requires_auth = True
+
+    async def get(self, request: web.Request, event_id: str) -> web.Response:
+        return await _frigate_proxy.thumbnail(request, event_id)
+
+
+class FrigateFacesProxyView(CORSHomeAssistantView):
+    """GET /api/extended_openai_conversation/frigate_proxy/faces
+
+    Frigate's face library listing, {name: [files]}, without the `train`
+    bucket of unclassified crops.
+    """
+
+    url = _frigate_proxy.FACES_URL
+    name = "api:extended_openai_conversation:frigate_proxy_faces"
+    requires_auth = True
 
     async def get(self, request: web.Request) -> web.Response:
-        path = (request.query.get("path") or "").lstrip("/")
-        if not path or not any(path.startswith(p) for p in self._ALLOWED_PREFIXES):
-            return self.json({"error": "path not allowed"}, status_code=400)
-        from .frigate_sync import base_url as _frigate_base_url
-        base = _frigate_base_url()
-        if not base:
-            return self.json({"error": "frigate not configured"}, status_code=503)
-        url = f"{base.rstrip('/')}/{path}"
-        import httpx
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url)
-            return web.Response(
-                body=resp.content,
-                status=resp.status_code,
-                content_type=resp.headers.get("content-type", "application/json"),
-            )
-        except Exception as e:  # noqa: BLE001
-            return self.json({"error": f"frigate fetch failed: {e}"}, status_code=502)
+        return await _frigate_proxy.faces(request)
+
+
+class FrigateFaceFileProxyView(CORSHomeAssistantView):
+    """GET /api/extended_openai_conversation/frigate_proxy/faces/{name}/{file}
+
+    One enrolled face image (webp/jpg/png) for a face-library name.
+    """
+
+    url = _frigate_proxy.FACE_FILE_URL
+    name = "api:extended_openai_conversation:frigate_proxy_face_file"
+    requires_auth = True
+
+    async def get(self, request: web.Request, name: str, file: str) -> web.Response:
+        return await _frigate_proxy.face_file(request, name, file)
+
+
+# The typed Frigate routes. Nothing is registered at the bare
+# `frigate_proxy` URL any more, so the old `?path=` form answers 404.
+FRIGATE_PROXY_VIEW_CLASSES = (
+    FrigateEventsProxyView,
+    FrigateEventThumbnailProxyView,
+    FrigateFacesProxyView,
+    FrigateFaceFileProxyView,
+)
 
 
 class AvatarView(CORSHomeAssistantView):
@@ -1677,7 +1699,7 @@ _LEGACY_PRIVATE_VIEW_CLASSES = (
     IdentityCreateView,
     RelationshipsView,
     PreferencesView,
-    FrigateProxyView,
+    *FRIGATE_PROXY_VIEW_CLASSES,
     AvatarView,
 )
 for _view_class in _LEGACY_PRIVATE_VIEW_CLASSES:
@@ -1783,7 +1805,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     for view_cls in (
         IdentityListView, IdentityDetailView, IdentityCreateView,
         RelationshipsView, PreferencesView, IdentityBackupView,
-        AvatarView, FrigateProxyView,
+        AvatarView, *FRIGATE_PROXY_VIEW_CLASSES,
     ):
         try:
             hass.http.register_view(view_cls())

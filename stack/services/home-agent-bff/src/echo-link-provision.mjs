@@ -23,7 +23,7 @@ export function loadEchoLinkProvision(file) {
     "linkIssuance", "victoriaHandoff", "linkReview", "victoriaBrowserOrigin"];
   if (!value || typeof value !== "object" || Array.isArray(value) || value.version !== 1 ||
       !fields.every(name=>Object.hasOwn(value,name)) ||
-      Object.keys(value).some(name=>!fields.includes(name) && !["personalMemory","personalMemoryHomeOrigins"].includes(name))) throw new Error("link_provision_shape_rejected");
+      Object.keys(value).some(name=>!fields.includes(name) && !["personalMemory","personalMemoryHomeOrigins","lighting"].includes(name))) throw new Error("link_provision_shape_rejected");
   const key = name => {
     const encoded = read(value[name], 128), bytes = Buffer.from(encoded, "base64url");
     if (!/^[A-Za-z0-9_-]{43}$/.test(encoded) || bytes.length !== 32 ||
@@ -48,6 +48,7 @@ export function loadEchoLinkProvision(file) {
     linkIssuance: transport("linkIssuance"), victoriaHandoff: transport("victoriaHandoff"),
     linkReview: transport("linkReview", "origin"),
     ...(Object.hasOwn(value,"personalMemory") ? {personalMemory:transport("personalMemory","origin")} : {}),
+    ...(Object.hasOwn(value,"lighting") ? {lighting:transport("lighting","origin")} : {}),
     personalMemoryHomeOrigins:value.personalMemoryHomeOrigins ?? [],
   };
 }

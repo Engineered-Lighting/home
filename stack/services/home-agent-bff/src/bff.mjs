@@ -8,6 +8,7 @@ import { QualifiedHaAuth } from "./qualified-ha-auth.mjs";
 import { EchoLinkReview } from "./echo-link-review.mjs";
 import { EchoLinkStart } from "./echo-link-start.mjs";
 import { PersonalMemoryClient } from "./personal-memory-client.mjs";
+import { LightingClient, LIGHTING_OPERATIONS } from "./lighting-client.mjs";
 import { SharedSessionRevocationOutbox } from "./shared-session-revocation-outbox.mjs";
 
 const COOKIE_NAME = "__Host-home_agent";
@@ -2031,7 +2032,7 @@ async function readBoundedCoreResponse(response) {
   }
 }
 
-function createBff(config, { fetchImpl = fetch, store, attestationStore, linkReview, linkStart, personalMemory } = {}) {
+function createBff(config, { fetchImpl = fetch, store, attestationStore, linkReview, linkStart, personalMemory, lighting } = {}) {
   if (store && (store.haIssuerId !== LEGACY_HA_ISSUER_ID || store.siteId !== LEGACY_SITE_ID)) {
     throw new Error("legacy BFF requires Echo sessions");
   }
@@ -2061,6 +2062,9 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
   }
   if (personalMemory !== undefined && (!(personalMemory instanceof PersonalMemoryClient) || !personalMemory.usesStore(sessions))) {
     throw new Error("personal memory requires the same authenticated session store");
+  }
+  if (lighting !== undefined && (!(lighting instanceof LightingClient) || !lighting.usesStore(sessions))) {
+    throw new Error("lighting requires the same authenticated session store");
   }
   const nativeAttestations = attestationStore || new NativeAttestationStore(
     config.nativeAttestationConfigured === true ? config.nativeInstallations : null,
@@ -2282,7 +2286,11 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
         "/api/agent/personal-memory/sharing-propose":"sharing-propose",
         "/api/agent/personal-memory/sharing-confirm":"sharing-confirm",
         "/api/agent/personal-memory/sharing-outcome":"sharing-outcome"})[url.pathname] : null;
-    const isFreshIdentityRoute = Boolean(memoryOperation || linkOperation || startOperation || authenticationOperation || victoriaAuthenticationOperation || preparingReview) || (
+    const lightingOperation = req.method === "POST" && !url.search && lighting &&
+      url.pathname.startsWith("/api/agent/lighting/") &&
+      LIGHTING_OPERATIONS.includes(url.pathname.slice("/api/agent/lighting/".length)) ?
+      url.pathname.slice("/api/agent/lighting/".length) : null;
+    const isFreshIdentityRoute = Boolean(memoryOperation || lightingOperation || linkOperation || startOperation || authenticationOperation || victoriaAuthenticationOperation || preparingReview) || (
       !url.search && (
         PRINCIPAL_BINDING_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`) ||
         PARENT_RELATIONSHIP_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`)
@@ -2309,6 +2317,34 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
         { error: "authentication_revoked" },
         { "Set-Cookie": clearSessionCookie(config.secureCookie) },
       );
+    }
+
+    if (lightingOperation) {
+      let rawBody;
+      const controller=new AbortController();
+      const disconnected=()=>controller.abort();
+      res.once("close",disconnected);
+      try {
+        if (req.headers["content-type"]!=="application/json" || req.headers["content-encoding"]) return json(res,415,{error:"json_required"});
+        rawBody=await readBody(req);
+        if (rawBody.length>2048) return json(res,413,{error:"body_too_large"});
+        const text=new TextDecoder("utf-8",{fatal:true}).decode(rawBody);
+        if (jsonHasDuplicateObjectKeys(text)) return json(res,422,{error:"invalid_lighting_request"});
+        const result=await lighting.request(sessionId,lightingOperation,JSON.parse(text),{signal:controller.signal});
+        if (!res.destroyed) return json(res,200,result);
+      } catch (error) {
+        // Malformed input and typed refusals are definite; anything else must be looked up.
+        if (res.destroyed) return;
+        if (error instanceof SyntaxError || ["invalid_lighting_request","invalid_lighting_operation"].includes(error?.message)) {
+          return json(res,422,{error:"invalid_lighting_request"});
+        }
+        return error?.message==="lighting_not_permitted" ?
+          json(res,403,{error:"lighting_not_permitted"}) : json(res,503,{error:"lighting_outcome_unknown"});
+      } finally {
+        rawBody?.fill(0);
+        res.removeListener("close",disconnected);
+      }
+      return;
     }
 
     if (memoryOperation) {
@@ -2390,6 +2426,7 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
         is_admin: session.principal.isAdmin,
         csrf_token: session.csrf,
         ...(linkReview ? { shared_link_review_enabled: true } : {}),
+        ...(lighting ? { lighting_enabled: true } : {}),
         ...(personalMemory ? { personal_memory_enabled: true,
           personal_memory_home_origins:config.personalMemoryHomeOrigins ?? [] } : {}),
         ...(linkStart ? { shared_link_start_enabled: true } : {}),

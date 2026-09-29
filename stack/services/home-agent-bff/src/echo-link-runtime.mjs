@@ -15,6 +15,7 @@ import { GovernedFreshHaCeremony } from "./governed-fresh-ha-ceremony.mjs";
 import { SharedAuthProofClient } from "./shared-auth-proof-client.mjs";
 import { SharedAuthProofJournal } from "./shared-auth-proof-journal.mjs";
 import { PersonalMemoryClient } from "./personal-memory-client.mjs";
+import { LightingClient } from "./lighting-client.mjs";
 
 // Trusted provisioning only. This factory neither reads browser configuration
 // nor enables itself in the legacy server. Keys must survive process restarts.
@@ -77,7 +78,9 @@ export function createEchoLinkRuntime(baseConfig, provision) {
     if (!linkStart.browserSetup) throw new Error("link_runtime_browser_setup_required");
     const personalMemory = provision.personalMemory ? new PersonalMemoryClient({
       ...provision.personalMemory,store,config,commitmentKey:provision.commitmentKey }) : undefined;
-    const server = createBff(config, { store, linkStart, linkReview: review, personalMemory });
+    const lighting = provision.lighting ? new LightingClient({
+      ...provision.lighting,store,config,commitmentKey:provision.commitmentKey }) : undefined;
+    const server = createBff(config, { store, linkStart, linkReview: review, personalMemory, lighting });
     outbox.startCleanup();
     // The caller stops/drains the HTTP server before closing owned journals.
     return Object.freeze({ server, close });

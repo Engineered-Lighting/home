@@ -56,6 +56,7 @@ const MAP = [
   [/^app\/src\/home-external\.jsx$/, ["run-external-tests"]],
   [/^app\/src\/home-look\.jsx$/, ["run-look-tests"]],
   [/^app\/src\/home-natural-look\.js$/, ["run-natural-look-routing-tests"]],
+  [/^app\/src\/home-lighting-intent\.js$/, ["run-lighting-intent-tests"]],
   [/^app\/src\/home-worldstate/, ["run-worldstate-tests"]],
   [/^app\/src\/home-spatial/, ["run-spatial-tests"]],
   [/^app\/src\/home-s2s\.jsx$/, ["run-s2s-tests"]],

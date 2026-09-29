@@ -22,6 +22,10 @@ def test_lighting_override_matches_the_hardened_private_listeners():
     assert all(volume["bind"]["create_host_path"] is False for volume in lighting["volumes"])
     assert {v["target"]: v["read_only"] for v in lighting["volumes"]}["/journals"] is False
     assert set(lighting["networks"]) == {"api", "database", "lighting-egress"}
+    # Both homes' endpoints are Serve ports on the LA host; its name is pinned to the
+    # Tailscale IPv4 exactly as for victoria-link, which the lighting firewall profile checks.
+    assert lighting["extra_hosts"] == base["services"]["victoria-link"]["extra_hosts"][:0] + [
+        "${HOME_AGENT_VICTORIA_HA_HOSTNAME:?set HA origin hostname}:${HOME_AGENT_HA_TAILSCALE_IPV4:?set pinned Tailscale IPv4}"]
     network = override["networks"]["lighting-egress"]
     assert network["name"] == "home-agent_lighting-egress" and network["enable_ipv6"] is False
     assert "lighting" not in base["services"]  # existing commands never need lighting variables

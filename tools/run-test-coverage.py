@@ -121,6 +121,8 @@ SUITES: list[Suite] = [
              desc="world state aggregator + identity context"),
     _py_test("ha-config/extended_openai_conversation/test_external_routing.py",
              desc="external routing classifier + privacy"),
+    _py_test("ha-config/extended_openai_conversation/test_cross_home_guard.py",
+             desc="LA assistant declines actions on Victoria or both homes"),
     _py_test("ha-config/extended_openai_conversation/test_native.py",
              desc="native.py media_player area->entity resolver"),
     _py_test("ha-config/extended_openai_conversation/test_registry.py",

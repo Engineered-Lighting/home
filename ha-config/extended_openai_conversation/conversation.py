@@ -55,6 +55,7 @@ from .exceptions import (
 )
 from .functions import get_function
 from .helpers import get_exposed_entities
+from .cross_home_guard import cross_home_action_reply
 from .room_binding import bind, parse_marker, resolve
 from .skills import Skill, SkillManager
 
@@ -595,6 +596,21 @@ class ExtendedOpenAIAgentEntity(
                     continue_conversation=False,
                 )
             # 5. Not muted, no mute/resume command — fall through to normal processing.
+
+        # ── Cross-home action guard ─────────────────────────────
+        # This assistant never acts on Victoria or "both homes", and must not
+        # claim to. Home's confirmed cross-home lighting does that instead.
+        # Deterministic and pre-model; questions about Victoria pass through.
+        _cross_home_reply = cross_home_action_reply(user_input.text)
+        if _cross_home_reply:
+            _LOGGER.info("cross-home action request declined")
+            resp = intent.IntentResponse(language=user_input.language)
+            resp.async_set_speech(_cross_home_reply)
+            return conversation.ConversationResult(
+                response=resp,
+                conversation_id=user_input.conversation_id,
+                continue_conversation=False,
+            )
 
         dev = getattr(user_input, "device_id", None)
         # Proactive room binding: the Home app tags a room-entry prompt's

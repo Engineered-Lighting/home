@@ -29,6 +29,13 @@ test("deployable image contains every asset required by origin readiness", () =>
   }
 });
 
+test("review fonts are Home's exact Geist faces", () => {
+  const repo = new URL("../../../../app/src/", import.meta.url);
+  for (const name of ["geist-latin.woff2", "geist-mono-latin.woff2"]) {
+    assert.deepEqual(fs.readFileSync(new URL(`home-agent/${name}`, repo)), fs.readFileSync(new URL(`vendor/fonts/${name}`, repo)), name);
+  }
+});
+
 function makeAssets() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "home-agent-origin-"));
   for (const [name, body] of [
@@ -39,6 +46,8 @@ function makeAssets() {
     ["preference-review.html", "<!doctype html><title>Preference review</title>"],
     ["preference-review.js", "globalThis.preferenceReview = true;"],
     ["preference-review.css", "body { color: white; }"],
+    ["geist-latin.woff2", "wOF2-sans"],
+    ["geist-mono-latin.woff2", "wOF2-mono"],
   ]) fs.writeFileSync(path.join(root, name), body);
   return root;
 }
@@ -332,7 +341,7 @@ test("deployment has pinned internal ingress and no host port or egress network"
   assert.doesNotMatch(compose, /^\s+volumes:/m);
   const dockerfile = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
   const assetCopies = dockerfile.match(/^COPY --from=agent_assets .+$/gm) || [];
-  assert.equal(assetCopies.length, 7);
+  assert.equal(assetCopies.length, STATIC_ASSETS.size - 1);
   assert.doesNotMatch(dockerfile, /^COPY\s+\.\s/m);
 });
 
@@ -518,7 +527,11 @@ test("only the preference review may be framed, and only by provisioned Home ori
     assert.match(csp, /(^|; )frame-ancestors https:\/\/home\.test(;|$)/);
     assert.match(csp, /default-src 'none'/);
     assert.match(csp, /frame-src 'none'/);
-    for (const asset of ["/home-agent/", "/home-agent/preference-review.js", "/home-agent/preference-review.css", "/home-agent/api.js"]) {
+    const font = await request(f.originPort, "/home-agent/geist-latin.woff2");
+    assert.equal(font.status, 200);
+    assert.equal(font.headers["content-type"], "font/woff2");
+    assert.equal(font.headers["cross-origin-resource-policy"], "same-origin");
+    for (const asset of ["/home-agent/", "/home-agent/preference-review.js", "/home-agent/preference-review.css", "/home-agent/api.js", "/home-agent/geist-mono-latin.woff2"]) {
       const other = await request(f.originPort, asset);
       assert.equal(other.headers["x-frame-options"], "DENY", asset);
       assert.match(other.headers["content-security-policy"], /frame-ancestors 'none'/, asset);

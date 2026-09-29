@@ -14,6 +14,9 @@ const STATIC_ASSETS = new Map([
   ["/home-agent/preference-review.html", ["preference-review.html", "text/html; charset=utf-8", "no-store"]],
   ["/home-agent/preference-review.js", ["preference-review.js", "text/javascript; charset=utf-8", "private, no-cache"]],
   ["/home-agent/preference-review.css", ["preference-review.css", "text/css; charset=utf-8", "private, no-cache"]],
+  // Home's Geist faces, so the inline review card matches the Home chat.
+  ["/home-agent/geist-latin.woff2", ["geist-latin.woff2", "font/woff2", "private, max-age=86400"]],
+  ["/home-agent/geist-mono-latin.woff2", ["geist-mono-latin.woff2", "font/woff2", "private, max-age=86400"]],
 ]);
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const BROWSER_API_ROUTES = Object.freeze([

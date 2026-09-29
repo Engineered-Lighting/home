@@ -32,16 +32,23 @@
     } catch {emit({kind:"home",text:"The trusted preference review is not configured yet."});return true;}
     const nonce=root.crypto.randomUUID().replace(/-/g,"");
     const frame=root.document.createElement("iframe");
-    frame.src=origin+"/home-agent/preference-review.html#"+nonce;
+    const theme=root.document.documentElement.dataset.theme==="light" ? "light" : "dark";
+    frame.src=origin+"/home-agent/preference-review.html#"+nonce+"."+theme;
     frame.title="Shared preference review";
     frame.referrerPolicy="no-referrer";
     frame.setAttribute("allow","");
-    frame.style.cssText="display:block;width:100%;max-width:520px;height:176px;border:0;border-radius:10px;background:#141a18;color-scheme:dark";
-    let timer,deadline,done=false,loads=0,confirming=false;
+    // Transparent: the card draws on Home's own surface in Home's theme.
+    frame.style.cssText="display:block;width:100%;max-width:560px;height:150px;border:0;background:transparent;color-scheme:"+theme;
+    let timer,deadline,done=false,loads=0,confirming=false,slot=null;
     const valid=()=>!done && options.isCurrent();
-    const dispose=()=>{
+    // A card closed without a chat reply leaves a short note in its place.
+    const dispose=note=>{
       done=true;clearInterval(timer);clearTimeout(deadline);root.removeEventListener("message",receive);
       frame.remove();
+      if(note && slot) {
+        slot.textContent=note;
+        slot.style.cssText="margin-top:6px;font-family:'Geist Mono',ui-monospace,monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--hg-fg-4)";
+      }
       if(active===handle) active=null;
     };
     const reply=text=>emit({kind:"home",text});
@@ -70,7 +77,7 @@
         value.status==="saved" ? `Saved: ${value.tone} lighting in the evening, for both homes. Your lights have not been changed.` : messages[value.status];
       reply(message);
       // A pending outcome keeps the card so its lookup stays reachable.
-      if(value.status!=="pending") dispose();
+      if(value.status!=="pending") dispose(value.status==="read" ? null : "review closed");
     };
     frame.addEventListener("load",()=>{
       // A reloaded or re-attached frame lost its nonce; never re-bind it.
@@ -79,7 +86,7 @@
         "The preference review closed. Nothing was confirmed.");
       dispose();
     });
-    const handle={cancel(){dispose();}};
+    const handle={cancel(){dispose(confirming ? "closed after confirming \u00b7 ask again to check" : "closed \u00b7 nothing changed");}};
     active=handle;root.addEventListener("message",receive);
     timer=setInterval(()=>{
       if(!valid()) {handle.cancel();return;}
@@ -90,10 +97,11 @@
         "The preference review timed out. Nothing was confirmed.");
       dispose();
     },300000);
-    const intro={read:"Checking your shared preference…",forget:"Review below to forget this preference in both homes.",
+    const intro={read:"Checking your shared preference\u2026",forget:"Review below to forget this preference in both homes.",
       remember:"Review below to save this preference for both homes.",correct:"Review below to update this preference for both homes."}[intent.operation];
     emit({kind:"personal-memory-review",text:intro,mountReview(container) {
       if(done || !container) return ()=>{};
+      slot=container;
       if(frame.parentNode!==container) container.appendChild(frame);
       return ()=>{if(frame.parentNode===container && !done) frame.remove();};
     }});

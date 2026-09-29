@@ -342,17 +342,109 @@
 
   /* ── Addendum 24 helpers: Frigate face crops ────────────────── */
 
-  /** Compatibility surface retained for callers from the legacy UI.
-   *  E4 intentionally returns no URLs: direct browser crop loads cannot
-   *  authenticate and can be retained by browser/network caches. */
-  function frigateFaceCropUrls() {
-    return {
-      count: 0,
-      urls: [],
-      frigateName: null,
-      disabled: true,
-      reason: "legacy_face_thumbnails_disabled",
-    };
+  /* Owner policy (2026-09-29): Frigate images reach the browser only through
+   * Home Assistant's typed, authenticated proxy routes under
+   * <endpoint>/api/extended_openai_conversation/frigate_proxy/. The browser
+   * is never given a Frigate origin, never loads Frigate clip paths, and
+   * never passes a Frigate path as a query parameter. Callers fetch these
+   * URLs with the HA bearer token and show the bytes from a blob URL. */
+  const FRIGATE_IGNORED_BUCKETS = new Set(["train"]);
+  const FRIGATE_FACE_FILE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,254}\.(webp|jpg|png)$/i;
+  const FRIGATE_EVENT_ID = /^[0-9]+\.[0-9]+-[a-z0-9]+$/;
+  const FRIGATE_SIGHTINGS_MAX = 200;
+
+  function frigateProxyBase(endpoint) {
+    if (!endpoint) return null;
+    return `${String(endpoint).replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy`;
+  }
+
+  // Frigate writes two filename shapes: "name-<unix>.webp" from one cohort
+  // and "name_<unix>.webp" from another. A parser that knows only one
+  // returns 0 for every file in the other, so sorting silently does nothing.
+  function frigateCropTimestamp(fileName) {
+    const match = String(fileName || "").match(/[-_](\d{9,10})(?:\.\d+)?\.[a-z]+$/i);
+    return match ? Number(match[1]) : 0;
+  }
+
+  /** Given the face-library listing ({name: [file, ...]}, or {name: count}
+   *  from a metadata-only listing), an identity, and the HA endpoint, return
+   *  the enrolled reference photos for that identity, newest first.
+   *
+   *  Lookup order: identity.aliases with kind "frigate_name", then the
+   *  lower-cased display_name. "train" is Frigate's recognition bucket, not
+   *  a person, and never matches. Names and files are URL-encoded (names
+   *  like "marcelo sr" contain spaces); files that are not a plain image
+   *  name are dropped rather than sent. */
+  function frigateFaceCropUrls(facesByPerson, identity, endpoint) {
+    const none = { count: 0, urls: [], files: [], newestAt: null, frigateName: null };
+    const base = frigateProxyBase(endpoint);
+    if (!identity || !facesByPerson || typeof facesByPerson !== "object" || !base) return none;
+    const candidates = [];
+    if (Array.isArray(identity.aliases)) {
+      for (const a of identity.aliases) {
+        if (a && a.kind === "frigate_name" && a.alias) candidates.push(String(a.alias));
+      }
+    }
+    if (identity.display_name) candidates.push(String(identity.display_name).trim().toLowerCase());
+    for (const cand of candidates) {
+      if (!cand || FRIGATE_IGNORED_BUCKETS.has(cand.trim().toLowerCase())) continue;
+      if (!Object.prototype.hasOwnProperty.call(facesByPerson, cand)) continue;
+      const bucket = facesByPerson[cand];
+      if (Number.isInteger(bucket) && bucket > 0) {
+        return { ...none, count: bucket, frigateName: cand };
+      }
+      if (!Array.isArray(bucket) || bucket.length === 0) continue;
+      // Frigate returns readdir order, which is arbitrary, and callers show a
+      // handful -- so without sorting they hide crops at random rather than
+      // the oldest.
+      const files = bucket
+        .filter((f) => typeof f === "string" && FRIGATE_FACE_FILE.test(f))
+        .sort((a, b) => frigateCropTimestamp(b) - frigateCropTimestamp(a));
+      const folder = encodeURIComponent(cand);
+      return {
+        count: files.length,
+        files,
+        urls: files.map((f) => `${base}/faces/${folder}/${encodeURIComponent(f)}`),
+        newestAt: files.length ? (frigateCropTimestamp(files[0]) || null) : null,
+        frigateName: cand,
+      };
+    }
+    return none;
+  }
+
+  /** The typed sightings route: Frigate events whose sub-label is this
+   *  face-library name, at most 200. */
+  function frigateSightingsUrl(endpoint, frigateName, limit) {
+    const base = frigateProxyBase(endpoint);
+    const name = String(frigateName || "");
+    if (!base || !name || FRIGATE_IGNORED_BUCKETS.has(name.trim().toLowerCase())) return null;
+    const n = Math.max(1, Math.min(FRIGATE_SIGHTINGS_MAX, Math.floor(Number(limit) || FRIGATE_SIGHTINGS_MAX)));
+    return `${base}/events?person=${encodeURIComponent(name)}&limit=${n}`;
+  }
+
+  /** The typed thumbnail route for one event. Ids that are not Frigate's
+   *  "<seconds>.<fraction>-<suffix>" shape get no URL at all. */
+  function frigateEventThumbnailUrl(endpoint, eventId) {
+    const base = frigateProxyBase(endpoint);
+    const id = String(eventId || "");
+    if (!base || !FRIGATE_EVENT_ID.test(id)) return null;
+    return `${base}/events/${encodeURIComponent(id)}/thumbnail.jpg`;
+  }
+
+  /** Frigate's events JSON → [{id, camera, startedAt, score}], newest first,
+   *  keeping only events with a well-formed id. */
+  function normalizeFrigateSightings(events) {
+    if (!Array.isArray(events)) return [];
+    return events
+      .filter((e) => e && typeof e === "object" && FRIGATE_EVENT_ID.test(String(e.id || "")))
+      .map((e) => ({
+        id: String(e.id),
+        camera: typeof e.camera === "string" ? e.camera : null,
+        startedAt: Number(e.start_time) || 0,
+        score: e.data && typeof e.data.sub_label_score === "number" ? e.data.sub_label_score : null,
+      }))
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, FRIGATE_SIGHTINGS_MAX);
   }
 
   /* ── Addendum 23 helpers: hover state ─────────────────────────── */
@@ -635,6 +727,13 @@
     neighbor:          { stroke: "var(--hg-fg-3)", width: 0.8, dash: "4,2" },
     service:           { stroke: "var(--hg-fg-3)", width: 0.8, dash: "4,2" },
     guest:             { stroke: "var(--hg-fg-3)", width: 0.8, dash: "4,2" },
+    // The agent authority names edges by kind (partner, parent, sibling,
+    // roommate, friend, neighbor, colleague) rather than by the per-person
+    // category above. Without these, parent/sibling/colleague edges fell
+    // through to the anonymous fallback and drew as unknown links.
+    parent:            { stroke: "var(--hg-fg-1)", width: 1.8, dash: null },
+    sibling:           { stroke: "var(--hg-fg-1)", width: 1.5, dash: null },
+    colleague:         { stroke: "var(--hg-fg-2)", width: 1.0, dash: null },
   };
   const EDGE_STYLE_ENDED = { stroke: "var(--hg-fg-4)", width: 0.6, dash: "1,2" };
 
@@ -799,8 +898,12 @@
     // Addendum 23 — hover state helpers
     connectedUuidsForHovered,
     tooltipPlacement,
-    // Addendum 24 — Frigate face-crop URL builder
+    // Addendum 24 — Frigate images, typed HA proxy routes only
     frigateFaceCropUrls,
+    frigateCropTimestamp,
+    frigateSightingsUrl,
+    frigateEventThumbnailUrl,
+    normalizeFrigateSightings,
     // Addendum 24 Phase 3 — custom avatar URL builder
     avatarUrl,
   };

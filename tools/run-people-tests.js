@@ -683,29 +683,85 @@ process.stdout.write("\n[1mhover state helpers (Addendum 23)[0m\n");
 })();
 
 /* ────────────────────────────────────────────────────────────────────────
- * Suite — Addendum 24: Frigate face-crop URL builder
+ * Suite — Frigate images through the typed HA proxy only (owner policy,
+ * 2026-09-29)
  *
- * Catches regressions in frigateFaceCropUrls. Key edge cases:
+ * Images reach the browser only via
+ * <endpoint>/api/extended_openai_conversation/frigate_proxy/... typed
+ * routes: never a Frigate origin, never /clips/faces/ directly, never a
+ * ?path= passthrough. Key edge cases:
  * - Folder names with spaces ("marcelo sr") MUST be URL-encoded
  * - Frigate-alias lookup beats display_name fallback
- * - Empty facesByPerson / null identity returns {count:0,urls:[]}
+ * - Both crop filename shapes sort newest first
+ * - "train" is never a person
  * ──────────────────────────────────────────────────────────────── */
-process.stdout.write("\n[1mlegacy face-thumbnail containment (E4)[0m\n");
+process.stdout.write("\n[1mFrigate images via the typed HA proxy (owner policy)[0m\n");
 
 (function () {
+  const TYPED = "/proxy/ha/api/extended_openai_conversation/frigate_proxy/";
   const r = H.frigateFaceCropUrls(
-    { marcelo: ["face.webp"] },
-    { display_name: "Marcelo" },
-    "http://frigate.invalid",
+    { "marcelo sr": ["marcelo sr-1715000000.webp", "marcelo sr_1720000000.webp", "../config.webp", "x.gif"], marcelo: ["m.webp"] },
+    { display_name: "Marcelo", aliases: [{ kind: "frigate_name", alias: "marcelo sr" }] },
+    "/proxy/ha/",
   );
-  assert("compatibility helper returns no browser URLs",
-    r.count === 0 && Array.isArray(r.urls) && r.urls.length === 0, r);
-  assert("compatibility helper declares the containment reason",
-    r.disabled === true && r.reason === "legacy_face_thumbnails_disabled", r);
-  assert("People source has no direct Frigate face-crop path",
-    !peopleSource.includes("/clips/faces/"));
+  assert("enrolled photos use the typed faces route, alias first, encoded",
+    r.frigateName === "marcelo sr" && r.count === 2 &&
+    r.urls[0] === `${TYPED}faces/marcelo%20sr/marcelo%20sr_1720000000.webp` &&
+    r.urls[1] === `${TYPED}faces/marcelo%20sr/marcelo%20sr-1715000000.webp`, r);
+  assert("enrolled photos are newest first across both filename shapes",
+    r.newestAt === 1720000000 && r.files[0] === "marcelo sr_1720000000.webp", r);
+  assert("unsafe or non-image face files are dropped, not sent",
+    !r.urls.some((u) => u.includes("config") || u.includes(".gif")), r.urls);
+  assert("display_name fallback is lower-cased",
+    H.frigateFaceCropUrls({ ana: ["ana-1715000000.webp"] }, { display_name: "Ana" }, "/proxy/ha").frigateName === "ana");
+  assert("the train bucket never matches a person",
+    H.frigateFaceCropUrls({ train: ["a-1715000000.webp"] }, { display_name: "Train" }, "/proxy/ha").count === 0 &&
+    H.frigateSightingsUrl("/proxy/ha", "train", 10) === null);
+  assert("a metadata-only listing yields a count and no URLs",
+    (() => { const m = H.frigateFaceCropUrls({ ana: 3 }, { display_name: "Ana" }, "/proxy/ha"); return m.count === 3 && m.urls.length === 0 && m.frigateName === "ana"; })());
+  assert("empty inputs return no URLs",
+    H.frigateFaceCropUrls(null, { display_name: "A" }, "/proxy/ha").urls.length === 0 &&
+    H.frigateFaceCropUrls({ a: ["a.webp"] }, null, "/proxy/ha").urls.length === 0 &&
+    H.frigateFaceCropUrls({ a: ["a.webp"] }, { display_name: "A" }, "").urls.length === 0);
+  assert("sightings use the typed events route with a clamped limit",
+    H.frigateSightingsUrl("/proxy/ha", "marcelo sr", 999) === `${TYPED}events?person=marcelo%20sr&limit=200` &&
+    H.frigateSightingsUrl("/proxy/ha", "ana", 0) === `${TYPED}events?person=ana&limit=200` &&
+    H.frigateSightingsUrl("/proxy/ha", "ana", 5) === `${TYPED}events?person=ana&limit=5`);
+  assert("sighting thumbnails use the typed thumbnail route; malformed ids get none",
+    H.frigateEventThumbnailUrl("/proxy/ha", "1720000000.123-ab12cd") === `${TYPED}events/1720000000.123-ab12cd/thumbnail.jpg` &&
+    H.frigateEventThumbnailUrl("/proxy/ha", "../config") === null &&
+    H.frigateEventThumbnailUrl("/proxy/ha", "1.2-AB") === null);
+  const sightings = H.normalizeFrigateSightings([
+    { id: "1700000000.1-aa", camera: "door", start_time: 1700000000 },
+    { id: "bad id", camera: "x", start_time: 1800000000 },
+    { id: "1710000000.2-bb", camera: "hall", start_time: 1710000000, data: { sub_label_score: 0.9 } },
+  ]);
+  assert("sightings are newest first and keep only well-formed ids",
+    sightings.length === 2 && sightings[0].id === "1710000000.2-bb" && sightings[0].score === 0.9, sightings);
+  assert("crop timestamps parse both filename shapes",
+    H.frigateCropTimestamp("a-1715000000.webp") === 1715000000 &&
+    H.frigateCropTimestamp("a_1720000000.5.webp") === 1720000000 &&
+    H.frigateCropTimestamp("a.webp") === 0);
+  const helperSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-people-helpers.js"), "utf8");
+  for (const [label, source] of [["People", peopleSource], ["People helpers", helperSource]]) {
+    assert(`${label} source has no direct Frigate face-crop path`,
+      !source.includes("/clips/faces/"));
+    assert(`${label} source has no ?path= Frigate passthrough`,
+      !/frigate_proxy\?|[?&]path=/.test(source));
+    assert(`${label} source never reads or builds a Frigate origin`,
+      !/frigate_url|frigateUrl|frigateBaseUrl|:5000\b|\/api\/events\//.test(source));
+  }
+  assert("People images are fetched with the HA token and shown from revoked blob URLs",
+    peopleSource.includes("function PeopleAuthedImage(") &&
+    /PeopleAuthedImage[\s\S]*Authorization: `Bearer \$\{token\}`[\s\S]*cache: "no-store"[\s\S]*URL\.revokeObjectURL\(created\)/.test(peopleSource));
   assert("legacy inspector explains why thumbnails are absent",
     peopleSource.includes("Face thumbnails are disabled in the legacy inspector during cutover."));
+  assert("Agent headshots use the profile-store avatar route and are never probed",
+    peopleSource.includes("/api/extended_openai_conversation/agent_profile/${id}/avatar") &&
+    peopleSource.includes('if (i.source === "agent_authority" || !peopleIdentityMayHaveAvatar(i))'));
+  assert("edge styles cover the agent vocabulary",
+    ["partner", "parent", "sibling", "roommate", "friend", "neighbor", "colleague"]
+      .every((k) => H.EDGE_STYLE[k] && H.edgeStyleFor(k, "active") === H.EDGE_STYLE[k]));
 })();
 
 /* ────────────────────────────────────────────────────────────────────────

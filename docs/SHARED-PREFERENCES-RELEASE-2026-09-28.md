@@ -3,6 +3,34 @@
 Status: **shared preferences live and accepted in authenticated Home** (desktop), 2026-09-28.
 Phone-size (375×812) acceptance is still pending.
 
+## Internal TLS expiry alert installed — 2026-09-29 ~07:26 UTC
+
+The expiry check from #170 and #171 (merge commit `7b661cf6`) is installed on LA. The leaves were not renewed.
+
+- **Pre-operation checks:**
+  - The system was `degraded` only because of four failed units: the two superseded off-host backup units,
+    `observer-recover` and `observer-health`.
+  - `observer-health` has been failing since 2026-09-20. Its watched Lab unit `vjepa-live-prototype` has refused every
+    start since the 2026-09-20 12:16 PDT global OOM kill of vLLM. That was reported to the Lab session for inspection.
+  - Home Agent containers were up, the encrypted volume had 58 GB free, and Tctl was 59 °C. The only kernel faults in
+    this boot were the 09-17 and 09-20 vLLM OOM kills.
+- **Source:** the clean `/opt/home/reviewed-main`, moved to `7b661cf6` (detached). `/opt/home/home-github` has
+  uncommitted changes and was not used.
+- **Installed:**
+  - `/usr/local/libexec/home-agent/shared-preferences/renew_internal_tls.py` (root 0555)
+  - `/etc/systemd/system/home-agent-internal-tls-expiry.{service,timer}` (0644)
+  - Each blob digest matched the merge commit. The receipt is `/srv/home-agent/config/internal-tls-renewal-install.sha256`
+    (root 0600), listing tool `b0b01b0f…`, service `0a021f0f…` and timer `13b538f1…`.
+- **First run, in the unit's sandbox:** `Result=success`, exit 0, no warnings.
+  - All six leaves are `ok` with 89 days left; `lighting` is absent.
+  - The CA has 364 days left, sha256 `d3e2b4b2…`.
+  - The run wrote no `tls-renewal/` store, sent no alert and touched no container.
+- **Timer:** enabled, running daily around 09:20 PDT.
+  - Warnings exit 10 and page through `ntfy-send` without failing the unit, because the Lab worker preflight refuses GPU
+    work while any unit is failed.
+  - Real errors fail the unit and page through `OnFailure`.
+- **Failed units:** unchanged by the install. The Lab session was notified before and after, with no collision.
+
 ## Live acceptance — ~22:40–23:05 UTC
 
 The owner typed every credential and made every confirmation. Claude checked server state between steps.
@@ -275,7 +303,10 @@ remain outside this release's replacement scope.
 - After a sustained resource check, move the five private services (`echo-identity`, `victoria-identity`, `link-coordinator`,
   `echo-preferences`, `victoria-link`) from `restart: no` to a restarting policy, through a reviewed compose change.
 - In-chat preference confirmation, to replace the separate Agent window.
-- Internal TLS leaves expire 2026-12-27; renew them before then with `renew_internal_tls.py`, following the
-  shared-preferences README (Internal TLS renewal). The daily expiry alert warns from about 2026-11-27.
+- Internal TLS leaves expire 2026-12-27.
+  - The expiry alert is installed (2026-09-29, above) and pages from about 2026-11-27.
+  - Renew before 2026-12-27 with the installed `renew_internal_tls.py`, following the shared-preferences README
+    (Internal TLS renewal). Put the victoria-link ingress leaf last, in an owner-chosen window with sign-out and sign-in.
+  - CA rotation needs its own reviewed change before about 2027-05-31.
 
 Lighting and travel defaults remain inactive milestones.

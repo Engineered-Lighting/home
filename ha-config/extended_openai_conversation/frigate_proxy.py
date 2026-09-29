@@ -24,6 +24,7 @@ module imports nothing from Home Assistant so it can be tested on its own.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -113,6 +114,29 @@ def _default_client_factory(**kwargs: Any):
 
 _client_factory: ClientFactory = _default_client_factory
 _face_library_cache: dict[str, Any] = {"at": None, "library": None}
+_ssl_context_cache: dict[str, Any] = {"context": None}
+
+
+def _build_ssl_context():
+    import ssl
+
+    return ssl.create_default_context()
+
+
+async def _client_ssl_context():
+    """Build the TLS context once, off the event loop.
+
+    httpx.AsyncClient() otherwise loads the CA bundle on every construction,
+    which Home Assistant reports as a blocking call inside the event loop.
+    """
+
+    context = _ssl_context_cache["context"]
+    if context is None:
+        context = await asyncio.get_running_loop().run_in_executor(
+            None, _build_ssl_context
+        )
+        _ssl_context_cache["context"] = context
+    return context
 
 
 def reset_face_library_cache() -> None:
@@ -206,9 +230,10 @@ async def _fetch(path: str, *, max_bytes: int) -> tuple[str, bytes]:
     base = (_frigate_base_url() or "").rstrip("/")
     if not base:
         raise ProxyRejected(503, "frigate_not_configured")
+    verify = await _client_ssl_context()
     try:
         async with _client_factory(
-            timeout=UPSTREAM_TIMEOUT_S, follow_redirects=False
+            timeout=UPSTREAM_TIMEOUT_S, follow_redirects=False, verify=verify
         ) as client:
             response = await client.get(f"{base}/{path}")
     except Exception as error:  # noqa: BLE001 - any transport failure

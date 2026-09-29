@@ -669,14 +669,44 @@ _fake_httpx.AsyncClient = lambda **kwargs: recorded.append(kwargs) or "client"
 _saved_httpx = sys.modules.get("httpx")
 sys.modules["httpx"] = _fake_httpx
 try:
-    proxy._default_client_factory(timeout=proxy.UPSTREAM_TIMEOUT_S, follow_redirects=False)
+    proxy._default_client_factory(
+        timeout=proxy.UPSTREAM_TIMEOUT_S, follow_redirects=False, verify="ctx"
+    )
 finally:
     if _saved_httpx is None:
         sys.modules.pop("httpx", None)
     else:
         sys.modules["httpx"] = _saved_httpx
 check("the httpx client is built with follow_redirects=False",
-      recorded == [{"timeout": proxy.UPSTREAM_TIMEOUT_S, "follow_redirects": False}], recorded)
+      recorded == [{"timeout": proxy.UPSTREAM_TIMEOUT_S, "follow_redirects": False,
+                    "verify": "ctx"}], recorded)
+
+# The TLS context: built once, in an executor thread, and handed to every client.
+import threading
+
+_built_in: list[str] = []
+_saved_builder = proxy._build_ssl_context
+
+
+def _recording_builder():
+    _built_in.append(threading.current_thread().name)
+    return "tls-context"
+
+
+proxy._build_ssl_context = _recording_builder
+proxy._ssl_context_cache["context"] = None
+try:
+    fresh()
+    _run(proxy.faces(_Request(proxy.FACES_URL)))
+    _run(proxy.face_file(_Request(proxy.URL_PREFIX + "/faces/Alex/alex-1.webp"), "Alex", "alex-1.webp"))
+finally:
+    proxy._build_ssl_context = _saved_builder
+check("the TLS context is built once, off the event loop thread",
+      len(_built_in) == 1 and _built_in[0] != threading.main_thread().name, _built_in)
+check("every upstream client receives that cached TLS context",
+      upstream.client_kwargs
+      and all(kw.get("verify") == "tls-context" for kw in upstream.client_kwargs),
+      upstream.client_kwargs)
 
 
 # -- the views in __init__.py ----------------------------------------------

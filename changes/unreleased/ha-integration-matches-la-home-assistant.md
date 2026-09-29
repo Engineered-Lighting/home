@@ -10,6 +10,10 @@ store and translations, so it can be deployed from the repo again. Nothing
 changes on Home Assistant. The reviewed E4 identity cutover and action
 containment design that LA does not run moves unchanged to
 `ha-config/extended_openai_conversation_e4_reference/`, where its tests and
-the E4 operator tooling still point. The Apartment engineered-fixture
-validation, which was never deployed, is kept only in that reference copy for
-now. The integration's own tests now run in CI.
+the E4 operator tooling still point. Features that exist only there are not
+part of this release: the Los Angeles assistant's fixed reply to Victoria
+actions, the native-tool Travel Mode guard, structured errors for missing
+service targets, and the Apartment engineered-fixture validation. LA's native
+dispatcher still refuses every model-originated Home Assistant action; the
+runbook records what LA's assistant does not contain. The integration's own
+tests now run in CI.

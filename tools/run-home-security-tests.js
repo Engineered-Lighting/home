@@ -286,12 +286,47 @@ test("contentful metrics conversation tracing is absent and cannot be env-enable
   assert.match(source, /@app\.get\("\/conversations\/stream"\)[\s\S]*?"capability_disabled"[\s\S]*?status_code=404/);
 });
 
-test("legacy model tools and automatic private context are locked off", () => {
-  // These assertions describe the reviewed E4/containment design, which LA
-  // Home Assistant does not run: the owner kept the live tool-enabled voice
-  // assistant, so ha-config/extended_openai_conversation/ mirrors the live
-  // runtime and the contained design is kept, unchanged, in the reference
-  // copy below. external_routing.py is identical in both and is read live.
+test("LA's live integration refuses model HA actions and guards legacy private views", () => {
+  // ha-config/extended_openai_conversation/ is what LA Home Assistant runs.
+  // Its native dispatcher refuses every model-originated service call,
+  // script, and automation, whatever the tool catalog offers.
+  const live = path.join(__dirname, "..", "ha-config", "extended_openai_conversation");
+  const native = fs.readFileSync(path.join(live, "functions", "native.py"), "utf8");
+  assert.match(
+    native,
+    /_MODEL_ACTION_FUNCTIONS = frozenset\(\s*\{"execute_service", "execute_service_single", "add_automation", "invoke_script"\}\s*\)/,
+  );
+  assert.match(native, /if name in _MODEL_ACTION_FUNCTIONS:\s*return _model_action_disabled\(name\)/);
+  assert.match(native, /return _model_action_disabled\("execute_service_single", domain, service\)/);
+  assert.match(native, /return _model_action_disabled\("add_automation"\)/);
+  assert.match(native, /return _model_action_disabled\("invoke_script", "script", "turn_on"\)/);
+
+  const integration = fs.readFileSync(path.join(live, "__init__.py"), "utf8");
+  assert.match(integration, /_LEGACY_SENSITIVE_LOG_NAMES = \("asr_debug\.log", "external_routing\.log"\)/);
+  assert.match(integration, /user = request\.get\("hass_user"\)[\s\S]*user, "is_admin", False/);
+  assert.match(integration, /for _view_class in _LEGACY_PRIVATE_VIEW_CLASSES:/);
+  assert.match(integration, /Legacy sensitive log purge failed closed/);
+});
+
+test("LA keeps its tool catalog and private context by recorded owner decision", () => {
+  // The owner kept LA's tool-enabled assistant (2026-09-29). This pins that
+  // exception to the runbook: if the live integration ever gains the
+  // containment flags, or the runbook drops the exception, update both.
+  const root = path.join(__dirname, "..");
+  const live = path.join(root, "ha-config", "extended_openai_conversation");
+  const constants = fs.readFileSync(path.join(live, "const.py"), "utf8");
+  const conversation = fs.readFileSync(path.join(live, "conversation.py"), "utf8");
+  const runbook = fs.readFileSync(path.join(root, "docs", "HOME-AGENT-RUNBOOK.md"), "utf8");
+  assert.doesNotMatch(constants, /MODEL_TOOL_CATALOG_ENABLED/);
+  assert.doesNotMatch(constants, /MODEL_PRIVATE_CONTEXT_ENABLED/);
+  assert.match(conversation, /"user_input_text":/);
+  assert.match(runbook, /LA Home Assistant exception \(owner decision, 2026-09-29\)/);
+});
+
+test("the reviewed containment design keeps model tools and private context locked off", () => {
+  // LA does not run this design (see the exception above). It is kept,
+  // unchanged, in the reference copy so it can be adopted deliberately.
+  // external_routing.py is identical in both and is read live.
   const root = path.join(__dirname, "..");
   const reference = path.join(root, "ha-config", "extended_openai_conversation_e4_reference");
   const constants = fs.readFileSync(

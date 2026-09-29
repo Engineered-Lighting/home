@@ -25,6 +25,11 @@ Stack (Ubuntu AI box)
   · psutil                             BSD-3       https://github.com/giampaolo/psutil
   · httpx                              BSD-3       https://www.python-httpx.org
 
+Home Assistant integration
+  · Extended OpenAI Conversation       MIT         https://github.com/jekalmin/extended_openai_conversation
+    (jekalmin and contributors; MIT as declared in the upstream pyproject.toml).
+    ha-config/extended_openai_conversation/ is a modified copy of it.
+
 License texts for each dependency live in their respective upstream
 repositories. Where MIT/BSD-3 is named, the canonical license text from
 each project applies unmodified.

@@ -117,6 +117,8 @@ SUITES: list[Suite] = [
              desc="identity store CRUD + concurrency"),
     _py_test("ha-config/extended_openai_conversation/test_frigate_sync.py",
              desc="frigate sync drainer + PUT rename"),
+    _py_test("ha-config/extended_openai_conversation/test_frigate_proxy.py",
+             desc="typed Frigate routes: exact shapes, no traversal, no redirects, no Frigate origin"),
     _py_test("ha-config/extended_openai_conversation/test_world_state.py",
              desc="world state aggregator + identity context"),
     _py_test("ha-config/extended_openai_conversation/test_external_routing.py",

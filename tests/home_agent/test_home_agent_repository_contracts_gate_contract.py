@@ -74,6 +74,7 @@ HA_E4_REFERENCE = "ha-config/extended_openai_conversation_e4_reference"
 IN_PACKAGE_SUITES = (
     f"{HA_INTEGRATION}/test_entity_strict.py",
     f"{HA_INTEGRATION}/test_external_routing.py",
+    f"{HA_INTEGRATION}/test_frigate_proxy.py",
     f"{HA_INTEGRATION}/test_frigate_sync.py",
     f"{HA_INTEGRATION}/test_frigate_tool.py",
     f"{HA_INTEGRATION}/test_identity_store.py",

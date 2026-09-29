@@ -37,18 +37,18 @@ class AgentProfilesView(HomeAssistantView):
             return self.json({"error": str(error)}, status_code=500)
         # Frigate is independent of the frozen identity store, so the face
         # library stays usable even though that store cannot serve. The tab
-        # needs the base URL to render crops, and this is the only response it
-        # still receives when the legacy view has refused.
-        frigate_url = None
+        # only learns whether it is configured: every Frigate image and listing
+        # reaches the browser through the typed, authenticated frigate_proxy
+        # routes, so Frigate's URL and origin are never sent to it.
+        frigate_configured = False
         try:
             from .frigate_sync import base_url as _frigate_base_url
-            frigate_url = _frigate_base_url()
+            frigate_configured = bool(_frigate_base_url())
         except Exception:  # noqa: BLE001 - decoration, never fail the read
             LOGGER.debug("frigate base url unavailable", exc_info=True)
         return self.json({
             "profiles": profiles,
-            "frigate_url": frigate_url,
-            "frigate_faces_available": bool(frigate_url),
+            "frigate_faces_available": frigate_configured,
         })
 
 

@@ -176,6 +176,7 @@ jobs:
           suites=(
             ha-config/extended_openai_conversation/test_entity_strict.py
             ha-config/extended_openai_conversation/test_external_routing.py
+            ha-config/extended_openai_conversation/test_frigate_proxy.py
             ha-config/extended_openai_conversation/test_frigate_sync.py
             ha-config/extended_openai_conversation/test_frigate_tool.py
             ha-config/extended_openai_conversation/test_identity_store.py

@@ -7,7 +7,7 @@ const {chromium}=require("playwright");
 const http=require("node:http");
 const root=path.resolve(__dirname,"..");
 const VIEWPORTS={desktop:{width:1280,height:800},phone:{width:375,height:812}};
-const MODES=["direct","both-homes","partial","unknown","clarify","not-permitted",
+const MODES=["direct","both-homes","partial","unknown","clarify","not-permitted","signed-out",
   "manual-victoria","auto-victoria","auto-la","fallback-last","fallback-default"];
 // Commands naming no home: the default home comes from the hand-picked choice,
 // then the gateway's location, then the last home acted on.
@@ -19,7 +19,8 @@ const LOCATION={"auto-victoria":{version:1,site:"victoria",basis:"network",label
 const homePage=(mode,text)=>`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{margin:0;font:15px system-ui;background:#0b0f0e;color:#eee}main{padding:16px}#ask{min-height:44px}</style>
 <main><button id="ask">Ask Home</button><div id="thread"></div></main>
-<script>window.HG_WEB_MODE=true;window.HG_AGENT_ORIGIN='https://agent.test';window.events=[];window.current=true;window.handled=null;</script>
+<script>window.HG_WEB_MODE=true;window.HG_AGENT_ORIGIN='https://agent.test';window.events=[];window.current=true;window.handled=null;
+window.maxFrameHeight=0;(function watch(){const f=document.querySelector('iframe');if(f) maxFrameHeight=Math.max(maxFrameHeight,f.getBoundingClientRect().height);requestAnimationFrame(watch);})();</script>
 <script src="/home-lighting-intent.js"></script><script src="/home-lighting-control.js"></script>
 <script>
 const thread=document.getElementById('thread');
@@ -64,6 +65,7 @@ async function scenario(browser,originServer,mode,viewportName) {
       return route.fulfill(response);
     }
     const operation=url.pathname.split("/").at(-1),body=request.postDataJSON();calls.push({operation,body});
+    if(operation==="session" && mode==="signed-out") return reply({authenticated:false});
     if(operation==="session") return reply({authenticated:true,user_id:"owner",csrf_token:"private-csrf",
       authority:{version:1,site_id:"echo",ha_issuer_id:"home-assistant:echo"},lighting_enabled:true,
       personal_memory_enabled:true,personal_memory_home_origins:["https://home.test"]});
@@ -108,6 +110,14 @@ async function scenario(browser,originServer,mode,viewportName) {
       assert.equal(await page.locator("iframe").count(),0);
       assert.equal(count("propose"),0);
       assert.equal(await stored(),"echo");
+    } else if(mode==="signed-out") {
+      // Only the card can say the Agent sign-in expired, so it appears after a pause.
+      await frame.getByText("Sign in to Home Agent and allow lighting control").waitFor({timeout:8000});
+      await page.waitForFunction(()=>document.querySelector("iframe").getBoundingClientRect().height>=48);
+      assert.equal(count("propose"),0);
+      assert.equal(await page.evaluate(()=>events.filter(e=>e.kind==="home").length),0);
+      await page.evaluate(()=>{current=false;});
+      await frameGone();
     } else if(mode==="clarify") {
       await replied("I couldn't find \"attic\" in Victoria. Lights there: Kitchen, Porch.");
       await frameGone();
@@ -131,6 +141,8 @@ async function scenario(browser,originServer,mode,viewportName) {
       else if(mode==="fallback-last") assert.equal(last,done+" (I couldn't tell where you are, so I used Victoria, the last home you used.)");
       else if(!["partial","both-homes"].includes(mode)) assert.equal(last,done);
       if(UNNAMED.includes(mode)) assert.deepEqual(calls.find(c=>c.operation==="propose").body.sites,["victoria"]);
+      // The card works out of sight unless a result needs looking up.
+      if(mode!=="unknown") assert.equal(await page.evaluate(()=>maxFrameHeight),0);
       assert.equal(count("location"),["auto-victoria","fallback-last"].includes(mode) ? 1 : 0);
       // Only a single home that actually changed becomes the "last home acted on".
       assert.equal(await stored(),["both-homes","partial"].includes(mode) ? null : "victoria");

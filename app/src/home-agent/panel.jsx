@@ -298,6 +298,77 @@ function HouseholdCard({
   );
 }
 
+function LightingConsent({ api }) {
+  const [status, setStatus] = useState("idle");
+  const [review, setReview] = useState(null);
+  const [checked, setChecked] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const running = useRef(null), alive = useRef(true), blocked = useRef(false), dispatched = useRef(false);
+  const retained = useRef(null);
+  useEffect(() => {
+    const unsubscribe = api.subscribeAuthority(() => {
+      blocked.current = true; running.current?.abort(); retained.current = null;
+      setReview(null); setChecked(false); setStatus("unavailable");
+    });
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => { alive.current = false; running.current?.abort(); unsubscribe(); window.clearInterval(timer); };
+  }, [api]);
+  const busy = ["loading", "confirming", "checking"].includes(status);
+  const expired = review && now >= Date.parse(review.expires_at);
+  async function perform(kind) {
+    if (running.current || !alive.current || blocked.current) return;
+    if (kind === "confirm" && (!checked || !review || dispatched.current || Date.now() >= Date.parse(review.expires_at))) return;
+    if (kind === "propose" && dispatched.current || kind === "outcome" && !retained.current) return;
+    const controller = new AbortController(), generation = api.authorityGeneration;
+    running.current = controller;
+    const current = () => alive.current && !blocked.current && !controller.signal.aborted && generation === api.authorityGeneration;
+    setStatus(kind === "propose" ? "loading" : kind === "confirm" ? "confirming" : "checking");
+    try {
+      if (kind === "propose") {
+        const operation_id = window.crypto.randomUUID();
+        const result = (await api.lighting("consent-propose", {version:1, operation_id}, {signal:controller.signal})).result;
+        if (!current()) return;
+        if (result?.version !== 1 || result.operation_id !== operation_id || result.source !== "core.lighting.v1" ||
+            result.applies_to !== "both_homes" || result.effect !== "switch_allowlisted_lights_after_each_confirmation" ||
+            !/^[a-f0-9]{64}$/.test(result.reviewed_digest) || !Number.isFinite(Date.parse(result.grants_expire_at)) ||
+            !(Date.parse(result.expires_at) > Date.now() && Date.parse(result.expires_at) <= Date.now()+60000+SERVER_CLOCK_SKEW_MS)) throw new Error("invalid_review");
+        retained.current = result; setReview(result); setChecked(false); setNow(Date.now()); setStatus("review");
+      } else {
+        if (kind === "confirm") dispatched.current = true;
+        const body = {version:1, operation_id:retained.current.operation_id};
+        if (kind === "confirm") body.reviewed_digest = retained.current.reviewed_digest;
+        const result = (await api.lighting("consent-"+kind, body, {signal:controller.signal})).result;
+        if (!current()) return;
+        if (result?.version !== 1 || result.operation_id !== retained.current.operation_id || result.status !== "committed") throw new Error("outcome_unknown");
+        setReview(null); setChecked(false); setStatus("committed");
+      }
+    } catch {
+      if (current()) { setChecked(false); setStatus(kind === "propose" ? "unavailable" : "unknown"); }
+    } finally { if (running.current === controller) running.current = null; }
+  }
+  return <section className="agent-card agent-lighting-consent" aria-busy={busy}>
+    <h2>Lighting control between homes</h2>
+    <p>Choose whether Home can switch your allowlisted lights in Los Angeles and Victoria. Every change still waits for your confirmation in the chat.</p>
+    <div role="status" aria-live="polite">
+      {busy && <p>{status === "loading" ? "Preparing your lighting review..." : status === "confirming" ? "Confirming lighting control..." : "Checking the original confirmation..."}</p>}
+      {status === "unavailable" && <p>Lighting setup is unavailable. Check that both accounts are linked and you are signed in.</p>}
+      {status === "unknown" && <p>The outcome is not confirmed. Check its status instead of submitting again.</p>}
+      {status === "committed" && <p>Lighting control was allowed. In Home, try "turn off the kitchen light in Victoria".</p>}
+      {expired && status === "review" && <p>This review expired. Request a new review to continue.</p>}
+    </div>
+    {["idle", "unavailable"].includes(status) && !blocked.current && !dispatched.current &&
+      <button disabled={busy} onClick={() => perform("propose")}>Review lighting control</button>}
+    {status === "review" && review && <>
+      <p>Applies to Los Angeles and Victoria until {new Date(review.grants_expire_at).toLocaleString()}.</p>
+      <p>Only on, off and brightness for lights you allowlisted in each home. It does not unlock doors, run scenes or change other devices.</p>
+      <label><input type="checkbox" checked={checked} disabled={expired || busy} onChange={event => setChecked(event.target.checked)} /> Allow Home to switch these lights after I confirm each change.</label>
+      <p><button disabled={!checked || expired || busy} onClick={event => { if (event.nativeEvent.isTrusted) perform("confirm"); }}>Confirm lighting control</button></p>
+      {expired && <button onClick={() => perform("propose")}>Get a new review</button>}
+    </>}
+    {status === "unknown" && <button disabled={busy} onClick={() => perform("outcome")}>Check lighting status</button>}
+  </section>;
+}
+
 function SharedPreferenceConsent({ api }) {
   const [status, setStatus] = useState("idle");
   const [review, setReview] = useState(null);
@@ -1309,6 +1380,8 @@ function HomeAgentPanel() {
 
       {!api.invoke && session?.authenticated && api.authority && session.personal_memory_enabled === true &&
         <SharedPreferenceConsent key={`sharing:${api.authority}:${api.authorityGeneration}`} api={api} />}
+      {!api.invoke && session?.authenticated && api.authority && session.lighting_enabled === true &&
+        <LightingConsent key={`lighting:${api.authority}:${api.authorityGeneration}`} api={api} />}
 
       {phase === "signed_out" && (
         <section className="agent-card">

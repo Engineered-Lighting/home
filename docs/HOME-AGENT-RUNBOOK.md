@@ -34,6 +34,20 @@ adding broad proxy routes or mounting legacy databases.
 - Legacy containment: browser secrets/history are purged, model action tools
   are recursively denied, Intelligence is loopback/read-only with generated
   memory and capture off, and contentful metrics tracing is off.
+  LA Home Assistant exception (owner decision, 2026-09-29): LA runs the
+  pre-containment `extended_openai_conversation` in
+  `ha-config/extended_openai_conversation/`. Its native dispatcher still
+  refuses every model-originated service call, script, and automation, and the
+  legacy private views stay admin-only. The tool catalog is not filtered,
+  though: every function tool the conversation subentry configures, including
+  non-native action types (composite, REST, file, bash, lighting overrides,
+  gesture capture), stays reachable. Automatic private home context and
+  conversation history reach the model, `conversation.finished` events carry
+  user and assistant text, and ASR-correction and Jarvis-mute lines write raw
+  user text to `/config/asr_debug.log`, which is purged only when the
+  integration starts. The host-added agent profile views require HA
+  authentication but not administrator rights. The reviewed containment design
+  is kept unchanged in `ha-config/extended_openai_conversation_e4_reference/`.
 - Reviewed People cutover with typed aliases, recognition bindings, executable
   privacy/status projection, non-authoritative relationship candidates, and
   independently receipted whole-person auto-expiry.
@@ -49,6 +63,8 @@ change. Complete and record them before connecting persistent context:
    localStorage credentials and private content.
 3. Confirm a model request cannot dispatch native services, scripts,
    composites, REST/file actions, lighting overrides, or gesture capture.
+   On LA Home Assistant only native services, scripts, and automations are
+   refused; see the LA exception above.
 4. Keep Intelligence bound to loopback and leave
    `INTELLIGENCE_READ_ONLY=1`, `INTELLIGENCE_MEMORY_ENABLED=0`, multimodal ring
    and pilot off, and contentful metrics tracing off.
@@ -895,9 +911,15 @@ activation. Home Assistant must be stopped so the installer can obtain an
 exclusive SQLite lock. From a reviewed checkout, run:
 
 ```text
-python3 ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py \
+python3 ha-config/extended_openai_conversation_e4_reference/freeze_legacy_identity_semantics.py \
   --database /config/extended_openai_conversation/identity.db
 ```
+
+The E4 operator modules (the freeze, its observer, `identity_store.py` and
+`legacy_identity_fence.py`) live in
+`ha-config/extended_openai_conversation_e4_reference/`, not in the integration
+directory: `ha-config/extended_openai_conversation/` mirrors the pre-E4
+integration LA Home Assistant runs.
 
 The network-free installer opens an existing database in read/write mode (it
 will not create one) and holds the same lifetime OS lock used by the integration.

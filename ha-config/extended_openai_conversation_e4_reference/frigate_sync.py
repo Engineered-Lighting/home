@@ -3,12 +3,11 @@
 Bridges identity_store.py (HA side) with Frigate's HTTP API. Two
 flows:
 
-1. **Auto-seed on boot** (Slice 2): if identity_store is empty,
-   pull Frigate's face library and create one identity per
-   person_name. Each gets a `frigate_name` alias + an enrollment
-   row with quality = sample count. The user opens the people tab
-   and sees these as a starting point — they can rename, relate,
-   delete, or ignore.
+1. **Operational enrollment poll**: pull Frigate's face library and
+   retain only opaque source identifiers in the separate recognition
+   database. It never creates semantic people, aliases, relationships,
+   display labels, or model context. Legacy privacy flags remain a
+   read-only ingress policy.
 
 2. **Capability probe** (Slice 2 + AR2-2): on integration boot,
    one HTTP call to Frigate to verify:
@@ -32,8 +31,9 @@ Disable
 Frigate synchronization is disabled by default. Set
 `EXTENDED_OPENAI_FRIGATE_SYNC=on` only for the isolated legacy
 recognition/enrollment workflow after an operator review. Any other value
-keeps auto-seed, polling, and writeback as no-ops; identity_store can still be
-used manually via the people tab + API.
+keeps network polling, enrollment, and writeback as no-ops. A scheduled poll
+still reapplies current privacy locally so disabling transport cannot retain an
+opaque identifier that a newer policy now blocks.
 
 Why a separate file
 -------------------
@@ -49,7 +49,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 LOGGER = logging.getLogger(__name__)
 
@@ -202,6 +202,8 @@ class SeedReport:
     frigate_faces_found: int = 0
     identities_created: int = 0
     identities_skipped_existing: int = 0
+    identities_skipped_policy: int = 0
+    operational_rows_purged: int = 0
     errors: list = field(default_factory=list)
 
 
@@ -212,12 +214,10 @@ async def auto_seed_identities_from_frigate(
     frigate_url: Optional[str] = None,
     force: bool = False,
 ) -> SeedReport:
-    """Pull `/api/faces` and create one identity per new person_name.
+    """Pull `/api/faces` into isolated operational recognition storage.
 
-    Idempotent: per-face `resolve_frigate_name` dedup means existing
-    identities are SKIPPED, only new Frigate buckets become new
-    identity rows. Safe to call continuously (periodic poll from the
-    integration's background task) and at every restart.
+    Idempotent: existing semantic or operational names are skipped. New
+    Frigate buckets never become semantic identity rows.
 
     `force=True` is now a no-op semantically (kept for back-compat
     with tests); the function always proceeds when not disabled.
@@ -234,11 +234,25 @@ async def auto_seed_identities_from_frigate(
     optimization.
     """
     report = SeedReport()
-    if is_disabled():
-        report.skipped_reason = "frigate sync disabled"
-        return report
     if store is None:
         report.skipped_reason = "no store passed"
+        return report
+    try:
+        report.operational_rows_purged = (
+            store.purge_blocked_operational_recognition()
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Do not fetch/process new names if current privacy cannot first be
+        # enforced against rows left by an earlier poll.
+        report.errors.append(
+            "operational recognition privacy purge failed: "
+            f"{type(exc).__name__}"
+        )
+        return report
+    if is_disabled():
+        # Disabling network synchronization must not disable enforcement of a
+        # newer privacy decision against identifiers retained by an older run.
+        report.skipped_reason = "frigate sync disabled"
         return report
     report.attempted = True
 
@@ -277,35 +291,47 @@ async def auto_seed_identities_from_frigate(
         report.frigate_faces_found = len(face_map)
 
         for frigate_name, crops in face_map.items():
-            # Skip if alias already maps to an identity
-            existing_row = store.resolve_frigate_name(frigate_name)
-            if existing_row is not None:
+            del crops
+            # The fenced semantic store is deliberately absent from
+            # WorldState, but its privacy flags still form a read-only ingress
+            # policy. In particular, do-not-track/ignored subjects must never
+            # be copied into the isolated operational database.
+            policy = store.legacy_recognition_persistence_policy(
+                frigate_name
+            )
+            if policy == "blocked":
+                report.identities_skipped_policy += 1
+                continue
+            existing_operational = (
+                store.resolve_operational_recognition_name(frigate_name)
+            )
+            existing_semantic = store.resolve_frigate_name(frigate_name)
+            if (
+                existing_operational is not None
+                or existing_semantic is not None
+            ):
                 report.identities_skipped_existing += 1
                 continue
             try:
-                display_name = _frigate_name_to_display(frigate_name)
-                store.ensure_recognition_enrollment(
+                persisted_name = store.ensure_recognition_enrollment(
                     frigate_name,
-                    display_label=display_name,
                     actor="frigate_sync",
                 )
-                report.identities_created += 1
+                if persisted_name:
+                    report.identities_created += 1
+                else:
+                    report.identities_skipped_policy += 1
             except Exception as e:
-                report.errors.append(f"create_identity for {frigate_name!r} failed: {e}")
+                # Do not copy a potentially private face-library label into
+                # logs, metrics, or user-facing error payloads.
+                report.errors.append(
+                    f"operational recognition enrollment failed: "
+                    f"{type(e).__name__}"
+                )
         return report
     finally:
         if owns_client:
             await http_client.aclose()
-
-
-def _frigate_name_to_display(frigate_name: str) -> str:
-    """Convert a Frigate person_name (often lowercase / underscored)
-    to a human-friendly display name. Conservative: just title-case
-    + underscore→space. Users can rename via the people tab."""
-    if not frigate_name:
-        return "Unknown"
-    cleaned = frigate_name.replace("_", " ").strip()
-    return cleaned[:1].upper() + cleaned[1:] if cleaned else "Unknown"
 
 
 # ── Writeback (signatures used by Slices 10 + 11) ───────────────────
@@ -417,6 +443,14 @@ async def drain_pending_writes(
     "Frigate sync stuck" so the user can intervene (retry / cancel)."""
     summary = {"processed": 0, "succeeded": 0, "failed": 0, "skipped": 0}
     if is_disabled() or store is None:
+        return summary
+    if getattr(store, "semantic_writes_frozen", True):
+        summary["capability_disabled"] = True
+        summary["reason"] = getattr(
+            store,
+            "legacy_authority_state",
+            "legacy_frozen",
+        )
         return summary
     pending = store.pending_writes(state="pending", limit=50)
     for row in pending:

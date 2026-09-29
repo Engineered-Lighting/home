@@ -1997,7 +1997,7 @@ def test_every_ha_host_import_is_verified_and_deployed() -> None:
     """
 
     module = _module()
-    eoc = ROOT / "ha-config/extended_openai_conversation"
+    eoc = ROOT / "ha-config/extended_openai_conversation_e4_reference"
     imported: set[str] = set()
     for script in (
         "freeze_legacy_identity_semantics.py",

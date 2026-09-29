@@ -75,19 +75,19 @@ install_module \
   "$REMOTE_OPERATOR_ROOT/migrate_legacy_identity.py"
 
 install_module \
-  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py" \
+  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation_e4_reference/freeze_legacy_identity_semantics.py" \
   "$REMOTE_EOC_ROOT/freeze_legacy_identity_semantics.py"
 
 install_module \
-  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py" \
+  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation_e4_reference/collect_legacy_identity_freeze_observation.py" \
   "$REMOTE_EOC_ROOT/collect_legacy_identity_freeze_observation.py"
 
 # Both scripts above import these. Without them the imports fail at the writer
 # fence, after Home Assistant has already been stopped.
 install_module \
-  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation/identity_store.py" \
+  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation_e4_reference/identity_store.py" \
   "$REMOTE_EOC_ROOT/identity_store.py"
 
 install_module \
-  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation/legacy_identity_fence.py" \
+  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation_e4_reference/legacy_identity_fence.py" \
   "$REMOTE_EOC_ROOT/legacy_identity_fence.py"

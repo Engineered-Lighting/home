@@ -42,6 +42,7 @@ READ_PATHS = (
     "changes/unreleased/**",
     "docs/HOME-AGENT-RUNBOOK.md",
     "ha-config/extended_openai_conversation/**",
+    "ha-config/extended_openai_conversation_e4_reference/**",
     "stack/home-agent.env.example",
     "stack/home-agent-compose.yml",
     "stack/home-agent-deploy/**",
@@ -55,11 +56,48 @@ READ_PATHS = (
     "stack/services/home-agent-core/app/phase3_activation_probe.py",
     "stack/services/home-agent-core/app/store.py",
     "stack/services/home-agent-core/docker-entrypoint.sh",
+    "stack/services/intelligence/tests/fixtures/office_override_session_automation_tail.json",
     "tests/home_agent/requirements-contracts.lock",
     "tests/home_agent/requirements-contracts.txt",
     "tools/release/release-lib.mjs",
+    "tools/test_helpers/mock_hass.py",
     "tools/run-home-agent-e1-postgres-gate.py",
     "web-gateway/server.mjs",
+)
+
+# The Home Assistant integration's in-package tests. They stub Home Assistant,
+# need only the standard library, and run as scripts the way they always have.
+# ha-config/extended_openai_conversation/ mirrors what LA Home Assistant runs;
+# the reference directory keeps the reviewed E4/containment design testable.
+HA_INTEGRATION = "ha-config/extended_openai_conversation"
+HA_E4_REFERENCE = "ha-config/extended_openai_conversation_e4_reference"
+IN_PACKAGE_SUITES = (
+    f"{HA_INTEGRATION}/test_entity_strict.py",
+    f"{HA_INTEGRATION}/test_external_routing.py",
+    f"{HA_INTEGRATION}/test_frigate_sync.py",
+    f"{HA_INTEGRATION}/test_frigate_tool.py",
+    f"{HA_INTEGRATION}/test_identity_store.py",
+    f"{HA_INTEGRATION}/test_lifecycle.py",
+    f"{HA_INTEGRATION}/test_living_lights.py",
+    f"{HA_INTEGRATION}/test_native.py",
+    f"{HA_INTEGRATION}/test_override_sessions.py",
+    f"{HA_INTEGRATION}/test_recap.py",
+    f"{HA_INTEGRATION}/test_registry.py",
+    f"{HA_INTEGRATION}/test_template_helpers.py",
+    f"{HA_INTEGRATION}/test_visual_preroute.py",
+    f"{HA_INTEGRATION}/test_world_state.py",
+    f"{HA_E4_REFERENCE}/test_action_containment.py",
+    f"{HA_E4_REFERENCE}/test_cross_home_guard.py",
+    f"{HA_E4_REFERENCE}/test_frigate_sync.py",
+    f"{HA_E4_REFERENCE}/test_identity_store.py",
+)
+# Already failing on main before the integration was reconciled with LA Home
+# Assistant, for reasons in the test harness itself (an exec'd slice that lost
+# its `re` import; a stubbed vision call that is never reached). Listed so a new
+# test cannot go unrun by accident; fixing them is separate work.
+IN_PACKAGE_KNOWN_BROKEN = (
+    f"{HA_INTEGRATION}/test_friendly_error_speech.py",
+    f"{HA_INTEGRATION}/test_grounded_look.py",
 )
 
 
@@ -107,6 +145,27 @@ class HomeAgentRepositoryContractsGateContractTests(unittest.TestCase):
             '"${RUNNER_TEMP}/home-agent-contracts/bin/python" -m pytest', run
         )
         self.assertIn("git diff --exit-code", run)
+
+    def test_every_in_package_test_runs_under_the_hash_pinned_interpreter(
+        self,
+    ) -> None:
+        step = self.jobs.split(
+            "- name: Run the Home Assistant integration in-package tests", 1
+        )[1]
+        listed = re.findall(r"(?m)^            (ha-config/\S+\.py)$", step)
+        self.assertEqual(listed, list(IN_PACKAGE_SUITES))
+        self.assertIn('for suite in "${suites[@]}"; do', step)
+        self.assertIn(
+            '"${RUNNER_TEMP}/home-agent-contracts/bin/python" "${suite}"', step
+        )
+        self.assertIn("set -euo pipefail", step)
+        self.assertIn("git diff --exit-code", step)
+        present = {
+            path.relative_to(ROOT).as_posix()
+            for directory in (HA_INTEGRATION, HA_E4_REFERENCE)
+            for path in (ROOT / directory).glob("test_*.py")
+        }
+        self.assertEqual(present, {*IN_PACKAGE_SUITES, *IN_PACKAGE_KNOWN_BROKEN})
 
     def test_lock_is_fully_hashed_and_matches_core_dev_lock(self) -> None:
         lock = LOCK.read_text(encoding="utf-8")

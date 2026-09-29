@@ -181,7 +181,7 @@ REMOTE_OBSERVER = (
 REMOTE_OPERATOR_ROOT = "/config/home-agent-operator"
 REMOTE_OPERATOR_MODULE = f"{REMOTE_OPERATOR_ROOT}/migrate_legacy_identity.py"
 OPERATOR_MODULE_SOURCE = OPERATOR_ROOT / "migrate_legacy_identity.py"
-EOC_SOURCE_ROOT = SOURCE_ROOT / "ha-config" / "extended_openai_conversation"
+EOC_SOURCE_ROOT = SOURCE_ROOT / "ha-config" / "extended_openai_conversation_e4_reference"
 # Every module step 20 executes on the Home Assistant host, paired with the
 # pinned source it must equal. Presence was the only thing ever checked here,
 # and presence is what a stale copy also satisfies: the freeze observer on the

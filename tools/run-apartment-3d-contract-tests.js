@@ -15,7 +15,10 @@ const SIM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-sim.js
 const INDEX = fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8");
 const SW = fs.readFileSync(path.join(REPO, "app", "src", "home-service-worker.js"), "utf8");
 const FEATURE_LOADER = fs.readFileSync(path.join(REPO, "app", "src", "home-feature-loader.js"), "utf8");
-const BACKEND = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation", "__init__.py"), "utf8");
+// The engineered-fixture validation (962a3ab8, 8115cfec) was never deployed to
+// LA Home Assistant, whose runtime ha-config/extended_openai_conversation/ now
+// mirrors. Until it is deployed it lives only in the pre-reconciliation copy.
+const BACKEND = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation_e4_reference", "__init__.py"), "utf8");
 const APP = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
 const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js"), "utf8");
 const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");

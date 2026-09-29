@@ -22,7 +22,10 @@ const vm = require("vm");
 const H = require(path.join(__dirname, "..", "app", "src", "home-people-helpers.js"));
 const peopleSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-people.jsx"), "utf8");
 const appSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-app.jsx"), "utf8");
-const haInitSource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation", "__init__.py"), "utf8");
+// The legacy People API assertions below pin the reviewed E4 boundary. LA Home
+// Assistant runs the pre-E4 integration (ha-config/extended_openai_conversation/),
+// so the E4 design they describe is kept unchanged in the reference copy.
+const haInitSource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation_e4_reference", "__init__.py"), "utf8");
 
 let passes = 0;
 let fails = 0;

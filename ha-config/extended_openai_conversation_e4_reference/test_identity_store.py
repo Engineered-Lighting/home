@@ -60,6 +60,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -70,16 +71,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Force-enable for tests in case the env was sticky
 os.environ.pop("EXTENDED_OPENAI_IDENTITY_STORE", None)
+os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = "legacy_migration_only"
 
 from identity_store import (  # type: ignore[import]
     IdentityStore,
-    RELATIONSHIP_TYPES,
-    PREFERENCE_SOURCES,
     SCHEMA_VERSION,
-    CHANGE_LOG_RETENTION,
     LEGACY_MIGRATION_MODE,
     SEMANTIC_WRITES_MODE_ENV,
-    is_disabled,
 )
 
 
@@ -274,28 +272,102 @@ def _rename_no_queue_when_unchanged():
 t("non-display_name update does NOT queue Frigate rename",
   _rename_no_queue_when_unchanged)
 
-def _frozen_profile_edit_allows_user_pronouns():
+def _frozen_profile_edit_allows_ha_admin_pronouns_before_e4_fence():
     s = fresh()
     u = s.create_identity("Marcelo", relationship_type="me")
     s._semantic_writes_frozen = True
-    ok = s.update_identity(u, {"pronouns": "he/him"}, actor="user")
+    ok = s.update_identity(
+        u,
+        {"pronouns": "he/him"},
+        actor="ha_admin",
+        allow_legacy_self_profile_edit=True,
+    )
     assert ok
     after = s.get_identity(u)
     assert after.pronouns == "he/him"
-t("frozen semantic authority still allows user profile pronoun edits",
-  _frozen_profile_edit_allows_user_pronouns)
+t("pre-E4 freeze allows HA-admin self-profile pronoun compatibility",
+  _frozen_profile_edit_allows_ha_admin_pronouns_before_e4_fence)
 
-def _frozen_blocks_non_user_profile_edit():
+def _frozen_profile_edit_requires_unique_me():
+    s = fresh()
+    first = s.create_identity("Marcelo", relationship_type="me")
+    s.create_identity("Ambiguous self", relationship_type="me")
+    s._semantic_writes_frozen = True
+    try:
+        s.update_identity(
+            first,
+            {"pronouns": "he/him"},
+            allow_legacy_self_profile_edit=True,
+        )
+        raise AssertionError("expected PermissionError for ambiguous self")
+    except PermissionError as e:
+        assert "frozen pending" in str(e)
+t("frozen pronoun compatibility requires exactly one me identity",
+  _frozen_profile_edit_requires_unique_me)
+
+def _frozen_profile_edit_blocks_third_party_pronouns():
+    s = fresh()
+    s.create_identity("Marcelo", relationship_type="me")
+    other = s.create_identity("Other", relationship_type="friend")
+    s._semantic_writes_frozen = True
+    try:
+        s.update_identity(
+            other,
+            {"pronouns": "they/them"},
+            allow_legacy_self_profile_edit=True,
+        )
+        raise AssertionError("expected PermissionError for third-party pronouns")
+    except PermissionError as e:
+        assert "frozen pending" in str(e)
+t("frozen pronoun compatibility cannot edit a third party",
+  _frozen_profile_edit_blocks_third_party_pronouns)
+
+def _frozen_profile_edit_blocks_semantic_and_privacy_fields():
+    blocked_patches = (
+        {"display_name": "Renamed"},
+        {"relationship_type": "friend"},
+        {"relationship_subrole": "parent"},
+        {"notes": "legacy prompt content"},
+        {"is_private": True},
+        {"is_silent": True},
+        {"is_ignored": True},
+        {"is_archived": True},
+        {"do_not_track": True},
+        {"auto_expire_at": "2030-01-01T00:00:00Z"},
+        {"ha_person_entity_id": "person.other"},
+        {"ha_device_tracker_entity_id": "device_tracker.other"},
+        {"pronouns": "he/him", "notes": "mixed bypass"},
+    )
+    for patch in blocked_patches:
+        s = fresh()
+        me = s.create_identity("Marcelo", relationship_type="me")
+        s._semantic_writes_frozen = True
+        try:
+            s.update_identity(
+                me,
+                patch,
+                allow_legacy_self_profile_edit=True,
+            )
+            raise AssertionError(f"expected PermissionError for {sorted(patch)}")
+        except PermissionError as e:
+            assert "frozen pending" in str(e)
+t("frozen compatibility blocks semantic, privacy, binding, and mixed patches",
+  _frozen_profile_edit_blocks_semantic_and_privacy_fields)
+
+def _frozen_blocks_profile_edit_without_server_capability():
     s = fresh()
     u = s.create_identity("Marcelo", relationship_type="me")
     s._semantic_writes_frozen = True
-    try:
-        s.update_identity(u, {"pronouns": "he/him"}, actor="assistant")
-        raise AssertionError("expected PermissionError for non-user actor")
-    except PermissionError as e:
-        assert "semantic authority" in str(e)
-t("frozen semantic authority blocks assistant profile writes",
-  _frozen_blocks_non_user_profile_edit)
+    for actor in ("user", "assistant", "system", "home_app", "ui", "frigate_sync"):
+        try:
+            s.update_identity(u, {"pronouns": "he/him"}, actor=actor)
+            raise AssertionError(
+                f"expected PermissionError without HA capability for {actor}"
+            )
+        except PermissionError as e:
+            assert "frozen pending" in str(e)
+t("caller actor labels cannot authorize frozen profile writes",
+  _frozen_blocks_profile_edit_without_server_capability)
 
 def _frozen_blocks_legacy_create():
     s = fresh_frozen()
@@ -303,7 +375,7 @@ def _frozen_blocks_legacy_create():
         s.create_identity("New Person", relationship_type="friend")
         raise AssertionError("expected PermissionError for legacy create")
     except PermissionError as e:
-        assert "semantic authority" in str(e)
+        assert "frozen pending" in str(e)
 t("frozen semantic authority blocks legacy create_identity",
   _frozen_blocks_legacy_create)
 
@@ -409,7 +481,7 @@ def _set_pref_upserts():
     pid = s.set_preference(u, "light_temp_pref", 2700)
     assert pid > 0
     # Set same key + same (empty) scope → update, not duplicate
-    pid2 = s.set_preference(u, "light_temp_pref", 3000)
+    s.set_preference(u, "light_temp_pref", 3000)
     prefs = s.list_preferences(u)
     assert len(prefs) == 1, prefs
     assert prefs[0]["value"] == 3000
@@ -475,6 +547,65 @@ def _every_mutation_writes_audit_row():
     assert kinds == ["identity_mutation"] * 3, kinds
 t("every mutation writes a change_log row", _every_mutation_writes_audit_row)
 
+def _audit_is_content_minimized():
+    s = fresh()
+    u = s.create_identity("SENSITIVE-NAME-CANARY")
+    s.update_identity(u, {"notes": "SENSITIVE-NOTE-CANARY"})
+    s.delete_identity(u, queue_frigate_delete=False)
+    rows = s._conn.execute(
+        "SELECT before_json, after_json, link_conv_id, link_turn_id "
+        "FROM change_log ORDER BY id"
+    ).fetchall()
+    serialized = json.dumps([dict(row) for row in rows])
+    assert "SENSITIVE-NAME-CANARY" not in serialized
+    assert "SENSITIVE-NOTE-CANARY" not in serialized
+    assert all(row["before_json"] is None for row in rows)
+    assert all(
+        set(json.loads(row["after_json"])) == {"operation_code"}
+        for row in rows
+    )
+    assert all(row["link_conv_id"] is None for row in rows)
+    assert all(row["link_turn_id"] is None for row in rows)
+t("audit rows never retain identity snapshots or conversation links",
+  _audit_is_content_minimized)
+
+def _setup_scrubs_historical_audit_snapshots():
+    with tempfile.TemporaryDirectory() as directory:
+        path = str(Path(directory) / "identity.db")
+        first = IdentityStore(db_path=path)
+        first.setup()
+        first._conn.execute(
+            "INSERT INTO change_log(ts, kind, actor, target_uuid, before_json, "
+            "after_json, link_conv_id) VALUES(?, 'identity_mutation', 'user', "
+            "?, ?, ?, ?)",
+            (
+                "2026-07-11T00:00:00Z",
+                "opaque-id",
+                '{"display_name":"SENSITIVE-HISTORICAL-CANARY"}',
+                '{"notes":"SENSITIVE-HISTORICAL-NOTE"}',
+                "conversation-canary",
+            ),
+        )
+        first.close()
+        reopened = IdentityStore(db_path=path)
+        reopened.setup()
+        row = reopened._conn.execute(
+            "SELECT before_json, after_json, link_conv_id FROM change_log"
+        ).fetchone()
+        assert row["before_json"] is None
+        assert json.loads(row["after_json"]) == {
+            "operation_code": "legacy_scrubbed"
+        }
+        assert row["link_conv_id"] is None
+        raw = Path(path).read_bytes()
+        assert b"SENSITIVE-HISTORICAL-CANARY" not in raw
+        assert b"SENSITIVE-HISTORICAL-NOTE" not in raw
+        assert b"conversation-canary" not in raw
+        wal = Path(path + "-wal")
+        assert not wal.exists() or b"SENSITIVE-HISTORICAL-CANARY" not in wal.read_bytes()
+        reopened.close()
+t("setup scrubs historical full audit snapshots", _setup_scrubs_historical_audit_snapshots)
+
 def _purge_respects_ttl_and_pinned():
     s = fresh()
     u = s.create_identity("Sarah")
@@ -532,6 +663,58 @@ t("EXTENDED_OPENAI_IDENTITY_STORE=off → all methods no-op",
 
 
 # ── Privacy flags (typed columns per AR-5) ─────────────────────────────
+section("semantic cutover freeze")
+
+def _semantic_freeze_is_irreversible_and_recognition_stays_operational():
+    with tempfile.TemporaryDirectory() as directory:
+        path = str(Path(directory) / "identity.db")
+        mutable = IdentityStore(db_path=path)
+        mutable.setup()
+        assert mutable.semantic_writes_frozen is False
+        mutable.create_identity("Reviewed before cutover")
+        mutable.close()
+
+        os.environ.pop("EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES", None)
+        frozen = IdentityStore(db_path=path)
+        frozen.setup()
+        assert frozen.semantic_writes_frozen is True
+        try:
+            frozen.create_identity("Must fail")
+            raise AssertionError("semantic create unexpectedly succeeded")
+        except PermissionError:
+            pass
+        recognition_name = frozen.ensure_recognition_enrollment(
+            "new_frigate_cluster", display_label="Unreviewed recognition"
+        )
+        assert recognition_name == "new_frigate_cluster"
+        assert frozen.resolve_frigate_name("new_frigate_cluster") is None
+        assert (
+            frozen.resolve_operational_recognition_name(
+                "new_frigate_cluster"
+            )
+            is not None
+        )
+        frozen.close()
+
+        os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = (
+            "legacy_migration_only"
+        )
+        reopened = IdentityStore(db_path=path)
+        reopened.setup()
+        assert reopened.semantic_writes_frozen is True
+        try:
+            reopened.add_alias(recognition_name, "Must fail")
+            raise AssertionError("semantic alias unexpectedly succeeded")
+        except PermissionError:
+            pass
+        reopened.close()
+
+t(
+    "pending-cutover freeze isolates operational recognition enrollment",
+    _semantic_freeze_is_irreversible_and_recognition_stays_operational,
+)
+
+
 section("privacy flags")
 
 def _typed_flags_round_trip():
@@ -571,7 +754,10 @@ def _txn_isolation():
             results[key] = False
     t1 = threading.Thread(target=worker, args=("A", "first"))
     t2 = threading.Thread(target=worker, args=("B", "second"))
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     # Exactly one wins, one fails version check
     wins = sum(1 for v in results.values() if v)
     assert wins == 1, f"expected exactly one winner, got {results}"

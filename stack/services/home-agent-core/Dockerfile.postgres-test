@@ -28,7 +28,7 @@ COPY stack/home-agent-deploy/ /workspace/stack/home-agent-deploy/
 COPY stack/services/home-agent-bff/src/bff.mjs /workspace/stack/services/home-agent-bff/src/bff.mjs
 COPY app/src/home-agent/api.js /workspace/app/src/home-agent/api.js
 COPY app/src/home-agent/panel.jsx /workspace/app/src/home-agent/panel.jsx
-COPY ha-config/extended_openai_conversation/ /workspace/ha-config/extended_openai_conversation/
+COPY ha-config/extended_openai_conversation_e4_reference/ /workspace/ha-config/extended_openai_conversation_e4_reference/
 COPY ha-config/home_agent_edge/ /workspace/ha-config/home_agent_edge/
 COPY tests/home_agent/ /workspace/tests/home_agent/
 COPY tools/run-home-agent-e1-postgres-gate.py /workspace/tools/

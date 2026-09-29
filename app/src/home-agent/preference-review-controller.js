@@ -6,7 +6,9 @@
   // on this origin: the Home page sees only the nonce-bound result messages.
   const document=root.document, api=new root.HomeAgentApi();
   const elements=Object.fromEntries(["status","detail","confirm","check","cancel","sign-in","retry-session"].map(id=>[id,document.getElementById(id)]));
-  const nonce=root.location.hash.slice(1);
+  // Home passes "#<nonce>" or "#<nonce>.<theme>" so the card follows Home's theme.
+  const [, nonce="", theme="dark"]=/^#([a-f0-9]{32})(?:\.(dark|light))?$/.exec(root.location.hash) || [];
+  document.documentElement.dataset.theme=theme;
   const parent=root.parent;
   const ARM_DELAY_MS=500;
   let origins=[], bound=null, review=null, confirmation=null, busy=false, finished=false;
@@ -47,7 +49,8 @@
   });
   async function session() {
     const value=await api.session();
-    if(!value.authenticated || value.personal_memory_enabled!==true ||
+    if(!value.authenticated) throw Object.assign(new Error("signed out"),{signedOut:true});
+    if(value.personal_memory_enabled!==true ||
         !Array.isArray(value.personal_memory_home_origins) || !value.personal_memory_home_origins.length) throw new Error("unavailable");
     origins=value.personal_memory_home_origins.filter(origin=>{
       try {const url=new URL(origin);return url.protocol==="https:" && url.origin===origin && url.origin!==root.location.origin;}
@@ -61,8 +64,9 @@
       await session();
       elements["sign-in"].hidden=true;elements["retry-session"].hidden=true;
       setStatus("Connecting to your Home conversation…");
-    } catch {
-      setStatus("Sign in to Home Agent and enable shared preferences, then check sign-in.");
+    } catch(error) {
+      setStatus(error?.signedOut ? "Your Home Agent sign-in has expired. Sign in, then check sign-in here." :
+        "Shared preferences aren't available for this Home Agent sign-in.");
       elements["sign-in"].hidden=false;elements["retry-session"].hidden=false;
     }
   }
@@ -98,7 +102,7 @@
       elements.detail.textContent=review.current ? `Currently saved: ${review.current.value}.` : "No preference is currently saved.";
       setStatus(operation==="forget" ? "Forget your evening lighting preference in both homes?" :
         `Save ${review.proposed.value} evening lighting as your preference in both homes?`);
-      showConfirm(operation==="forget" ? "Forget" : "Confirm");
+      showConfirm(operation==="forget" ? "forget" : "confirm");
       send({status:"review_pending"});
       expiryTimer=setTimeout(()=>{
         if(!confirmation && !finished) end("expired","This review expired. No change was made.");
@@ -145,6 +149,6 @@
   root.addEventListener("message",receive);
   root.addEventListener("resize",resize);
   root.addEventListener("pagehide",()=>{finished=true;clearTimeout(expiryTimer);disarm();api.invalidateAuthority?.();});
-  if(root.top===root || root.top!==parent || !/^[a-f0-9]{32}$/.test(nonce)) end("unavailable","Open this review from a preference request in the Home chat.");
+  if(root.top===root || root.top!==parent || !nonce) end("unavailable","Open this review from a preference request in the Home chat.");
   else {root.history.replaceState(null,"",root.location.pathname);authenticate();}
 })(window);

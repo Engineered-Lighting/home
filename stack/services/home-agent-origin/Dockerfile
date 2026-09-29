@@ -12,6 +12,8 @@ COPY --from=agent_assets preference-review.js /srv/home-agent/preference-review.
 COPY --from=agent_assets preference-review.css /srv/home-agent/preference-review.css
 COPY --from=agent_assets lighting-review.html /srv/home-agent/lighting-review.html
 COPY --from=agent_assets lighting-review.js /srv/home-agent/lighting-review.js
+COPY --from=agent_assets geist-latin.woff2 /srv/home-agent/geist-latin.woff2
+COPY --from=agent_assets geist-mono-latin.woff2 /srv/home-agent/geist-mono-latin.woff2
 
 USER node
 EXPOSE 8096

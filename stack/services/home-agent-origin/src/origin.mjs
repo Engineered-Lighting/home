@@ -16,6 +16,9 @@ const STATIC_ASSETS = new Map([
   ["/home-agent/preference-review.css", ["preference-review.css", "text/css; charset=utf-8", "private, no-cache"]],
   ["/home-agent/lighting-review.html", ["lighting-review.html", "text/html; charset=utf-8", "no-store"]],
   ["/home-agent/lighting-review.js", ["lighting-review.js", "text/javascript; charset=utf-8", "private, no-cache"]],
+  // Home's Geist faces, so the inline review card matches the Home chat.
+  ["/home-agent/geist-latin.woff2", ["geist-latin.woff2", "font/woff2", "private, max-age=86400"]],
+  ["/home-agent/geist-mono-latin.woff2", ["geist-mono-latin.woff2", "font/woff2", "private, max-age=86400"]],
 ]);
 // The inline reviews Home may frame, and nothing else.
 const FRAMEABLE_REVIEWS = new Set(["preference-review.html", "lighting-review.html"]);

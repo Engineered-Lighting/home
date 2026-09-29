@@ -1,0 +1,37 @@
+[Unit]
+Description=Warn before a shared-preference internal TLS leaf or its CA expires
+RequiresMountsFor=/srv/home-agent
+OnFailure=ntfy-alert@%n.service
+
+# Expiry warnings (exit 10) page through ntfy-send and leave the unit
+# successful: the Lab worker preflight refuses GPU work while any unit is
+# failed, and a leaf 30 days from expiry is not a reason to stop it. Real
+# errors (unreadable or unsafe layout, CA mismatch, a crash) still fail the
+# unit, page through OnFailure and stop Lab work until someone looks.
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -s /usr/local/libexec/home-agent/shared-preferences/renew_internal_tls.py check-expiry --root /srv/home-agent/shared-preferences/prepared-20260928
+SuccessExitStatus=10
+# '+' runs only these host-alert helpers outside the sandbox: the reset must
+# clear /run/ntfy-alert, and ntfy-send spools under /var/spool before sending.
+# The warning page re-runs the read-only check to name each warning.
+ExecStartPost=+/usr/local/sbin/ntfy-alert-reset %n
+ExecStopPost=+/bin/sh -c 'test "$$EXIT_STATUS" = 10 || exit 0; /usr/bin/python3 -I -s /usr/local/libexec/home-agent/shared-preferences/renew_internal_tls.py check-expiry --root /srv/home-agent/shared-preferences/prepared-20260928 2>&1 >/dev/null | /usr/bin/sed -n "s/^internal TLS: //p" | /usr/local/sbin/ntfy-send internal-tls-expiry page "Internal TLS renewal due" default warning'
+TimeoutStartSec=2min
+UMask=0077
+CPUQuota=10%
+MemoryMax=128M
+TasksMax=16
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+MemoryDenyWriteExecute=true

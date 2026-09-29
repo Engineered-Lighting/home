@@ -5,11 +5,11 @@ const http=require("node:http");
 const root=path.resolve(__dirname,".."),fact="00000000-0000-0000-0000-000000000001";
 const preference=tone=>({version:1,kind:"personal_preference",key:"lighting.evening.tone",scope:"owner",value:tone});
 const VIEWPORTS={desktop:{width:1280,height:800},phone:{width:375,height:812}};
-const MODES=["remember","correct","read","forget","unknown","untrusted","expired","cancel","offscreen","wrong-origin","foreign-embedder","cancel-context","clear-review"];
+const MODES=["remember","light","correct","read","forget","unknown","untrusted","expired","cancel","offscreen","wrong-origin","foreign-embedder","cancel-context","clear-review"];
 const PROMPTS={read:"What lighting do I prefer in the evening?",forget:"Forget my evening lighting preference.",correct:"Actually, I prefer neutral lighting in the evening."};
 // A minimal Home chat: user text, replies, and an inline slot for the review card.
-const homePage=(mode,text)=>`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{margin:0;font:15px system-ui;background:#0b0f0e;color:#eee}main{padding:16px}#ask{min-height:44px}.spacer{height:${mode==="offscreen"?2400:0}px}</style>
+const homePage=(mode,text)=>`<!doctype html><html data-theme="${mode==="light"?"light":"dark"}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>:root{--hg-fg-4:#767676}[data-theme=light]{--hg-fg-4:#8A8270}body{margin:0;font:15px system-ui;background:${mode==="light"?"#EFE9DC;color:#1A1812":"#000;color:#EDEDED"}}main{padding:16px}#ask{min-height:44px}.spacer{height:${mode==="offscreen"?2400:0}px}</style>
 <main><button id="ask">Ask Home</button><div class="spacer"></div><div id="thread"></div></main>
 <script>window.HG_WEB_MODE=true;window.HG_AGENT_ORIGIN='https://agent.test';window.events=[];window.current=true;</script>
 <script src="/home-personal-memory.js"></script>
@@ -33,7 +33,7 @@ async function served(originServer,pathname) {
 async function scenario(browser,originServer,mode,viewportName) {
   const home=mode==="foreign-embedder" ? "https://evil.test" : "https://home.test";
   const context=await browser.newContext({viewport:VIEWPORTS[viewportName]}),calls=[],errors=[];
-  let tone=["remember","unknown","untrusted","expired","cancel","offscreen"].includes(mode) || mode.endsWith("-context") || mode==="clear-review" || mode==="wrong-origin" || mode==="foreign-embedder" ? null : "warm";
+  let tone=["remember","light","unknown","untrusted","expired","cancel","offscreen"].includes(mode) || mode.endsWith("-context") || mode==="clear-review" || mode==="wrong-origin" || mode==="foreign-embedder" ? null : "warm";
   let revision=tone?1:0,review;
   context.on("page",page=>page.on("pageerror",error=>errors.push(error.message)));
   await context.route("**/*",async route=>{
@@ -46,7 +46,7 @@ async function scenario(browser,originServer,mode,viewportName) {
     }
     if(url.pathname.startsWith("/home-agent/")) {
       const name=url.pathname.split("/").at(-1);
-      assert.ok(["preference-review.html","preference-review.css","preference-review.js","api.js"].includes(name));
+      assert.ok(["preference-review.html","preference-review.css","preference-review.js","api.js","geist-latin.woff2","geist-mono-latin.woff2"].includes(name),name);
       const response=await served(originServer,url.pathname);
       assert.equal(response.status,200);
       return route.fulfill(response);
@@ -95,6 +95,7 @@ async function scenario(browser,originServer,mode,viewportName) {
       await confirm.waitFor();
       await page.evaluate(mode=>{if(mode==="clear-review")window.HomePersonalMemory.reset();else window.current=false;},mode);
       await frameGone();
+      assert.equal(await page.locator(".slot").textContent(),"closed · nothing changed");
       assert.equal(count("confirm"),0);
     } else if(mode==="read") {
       await replied("You prefer warm");
@@ -139,7 +140,16 @@ async function scenario(browser,originServer,mode,viewportName) {
     } else {
       await confirm.waitFor();
       assert.equal(count("confirm"),0);
-      if(mode==="remember") await page.screenshot({path:path.join(root,`.tmp/personal-preference-inline-${viewportName}.png`)});
+      if(["remember","light"].includes(mode)) {
+        await frame.locator("#confirm:not([disabled])").waitFor();
+        const agent=page.frames().find(f=>f.url().startsWith("https://agent.test/"));
+        const look=await agent.evaluate(()=>({theme:document.documentElement.dataset.theme,bg:getComputedStyle(document.documentElement).backgroundColor,
+          font:getComputedStyle(document.getElementById("status")).fontFamily,fonts:[...document.fonts].filter(f=>f.status==="loaded").map(f=>f.family)}));
+        assert.equal(look.theme,mode==="light"?"light":"dark");
+        assert.equal(look.bg,"rgba(0, 0, 0, 0)","frame must be transparent over Home");
+        assert.match(look.font,/^"?Geist"?,/);
+        await page.screenshot({path:path.join(root,`.tmp/personal-preference-inline-${mode}-${viewportName}.png`)});
+      }
       await confirm.click();
       if(["forget","unknown"].includes(mode)) {
         await check.waitFor();
@@ -148,6 +158,10 @@ async function scenario(browser,originServer,mode,viewportName) {
         assert.equal(await confirm.isVisible(),false);assert.equal(await cancel.isVisible(),false);
         assert.ok(!(await texts(page)).some(t=>t.startsWith("Forgotten") || t.startsWith("Saved")));
         await check.click();
+      }
+      if(mode==="remember") {
+        await frameGone();
+        assert.equal(await page.locator(".slot").textContent(),"review closed");
       }
       await replied(mode==="forget" ? "Forgotten: your evening lighting preference is gone from both homes." : mode==="correct" ? "Saved: neutral lighting in the evening, for both homes." : "Saved: warm lighting in the evening, for both homes.");
       await frameGone();

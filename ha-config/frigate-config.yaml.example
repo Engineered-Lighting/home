@@ -1,9 +1,13 @@
+# Credentials come from Frigate's environment, never this file: set
+# FRIGATE_RTSP_USER, FRIGATE_RTSP_PASSWORD and FRIGATE_MQTT_PASSWORD for the
+# Frigate container (Frigate substitutes {FRIGATE_*} variables, go2rtc included).
+
 mqtt:
   enabled: true
   host: core-mosquitto
   port: 1883
   user: frigate
-  password: frigatepass
+  password: "{FRIGATE_MQTT_PASSWORD}"
 
 # Use Intel iGPU (VAAPI) for decoding
 ffmpeg:
@@ -13,25 +17,25 @@ ffmpeg:
 go2rtc:
   streams:
     living_room:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.227:554/stream1
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.227:554/stream1
     living_room_sub:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.227:554/stream2
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.227:554/stream2
     dining_room:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.92:554/stream1
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.92:554/stream1
     dining_room_sub:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.92:554/stream2
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.92:554/stream2
     workshop:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.54:554/stream1
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.54:554/stream1
     workshop_sub:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.54:554/stream2
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.54:554/stream2
     driveway:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.68:554/stream1
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.68:554/stream1
     driveway_sub:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.68:554/stream2
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.68:554/stream2
     kitchen:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.64:554/stream1
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.64:554/stream1
     kitchen_sub:
-      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.64:554/stream2
+      - rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.168.0.64:554/stream2
 
 detectors:
   coral:

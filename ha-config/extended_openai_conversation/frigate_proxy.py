@@ -42,7 +42,9 @@ FACE_FILE_URL = f"{URL_PREFIX}/faces/{{name}}/{{file}}"
 
 PERSON_NAME = re.compile(r"[A-Za-z0-9 _.\-]{1,64}")
 EVENT_ID = re.compile(r"[0-9]{9,11}\.[0-9]{1,6}-[a-z0-9]{4,12}")
-FACE_FILE = re.compile(r"[A-Za-z0-9_.\-]{1,128}\.(?:webp|jpg|jpeg|png)")
+# Enrolled files can carry spaces (they arrive URL-decoded, as %20 on the wire).
+# First character alphanumeric, so no leading dot; separators never match.
+FACE_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.\-]{0,254}\.(?:webp|jpg|jpeg|png)")
 LIMIT = re.compile(r"[0-9]{1,3}")
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200

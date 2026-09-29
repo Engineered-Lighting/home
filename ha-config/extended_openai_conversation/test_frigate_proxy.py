@@ -328,6 +328,18 @@ for value in ("Al..ex", "..", ".", " ", "train", "a/b", "a\\b", "","A" * 65, Non
 for value in ("Alex", "Sam Lee", "J.R. Smith", "anne-marie_2"):
     check(f"validate_person_name accepts {value!r}", proxy.validate_person_name(value) == value)
 
+fresh()
+upstream.routes["clips/faces/Alex/Alex%20front%201.webp"] = _UpstreamResponse(
+    body=b"RIFFwebp", content_type="image/webp"
+)
+response = _run(proxy.face_file(
+    _Request(proxy.URL_PREFIX + "/faces/Alex/Alex%20front%201.webp"), "Alex", "Alex front 1.webp"
+))
+check("face file: a file name with spaces is accepted and re-encoded for Frigate",
+      response.status == 200
+      and upstream.requests[-1] == f"{FRIGATE}/clips/faces/Alex/Alex%20front%201.webp",
+      (response.status, upstream.requests))
+
 for ext in ("jpg", "jpeg", "png", "webp"):
     check(f"face file: .{ext} is an accepted extension",
           proxy.validate_face_file(f"face-01.{ext}") == f"face-01.{ext}")
@@ -448,8 +460,9 @@ for label, name, file in (
     ("no extension", "Alex", "alex-1"),
     ("upper-case extension", "Alex", "a.WEBP"),
     ("json file", "Alex", "a.json"),
-    ("129-character stem", "Alex", "a" * 129 + ".webp"),
-    ("space in file", "Alex", "a b.webp"),
+    ("256-character stem", "Alex", "a" * 256 + ".webp"),
+    ("leading space in file", "Alex", " a.webp"),
+    ("backslash file", "Alex", "a\\b.webp"),
 ):
     request = _Request(proxy.URL_PREFIX + "/faces/x/y.webp")
     ok, detail = rejected(lambda: proxy.face_file(request, name, file), 400, network=False)

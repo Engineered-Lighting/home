@@ -26,6 +26,11 @@ const appSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home
 // Assistant runs the pre-E4 integration (ha-config/extended_openai_conversation/),
 // so the E4 design they describe is kept unchanged in the reference copy.
 const haInitSource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation_e4_reference", "__init__.py"), "utf8");
+// The Frigate routes LA Home Assistant serves: the live integration's typed
+// views and the module they delegate to.
+const liveHaInitSource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation", "__init__.py"), "utf8");
+const liveFrigateProxySource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation", "frigate_proxy.py"), "utf8");
+const liveAgentProfileViewsSource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation", "agent_profile_views.py"), "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -926,12 +931,23 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("`${operationScopeKey}:detail:${identityUuid || \"closed\"}`") &&
     peopleSource.includes("`${operationScopeKey}:avatar:${identity.uuid}`") &&
     peopleSource.includes("`${operationScopeKey}:preferences:${identityUuid}`"));
-  assert("Frigate metadata uses one exact typed authenticated route",
+  assert("Frigate is reached only through the typed authenticated HA routes",
     peopleSource.includes("/api/extended_openai_conversation/frigate_proxy/faces") &&
-    haInitSource.includes('url = "/api/extended_openai_conversation/frigate_proxy/faces"') &&
-    haInitSource.includes("request.raw_path == cls.url") &&
-    haInitSource.includes('"Cache-Control": "no-store"') &&
-    !haInitSource.includes("_ALLOWED_PREFIXES"));
+    liveFrigateProxySource.includes('EVENTS_URL = f"{URL_PREFIX}/events"') &&
+    liveFrigateProxySource.includes('THUMBNAIL_URL = f"{URL_PREFIX}/events/{{event_id}}/thumbnail.jpg"') &&
+    liveFrigateProxySource.includes('FACES_URL = f"{URL_PREFIX}/faces"') &&
+    liveFrigateProxySource.includes('FACE_FILE_URL = f"{URL_PREFIX}/faces/{{name}}/{{file}}"') &&
+    liveFrigateProxySource.includes('URL_PREFIX = "/api/extended_openai_conversation/frigate_proxy"') &&
+    liveFrigateProxySource.includes("follow_redirects=False") &&
+    liveFrigateProxySource.includes('TRAIN_BUCKET = "train"') &&
+    ["FrigateEventsProxyView", "FrigateEventThumbnailProxyView", "FrigateFacesProxyView", "FrigateFaceFileProxyView"]
+      .every((view) => new RegExp(`class ${view}\\(CORSHomeAssistantView\\):\\n(?:(?!\\nclass )[\\s\\S])*?requires_auth = True`).test(liveHaInitSource)) &&
+    liveHaInitSource.includes("    *FRIGATE_PROXY_VIEW_CLASSES,\n    AvatarView,\n)") &&
+    // No ?path= passthrough and no Frigate origin handed to the browser.
+    !liveHaInitSource.includes("_ALLOWED_PREFIXES") &&
+    !liveHaInitSource.includes('request.query.get("path")') &&
+    !liveHaInitSource.includes('"/api/extended_openai_conversation/frigate_proxy"') &&
+    !liveAgentProfileViewsSource.includes('"frigate_url"'));
   assert("fenced plaintext identity backup is disabled",
     haInitSource.includes("legacy_identity_export_disabled_pending_cutover") &&
     haInitSource.includes("if store.semantic_write_fence_installed:"));

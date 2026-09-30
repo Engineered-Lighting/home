@@ -257,3 +257,66 @@ test('reset during delivery prevents late outcomes and subsequent implicit execu
  assert.equal(outcomes.length,0);assert.equal(events.filter(e=>e.kind==='perception').length,0);
  await api.run('Look again',options);assert.match(events.at(-1).text,/Which home and room/);
 });
+
+// A question naming no room and no home uses the owner's default home (the
+// resolver light commands use); anything named keeps its explicit target.
+function withHome(resolveHome) {
+ const events=[],calls=[],value=caption();
+ const {api}=setup(async op=>{calls.push('victoria:'+op);return op==='cameras.refresh'?receipt():op==='cameras.context'?value:image(value);},
+  {HG_WEB_MODE:true,HomeLightingControl:resolveHome===undefined?undefined:{resolveHome},
+   fetch:async()=>{calls.push('echo');return {ok:true,text:async()=>JSON.stringify(laValue())};}});
+ return {api,events,calls,options:{addEvent:e=>events.push(e),isCurrent:()=>true,homeChoice:'auto'}};
+}
+test('no room and no home in Victoria checks the den and says why',async()=>{
+ let asked;
+ const f=withHome(async choice=>{asked=choice;return {site:'victoria',basis:'network',label:'on the Victoria network'};});
+ assert.equal(await f.api.run('Show me my home',f.options),true);
+ assert.equal(asked,'auto');
+ assert.deepEqual(f.calls,['victoria:cameras.refresh','victoria:cameras.context','victoria:cameras.refreshImage']);
+ assert.ok(f.events.some(e=>e.kind==='system' && e.text==="Checking Victoria den (you're in Victoria)..."));
+ assert.ok(!f.events.some(e=>/Which home/.test(e.text||'')));
+});
+test('the last home used is named when location is unknown',async()=>{
+ const f=withHome(async()=>({site:'victoria',basis:'last',label:'last home used'}));
+ await f.api.run("What's happening at home?",f.options);
+ assert.ok(f.events.some(e=>e.kind==='system' && /I couldn't tell where you are, so I used Victoria, the last home you used/.test(e.text)));
+});
+test('no room and no home in LA asks only which LA room, then checks it',async()=>{
+ const f=withHome(async()=>({site:'echo',basis:'phone',label:'your phone is in Los Angeles'}));
+ await f.api.run('Show me my home',f.options);
+ assert.equal(f.calls.length,0);
+ assert.equal(f.events.at(-1).text,"Which LA camera (you're in LA): living room, kitchen, dining room, workshop, or driveway?");
+ await f.api.run('kitchen',f.options);
+ assert.deepEqual(f.calls,['echo']);
+});
+test('a named room or home ignores the default home',async()=>{
+ let used=0;
+ const f=withHome(async()=>{used++;return {site:'victoria',basis:'network'};});
+ await f.api.run('Show me the LA kitchen',f.options);
+ await f.api.run('Is anyone in the kitchen?',f.options);
+ await f.api.run('Show LA',f.options);
+ assert.equal(used,0);
+ assert.ok(!f.calls.some(c=>c.startsWith('victoria:')));
+});
+test('a missing or failing resolver keeps asking which home',async()=>{
+ for(const resolveHome of [undefined,async()=>{throw new Error('offline');}]) {
+  const f=withHome(resolveHome);
+  await f.api.run('Show me my home',f.options);
+  assert.equal(f.calls.length,0);
+  assert.match(f.events.at(-1).text,/^Which home and room/);
+ }
+});
+test('a lookup that never answers falls back to asking within the bound',async()=>{
+ const f=withHome(()=>new Promise(()=>{}));
+ const started=Date.now();
+ await f.api.run('Show me my home',f.options);
+ assert.ok(Date.now()-started<3000);
+ assert.equal(f.calls.length,0);
+ assert.match(f.events.at(-1).text,/^Which home and room/);
+});
+test('switching context while the home is resolved sends nothing',async()=>{
+ let current=true;
+ const f=withHome(async()=>{current=false;return {site:'victoria',basis:'network'};});
+ assert.equal(await f.api.run('Show me my home',{...f.options,isCurrent:()=>current}),true);
+ assert.equal(f.calls.length,0);
+});

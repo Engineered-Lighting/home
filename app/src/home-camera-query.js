@@ -104,13 +104,18 @@
     if(home.basis==='last') return ` (I couldn't tell where you are, so I used ${HOME[home.site]}, the last home you used)`;
     return '';
   }
+  // Bounded so a slow lookup never leaves the owner's message unshown; the
+  // resolver's own location fetch gives up at 1.5 s, falling back to the last home.
+  const DEFAULT_HOME_MS=2000;
   async function defaultHome(text, plan, options) {
     if(plan?.clarify!=='home' || !root.HG_WEB_MODE || typeof root.HomeLightingControl?.resolveHome!=='function' ||
         /\b(victoria|los angeles|la|echo|both)\b/.test(normalize(text))) return {plan};
     try {
-      const home=await root.HomeLightingControl.resolveHome(options.homeChoice);
+      let timer;
+      const home=await Promise.race([root.HomeLightingControl.resolveHome(options.homeChoice),
+        new Promise(resolve=>{timer=setTimeout(resolve,DEFAULT_HOME_MS,null);})]).finally(()=>clearTimeout(timer));
       if(home?.site==='victoria') return {plan:{targets:[{siteId:'victoria',cameraId:'den'}]},home};
-      if(home?.site==='echo') return {plan:{clarify:'la_room'}};
+      if(home?.site==='echo') return {plan:{clarify:'la_room'},home};
     } catch {/* keep asking which home */}
     return {plan};
   }
@@ -327,7 +332,7 @@
       pending={kind:plan.clarify,until:root.performance.now()+60000,isCurrent:options.isCurrent};
       emit(plan.clarify==='home' ? 'Which home and room: Victoria den, or an LA camera?' :
         (plan.clarify==='both_room' ? 'I can check Victoria den too. ' : '')+
-        'Which LA camera: living room, kitchen, dining room, workshop, or driveway?');
+        `Which LA camera${inferred?.site==='echo' ? homeNote(inferred) : ''}: living room, kitchen, dining room, workshop, or driveway?`);
       return true;
     }
     busy=true;

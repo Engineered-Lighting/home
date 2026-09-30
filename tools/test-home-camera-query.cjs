@@ -285,7 +285,7 @@ test('no room and no home in LA asks only which LA room, then checks it',async()
  const f=withHome(async()=>({site:'echo',basis:'phone',label:'your phone is in Los Angeles'}));
  await f.api.run('Show me my home',f.options);
  assert.equal(f.calls.length,0);
- assert.match(f.events.at(-1).text,/^Which LA camera/);
+ assert.equal(f.events.at(-1).text,"Which LA camera (you're in LA): living room, kitchen, dining room, workshop, or driveway?");
  await f.api.run('kitchen',f.options);
  assert.deepEqual(f.calls,['echo']);
 });
@@ -305,6 +305,14 @@ test('a missing or failing resolver keeps asking which home',async()=>{
   assert.equal(f.calls.length,0);
   assert.match(f.events.at(-1).text,/^Which home and room/);
  }
+});
+test('a lookup that never answers falls back to asking within the bound',async()=>{
+ const f=withHome(()=>new Promise(()=>{}));
+ const started=Date.now();
+ await f.api.run('Show me my home',f.options);
+ assert.ok(Date.now()-started<3000);
+ assert.equal(f.calls.length,0);
+ assert.match(f.events.at(-1).text,/^Which home and room/);
 });
 test('switching context while the home is resolved sends nothing',async()=>{
  let current=true;

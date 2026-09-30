@@ -54,8 +54,14 @@ path, as before. This is a choice of target only, never an authority: either
 home can already be named explicitly. It replaces, for target choice, the
 earlier plan's "fresh fix within five minutes; network only corroborates" rule.
 The endpoint returns only a site, how it was decided and a short label; never
-coordinates, addresses or entity ids. Only light commands use it today, since
-other commands have no Victoria path yet.
+coordinates, addresses or entity ids.
+
+Camera questions use the same default home, but only when they name no room
+and no home ("show me my home", "what's happening at home?"). A named room
+already decides the home, since each camera room exists in one home. In
+Victoria that means the den, its only camera; in Los Angeles Home asks only
+which of its rooms. Other commands have no Victoria path yet and are
+unchanged.
 
 ## Access to each home
 

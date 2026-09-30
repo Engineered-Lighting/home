@@ -93,6 +93,27 @@
     return {targets};
   }
   function matches(text) { return resolve(text) !== null; }
+  // A question naming no room and no home goes to the home the owner is in,
+  // from the same resolver light commands use (HomeLightingControl.resolveHome).
+  // It only picks a target; the check itself is unchanged. Victoria has one
+  // camera, so it resolves fully; LA still asks which room.
+  const HOME={echo:'LA',victoria:'Victoria'};
+  function homeNote(home) {
+    if(!home) return '';
+    if(home.basis==='network' || home.basis==='phone') return ` (you're in ${HOME[home.site]})`;
+    if(home.basis==='last') return ` (I couldn't tell where you are, so I used ${HOME[home.site]}, the last home you used)`;
+    return '';
+  }
+  async function defaultHome(text, plan, options) {
+    if(plan?.clarify!=='home' || !root.HG_WEB_MODE || typeof root.HomeLightingControl?.resolveHome!=='function' ||
+        /\b(victoria|los angeles|la|echo|both)\b/.test(normalize(text))) return {plan};
+    try {
+      const home=await root.HomeLightingControl.resolveHome(options.homeChoice);
+      if(home?.site==='victoria') return {plan:{targets:[{siteId:'victoria',cameraId:'den'}]},home};
+      if(home?.site==='echo') return {plan:{clarify:'la_room'}};
+    } catch {/* keep asking which home */}
+    return {plan};
+  }
   function answer(value, now, request) {
     const unavailable = "I can't get a current view of your Victoria den right now. No fresh camera description is available.";
     if (!value || !request || value.request_id !== request.request_id ||
@@ -263,7 +284,11 @@
     const originalOptions = options;
     options = {...options,addEvent:event=>originalOptions.addEvent({...event,turnId,turnKey:turnId,privateCameraContext:true})};
     const s = normalize(text);
-    let plan = resolve(text);
+    let plan = resolve(text), inferred = null;
+    if(plan?.clarify==='home') {
+      ({plan, home:inferred} = await defaultHome(text, plan, originalOptions));
+      if(originalOptions.isCurrent?.()===false) return true;
+    }
     const refresh = /^(?:look(?: there)? again|check(?: there)? again|refresh(?: (?:it|that|the view))?|look at (?:it|that|there))$/.test(s);
     const recall = /^(?:what did you see(?: there)?|what (?:was|is) in (?:that|the) (?:image|picture)|describe (?:it|that|the image))$/.test(s);
     const detail = /^(?:what (?:colou?r|size|kind|type)|how many|is (?:the|that)|are (?:the|those)|can you (?:see|tell))\b/.test(s);
@@ -314,7 +339,8 @@
     try {
       for(const target of plan.targets) {
         if(!batch.isCurrent()) break;
-        options.addEvent({kind:'system',text:`Checking ${target.siteId==='victoria'?'Victoria':'LA'} ${target.cameraId.replace(/_/g,' ')}...`,privateCameraContext:true});
+        const note=inferred?.site===target.siteId ? homeNote(inferred) : '';
+        options.addEvent({kind:'system',text:`Checking ${target.siteId==='victoria'?'Victoria':'LA'} ${target.cameraId.replace(/_/g,' ')}${note}...`,privateCameraContext:true});
         const outcome = target.siteId==='victoria' ? await refreshVictoria(batch) : await refreshLA(target.cameraId,batch);
         outcome.roomId=target.cameraId;
         if(batch.isCurrent()) {

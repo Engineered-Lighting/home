@@ -9355,7 +9355,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       return;
     }
     if (window.HomeCameraQuery && await window.HomeCameraQuery.run(text, {
-      addEvent, simActive: sim.active,
+      addEvent, simActive: sim.active, homeChoice: homeChoiceRef.current,
       validateAuthority: window.HG_WEB_MODE ? () => window.HomeCameraQuery.validateAuthority(clearPrivateCameraContext) : undefined,
       onAuthorityLoss: clearPrivateCameraContext,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,

@@ -56,6 +56,11 @@ def _constants(source: str) -> dict[str, str]:
         target = node.targets[0]
         if not isinstance(target, ast.Name):
             continue
+        # An alias such as RECONCILE_SIGNATURE = SIGNATURE carries the aliased
+        # value, not the word "SIGNATURE".
+        if isinstance(node.value, ast.Name) and node.value.id in values:
+            values[target.id] = values[node.value.id]
+            continue
         try:
             value = ast.literal_eval(node.value)
         except (ValueError, SyntaxError):
@@ -110,20 +115,64 @@ def _expansions(source: str) -> str:
     return "\n".join(parts)
 
 
+def _argument_count(params: str) -> int:
+    """Declared parameters, one per top-level comma.
+
+    Counting type keywords at line starts undercounted any signature that packs
+    several parameters on a line or uses a type outside a fixed list (bigint),
+    which made one six-argument function look like a 1- and a 2-argument
+    overload.
+    """
+
+    return len([part for part in params.split(",") if part.strip()])
+
+
+def _sql_text(source: str) -> str:
+    """Every SQL string the migration can execute, as Postgres will see it.
+
+    Later migrations keep frozen function definitions as dict values rather
+    than module-level strings; the parser joins their adjacent fragments and
+    decodes escapes, which a regex over raw source cannot do.
+    """
+
+    strings = [
+        node.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    return "\n".join([_resolved(source), *strings])
+
+
+# One level of nested parentheses covers DEFAULT expressions and numeric(p,s)
+# without letting a match run past its own closing parenthesis.
+_CREATE = re.compile(
+    r"CREATE (?:OR REPLACE )?FUNCTION\s+([\w.]+)\s*"
+    r"\(((?:[^()]|\([^()]*\))*)\)\s*RETURNS(.*?)\bAS\b",
+    re.S,
+)
+
+
 def _created_functions(source: str) -> dict[str, int]:
     """Function name -> declared argument count, from CREATE statements."""
 
-    created: dict[str, int] = {}
-    for match in re.finditer(
-        r"CREATE (?:OR REPLACE )?FUNCTION\s+([\w.]+)\s*\((.*?)\)\s*RETURNS",
-        source,
-        re.S,
-    ):
-        name, params = match.group(1), match.group(2)
-        created[name] = len(
-            re.findall(rf"^\s*\w+\s+(?:{SQL_TYPES})\b", params, re.M)
-        )
-    return created
+    return {
+        match.group(1): _argument_count(match.group(2))
+        for match in _CREATE.finditer(_sql_text(source))
+    }
+
+
+def _definer_functions(source: str) -> dict[str, int]:
+    """The SECURITY DEFINER subset of ``_created_functions``.
+
+    Only a definer runs as its owner; a SECURITY INVOKER function runs as its
+    caller whoever owns it, so its ownership cannot trip its own guard.
+    """
+
+    return {
+        match.group(1): _argument_count(match.group(2))
+        for match in _CREATE.finditer(_sql_text(source))
+        if re.search(r"\bSECURITY\s+DEFINER\b", match.group(3))
+    }
 
 
 def _upgrade_body(source: str) -> str:
@@ -155,7 +204,21 @@ def _owned_signatures(source: str) -> set[tuple[str, int]]:
         rf"ALTER FUNCTION\s+([\w.]+)\(([^)]*)\)\s*OWNER TO", _resolved(source), re.S
     ):
         name, params = match.group(1), match.group(2)
-        owned.add((name, len(re.findall(rf"\b(?:{SQL_TYPES})\b", params))))
+        owned.add((name, _argument_count(params)))
+    # A function created while SET LOCAL ROLE is in effect is owned by that
+    # role from the start; 0044 creates its lookup this way.
+    resolved, constants = _resolved(source), _constants(source)
+    for span in re.finditer(r"SET LOCAL ROLE\s+\w+;(.*?)RESET ROLE", resolved, re.S):
+        executed = [span.group(1)] + [
+            constants[name]
+            for name in re.findall(r"op\.execute\((\w+)\)", span.group(1))
+            if name in constants
+        ]
+        for text in executed:
+            for name, value in constants.items():
+                text = text.replace("{" + name + "}", value)
+            for match in _CREATE.finditer(text):
+                owned.add((match.group(1), _argument_count(match.group(2))))
     return owned
 
 
@@ -197,7 +260,7 @@ def test_a_created_function_is_given_an_explicit_owner() -> None:
         # 0022's suppression predicate is both, and flagging it would be noise.
         if "current_user" not in source:
             continue
-        for name, arity in _created_functions(source).items():
+        for name, arity in _definer_functions(source).items():
             if (name, arity) not in owned:
                 problems.append(
                     f"{path.name} creates {name} with {arity} arguments but "
@@ -231,7 +294,7 @@ def test_a_changed_signature_drops_the_superseded_overload() -> None:
         superseded = sorted(counts)[:-1]
         for count in superseded:
             dropped = any(
-                len(re.findall(rf"\b(?:{SQL_TYPES})\b", match.group(1))) == count
+                _argument_count(match.group(1)) == count
                 for match in re.finditer(
                     rf"DROP FUNCTION IF EXISTS\s+{re.escape(name)}\((.*?)\)",
                     combined,

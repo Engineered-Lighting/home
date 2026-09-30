@@ -1,0 +1,97 @@
+name: home agent core and operator unit tests
+
+# Database-free runs of stack/services/home-agent-core/tests and
+# stack/home-agent-deploy/operator/tests, discovered by directory so a new test
+# file cannot be left out. PostgreSQL-backed assertions skip here and belong in
+# home-agent-e1-postgres.yml, which pins them by file.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/home-agent-core-unit.yml"
+      - "app/src-tauri/src/**"
+      - "app/src/**"
+      - "ha-config/home_agent_edge/**"
+      - "stack/**"
+      - "tests/home_agent/test_home_agent_core_unit_gate_contract.py"
+      - "tools/run-home-agent-e1-postgres-gate.py"
+      - "web-gateway/**"
+  push:
+    branches: [main, codex/home-agent-integration]
+    paths:
+      - ".github/workflows/home-agent-core-unit.yml"
+      - "app/src-tauri/src/**"
+      - "app/src/**"
+      - "ha-config/home_agent_edge/**"
+      - "stack/**"
+      - "tests/home_agent/test_home_agent_core_unit_gate_contract.py"
+      - "tools/run-home-agent-e1-postgres-gate.py"
+      - "web-gateway/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-agent-core-unit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install the hash-pinned Core development packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/home-agent-core"
+          "${RUNNER_TEMP}/home-agent-core/bin/python" -m pip install \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --require-hashes \
+            -r stack/services/home-agent-core/requirements-dev.lock
+
+      - name: Run the gate contract
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/home-agent-core/bin/python" -m pytest \
+            -p no:cacheprovider \
+            -q \
+            tests/home_agent/test_home_agent_core_unit_gate_contract.py
+
+      - name: Run Core unit tests
+        shell: bash
+        working-directory: stack/services/home-agent-core
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        # The E1 PostgreSQL gate runs the ignored file against a live database;
+        # without one its fixtures error instead of skipping.
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/home-agent-core/bin/python" -m pytest \
+            -p no:cacheprovider \
+            -q \
+            tests \
+            --ignore=tests/test_phase3_identity_erasure_admission_postgres.py
+
+      - name: Run operator unit tests
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/home-agent-core/bin/python" -m pytest \
+            -p no:cacheprovider \
+            -q \
+            stack/home-agent-deploy/operator/tests
+          git diff --exit-code

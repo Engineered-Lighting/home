@@ -1,6 +1,6 @@
 ---
 title: Cross-home lighting restarts on its own
-target: deploy
+target: backend
 type: changed
 ---
 

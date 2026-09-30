@@ -363,8 +363,9 @@ It listens on `172.23.0.37:9448` (TLS leaf issued by the retained internal CA),
 reaches PostgreSQL as `home_agent_lighting`, and reaches each home's light-only
 endpoint through its Tailscale Serve port (LA `:10000`, Victoria `:10001`) over
 the `home-agent_lighting-egress` bridge (`ha-light-egr0`, `172.27.0.10`), which
-the `lighting` firewall profile confines to exactly those two ports. It starts
-with `restart: no` until a sustained check.
+the `lighting` firewall profile confines to exactly those two ports. It runs
+with `restart: unless-stopped`, like the other private listeners. At boot it
+may exit once if Core is not admitted yet; Docker then starts it again.
 
 Order, in one Lab-acknowledged window:
 

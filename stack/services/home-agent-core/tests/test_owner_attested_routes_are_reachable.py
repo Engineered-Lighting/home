@@ -43,7 +43,13 @@ def test_routes_that_must_be_live_together_share_a_revision() -> None:
     """
 
     assert OWNER_PARTNER_ADAPTER_REVISION == OWNER_PERSON_ADAPTER_REVISION
-    expected = {"0030_relationship_vocabulary_e5q", "0031_relationship_uniqueness_e5r"}
+    # 0047 preserves the 0031 owner functions and grants; see the reviewed
+    # matrix in app/identity_capabilities.py.
+    expected = {
+        "0030_relationship_vocabulary_e5q",
+        "0031_relationship_uniqueness_e5r",
+        "0047_personal_pref_authority_v1",
+    }
     for revision in _members():
         for capability in ("owner_person_creation", "owner_relationship_attestation"):
             assert supports_identity_capability(revision, capability) is (revision in expected)

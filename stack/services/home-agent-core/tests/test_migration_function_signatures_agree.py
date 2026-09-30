@@ -40,13 +40,34 @@ def test_new_migrations_declare_a_function_signature_once() -> None:
     for path in sorted(VERSIONS.glob("*.py")):
         if path.name < "0022":
             continue
-        source = path.read_text()
-        creates = "CREATE FUNCTION" in source or "CREATE OR REPLACE FUNCTION" in source
-        refers = "ALTER FUNCTION" in source or "DROP FUNCTION" in source
-        if creates and refers and "SIGNATURE" not in source:
+        # Join adjacent string fragments so a reference split across lines
+        # reads as the SQL statement it becomes.
+        source = re.sub(r'"\s*\n\s*f?"', "", path.read_text())
+        created = {
+            match.group(1): _argument_count(match.group(2))
+            for match in re.finditer(
+                r"CREATE (?:OR REPLACE )?FUNCTION\s+([\w.]+)\s*\((.*?)\)\s*RETURNS",
+                source,
+                re.S,
+            )
+        }
+        if not created:
+            continue
+        # The declared constant may be named SIGNATURE, FUNCTIONS or anything
+        # else; what matters is that no reference restates an argument list
+        # by hand. A literal list is tolerated only where it cannot drift from
+        # this migration's own CREATE of the same function.
+        for match in re.finditer(
+            r"(?:ALTER|DROP) FUNCTION (?:IF EXISTS )?([\w.]+)\s*\(([^)]*)\)", source
+        ):
+            name, arguments = match.group(1), match.group(2)
+            if "{" in arguments:
+                continue
+            if created.get(name) == _argument_count(arguments):
+                continue
             problems.append(
-                f"{path.name} creates a function and names its signature again "
-                "by hand; declare it once and interpolate"
+                f"{path.name} creates a function and names {name}({arguments}) "
+                "again by hand; declare the signature once and interpolate"
             )
     assert not problems, "\n".join(problems)
 

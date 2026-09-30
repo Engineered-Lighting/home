@@ -183,7 +183,24 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
             'receipt_writer="$operator_dir/phase3_evidence_receipts.py"',
             self.script,
         )
-        self.assertIn('python3 "$receipt_writer" restore', self.script)
+        # Maintenance revisions write their own restore receipt (#145); every
+        # other revision writes the plain restore receipt. No other receipt
+        # command is reachable from the drill.
+        invocation = 'python3 "$receipt_writer" "$receipt_command"'
+        self.assertEqual(self.script.count('"$receipt_writer" '), 1)
+        self.assertIn(invocation, self.script)
+        self.assertIn(
+            "receipt_command=restore\n"
+            'case "$HOME_AGENT_EXPECTED_DB_REVISION" in\n'
+            "  0031_relationship_uniqueness_e5r|0047_personal_pref_authority_v1)\n"
+            "    receipt_command=restore-maintenance ;;\n"
+            "esac\n" + invocation,
+            self.script,
+        )
+        self.assertEqual(
+            sorted(set(re.findall(r"receipt_command=([\w-]+)", self.script))),
+            ["restore", "restore-maintenance"],
+        )
         self.assertIn(
             '--database-system-identifier "$restored_system_id"',
             self.script,
@@ -191,7 +208,7 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
         self.assertNotIn("erasure_ledger_replay_status", self.script)
         self.assertLess(
             self.script.index("pg_checksums"),
-            self.script.index('python3 "$receipt_writer" restore'),
+            self.script.index(invocation),
         )
 
     def test_environment_preflight_and_image_label_support_the_drill(self) -> None:

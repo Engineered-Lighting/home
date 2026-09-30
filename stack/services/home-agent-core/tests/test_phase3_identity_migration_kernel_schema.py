@@ -12,11 +12,17 @@ SCHEMA = (ROOT / "app" / "schema.py").read_text(encoding="utf-8")
 
 
 def _revision_literal(path: Path, name: str) -> str | None:
+    # Revisions from 0032 on use a plain assignment instead of an annotated
+    # one; both forms put the string in alembic_version.
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for statement in tree.body:
-        if not isinstance(statement, ast.AnnAssign):
+        if isinstance(statement, ast.AnnAssign):
+            targets = [statement.target]
+        elif isinstance(statement, ast.Assign):
+            targets = statement.targets
+        else:
             continue
-        if not isinstance(statement.target, ast.Name) or statement.target.id != name:
+        if not any(isinstance(t, ast.Name) and t.id == name for t in targets):
             continue
         if isinstance(statement.value, ast.Constant):
             return statement.value.value

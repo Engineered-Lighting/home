@@ -14,8 +14,9 @@ def test_lighting_override_matches_the_hardened_private_listeners():
     assert lighting["command"] == ["lighting-api"] and lighting["image"] == coordinator["image"]
     for key in ("user", "read_only", "security_opt", "cap_drop", "init", "tmpfs", "logging", "profiles"):
         assert lighting[key] == coordinator[key], key
-    # Commissioning: started explicitly; a restarting policy follows a sustained check.
-    assert lighting["restart"] == "no"
+    # Restarts on its own after a crash or reboot, like the other private listeners
+    # (after an 8-hour sustained check on 2026-09-29).
+    assert lighting["restart"] == coordinator["restart"] == "unless-stopped"
     assert lighting["environment"]["HOME_AGENT_LIGHTING_PROFILE_FILE"] == "/config/listener.json"
     assert "HOME_AGENT_LINK_COORDINATOR_PROFILE_FILE" not in lighting["environment"]
     assert all("LINK_COORDINATOR" not in json.dumps(value) for value in lighting.values())

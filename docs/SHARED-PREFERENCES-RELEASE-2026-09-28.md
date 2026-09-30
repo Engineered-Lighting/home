@@ -299,14 +299,22 @@ remain outside this release's replacement scope.
 
 ## Remaining work
 
-- Repeat the six-step acceptance at 375×812.
-- After a sustained resource check, move the five private services (`echo-identity`, `victoria-identity`, `link-coordinator`,
-  `echo-preferences`, `victoria-link`) from `restart: no` to a restarting policy, through a reviewed compose change.
-- In-chat preference confirmation, to replace the separate Agent window.
-- Internal TLS leaves expire 2026-12-27.
-  - The expiry alert is installed (2026-09-29, above) and pages from about 2026-11-27.
+Updated 2026-09-30.
+
+- Repeat the six-step acceptance at 375×812. This is still open.
+- Internal TLS leaves expire 2026-12-27, and the lighting leaf expires 2026-12-28.
+  - The expiry alert is installed (2026-09-29, above). It covers all seven leaves, including lighting, and pages from
+    about 2026-11-27.
   - Renew before 2026-12-27 with the installed `renew_internal_tls.py`, following the shared-preferences README
     (Internal TLS renewal). Put the victoria-link ingress leaf last, in an owner-chosen window with sign-out and sign-in.
   - CA rotation needs its own reviewed change before about 2027-05-31.
 
-Lighting and travel defaults remain inactive milestones.
+Done since this receipt was written:
+
+- **Restart policy.** The five private services (`echo-identity`, `victoria-identity`, `link-coordinator`,
+  `echo-preferences`, `victoria-link`) and `lighting` all run with `restart: unless-stopped`, as checked live on
+  2026-09-30. `victoria-preferences` stays staged with `restart: no`, because nothing uses it.
+- **In-chat confirmation.** Preferences are now confirmed inline in the Home chat (#156) instead of in the separate
+  Agent window.
+- **Cross-home lighting and travel-aware defaults** are live and accepted; see
+  `CROSS-HOME-LIGHTING-RELEASE-2026-09-29.md`.

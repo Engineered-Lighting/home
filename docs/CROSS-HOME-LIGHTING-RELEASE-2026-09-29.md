@@ -19,6 +19,8 @@ travel-aware defaults. See `CROSS-HOME-LIGHTING.md` for the rules and design. Ti
   consent was issued for 30 days; choosing **Review lighting control** again extends it to 365.
 - **Limits:** 0.5 CPU, 512 MiB RAM (no swap), 64 processes. Observed about 94 MiB.
 - **TLS leaf:** `CN=lighting`, IP SAN `172.23.0.37`, from the retained internal CA, expires **2026-12-28 07:41 UTC**.
+  The daily `home-agent-internal-tls-expiry` check covers it (first reported `ok`, 89 days left, on the
+  2026-09-29 09:29 run) and warns from 30 days out; `renew_internal_tls.py` renews it like the other leaves.
 - **Egress:** bridge `home-agent_lighting-egress` (`ha-light-egr0`, `172.27.0.10`) to the Serve ports `:10000` (LA HA)
   and `:10001` (Victoria HA) only. Enforced by firewall profile `lighting` (chain `HOME_AGENT_LIGHT_INPUT`, hook
   digest `42e83a03…`) and checked every 5 minutes by `home-agent-lighting-egress-verify.timer` (last result success).
@@ -82,7 +84,5 @@ with `gh attestation verify` and imported with `operator/imported_image_identity
 
 ## Open items
 
-- **Lighting TLS leaf is not in the expiry alert.** The daily `home-agent-internal-tls-expiry` check covers six leaves,
-  and `lighting` is absent. Add it, or renew by hand before 2026-12-28.
 - Workshop camera: its Frigate feed is down (pre-existing).
 - LA `extended_openai_conversation`: the `IdentityStore` `legacy_identity_semantics_frozen` error predates this work.

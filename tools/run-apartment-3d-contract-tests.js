@@ -15,13 +15,14 @@ const SIM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-sim.js
 const INDEX = fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8");
 const SW = fs.readFileSync(path.join(REPO, "app", "src", "home-service-worker.js"), "utf8");
 const FEATURE_LOADER = fs.readFileSync(path.join(REPO, "app", "src", "home-feature-loader.js"), "utf8");
-// The engineered-fixture validation (962a3ab8, 8115cfec) was never deployed to
-// LA Home Assistant, whose runtime ha-config/extended_openai_conversation/ now
-// mirrors. Until it is deployed it lives only in the pre-reconciliation copy.
-const BACKEND = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation_e4_reference", "__init__.py"), "utf8");
+const BACKEND = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation", "__init__.py"), "utf8");
 const APP = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
 const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js"), "utf8");
 const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");
+const ADAPTIVE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "adaptive-performance.mjs"), "utf8");
+const WORLD = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "world-surface.js"), "utf8");
+const VIEW_OPTIONS = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "world-view-options.mjs"), "utf8");
+const SEMANTIC_NAV = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "apartment-semantic-navigation.mjs"), "utf8");
 const RIG = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "rig.js"), "utf8");
 const PREWARM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-prewarm.js"), "utf8");
 const EDIT = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-edit.jsx"), "utf8");
@@ -54,11 +55,20 @@ assert("hidden splat opacity is forced to zero", MODES.includes("if (!splatActiv
 assert("tickSpark is gated to active photo/fade modes", MODES.includes("state.mode === 'splat' || state.targetMode === 'splat'"));
 assert("mode debug reports Spark visibility", MODES.includes("sparkVisible: state.sparkRenderer ? state.sparkRenderer.visible : null"));
 assert("mesh fallback does not use neon normal material", !MODES.includes("MeshNormalMaterial") && MODES.includes("meshDisplayMaterial"));
-assert("mobile mesh can prefer optional phone asset", MODES.includes("'mesh.mobile.glb'") && MODES.indexOf("'mesh.mobile.glb'") < MODES.indexOf("'mesh.glb'"));
+assert("mobile mesh can prefer optional bounded asset", MODES.includes("meshNames: Object.freeze(['mesh.mobile.glb', 'mesh.glb', 'collision.glb'])"));
+assert("loader asset target is device-stable rather than viewport-width based", MODES.includes("function currentAssetPlan()") && MODES.includes("performanceController?.getDiagnostics") && !MODES.includes("visualViewport?.width"));
+assert("engine, world, and prewarmer share one client target classifier", ENGINE.includes("selectClientPerformanceTarget") && ENGINE.includes("selectApartmentPerformanceTarget") && ENGINE.includes("performanceController,") && WORLD.includes("selectClientPerformanceTarget") && WORLD.includes("sharedController?.getDiagnostics?.()?.targetTier") && PREWARM.includes("selectApartmentAssetPlan"));
+assert("world surface cannot resolve Apartment scan assets for a parcel cutaway", !ENGINE.includes("dollhouseAssetCandidates"));
+assert("prewarmer and loader consume one target-plus-user-mode asset plan", MODES.includes("export function apartmentAssetPlanForPerformanceTarget") && MODES.includes("Object.freeze(['mesh.mobile.glb', 'mesh.glb', 'collision.glb'])") && ENGINE.includes("export async function selectApartmentAssetPlan") && ENGINE.includes("viewOptionsM.resolveSelection(viewSelection)") && PREWARM.includes("engineModule?.selectApartmentAssetPlan?.({ viewSelection })"));
+assert("shared renderers reconcile every performance commit", ADAPTIVE.includes("function subscribe(subscriber)") && ENGINE.includes("performanceController.subscribe") && WORLD.includes("performanceController.subscribe"));
+assert("overlap sampling has one deterministic authority", ADAPTIVE.includes("setSamplingSourceActive") && ADAPTIVE.includes("samplingSource !== samplingAuthority") && ENGINE.includes("priority: 20") && WORLD.includes("priority: 10"));
 assert("mesh debug reports fallback source", MODES.includes("meshSource: state.meshSource") && MODES.includes("meshFallback: state.meshFallback"));
 assert("mesh disables child frustum culling for inside-camera snaps", MODES.includes("o.frustumCulled = false;"));
-assert("prewarm can fetch optional mobile mesh first", PREWARM.includes('"mesh.mobile.glb"') && PREWARM.indexOf('"mesh.mobile.glb"') < PREWARM.indexOf('"mesh.glb"'));
-assert("prewarm fetches full-quality photo scan before mobile fallback", PREWARM.includes('"apartment.ply"') && PREWARM.includes('"apartment.mobile.ply"') && PREWARM.indexOf('"apartment.ply"') < PREWARM.indexOf('"apartment.mobile.ply"'));
+assert("prewarm follows stable target and persisted user quality", PREWARM.includes("function fallbackAssetPlanForTarget(target, performanceMode") && PREWARM.includes('target === "mobile60" || target === "mobile30"') && PREWARM.includes("savedWorldViewSelection()"));
+assert("prewarm prefers optional mobile mesh only on mobile targets", PREWARM.includes('["mesh.mobile.glb", "mesh.glb", "collision.glb"]') && PREWARM.includes('["mesh.glb", "collision.glb"]'));
+assert("adaptive mobile loads bounded photo and mesh first", MODES.includes("splatNames: Object.freeze(['apartment.mobile.ply', 'apartment.ply', 'apartment.spz'])") && MODES.includes("meshNames: Object.freeze(['mesh.mobile.glb', 'mesh.glb', 'collision.glb'])"));
+assert("max-fidelity mobile explicitly loads full photo and mesh first", MODES.includes("splatNames: Object.freeze(['apartment.ply', 'apartment.spz', 'apartment.mobile.ply'])") && MODES.includes("meshNames: Object.freeze(['mesh.glb', 'mesh.mobile.glb', 'collision.glb'])") && MODES.includes("mode === 'maxFidelity'"));
+assert("max-fidelity copy promises configured budgets, not native DPR", VIEW_OPTIONS.includes("highest configured rendering and tile budgets") && !VIEW_OPTIONS.includes("Pins full map resolution"));
 assert("mode loader can parse photo, mesh, and collision proxy in the background", MODES.includes("async preload(targets = ['splat', 'mesh', 'collision'])") && MODES.includes("loadSplat()") && MODES.includes("loadMesh()") && MODES.includes("loadCollision()"));
 assert("preloaded photo and mesh remain hidden until selected", MODES.includes("state.splat = splat;") && MODES.includes("state.mesh = grp;") && MODES.includes("visibleFor(state.mode);"));
 assert("mode debug reports splat source and count", MODES.includes("splatSource: state.splatSource") && MODES.includes("numSplats: state.splat"));
@@ -72,6 +82,58 @@ assert("zoom controls hide during camera pose", APT.includes("const showZoomHud 
 assert("debug API exposes zoomIn", APT.includes("zoomIn: () => zoomApartment(1)"));
 assert("debug API exposes zoomOut", APT.includes("zoomOut: () => zoomApartment(-1)"));
 assert("apartment view quietly preloads photo and mesh after cloud is ready", APT.includes("function aptShouldModePrewarm") && APT.includes('engine.modes.preload(["splat"])') && APT.includes('engine.modes.preload(["mesh"])'));
+
+process.stdout.write("\napartment_semantic_navigation_contract_test\n");
+assert("engine bridges the classic Apartment view to the pure semantic module",
+  ENGINE.includes("async apartmentSemanticNavigation(model, states, currentDeviceId = null)")
+  && ENGINE.includes("buildApartmentSemanticNavigation(model, states)")
+  && ENGINE.includes("apartmentDeviceStatusText"));
+assert("semantic navigator is a named native non-canvas navigation surface",
+  APT.includes('data-apt-semantic-navigation="1"')
+  && APT.includes('aria-label="Apartment rooms and devices"')
+  && APT.includes('data-apt-semantic-room-select="1"')
+  && APT.includes('data-apt-semantic-device-select="1"'));
+assert("semantic navigator stays out of permanent chrome but becomes visible with keyboard focus",
+  APT.includes('[data-apt-semantic-navigation="1"]:focus-within')
+  && APT.includes("clip-path: inset(50%)")
+  && APT.includes("clip-path: none"));
+assert("view derives semantic targets through the engine boundary",
+  APT.includes("engine.apartmentSemanticNavigation(")
+  && APT.includes("statesRef.current")
+  && APT.includes("setApartmentSemanticNavigation"));
+assert("semantic devices expose separate browse and explicit open controls",
+  APT.includes('data-apt-semantic-open="1"')
+  && APT.includes('aria-haspopup="dialog"')
+  && APT.includes("onDeviceId?.(event.target.value)")
+  && APT.includes("onOpenDevice"));
+assert("choosing a stable room filters the device selector without dropping unpositioned devices",
+  APT.includes("const semanticDevicesForRoom = useMemo")
+  && APT.includes("semanticDeviceRoomById.get(device.id) === semanticRoomId")
+  && APT.includes("devices={semanticDevicesForRoom}")
+  && APT.includes("devices not positioned in the scan remain available"));
+const semanticKeyboardBlock = APT.slice(
+  APT.indexOf('else if ((e.key === "n" || e.key === "p")'),
+  APT.indexOf('window.addEventListener("keydown", onKey)'),
+);
+assert("n and p cycle every semantic device including devices without markers",
+  semanticKeyboardBlock.includes("semanticDevicesForRoom")
+  && semanticKeyboardBlock.includes("stepSemanticDevice")
+  && !semanticKeyboardBlock.includes("Array.isArray(d.pos)"));
+assert("semantic selection has one bounded polite atomic live region",
+  /data-apt-semantic-status="1"[\s\S]{0,180}role="status"[\s\S]{0,180}aria-live="polite"[\s\S]{0,180}aria-atomic="true"/.test(APT)
+  && APT.includes("apartmentSemanticNavigation.statusText"));
+assert("semantic device projection uses an exact DOM-facing allowlist",
+  SEMANTIC_NAV.includes("ha_entity_id, siteId/site_id, coordinates")
+  && SEMANTIC_NAV.includes("devices.push(Object.freeze(target))")
+  && SEMANTIC_NAV.includes("siteIds.has(id)")
+  && SEMANTIC_NAV.includes("if (!device || typeof device !== 'object' || isSiteRecord(device)) continue"));
+assert("device cards are labelled dialogs that restore focus to their opener or viewport fallback",
+  CARDS.includes('data-apt-control-card="1"')
+  && CARDS.includes('role="dialog"')
+  && CARDS.includes("returnFocusRef.current = documentRef.activeElement")
+  && CARDS.includes("const previousUsable = previous?.isConnected && !previous.disabled")
+  && CARDS.includes("previousUsable ? previous : viewport")
+  && CARDS.includes("returnTarget.focus"));
 
 process.stdout.write("\napartment_camera_snap_contract_test\n");
 assert("mobile camera frame helper exists", APT.includes("function aptMobileCameraFrame"));
@@ -103,7 +165,7 @@ assert("mesh is not drawn as a material overlay on top of video", !APT.includes(
 assert("3d renderer supports transparent camera compositing", ENGINE.includes("alpha: true") && ENGINE.includes("renderer.setClearColor(0x000000, 0)") && ENGINE.includes("scene.background = null"));
 
 process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");
-assert("mobile photo mode prefers full-quality splat before mobile fallback", MODES.includes("'apartment.ply'") && MODES.includes("'apartment.mobile.ply'") && MODES.indexOf("'apartment.ply'") < MODES.indexOf("'apartment.mobile.ply'"));
+assert("adaptive mobile photo mode prefers bounded splat before full fallbacks", MODES.includes("['apartment.mobile.ply', 'apartment.ply', 'apartment.spz']"));
 assert("splat load has a timeout instead of hanging forever", MODES.includes("splat load timeout") && MODES.includes("mobile ? 45000 : 90000"));
 
 process.stdout.write("\napartment_light_control_contract_test\n");
@@ -114,7 +176,7 @@ assert("apartment service payload uses HA target fields", DATA.includes('const t
 assert("apartment data exposes HA readback helper", DATA.includes("async function readStates") && DATA.includes("readStates, bindStates"));
 assert("apartment controls optimistically update selected state", APT.includes("function aptOptimisticServiceState") && APT.includes("setServicePulse((n) => n + 1)") && APT.includes("statesRef.current[entityId] = optimistic"));
 assert("apartment controls rollback optimistic state on failure", APT.includes("statesRef.current[entityId] = prev") && APT.includes("didn't respond"));
-assert("apartment controls verify state after accepted HA service calls", APT.includes("function aptExpectedServiceState") && APT.includes("window.HomeApartmentData.readStates(client, [entityId])") && APT.includes("is still ${verified.state} in Home Assistant"));
+assert("apartment controls verify scoped state after accepted HA service calls", APT.includes("function aptExpectedServiceState") && APT.includes('window.HomeApartmentData.readStates(client, [entityId], { siteId: "echo" })') && APT.includes("is still ${verified.state} in Home Assistant"));
 assert("apartment debug API can open a controllable card for button audits", APT.includes("openFirstControllableCard") && APT.includes("setCardId(dev.id)"));
 
 process.stdout.write("\nhome_light_state_query_contract_test\n");

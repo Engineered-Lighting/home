@@ -15,6 +15,24 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 const APT_FONT_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const APT_FONT_SANS = '"Geist", "Inter", sans-serif';
+const APT_WORLD_ENTRY_READINESS_BUDGET_MS = 500;
+const APT_HANDOFF_ENDPOINT_BUDGET_MS = 4000;
+const APT_WORLD_ENTRY_PROVIDER_ACTIVATION_BUDGET_MS = 120;
+const APT_WORLD_ENTRY_COMPOSITOR_RESERVE_MS = 180;
+/* The 500ms provider deadline reserves time for the separate endpoint gate, not the provider's cold root
+ * load. Once the world has committed, a cancellable background adoption may
+ * use the same 12s ceiling as the renderer's hidden tileset warmer. */
+const APT_WORLD_COMMITTED_PROVIDER_READINESS_BUDGET_MS = 12_000;
+const APT_WORLD_TRAVEL_READINESS_BUDGET_MS = 500;
+const APT_WORLD_INTERACTION_HEIGHT_BUDGET_MS = 1600;
+const APT_HANDOFF_CAPTURE_CLEANUP_RESERVE_MS = 24;
+const APT_WORLD_PIN_IDLE_CADENCE_MS = 250;
+const APT_WORLD_PIN_INTERACTION_TAIL_MS = 180;
+const EMPTY_APARTMENT_SEMANTIC_NAVIGATION = Object.freeze({
+  rooms: Object.freeze([]),
+  devices: Object.freeze([]),
+  statusText: "No apartment devices available.",
+});
 
 const APT_SERVICE_BY_RUNTIME_KEY = {
   HG_DEFAULT_HA_BASE: "ha",
@@ -77,12 +95,187 @@ function aptServiceBase(storageKey, runtimeKey, fallback) {
   return fallback;
 }
 
-function aptConfirmedWorldAnchor(simActive) {
-  if (simActive) {
+/* Outward world zoom is opt-in and default off, so the Apartment tab behaves
+ * exactly as it does today until someone asks for it. Precedence follows the
+ * repo's existing flags: URL parameter, then localStorage, then off. The registry
+ * owns the read; this wrapper only tolerates the registry not being loaded yet. */
+function aptWorldZoomEnabled() {
+  if (window.HomeMapRehearsalOfflineState?.active) return false;
+  try {
+    return window.HomeSpatialViewport?.isWorldZoomEnabled?.() === true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* Device/HA simulation and spatial geography are independent. Product preview
+ * commonly uses simulated entities while still navigating the registered Echo
+ * Park/Victoria sites. Kansas is retained only for explicit synthetic-spatial
+ * QA, never inferred from a simulated Apartment model. */
+function aptSyntheticSpatialQaEnabled() {
+  try {
+    if (window.__APT_SYNTHETIC_SPATIAL_QA === true) return true;
+    return new URLSearchParams(window.location?.search || "")
+      .get("apartmentSpatialQa") === "synthetic";
+  } catch (_) {
+    return false;
+  }
+}
+
+function aptUseSyntheticSpatialQa(simActive, qaEnabled) {
+  return simActive === true && qaEnabled === true;
+}
+
+function aptZoomTransitionDisabled(phase, targetDirection, requestedDirection) {
+  return phase !== "idle" && targetDirection === requestedDirection;
+}
+
+function aptTravelBlocksZoomInput(travelling, source) {
+  const ownsJourney = typeof source === "string"
+    && (source.startsWith("travel-out-") || source.startsWith("travel-in-"));
+  return travelling === true && !ownsJourney;
+}
+
+function aptWorldPinCadence({ visible, documentVisible, motionActive } = {}) {
+  if (visible !== true || documentVisible === false) return "stopped";
+  return motionActive === true ? "frame" : "idle";
+}
+
+/*
+ * Which projected home is the one the camera is framed on.
+ *
+ * Outside a flight the world is always centred on the selected home, so its
+ * label sits exactly under a cursor resting on the map. As a 44 px button it
+ * took the wheel notch meant for the map (the 2026-09-18 smoke: a notch over
+ * the centred Echo Park pin at 951 km "did NOT zoom"), and clicking it did
+ * nothing: travelToSite refuses the selected site unless a flight is under
+ * way. So it is drawn as a marker, not a control, and hit-testing passes
+ * through it to the world. During a flight the origin keeps its button,
+ * because selecting it then is the one way to turn back.
+ *
+ * Keyed to the selection, not to whichever label happens to sit mid-screen.
+ * The one state where the two differ is a flight held on arrival ("the
+ * destination view is not ready"): the camera is on the destination and the
+ * registry, and "Return to interior", are still on the origin. Marking the
+ * centred destination current there would leave "Travel to <origin>" as a
+ * button travelToSite refuses (it is the selected site and nothing is
+ * flying), and take away the one label that works: the destination's, which
+ * runs the journey again like the card's Retry.
+ */
+function aptWorldPinIsCurrent(siteId, selectedSiteId, travelling) {
+  return travelling !== true && siteId != null && siteId === selectedSiteId;
+}
+
+/* Whether the world owns pointer input: the same test its host's
+ * pointer-events uses. Overlays forward the wheel to it only then, so a wheel
+ * over a recovery button can never zoom a world that is not on screen. */
+function aptWorldHostTakesInput(spatialScale, spatialTransition) {
+  return !(spatialScale === "apartment" && spatialTransition === "idle");
+}
+
+/*
+ * Whether an AI still is actually on screen in this frame.
+ *
+ * Read from cameraState(), which reports what the hero pass paints and how
+ * thick the cloud over it is -- the same numbers the shader draws from, so the
+ * disclosure cannot describe a frame nobody saw. hero is null beyond the swap
+ * (region and planet ranges); 0.995 is the coverage the surface itself calls
+ * opaque, and under it nothing of the still shows.
+ */
+function aptHeroStillOnScreen(camera) {
+  const opacity = Number(camera?.hero?.opacity);
+  if (!(opacity > 0.01)) return false;
+  return !(Number(camera?.cloud?.coverage) >= 0.995);
+}
+
+/*
+ * "Research imagery" is shown whenever an AI still is on screen, the handoff
+ * included, and never inside the interior.
+ *
+ * Showing is immediate: an honest disclosure may not trail the picture it
+ * discloses. Hiding waits 600 ms, because the still band has sub-second opaque
+ * moments (a gap cover measured 0.07-0.2 s, a descent pass) and a label that
+ * blinks with each of them reads as a fault, not as information.
+ */
+function aptResearchImageryShown({ interior, stillOnScreen, lastOnScreenAtMs, nowMs } = {}) {
+  if (interior === true) return false;
+  if (stillOnScreen === true) return true;
+  return Number.isFinite(lastOnScreenAtMs) && Number.isFinite(nowMs)
+    && nowMs - lastOnScreenAtMs < 600;
+}
+
+/*
+ * Whether the world host is painted at all this frame.
+ *
+ * At the Apartment scale React holds the host at opacity 0, and the only
+ * writers of a visible opacity are the handoff compositor and the
+ * reduced-motion black cut, frame by frame, once the handoff's clock runs.
+ * Preparation comes first -- about 250 ms warm (the S3 freeze), up to the 4 s
+ * endpoint budget cold -- and throughout it the surface already reports its
+ * parked still at full opacity while the screen shows the interior. So the
+ * inline opacity, which is what the compositor wrote, decides; a host without
+ * one paints at the default 1.
+ */
+function aptWorldHostPainted(opacityStyle) {
+  if (opacityStyle == null || opacityStyle === "") return true;
+  const opacity = Number.parseFloat(opacityStyle);
+  return !Number.isFinite(opacity) || opacity > 0.01;
+}
+
+/*
+ * How often the disclosure reads the frame.
+ *
+ * Per frame while the view moves, and also while a still is in the stack but
+ * not visible -- under opaque cloud, a gap cover, or a host the handoff has
+ * not painted yet -- because then it can surface on any frame with no input
+ * at all (a held cloud clearing, a gap cover closing, the compositor's clock
+ * starting), and the label may not trail the picture. Otherwise the pins'
+ * idle cadence: with no still in the stack only camera motion can bring one,
+ * and every input that moves the camera wakes the poll first; with the still
+ * disclosed, a hide one idle poll late is inside the 600 ms grace anyway.
+ */
+function aptResearchImageryCadence({ interior, documentVisible, moving, stillInStack, stillOnScreen } = {}) {
+  if (interior === true || documentVisible === false) return "stopped";
+  if (moving === true) return "frame";
+  return stillInStack === true && stillOnScreen !== true ? "frame" : "idle";
+}
+
+/* A renderer that will not paint again: the recovery card blacks out the
+ * whole view behind it, and the credits it lives in are lifted over every
+ * other layer, the overview banner included, for as long as that lasts. */
+function aptRecoveryBlackout(recovery) {
+  return recovery?.kind === "render-error" || recovery?.kind === "context-lost";
+}
+
+function aptTravelArrivalScale(flight) {
+  if (flight?.status !== "complete") return null;
+  if (flight.arrivalBand === "parcel" && flight.heightResolved === true) return "parcel";
+  if (flight.arrivalBand === "unresolved" && flight.heightResolved === false) return "city";
+  return null;
+}
+
+function aptSelectedApartmentSite(sites, selectedSiteId, worldZoomEnabled) {
+  const entries = Array.isArray(sites) ? sites : [];
+  return entries.find((entry) => entry?.id === selectedSiteId) || null;
+}
+
+function aptInteriorWorkspaceScope(siteId, authorityKey = "") {
+  const site = window.HomeSpatialViewport?.getSite?.(siteId);
+  const revision = site?.contentRevision || null;
+  const pack = window.HomeContentPacks?.get?.(siteId, revision || undefined);
+  return { siteId, contentRevision: revision,
+    registrationVersion: site?.sceneRegistration?.version ?? 0,
+    frameDigest: pack?.manifest?.assets?.["frame.json"]?.sha256 || null, authorityKey };
+}
+
+function aptConfirmedWorldAnchor(syntheticSpatialQa = false) {
+  if (syntheticSpatialQa) {
     return Object.freeze({
       latitude: 39,
       longitude: -98,
       altitudeMeters: 0,
+      siteId: "synthetic",
+      heightProvenance: "unresolved",
       source: "synthetic-simulation",
       confirmed: true,
       synthetic: true,
@@ -101,10 +294,46 @@ function aptConfirmedWorldAnchor(simActive) {
       || longitude < -180 || longitude > 180
       || !Number.isFinite(altitudeMeters)
     ) return null;
+    const azimuth = candidate?.localXAxisAzimuthDeg;
+    const viewHeading = candidate?.parcelViewHeadingDeg;
+    const parcelRangeM = Number(candidate?.parcelRangeM);
     return Object.freeze({
       latitude,
       longitude,
       altitudeMeters,
+      siteId: typeof candidate?.siteId === "string" ? candidate.siteId : undefined,
+      heightProvenance: candidate?.heightProvenance === "public-elevation"
+        ? "public-elevation"
+        : (candidate?.heightProvenance === "fixed" ? "fixed" : "unresolved"),
+      /*
+       * The registration travels with the anchor.
+       *
+       * This function narrows the registry record to what the surface needs,
+       * and for a while that narrowing silently dropped the one yaw that maps
+       * the scan's frame to true north. The pose derivation then had nothing to
+       * work from and fell back to the band preset, so the world arrived
+       * near top-down instead of facing the way the Apartment was facing --
+       * with no error anywhere, because a missing optional field is not a
+       * failure, it is just a different branch.
+       */
+      localXAxisAzimuthDeg: Number.isFinite(azimuth) ? azimuth : null,
+      /*
+       * And the chosen sight line for a home that has no scan to register.
+       * Narrowed here for the same reason as the yaw above: a field the
+       * registry sets and this function forgets is a silent different branch,
+       * not an error.
+       */
+      parcelViewHeadingDeg: Number.isFinite(viewHeading) ? viewHeading : null,
+      heroStills: Array.isArray(candidate?.heroStills) ? candidate.heroStills : [],
+      contentAttributions: Array.isArray(candidate?.contentAttributions) ? candidate.contentAttributions : [],
+      /* Whether there is an interior to arrive in. Without this the traversal
+       * cannot tell a home you can walk into from one you can only look at,
+       * and would play a collapse into an interior that does not exist. */
+      sceneAvailable: candidate?.sceneAvailable === true,
+      contentRevision: candidate?.contentRevision ?? null,
+      parcelRangeM: Number.isFinite(parcelRangeM) && parcelRangeM > 0 ? parcelRangeM : 180,
+      registrationVersion: Number(candidate?.registrationVersion) || 0,
+      sampleWidthM: Number(candidate?.sampleWidthM) || 2,
       source: String(candidate.source || "confirmed-home-site"),
       confirmed: true,
       synthetic: false,
@@ -114,13 +343,134 @@ function aptConfirmedWorldAnchor(simActive) {
   }
 }
 
-function aptSpatialAvailability(scale) {
-  if (scale === "parcel") return "confirmed home marker; parcel and building data unavailable";
-  if (scale === "city") return "confirmed home marker; city detail unavailable";
-  if (scale === "country" || scale === "planet") {
-    return "bundled Natural Earth; ellipsoid terrain";
+function aptSyncDollhouseContext(engine, { liveOn = false, liveCam = null, calibCam = null } = {}) {
+  const context = { live: !!(liveOn || liveCam), calibrating: !!calibCam };
+  engine?.setDollhouseContext?.(context);
+  return context;
+}
+
+function aptBeginDollhouseCalibration(engine) {
+  // Calibration unlocks orbit: fence display cuts before the held-pose gate clears.
+  aptSyncDollhouseContext(engine, { liveCam: true, calibCam: true });
+  engine?.rig?.returnToOverview?.();
+}
+
+/* The surface cache key is shared by background preparation and committed
+ * entry. If both paths spell this independently, normal prepare() can erase a
+ * warm target simply because its string differs. */
+function aptWorldAnchorKey(anchor, dollhouseRegistration = null) {
+  if (!anchor) return "";
+  const dollhouseRevision = Number(dollhouseRegistration?.registrationRevision) || 0;
+  return `${anchor.latitude}:${anchor.longitude}:${anchor.altitudeMeters || 0}:${anchor.registrationVersion || 0}:${dollhouseRevision}:${anchor.contentRevision || "legacy"}`;
+}
+
+/* A non-identifying revision for sharing/superseding prewarm work. Coordinates
+ * stay in the private target object; the controller retains only this stable
+ * site/registration identity in its diagnostics-safe bookkeeping. */
+function aptWorldEntryRevision(anchor, dollhouseRegistration = null) {
+  if (!anchor || anchor.confirmed !== true) return null;
+  const siteId = String(anchor.siteId || dollhouseRegistration?.siteId || "").trim();
+  if (!siteId) return null;
+  const anchorRevision = Number(anchor.registrationVersion) || 0;
+  const dollhouseRevision = Number(dollhouseRegistration?.registrationRevision) || 0;
+  return `${siteId}:anchor-r${anchorRevision}:dollhouse-r${dollhouseRevision}`
+    + (anchor.contentRevision ? `:content-${anchor.contentRevision}` : "");
+}
+
+/* Apartment-owned speculative readiness may briefly run the bundled local
+ * surface so a cold Cesium canvas/model can finish mounting. It must never wake a
+ * retained paid tileset: a staged candidate preloads when hidden, and an active
+ * candidate would resume its complete render/streaming loop behind Apartment.
+ * Fail closed for an unknown snapshot so future providers cannot accidentally
+ * inherit this local-only exception. */
+function aptStartLocalWorldPrewarmFrames(surface) {
+  let snapshot = null;
+  try { snapshot = surface?.snapshot?.() ?? null; } catch (_) { return false; }
+  if (!snapshot || snapshot.running === true
+      || snapshot.provider !== "bundled-natural-earth"
+      || snapshot.providerCandidate !== null
+      || typeof surface?.setRunning !== "function") return false;
+  surface.setRunning(true);
+  return true;
+}
+
+function aptApartmentOwnsSpatialSurface(coordinator) {
+  let state = null;
+  try { state = coordinator?.getState?.() ?? null; } catch (_) { return false; }
+  return !state || (state.committedScale === "apartment" && state.phase === "idle");
+}
+
+/* Local prewarm cannot activate the metered provider. Natural Earth's honest
+ * ellipsoid responses therefore normalize to "skipped" for both height stages,
+ * while an optional registered GLB can independently fail or time out. Neither
+ * outcome makes an already-mounted local surface/target cold. The committed
+ * intent owns provider refinement and explicitly retries the dollhouse reveal
+ * gate. Keep this decision pure so the controller's real partial result can be
+ * exercised by the deterministic seam harness. */
+function aptWorldPrewarmCanUseRichEntry(prewarmJoin) {
+  const stages = prewarmJoin?.stages || {};
+  return ["surface", "target"].every(
+    (name) => stages[name] === "ready",
+  );
+}
+
+function aptWorldPrewarmNeedsDollhouseRetry(prewarmJoin, hasDollhouseRegistration = false) {
+  if (hasDollhouseRegistration !== true) return false;
+  const status = prewarmJoin?.stages?.dollhouseAssets;
+  return status !== "ready";
+}
+
+/* Paid imagery is an optional refinement, never a prerequisite for the full
+ * reversible handoff. Only local destination and compositor/capture failures
+ * select committed endpoint preparation. This deliberately ignores provider state. */
+function aptWorldEntryRequiresColdCut({
+  prewarmReady = true,
+  navigationReady = true,
+  compositorReady = true,
+} = {}) {
+  return prewarmReady !== true || navigationReady !== true || compositorReady !== true;
+}
+
+/*
+ * What the viewport is actually showing.
+ *
+ * This used to be a fixed string per scale band, which meant it asserted
+ * "bundled Natural Earth" at country range while live photorealistic tiles were
+ * on screen. A disclosure line that names the wrong provider is worse than no
+ * line at all: its whole job is to say what you are looking at, and it was
+ * confidently wrong at exactly the ranges where a user is most likely to wonder.
+ *
+ * It now reads the surface's own snapshot. `provider` names the selected
+ * renderer source, while `naturalEarthGlobeVisible` distinguishes an overview
+ * that is actually painted from the intentional black local field.
+ */
+function aptSpatialAvailability(scale, snapshot) {
+  if (scale === "apartment") return "Apartment mesh or splat";
+  const provider = snapshot?.provider ?? null;
+  const terrain = snapshot?.terrain === "ellipsoid" ? "ellipsoid terrain" : "terrain";
+  if (provider === "google-photorealistic-3d") {
+    const state = snapshot?.availability === "DEGRADED" ? "degraded; " : "";
+    return scale === "parcel"
+      ? `${state}confirmed home marker; photorealistic 3D mesh`
+      : `${state}confirmed home marker; photorealistic 3D mesh; ${terrain}`;
   }
-  return "Apartment mesh or splat";
+  if (provider === "bundled-natural-earth") {
+    /* Natural Earth level 2 is an honest country/planet overview, but it has
+     * no parcel, building, street, or city-scale detail. The semantic camera
+     * may still be in those bands so the disclosure must state the missing
+     * fidelity instead of letting the scale label imply that it is present. */
+    if ((scale === "parcel" || scale === "city")
+        && snapshot?.localDetailAvailability !== "LIVE") {
+      if (snapshot?.naturalEarthGlobeVisible === false) {
+        return `local detail unavailable; bundled Natural Earth overview begins at country scale; ${terrain}`;
+      }
+      return `local detail unavailable; fallback: bundled Natural Earth overview only; ${terrain}`;
+    }
+    return `fallback: bundled Natural Earth overview; ${terrain}`;
+  }
+  /* No surface yet, or a provider this build does not know how to name. Saying
+   * so is honest; guessing a provider is the defect being fixed. */
+  return "imagery unavailable";
 }
 
 function aptCameraAspect(dev) {
@@ -328,6 +678,70 @@ function aptDelay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/*
+ * Sampled fresh, never cached.
+ *
+ * This preference used to be read exactly once, when the spatial coordinator
+ * was constructed, and the coordinator's own setReducedMotion was never called
+ * afterwards — so a user who turned Reduce Motion on mid-session kept getting
+ * the full 650ms handoff until the Apartment view was torn down. rig.js already
+ * re-queries on every use; this follows rig.js.
+ */
+/*
+ * The world-view selection survives a reload.
+ *
+ * Discovery means comparing options over a session, and losing the choice on
+ * every refresh makes that impossible. Reads defensively: this value outlives
+ * the build that wrote it, and an unknown id is normalised by the renderer's own
+ * module rather than trusted here.
+ */
+/*
+ * Where the home markers start being useful.
+ *
+ * Below this the selected home fills the frame and a dot on top of it is
+ * noise, while the other home is thousands of kilometres off screen. From
+ * here out both are in shot and the pair is the point.
+ */
+const WORLD_PIN_MIN_RANGE_M = 900_000;
+
+const APT_WORLD_VIEW_KEY = "apartment3d.worldView";
+
+function aptReadWorldView() {
+  try {
+    const raw = window.localStorage.getItem(APT_WORLD_VIEW_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    if (!Object.hasOwn(parsed, "dollhouse")) return parsed;
+
+    /* The parcel cutaway experiment was removed. Delete its persisted choice
+     * as well as ignoring it so a later option cannot accidentally resurrect
+     * the retired behavior under the same key. */
+    const cleaned = { ...parsed };
+    delete cleaned.dollhouse;
+    aptWriteWorldView(cleaned);
+    return cleaned;
+  } catch (error) {
+    return {};
+  }
+}
+
+function aptWriteWorldView(selection) {
+  try {
+    window.localStorage.setItem(APT_WORLD_VIEW_KEY, JSON.stringify(selection || {}));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function aptPrefersReducedMotion() {
+  try {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function aptAbortableDelay(ms, signal) {
   if (!ms) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -347,6 +761,375 @@ function aptAbortableDelay(ms, signal) {
   });
 }
 
+/* Bound a readiness operation without pretending that a Promise timeout can
+ * cancel work already handed to a renderer/provider. The operation remains
+ * observed after timeout; its own generation/abort ownership decides whether
+ * a late result may still attach. */
+function aptSettleWithin(task, timeoutMs, signal) {
+  const budgetMs = Math.max(0, Number(timeoutMs) || 0);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      callback(value);
+    };
+    const onAbort = () => {
+      const error = new Error("spatial viewport transition cancelled");
+      error.name = "AbortError";
+      finish(reject, error);
+    };
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+    timer = setTimeout(() => finish(resolve, { status: "timed-out", value: null }), budgetMs);
+    Promise.resolve(task).then(
+      (value) => finish(resolve, { status: "settled", value }),
+      (error) => finish(reject, error),
+    );
+  });
+}
+
+/* A staged provider may become visible only while the coordinator intent that
+ * asked for it still owns preparation for the same renderer/site revision.
+ * Keep the predicate pure: the seam harness exercises every invalidation axis
+ * without needing a live Cesium context. */
+function aptWorldPromotionAuthority({
+  context,
+  coordinatorState,
+  expectedLifecycleRevision,
+  currentLifecycleRevision,
+  targetRevision,
+  currentTargetRevision,
+  expectedSurface,
+  currentSurface,
+} = {}) {
+  return Boolean(
+    context
+    && !context.signal?.aborted
+    && coordinatorState?.phase === "preparing"
+    && coordinatorState.latestIntentId === context.intentId
+    && coordinatorState.latestIntentRevision === context.intentRevision
+    && coordinatorState.transition?.intentId === context.intentId
+    && coordinatorState.transition?.intentRevision === context.intentRevision
+    && expectedLifecycleRevision === currentLifecycleRevision
+    && targetRevision
+    && targetRevision === currentTargetRevision
+    && expectedSurface
+    && expectedSurface === currentSurface
+  );
+}
+
+/* Turn an already-created hidden provider into the visible surface only inside
+ * a bounded, host-owned lifecycle transaction. Provider/tile callbacks never
+ * call this function: a late root request may stage and prewarm, but a current
+ * coordinator intent must explicitly prove quiet imagery and then revalidate
+ * authority immediately before the synchronous promotion. */
+function aptTryPromoteStagedWorldImagery({
+  activation,
+  signal,
+  timeoutMs,
+  settleWithin,
+  waitForImagery,
+  mayPromote,
+  promote,
+} = {}) {
+  if (activation?.status === "ready") return Promise.resolve(activation);
+  if (activation?.status !== "staged") {
+    return Promise.resolve({ status: "skipped" });
+  }
+  if (typeof mayPromote !== "function" || !mayPromote()) {
+    return Promise.resolve({ status: "superseded" });
+  }
+  const budgetMs = Math.max(0, Number(timeoutMs) || 0);
+  if (!(budgetMs > 0) || typeof settleWithin !== "function"
+      || typeof waitForImagery !== "function" || typeof promote !== "function") {
+    return Promise.resolve({ status: "not-ready" });
+  }
+  let readinessTask;
+  try {
+    readinessTask = waitForImagery({ timeoutMs: budgetMs, signal });
+  } catch (_) {
+    return Promise.resolve({ status: "failed" });
+  }
+  return settleWithin(readinessTask, budgetMs, signal).then((readiness) => {
+    if (readiness?.status !== "settled" || readiness.value !== true) {
+      return { status: "not-ready" };
+    }
+    /* This is deliberately adjacent to promote(). Do not move the authority
+     * check above the await: cancellation, lifecycle teardown, or a site
+     * revision can occur while Cesium is proving the hidden frame is quiet. */
+    if (!mayPromote()) return { status: "superseded" };
+    try {
+      return promote() ?? { status: "not-ready" };
+    } catch (_) {
+      return { status: "failed" };
+    }
+  }, (error) => (
+    signal?.aborted || error?.name === "AbortError"
+      ? { status: "superseded" }
+      : { status: "failed" }
+  ));
+}
+
+/* Continuous wheel/pinch motion intentionally bypasses coordinator prepare(),
+ * so it needs a separate visibility authority from a semantic +/- intent. The
+ * operation may reveal a staged provider only while the same viewport
+ * lifecycle, site/scene revision, surface, and world ownership are still
+ * current. Keeping this predicate separate avoids weakening
+ * aptWorldPromotionAuthority for late Apartment-entry continuations. */
+function aptWorldInteractionPromotionAuthority({
+  signal,
+  expectedOperationGeneration,
+  currentOperationGeneration,
+  coordinatorState,
+  expectedLifecycleRevision,
+  currentLifecycleRevision,
+  targetRevision,
+  currentTargetRevision,
+  expectedSurface,
+  currentSurface,
+} = {}) {
+  return Boolean(
+    signal
+    && !signal.aborted
+    && expectedOperationGeneration === currentOperationGeneration
+    && coordinatorState?.phase === "idle"
+    && coordinatorState.committedScale !== "apartment"
+    && expectedLifecycleRevision === currentLifecycleRevision
+    && targetRevision
+    && targetRevision === currentTargetRevision
+    && expectedSurface
+    && expectedSurface === currentSurface
+  );
+}
+
+/* Detect a successful semantic COMMIT whose destination is the world. This
+ * includes Apartment entry, +/- scale intents, and inter-home travel: each can
+ * supersede an older provider adopter while reusing the same hidden tileset.
+ * Continuous wheel synchronization publishes idle -> idle instead, so the
+ * activating edge prevents every reported band change from starting a tail. */
+function aptCommittedWorldIntent(previous, next) {
+  return Boolean(
+    previous?.phase === "activating"
+    && previous.transition?.toSurface === "world"
+    && next?.phase === "idle"
+    && next.committedScale !== "apartment"
+  );
+}
+
+/* One non-blocking, provider-revalidated adoption transaction for explicit
+ * world interaction.
+ *
+ * Rapid wheel and pinch events join the same Promise instead of starting a
+ * readiness listener per event. A timed-out activation is deliberately not
+ * aborted: Cesium's paid root factory cannot be cancelled and may still become
+ * a hidden staged candidate for the next explicit gesture. A completed request
+ * is not memoized by site revision alone: the provider may have been deferred,
+ * expired, or faulted since the previous gesture. Cancellation only revokes
+ * host visibility authority. */
+function aptCreateWorldImageryAdopter({
+  timeoutMs = 500,
+  refinementTimeoutMs = 1600,
+  clock = () => performance.now(),
+  settleWithin,
+  tryPromote,
+  activate,
+  waitForImagery,
+  promote,
+  refine,
+  hasAuthority,
+} = {}) {
+  if ([clock, settleWithin, tryPromote, activate, waitForImagery, promote, refine, hasAuthority]
+    .some((callback) => typeof callback !== "function")) {
+    throw new TypeError("world imagery adopter callbacks must be functions");
+  }
+  const budgetMs = Math.max(1, Number(timeoutMs) || 500);
+  const refineBudgetMs = Math.max(1, Number(refinementTimeoutMs) || 1600);
+  let generation = 0;
+  let active = null;
+
+  const owns = (record) => Boolean(
+    active === record
+    && record.generation === generation
+    && !record.controller.signal.aborted
+    && hasAuthority(record, generation)
+  );
+
+  const cancel = () => {
+    generation += 1;
+    if (active) active.controller.abort();
+    active = null;
+  };
+
+  const request = ({
+    source = "world-interaction",
+    targetRevision = null,
+    timeoutMs: requestTimeoutMs = null,
+    restart = false,
+  } = {}) => {
+    if (!targetRevision) return Promise.resolve({ status: "skipped" });
+    if (active && active.targetRevision === targetRevision
+      && !active.controller.signal.aborted && restart !== true) {
+      return active.promise;
+    }
+    if (active) cancel();
+
+    const record = {
+      generation: ++generation,
+      source,
+      targetRevision,
+      budgetMs: Number.isFinite(requestTimeoutMs)
+        ? Math.max(1, Number(requestTimeoutMs))
+        : budgetMs,
+      controller: new AbortController(),
+      startedAt: clock(),
+      promise: null,
+    };
+    active = record;
+    const remainingMs = () => Math.max(
+      0,
+      record.budgetMs - (clock() - record.startedAt),
+    );
+
+    record.promise = (async () => {
+      if (!owns(record)) return { status: "superseded" };
+      let activationWindow;
+      try {
+        activationWindow = await settleWithin(
+          activate(record),
+          remainingMs(),
+          record.controller.signal,
+        );
+      } catch (error) {
+        return record.controller.signal.aborted || error?.name === "AbortError"
+          ? { status: "superseded" }
+          : { status: "failed" };
+      }
+      if (!owns(record)) return { status: "superseded" };
+      if (activationWindow?.status !== "settled") return { status: "not-ready" };
+
+      const result = await tryPromote({
+        activation: activationWindow.value,
+        signal: record.controller.signal,
+        timeoutMs: remainingMs(),
+        settleWithin,
+        waitForImagery,
+        mayPromote: () => owns(record),
+        promote,
+      });
+      if (result?.status !== "ready" || !owns(record)) return result;
+
+      /* Promotion deliberately invalidates the previous provider's height.
+       * Keep this request coalescible while the newly-visible provider refines
+       * roof then dollhouse ground height. Wheel/pinch callers never await the
+       * Promise, so camera input remains immediate; a second gesture joins the
+       * same bounded refinement instead of starting a competing sample. The
+       * provider itself remains visible if refinement fails or times out. */
+      try {
+        await refine(record, {
+          timeoutMs: refineBudgetMs,
+          mayCommit: () => owns(record),
+        });
+      } catch (error) {
+        if (record.controller.signal.aborted || error?.name === "AbortError") {
+          return { status: "superseded" };
+        }
+      }
+      if (!owns(record)) return { status: "superseded" };
+      return result;
+    })().finally(() => {
+      if (active === record) active = null;
+    });
+    return record.promise;
+  };
+
+  return Object.freeze({
+    request,
+    cancel,
+    snapshot() {
+      return Object.freeze({
+        generation,
+        active: Boolean(active),
+        activeTargetRevision: active?.targetRevision ?? null,
+      });
+    },
+  });
+}
+
+/* Keep capture cancellation ahead of the host's preparation timeout so an
+ * immediate retry cannot overlap the previous frame's PBO/fence. Returning
+ * zero prevents a late readback; the host retains the committed source view. */
+function aptHandoffCaptureBudget(deadlineAt, now, cleanupReserveMs = 24) {
+  const deadline = Number(deadlineAt);
+  const current = Number(now);
+  const reserve = Math.max(0, Number(cleanupReserveMs) || 0);
+  if (!Number.isFinite(deadline) || !Number.isFinite(current)) return 0;
+  return Math.max(0, deadline - current - reserve);
+}
+
+function aptDisposeHandoffCompositorSlots(
+  readyRef,
+  pendingRef,
+  promiseRef,
+  generationRef,
+) {
+  generationRef.current += 1;
+  const ready = readyRef.current;
+  const pending = pendingRef.current;
+  readyRef.current = null;
+  pendingRef.current = null;
+  promiseRef.current = null;
+  ready?.dispose?.();
+  if (pending && pending !== ready) pending.dispose?.();
+  return generationRef.current;
+}
+
+function aptHandoffCompositorMayInstall(
+  generation,
+  currentGeneration,
+  { aborted = false, hasHost = true, pendingMatches = true } = {},
+) {
+  return generation === currentGeneration
+    && aborted !== true
+    && hasHost === true
+    && pendingMatches === true;
+}
+
+/* Wait for the Apartment rig to finish a deliberate pre-travel zoom without
+ * tying the journey to a guessed timeout. The hard deadline is only a
+ * fail-safe for a throttled/paused renderer; it lands on the same overview
+ * detent and preserves the selected azimuth/elevation. */
+function aptWaitForRigSettle(rig, { isCurrent, timeoutMs = 700 } = {}) {
+  return new Promise((resolve, reject) => {
+    const startedAt = performance.now();
+    let timer = 0;
+    const finish = (forced = false) => {
+      if (timer) clearTimeout(timer);
+      resolve({ forced });
+    };
+    const cancel = () => {
+      if (timer) clearTimeout(timer);
+      const error = new Error("Apartment travel superseded");
+      error.name = "AbortError";
+      reject(error);
+    };
+    const check = () => {
+      if (isCurrent && !isCurrent()) { cancel(); return; }
+      if (!rig?.isTweening?.()) { finish(false); return; }
+      if (performance.now() - startedAt >= timeoutMs) {
+        rig.goTo?.({ zoom: 0, dur: 0 });
+        finish(true);
+        return;
+      }
+      timer = setTimeout(check, 16);
+    };
+    check();
+  });
+}
+
 function aptShouldModePrewarm() {
   try {
     if (localStorage.getItem("apartment3d.modePrewarm") === "off") return false;
@@ -359,10 +1142,13 @@ function aptShouldModePrewarm() {
   return true;
 }
 
-function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
+function AptHudButton({ label, ariaLabel, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
+      type="button"
       data-apt-hud-button="1"
+      aria-label={ariaLabel || label}
+      aria-pressed={typeof active === "boolean" ? active : undefined}
       onClick={onClick} disabled={disabled} title={title} className="hg-focusable"
       style={{
         background: active ? "var(--hg-ice)" : "rgba(10,12,16,0.55)",
@@ -378,10 +1164,11 @@ function AptHudButton({ label, onClick, active, disabled, title, mobile = readAp
   );
 }
 
-function AptZoomButton({ label, title, onClick, disabled, mobile = readAptViewport().mobile }) {
+function AptZoomButton({ label, title, onClick, disabled, buttonRef, mobile = readAptViewport().mobile }) {
   const size = mobile ? 44 : 38;
   return (
     <button
+      ref={buttonRef}
       type="button"
       className="hg-focusable"
       aria-label={title}
@@ -408,6 +1195,697 @@ function AptZoomButton({ label, title, onClick, disabled, mobile = readAptViewpo
     </button>
   );
 }
+
+/*
+ * A native, non-canvas route through every Apartment room and device.
+ *
+ * It occupies one clipped pixel until keyboard focus enters it, then
+ * :focus-within reveals the existing-token panel below. Screen readers see a
+ * normal labelled navigation landmark at all times; sighted pointer users do
+ * not get another permanent layer of Apartment chrome. Device selection and
+ * opening controls are separate so arrowing through a native select never
+ * yanks focus into a card before the user has finished browsing.
+ */
+function AptSemanticNavigation({
+  navigation,
+  devices: roomDevices,
+  roomId,
+  deviceId,
+  onRoomId,
+  onDeviceId,
+  onPreviousDevice,
+  onNextDevice,
+  onOpenDevice,
+  deviceSelectRef,
+  disabled = false,
+}) {
+  const rooms = navigation?.rooms || [];
+  const devices = roomDevices || navigation?.devices || [];
+  const selectedRoomId = rooms.some((room) => room.id === roomId) ? roomId : "";
+  const selectedDeviceId = devices.some((device) => device.id === deviceId) ? deviceId : "";
+  const canBrowseDevices = !disabled && devices.length > 0;
+
+  return (
+    <nav
+      data-apt-semantic-navigation="1"
+      aria-label="Apartment rooms and devices"
+    >
+      <div style={{
+        fontFamily: APT_FONT_SANS, fontSize: 13, color: "var(--hg-fg-0)",
+        marginBottom: 4,
+      }}>
+        apartment navigation
+      </div>
+      <div id="apt-semantic-navigation-help" style={{
+        fontFamily: APT_FONT_MONO, fontSize: 9, lineHeight: 1.45,
+        color: "var(--hg-fg-3)", marginBottom: 9,
+      }}>
+        Browse the model without the 3D canvas. Choosing a room filters the
+        device list; devices not positioned in the scan remain available.
+      </div>
+      <label style={{ display: "grid", gap: 4, marginBottom: 8 }}>
+        <span style={{
+          fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.12em",
+          color: "var(--hg-fg-4)", textTransform: "uppercase",
+        }}>room</span>
+        <select
+          data-apt-semantic-room-select="1"
+          aria-label="Apartment room"
+          aria-describedby="apt-semantic-navigation-help"
+          value={selectedRoomId}
+          disabled={disabled || rooms.length === 0}
+          onChange={(event) => onRoomId?.(event.target.value)}
+          className="hg-focusable"
+          style={{
+            minHeight: 36, width: "100%", padding: "5px 7px",
+            fontFamily: APT_FONT_MONO, fontSize: 10,
+            color: "var(--hg-fg-1)", background: "var(--hg-bg-1, #0b1218)",
+            border: "1px solid var(--hg-border-soft)",
+          }}
+        >
+          <option value="">{rooms.length ? `All rooms · ${rooms.length}` : "No rooms available"}</option>
+          {rooms.map((room) => (
+            <option key={room.id} value={room.id}>{room.name}</option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: "grid", gap: 4 }}>
+        <span style={{
+          fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.12em",
+          color: "var(--hg-fg-4)", textTransform: "uppercase",
+        }}>device</span>
+        <select
+          ref={deviceSelectRef}
+          data-apt-semantic-device-select="1"
+          aria-label="Apartment device"
+          aria-describedby="apt-semantic-navigation-help"
+          value={selectedDeviceId}
+          disabled={!canBrowseDevices}
+          onChange={(event) => onDeviceId?.(event.target.value)}
+          className="hg-focusable"
+          style={{
+            minHeight: 36, width: "100%", padding: "5px 7px",
+            fontFamily: APT_FONT_MONO, fontSize: 10,
+            color: "var(--hg-fg-1)", background: "var(--hg-bg-1, #0b1218)",
+            border: "1px solid var(--hg-border-soft)",
+          }}
+        >
+          <option value="">{devices.length
+            ? `${devices.length} devices`
+            : selectedRoomId ? "No devices in this room" : "No devices available"}</option>
+          {devices.map((device) => (
+            <option key={device.id} value={device.id}>{device.ariaLabel}</option>
+          ))}
+        </select>
+      </label>
+      <div role="group" aria-label="Device navigation" style={{
+        display: "grid", gridTemplateColumns: "1fr 1.35fr 1fr", gap: 6, marginTop: 9,
+      }}>
+        <button
+          type="button"
+          data-apt-semantic-previous="1"
+          aria-label="Previous apartment device"
+          aria-keyshortcuts="P"
+          disabled={!canBrowseDevices}
+          onClick={onPreviousDevice}
+          className="hg-focusable"
+        >previous</button>
+        <button
+          type="button"
+          data-apt-semantic-open="1"
+          aria-haspopup="dialog"
+          disabled={disabled || !selectedDeviceId}
+          onClick={onOpenDevice}
+          className="hg-focusable"
+        >open controls</button>
+        <button
+          type="button"
+          data-apt-semantic-next="1"
+          aria-label="Next apartment device"
+          aria-keyshortcuts="N"
+          disabled={!canBrowseDevices}
+          onClick={onNextDevice}
+          className="hg-focusable"
+        >next</button>
+      </div>
+    </nav>
+  );
+}
+
+/*
+ * The "Research imagery" disclosure, shown only while an AI still is on screen.
+ *
+ * It used to render at every world range, planet included, where the only
+ * imagery on screen is the live map or the bundled globe: a statement about a
+ * picture nobody could see, placed over the one they were looking at. And it
+ * was hidden during the outward handoff, whose particles collapse into exactly
+ * that still, because the scale is still "apartment" until the handoff
+ * commits. Visibility now follows the frame (aptResearchImageryShown), so its
+ * state lives below a memo boundary like the projected pins: polling
+ * cameraState() per frame while the world moves never rerenders the Apartment
+ * view. At rest it polls at the pins' idle cadence unless a still is in the
+ * stack but hidden (aptResearchImageryCadence), so it owns no rAF over a
+ * settled view.
+ *
+ * "On screen" is the surface's own hero/cloud numbers AND a painted world
+ * host (aptWorldHostPainted): at the Apartment scale the host is transparent
+ * until the handoff compositor's clock starts, and the interior is what shows
+ * during preparation, however opaque the parked still is.
+ */
+const AptResearchImageryDisclosure = React.memo(function AptResearchImageryDisclosure({
+  surfaceRef,
+  worldHostRef,
+  interior,
+  motionActive,
+  holdLayout,
+  note,
+}) {
+  const [shown, setShown] = useState(false);
+  /* Outlives effect restarts, so the end of a handoff cannot cut the grace. */
+  const lastOnScreenAtRef = useRef(null);
+  useEffect(() => {
+    let frame = 0;
+    let idleTimer = 0;
+    let cancelled = false;
+    let interactionUntil = 0;
+    const documentVisible = () => typeof document === "undefined"
+      || document.visibilityState !== "hidden";
+    const clearScheduled = () => {
+      if (frame) cancelAnimationFrame(frame);
+      if (idleTimer) clearTimeout(idleTimer);
+      frame = 0;
+      idleTimer = 0;
+    };
+    const surfaceIsMoving = () => {
+      if (motionActive || performance.now() < interactionUntil) return true;
+      try {
+        const snapshot = surfaceRef.current?.snapshot?.();
+        return snapshot?.navigating === true || snapshot?.zooming === true;
+      } catch (_) {
+        return false;
+      }
+    };
+    const tick = () => {
+      frame = 0;
+      idleTimer = 0;
+      if (cancelled) return;
+      let camera = null;
+      if (!interior) {
+        try { camera = surfaceRef.current?.cameraState?.() ?? null; } catch (_) { camera = null; }
+      }
+      const nowMs = performance.now();
+      const stillInStack = camera?.hero != null;
+      const stillOnScreen = !interior && aptHeroStillOnScreen(camera)
+        && aptWorldHostPainted(worldHostRef?.current?.style?.opacity);
+      if (stillOnScreen) lastOnScreenAtRef.current = nowMs;
+      const next = aptResearchImageryShown({
+        interior, stillOnScreen, lastOnScreenAtMs: lastOnScreenAtRef.current, nowMs,
+      });
+      setShown((previous) => (previous === next ? previous : next));
+      /* Inside the interior there is no still to watch until a handoff starts,
+       * and that change of props restarts this effect. */
+      const cadence = aptResearchImageryCadence({
+        interior,
+        documentVisible: documentVisible(),
+        moving: !interior && surfaceIsMoving(),
+        stillInStack,
+        stillOnScreen,
+      });
+      if (cadence === "frame") frame = requestAnimationFrame(tick);
+      else if (cadence === "idle") idleTimer = setTimeout(tick, APT_WORLD_PIN_IDLE_CADENCE_MS);
+    };
+    /*
+     * Any input may be the start of a move, so it wakes the per-frame poll
+     * before the first frame it could change. Heard on the window in the
+     * capture phase, ahead of everything that consumes it: the world host's
+     * zoom listener stops propagation, and a wheel over a projected label or a
+     * recovery button, the zoom buttons and the keyboard never reach the host
+     * at all. Passive, so it can never delay the input it hears.
+     */
+    const wakeForInteraction = () => {
+      if (interior || cancelled) return;
+      interactionUntil = performance.now() + APT_WORLD_PIN_INTERACTION_TAIL_MS;
+      if (frame) return;
+      clearScheduled();
+      frame = requestAnimationFrame(tick);
+    };
+    const onVisibilityChange = () => {
+      clearScheduled();
+      if (documentVisible()) tick();
+    };
+    const wakeEvents = ["wheel", "pointerdown", "keydown", "touchmove"];
+    const listening = !interior && typeof window !== "undefined";
+    if (listening) {
+      for (const type of wakeEvents) {
+        window.addEventListener(type, wakeForInteraction, { passive: true, capture: true });
+      }
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+    tick();
+    return () => {
+      cancelled = true;
+      clearScheduled();
+      if (listening) {
+        for (const type of wakeEvents) {
+          window.removeEventListener(type, wakeForInteraction, { capture: true });
+        }
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+    };
+  }, [surfaceRef, worldHostRef, interior, motionActive]);
+
+  /*
+   * While a recovery card is up it sits on the credits' top edge, and the
+   * credits grow with this block: collapsing it would slide the card's buttons
+   * under the pointer by its height (about 20 px, or 70-75 px with Echo
+   * Park's note) each time the still came or went. So it keeps its box,
+   * invisible and aria-hidden, until the card goes. The hidden box carries no
+   * data-apt-content-review, so the audits count a disclosure only when one is
+   * on screen.
+   */
+  if (!shown && !holdLayout) return null;
+  const reserved = !shown;
+  return (
+    <div aria-hidden={reserved ? "true" : undefined}
+      data-apt-content-review-reserved={reserved ? "1" : undefined}
+      style={{ justifySelf: "end", display: "grid", gap: 3, justifyItems: "end",
+        maxWidth: "min(100%, 460px)", visibility: reserved ? "hidden" : undefined }}>
+      <span data-apt-content-review={reserved ? undefined : "research-only"}
+        title={reserved ? undefined : "This imported home pack has not been approved for production use."}
+        style={{ fontSize: 10, color: "#fff", padding: "4px 7px", background: "rgba(5,12,18,.8)" }}>
+        Research imagery
+      </span>
+      {note ? (
+        <span data-apt-content-review-note={reserved ? undefined : "1"}
+          style={{ fontSize: 10, lineHeight: 1.35, color: "#d7dde3", textAlign: "right",
+            padding: "4px 7px", background: "rgba(5,12,18,.8)" }}>
+          {note}
+        </span>
+      ) : null}
+    </div>
+  );
+});
+
+/*
+ * The journey recovery message: a card above the credits, not a dialog in the
+ * middle of the view.
+ *
+ * Centred, it sat exactly where the cursor rests while zooming and swallowed
+ * the wheel (the 2026-09-17 audit, stage 5), so the one gesture that could
+ * clear a held cloud was the one it blocked. The card passes the wheel, drags
+ * and clicks through; only its buttons are hit-tested, and a wheel over them
+ * bubbles to the card and is handed to the world as the same event
+ * (onWheelForward). The host renders it inside the credits and it sits on
+ * their top edge, so it can never cover the imagery attribution, whose height
+ * changes with the provider. The disclosure above the attribution keeps its
+ * box while the card is up (holdLayout), so the still coming and going cannot
+ * move these buttons under the pointer. Visibility is restated
+ * because the credits are hidden inside the interior, where a failed journey
+ * also reports here. A broken renderer still blacks out the view behind it.
+ */
+function AptJourneyRecoveryCard({
+  message,
+  blackout,
+  showOverview,
+  onRetry,
+  onReturn,
+  onShowOverview,
+  onWheelForward,
+}) {
+  const cardRef = useRef(null);
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card || !onWheelForward) return undefined;
+    card.addEventListener("wheel", onWheelForward, { passive: false });
+    return () => card.removeEventListener("wheel", onWheelForward);
+  }, [onWheelForward]);
+  return (
+    <div ref={cardRef} data-apt-journey-recovery="1" role="status" aria-live="polite"
+      style={{ position: "absolute", left: "50%", bottom: "calc(100% + 8px)", transform: "translateX(-50%)",
+        width: "min(420px, 100%)", boxSizing: "border-box", padding: "12px 14px", borderRadius: 8,
+        color: "#fff", background: "rgba(5,12,18,.94)", fontSize: 12, lineHeight: 1.45,
+        visibility: "visible",
+        boxShadow: blackout ? "0 0 0 200vmax #050c12" : "0 8px 32px rgba(0,0,0,.5)",
+        pointerEvents: "none" }}>
+      <p style={{ margin: "0 0 10px" }}>{message}</p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button type="button" className="hg-focusable" style={{ minHeight: 44, minWidth: 64, pointerEvents: "auto" }}
+          onClick={onRetry}>Retry</button>
+        <button type="button" className="hg-focusable" style={{ minHeight: 44, minWidth: 64, pointerEvents: "auto" }}
+          onClick={onReturn}>Return to interior</button>
+        {showOverview && (
+          <button type="button" className="hg-focusable" style={{ minHeight: 44, pointerEvents: "auto" }}
+            onClick={onShowOverview}>Show world overview</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Projected home labels update on nearly every frame of a planet flight. Keep
+ * that high-frequency state below a memo boundary so moving two 44px buttons
+ * never rerenders the full Apartment view and its accessibility/card tree. */
+/*
+ * THE HERO STILL AND THE CLOUD PASS-THROUGH USED TO LIVE HERE.
+ *
+ * WHAT THEY ARE. The still is a sharp image of the home that the world opens
+ * on and pulls out of; the cloud is what hides the moment that still is
+ * exchanged for the live map. Both exist because Google's photorealistic mesh
+ * is aerial photogrammetry and is softest exactly where this product asks the
+ * most of it -- one roofline, filling the frame, at the moment the scan hands
+ * over. A cross-fade cannot make the exchange, because it requires the two
+ * images to agree pixel for pixel and they do not; an opaque occluder removes
+ * the requirement, because nothing has to match while nothing is visible.
+ *
+ * WHY THEY ARE NOT HERE ANY MORE. They were an <img> and seven blurred
+ * gradients composited over the canvas. DOM was chosen to avoid a third WebGL
+ * context, since this view already runs two and WebView2 kills the OLDEST when
+ * it hits its cap -- which is the Apartment's. That reasoning was sound and is
+ * still recorded at the live-feed canvas below; it simply does not apply to
+ * where they went, which is a post-process stage INSIDE the widget that was
+ * already here. No new context exists.
+ *
+ * What DOM could not do is the reason to move. Compositing over the canvas
+ * makes the browser blend a full-viewport image and seven large blurred
+ * gradients on top of every frame the scene has already paid for, and a
+ * gradient has no depth to march, so the cloud could only ever be a flat
+ * sweep -- which is what "the clouds are just a grey overlay" meant. In the
+ * shader the still is one texture fetch and the cloud is a real volumetric
+ * slab, and the two cost ONE pass together rather than two.
+ *
+ * See hero-cloud-pass.mjs for the shader and world-surface.js for the wiring.
+ * The arithmetic still lives in hero-still.mjs and cloud-handoff.mjs, still
+ * arrives through cameraState(), and this host still decides nothing -- the
+ * only change is which surface draws it.
+ */
+function aptWorldPinEmphasis(distancePx, focused = false) {
+  const strength = focused ? 1 : Math.max(0, 1 - Math.max(0, Number(distancePx)) / 120);
+  return { strength, scale: 1 + 0.25 * (Number.isFinite(strength) ? strength : 0) };
+}
+
+const AptWorldSitePins = React.memo(function AptWorldSitePins({
+  visible,
+  surfaceRef,
+  interactionTargetRef,
+  sites,
+  selectedSiteId,
+  travelling,
+  motionActive,
+  onSelect,
+  onWheelForward,
+  frameStyle,
+}) {
+  const [pins, setPins] = useState([]);
+  const [pointer, setPointer] = useState(null);
+  const [focusedSiteId, setFocusedSiteId] = useState(null);
+  const pinsHostRef = useRef(null);
+  /* The projection loop's wake, for wheel that reaches a pin instead of the
+   * world host and so never passes the host's own listener. */
+  const wakeRef = useRef(null);
+  useEffect(() => {
+    if (!visible) return undefined;
+    const target = interactionTargetRef?.current?.parentElement;
+    let frame = 0;
+    let latest = null;
+    const move = (event) => {
+      const box = pinsHostRef.current?.getBoundingClientRect();
+      if (!box) return;
+      latest = { x: event.clientX - box.left, y: event.clientY - box.top,
+        width: box.width, height: box.height };
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; setPointer(latest); });
+    };
+    const leave = () => { latest = null; setPointer(null); };
+    target?.addEventListener('pointermove', move, { passive: true });
+    target?.addEventListener('pointerleave', leave);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      target?.removeEventListener('pointermove', move);
+      target?.removeEventListener('pointerleave', leave);
+    };
+  }, [visible, interactionTargetRef]);
+  const projectionTargets = useMemo(() => sites.map((site) => ({
+    id: site.id,
+    longitude: site.visualAnchor?.longitude ?? site.site?.longitude,
+    latitude: site.visualAnchor?.latitude ?? site.site?.latitude,
+    altitudeMeters: 0,
+  })), [sites]);
+  const sitesById = useMemo(() => new Map(sites.map((site) => [site.id, site])), [sites]);
+
+  useEffect(() => {
+    if (!visible || !projectionTargets.length) {
+      setPins((previous) => (previous.length ? [] : previous));
+      return undefined;
+    }
+    let frame = 0;
+    let idleTimer = 0;
+    let cancelled = false;
+    let pointerActive = false;
+    let interactionUntil = 0;
+    const documentVisible = () => typeof document === "undefined"
+      || document.visibilityState !== "hidden";
+    const clearScheduled = () => {
+      if (frame) cancelAnimationFrame(frame);
+      if (idleTimer) clearTimeout(idleTimer);
+      frame = 0;
+      idleTimer = 0;
+    };
+    const surfaceIsMoving = () => {
+      if (motionActive || travelling || pointerActive || Date.now() < interactionUntil) return true;
+      try {
+        const snapshot = surfaceRef.current?.snapshot?.();
+        return snapshot?.navigating === true || snapshot?.zooming === true;
+      } catch (_) {
+        return false;
+      }
+    };
+    const scheduleFrame = () => {
+      if (cancelled || !documentVisible() || frame) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = 0;
+      frame = requestAnimationFrame(tick);
+    };
+    const scheduleIdle = () => {
+      if (cancelled || !documentVisible() || idleTimer) return;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      idleTimer = setTimeout(tick, APT_WORLD_PIN_IDLE_CADENCE_MS);
+    };
+    const scheduleNext = () => {
+      const cadence = aptWorldPinCadence({
+        visible,
+        documentVisible: documentVisible(),
+        motionActive: surfaceIsMoving(),
+      });
+      if (cadence === "frame") scheduleFrame();
+      else if (cadence === "idle") scheduleIdle();
+      else clearScheduled();
+    };
+    const tick = () => {
+      frame = 0;
+      idleTimer = 0;
+      if (cancelled) return;
+      const surface = surfaceRef.current;
+      const camera = surface?.cameraState?.();
+      if (surface && camera && camera.rangeM >= WORLD_PIN_MIN_RANGE_M) {
+        try {
+          const next = surface.projectSites?.(projectionTargets) ?? [];
+          setPins((previous) => {
+            if (previous.length === next.length && previous.every((pin, index) => {
+              const now = next[index];
+              return now && pin.id === now.id
+                && Math.abs(pin.xFraction - now.xFraction) < 0.0015
+                && Math.abs(pin.yFraction - now.yFraction) < 0.0015;
+            })) return previous;
+            return next;
+          });
+        } catch (_) {
+          setPins((previous) => (previous.length ? [] : previous));
+        }
+      } else {
+        setPins((previous) => (previous.length ? [] : previous));
+      }
+      scheduleNext();
+    };
+    const wakeForInteraction = () => {
+      interactionUntil = Date.now() + APT_WORLD_PIN_INTERACTION_TAIL_MS;
+      scheduleFrame();
+    };
+    const onPointerDown = () => {
+      pointerActive = true;
+      scheduleFrame();
+    };
+    const onPointerDone = () => {
+      pointerActive = false;
+      wakeForInteraction();
+    };
+    const onVisibilityChange = () => {
+      clearScheduled();
+      if (documentVisible()) scheduleFrame();
+    };
+    wakeRef.current = wakeForInteraction;
+    const interactionTarget = interactionTargetRef?.current;
+    interactionTarget?.addEventListener?.("pointerdown", onPointerDown, { passive: true });
+    /* Capture, like the host's own zoom listener: that one stops propagation
+     * in the capture phase, so a bubbling listener here never heard a notch
+     * over the map and the labels waited out an idle poll to follow the zoom. */
+    interactionTarget?.addEventListener?.("wheel", wakeForInteraction, { passive: true, capture: true });
+    interactionTarget?.addEventListener?.("touchmove", wakeForInteraction, { passive: true });
+    if (typeof window !== "undefined") {
+      window.addEventListener("pointerup", onPointerDone, { passive: true });
+      window.addEventListener("pointercancel", onPointerDone, { passive: true });
+      window.addEventListener("blur", onPointerDone);
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+    scheduleFrame();
+    return () => {
+      cancelled = true;
+      clearScheduled();
+      if (wakeRef.current === wakeForInteraction) wakeRef.current = null;
+      interactionTarget?.removeEventListener?.("pointerdown", onPointerDown);
+      interactionTarget?.removeEventListener?.("wheel", wakeForInteraction, { capture: true });
+      interactionTarget?.removeEventListener?.("touchmove", wakeForInteraction);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("pointerup", onPointerDone);
+        window.removeEventListener("pointercancel", onPointerDone);
+        window.removeEventListener("blur", onPointerDone);
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+    };
+  }, [visible, surfaceRef, interactionTargetRef, projectionTargets, motionActive, travelling]);
+
+  /*
+   * A wheel over a label continues the zoom.
+   *
+   * This layer is a sibling of the world host, not its child, so a notch over
+   * a button never reached the host's listener and was simply lost -- over the
+   * labels, which is where a person looks while zooming out to them. The layer
+   * and the current home's marker are pointer-events:none, so only a travel
+   * button can receive a wheel; it bubbles here and the SAME event is handed
+   * to the handler the host uses. Nothing is synthesised, so the zoom sees one
+   * notch, not two.
+   */
+  const layerMounted = visible && pins.length > 0;
+  useEffect(() => {
+    const layer = pinsHostRef.current;
+    if (!layerMounted || !layer) return undefined;
+    const onWheel = (event) => {
+      wakeRef.current?.();
+      onWheelForward?.(event);
+    };
+    layer.addEventListener("wheel", onWheel, { passive: false });
+    return () => layer.removeEventListener("wheel", onWheel);
+  }, [layerMounted, onWheelForward]);
+
+  if (!visible || !pins.length) return null;
+  return (
+    <div
+      ref={pinsHostRef}
+      data-apt-world-pins="1"
+      style={{
+        ...frameStyle,
+        left: 0,
+        /* Above the chrome scrim (z4, later in the DOM), which painted over
+         * any label in the top ~170 px or bottom ~190 px of the view -- where
+         * the other home sits at planet range. Still below the top bar and
+         * bottom HUD (z5, later in the DOM), the zoom controls (z6), credits
+         * (z7) and the overview banner (z8), so no label covers a control. */
+        zIndex: 5,
+        pointerEvents: "none",
+        background: "transparent",
+      }}
+    >
+      {pins.map((pin) => {
+        const site = sitesById.get(pin.id);
+        if (!site) return null;
+        const isSelected = site.id === selectedSiteId;
+        const isCurrent = aptWorldPinIsCurrent(site.id, selectedSiteId, travelling);
+        /* A marker is not a control: neither the cursor nor focus may lift it
+         * the way they lift a travel button. */
+        const distance = !isCurrent && pointer ? Math.hypot(pointer.x - pin.xFraction * pointer.width,
+          pointer.y - pin.yFraction * pointer.height) : Infinity;
+        const emphasis = aptWorldPinEmphasis(distance, !isCurrent && focusedSiteId === pin.id);
+        const style = {
+          position: "absolute",
+          left: `${pin.xFraction * 100}%`,
+          top: `${pin.yFraction * 100}%`,
+          transform: `translate(-50%, -50%) scale(${emphasis.scale})`,
+          transition: aptPrefersReducedMotion() ? "none" : "transform 150ms ease, box-shadow 150ms ease",
+          minWidth: 44,
+          height: 44,
+          padding: "0 10px",
+          border: `1px solid ${isSelected ? "rgba(127,231,255,0.72)" : "rgba(255,255,255,0.38)"}`,
+          background: isSelected ? "rgba(5,18,25,0.88)" : "rgba(5,10,15,0.82)",
+          color: isSelected ? "#bdf5ff" : "rgba(255,255,255,0.94)",
+          boxShadow: emphasis.strength > 0
+            ? `0 0 ${12 + 12 * emphasis.strength}px rgba(127,231,255,${0.45 * emphasis.strength}), 0 0 0 3px rgba(127,231,255,${0.2 * emphasis.strength})`
+            : isSelected
+            ? "0 0 0 3px rgba(127,231,255,0.16), 0 4px 18px rgba(0,0,0,0.42)"
+            : "0 4px 16px rgba(0,0,0,0.42)",
+          cursor: isCurrent ? "default" : travelling ? "progress" : "pointer",
+          /* The current home's marker passes the wheel, drags and clicks
+           * straight through to the world under it. */
+          pointerEvents: isCurrent ? "none" : "auto",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: APT_FONT_MONO,
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          whiteSpace: "nowrap",
+        };
+        if (isCurrent) {
+          /* A map marker, named as one. The visible text stays the bare home
+           * name (the zoom audit and the journey harness read it); "current
+           * home" is in the accessible name, and the dot is the visible cue.
+           * It keeps data-apt-world-pin because the zoom audit waits for the
+           * current home's label to be visible. It is deliberately not
+           * hit-testable, so elementFromPoint at its centre finds the world;
+           * data-apt-world-pin-current tells an audit that is by design, not
+           * a layer painted over it. */
+          return (
+            <span
+              key={pin.id}
+              data-apt-world-pin={pin.id}
+              data-apt-world-pin-current="1"
+              role="img"
+              aria-label={`${site.shortName}, current home`}
+              aria-current="location"
+              style={style}
+            >
+              <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: "50%",
+                background: "#7fe7ff", marginRight: 7, flex: "none" }} />
+              {site.shortName}
+            </span>
+          );
+        }
+        return (
+          <button
+            key={pin.id}
+            type="button"
+            data-apt-world-pin={pin.id}
+            title={`Travel to ${site.shortName}`}
+            aria-label={`Travel to ${site.shortName}`}
+            onFocus={() => setFocusedSiteId(pin.id)}
+            onBlur={() => setFocusedSiteId(null)}
+            onClick={() => { void onSelect(pin.id); }}
+            style={style}
+          >
+            {site.shortName}
+          </button>
+        );
+      })}
+    </div>
+  );
+});
 
 /* Live MJPEG feed, undistorted on the fly. When the snapped camera carries
    solved intrinsics with real distortion (dist[0] != 0) the raw <img> stays in
@@ -748,23 +2226,49 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   );
 }
 
-function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false }) {
+function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "" }) {
+  const liveShadow = window.HomeLiveSceneShadow?.active === true;
   const viewport = useAptViewport();
   const mobile = viewport.mobile;
   const hostRef = useRef(null);
   const worldHostRef = useRef(null);
+  const worldCreditsRef = useRef(null);
+  const emptyInteriorRef = useRef(null);
+  const apartmentSceneControlsEnabledRef = useRef(false);
   const viewRootRef = useRef(null);
+  const viewOpenRef = useRef(open);
+  viewOpenRef.current = open;
   const engineRef = useRef(null);
   const worldSurfaceRef = useRef(null);
+  const worldScaleObserverCleanupRef = useRef(null);
   const worldSurfacePendingRef = useRef(null);
   const worldSurfacePromiseRef = useRef(null);
+  const worldEntryPrewarmRef = useRef(null);
+  const worldEntryPrewarmPromiseRef = useRef(null);
   const confirmedWorldAnchorRef = useRef(null);
   const worldAnchorKeyRef = useRef("");
   const spatialCoordinatorRef = useRef(null);
+  const restoredWorldScaleRef = useRef(null);
   const spatialCoordinatorPromiseRef = useRef(null);
   const spatialLifecycleRevisionRef = useRef(0);
   const spatialIntentRef = useRef(0);
+  const spatialTravelIntentRef = useRef(0);
+  const worldOverviewAbortRef = useRef(null);
   const zoomRequestRef = useRef(null);
+  const boundaryMomentumRef = useRef(null);
+  const boundaryFrameRef = useRef(0);
+  const boundaryLastFrameRef = useRef(0);
+  const boundaryWheelRef = useRef(null);
+  /* The world host's own wheel handler while the world takes input, else
+   * null. Overlays above the world (projected home buttons, the recovery
+   * card's buttons) hand their wheel events to it; see forwardWheelToWorld. */
+  const worldWheelHandlerRef = useRef(null);
+  const zoomInButtonRef = useRef(null);
+  const zoomOutButtonRef = useRef(null);
+  const emptyInteriorExitPendingRef = useRef(false);
+  const semanticDeviceSelectRef = useRef(null);
+  const pendingSpatialFocusRef = useRef(null);
+  const pendingSpatialFocusElementRef = useRef(null);
   const detachRef = useRef(null);
   const flyTimerRef = useRef(null);     // pending feed-reveal timeout
   const flySeqRef = useRef(0);
@@ -776,9 +2280,147 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const [mode, setMode] = useState("points");
   const [modeLoading, setModeLoading] = useState(null);
   const [modeError, setModeError] = useState(null);
+  /* The loaded interior's disclosed placeholder (engine.scenePlaceholder), or
+   * null for a real scan. Drives the "scan pending" badge and points-only. */
+  const [interiorPlaceholder, setInteriorPlaceholder] = useState(null);
   const [toast, setToast] = useState(null);
   const [spatialScale, setSpatialScale] = useState("apartment");
   const [spatialTransition, setSpatialTransition] = useState("idle");
+  const [spatialTransitionDirection, setSpatialTransitionDirection] = useState(null);
+  /*
+   * The single answer to "does the Apartment own the viewport right now".
+   *
+   * `spatialScale` alone is the wrong signal, and it is the signal every guard
+   * used to key on. The coordinator does not flip it until activate(), so for
+   * the entire outward handoff it still reads "apartment": the host keeps
+   * pointerEvents auto, the orbit input stays attached, and a user can drag the
+   * scene around while it is collapsing to a 4px point behind a black firewall.
+   * The transition phase is what closes that window.
+   */
+  const apartmentOwnsInput = spatialScale === "apartment" && spatialTransition === "idle";
+  /* The registry is the authority; this mirrors it for rendering only. */
+  const [homeSites, setHomeSites] = useState(() => {
+    try { return window.HomeSpatialViewport?.getSites?.() || []; } catch (_) { return []; }
+  });
+  const [selectedSiteId, setSelectedSiteId] = useState(() => {
+    try { return window.HomeSpatialViewport?.getSelectedSiteId?.() || null; } catch (_) { return null; }
+  });
+  const [travelling, setTravelling] = useState(false);
+  const [journeyRecovery, setJourneyRecovery] = useState(null);
+  const [surfaceRecovery, setSurfaceRecovery] = useState(null);
+  const [worldOverviewActive, setWorldOverviewActive] = useState(false);
+  const journeyRetryRef = useRef(null);
+  const loadedInteriorSiteRef = useRef(null);
+  const pendingInteriorRef = useRef(null);
+  const interiorSessionRef = useRef(null);
+  const interiorSwitchRequestRef = useRef(null);
+  const modelSiteRef = useRef(null);
+  const modelScopeRef = useRef(null);
+  const workspaceStateRef = useRef(null);
+  const workspaceAuthorityRef = useRef({ key: null });
+  const [interiorSwitchState, setInteriorSwitchState] = useState({ phase: "idle" });
+  const [contentPackBusy, setContentPackBusy] = useState(false);
+  const [contentPacks, setContentPacks] = useState([]);
+  /* The hero still currently armed, or null. Held here so the layer and the
+   * debug entry points share one source of truth. */
+  const [heroStill, setHeroStill] = useState(null);
+  /* Read by the download entry point, which must see the current still without
+   * being a dependency of anything that re-renders. */
+  const heroStillRef = useRef(null);
+  useEffect(() => { heroStillRef.current = heroStill; }, [heroStill]);
+  const travellingRef = useRef(false);
+  /*
+   * Where each home currently sits on screen, as viewport fractions.
+   *
+   * Fractions rather than coordinates on purpose: the registry owns the
+   * latitudes, the surface does the projection, and what reaches the DOM is a
+   * position in the frame. A marker never carries a location.
+   */
+  /*
+   * Whether the selected home has an interior to arrive in, and what to call
+   * it. Null while the registry has not resolved, so the empty state is shown
+   * only on a definite absence rather than on a not-yet-known.
+   */
+  const worldZoomEnabled = aptWorldZoomEnabled();
+  const selectedSiteEntry = aptSelectedApartmentSite(
+    homeSites,
+    selectedSiteId,
+    worldZoomEnabled,
+  );
+  const selectedSiteInterior = selectedSiteEntry ? selectedSiteEntry.sceneAvailable === true
+    && loadedInteriorSiteRef.current === selectedSiteEntry.id
+    && interiorSwitchState.phase !== "loading" && interiorSwitchState.phase !== "error" : null;
+  const selectedSiteName = selectedSiteEntry?.shortName || "this home";
+  const selectedContentRevision = selectedSiteEntry?.contentRevision || null;
+  const apartmentSceneControlsEnabled = !liveShadow && apartmentOwnsInput && phase === "ready" && selectedSiteInterior === true;
+  // Binding4 commissions these local display modes separately from writers,
+  // tracking, camera capture and scene-edit controls, which remain disabled.
+  const apartmentDisplayModesEnabled = apartmentSceneControlsEnabled || (liveShadow
+    && [4,5,6].includes(window.HomeLiveSceneShadow.resident_binding?.version) && phase === "ready" && selectedSiteInterior === true);
+  // The current HA model belongs to Echo. Importing a scan grants no control
+  // binding for another home; that requires its own reviewed integration.
+  apartmentSceneControlsEnabledRef.current = apartmentSceneControlsEnabled;
+  const apartmentSceneUnavailableReason = selectedSiteInterior === false
+    ? `${selectedSiteName} interior is not uploaded`
+    : null;
+  /* A DISCLOSED placeholder interior (a generic massing model standing in for
+   * a scan that does not exist yet) is a real, enterable scene -- unlike the
+   * missing-interior panel above -- but it must never pass for the home: it is
+   * named on screen and offers the point cloud only (scene-placeholder.mjs). */
+  const interiorPlaceholderShown = selectedSiteInterior === true && !!interiorPlaceholder;
+  const interiorPointsOnlyReason = interiorPlaceholderShown
+    ? `${selectedSiteName} · scan pending: point cloud only`
+    : null;
+  /*
+   * Which alternatives the world view is built from.
+   *
+   * Held as ids rather than resolved presets: the resolved objects come from an
+   * ES module the renderer owns, and duplicating their numbers here is exactly
+   * how an option ends up meaning one thing in the panel and another on screen.
+   */
+  const [worldViewSelection, setWorldViewSelection] = useState(() => aptReadWorldView());
+  const [worldViewGroups, setWorldViewGroups] = useState(null);
+  const [worldViewPanelOpen, setWorldViewPanelOpen] = useState(false);
+  const worldViewKeyRef = useRef("");
+  /* The resolved presets, for consumers outside React's render tree -- the
+   * coordinator adapters run in a closure created once and cannot read state. */
+  const worldViewBundleRef = useRef(null);
+  /* Installed only when a measurement asks for it; it wraps the page's network
+   * entry points, which is not something a viewport should do by default. */
+  const providerTrafficRef = useRef(null);
+  const providerTrafficPromiseRef = useRef(null);
+  const handoffCompositorRef = useRef(null);
+  const handoffCompositorPendingRef = useRef(null);
+  const handoffCompositorPromiseRef = useRef(null);
+  const handoffCompositorGenerationRef = useRef(0);
+  const handoffFallbackRef = useRef(null);
+  /* A cold prewarm miss opts one intent into the bounded host-owned black cut.
+   * Identity, rather than a boolean, prevents a cancelled intent from changing
+   * the visual path of the newer request that superseded it. */
+  const coldWorldEntryIntentRef = useRef(null);
+  /* Returning from the world has the same finite capture contract. A separate
+   * token keeps an inward capture miss from changing any later outward intent. */
+  const coldApartmentEntryIntentRef = useRef(null);
+  /* Provider creation can outlive the 500ms readiness budget. This token keeps
+   * a late factory result tied to one viewport lifecycle, site revision, and
+   * transition signal; the surface supplies the final mutation generation. */
+  const worldImageryActivationRef = useRef(null);
+  const worldImageryActivationGenerationRef = useRef(0);
+  const worldImageryPromotedIntentRef = useRef(null);
+  /* Explicit wheel/pinch/travel may adopt a provider that finished staging
+   * after the Apartment firewall. The adopter owns coalescing and cancellation;
+   * this ref only exposes it to input handlers outside the coordinator closure. */
+  const worldImageryAdopterRef = useRef(null);
+  /* A timed-out/failed optional GLB must not block the local handoff. The next
+   * successfully activated world intent gets one fresh, bounded reveal gate;
+   * the surface owns registration/load generations underneath it. */
+  const worldDollhouseRetryIntentRef = useRef(null);
+  /* The one live canonical handoff clock. Gesture handlers retarget this
+   * object; they never cancel/restart the renderer animation mid-frame. */
+  const handoffMotionRef = useRef(null);
+  /* Lets the outer-detent controller distinguish a visual inverse that already
+   * reached progress 0 from a failed preparation that still needs spring-back. */
+  const handoffSourceReversalRef = useRef(null);
   const [azIdx, setAzIdx] = useState(1);
   const [editing, setEditing] = useState(false);
   const [aimMode, setAimMode] = useState(false);
@@ -793,6 +2435,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const [track, setTrack] = useState(null);          // primary person track
   const [trackerStatus, setTrackerStatus] = useState("connecting");
   const [servicePulse, setServicePulse] = useState(0);
+  const [apartmentSemanticNavigation, setApartmentSemanticNavigation] = useState(
+    EMPTY_APARTMENT_SEMANTIC_NAVIGATION,
+  );
+  const [semanticRoomId, setSemanticRoomId] = useState("");
+  const [semanticDeviceId, setSemanticDeviceId] = useState(null);
+  const [semanticRoomStatus, setSemanticRoomStatus] = useState("");
+  const [semanticStatusDeviceId, setSemanticStatusDeviceId] = useState(null);
   const [hoverId, setHoverId] = useState(null);
   const [cardId, setCardId] = useState(null);
   const [inCamPose, setInCamPose] = useState(false);
@@ -801,6 +2450,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const [liveFeedStatus, setLiveFeedStatus] = useState("idle");
   const [cameraPoseReady, setCameraPoseReady] = useState(false);
   const [calibCam, setCalibCam] = useState(null); // correspondence-capture overlay
+  const dollhouseContextRef = useRef(null);
+  dollhouseContextRef.current = { liveOn, liveCam, calibCam };
+  useEffect(() => {
+    aptSyncDollhouseContext(engineRef.current, dollhouseContextRef.current);
+  }, [phase, selectedSiteId, selectedContentRevision, liveOn, liveCam, calibCam]);
   const calibPickRef = useRef(false);
   const calibApiRef = useRef(null);
   const calibPointsRef = useRef(null);
@@ -810,15 +2464,76 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
+  workspaceAuthorityRef.current.key = liveShadow
+    ? 'live-resident:' + window.HomeLiveSceneShadow.resident_binding?.digest
+    : window.HomeApartmentData.ensureWorkspaceAuthority?.({ endpoint, token, simulation: simActive })?.key;
+  const apartmentAuthorityKey = workspaceAuthorityRef.current.key;
+  const apartmentDeviceControlsEnabled = apartmentSceneControlsEnabled && selectedSiteEntry?.id === "echo"
+    && modelScopeRef.current?.authorityKey === workspaceAuthorityRef.current.key;
+  workspaceStateRef.current = { model, dirty: ["unsaved", "saving", "validation", "offline", "conflict", "simulation"].includes(saveStatus.state) };
+  const rehearsalIsolated = liveShadow || mapRehearsalOpen || window.HomeMapRehearsalOfflineState?.active === true;
+  const apartmentShadowEquipmentDisplayEnabled = liveShadow && [4,5,6].includes(window.HomeLiveSceneShadow.resident_binding?.version)
+    && apartmentDisplayModesEnabled && model === window.HomeLiveResidentModel && model.source_detail?.read_only === true;
+  const apartmentPlacementDisplayEnabled = apartmentShadowEquipmentDisplayEnabled || (apartmentSceneControlsEnabled && !rehearsalIsolated
+    && modelScopeRef.current?.authorityKey === workspaceAuthorityRef.current.key
+    && modelSiteRef.current === selectedSiteId
+    && (selectedSiteId === "echo" || selectedSiteId === "victoria" && !!model._equipment_registration));
+  const apartmentPlacementControlsEnabled = !liveShadow && apartmentPlacementDisplayEnabled
+    && (selectedSiteId === "echo" || model.source_detail?.read_only === false);
+  const syntheticSpatialQa = aptUseSyntheticSpatialQa(
+    simActive,
+    aptSyntheticSpatialQaEnabled(),
+  );
   const [serviceEpoch, setServiceEpoch] = useState(0);
+  const [equipmentReloadEpoch, setEquipmentReloadEpoch] = useState(0);
+  const [virtualSpotlightsVisible, setVirtualSpotlightsVisible] = useState(true);
+  const [virtualFixturePreview, setVirtualFixturePreview] = useState(null);
+  const [virtualFixtureId, setVirtualFixtureId] = useState("");
+  const [virtualFixtureChannel, setVirtualFixtureChannel] = useState("spotlight");
+  const [virtualFixtureControlsOpen, setVirtualFixtureControlsOpen] = useState(false);
+  const [virtualAimNotice, setVirtualAimNotice] = useState("");
+  const [virtualAimHistoryVersion, setVirtualAimHistoryVersion] = useState(0);
+  const virtualAimHistoryRef = useRef({ undo: [], redo: [] });
+  const virtualAimGestureRef = useRef(null);
+  const [deskTargetSelection, setDeskTargetSelection] = useState(null);
+  const deskTargetCaptureRef = useRef(null);
+  const virtualFixtureStatesRef = useRef({ key: null, states: new Map(), targets: new Map() });
+  const virtualFixtureDocument = selectedSiteId === "victoria" && apartmentPlacementDisplayEnabled
+    && !rehearsalIsolated && model._equipment_registration?.scope?.site_id === "victoria"
+    && model._equipment_registration?.binding?.content_revision === selectedContentRevision
+    && model._equipment_registration?.binding?.registration_version === (selectedSiteEntry?.sceneRegistration?.version ?? 0)
+    && model._equipment_registration?.binding?.frame_digest === modelScopeRef.current?.frameDigest
+    ? model._equipment_registration : null;
+  const virtualFixtureItems = virtualFixturePreview?.fixtures || [];
+  const selectedVirtualFixture = virtualFixtureItems.find((fixture) => fixture.fixture_id === virtualFixtureId)
+    || virtualFixtureItems[0] || null;
+  const selectedVirtualChannel = virtualFixtureChannel.startsWith("radial-")
+    ? selectedVirtualFixture?.state?.radials.find((zone) => zone.number === Number(virtualFixtureChannel.slice(7)))
+    : selectedVirtualFixture?.state?.[virtualFixtureChannel];
+  const virtualFixtureBindingKey = virtualFixtureDocument
+    ? JSON.stringify([apartmentAuthorityKey, virtualFixtureDocument.binding]) : null;
   const modePrewarmRef = useRef(null);
-  const sourceMeta = window.HomeApartmentData.modelSourceMeta?.(model)
+  const sourceMeta = liveShadow ? { kind: 'live_shadow', label: 'registered shadow model' } : window.HomeApartmentData.modelSourceMeta?.(model)
     || { kind: simActive ? "simulation" : "empty", label: simActive ? "Simulation" : "No model" };
   const liveComparison = useMemo(() => (
     liveReview.state === "ready" && liveReview.live
       ? window.HomeApartmentData.compareApartmentModels?.(model, liveReview.live) || null
       : null
   ), [model, liveReview]);
+  const semanticDeviceRoomById = useMemo(() => {
+    const roomByDevice = new Map();
+    for (const device of model.devices || []) {
+      const id = typeof device?.id === "string" ? device.id.trim() : "";
+      const roomId = typeof device?.room_id === "string" ? device.room_id.trim() : "";
+      if (id && !roomByDevice.has(id)) roomByDevice.set(id, roomId);
+    }
+    return roomByDevice;
+  }, [model.devices]);
+  const semanticDevicesForRoom = useMemo(() => {
+    const devices = apartmentSemanticNavigation.devices || [];
+    if (!semanticRoomId) return devices;
+    return devices.filter((device) => semanticDeviceRoomById.get(device.id) === semanticRoomId);
+  }, [apartmentSemanticNavigation.devices, semanticDeviceRoomById, semanticRoomId]);
 
   useEffect(() => {
     const bump = () => setServiceEpoch((n) => n + 1);
@@ -834,12 +2549,29 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     if (!sticky) toastTimerRef.current = setTimeout(() => setToast(null), 2800);
   }, []);
 
-  const ensureSpatialCoordinator = useCallback(async (confirmedAnchor) => {
-    // Keep the lifecycle adapter stable while allowing a newly confirmed site
-    // revision to replace the anchor used on the next Apartment -> world entry.
-    confirmedWorldAnchorRef.current = confirmedAnchor;
-    if (spatialCoordinatorRef.current) return spatialCoordinatorRef.current;
-    if (spatialCoordinatorPromiseRef.current) return spatialCoordinatorPromiseRef.current;
+  const cancelSpatialTravel = useCallback(async () => {
+    worldOverviewAbortRef.current?.abort();
+    worldOverviewAbortRef.current = null;
+    const active = travellingRef.current
+      || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle";
+    ++spatialTravelIntentRef.current;
+    worldSurfaceRef.current?.cancelNavigation?.("user-cancelled");
+    travellingRef.current = false;
+    setTravelling(false);
+    await spatialCoordinatorRef.current?.cancel?.();
+    return active;
+  }, []);
+  useEffect(() => {
+    if (!mapRehearsalOpen) return;
+    setEditing(false); setAimMode(false); setAimDestination(null); setCalibCam(null); setLiveCam(null); setLiveOn(false); setCardId(null);
+    ++spatialIntentRef.current;
+    void cancelSpatialTravel();
+  }, [mapRehearsalOpen, cancelSpatialTravel]);
+
+  /* Mounting is shared by speculative preparation and committed entry. The
+   * promise is deliberately retained after success: neither path may allocate
+   * a second Cesium renderer while the first one is still becoming ready. */
+  const ensureWorldSurface = useCallback(async () => {
     const engine = engineRef.current;
     const worldHost = worldHostRef.current;
     if (!engine || !worldHost) throw new Error("Apartment viewport is not ready");
@@ -852,79 +2584,1166 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       }
     };
 
-    const promise = (async () => {
-      let surface = worldSurfaceRef.current;
-      if (!surface) {
-        let surfacePromise = worldSurfacePromiseRef.current;
-        if (!surfacePromise) {
-          surfacePromise = (async () => {
-            const next = await engine.createWorldSurface();
-            worldSurfacePendingRef.current = next;
-            try {
-              requireCurrentLifecycle();
-              await next.mount(worldHost);
-              requireCurrentLifecycle();
-              worldSurfaceRef.current = next;
-              return next;
-            } catch (error) {
-              next.dispose?.();
-              throw error;
-            } finally {
-              if (worldSurfacePendingRef.current === next) worldSurfacePendingRef.current = null;
-            }
-          })();
-          worldSurfacePromiseRef.current = surfacePromise;
-        }
+    if (worldSurfaceRef.current) return worldSurfaceRef.current;
+    let surfacePromise = worldSurfacePromiseRef.current;
+    if (!surfacePromise) {
+      surfacePromise = (async () => {
+        const next = await engine.createWorldSurface();
+        worldSurfacePendingRef.current = next;
         try {
-          surface = await surfacePromise;
-        } catch (error) {
-          if (worldSurfacePromiseRef.current === surfacePromise) {
-            worldSurfacePromiseRef.current = null;
+          requireCurrentLifecycle();
+          await next.mount(worldHost, { creditContainer: worldCreditsRef.current });
+          requireCurrentLifecycle();
+          if (worldViewBundleRef.current?.resolved) {
+            next.setViewOptions?.(worldViewBundleRef.current.resolved);
           }
+          worldSurfaceRef.current = next;
+          return next;
+        } catch (error) {
+          next.dispose?.();
           throw error;
+        } finally {
+          if (worldSurfacePendingRef.current === next) worldSurfacePendingRef.current = null;
         }
+      })();
+      worldSurfacePromiseRef.current = surfacePromise;
+    }
+    try {
+      const surface = await surfacePromise;
+      requireCurrentLifecycle();
+      return surface;
+    } catch (error) {
+      if (worldSurfacePromiseRef.current === surfacePromise) {
+        worldSurfacePromiseRef.current = null;
       }
+      throw error;
+    }
+  }, []);
+
+  const ensureSpatialCoordinator = useCallback(async (confirmedAnchor) => {
+    // Keep the lifecycle adapter stable while allowing a newly confirmed site
+    // revision to replace the anchor used on the next Apartment -> world entry.
+    // Calls which only need the already-created coordinator must not erase the
+    // last confirmed anchor while an inter-home journey is still in flight.
+    if (confirmedAnchor !== undefined) confirmedWorldAnchorRef.current = confirmedAnchor;
+    if (spatialCoordinatorRef.current) return spatialCoordinatorRef.current;
+    if (spatialCoordinatorPromiseRef.current) return spatialCoordinatorPromiseRef.current;
+    const engine = engineRef.current;
+    if (!engine) throw new Error("Apartment viewport is not ready");
+    const lifecycleRevision = spatialLifecycleRevisionRef.current;
+    const requireCurrentLifecycle = () => {
+      if (spatialLifecycleRevisionRef.current !== lifecycleRevision) {
+        const error = new Error("Apartment spatial viewport lifecycle changed");
+        error.name = "AbortError";
+        throw error;
+      }
+    };
+
+    const promise = (async () => {
+      const surface = await ensureWorldSurface();
       requireCurrentLifecycle();
 
       const applyAnchor = () => {
         const activeAnchor = confirmedWorldAnchorRef.current;
         if (!activeAnchor) throw new Error("Apartment world anchor is unavailable");
-        const key = `${activeAnchor.latitude}:${activeAnchor.longitude}:${activeAnchor.altitudeMeters || 0}`;
+        const site = syntheticSpatialQa
+          ? null
+          : window.HomeSpatialViewport?.getSelectedSite?.();
+        const registration = site?.dollhouseRegistration ?? null;
+        const key = aptWorldAnchorKey(activeAnchor, registration);
         if (worldAnchorKeyRef.current === key) return;
         surface.setAnchor(activeAnchor);
+        surface.setDollhouseRegistration?.(registration);
         worldAnchorKeyRef.current = key;
+      };
+
+      /*
+       * The reversible handoff, driven from ONE loop.
+       *
+       * The compositor deliberately owns no rAF: it does not own the progress
+       * clock, and a second loop would sample it in a different task from the
+       * Apartment's collapse transform and the world's fade. All three come out
+       * of the same handoffFrame() here, so what noCoexistenceViolations()
+       * proves on the curves is what actually paints.
+       *
+       * Nothing in here is allowed to fail the handoff. A missing compositor, a
+       * dead GPU and a slow capture all still play the full timeline; only the
+       * user's own reduced-motion setting takes the short cut.
+       */
+      const runHandoff = async (context, direction) => {
+        /* Product-safe diagnostics: phase and timing only. No coordinates, no
+         * address, no tile URL, no key. */
+        const handoffDebug = { direction, frames: 0, durationMs: null, compositor: null };
+        window.__aptHandoffDebug = handoffDebug;
+        const apartmentHost = hostRef.current;
+        const worldHost = worldHostRef.current;
+        const compositor = handoffCompositorRef.current;
+        /*
+         * The handoff preset overrides the coordinator's duration.
+         *
+         * The coordinator carries one number for every surface transition; the
+         * panel is choosing the TEMPO of this particular one. Reading the preset
+         * here is what makes 300 / 420 / 650 real rather than three labels.
+         */
+        const presetMs = worldViewBundleRef.current?.resolved?.handoff?.durationMs;
+        const coordinatorDurationMs = Math.max(0, Number(context.durationMs) || 0);
+        /* Reduced motion is a 120ms semantic cut owned by the coordinator. A
+         * visual tempo preset must never turn that accessibility path back into
+         * a 300/420/650ms particle animation. */
+        const reducedMotion = aptPrefersReducedMotion() || coordinatorDurationMs === 120;
+        const blackCutOnly = reducedMotion;
+        const durationMs = reducedMotion
+          ? coordinatorDurationMs
+          : Number.isFinite(presetMs)
+            ? presetMs
+            : coordinatorDurationMs;
+        /* A wheel can already have pulled the Apartment through the reversible
+         * preview band. Continue from that exact canonical progress instead of
+         * jumping back to a full-size first frame when the snap commits. */
+        const boundaryState = direction === "outward"
+          ? boundaryMomentumRef.current?.snapshot?.()
+          : null;
+        const startProgress = boundaryState?.phase === "triggered"
+          ? Math.max(0, Math.min(0.99, Number(boundaryState.progress) || 0))
+          : 0;
+        const startVelocity = boundaryState?.phase === "triggered"
+          ? Number(boundaryState.progressVelocity) || 0
+          : 0;
+        const startAcceleration = boundaryState?.phase === "triggered"
+          ? Number(boundaryState.progressAcceleration) || 0
+          : 0;
+        const view = typeof window !== "undefined" ? window : null;
+        handoffDebug.durationMs = durationMs;
+        handoffDebug.startProgress = direction === "inward" ? 1 : startProgress;
+        handoffDebug.startVelocity = direction === "outward" ? startVelocity : 0;
+        handoffDebug.startAcceleration = direction === "outward" ? startAcceleration : 0;
+        handoffDebug.reversals = [];
+        handoffDebug.compositor = compositor ? compositor.snapshot() : null;
+
+        /* The compositor's DOM survives a WebGL failure and already paints a
+         * black firewall. This host-owned layer covers the still rarer case
+         * where the compositor module itself cannot be created, and it is also
+         * the intentional 120ms reduced-motion path. Chrome remains above it;
+         * only the spatial viewport changes owner. */
+        const runBlackCut = async () => {
+          const overlay = handoffFallbackRef.current;
+          if (!overlay || !view?.requestAnimationFrame || durationMs <= 0) {
+            if (overlay) {
+              overlay.style.visibility = "visible";
+              overlay.style.opacity = "1";
+            }
+            try { await aptAbortableDelay(durationMs, context.signal); }
+            finally {
+              if (overlay) {
+                overlay.style.opacity = "0";
+                overlay.style.visibility = "hidden";
+              }
+            }
+            return context.signal.aborted ? "aborted" : "complete";
+          }
+          overlay.style.visibility = "visible";
+          overlay.style.opacity = "0";
+          const ease = (value) => {
+            const t = Math.max(0, Math.min(1, value));
+            return t * t * (3 - 2 * t);
+          };
+          return new Promise((resolve) => {
+            let frameId = 0;
+            let startedAt = null;
+            let settled = false;
+            const finish = (status) => {
+              if (settled) return;
+              settled = true;
+              if (frameId) view.cancelAnimationFrame(frameId);
+              context.signal.removeEventListener("abort", onAbort);
+              const apartmentWasCommitted = context.fromSurface === "apartment";
+              if (status === "aborted") {
+                apartmentHost.style.opacity = apartmentWasCommitted ? "1" : "0";
+                worldHost.style.opacity = apartmentWasCommitted ? "0" : "1";
+              }
+              apartmentHost.style.removeProperty("transform");
+              overlay.style.opacity = "0";
+              overlay.style.visibility = "hidden";
+              resolve(status);
+            };
+            const onAbort = () => finish("aborted");
+            const step = (at) => {
+              frameId = 0;
+              if (context.signal.aborted) { finish("aborted"); return; }
+              if (startedAt === null) startedAt = at;
+              const phase = Math.max(0, Math.min(1, (at - startedAt) / durationMs));
+              const fadingOut = ease(phase * 2);
+              const fadingIn = ease((phase - 0.5) * 2);
+              const sourceOpacity = phase < 0.5 ? 1 - fadingOut : 0;
+              const destinationOpacity = phase < 0.5 ? 0 : fadingIn;
+              const blackOpacity = phase < 0.5 ? fadingOut : 1 - fadingIn;
+              if (direction === "outward") {
+                apartmentHost.style.opacity = String(sourceOpacity);
+                worldHost.style.opacity = String(destinationOpacity);
+                if (!blackCutOnly) {
+                  apartmentHost.style.transform = `scale(${Math.max(0.0019, 1 - 0.9981 * fadingOut)})`;
+                }
+              } else {
+                worldHost.style.opacity = String(sourceOpacity);
+                apartmentHost.style.opacity = String(destinationOpacity);
+                if (!blackCutOnly && phase >= 0.5) {
+                  apartmentHost.style.transform = `scale(${0.0019 + 0.9981 * fadingIn})`;
+                }
+              }
+              overlay.style.opacity = String(blackOpacity);
+              handoffDebug.frames += 1;
+              handoffDebug.lastProgress = direction === "outward" ? phase : 1 - phase;
+              if (phase >= 1) { finish("complete"); return; }
+              frameId = view.requestAnimationFrame(step);
+            };
+            context.signal.addEventListener("abort", onAbort, { once: true });
+            frameId = view.requestAnimationFrame(step);
+          });
+        };
+
+        if (!apartmentHost || !worldHost || !view?.requestAnimationFrame || durationMs === 0) {
+          handoffDebug.skipped = !apartmentHost ? "no-host"
+            : !worldHost ? "no-world-host"
+            : !view?.requestAnimationFrame ? "no-raf"
+            : "zero-duration";
+          await aptAbortableDelay(durationMs, context.signal);
+          return;
+        }
+
+        if (blackCutOnly) {
+          handoffDebug.skipped = "reduced-motion-semantic-cut";
+          handoffDebug.fallback = await runBlackCut();
+          handoffDebug.finishedAt = Math.round(view.performance?.now?.() ?? 0);
+          return;
+        }
+
+        const initialProgress = direction === "inward" ? 1 : startProgress;
+        const motion = compositor?.createMotion?.({
+          direction,
+          startProgress: initialProgress,
+          startVelocity: direction === "outward" ? startVelocity : 0,
+          startAcceleration: direction === "outward" ? startAcceleration : 0,
+          durationMs,
+        }) ?? null;
+        if (!motion) {
+          /* A failed compositor has no canonical frame writer. Preserve the
+           * existing bounded black-cut fallback rather than inventing a second,
+          * untested progress clock in this classic-script host. */
+          handoffDebug.skipped = "no-compositor-clock";
+          handoffDebug.fallback = await runBlackCut();
+          handoffDebug.finishedAt = Math.round(view.performance?.now?.() ?? 0);
+          return;
+        }
+        const motionRecord = {
+          context,
+          direction,
+          motion,
+          active: true,
+          retarget(nextDirection, source) {
+            if (!this.active || context.signal.aborted) return this.motion.snapshot();
+            const before = this.motion.snapshot();
+            const next = this.motion.retarget(nextDirection);
+            if (next.reversals !== before.reversals) {
+              handoffDebug.reversals.push(Object.freeze({
+                from: before.targetDirection,
+                to: next.targetDirection,
+                progress: Number(next.progress.toFixed(6)),
+                source: String(source || "gesture"),
+              }));
+              handoffDebug.targetDirection = next.targetDirection;
+            }
+            return next;
+          },
+          snapshot() { return this.motion.snapshot(); },
+        };
+        handoffMotionRef.current = motionRecord;
+
+        /* Perspective size during preview is exactly the timeline scale. Clear
+         * the rig pull and replace it with the equivalent host transform in the
+         * same task, before the browser can paint, so the seam has no size pop. */
+        if (!reducedMotion) {
+          const initial = compositor?.setProgress(initialProgress) ?? null;
+          engineRef.current.rig.setOvershoot?.(0);
+          if (initial) {
+            apartmentHost.style.opacity = String(initial.apartmentOpacity);
+            apartmentHost.style.transform = "scale(" + initial.apartmentScale + ")";
+            worldHost.style.opacity = String(initial.worldOpacity);
+          }
+        }
+        const outcome = await new Promise((resolve) => {
+          let frameId = 0;
+          let lastAt = null;
+          let settled = false;
+          const finish = (value = "aborted") => {
+            if (settled) return;
+            settled = true;
+            if (frameId) view.cancelAnimationFrame(frameId);
+            context.signal.removeEventListener("abort", onAbort);
+            resolve(value);
+          };
+          const onAbort = () => finish("aborted");
+          const step = (at) => {
+            frameId = 0;
+            if (context.signal.aborted) { finish(); return; }
+            const now = Number.isFinite(at) ? at : (view.performance?.now?.() ?? 0);
+            const deltaMs = lastAt === null ? 0 : Math.max(0, Math.min(50, now - lastAt));
+            lastAt = now;
+            /* There is one progress value for both directions. Retargeting the
+             * pure clock changes its endpoint without re-basing progress, so
+             * this frame is always the exact inverse of a frame already shown. */
+            const motionState = motion.advance(deltaMs);
+            const progress = motionState.progress;
+            const frame = compositor?.setProgress(progress) ?? null;
+            if (frame) {
+              apartmentHost.style.opacity = String(frame.apartmentOpacity);
+              apartmentHost.style.transform = "scale(" + frame.apartmentScale + ")";
+              worldHost.style.opacity = String(frame.worldOpacity);
+            }
+            handoffDebug.frames += 1;
+            handoffDebug.lastProgress = progress;
+            handoffDebug.targetDirection = motionState.targetDirection ?? direction;
+            if (motionState.settled) {
+              finish(motionState.endpoint ?? "destination");
+              return;
+            }
+            frameId = view.requestAnimationFrame(step);
+          };
+          context.signal.addEventListener("abort", onAbort, { once: true });
+          frameId = view.requestAnimationFrame(step);
+        });
+        /*
+         * Drop the transform, KEEP the opacities.
+         *
+         * React never writes transform, so removing it is safe and necessary --
+         * the endpoint scale is 0.0019 and leaving it would pin the Apartment
+         * to an invisible speck. The opacities are the opposite case: React
+         * DOES own them, and it diffs against its own previous props rather
+         * than against the DOM. It had already written the settled value before
+         * this loop began, so removing that value here leaves React believing
+         * the DOM is correct while it shows the wrong thing, and nothing rewrites
+         * it until an unrelated re-render happens to change the prop. The last
+         * frame already wrote exactly the settled endpoint, so the fix is simply
+         * to leave it there.
+         */
+        if (motionRecord) motionRecord.active = false;
+        if (handoffMotionRef.current === motionRecord) handoffMotionRef.current = null;
+        if (context.signal.aborted) {
+          /* Cancellation restores the last committed owner explicitly. React
+           * may believe it already wrote these values and otherwise leave the
+           * imperative mid-handoff opacity stranded in the DOM. */
+          const apartmentWasCommitted = context.fromSurface === "apartment";
+          apartmentHost.style.opacity = apartmentWasCommitted ? "1" : "0";
+          worldHost.style.opacity = apartmentWasCommitted ? "0" : "1";
+        }
+        apartmentHost.style.removeProperty("transform");
+        handoffDebug.settledEndpoint = outcome;
+        handoffDebug.finishedAt = Math.round(view.performance?.now?.() ?? 0);
+        /* Reaching the source through the inverse curve is a visual cancellation,
+         * not a successful activation of the original destination. Throw only
+         * after the exact source frame has been applied; the coordinator then
+         * keeps its original committed owner and runs normal target cleanup. */
+        if (outcome === "source" && !context.signal.aborted) {
+          if (boundaryMomentumRef.current?.snapshot?.()?.activeIntentId === context.intentId) {
+            handoffSourceReversalRef.current = context.intentId;
+          }
+          const error = new Error("spatial viewport handoff reversed to source");
+          error.name = "AbortError";
+          throw error;
+        }
+      };
+
+      const disposeCompositor = () => {
+        aptDisposeHandoffCompositorSlots(
+          handoffCompositorRef,
+          handoffCompositorPendingRef,
+          handoffCompositorPromiseRef,
+          handoffCompositorGenerationRef,
+        );
+      };
+
+      /*
+       * Built at commit, never at mount. This is the app's THIRD live WebGL
+       * context, and WebView2 caps them at 16 and evicts the OLDEST -- which in
+       * this app is the Apartment's own. Holding one warm across a session
+       * turns a bounded risk into a standing one.
+       *
+       * Reduced motion never builds it at all: the cut is a semantic jump, so
+       * a particle field would be the very thing the preference asks us not to
+       * draw, and the context is not worth taking for it.
+       */
+      const armCompositor = async (context, {
+        captureDeadlineAt = performance.now() + APT_HANDOFF_ENDPOINT_BUDGET_MS,
+      } = {}) => {
+        if (handoffCompositorRef.current || context.signal.aborted) return;
+        if (aptPrefersReducedMotion()) return;
+        /* Preparation can be requested again while the capture/GL allocation
+         * from the first request is still awaiting a frame. Share that work:
+         * a second compositor would consume a fourth WebGL context and the
+         * loser could land after cancellation with stale pixels. */
+        if (handoffCompositorPromiseRef.current) {
+          const inFlight = handoffCompositorPromiseRef.current;
+          try { await inFlight; } catch (_) { /* firewall still plays */ }
+          /* The shared allocation may have belonged to the intent this one
+           * superseded. That owner correctly disposes its result when aborted;
+           * retry once under the latest context instead of silently degrading
+           * the winning handoff to a black cut. */
+          if (!handoffCompositorRef.current && !context.signal.aborted
+              && handoffCompositorPromiseRef.current === inFlight) {
+            handoffCompositorPromiseRef.current = null;
+            return armCompositor(context, { captureDeadlineAt });
+          }
+          return;
+        }
+        const generation = ++handoffCompositorGenerationRef.current;
+        const promise = (async () => {
+          /* The handoff preset decides how dense the field is and how long the
+           * streaks are. Passed at construction because the geometry is built
+           * once; changing the preset builds the next handoff differently. */
+          const handoffPreset = worldViewBundleRef.current?.resolved?.handoff ?? null;
+          const captureSurface = Object.freeze({
+            performanceBudget: () => surface.performanceBudget?.() ?? null,
+            /* Lets the compositor wait for the AI still to be fully up before it
+             * takes the particles' colours (WORLD_CAPTURE_GATE). */
+            captureReadiness: () => surface.captureReadiness?.() ?? null,
+            captureFrame: async ({ scale } = {}) => {
+              const presentationReady = await surface.waitForPresentation?.({
+                timeoutMs: Math.max(0, captureDeadlineAt - performance.now()),
+                signal: context.signal,
+              });
+              if (presentationReady !== true || context.signal.aborted) return null;
+              const timeoutMs = aptHandoffCaptureBudget(
+                captureDeadlineAt,
+                performance.now(),
+                APT_HANDOFF_CAPTURE_CLEANUP_RESERVE_MS,
+              );
+              /* A missed deadline retains the source without allocating a late PBO. */
+              if (!(timeoutMs > 0)) return Promise.resolve(null);
+              return surface.captureFrame?.({ scale, timeoutMs }) ?? Promise.resolve(null);
+            },
+          });
+          let compositor = null;
+          try {
+            compositor = await engineRef.current.createHandoffCompositor({
+              host: viewRootRef.current,
+              worldSurface: captureSurface,
+              apartmentSurface: {
+                captureFrame: (options) => engineRef.current.captureFrame?.({ ...options, signal: context.signal }),
+              },
+              particleCount: handoffPreset?.particleCount,
+              streakFraction: handoffPreset?.streakFraction,
+            });
+            if (generation !== handoffCompositorGenerationRef.current
+                || context.signal.aborted || !viewRootRef.current) {
+              compositor.dispose();
+              return null;
+            }
+            /* Retain the not-yet-primed allocation so a host timeout can tear
+             * down its WebGL context immediately. Its capture proxy expires
+             * before that same deadline, preventing an orphaned PBO/fence from
+             * overlapping an immediate retry. */
+            handoffCompositorPendingRef.current = compositor;
+            const primed = await compositor.prime();
+            if (!primed.endpointsReady) {
+              if (handoffCompositorPendingRef.current === compositor) handoffCompositorPendingRef.current = null;
+              compositor.dispose();
+              return null;
+            }
+            if (!aptHandoffCompositorMayInstall(
+              generation,
+              handoffCompositorGenerationRef.current,
+              {
+                aborted: context.signal.aborted,
+                hasHost: Boolean(viewRootRef.current),
+                pendingMatches: handoffCompositorPendingRef.current === compositor,
+              },
+            )) {
+              compositor.dispose();
+              return null;
+            }
+            handoffCompositorPendingRef.current = null;
+            handoffCompositorRef.current = compositor;
+            return compositor;
+          } catch (error) {
+            if (handoffCompositorPendingRef.current === compositor) {
+              handoffCompositorPendingRef.current = null;
+            }
+            if (handoffCompositorRef.current === compositor) {
+              handoffCompositorRef.current = null;
+            }
+            compositor?.dispose?.();
+            throw error;
+          }
+        })();
+        handoffCompositorPromiseRef.current = promise;
+        try {
+          await promise;
+        } catch (_) {
+          /* the firewall still plays */
+        } finally {
+          if (handoffCompositorPromiseRef.current === promise
+              && !handoffCompositorRef.current) {
+            handoffCompositorPromiseRef.current = null;
+          }
+        }
       };
 
       const apartmentSurface = {
         async prepare(context) {
           if (context.signal.aborted) return;
-          engine.rig.goTo({ zoom: 0, dur: 0 });
-          engine.setRunning(true);
+          if (coldApartmentEntryIntentRef.current === context.intentId) {
+            coldApartmentEntryIntentRef.current = null;
+          }
+          engineRef.current.rig.setOvershoot?.(0);
+          engineRef.current.rig.goTo({ zoom: 0, dur: 0 });
+          engineRef.current.setRunning(true);
+          /*
+           * The return needs its own compositor, and its own capture.
+           *
+           * Without this the inward trip has no firewall and no field: the
+           * timeline still runs for 650ms but writes nothing, so React's
+           * declarative opacities flip on the first frame and the return reads
+           * as an instant cut. Arming here also re-primes at the RETURN range,
+           * which is a different camera distance than the outward prime -- the
+           * old texture would reassemble the world from the wrong altitude.
+          */
+          if (context.fromSurface !== context.toSurface && !aptPrefersReducedMotion()) {
+            const captureDeadlineAt = performance.now()
+              + APT_HANDOFF_ENDPOINT_BUDGET_MS;
+            const compositorWindow = await aptSettleWithin(
+              armCompositor(context, { captureDeadlineAt }),
+              APT_HANDOFF_ENDPOINT_BUDGET_MS,
+              context.signal,
+            );
+            const compositorReady = compositorWindow.status === "settled"
+              && Boolean(handoffCompositorRef.current);
+            if (!compositorReady) {
+              /* Release a late allocation and retain the complete world until retry. */
+              disposeCompositor();
+              setJourneyRecovery({ kind: "content-unavailable", message: "The interior view is still preparing." });
+              journeyRetryRef.current = () => zoomRequestRef.current?.(1, { source: "retry-interior" });
+              throw new Error("interior endpoint not ready");
+            }
+          }
           await aptAbortableDelay(0, context.signal);
         },
         async activate(context) {
-          if (context.signal.aborted) return;
-          setSpatialScale("apartment");
-          if (context.fromSurface !== context.toSurface) {
-            await aptAbortableDelay(context.durationMs, context.signal);
+          try {
+            if (context.signal.aborted) return;
+            if (context.fromSurface !== context.toSurface) {
+              await runHandoff(context, "inward");
+              disposeCompositor();
+            }
+            setSpatialScale("apartment");
+            /* A completed return owns the detent again. Clear the boundary latch
+             * only after the inward compositor has reached its exact endpoint;
+             * clearing it in prepare() would re-arm wheel input underneath the
+             * still-visible world and allow a second transition to race the first. */
+            boundaryMomentumRef.current?.dispatch?.({
+              type: "reset",
+              reason: "apartment-reactivated",
+            });
+            engineRef.current.rig.setOvershoot?.(0);
+          } finally {
+            if (coldApartmentEntryIntentRef.current === context.intentId) {
+              coldApartmentEntryIntentRef.current = null;
+            }
           }
         },
         suspend() {
-          engine.setRunning(false);
+          engineRef.current.setRunning(false);
         },
         cancel(context) {
+          if (coldApartmentEntryIntentRef.current === context.intentId) {
+            coldApartmentEntryIntentRef.current = null;
+          }
           if (context.fromSurface === "world") {
-            engine.setRunning(false);
+            engineRef.current.setRunning(false);
             setSpatialScale(context.fromScale);
+            disposeCompositor();
           }
         },
+      };
+
+      /*
+       * Give the world its imagery.
+       *
+       * Without this the surface only ever renders the bundled Natural Earth
+       * tier, which at parcel range is a single stretched level-2 texel -- a
+       * flat olive field that reads as a broken map rather than as an offline
+       * fallback. The capability and the key delivery both existed; nothing
+       * connected them.
+       *
+       * Called only after the outer-detent threshold commits a coordinator
+       * intent. Creating the tileset spends one of the account's 1,000 monthly
+       * root-tile requests: sub-threshold fidgeting cannot activate it, while a
+       * later visual handoff reversal cannot recall a request already handed to
+       * the provider. The surface reuses a live session until it ages out.
+       *
+       * Only explicit synthetic-spatial QA suppresses this. Simulated HA/device
+       * state still navigates registered geography and may use configured live
+       * imagery exactly like the ordinary Apartment model.
+       */
+      const currentWorldEntryRevision = () => {
+        const anchor = confirmedWorldAnchorRef.current;
+        const site = syntheticSpatialQa
+          ? null
+          : window.HomeSpatialViewport?.getSelectedSite?.();
+        return aptWorldEntryRevision(anchor, site?.dollhouseRegistration ?? null);
+      };
+
+      const invalidateWorldImageryActivation = (context) => {
+        const record = worldImageryActivationRef.current;
+        if (!record || (context && record.intentId !== context.intentId)) return false;
+        record.cancelled = true;
+        worldImageryActivationGenerationRef.current += 1;
+        worldImageryActivationRef.current = null;
+        /* Do not manufacture a setAnchor() mutation just to cancel host
+         * ownership. Cesium's factory cannot be cancelled once requested, and
+         * a simple handoff reversal should preserve the resulting hidden,
+         * reusable candidate. A real site change already calls setAnchor(),
+         * while lifecycle teardown disposes the surface; both provide the
+         * renderer-side generation invalidation a stale factory needs. */
+        return true;
+      };
+
+      const activateWorldImagery = (context, targetRevision = currentWorldEntryRevision()) => {
+        if (syntheticSpatialQa || context.signal.aborted || !targetRevision) return Promise.resolve(null);
+        const providers = window.HomeWorldProviders;
+        if (!providers) return Promise.resolve(null);
+
+        const record = {
+          generation: ++worldImageryActivationGenerationRef.current,
+          lifecycleRevision,
+          targetRevision,
+          intentId: context.intentId,
+          surface,
+          surfaceActivationStarted: false,
+          cancelled: false,
+          promise: null,
+        };
+        const ownsActivation = () => (
+          worldImageryActivationRef.current === record
+          && worldImageryActivationGenerationRef.current === record.generation
+          && spatialLifecycleRevisionRef.current === record.lifecycleRevision
+          && worldSurfaceRef.current === record.surface
+          && currentWorldEntryRevision() === record.targetRevision
+          && !record.cancelled
+          && !context.signal.aborted
+        );
+        const onAbort = () => invalidateWorldImageryActivation(context);
+        const releaseOwnership = () => {
+          context.signal.removeEventListener("abort", onAbort);
+          if (worldImageryActivationRef.current === record) {
+            worldImageryActivationRef.current = null;
+          }
+        };
+        worldImageryActivationRef.current = record;
+        context.signal.addEventListener("abort", onAbort, { once: true });
+
+        record.promise = (async () => {
+          try {
+            const config = await providers.load();
+            if (!ownsActivation()) return config;
+            if (!config.configured) {
+              if (new URLSearchParams(window.location.search).get("worldOverview") !== "off") {
+                surface.setOverviewNavigation?.(true);
+                setWorldOverviewActive(true);
+              }
+              return config;
+            }
+            surface.setOverviewNavigation?.(false);
+            setWorldOverviewActive(false);
+            record.surfaceActivationStarted = true;
+            const result = await surface.activatePhotorealistic({
+              tilesKey: providers.getTilesKey(),
+            });
+            if (!ownsActivation()) return { status: "superseded" };
+            if (["fallback", "unavailable", "failed"].includes(result?.status)
+                && new URLSearchParams(window.location.search).get("worldOverview") !== "off") {
+              surface.setOverviewNavigation?.(true);
+              setWorldOverviewActive(true);
+            }
+            return result;
+          } catch (_) {
+            // Natural Earth remains the contractual overview fallback and the
+            // local black field remains usable; a provider failure cannot fail zoom.
+            return ownsActivation() ? { status: "unavailable" } : { status: "superseded" };
+          } finally {
+            releaseOwnership();
+          }
+        })();
+        return record.promise;
+      };
+
+      /*
+       * Derive the world pose from the live Apartment camera and apply it.
+       *
+       * Silent on failure by design: an unregistered site, a rig that cannot
+       * report a basis, or a surface that has already moved on all leave the
+       * band pose in place, which is a worse view but still a view.
+       */
+      /*
+       * Arm the home's declared stills.
+       *
+       * Nothing did this before, which is why the hero layer only ever appeared
+       * when a debug caller armed one by hand: the feature was complete and
+       * unreachable. The stills travel with the anchor, so this runs wherever
+       * the anchor is applied rather than on a lifecycle event that might not
+       * fire on every route into the world.
+       */
+      const armDeclaredStills = () => {
+        const anchor = confirmedWorldAnchorRef.current;
+        const surface = worldSurfaceRef.current;
+        if (!surface?.setHeroStills) return null;
+        try {
+          return surface.setHeroStills(anchor?.heroStills || [], anchor);
+        } catch (_) {
+          /* A still is an enhancement; never let it stop world entry. */
+          return null;
+        }
+      };
+
+      const applyRegisteredWorldPose = async (context) => {
+        const anchor = confirmedWorldAnchorRef.current;
+        const entryRangeM = surface.heroEntryRange?.(anchor) ?? anchor?.parcelRangeM;
+        const capturedPose = anchor?.heroStills?.[0];
+        if (capturedPose && Number.isFinite(capturedPose.headingDeg) && Number.isFinite(capturedPose.pitchDeg)) {
+          armDeclaredStills();
+          return surface.setRegisteredPose({
+            headingDeg: capturedPose.headingDeg, pitchDeg: capturedPose.pitchDeg, rollDeg: 0,
+            ...(capturedPose.fovAxis === "vertical" && Number.isFinite(capturedPose.fovDeg)
+              ? { verticalFovDeg: capturedPose.fovDeg } : {}),
+            rangeM: entryRangeM,
+          });
+        }
+        const azimuth = anchor?.localXAxisAzimuthDeg;
+        if (!Number.isFinite(azimuth)) {
+          /*
+           * No scan to register, so there is no Apartment basis to re-apply --
+           * but there may still be a chosen sight line, and if there is it must
+           * be applied HERE too. Returning null left the band's generic camera
+           * in place, and the band carries no heading at all, so a home without
+           * a scan arrived pointing wherever navigate() happened to leave it.
+           * travelToSite already honoured the chosen bearing; cold entry did
+           * not, so the same home faced two different ways depending on how you
+           * got there -- and the hero still, which is captured at one bearing,
+           * can only be right for one of them.
+           */
+          const chosen = anchor?.parcelViewHeadingDeg;
+          if (!Number.isFinite(chosen)) return null;
+          armDeclaredStills();
+          return surface.setRegisteredPose({
+            headingDeg: chosen,
+            /* PARCEL_DESCENT_PITCH_DEG in world-camera.mjs; see the note at the
+             * traversal's copy of this literal. */
+            pitchDeg: -35,
+            rollDeg: 0,
+            rangeM: entryRangeM,
+          });
+        }
+        try {
+          const pose = await engineRef.current.apartmentWorldPose({ localXAxisAzimuthDeg: azimuth });
+          if (!pose || context.signal.aborted) return null;
+          armDeclaredStills();
+          return surface.setRegisteredPose({
+            headingDeg: pose.headingDeg,
+            pitchDeg: pose.pitchDeg,
+            rollDeg: pose.rollDeg,
+            verticalFovDeg: pose.verticalFovDeg,
+            rangeM: entryRangeM,
+          });
+        } catch (_) {
+          return null;
+        }
+      };
+
+      const mayPromoteWorldImagery = (context, targetRevision) => (
+        aptWorldPromotionAuthority({
+          context,
+          coordinatorState: spatialCoordinatorRef.current?.getState?.(),
+          expectedLifecycleRevision: lifecycleRevision,
+          currentLifecycleRevision: spatialLifecycleRevisionRef.current,
+          targetRevision,
+          currentTargetRevision: currentWorldEntryRevision(),
+          expectedSurface: surface,
+          currentSurface: worldSurfaceRef.current,
+        })
+      );
+
+      const promoteStagedWorldImagery = (
+        context,
+        activation,
+        targetRevision,
+        timeoutMs,
+      ) => aptTryPromoteStagedWorldImagery({
+        activation,
+        signal: context.signal,
+        timeoutMs,
+        settleWithin: aptSettleWithin,
+        waitForImagery: (options) => (
+          surface.waitForImagery?.(options) ?? Promise.resolve(false)
+        ),
+        mayPromote: () => mayPromoteWorldImagery(context, targetRevision),
+        promote: () => surface.promotePhotorealistic?.() ?? { status: "not-ready" },
+      });
+
+      const interactionImageryAdopter = aptCreateWorldImageryAdopter({
+        timeoutMs: APT_WORLD_ENTRY_READINESS_BUDGET_MS,
+        refinementTimeoutMs: APT_WORLD_INTERACTION_HEIGHT_BUDGET_MS,
+        settleWithin: aptSettleWithin,
+        tryPromote: aptTryPromoteStagedWorldImagery,
+        activate: (record) => activateWorldImagery({
+          intentId: `world-interaction-${record.generation}`,
+          signal: record.controller.signal,
+        }, record.targetRevision),
+        waitForImagery: (options) => (
+          surface.waitForImagery?.(options) ?? Promise.resolve(false)
+        ),
+        promote: () => surface.promotePhotorealistic?.() ?? { status: "not-ready" },
+        refine: async (record, { timeoutMs, mayCommit }) => {
+          const startedAt = performance.now();
+          const remainingMs = () => Math.max(
+            0,
+            timeoutMs - (performance.now() - startedAt),
+          );
+          const assertAuthority = () => {
+            if (record.controller.signal.aborted || !mayCommit()) {
+              const error = new Error("world imagery refinement superseded");
+              error.name = "AbortError";
+              throw error;
+            }
+          };
+          assertAuthority();
+          const surfaceHeight = await surface.resolveSurfaceHeight({
+            timeoutMs: remainingMs(),
+          });
+          assertAuthority();
+          const dollhouseGround = await (
+            surface.resolveDollhouseGroundHeight?.({
+              timeoutMs: remainingMs(),
+            }) ?? Promise.resolve({ heightM: null, source: "unregistered" })
+          );
+          assertAuthority();
+          return { surfaceHeight, dollhouseGround };
+        },
+        hasAuthority: (record, currentOperationGeneration) => (
+          aptWorldInteractionPromotionAuthority({
+            signal: record.controller.signal,
+            expectedOperationGeneration: record.generation,
+            currentOperationGeneration,
+            coordinatorState: spatialCoordinatorRef.current?.getState?.(),
+            expectedLifecycleRevision: lifecycleRevision,
+            currentLifecycleRevision: spatialLifecycleRevisionRef.current,
+            targetRevision: record.targetRevision,
+            currentTargetRevision: currentWorldEntryRevision(),
+            expectedSurface: surface,
+            currentSurface: worldSurfaceRef.current,
+          })
+        ),
+      });
+      worldImageryAdopterRef.current?.cancel?.();
+      worldImageryAdopterRef.current = interactionImageryAdopter;
+
+      const completeColdWorldEntry = async (context, reason = "entry-readiness-deadline") => {
+        /* Staging and visibility are separate renderer operations. Only an
+         * intent that already promoted Google needs an explicit rollback here.
+         * Calling defer while its uncancellable factory is still in flight
+         * would advance the renderer generation and waste that paid request;
+         * the factory already guarantees its late result attaches hidden. */
+        if (worldImageryPromotedIntentRef.current === context.intentId) {
+          try { surface.deferPhotorealistic?.(); } catch (_) { /* disposed */ }
+          worldImageryPromotedIntentRef.current = null;
+        }
+        if (context.signal.aborted) return;
+        const navigation = await surface.navigate({
+          intentId: context.intentId,
+          band: context.toScale,
+          motion: "cut",
+          durationMs: 0,
+        });
+        if (context.signal.aborted || navigation.status !== "settled") {
+          const error = new Error("cold world entry superseded");
+          error.name = "AbortError";
+          throw error;
+        }
+        /* Apply the captured pose after the generic band pose, before the
+         * endpoint readiness gate can authorize visual ownership. */
+        if (context.fromSurface !== context.toSurface) {
+          await applyRegisteredWorldPose(context);
+        }
+        if (context.signal.aborted) {
+          const error = new Error("cold world entry superseded");
+          error.name = "AbortError";
+          throw error;
+        }
+        if (!aptPrefersReducedMotion()) {
+          const preparation = await aptSettleWithin(
+            armCompositor(context), APT_HANDOFF_ENDPOINT_BUDGET_MS, context.signal,
+          );
+          if (preparation.status !== "settled" || !handoffCompositorRef.current) {
+            disposeCompositor();
+            setJourneyRecovery({ kind: "content-unavailable", message: "The outside view is not ready for this display. Import a complete home pack or retry." });
+            journeyRetryRef.current = () => zoomRequestRef.current?.(-1, { source: "retry-outside" });
+            throw new Error("outside endpoint not ready");
+          }
+        }
       };
 
       const worldLifecycle = {
         async prepare(context) {
           if (context.signal.aborted) return;
+          if (coldWorldEntryIntentRef.current === context.intentId) {
+            coldWorldEntryIntentRef.current = null;
+          }
           applyAnchor();
           surface.setRunning(true);
+
+          const enteringWorld = context.fromSurface === "apartment"
+            && context.toSurface === "world";
+          if (enteringWorld) {
+            if (worldDollhouseRetryIntentRef.current?.intentId === context.intentId) {
+              worldDollhouseRetryIntentRef.current = null;
+            }
+            /* One deadline begins at the outer-detent threshold and covers
+             * every awaited destination-readiness step: matching local prewarm,
+             * hidden provider activation, destination navigation, imagery
+             * quiet, promotion, provider-specific heights, and compositor
+             * prime. Registered-pose math remains outside because it is local
+             * and is required on both the warm and cold paths. */
+            const readinessStartedAt = performance.now();
+            const remainingReadinessMs = () => Math.max(
+              0,
+              APT_WORLD_ENTRY_READINESS_BUDGET_MS - (performance.now() - readinessStartedAt),
+            );
+            /* Always leave enough of the same deadline for a local-surface
+             * capture. Paid imagery may use only the surplus; otherwise a slow
+             * optional root request could consume the entire budget and make
+             * the rich handoff unreachable on the default/offline path. */
+            const remainingProviderReadinessMs = () => Math.max(
+              0,
+              remainingReadinessMs() - APT_WORLD_ENTRY_COMPOSITOR_RESERVE_MS,
+            );
+            const deferProviderCandidate = () => {
+              try { surface.deferPhotorealistic?.(); } catch (_) { /* disposed */ }
+              if (worldImageryPromotedIntentRef.current === context.intentId) {
+                worldImageryPromotedIntentRef.current = null;
+              }
+            };
+            const anchor = confirmedWorldAnchorRef.current;
+            const site = syntheticSpatialQa
+              ? null
+              : window.HomeSpatialViewport?.getSelectedSite?.();
+            const revision = aptWorldEntryRevision(
+              anchor,
+              site?.dollhouseRegistration ?? null,
+            );
+            let prewarmJoin = null;
+            if (revision && worldEntryPrewarmRef.current) {
+              try {
+                prewarmJoin = await worldEntryPrewarmRef.current.joinForHandoff({
+                  revision,
+                  maxWaitMs: remainingReadinessMs(),
+                  signal: context.signal,
+                });
+              } catch (_) {
+                prewarmJoin = null;
+              }
+            }
+            if (context.signal.aborted) return;
+
+            /* Missing revision/controller/join data is cold by default. Only
+             * affirmative local surface + target stages for this exact joined
+             * revision may enter the richer path; optional provider/heights/
+             * GLB status cannot veto a capturable local frame. There is
+             * no null-result fall-through into the old serial 6s + 6s waits. */
+            const prewarmReady = aptWorldPrewarmCanUseRichEntry(prewarmJoin);
+            if (aptWorldPrewarmNeedsDollhouseRetry(
+              prewarmJoin,
+              Boolean(site?.dollhouseRegistration),
+            )) {
+              /* Speculation never owns visibility, and a settled controller is
+               * deliberately reused. Mark this intent to open the renderer's
+               * reveal gate only after it wins either handoff path; the asset
+               * never consumes compositor eligibility or the 500ms firewall. */
+              worldDollhouseRetryIntentRef.current = Object.freeze({
+                intentId: context.intentId,
+                revision,
+              });
+            }
+            if (aptWorldEntryRequiresColdCut({ prewarmReady })) {
+              if (revision) void activateWorldImagery(context, revision).catch(() => {});
+              await completeColdWorldEntry(context, "prewarm-not-ready");
+              return;
+            }
+
+            const activationWindow = await aptSettleWithin(
+              activateWorldImagery(context, revision),
+              Math.min(
+                APT_WORLD_ENTRY_PROVIDER_ACTIVATION_BUDGET_MS,
+                remainingProviderReadinessMs(),
+              ),
+              context.signal,
+            );
+            const imageryActivation = activationWindow.value;
+            let providerCandidateReady = activationWindow.status === "settled" && (
+              imageryActivation?.status === "staged"
+              || imageryActivation?.status === "ready"
+            );
+
+            const navigationWindow = await aptSettleWithin(
+              surface.navigate({
+                intentId: context.intentId,
+                band: context.toScale,
+                /* The destination is hidden; the compositor is the visible
+                 * motion. A camera tween here would spend the whole readiness
+                 * budget before the default local field can be captured. */
+                motion: "cut",
+                durationMs: 0,
+              }),
+              remainingReadinessMs(),
+              context.signal,
+            );
+            const navigationReady = navigationWindow.status === "settled"
+              && navigationWindow.value?.status === "settled";
+            if (aptWorldEntryRequiresColdCut({ navigationReady })) {
+              await completeColdWorldEntry(context, "navigation-not-ready");
+              return;
+            }
+
+            await applyRegisteredWorldPose(context);
+            if (context.signal.aborted) return;
+
+            if (providerCandidateReady) {
+              const imageryWindow = await aptSettleWithin(
+                surface.waitForImagery?.({
+                  timeoutMs: remainingProviderReadinessMs(),
+                  signal: context.signal,
+                })
+                  ?? Promise.resolve(false),
+                remainingProviderReadinessMs(),
+                context.signal,
+              );
+              if (imageryWindow.status !== "settled" || imageryWindow.value !== true) {
+                deferProviderCandidate();
+                providerCandidateReady = false;
+              }
+            }
+
+            if (providerCandidateReady) {
+              /* Provider construction is still hidden at this point. Promotion
+               * is a synchronous, host-owned commit made only after the quiet
+               * gate succeeds for this intent and revision. No tile callback
+               * or late activation continuation can make Google visible. */
+              if (context.signal.aborted || currentWorldEntryRevision() !== revision) {
+                deferProviderCandidate();
+                await completeColdWorldEntry(context, "entry-superseded-before-promotion");
+                return;
+              }
+              let promotion = null;
+              try { promotion = surface.promotePhotorealistic?.() ?? null; }
+              catch (_) { promotion = null; }
+              if (promotion?.status !== "ready") {
+                deferProviderCandidate();
+                providerCandidateReady = false;
+              } else {
+                worldImageryPromotedIntentRef.current = context.intentId;
+              }
+            }
+
+            if (providerCandidateReady) {
+              /* Promotion changes the provider generation and intentionally
+               * invalidates Natural-Earth height caches. Resolve the visible
+               * provider's roof first, then its registered dollhouse ground:
+               * the ground resolver captures the surface generation, so the
+               * two cannot run in parallel. Provider refinement may use only
+               * the budget surplus reserved above the compositor floor. */
+              const surfaceHeightWindow = await aptSettleWithin(
+                surface.resolveSurfaceHeight({ timeoutMs: remainingProviderReadinessMs() }),
+                remainingProviderReadinessMs(),
+                context.signal,
+              );
+              const surfaceHeightSource = surfaceHeightWindow.value?.source;
+              const providerSurfaceHeightReady = surfaceHeightWindow.status === "settled"
+                && Number.isFinite(surfaceHeightWindow.value?.heightM)
+                && (surfaceHeightSource === "cached" || surfaceHeightSource === "sampled-surface");
+              if (!providerSurfaceHeightReady) {
+                deferProviderCandidate();
+                providerCandidateReady = false;
+              }
+            }
+
+            if (providerCandidateReady) {
+              const groundHeightWindow = await aptSettleWithin(
+                surface.resolveDollhouseGroundHeight?.({
+                  timeoutMs: remainingProviderReadinessMs(),
+                }) ?? Promise.resolve({ heightM: null, source: "unregistered" }),
+                remainingProviderReadinessMs(),
+                context.signal,
+              );
+              const groundHeight = groundHeightWindow.value;
+              const providerGroundHeightReady = groundHeightWindow.status === "settled"
+                && groundHeight?.source !== "superseded"
+                && groundHeight?.source !== "site-mismatch"
+                && (groundHeight?.source === "unregistered" || Number.isFinite(groundHeight?.heightM));
+              if (!providerGroundHeightReady) {
+                deferProviderCandidate();
+                providerCandidateReady = false;
+              }
+            }
+            if (context.signal.aborted) {
+              deferProviderCandidate();
+              return;
+            }
+
+            if (!aptPrefersReducedMotion()) {
+              const compositorWindow = await aptSettleWithin(
+                armCompositor(context, {
+                  captureDeadlineAt: performance.now() + APT_HANDOFF_ENDPOINT_BUDGET_MS,
+                }),
+                APT_HANDOFF_ENDPOINT_BUDGET_MS,
+                context.signal,
+              );
+              const compositorReady = compositorWindow.status === "settled"
+                && Boolean(handoffCompositorRef.current);
+              if (aptWorldEntryRequiresColdCut({ compositorReady })) {
+                /* Generation invalidation makes a late create/prime dispose its
+                 * own WebGL context instead of installing after the black cut. */
+                disposeCompositor();
+                await completeColdWorldEntry(context, "compositor-not-ready");
+                return;
+              }
+            }
+            return;
+          }
+
+          /* World-owned scale changes can adopt a cold root request that
+           * finished only after Apartment entry's 500ms firewall. It is
+           * intentionally left hidden, but it must not remain hidden forever:
+           * each later intent gets one finite chance to adopt that staged
+           * session before moving its camera. Nothing promotes from a provider
+           * callback or late continuation. */
+          const targetRevision = currentWorldEntryRevision();
+          const promotionStartedAt = performance.now();
+          const remainingWorldPromotionMs = () => Math.max(
+            0,
+            APT_WORLD_ENTRY_READINESS_BUDGET_MS
+              - (performance.now() - promotionStartedAt),
+          );
+          const activationWindow = await aptSettleWithin(
+            activateWorldImagery(context, targetRevision),
+            remainingWorldPromotionMs(),
+            context.signal,
+          );
+          if (context.signal.aborted) return;
+          if (activationWindow.status === "settled") {
+            await promoteStagedWorldImagery(
+              context,
+              activationWindow.value,
+              targetRevision,
+              remainingWorldPromotionMs(),
+            );
+          }
+          if (context.signal.aborted) return;
           const result = await surface.navigate({
             intentId: context.intentId,
             band: context.toScale,
@@ -938,17 +3757,64 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           }
         },
         async activate(context) {
-          if (context.signal.aborted) return;
-          setSpatialScale(context.toScale);
-          if (context.fromSurface !== context.toSurface) {
-            await aptAbortableDelay(context.durationMs, context.signal);
+          try {
+            if (context.signal.aborted) return;
+            setSpatialScale(context.toScale);
+            if (context.fromSurface !== context.toSurface) {
+              await runHandoff(context, "outward");
+              disposeCompositor();
+            }
+            const dollhouseRetry = worldDollhouseRetryIntentRef.current;
+            if (dollhouseRetry?.intentId === context.intentId) {
+              worldDollhouseRetryIntentRef.current = null;
+              if (!context.signal.aborted
+                  && currentWorldEntryRevision() === dollhouseRetry.revision) {
+                /* A retry begins only after this destination has genuinely won
+                 * the reversible handoff. waitForDollhouse is itself bounded
+                 * and registration-generation guarded, so a later site change
+                 * cannot reveal the old home's model. A timeout leaves it
+                 * hidden and the next committed entry retries again. */
+                void (surface.waitForDollhouse?.({
+                  timeoutMs: APT_WORLD_ENTRY_READINESS_BUDGET_MS,
+                }) ?? Promise.resolve({ status: "not-required" })).catch(() => {});
+              }
+            }
+          } finally {
+            if (coldWorldEntryIntentRef.current === context.intentId) {
+              coldWorldEntryIntentRef.current = null;
+            }
+            if (worldImageryPromotedIntentRef.current === context.intentId) {
+              worldImageryPromotedIntentRef.current = null;
+            }
+            if (worldDollhouseRetryIntentRef.current?.intentId === context.intentId) {
+              worldDollhouseRetryIntentRef.current = null;
+            }
           }
         },
         suspend() {
+          interactionImageryAdopter.cancel();
           surface.setRunning(false);
         },
         cancel(context) {
+          /* A direct-manipulation reversal revokes host authority without
+           * destroying an in-flight paid root request. The renderer keeps any
+           * late result staged and hidden; a site change/setAnchor or lifecycle
+           * disposal remains the authority that invalidates the factory. */
+          invalidateWorldImageryActivation(context);
+          if (context.fromSurface === "apartment" && context.toSurface === "world"
+              && worldImageryPromotedIntentRef.current === context.intentId) {
+            try { surface.deferPhotorealistic?.(); }
+            catch (_) { /* disposed */ }
+            worldImageryPromotedIntentRef.current = null;
+          }
+          if (coldWorldEntryIntentRef.current === context.intentId) {
+            coldWorldEntryIntentRef.current = null;
+          }
+          if (worldDollhouseRetryIntentRef.current?.intentId === context.intentId) {
+            worldDollhouseRetryIntentRef.current = null;
+          }
           setSpatialScale(context.fromScale);
+          disposeCompositor();
           if (context.fromSurface === "apartment") {
             surface.setRunning(false);
             return undefined;
@@ -962,13 +3828,42 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         },
       };
 
-      const coordinator = await engine.createSpatialViewportCoordinator({
+      let previousCoordinatorState = null;
+      const coordinator = await engineRef.current.createSpatialViewportCoordinator({
         apartmentSurface,
         worldSurface: worldLifecycle,
-        reducedMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true,
+        initialScale: restoredWorldScaleRef.current || "apartment",
+        reducedMotion: aptPrefersReducedMotion(),
         onStateChange(next) {
+          const previous = previousCoordinatorState;
+          previousCoordinatorState = next;
           setSpatialTransition(next.phase);
+          setSpatialTransitionDirection(
+            next.phase === "idle" ? null : next.transition?.direction ?? null,
+          );
           if (next.phase === "idle") setSpatialScale(next.committedScale);
+          /* A cold Google root commonly outlives the 500ms visual firewall.
+           * The committed world intent is itself explicit visibility authority,
+           * so give that one entry a cancellable adoption tail instead of
+           * stranding the now-warm tileset behind the local field until the
+           * user happens to scroll again. This is a host lifecycle event, never a
+           * provider/tile callback, and the adopter revalidates idle world
+           * ownership, lifecycle, site revision, surface, and generation both
+           * before and after every await. */
+          const committedWorldIntent = aptCommittedWorldIntent(previous, next);
+          if (committedWorldIntent) {
+            const targetRevision = currentWorldEntryRevision();
+            void interactionImageryAdopter.request({
+              source: "world-intent-commit",
+              targetRevision,
+              timeoutMs: APT_WORLD_COMMITTED_PROVIDER_READINESS_BUDGET_MS,
+              /* A semantic world transition may have superseded the activation
+               * wrapper owned by the previous tail while the uncancellable
+               * Cesium factory kept running. Replacing even the same revision
+               * gives the winning COMMIT fresh visibility authority. */
+              restart: true,
+            }).catch(() => {});
+          }
         },
       });
       try {
@@ -978,6 +3873,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         throw error;
       }
       spatialCoordinatorRef.current = coordinator;
+      restoredWorldScaleRef.current = null;
+      worldScaleObserverCleanupRef.current?.();
+      worldScaleObserverCleanupRef.current = surface.observeScaleBand?.(({ band }) => {
+        const activeCoordinator = spatialCoordinatorRef.current;
+        const state = activeCoordinator?.getState?.();
+        if (!state || state.phase !== "idle" || state.committedScale === "apartment") return;
+        activeCoordinator.syncWorldScale?.(band);
+      }) ?? null;
       return coordinator;
     })();
     spatialCoordinatorPromiseRef.current = promise;
@@ -987,13 +3890,129 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       spatialCoordinatorPromiseRef.current = null;
       throw error;
     }
+  }, [ensureWorldSurface, syntheticSpatialQa]);
+
+  /*
+   * Keep the coordinator's reduced-motion answer current.
+   *
+   * It was read once at coordinator construction and the coordinator's own
+   * setReducedMotion dispatcher was never called, so turning Reduce Motion on
+   * mid-session did nothing until the Apartment view was torn down. The
+   * compositor re-queries per handoff on its own; this is what makes the
+   * coordinator's duration agree with it.
+   */
+  useEffect(() => {
+    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!query?.addEventListener) return undefined;
+    const onChange = (event) => {
+      spatialCoordinatorRef.current?.setReducedMotion?.(event.matches === true);
+      boundaryMomentumRef.current?.dispatch?.({
+        type: "reduced-motion",
+        value: event.matches === true,
+      });
+    };
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  /* Selection can change from the registry as well as from this control, so the
+   * dropdown follows the registry rather than owning the value. */
+  useEffect(() => {
+    const registry = window.HomeSpatialViewport;
+    if (!registry?.subscribe) return undefined;
+    const sync = () => {
+      setHomeSites(registry.getSites());
+      setSelectedSiteId(registry.getSelectedSiteId());
+    };
+    sync();
+    return registry.subscribe(sync);
+  }, []);
+
+  /*
+   * Load the option groups once, so the panel can render real labels and notes
+   * rather than a list of ids.
+   */
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const engine = engineRef.current;
+        /*
+         * `phase` is in the dependency list for a reason that is not obvious:
+         * this effect runs the moment the view opens, which is BEFORE the engine
+         * exists. Without a dependency that changes when the engine arrives, the
+         * early return here is permanent and the panel renders its toggle and
+         * nothing else -- a control that opens onto an empty box.
+         */
+        if (!engine?.worldViewOptions) return;
+        const bundle = await engine.worldViewOptions(worldViewSelection);
+        if (cancelled) return;
+        worldViewBundleRef.current = bundle;
+        setWorldViewGroups(bundle.groups);
+      } catch (_) { /* the panel simply does not open */ }
+    })();
+    return () => { cancelled = true; };
+  }, [open, phase, worldViewSelection]);
+
+  /*
+   * Apply the selection to the live surface.
+   *
+   * Keyed on the resolved selection key rather than on object identity: the
+   * selection round-trips through localStorage, so identity is meaningless and
+   * comparing it would either re-apply every render or never re-apply at all.
+   *
+   * This runs whenever the selection changes AND whenever a surface appears, so
+   * choosing an option before the world exists is not silently dropped -- which
+   * is the failure mode that has bitten this branch four times.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const engine = engineRef.current;
+        const surface = worldSurfaceRef.current;
+        if (!engine?.worldViewOptions) return;
+        const bundle = await engine.worldViewOptions(worldViewSelection);
+        if (cancelled) return;
+        worldViewKeyRef.current = bundle.key;
+        worldViewBundleRef.current = bundle;
+        /* Quality is a viewport-wide choice. Apply it to the resident
+         * Apartment renderer even before Cesium exists, then let the world
+         * surface consume the same shared governor when it is mounted. */
+        engine.setPerformanceMode?.(
+          bundle.resolved?.quality?.performanceMode ?? "adaptive",
+        );
+        surface?.setViewOptions?.(bundle.resolved);
+        /*
+         * The glide itself asks to come home, not just a wheel notch.
+         *
+         * A momentum zoom keeps travelling after the last notch, so waiting for
+         * the next wheel event left the camera parked against the ground until
+         * the user scrolled again.
+         */
+        surface?.setReturnBoundaryHandler?.(() => {
+          void zoomRequestRef.current?.(1, { source: "world-return-coast" });
+        });
+      } catch (_) { /* the world keeps whatever it had */ }
+    })();
+    return () => { cancelled = true; };
+  }, [worldViewSelection, spatialScale, spatialTransition]);
+
+  const setWorldViewOption = useCallback((groupKey, presetId) => {
+    setWorldViewSelection((previous) => {
+      const next = { ...previous, [groupKey]: presetId };
+      aptWriteWorldView(next);
+      return next;
+    });
   }, []);
 
   const markModelDirty = useCallback(() => {
+    if (rehearsalIsolated) return;
     setSaveStatus(simActive
       ? { state: "simulation", detail: "unsaved simulation change · live model untouched" }
       : { state: "unsaved", detail: "changes not yet saved" });
-  }, [simActive]);
+  }, [simActive, rehearsalIsolated]);
 
   useEffect(() => {
     if (!embedded) return undefined;
@@ -1012,63 +4031,93 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     };
   }, [embedded]);
 
-  /* ---------------- engine boot ---------------- */
-  useEffect(() => {
-    if (!open) return undefined;
-    let cancelled = false;
+  const captureCurrentWorkspace = useCallback(() => {
+    if (liveShadow) return;
+    const engine = engineRef.current || window.__APT_ENGINE;
+    if (!engine?.siteId) return;
+    const scope = { ...(engine.sceneIdentity || engine.workspaceScope || { siteId: engine.siteId, contentRevision: engine.contentRevision || null }),
+      authorityKey: workspaceAuthorityRef.current.key };
+    const view = { mode: engine.modes?.mode || "points", az: engine.rig?.azimuthIndex?.() ?? 1,
+      el: engine.rig?.elevationIndex?.() ?? 0, zoom: engine.rig?.zoomIndex?.() ?? 0 };
+    window.HomeApartmentData.saveViewPreference?.(scope, view);
+    if (modelSiteRef.current === engine.siteId && modelScopeRef.current?.authorityKey === scope.authorityKey
+        && (modelScopeRef.current?.frameDigest || null) === (scope.frameDigest || null)
+        && (modelScopeRef.current?.registrationVersion ?? 0) === (scope.registrationVersion ?? 0)) {
+      window.HomeApartmentData.captureWorkspace?.(scope, { ...workspaceStateRef.current, view });
+    }
+  }, []);
 
-    (async () => {
-      try {
-        // The engine canvas is created ONCE and owned imperatively, not by
-        // React: the resident renderer is permanently bound to it, so every
-        // view OPEN must re-attach THIS node — a React-owned <canvas> would
-        // be torn down on close while the renderer stays bound to it (the
-        // black-screen-on-reopen bug).
-        let canvas = window.__APT_CANVAS;
-        if (!canvas) {
-          canvas = document.createElement("canvas");
-          canvas.style.cssText = "display:block;width:100%;height:100%;";
-          window.__APT_CANVAS = canvas;
-        }
-        if (hostRef.current && canvas.parentElement !== hostRef.current) {
-          hostRef.current.appendChild(canvas);
-        }
+  const clearInteriorState = useCallback(() => {
+    captureCurrentWorkspace();
+    detachRef.current?.(); detachRef.current = null;
+    if (pendingInteriorRef.current) {
+      pendingInteriorRef.current.cancelled = true;
+      pendingInteriorRef.current.controller?.abort();
+      pendingInteriorRef.current.engine?.dispose?.();
+      pendingInteriorRef.current = null;
+    }
+    engineRef.current?.setRunning(false);
+    flySeqRef.current += 1;
+    if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
+    modelSiteRef.current = null;
+    modelScopeRef.current = null;
+    setModel(window.HomeApartmentData.EMPTY_MODEL); setSeedModel(null);
+    setRegistry({ entities: [], areas: [], devices: [], states: {} }); statesRef.current = {};
+    setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCameraPoseReady(false);
+    setCalibCam(null); setCardId(null); setHoverId(null); setTrack(null); setEditing(false);
+    setAimMode(false); setAimFixtureId(null); setAimDestination(null);
+    setInteriorPlaceholder(null); setModeError(null); setModeLoading(null); setError(null);
+    setSaveStatus({ state: "idle", detail: "viewing selected home" });
+    setSaving(false);
+    setLiveReview({ state: "idle", live: null, detail: "" });
+    setPhase("loading");
+  }, [captureCurrentWorkspace]);
 
-        // engine boot is deduped via a cached PROMISE — a fast close/reopen
-        // while assets stream must not run createEngine twice against the
-        // same resident canvas (two rAF loops fighting one GL context)
-        let enginePromise = window.__APT_ENGINE_PROMISE;
-        if (!enginePromise) {
-          setPhase("boot");
-          enginePromise = (async () => {
-            const mod = await window.Home3D.ready;
-            if (!mod) throw (window.Home3D.error || new Error("3d engine failed to load"));
-            return mod.createEngine({ canvas, hostEl: hostRef.current, sim: simActive });
-          })();
-          window.__APT_ENGINE_PROMISE = enginePromise;
-          enginePromise.catch(() => {
-            if (window.__APT_ENGINE_PROMISE === enginePromise) window.__APT_ENGINE_PROMISE = null;
-          });
-        }
-        const engine = await enginePromise;
-        window.__APT_ENGINE = engine;
-        if (cancelled) return;
-        engineRef.current = engine;
+  const bindInteriorEngine = useCallback(async (engine, isCurrent = () => true) => {
+        const current = () => isCurrent() && engineRef.current === engine
+          && window.HomeSpatialViewport?.getSelectedSiteId?.() === engine.siteId;
+        if (!current()) return;
+        aptSyncDollhouseContext(engine, dollhouseContextRef.current);
+        loadedInteriorSiteRef.current = engine.siteId;
+        /* Never carry one interior's disclosure onto the next engine; the new
+         * one reports its own once frame.json has been read. */
+        setInteriorPlaceholder(engine.scenePlaceholder ?? null);
+        Promise.resolve(engine.scenePlaceholderPromise).then((placeholder) => {
+          if (isCurrent() && engineRef.current === engine) setInteriorPlaceholder(placeholder ?? null);
+        }).catch(() => {});
+        const momentum = await engine.createApartmentBoundaryMomentum({
+          reducedMotion: aptPrefersReducedMotion(),
+        });
+        if (!current()) { momentum?.dispose?.(); momentum?.dispatch?.({ type: "reset", reason: "superseded" }); return; }
+        boundaryMomentumRef.current = momentum;
         setPhase("loading");
         engine.pointsPromise.then(
-          () => !cancelled && setPhase("ready"),
-          (e) => { if (!cancelled) { setError(String(e?.message || e)); setPhase("error"); } },
+          () => current() && setPhase("ready"),
+          (e) => { if (current()) { setError(String(e?.message || e)); setPhase("error"); } },
         );
-        engine.pointsPromise.then((p) => { calibPointsRef.current = p; }).catch(() => {});
+        engine.pointsPromise.then((p) => { if (current()) calibPointsRef.current = p; }).catch(() => {});
+        const viewScope = { ...(engine.sceneIdentity || engine.workspaceScope),
+          authorityKey: workspaceAuthorityRef.current.key };
+        let viewRestored = false, lastViewSignature = "";
+        const persistView = () => {
+          if (liveShadow || !current() || !viewRestored) return;
+          const view = { mode: engine.modes.mode, az: engine.rig.azimuthIndex(),
+            el: engine.rig.elevationIndex(), zoom: engine.rig.zoomIndex() };
+          const signature = JSON.stringify(view);
+          if (signature !== lastViewSignature) {
+            lastViewSignature = signature;
+            window.HomeApartmentData.saveViewPreference?.(viewScope, view);
+          }
+        };
         // keep the bottom toggle honest: calibrate/snap switch modes through
         // the engine directly, so subscribe rather than trusting local state —
         // and re-sync NOW: the close path restores the pre-snap mode AFTER
         // these listeners were unsubscribed, so local `mode` can be stale
         const unsubs = [
-          engine.on("progress", (p) => setProgress({ ...p })),
-          engine.on("stats", (s) => setStats(s)),
-          engine.on("contextlost", () => showToast("graphics context lost — recovering")),
-          engine.modes.onChange((next) => setMode(next)),
+          engine.on("progress", (p) => { if (current()) setProgress({ ...p }); }),
+          engine.on("stats", (s) => { if (current()) setStats(s); }),
+          engine.on("contextlost", () => { if (current()) showToast("graphics context lost — recovering"); }),
+          engine.modes.onChange((next) => { if (current()) { setMode(next); persistView(); } }),
         ];
         setMode(engine.modes.mode);
         engine.picking.setHost?.(hostRef.current);
@@ -1087,11 +4136,25 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         };
         const ro = new ResizeObserver(size);
         const detachInput = engine.attachInput(host, {
-          onZoomStep: (direction, meta) => zoomRequestRef.current?.(direction, meta),
+          onZoomStep: (direction, meta) => {
+            if (!apartmentSceneControlsEnabledRef.current) return;
+            const boundaryPhase = boundaryMomentumRef.current?.snapshot?.()?.phase;
+            /* Once preview starts, BOTH signs stay with the continuous boundary
+             * controller. Sending wheel-up back to the detented rig would zoom
+             * the Apartment in while its preview overshoot was still applied,
+             * and a trailing event after snap could supersede the handoff with a
+             * world-scale intent before the world even owned input. */
+            if (meta?.continuousBoundary || (boundaryPhase && boundaryPhase !== "idle")) {
+              boundaryWheelRef.current?.(meta);
+            }
+            else zoomRequestRef.current?.(direction, meta);
+          },
         });
         const azTimer = setInterval(() => {
+          if (!current()) return;
           setAzIdx(engine.rig.azimuthIndex());
           setInCamPose(!!engine.rig.inCameraPose?.());
+          persistView();
         }, 200);
         detachRef.current = () => {
           ro.disconnect(); detachInput(); clearInterval(azTimer);
@@ -1099,7 +4162,100 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         };
         size();
         ro.observe(host);
-        engine.setRunning(true);
+        engine.setRunning(aptApartmentOwnsSpatialSurface(spatialCoordinatorRef.current));
+        await engine.pointsPromise;
+        if (!current()) return;
+        const scope = { ...(engine.sceneIdentity || engine.workspaceScope),
+          authorityKey: workspaceAuthorityRef.current.key };
+        const preference = liveShadow ? null : window.HomeApartmentData.readViewPreference?.(scope);
+        if (preference) {
+          engine.rig.goTo?.({ az: preference.az, el: preference.el, zoom: preference.zoom, dur: 0 });
+          if (!engine.scenePlaceholder && preference.mode !== engine.modes.mode) {
+            try { await engine.modes.setMode(preference.mode, { duration: 0 }); }
+            catch (error) { if (current()) setModeError(String(error?.message || error)); }
+          }
+        }
+        viewRestored = true;
+        persistView();
+  }, [showToast]);
+
+  const prepareInteriorForSite = useCallback(async (siteId, isCurrent = () => true) => {
+    await window.HomeContentPacks?.ready;
+    const site = window.HomeSpatialViewport?.getSite?.(siteId);
+    if (!site?.sceneAvailable || !isCurrent()) return false;
+    const revision = site.contentRevision || "legacy";
+    const preparedScope = aptInteriorWorkspaceScope(siteId);
+    const contentIsCurrent = () => isCurrent()
+      && (window.HomeSpatialViewport?.getSite?.(siteId)?.contentRevision || "legacy") === revision;
+    const oldEngine = engineRef.current || window.__APT_ENGINE;
+    if (oldEngine?.siteId === siteId && (oldEngine.contentRevision || "legacy") === revision) {
+      await oldEngine.pointsPromise;
+      if (!contentIsCurrent()) return false;
+      engineRef.current = oldEngine;
+      if (hostRef.current && window.__APT_CANVAS?.parentElement !== hostRef.current) hostRef.current.appendChild(window.__APT_CANVAS);
+      detachRef.current?.(); detachRef.current = null;
+      await bindInteriorEngine(oldEngine, contentIsCurrent);
+      return contentIsCurrent();
+    }
+    const canvas = document.createElement("canvas");
+    canvas.style.cssText = "display:block;width:100%;height:100%;";
+    const module = await window.Home3D.ready;
+    if (!module || !contentIsCurrent()) return false;
+    let next = null;
+    let adopted = false;
+    const pending = { engine: null, cancelled: false, controller: new AbortController() };
+    pendingInteriorRef.current = pending;
+    try {
+      next = await module.createEngine({ canvas, hostEl: hostRef.current, sim: simActive, siteId,
+        contentRevision: revision === "legacy" ? null : revision,
+      assetSelection: [4,5,6].includes(window.HomeLiveSceneShadow?.resident_binding?.version)
+          ? window.HomeLiveSceneShadow.resident_binding.asset_selection : null,
+        signal: pending.controller.signal,
+        performanceController: oldEngine?.performanceController });
+      next.contentRevision = revision;
+      next.workspaceScope = preparedScope;
+      pending.engine = next;
+      if (pending.cancelled || !contentIsCurrent()) return false;
+      next.setRunning(false);
+      next.setSize(hostRef.current?.clientWidth || 1, hostRef.current?.clientHeight || 1);
+      const loaded = await aptSettleWithin(next.pointsPromise, APT_HANDOFF_ENDPOINT_BUDGET_MS);
+      if (loaded.status !== "settled" || pending.cancelled || !contentIsCurrent()) return false;
+      // The complete world retains ownership while the new scan is installed.
+      // No model or live-control state from the previous home is presented.
+      detachRef.current?.();
+      detachRef.current = null;
+      oldEngine?.setRunning(false);
+      oldEngine?.dispose?.();
+      window.__APT_CANVAS?.remove?.();
+      hostRef.current?.appendChild(canvas);
+      engineRef.current = next;
+      window.__APT_ENGINE = next;
+      window.__APT_CANVAS = canvas;
+      window.__APT_ENGINE_PROMISE = Promise.resolve(next);
+      adopted = true;
+      if (pendingInteriorRef.current === pending) pendingInteriorRef.current = null;
+      setLiveCam(null); setLiveOn(false); setCalibCam(null); setCardId(null);
+      await bindInteriorEngine(next, contentIsCurrent);
+      return contentIsCurrent();
+    } catch (_) { return false; }
+    finally {
+      if (pendingInteriorRef.current === pending) pendingInteriorRef.current = null;
+      if (!adopted) { next?.dispose?.(); canvas.remove(); }
+    }
+  }, [bindInteriorEngine, simActive]);
+
+  /* ---------------- engine boot ---------------- */
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        await window.HomeContentPacks?.ready;
+        if (cancelled) return;
+        const registry = window.HomeSpatialViewport;
+        const siteId = registry?.getSelectedSiteId?.() || "echo";
+        await interiorSwitchRequestRef.current?.(siteId, { force: true });
       } catch (e) {
         if (!cancelled) { setError(String(e?.message || e)); setPhase("error"); }
       }
@@ -1108,9 +4264,24 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     return () => {
       cancelled = true;
       if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
+      captureCurrentWorkspace();
+      if (pendingInteriorRef.current) {
+        pendingInteriorRef.current.cancelled = true;
+        pendingInteriorRef.current.controller?.abort();
+        pendingInteriorRef.current.engine?.dispose?.(); pendingInteriorRef.current = null;
+      }
+      interiorSessionRef.current = null;
       flySeqRef.current += 1;
       detachRef.current?.();
       detachRef.current = null;
+      if (boundaryFrameRef.current) cancelAnimationFrame(boundaryFrameRef.current);
+      boundaryFrameRef.current = 0;
+      boundaryLastFrameRef.current = 0;
+      pendingSpatialFocusRef.current = null;
+      pendingSpatialFocusElementRef.current = null;
+      try { boundaryMomentumRef.current?.dispatch?.({ type: "reset", reason: "view-closed" }); } catch (_) { /* */ }
+      boundaryMomentumRef.current = null;
+      engineRef.current?.rig?.setOvershoot?.(0);
       // this component instance PERSISTS across open/close (home-app renders
       // it permanently; open=false just renders null) — clear per-session UI
       // state here or a live feed / calibration overlay / control card
@@ -1120,23 +4291,81 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       engineRef.current?.overlay?.setAimBeam?.(null);
       setEditing(false);
       spatialLifecycleRevisionRef.current += 1;
+      spatialTravelIntentRef.current += 1;
+      worldOverviewAbortRef.current?.abort();
+      worldOverviewAbortRef.current = null;
+      setWorldOverviewActive(false);
+      travellingRef.current = false;
+      setTravelling(false);
+      worldImageryAdopterRef.current?.cancel?.();
+      worldImageryAdopterRef.current = null;
       spatialCoordinatorRef.current?.dispose?.();
       spatialCoordinatorRef.current = null;
       spatialCoordinatorPromiseRef.current = null;
+      /*
+       * Closing the view mid-handoff must give the GPU back explicitly. The
+       * canvas element going out of scope would release the context only on the
+       * next GC, and WebView2 evicts the OLDEST of its 16 contexts when the cap
+       * is hit — which in this app is the Apartment's own. This is the same leak
+       * the live-feed warp path already had to fix.
+       */
+      aptDisposeHandoffCompositorSlots(
+        handoffCompositorRef,
+        handoffCompositorPendingRef,
+        handoffCompositorPromiseRef,
+        handoffCompositorGenerationRef,
+      );
+      coldWorldEntryIntentRef.current = null;
+      coldApartmentEntryIntentRef.current = null;
+      worldImageryPromotedIntentRef.current = null;
+      worldDollhouseRetryIntentRef.current = null;
+      if (worldImageryActivationRef.current) {
+        worldImageryActivationRef.current.cancelled = true;
+      }
+      worldImageryActivationGenerationRef.current += 1;
+      worldImageryActivationRef.current = null;
+      if (handoffMotionRef.current) handoffMotionRef.current.active = false;
+      handoffMotionRef.current = null;
+      handoffSourceReversalRef.current = null;
+      /* The handoff writes these inline every frame; a close at 400ms would
+       * otherwise leave the Apartment pinned at 0.0019 scale and invisible when
+       * the view reopens. */
+      hostRef.current?.style.removeProperty("opacity");
+      hostRef.current?.style.removeProperty("transform");
+      worldHostRef.current?.style.removeProperty("opacity");
+      if (handoffFallbackRef.current) {
+        handoffFallbackRef.current.style.opacity = "0";
+        handoffFallbackRef.current.style.visibility = "hidden";
+      }
+      worldEntryPrewarmRef.current?.dispose?.();
+      worldEntryPrewarmRef.current = null;
+      /* A dynamic import may resolve after close. Clearing the ownership slot
+       * makes its installation handler dispose that late controller instead of
+       * reviving background work in a closed Apartment view. */
+      worldEntryPrewarmPromiseRef.current = null;
       worldSurfacePendingRef.current?.dispose?.();
       worldSurfacePendingRef.current = null;
+      worldScaleObserverCleanupRef.current?.();
+      worldScaleObserverCleanupRef.current = null;
       worldSurfaceRef.current?.dispose?.();
       worldSurfaceRef.current = null;
       worldSurfacePromiseRef.current = null;
+      providerTrafficRef.current?.dispose?.();
+      providerTrafficRef.current = null;
+      /* Dynamic import can still be resolving. Its lifecycle token disposes a
+       * late probe; clearing this slot lets the next open start cleanly. */
+      providerTrafficPromiseRef.current = null;
+      window.HomeWorldProviders?.forget?.();
       confirmedWorldAnchorRef.current = null;
       worldAnchorKeyRef.current = "";
       setSpatialScale("apartment");
       setSpatialTransition("idle");
+      setSpatialTransitionDirection(null);
       const eng = engineRef.current;
       if (eng) {
         // never leave the resident engine in a held/locked pose or with the
         // cloud hidden — a reopen would look dead with no recovery affordance
-        eng.rig.resetPose?.();
+        if (!liveShadow) eng.rig.resetPose?.();
         if (preSnapModeRef.current != null) {
           const back = preSnapModeRef.current;
           preSnapModeRef.current = null;
@@ -1145,13 +4374,161 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         eng.setRunning(false);
       }
     };
-  }, [open, simActive, showToast, embedded]);
+  }, [open, simActive, showToast, embedded, bindInteriorEngine, captureCurrentWorkspace]);
+
+  /* Once the Apartment is genuinely usable, prepare the hidden local world
+   * surface for the selected site's exact anchor/registration revision. This
+   * path intentionally has no provider callback and every start repeats the
+   * literal false permission: paid/network provider activation remains owned
+   * by committed worldLifecycle.prepare(). */
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!open || phase !== "ready" || !worldZoomEnabled
+        || !engine?.createWorldEntryPrewarm) {
+      worldEntryPrewarmRef.current?.cancel?.();
+      return undefined;
+    }
+
+    const anchor = aptConfirmedWorldAnchor(syntheticSpatialQa);
+    const site = syntheticSpatialQa
+      ? null
+      : window.HomeSpatialViewport?.getSelectedSite?.();
+    const dollhouseRegistration = site?.dollhouseRegistration ?? null;
+    const revision = aptWorldEntryRevision(anchor, dollhouseRegistration);
+    if (!anchor || !revision) {
+      worldEntryPrewarmRef.current?.cancel?.();
+      return undefined;
+    }
+
+    let cancelled = false;
+    const lifecycleRevision = spatialLifecycleRevisionRef.current;
+    (async () => {
+      let controllerPromise = worldEntryPrewarmPromiseRef.current;
+      if (!controllerPromise) {
+        /* CSS visibility:hidden keeps a cold local prewarm invisible, but Cesium
+         * Model readiness still needs scene updates. Share one bounded frame
+         * lease across the parallel readiness branches. A retained active or
+         * staged Google surface is deliberately ineligible: cached queries may
+         * still settle while it is parked, and committed worldLifecycle.prepare
+         * remains the only authority that may restart its renderer. */
+        let hiddenReadinessUsers = 0;
+        let suspendAfterHiddenReadiness = false;
+        const withHiddenWorldFrames = async (context, operation) => {
+          if (context.signal?.aborted) return { status: "cancelled" };
+          if (hiddenReadinessUsers === 0) {
+            suspendAfterHiddenReadiness = aptStartLocalWorldPrewarmFrames(context.surface);
+          }
+          hiddenReadinessUsers += 1;
+          try {
+            return await operation();
+          } finally {
+            hiddenReadinessUsers = Math.max(0, hiddenReadinessUsers - 1);
+            if (hiddenReadinessUsers === 0) {
+              const shouldSuspend = suspendAfterHiddenReadiness;
+              suspendAfterHiddenReadiness = false;
+              const apartmentStillOwnsSurface = aptApartmentOwnsSpatialSurface(
+                spatialCoordinatorRef.current,
+              );
+              if (shouldSuspend && apartmentStillOwnsSurface) {
+                try { context.surface.setRunning(false); } catch (_) { /* disposed */ }
+              }
+            }
+          }
+        };
+        controllerPromise = engine.createWorldEntryPrewarm({
+          ensureSurface: async ({ signal }) => {
+            const surface = await ensureWorldSurface();
+            return signal.aborted ? { status: "cancelled" } : surface;
+          },
+          applyTarget: ({ target, surface, signal }) => {
+            if (signal.aborted) return "cancelled";
+            if (target.viewOptions) surface.setViewOptions?.(target.viewOptions);
+            surface.setAnchor(target.anchor);
+            surface.setDollhouseRegistration?.(target.dollhouseRegistration);
+            confirmedWorldAnchorRef.current = target.anchor;
+            worldAnchorKeyRef.current = aptWorldAnchorKey(
+              target.anchor,
+              target.dollhouseRegistration,
+            );
+            return "ready";
+          },
+          resolveSurfaceHeight: (context) => withHiddenWorldFrames(context, () => (
+            context.surface.resolveSurfaceHeight({ timeoutMs: context.timeoutMs })
+          )),
+          resolveDollhouseGroundHeight: (context) => withHiddenWorldFrames(context, () => (
+            context.surface.resolveDollhouseGroundHeight?.({ timeoutMs: context.timeoutMs })
+              ?? { status: "not-required" }
+          )),
+          /* setDollhouseRegistration above starts cache loading with show:false.
+           * Speculation must never call waitForDollhouse: that method opens the
+           * reveal gate, and a join timeout does not cancel background work.
+           * Only a successfully activated world intent may reveal the cache. */
+        });
+        worldEntryPrewarmPromiseRef.current = controllerPromise;
+        controllerPromise.then(
+          (controller) => {
+            if (worldEntryPrewarmPromiseRef.current !== controllerPromise) {
+              controller.dispose?.();
+              return;
+            }
+            worldEntryPrewarmRef.current = controller;
+          },
+          () => {
+            if (worldEntryPrewarmPromiseRef.current === controllerPromise) {
+              worldEntryPrewarmPromiseRef.current = null;
+            }
+          },
+        );
+      }
+
+      let controller;
+      try {
+        controller = await controllerPromise;
+      } catch (_) {
+        return;
+      }
+      if (cancelled || spatialLifecycleRevisionRef.current !== lifecycleRevision
+          || worldEntryPrewarmPromiseRef.current !== controllerPromise) return;
+
+      let bundle;
+      try {
+        bundle = await engine.worldViewOptions(worldViewSelection);
+      } catch (_) {
+        return;
+      }
+      if (cancelled || spatialLifecycleRevisionRef.current !== lifecycleRevision
+          || !aptApartmentOwnsSpatialSurface(spatialCoordinatorRef.current)) return;
+
+      const connectionInfo = window.navigator?.connection ?? null;
+      void controller.start({
+        apartmentOpen: true,
+        apartmentReady: true,
+        worldZoomEnabled: true,
+        network: connectionInfo,
+        streamingPreset: bundle?.resolved?.streaming ?? null,
+        revision,
+        target: Object.freeze({
+          anchor,
+          dollhouseRegistration,
+          viewOptions: bundle?.resolved ?? null,
+        }),
+        allowProviderActivation: false,
+      }).catch(() => {
+        /* Preparation is opportunistic. Committed entry owns the fail-soft
+         * fallback and must remain reachable after every background failure. */
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [open, phase, selectedSiteId, worldViewSelection, syntheticSpatialQa,
+    worldZoomEnabled, ensureWorldSurface]);
 
   /* Once the cloud is usable, quietly load photo + mesh into the resident
      engine. The post-boot prewarmer handles network bytes; this handles parser
      and GPU readiness without switching the visible mode. */
   useEffect(() => {
     if (!open || phase !== "ready") return undefined;
+    if (liveShadow) return undefined;
     const engine = engineRef.current;
     if (!engine?.modes?.preload || !aptShouldModePrewarm()) return undefined;
     if (modePrewarmRef.current?.engine === engine && modePrewarmRef.current.done) return undefined;
@@ -1201,42 +4578,75 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   /* ---------------- model + registry load ---------------- */
   useEffect(() => {
     if (!open) return undefined;
+    if (liveShadow) {
+      setModel(window.HomeLiveResidentModel);
+      setSeedModel(window.HomeLiveResidentModel);
+      setRegistry({ entities: [], areas: [], devices: [], states: {} });
+      setSaveStatus({ state: 'idle', detail: 'registered shadow model · read only' });
+      return undefined;
+    }
     let dead = false;
     setLiveReview({ state: "idle", live: null, detail: "" });
+    if (mapRehearsalOpen || window.HomeMapRehearsalOfflineState?.readback?.().preview_released) return undefined;
     (async () => {
-      const seed = await window.HomeApartmentData.getSeedModel?.();
-      if (!dead) setSeedModel(seed || null);
+      /* Per-site: the seed model is a content-pack asset, and without the id
+       * this resolved to Echo's for whichever home was open. */
+      const scope = aptInteriorWorkspaceScope(selectedSiteId, workspaceAuthorityRef.current.key);
+      const current = () => !dead && window.HomeSpatialViewport?.getSelectedSiteId?.() === scope.siteId
+        && workspaceAuthorityRef.current.key === scope.authorityKey
+        && (window.HomeSpatialViewport?.getSite?.(scope.siteId)?.contentRevision || null) === scope.contentRevision
+        && (window.HomeSpatialViewport?.getSite?.(scope.siteId)?.sceneRegistration?.version ?? 0) === scope.registrationVersion
+        && (window.HomeContentPacks?.get?.(scope.siteId, scope.contentRevision)?.manifest?.assets?.["frame.json"]?.sha256 || null) === scope.frameDigest;
+      const workspace = window.HomeApartmentData.restoreWorkspace?.(scope);
+      if (workspace?.model && current()) {
+        modelSiteRef.current = scope.siteId;
+        modelScopeRef.current = scope;
+        setModel(workspace.model);
+        if (workspace.dirty) setSaveStatus({ state: "unsaved", detail: "session changes preserved" });
+      }
+      const seed = await window.HomeApartmentData.getSeedModel?.(scope.siteId, { contentRevision: scope.contentRevision });
+      if (!current()) return;
+      setSeedModel(seed || null);
+      if (workspace?.dirty) return;
       if (simActive && !dead) setRegistry({ entities: [], areas: [], devices: [], states: {} });
       // retry until a true remote load lands — the first attempt can race
       // tauriFetch readiness and fall back to a cached/seed copy, which the
       // user reads as "my saves were overwritten"
       for (let attempt = 0; attempt < 10 && !dead; attempt++) {
-        const m = await window.HomeApartmentData.getModel({ endpoint, token, sim: simActive });
-        if (dead) return;
+        const m = await window.HomeApartmentData.getModel({ endpoint, token, sim: simActive,
+          ...scope, equipmentRegistration: window.HG_WEB_MODE === true });
+        if (!current() || (modelSiteRef.current === scope.siteId && workspaceStateRef.current?.dirty
+            && modelScopeRef.current?.authorityKey === scope.authorityKey
+            && modelScopeRef.current?.frameDigest === scope.frameDigest
+            && modelScopeRef.current?.registrationVersion === scope.registrationVersion)) return;
+        modelSiteRef.current = scope.siteId;
+        modelScopeRef.current = scope;
         setModel(m);
         const meta = window.HomeApartmentData.modelSourceMeta?.(m) || {};
         setSaveStatus(meta.kind === "simulation"
           ? { state: "simulation", detail: "isolated · cannot save live" }
-          : meta.kind === "live_ha_model"
+          : meta.kind === "live_ha_model" || meta.kind === "equipment_registration"
             ? { state: "saved", detail: `revision ${m.revision}` }
             : meta.kind === "local_draft"
               ? { state: "offline", detail: "local draft · not saved to Home Assistant" }
               : { state: "idle", detail: meta.label || "loaded" });
         const fromRemote = meta.kind === "live_ha_model"
           || (meta.kind === "seed_model" && Number.isInteger(m.source_detail?.authoritative_revision));
-        if (fromRemote || simActive || !token) break;
+        if (fromRemote || simActive || !token || scope.siteId !== "echo") break;
         await new Promise((r) => setTimeout(r, 2500));
       }
     })();
     return () => { dead = true; };
-  }, [open, endpoint, token, simActive]);
+  /* selectedSiteId included: the seed model is per-site, so switching homes
+   * must reload it rather than leaving the previous home's in place. */
+  }, [open, endpoint, token, simActive, selectedSiteId, selectedContentRevision, mapRehearsalOpen, equipmentReloadEpoch, liveShadow && [4,5,6].includes(window.HomeLiveSceneShadow.resident_binding?.version) && phase === "ready"]);
 
   /* Registry inventory follows the authenticated HA connection separately
      from the Apartment document. Reconnecting must refresh all real lights,
      but must never reload the model over unsaved editor changes. */
   useEffect(() => {
     if (!open) return undefined;
-    if (simActive) {
+    if (simActive || rehearsalIsolated || selectedSiteId !== "echo") {
       setRegistry({ entities: [], areas: [], devices: [], states: {} });
       return undefined;
     }
@@ -1244,20 +4654,20 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     const client = window.__hav_haClient;
     if (!client) return undefined;
     let dead = false;
-    window.HomeApartmentData.getRegistry(client).then((nextRegistry) => {
-      if (!dead) setRegistry(nextRegistry);
+    window.HomeApartmentData.getRegistry(client, { siteId: selectedSiteId }).then((nextRegistry) => {
+      if (!dead && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo") setRegistry(nextRegistry);
     }).catch(() => {
       if (!dead) setRegistry({ entities: [], areas: [], devices: [], states: {} });
     });
     return () => { dead = true; };
-  }, [open, simActive, connection, endpoint, token, serviceEpoch]);
+  }, [open, simActive, connection, endpoint, token, serviceEpoch, rehearsalIsolated, selectedSiteId]);
 
   /* correspondence pick: NATIVE capture-phase listener — the rig's input
      handlers stop propagation, so React synthetic events never fire on the
      host (this is why Step 2 clicks "did nothing") */
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return undefined;
+    if (!host || !apartmentSceneControlsEnabled) return undefined;
     const onPick = (ev) => {
       if (!calibPickRef.current || !calibApiRef.current) return;
       const e = engineRef.current;
@@ -1330,7 +4740,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       host.removeEventListener("pointermove", onMove, true);
       host.removeEventListener("pointerup", onUp, true);
     };
-  }, [open, phase]);
+  }, [open, phase, apartmentSceneControlsEnabled]);
 
   /* 3D confirmation markers for banked pairs — rendered by the engine's
      overlay (the Babel layer has no working dynamic import of three) */
@@ -1343,8 +4753,17 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
 
   /* model -> overlay sync */
   useEffect(() => {
+    if (mapRehearsalOpen || liveShadow && !apartmentShadowEquipmentDisplayEnabled) return;
     const engine = engineRef.current;
     if (!engine || phase !== "ready") return;
+    if (engine.siteId !== selectedSiteId || !apartmentPlacementDisplayEnabled) {
+      engine.overlay.setDevices([]); engine.overlay.setZones([]); engine.overlay.setTargets?.([]);
+      engine.overlay.setEquipmentRegistration?.(null);
+      return;
+    }
+    // The editor owns selected-wall/measurement highlights during editing;
+    // parent passive effects must not clear the child's highlighted reference.
+    if (!editing || !model._equipment_registration) engine.overlay.setEquipmentRegistration?.(model._equipment_registration || null);
     engine.overlay.setDevices(model.devices || []);
     engine.overlay.setZones(model.zones || []);
     engine.overlay.setTargets?.(model.targets || []);
@@ -1353,7 +4772,349 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       if (dev) engine.overlay.setDeviceState(dev.id, st);
     }
     if (editing) engine.overlay.setZonesVisible(0.7);
-  }, [model, phase, editing]);
+  }, [model, phase, editing, selectedSiteId, mapRehearsalOpen, apartmentPlacementDisplayEnabled]);
+
+  // This ordinary-view preview reads the admitted survey without supplying
+  // missing optical origins or entering the committed-execution workflow.
+  useEffect(() => {
+    const engine = engineRef.current;
+    const overlay = engine?.overlay;
+    if (!overlay?.setVirtualFixtures) return;
+    const identity = engine.sceneIdentity, binding = virtualFixtureDocument?.binding;
+    const matchesScene = binding && identity?.siteId === selectedSiteId
+      && identity.contentRevision === binding.content_revision
+      && identity.registrationVersion === binding.registration_version
+      && identity.frameDigest === binding.frame_digest;
+    const document = open && phase === "ready" && matchesScene ? virtualFixtureDocument : null;
+    overlay.setVirtualFixtures(document);
+    if (document) {
+      if (virtualFixtureStatesRef.current.key !== virtualFixtureBindingKey) {
+        virtualFixtureStatesRef.current = { key: virtualFixtureBindingKey, states: new Map(), targets: new Map() };
+        virtualAimHistoryRef.current = { undo: [], redo: [] };
+        setVirtualAimHistoryVersion(value => value + 1);
+        setVirtualAimNotice("");
+      }
+      for (const [id, state] of virtualFixtureStatesRef.current.states) overlay.setVirtualFixtureState?.(id, state);
+      for (const [id, target] of virtualFixtureStatesRef.current.targets) overlay.aimVirtualFixtureAtTarget?.(id, target);
+    }
+    overlay.setVirtualFixturesVisible(virtualSpotlightsVisible && !editing && !calibCam
+      && !liveOn && spatialScale === "apartment");
+    setVirtualFixturePreview(overlay.virtualFixturesReadback?.() || null);
+  }, [open, phase, selectedSiteId, selectedContentRevision, virtualFixtureDocument,
+    virtualFixtureBindingKey, virtualSpotlightsVisible, editing, calibCam, liveOn, spatialScale]);
+
+  const syncVirtualFixturePreview = (engine) => {
+    const result = engine?.overlay.virtualFixturesReadback?.();
+    if (!result) return;
+    for (const fixture of result.fixtures || []) {
+      const state = fixture.state;
+      virtualFixtureStatesRef.current.states.set(fixture.fixture_id, {
+        radials: state.radials.map(({ number, on, brightness, color_temp_kelvin }) => ({ number, on, brightness, color_temp_kelvin })),
+        downward: { ...state.downward }, spotlight: { ...state.spotlight }, pan_deg: state.pan_deg, tilt_deg: state.tilt_deg,
+      });
+      const target = engine.overlay.virtualFixtureInteractionDescriptor?.(fixture.fixture_id)?.target;
+      if (target) virtualFixtureStatesRef.current.targets.set(fixture.fixture_id, target);
+      else virtualFixtureStatesRef.current.targets.delete(fixture.fixture_id);
+    }
+    setVirtualFixturePreview(result);
+  };
+  const changeVirtualFixture = (patch) => {
+    const engine = engineRef.current, binding = virtualFixtureDocument?.binding, identity = engine?.sceneIdentity;
+    if (!selectedVirtualFixture || !binding || phase !== "ready" || workspaceAuthorityRef.current.key !== apartmentAuthorityKey
+      || identity?.siteId !== "victoria"
+      || identity.contentRevision !== binding.content_revision || identity.registrationVersion !== binding.registration_version
+      || identity.frameDigest !== binding.frame_digest) return;
+    const result = engine.overlay.setVirtualFixtureState?.(selectedVirtualFixture.fixture_id, patch);
+    if (!result?.ok) return;
+    syncVirtualFixturePreview(engine);
+  };
+  const changeVirtualChannel = (patch) => changeVirtualFixture(virtualFixtureChannel.startsWith("radial-")
+    ? { radials: [{ number: Number(virtualFixtureChannel.slice(7)), ...patch }] }
+    : { [virtualFixtureChannel]: patch });
+
+  const deskTargetContextCurrent = (capture) => {
+    const engine = engineRef.current, document = virtualFixtureDocument;
+    return !!capture && open && phase === "ready" && !editing && !calibCam && !liveOn
+      && virtualSpotlightsVisible && spatialScale === "apartment" && !rehearsalIsolated
+      && engine === capture.engine && workspaceAuthorityRef.current.key === capture.authorityKey
+      && engine?.sceneIdentity?.siteId === "victoria"
+      && engine.sceneIdentity.contentRevision === capture.binding.content_revision
+      && engine.sceneIdentity.registrationVersion === capture.binding.registration_version
+      && engine.sceneIdentity.frameDigest === capture.binding.frame_digest
+      && document?.revision === capture.equipment_ref.revision && document?.digest === capture.equipment_ref.digest
+      && JSON.stringify(document.binding) === JSON.stringify(capture.binding);
+  };
+  const showDeskTargetCorners = (capture, corners) => {
+    if (!deskTargetContextCurrent(capture)) return;
+    capture.engine.overlay.setTargets?.(corners.map((corner, index) => ({
+      id: `desk-selection-${index + 1}`, name: `Desk corner ${index + 1}`, category: "desk",
+      shape: "point", pos: corner.point_m, normal: corner.normal_unit,
+    })));
+  };
+  const cancelDeskTargetSelection = () => {
+    const capture = deskTargetCaptureRef.current;
+    if (!capture) return;
+    capture.controller?.dispose(); capture.active = false;
+    if (deskTargetContextCurrent(capture)) capture.engine.overlay.setTargets?.(model.targets || []);
+    deskTargetCaptureRef.current = null; setDeskTargetSelection(null);
+  };
+  const startDeskTargetSelection = () => {
+    cancelDeskTargetSelection();
+    const engine = engineRef.current, document = virtualFixtureDocument;
+    if (!document || !engine?.overlay.createDeskTargetCapture) return;
+    const capture = { engine, authorityKey: apartmentAuthorityKey,
+      binding: JSON.parse(JSON.stringify(document.binding)),
+      equipment_ref: { revision: document.revision, digest: document.digest },
+      corners: [], active: true };
+    if (!deskTargetContextCurrent(capture)) return;
+    virtualAimGestureRef.current?.cancel();
+    deskTargetCaptureRef.current = capture;
+    setDeskTargetSelection({ status: "selecting", corners: [], confirmed: false });
+    capture.controller = engine.overlay.createDeskTargetCapture({
+      element: engine.renderer.domElement, windowTarget: window,
+      getIdentity: () => [workspaceAuthorityRef.current.key, engine.sceneIdentity,
+        virtualFixtureDocument.revision, virtualFixtureDocument.digest],
+      isEnabled: () => deskTargetCaptureRef.current === capture && deskTargetContextCurrent(capture),
+      surfaceHit: (x, y) => {
+        const hit = engine.displaySurfaceHit?.(x, y);
+        if (hit) return hit;
+        // Explain a refused pick without replacing it with unfiltered geometry.
+        if (engine.modes?.getCollision && engine.picking?.pick) {
+          const collision = engine.modes.getCollision();
+          if (!collision) throw Error("registered_collision_unavailable");
+          const raw = engine.picking.pick([collision], x, y);
+          throw Error(raw.length ? "registered_surface_raw_hit_unselected" : "registered_surface_no_hit");
+        }
+        return null;
+      },
+      onChange: value => {
+        if (deskTargetCaptureRef.current !== capture) return;
+        capture.corners = value.corners;
+        if (value.status === "retired") capture.active = false;
+        setDeskTargetSelection({ ...value, confirmed: false });
+        showDeskTargetCorners(capture, value.corners);
+      },
+      onComplete: corners => {
+        if (deskTargetCaptureRef.current !== capture || !deskTargetContextCurrent(capture)) return;
+        capture.corners = corners; capture.active = false;
+        setDeskTargetSelection({ status: "complete", corners, confirmed: false });
+        showDeskTargetCorners(capture, corners);
+      },
+    });
+  };
+  const saveDeskTargetSelection = () => {
+    const capture = deskTargetCaptureRef.current;
+    if (deskTargetSelection?.status !== "complete" || !deskTargetSelection.confirmed
+        || !deskTargetContextCurrent(capture)) return;
+    try {
+      const record = capture.engine.overlay.sealRegisteredDeskTarget({
+        binding: capture.binding, equipment_ref: capture.equipment_ref,
+        corners: capture.corners, confirmed: true,
+      }, window.HomeEquipmentRegistration.digest);
+      const blob = new Blob([JSON.stringify(record, null, 2) + "\n"], { type: "application/json" });
+      const url = URL.createObjectURL(blob), link = document.createElement("a");
+      link.href = url; link.download = "victoria-den-desk-target.json"; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setDeskTargetSelection(value => ({ ...value, status: "saved" }));
+    } catch (error) {
+      setVirtualAimNotice("Desk target unavailable. Select its four actual scan corners again.");
+    }
+  };
+  useEffect(() => () => {
+    const capture = deskTargetCaptureRef.current;
+    if (capture) {
+      capture.controller?.dispose(); capture.active = false;
+      // A retired selection must never restore old markers into a new scope.
+      if (engineRef.current === capture.engine && workspaceAuthorityRef.current.key === capture.authorityKey
+          && capture.engine.sceneIdentity?.frameDigest === capture.binding.frame_digest
+          && capture.engine.sceneIdentity?.contentRevision === capture.binding.content_revision) {
+        capture.engine.overlay.setTargets?.([]);
+      }
+      deskTargetCaptureRef.current = null;
+    }
+    setDeskTargetSelection(null);
+  }, [open, phase, apartmentAuthorityKey, virtualFixtureBindingKey,
+    virtualFixtureDocument?.revision, virtualFixtureDocument?.digest,
+    editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale]);
+
+  const restoreVirtualAimHistory = (direction) => {
+    const history = virtualAimHistoryRef.current, source = direction === "undo" ? history.undo : history.redo;
+    const entry = source.at(-1), engine = engineRef.current;
+    if (!entry || entry.binding !== virtualFixtureBindingKey || workspaceAuthorityRef.current.key !== apartmentAuthorityKey) return;
+    const result = engine?.overlay.restoreVirtualFixtureAim?.(entry.fixture_id, direction === "undo" ? entry.before : entry.after);
+    if (!result?.ok) { setVirtualAimNotice("This aim belongs to an earlier scene. Select a new room surface."); return; }
+    source.pop(); (direction === "undo" ? history.redo : history.undo).push(entry);
+    engine.overlay.setVirtualFixtureSelected?.(entry.fixture_id); setVirtualFixtureId(entry.fixture_id);
+    syncVirtualFixturePreview(engine); setVirtualAimHistoryVersion(value => value + 1);
+    setVirtualAimNotice(direction === "undo" ? "Aim undone." : "Aim restored.");
+  };
+
+  // Victoria presentation gestures are separate from Echo's physical-device
+  // capability. Selection never grants device, camera or command authority.
+  useEffect(() => {
+    const engine = engineRef.current, overlay = engine?.overlay;
+    if (!open || phase !== "ready" || !virtualFixtureDocument || editing || calibCam || liveOn
+        || !virtualSpotlightsVisible || spatialScale !== "apartment" || rehearsalIsolated
+        || !overlay?.createVirtualFixtureAimGesture) return undefined;
+    const binding = virtualFixtureDocument.binding, capturedAuthority = apartmentAuthorityKey;
+    const current = () => engineRef.current === engine && engine.siteId === "victoria"
+      && workspaceAuthorityRef.current.key === capturedAuthority
+      && engine.sceneIdentity?.contentRevision === binding.content_revision
+      && engine.sceneIdentity?.registrationVersion === binding.registration_version
+      && engine.sceneIdentity?.frameDigest === binding.frame_digest;
+    const gesture = overlay.createVirtualFixtureAimGesture({
+      element: engine.renderer.domElement, windowTarget: window,
+      isEnabled: () => current() && !deskTargetCaptureRef.current?.active,
+      getIdentity: () => [workspaceAuthorityRef.current.key, engine.sceneIdentity, virtualFixtureDocument.revision, virtualFixtureDocument.digest],
+      pickFixture: (x, y) => engine.picking.pick(overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id || null,
+      surfaceHit: (x, y) => {
+        const hit = engine.displaySurfaceHit?.(x, y);
+        return hit ? { point: hit.point, normal: hit.normal, kind: "registered_mesh" } : null;
+      },
+      captureSnapshot: id => overlay.virtualFixtureInteractionDescriptor(id),
+      previewTarget: (id, target, before) => overlay.aimVirtualFixtureAtTarget(id, target, { expectedGeneration: before.generation }),
+      restoreSnapshot: (id, before) => overlay.restoreVirtualFixtureAim(id, before),
+      onSelect: id => {
+        overlay.setVirtualFixtureSelected(id); setVirtualFixtureId(id); setVirtualFixtureChannel("spotlight");
+        setVirtualFixtureControlsOpen(true); setVirtualAimNotice("Drag a fixture or its aim handle onto a room surface.");
+      },
+      onPreview: info => {
+        if (!current()) return;
+        syncVirtualFixturePreview(engine);
+        setVirtualAimNotice(info.status === "surface_unavailable" ? "No visible room surface here. Move onto a wall, furniture or floor."
+          : info.status === "preview_unavailable" ? "That aim is unavailable. Choose another room surface."
+          : info.status === "canceled" ? "Aim canceled."
+          : info.status === "draft" ? "Aim updated in this virtual preview."
+          : info.status === "preview" ? "Aiming at the selected room surface…" : "");
+      },
+      onCommit: entry => {
+        if (!current()) return;
+        const history = virtualAimHistoryRef.current;
+        history.undo.push({ ...entry, binding: virtualFixtureBindingKey });
+        if (history.undo.length > 50) history.undo.shift();
+        history.redo = []; setVirtualAimHistoryVersion(value => value + 1); syncVirtualFixturePreview(engine);
+      },
+    });
+    virtualAimGestureRef.current = gesture;
+    return () => {
+      gesture.dispose();
+      if (virtualAimGestureRef.current === gesture) virtualAimGestureRef.current = null;
+      overlay.setVirtualFixtureSelected(null);
+    };
+  }, [open, phase, virtualFixtureBindingKey, virtualFixtureDocument, apartmentAuthorityKey,
+    editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale, rehearsalIsolated]);
+
+  /*
+   * The engine owns the ESM/classic-script boundary. Rebuild the small frozen
+   * semantic projection whenever its model, current selection, or HA state can
+   * change; a generation guard prevents a slower dynamic import from restoring
+   * stale labels after a newer selection. Sites and coordinates never cross
+   * this bridge.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const engine = engineRef.current;
+    if (!open || phase !== "ready" || !engine?.apartmentSemanticNavigation || engine.siteId !== "echo") {
+      setApartmentSemanticNavigation(EMPTY_APARTMENT_SEMANTIC_NAVIGATION);
+      setSemanticStatusDeviceId(null);
+      if (!open) {
+        setSemanticRoomId("");
+        setSemanticDeviceId(null);
+        setSemanticRoomStatus("");
+      }
+      return undefined;
+    }
+
+    const requestedDeviceId = cardId || semanticDeviceId || null;
+    Promise.resolve(engine.apartmentSemanticNavigation(
+      model,
+      statesRef.current,
+      requestedDeviceId,
+    )).then((next) => {
+      if (cancelled) return;
+      const resolved = next || EMPTY_APARTMENT_SEMANTIC_NAVIGATION;
+      setApartmentSemanticNavigation(resolved);
+      setSemanticStatusDeviceId(requestedDeviceId);
+      if (semanticRoomId && !(resolved.rooms || []).some((room) => room.id === semanticRoomId)) {
+        setSemanticRoomId("");
+        setSemanticRoomStatus("");
+      }
+      if (semanticDeviceId && (
+        !(resolved.devices || []).some((device) => device.id === semanticDeviceId)
+        || (semanticRoomId && semanticDeviceRoomById.get(semanticDeviceId) !== semanticRoomId)
+      )) {
+        setSemanticDeviceId(null);
+      }
+    }).catch((error) => {
+      if (cancelled) return;
+      console.warn("[apartment] semantic navigation unavailable:", error?.message || error);
+      setApartmentSemanticNavigation(EMPTY_APARTMENT_SEMANTIC_NAVIGATION);
+      setSemanticStatusDeviceId(null);
+    });
+    return () => { cancelled = true; };
+  }, [open, phase, model, servicePulse, cardId, semanticDeviceId, semanticRoomId,
+    semanticDeviceRoomById]);
+
+  useEffect(() => {
+    if (!cardId) return;
+    setSemanticDeviceId(cardId);
+    setSemanticRoomStatus("");
+  }, [cardId]);
+
+  const selectSemanticRoom = useCallback((roomId) => {
+    const rooms = apartmentSemanticNavigation.rooms || [];
+    const index = rooms.findIndex((room) => room.id === roomId);
+    if (index < 0) {
+      setSemanticRoomId("");
+      setSemanticRoomStatus(
+        `All ${rooms.length} apartment room${rooms.length === 1 ? "" : "s"}. `
+        + `${(apartmentSemanticNavigation.devices || []).length} devices available.`,
+      );
+      return;
+    }
+    const room = rooms[index];
+    const roomDeviceCount = (apartmentSemanticNavigation.devices || [])
+      .filter((device) => semanticDeviceRoomById.get(device.id) === room.id).length;
+    setSemanticRoomId(room.id);
+    if (semanticDeviceId && semanticDeviceRoomById.get(semanticDeviceId) !== room.id) {
+      setSemanticDeviceId(null);
+    }
+    setSemanticRoomStatus(
+      `Room ${index + 1} of ${rooms.length}. ${room.ariaLabel}. `
+      + `${roomDeviceCount} device${roomDeviceCount === 1 ? "" : "s"}.`,
+    );
+  }, [apartmentSemanticNavigation.rooms, apartmentSemanticNavigation.devices,
+    semanticDeviceRoomById, semanticDeviceId]);
+
+  const selectSemanticDevice = useCallback((deviceId) => {
+    const device = semanticDevicesForRoom.find((candidate) => candidate.id === deviceId);
+    setSemanticDeviceId(device?.id || null);
+    setSemanticRoomStatus("");
+  }, [semanticDevicesForRoom]);
+
+  const stepSemanticDevice = useCallback((direction, { openCard = false } = {}) => {
+    const devices = semanticDevicesForRoom;
+    if (!devices.length) return null;
+    const step = direction < 0 ? -1 : 1;
+    const currentId = cardId || semanticDeviceId;
+    const index = devices.findIndex((device) => device.id === currentId);
+    const nextIndex = index < 0
+      ? (step < 0 ? devices.length - 1 : 0)
+      : (index + step + devices.length) % devices.length;
+    const nextId = devices[nextIndex].id;
+    setSemanticDeviceId(nextId);
+    setSemanticRoomStatus("");
+    if (openCard) setCardId(nextId);
+    return nextId;
+  }, [semanticDevicesForRoom, cardId, semanticDeviceId]);
+
+  const openSemanticDevice = useCallback(() => {
+    const device = semanticDevicesForRoom
+      .find((candidate) => candidate.id === semanticDeviceId);
+    if (!device) return false;
+    setCardId(device.id);
+    return true;
+  }, [semanticDevicesForRoom, semanticDeviceId]);
 
   /* Quiet simulation beams are part of the spatial overview, not a selection
      artifact. Aim mode replaces these with the emphasized current/preview
@@ -1361,7 +5122,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine?.overlay?.setAimBeams || phase !== "ready" || aimMode) return;
-    if (!simActive || editing) { engine.overlay.setAimBeams([]); return; }
+    if (rehearsalIsolated) return;
+    if (!simActive || editing || selectedSiteId !== "echo" || engine.siteId !== "echo") { engine.overlay.setAimBeams([]); return; }
     const A = window.HomeApartmentAiming;
     const runtimeByFixture = window.__SIM_APARTMENT_AIM_RUNTIME?.readAll?.() || {};
     const targetById = new Map((model.targets || []).map((target) => [target.id, target]));
@@ -1397,37 +5159,55 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           surface_aligned: footprint?.kind === "ellipse" }, radial };
     });
     engine.overlay.setAimBeams(specs, "__none__");
-  }, [open, phase, model, simActive, editing, aimMode, servicePulse]);
+  }, [open, phase, model, simActive, editing, aimMode, servicePulse, rehearsalIsolated, selectedSiteId, selectedContentRevision]);
 
   /* HA entity state binding */
   useEffect(() => {
-    if (!open || phase !== "ready" || simActive) return undefined;
+    if (!open || phase !== "ready" || simActive || rehearsalIsolated || selectedSiteId !== "echo") return undefined;
     const client = window.__hav_haClient;
     if (!client) return undefined;
+    const engine = engineRef.current;
+    const authority = workspaceAuthorityRef.current.key;
+    const current = () => engineRef.current === engine && engine?.siteId === "echo"
+      && workspaceAuthorityRef.current.key === authority
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo"
+      && (window.HomeSpatialViewport?.getSite?.("echo")?.contentRevision || "legacy") === (engine.contentRevision || "legacy");
     return window.HomeApartmentData.bindStates(client, model, (entityId, st) => {
+      if (!current()) return;
       statesRef.current[entityId] = st;
       const dev = (model.devices || []).find((d) => d.ha_entity_id === entityId);
-      if (dev) engineRef.current?.overlay.setDeviceState(dev.id, st);
-    });
-  }, [open, phase, model, simActive]);
+      if (dev) engine.overlay.setDeviceState(dev.id, st);
+      setServicePulse((n) => n + 1);
+    }, { siteId: selectedSiteId, isCurrent: current });
+  }, [open, phase, model, simActive, rehearsalIsolated, selectedSiteId, selectedContentRevision, endpoint, token]);
 
   /* tracker WS -> person dot / room pulse */
   useEffect(() => {
-    if (!open || phase !== "ready") return undefined;
+    if (!open || phase !== "ready" || rehearsalIsolated) return undefined;
+    if (selectedSiteId !== "echo") { setTrack(null); return undefined; }
+    const engine = engineRef.current;
+    const authority = workspaceAuthorityRef.current.key;
+    const current = () => engineRef.current === engine && engine?.siteId === "echo"
+      && workspaceAuthorityRef.current.key === authority
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo"
+      && (window.HomeSpatialViewport?.getSite?.("echo")?.contentRevision || "legacy") === (engine.contentRevision || "legacy");
     return window.HomeApartmentData.openTracks({
+      siteId: selectedSiteId, isCurrent: current,
       sim: simActive,
-      onStatus: setTrackerStatus,
+      onStatus: (status) => { if (current()) setTrackerStatus(status); },
       onTracks: (frame) => {
+        if (!current()) return;
         const t = (frame.tracks || [])[0] || null;
         setTrack(t);
-        engineRef.current?.overlay.setPerson(t);
+        engine.overlay.setPerson(t);
       },
     });
-  }, [open, phase, simActive, serviceEpoch]);
+  }, [open, phase, simActive, serviceEpoch, selectedSiteId, selectedContentRevision, rehearsalIsolated, endpoint, token]);
 
   /* hover + click picking (view and side-effect-free Aim mode) */
   useEffect(() => {
-    if (!open || phase !== "ready" || editing) return undefined;
+    if (!open || phase !== "ready" || editing || rehearsalIsolated || !apartmentSceneControlsEnabled) return undefined;
+    if (!apartmentDeviceControlsEnabled) return undefined;
     const engine = engineRef.current;
     const host = hostRef.current;
     if (!engine || !host) return undefined;
@@ -1527,7 +5307,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       host.removeEventListener("dblclick", onDbl);
       cancelAnimationFrame(raf);
     };
-  }, [open, phase, editing, model, aimMode, aimDestination?.id, showToast, simActive]);
+  }, [open, phase, editing, model, aimMode, aimDestination?.id, showToast, simActive,
+    apartmentSceneControlsEnabled, rehearsalIsolated]);
 
   /* label/card screen anchors — updated on a light timer (rAF-driven HUD) */
   useEffect(() => {
@@ -1564,6 +5345,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     calibPairCountRef.current = 0; calibEscArmRef.current = 0;
     const e = engineRef.current;
     if (!e) return;
+    aptSyncDollhouseContext(e);
     const back = preSnapModeRef.current;
     preSnapModeRef.current = null;
     if (back && e.modes.mode !== back) e.modes.setMode(back, { duration: 0 }).catch(() => {});
@@ -1578,32 +5360,53 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+      /* Native controls and editors own their arrows/typing. Without SELECT
+       * and BUTTON here, moving through the home picker also rotated the 3D
+       * scene behind it. N/P is the one deliberate button exception: after a
+       * semantic shortcut opens a card, focus moves to its first button, and
+       * the same shortcut must be able to continue through every device. */
+      const semanticCycleFromCard = (e.key === "n" || e.key === "p")
+        && e.target?.closest?.('[data-apt-control-card="1"]');
+      if (e.target?.isContentEditable
+          || (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName))
+          || (e.target?.tagName === "BUTTON" && !semanticCycleFromCard)) return;
       const rig = engineRef.current?.rig;
       if (!rig) return;
-      const apartmentOwnsViewport = spatialScale === "apartment";
-      if (e.key === "ArrowLeft" && apartmentOwnsViewport) rig.stepAzimuth(-1);
-      else if (e.key === "ArrowRight" && apartmentOwnsViewport) rig.stepAzimuth(1);
-      else if (e.key === "ArrowUp" && apartmentOwnsViewport) rig.stepElevation(1);
-      else if (e.key === "ArrowDown" && apartmentOwnsViewport) rig.stepElevation(-1);
-      else if ((e.key === "h" || e.key === "Home") && apartmentOwnsViewport) rig.snapHome();
-      else if (e.key === "+" || e.key === "=") zoomRequestRef.current?.(1, { source: "keyboard" });
-      else if (e.key === "-") zoomRequestRef.current?.(-1, { source: "keyboard" });
-      else if ((e.key === "n" || e.key === "p") && !editing) {
-        // n/p cycle the same marker list pointer picking selects from
-        // (devices with a position get a 3D marker) and open the same card.
-        const list = (model.devices || []).filter((d) => Array.isArray(d.pos));
-        if (!list.length) return;
-        const i = list.findIndex((d) => d.id === cardId);
-        const next = e.key === "n"
-          ? list[(i + 1) % list.length]
-          : list[((i < 0 ? 0 : i) - 1 + list.length) % list.length];
-        setCardId(next.id);
+      const apartmentOwnsViewport = apartmentSceneControlsEnabled;
+      const zoomKey = e.key === "+" || e.key === "=" || e.key === "-";
+      if (travellingRef.current && zoomKey) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "ArrowLeft" && apartmentOwnsViewport) { e.preventDefault(); rig.stepAzimuth(-1); }
+      else if (e.key === "ArrowRight" && apartmentOwnsViewport) { e.preventDefault(); rig.stepAzimuth(1); }
+      else if (e.key === "ArrowUp" && apartmentOwnsViewport) { e.preventDefault(); rig.stepElevation(1); }
+      else if (e.key === "ArrowDown" && apartmentOwnsViewport) { e.preventDefault(); rig.stepElevation(-1); }
+      else if ((e.key === "h" || e.key === "Home") && apartmentOwnsViewport) { e.preventDefault(); rig.snapHome(); }
+      else if ((e.key === "+" || e.key === "=")
+          && (spatialScale !== "apartment" || apartmentOwnsViewport)) {
+        e.preventDefault();
+        zoomRequestRef.current?.(1, { source: "keyboard" });
+      }
+      else if (e.key === "-" && (spatialScale !== "apartment"
+          || apartmentOwnsViewport || selectedSiteInterior === false)) {
+        e.preventDefault();
+        zoomRequestRef.current?.(-1, { source: "keyboard" });
+      }
+      else if ((e.key === "n" || e.key === "p") && !editing && apartmentOwnsViewport) {
+        /* The semantic list is deliberately broader than overlay picks:
+         * unpositioned devices have no marker but must remain keyboard
+         * discoverable and open the same control card at its safe fallback
+         * screen position. */
+        if (!semanticDevicesForRoom.length) return;
+        e.preventDefault();
+        stepSemanticDevice(e.key === "n" ? 1 : -1, { openCard: true });
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, editing, model, cardId, spatialScale]);
+  }, [open, editing, spatialScale, selectedSiteInterior, apartmentSceneControlsEnabled,
+    semanticDevicesForRoom, stepSemanticDevice]);
 
   /* Overlay layers: topmost-only Escape + focus trap via HomeOverlay (no
      per-view window Escape listener). Non-embedded is a genuine modal;
@@ -1613,6 +5416,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     key: "apartment",
     active: !!(open && !embedded),
     onEscape: () => {
+      if (deskTargetCaptureRef.current) { cancelDeskTargetSelection(); return; }
+      if (virtualAimGestureRef.current?.readback().active) { virtualAimGestureRef.current.cancel(); return; }
+      if (mapRehearsalOpen) { void window.HomeMapRehearsalUI?.close?.(); return; }
+      if (travellingRef.current || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle") {
+        void cancelSpatialTravel(); return;
+      }
       if (aimMode) { setAimMode(false); setAimDestination(null); return; }
       if (cardId) { setCardId(null); return; }
       if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
@@ -1642,6 +5451,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     passive: true,
     initialFocus: "none",
     onEscape: () => {
+      if (deskTargetCaptureRef.current) { cancelDeskTargetSelection(); return; }
+      if (virtualAimGestureRef.current?.readback().active) { virtualAimGestureRef.current.cancel(); return; }
+      if (mapRehearsalOpen) { void window.HomeMapRehearsalUI?.close?.(); return; }
+      if (travellingRef.current || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle") {
+        void cancelSpatialTravel(); return;
+      }
       if (aimMode) { setAimMode(false); setAimDestination(null); return; }
       if (cardId) { setCardId(null); return; }
       if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
@@ -1678,7 +5493,16 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
 
   const pickMode = useCallback(async (m) => {
     const engine = engineRef.current;
-    if (!engine) return;
+    /* The resident engine still contains Echo Park while Victoria's opaque
+     * placeholder is visible. A programmatic or raced click must not mutate
+     * that hidden renderer and make the placeholder appear interactive. */
+    if (!engine || selectedSiteInterior === false) return;
+    /* The engine refuses too; asking first keeps the "check the asset" toast
+     * below for real load failures rather than a scene that has no photo. */
+    if (m !== "points" && engine.scenePlaceholder?.pointsOnly) {
+      showToast(`${window.HomeSpatialViewport?.getSite?.(engine.siteId)?.shortName || "This home"} · scan pending: point cloud only`);
+      return;
+    }
     if ((liveCam || engine.rig.inCameraPose?.()) && !calibCam) {
       showToast("camera view is locked to mesh - tap back to change modes");
       return;
@@ -1708,22 +5532,148 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       setModeLoading(null);
       refitMobileOverview(m === "points" ? 360 : 520);
     }
-  }, [showToast, refitMobileOverview, liveCam, calibCam]);
+  }, [showToast, refitMobileOverview, liveCam, calibCam, selectedSiteInterior]);
 
-  const zoomApartment = useCallback(async (dir) => {
+  /*
+   * The +/- controls stay mounted through a handoff, but the already-targeted
+   * direction becomes disabled; projected home markers are also temporarily
+   * disabled during a cross-home flight. If one launched the journey, park
+   * focus on the stable viewport root before that state change, then restore
+   * the same semantic control after the coordinator is idle. Pointer-initiated
+   * motion does not steal focus because no tracked control is active.
+   */
+  const parkSpatialControlFocus = useCallback(() => {
+    const active = document.activeElement;
+    let target = null;
+    if (active === zoomInButtonRef.current) target = "zoom-in";
+    else if (active === zoomOutButtonRef.current) target = "zoom-out";
+    else if (active?.hasAttribute?.("data-apt-world-pin")) {
+      target = "world-pin";
+      pendingSpatialFocusElementRef.current = active;
+    }
+    if (!target) return;
+    if (target !== "world-pin") pendingSpatialFocusElementRef.current = null;
+    pendingSpatialFocusRef.current = target;
+    try { viewRootRef.current?.focus?.({ preventScroll: true }); }
+    catch (_) { try { viewRootRef.current?.focus?.(); } catch (_) { /* detached */ } }
+  }, []);
+
+  useEffect(() => {
+    if (!open || travelling || spatialTransition !== "idle" || !pendingSpatialFocusRef.current) {
+      return undefined;
+    }
+    const frame = requestAnimationFrame(() => {
+      const key = pendingSpatialFocusRef.current;
+      const target = key === "zoom-in"
+        ? zoomInButtonRef.current
+        : key === "zoom-out"
+          ? zoomOutButtonRef.current
+          : key === "world-pin"
+            ? pendingSpatialFocusElementRef.current
+            : null;
+      pendingSpatialFocusRef.current = null;
+      pendingSpatialFocusElementRef.current = null;
+      const fallback = viewRootRef.current;
+      const next = target?.isConnected && !target.disabled ? target : fallback;
+      try { next?.focus?.({ preventScroll: true }); }
+      catch (_) { try { next?.focus?.(); } catch (_) { /* detached */ } }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, spatialScale, spatialTransition, travelling]);
+
+  const zoomApartment = useCallback(async (dir, meta = null) => {
     const rig = engineRef.current?.rig;
     if (!rig) return;
     const direction = dir < 0 ? "outward" : "inward";
     const existingCoordinator = spatialCoordinatorRef.current;
     const coordinatorState = existingCoordinator?.getState?.();
+    const missingInteriorExit = spatialScale === "apartment"
+      && selectedSiteInterior === false;
+
+    /* A geographic flight owns the world camera until it settles. Its pin
+     * remains a one-way, non-reversible trip; user zoom input is swallowed so
+     * wheelZoom cannot cancel the flight and snap back around the old anchor. */
+    if (aptTravelBlocksZoomInput(travellingRef.current, meta?.source)) return false;
+
+    /* The missing-interior panel sits above a still-resident scan for another
+     * home. It may only leave through the explicit outward viewport control;
+     * inward requests and any direct rig fallback would mutate that hidden
+     * scan. A persisted world-only selection may reopen before a coordinator
+     * exists, so outward exit is allowed to construct that world lazily. */
+    if (missingInteriorExit && direction !== "outward") return false;
+
+    /* A painted handoff owns one canonical clock. Retarget that live clock
+     * instead of cancelling the coordinator and letting rollback replace a
+     * partial frame with full Apartment/world opacity in one paint. The clock
+     * decides the semantic outcome only when it reaches an endpoint. */
+    const liveHandoff = handoffMotionRef.current;
+    if (liveHandoff?.active && coordinatorState?.phase === "activating") {
+      const snapshot = liveHandoff.retarget(direction, meta?.source);
+      setSpatialTransitionDirection(snapshot.targetDirection ?? direction);
+      return Object.freeze({
+        status: "retargeted",
+        intentId: liveHandoff.context.intentId,
+        direction: snapshot.targetDirection,
+        progress: snapshot.progress,
+      });
+    }
+
+    if (missingInteriorExit) {
+      const anchor = aptConfirmedWorldAnchor(syntheticSpatialQa);
+      if (!anchor) {
+        showToast("world view needs a confirmed home location", { tone: "error" });
+        return false;
+      }
+      try {
+        /* Do not step/reset the resident rig: it still contains Echo while the
+         * opaque Victoria placeholder is selected. Only the spatial
+         * coordinator may transfer ownership to the selected world anchor. */
+        const coordinator = existingCoordinator || await ensureSpatialCoordinator(anchor);
+        parkSpatialControlFocus();
+        const result = await coordinator.requestSemanticZoom("outward", {
+          atApartmentOverview: true,
+          intentId: meta?.intentId || `apartment-viewport-${++spatialIntentRef.current}`,
+        });
+        if (result.status === "failed") {
+          showToast("world view unavailable - Apartment remains active", { tone: "error" });
+        }
+        return result;
+      } catch (error) {
+        if (error?.name === "AbortError") return undefined;
+        console.warn("[apartment] missing-interior world exit failed:", error?.message || error);
+        showToast("world view unavailable - Apartment remains active", { tone: "error" });
+        return undefined;
+      }
+    }
 
     if (existingCoordinator && (
       coordinatorState?.committedScale !== "apartment"
       || coordinatorState?.phase !== "idle"
     )) {
+      parkSpatialControlFocus();
       try {
+        if (direction === "inward" && coordinatorState?.committedScale === "parcel"
+            && coordinatorState?.phase === "idle") {
+          const siteId = window.HomeSpatialViewport?.getSelectedSiteId?.();
+          const travelRevision = spatialTravelIntentRef.current;
+          const ready = await prepareInteriorForSite(siteId, () => (
+            spatialTravelIntentRef.current === travelRevision
+            && window.HomeSpatialViewport?.getSelectedSiteId?.() === siteId
+            && existingCoordinator.getState()?.committedScale === "parcel"
+            && existingCoordinator.getState()?.phase === "idle"
+          ));
+          if (!ready) {
+            if (window.HomeSpatialViewport?.getSelectedSite?.()?.sceneAvailable !== true) {
+              showToast("Exterior view · interior scan not uploaded yet.");
+              return { status: "held", reason: "interior-not-uploaded" };
+            }
+            setJourneyRecovery({ kind: "content-unavailable", message: "This home's interior is not ready. The outside view remains available." });
+            journeyRetryRef.current = () => zoomRequestRef.current?.(1, { source: "retry-interior-content" });
+            return { status: "held", reason: "interior-not-ready" };
+          }
+        }
         const result = await existingCoordinator.requestSemanticZoom(direction, {
-          intentId: `apartment-viewport-${++spatialIntentRef.current}`,
+          intentId: meta?.intentId || `apartment-viewport-${++spatialIntentRef.current}`,
         });
         if (result.status === "failed") {
           showToast("world view could not change scale", { tone: "error" });
@@ -1740,7 +5690,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       showToast("camera view is locked - tap back before zooming");
       return;
     }
-    if (direction !== "outward" || !rig.atWorldBoundary?.()) {
+    if (direction !== "outward" || !rig.atWorldBoundary?.() || !worldZoomEnabled) {
       return rig.stepZoom(dir, 260);
     }
     if (phase !== "ready" || editing || aimMode || calibCam || liveCam || liveOn) {
@@ -1748,7 +5698,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       return;
     }
 
-    const anchor = aptConfirmedWorldAnchor(simActive);
+    const anchor = aptConfirmedWorldAnchor(syntheticSpatialQa);
     if (!anchor) {
       showToast("world view needs a confirmed home location", { tone: "error" });
       return;
@@ -1756,9 +5706,19 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
 
     try {
       const coordinator = await ensureSpatialCoordinator(anchor);
+      /* A reversal can happen while mounting/prewarming the world. The pure
+       * boundary controller owns that gesture; if its exact intent is no longer
+       * active, never let this delayed preparation start a stale handoff. */
+      if (
+        meta?.boundaryIntent
+        && boundaryMomentumRef.current?.snapshot?.()?.activeIntentId !== meta.intentId
+      ) {
+        return { status: "cancelled", intentId: meta.intentId };
+      }
+      parkSpatialControlFocus();
       const result = await coordinator.requestSemanticZoom("outward", {
         atApartmentOverview: true,
-        intentId: `apartment-viewport-${++spatialIntentRef.current}`,
+        intentId: meta?.intentId || `apartment-viewport-${++spatialIntentRef.current}`,
       });
       if (result.status === "failed") {
         showToast("world view unavailable - Apartment remains active", { tone: "error" });
@@ -1770,31 +5730,1045 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       engineRef.current?.setRunning(true);
       setSpatialScale("apartment");
       setSpatialTransition("idle");
+      setSpatialTransitionDirection(null);
       showToast("world view unavailable - Apartment remains active", { tone: "error" });
     }
-  }, [aimMode, calibCam, editing, ensureSpatialCoordinator, liveCam, liveOn, phase, showToast, simActive]);
+  }, [aimMode, calibCam, editing, ensureSpatialCoordinator, liveCam, liveOn,
+    parkSpatialControlFocus, phase, prepareInteriorForSite, selectedSiteInterior, showToast, syntheticSpatialQa,
+    spatialScale, worldZoomEnabled]);
   zoomRequestRef.current = zoomApartment;
 
+  /* The missing-interior cover, not the resident Echo canvas, owns the one
+   * continuous gesture that remains meaningful in Victoria: outward zoom back
+   * to the map. Positive wheel motion and a closing two-finger pinch call the
+   * coordinator directly through the normal zoom path. All inward, orbit,
+   * click, and double-click input terminates on this opaque sibling. */
   useEffect(() => {
-    if (!open || spatialScale === "apartment") return undefined;
+    const panel = emptyInteriorRef.current;
+    if (!open || !panel || spatialScale !== "apartment"
+        || spatialTransition !== "idle" || selectedSiteInterior !== false) {
+      return undefined;
+    }
+
+    emptyInteriorExitPendingRef.current = false;
+    const touches = new Map();
+    let pinchDistance = 0;
+    const span = () => {
+      const points = [...touches.values()];
+      if (points.length !== 2) return 0;
+      return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+    };
+    const requestOutward = (source) => {
+      if (emptyInteriorExitPendingRef.current) return;
+      emptyInteriorExitPendingRef.current = true;
+      Promise.resolve(zoomRequestRef.current?.(-1, { source })).then(
+        (result) => {
+          if (!result || result.status === "failed" || result.status === "cancelled") {
+            emptyInteriorExitPendingRef.current = false;
+          }
+        },
+        () => { emptyInteriorExitPendingRef.current = false; },
+      );
+    };
+    const onWheel = (event) => {
+      event.preventDefault();
+      if (Number(event.deltaY) > 0) requestOutward("missing-interior-wheel");
+    };
+    const onTouchStart = (event) => {
+      for (const touch of event.changedTouches) {
+        touches.set(touch.identifier, { x: touch.clientX, y: touch.clientY });
+      }
+      pinchDistance = touches.size === 2 ? span() : 0;
+    };
+    const onTouchMove = (event) => {
+      for (const touch of event.changedTouches) {
+        if (touches.has(touch.identifier)) {
+          touches.set(touch.identifier, { x: touch.clientX, y: touch.clientY });
+        }
+      }
+      event.preventDefault();
+      if (touches.size !== 2) { pinchDistance = 0; return; }
+      const nextDistance = span();
+      if (pinchDistance > 0 && nextDistance < pinchDistance - 8) {
+        requestOutward("missing-interior-pinch");
+      }
+      pinchDistance = nextDistance;
+    };
+    const onTouchEnd = (event) => {
+      for (const touch of event.changedTouches) touches.delete(touch.identifier);
+      pinchDistance = touches.size === 2 ? span() : 0;
+    };
+
+    panel.addEventListener("wheel", onWheel, { passive: false });
+    panel.addEventListener("touchstart", onTouchStart, { passive: true });
+    panel.addEventListener("touchmove", onTouchMove, { passive: false });
+    panel.addEventListener("touchend", onTouchEnd, { passive: true });
+    panel.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      panel.removeEventListener("wheel", onWheel);
+      panel.removeEventListener("touchstart", onTouchStart);
+      panel.removeEventListener("touchmove", onTouchMove);
+      panel.removeEventListener("touchend", onTouchEnd);
+      panel.removeEventListener("touchcancel", onTouchEnd);
+      touches.clear();
+      pinchDistance = 0;
+    };
+  }, [open, selectedSiteInterior, spatialScale, spatialTransition]);
+
+  /*
+   * Turn the pure boundary reducer into the one Apartment-side motion loop.
+   *
+   * The rig continues to own every interior detent. At its outermost detent,
+   * native wheel magnitude feeds a short elastic preview, then momentum either
+   * springs the Apartment back or emits exactly one opaque coordinator intent.
+   * The same canonical progress seeds runHandoff(), so the snap is a continuation
+   * of the gesture instead of a second animation starting at full size.
+   */
+  useEffect(() => {
+    if (!open) return undefined;
+    let disposed = false;
+
+    const paintBoundary = (state) => {
+      const engine = engineRef.current;
+      const controller = boundaryMomentumRef.current;
+      if (!engine?.rig || !controller || !state) return;
+      if (state.phase === "committed") {
+        engine.rig.setOvershoot?.(0);
+        return;
+      }
+      const hostWidthPx = hostRef.current?.clientWidth || window.innerWidth || 1280;
+      engine.rig.setOvershoot?.(controller.rigOvershoot(hostWidthPx));
+    };
+
+    const scheduleFrame = () => {
+      if (disposed || boundaryFrameRef.current) return;
+      const phaseNow = boundaryMomentumRef.current?.snapshot?.()?.phase;
+      if (phaseNow !== "preview" && phaseNow !== "returning") return;
+      boundaryFrameRef.current = requestAnimationFrame((at) => {
+        boundaryFrameRef.current = 0;
+        if (disposed) return;
+        const previous = boundaryLastFrameRef.current || at;
+        boundaryLastFrameRef.current = at;
+        const controller = boundaryMomentumRef.current;
+        if (!controller) return;
+        processResult(controller.dispatch({
+          type: "frame",
+          deltaMs: Math.max(0, Math.min(50, at - previous)),
+        }));
+      });
+    };
+
+    const handleEffect = (effect) => {
+      if (effect.type === "snap") {
+        void (async () => {
+          let result;
+          try {
+            result = await zoomRequestRef.current?.(-1, {
+              source: "boundary-snap",
+              intentId: effect.intentId,
+              boundaryIntent: true,
+            });
+          } catch (_) {
+            result = { status: "failed" };
+          }
+          if (disposed) return;
+          const controller = boundaryMomentumRef.current;
+          if (!controller) return;
+          const status = result?.status === "committed"
+            ? "committed"
+            : result?.status === "failed"
+              ? "failed"
+              : result?.status === "stale"
+                ? "superseded"
+                : "cancelled";
+          if (status === "cancelled" && handoffSourceReversalRef.current === effect.intentId) {
+            handoffSourceReversalRef.current = null;
+            /* The compositor already retraced all the way to canonical 0. Mark
+             * the intent settled, then reset without painting the boundary's
+             * separate elastic return from charge 1; doing both state updates
+             * in this task avoids a second shrink after the seamless inverse. */
+            controller.dispatch({
+              type: "settled",
+              intentId: effect.intentId,
+              status,
+            });
+            processResult(controller.dispatch({
+              type: "reset",
+              reason: "handoff-visually-reversed",
+            }));
+            return;
+          }
+          processResult(controller.dispatch({
+            type: "settled",
+            intentId: effect.intentId,
+            status,
+          }));
+        })();
+        return;
+      }
+      if (effect.type === "cancel") {
+        const coordinator = spatialCoordinatorRef.current;
+        if (!coordinator) return;
+        /* Requesting the opposite semantic direction is also the coordinator's
+         * cancellation primitive: latest intent wins, its AbortController stops
+         * preparation/animation, and the target adapter restores the committed
+         * owner before this spring paints the Apartment back to its detent. */
+        void coordinator.requestSemanticZoom("inward", {
+          intentId: `${effect.intentId}:reverse`,
+        }).catch(() => {});
+      }
+    };
+
+    function processResult(result) {
+      if (!result || disposed) return;
+      paintBoundary(result.state);
+      result.effects?.forEach(handleEffect);
+      if (result.state.phase === "preview" || result.state.phase === "returning") {
+        scheduleFrame();
+      } else {
+        boundaryLastFrameRef.current = 0;
+      }
+    }
+
+    const dispatch = (action) => {
+      const controller = boundaryMomentumRef.current;
+      if (!controller) return null;
+      const result = controller.dispatch(action);
+      processResult(result);
+      return result;
+    };
+
+    boundaryWheelRef.current = (meta) => dispatch({
+      type: "wheel",
+      deltaY: meta?.deltaY,
+      deltaMode: meta?.deltaMode,
+      viewportHeightPx: meta?.viewportHeightPx,
+      timeStampMs: meta?.timeStamp,
+    });
+
+    const reset = (reason) => {
+      dispatch({ type: "reset", reason });
+      engineRef.current?.rig?.setOvershoot?.(0);
+    };
+    const onBlur = () => reset("window-blurred");
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") reset("document-hidden");
+    };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      disposed = true;
+      boundaryWheelRef.current = null;
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (boundaryFrameRef.current) cancelAnimationFrame(boundaryFrameRef.current);
+      boundaryFrameRef.current = 0;
+      boundaryLastFrameRef.current = 0;
+      engineRef.current?.rig?.setOvershoot?.(0);
+    };
+  }, [open]);
+
+  /* Starting another Apartment task while the outer-detent preview is elastic
+   * must restore the exact detent first. These states cannot become true during
+   * a committed cross-surface handoff because Apartment input is already inert. */
+  useEffect(() => {
+    if (!open || (phase === "ready" && !editing && !aimMode && !calibCam && !liveCam && !liveOn)) {
+      return;
+    }
+    boundaryMomentumRef.current?.dispatch?.({ type: "reset", reason: "apartment-task-started" });
+    engineRef.current?.rig?.setOvershoot?.(0);
+  }, [aimMode, calibCam, editing, liveCam, liveOn, open, phase]);
+
+  const requestWorldImageryAdoption = useCallback((source) => {
+    if (syntheticSpatialQa) return Promise.resolve({ status: "skipped" });
+    if (worldOverviewActive && spatialScale !== "apartment" && source !== "recovery-retry") {
+      return Promise.resolve({ status: "overview" });
+    }
+    const anchor = confirmedWorldAnchorRef.current;
+    const site = window.HomeSpatialViewport?.getSelectedSite?.();
+    const targetRevision = aptWorldEntryRevision(
+      anchor,
+      site?.dollhouseRegistration ?? null,
+    );
+    return worldImageryAdopterRef.current?.request?.({ source, targetRevision })
+      ?? Promise.resolve({ status: "unavailable" });
+  }, [syntheticSpatialQa, worldOverviewActive, spatialScale]);
+
+  useEffect(() => {
+    if (!open) return undefined;
     const host = worldHostRef.current;
     if (!host) return undefined;
-    let wheelAt = 0;
+    /*
+     * Continuous, damped, anchor-locked. Not a band transition.
+     *
+     * Every wheel event used to be rate-limited to one per 150ms and then
+     * turned into a whole discrete band jump, so a single flick crossed parcel
+     * to city to country to planet in about half a second and each hop was its
+     * own 300ms animation. The continuous log-range zoom this replaces it with
+     * already existed and was simply never connected: events accumulate into
+     * one live motion that keeps easing after the fingers stop.
+     *
+     * The rig path stays for the buttons and the keyboard, which are discrete
+     * by nature; only the wheel is continuous.
+     */
+    const reverseActiveTransition = (deltaY, source) => {
+      if (spatialTransition === "idle" || !deltaY) return false;
+      const state = spatialCoordinatorRef.current?.getState?.();
+      const activeDirection = state?.transition?.direction;
+      const requestedDirection = deltaY < 0 ? "inward" : "outward";
+      const liveTarget = handoffMotionRef.current?.snapshot?.()?.targetDirection;
+      /* During the compositor window compare with the LIVE target, not with the
+       * direction that originally launched the coordinator. That distinction
+       * makes outward -> inward -> outward possible inside one 420ms clock.
+       * During preparation there is no painted clock yet, so the older
+       * latest-intent cancellation path remains the safe behaviour. */
+      const shouldRetarget = liveTarget
+        ? requestedDirection !== liveTarget
+        : activeDirection && requestedDirection !== activeDirection;
+      if (shouldRetarget) {
+        void zoomRequestRef.current?.(requestedDirection === "inward" ? 1 : -1, {
+          source,
+        });
+      }
+      return true;
+    };
+
     const onWorldWheel = (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const now = performance.now();
-      if (now - wheelAt < 150) return;
-      wheelAt = now;
-      void zoomRequestRef.current?.(event.deltaY > 0 ? -1 : 1, { source: "world-wheel" });
+      if (travellingRef.current) return;
+      if (reverseActiveTransition(event.deltaY, "world-transition-reverse")) return;
+      const surface = worldSurfaceRef.current;
+      if (!surface?.wheelZoom) return;
+      const result = surface.wheelZoom({ deltaY: event.deltaY, deltaMode: event.deltaMode });
+      /* A late root request is still hidden at this point. This explicit
+       * gesture owns one coalesced readiness attempt, but camera motion never
+       * waits for it. */
+      void requestWorldImageryAdoption("wheel").catch(() => {});
+      /*
+       * Scrolling in past the camera floor is what asks to come home.
+       *
+       * Making the wheel continuous removed the only path that triggered the
+       * return: every inward event used to be a discrete band step, and the
+       * last one crossed back into the Apartment. Continuous zoom just clamps
+       * at the floor instead, so the gesture has to be re-attached to the
+       * boundary the surface now reports. Guarded on the transition being idle
+       * because the clamp is reported on every further notch, and without it a
+       * user still scrolling would queue a second handoff into the first.
+       */
+      if (result?.atReturnBoundary && spatialTransition === "idle") {
+        // +1 is INWARD here, not outward. The rig's convention is that "+"
+        // zooms in, and passing -1 asked for the opposite: the return boundary
+        // walked the camera out to planet scale instead of bringing it home.
+        void zoomRequestRef.current?.(1, { source: "world-return" });
+      }
     };
+    /*
+     * Pinch drives the SAME momentum path as the wheel.
+     *
+     * Not a second zoom implementation. A pinch that called its own code would
+     * feel different from a scroll for no reason a user could name, and would
+     * need its own return-boundary handling -- which is exactly how the return
+     * gesture got lost when the wheel went continuous. The pinch is converted
+     * into the wheel's own delta units and handed to the same call, so every
+     * behaviour downstream (momentum, coast, the boundary that brings you home)
+     * is inherited rather than reimplemented.
+     */
+    const activeTouches = new Map();
+    let pinchDistance = 0;
+
+    const touchSpan = () => {
+      const points = [...activeTouches.values()];
+      if (points.length < 2) return 0;
+      return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+    };
+
+    const onTouchStart = (event) => {
+      for (const touch of event.changedTouches) {
+        activeTouches.set(touch.identifier, { x: touch.clientX, y: touch.clientY });
+      }
+      if (activeTouches.size === 2) pinchDistance = touchSpan();
+    };
+
+    const onTouchMove = (event) => {
+      if (activeTouches.size < 2) return;
+      for (const touch of event.changedTouches) {
+        if (activeTouches.has(touch.identifier)) {
+          activeTouches.set(touch.identifier, { x: touch.clientX, y: touch.clientY });
+        }
+      }
+      const span = touchSpan();
+      if (!(span > 0) || !(pinchDistance > 0)) return;
+      event.preventDefault();
+      const delta = pinchDistance - span;
+      pinchDistance = span;
+      if (travellingRef.current) {
+        event.stopPropagation();
+        return;
+      }
+      /* Pixels of pinch are not pixels of wheel: a comfortable pinch travels far
+       * less than a scroll gesture, so it is scaled to reach the same step. */
+      if (Math.abs(delta) < 0.5) return;
+      if (reverseActiveTransition(delta, "world-transition-reverse-pinch")) return;
+      const surface = worldSurfaceRef.current;
+      if (!surface?.wheelZoom) return;
+      const result = surface.wheelZoom({ deltaY: delta * 2.6, deltaMode: 0 });
+      void requestWorldImageryAdoption("pinch").catch(() => {});
+      if (result?.atReturnBoundary && spatialTransition === "idle") {
+        void zoomRequestRef.current?.(1, { source: "world-return-pinch" });
+      }
+    };
+
+    const onTouchEnd = (event) => {
+      for (const touch of event.changedTouches) activeTouches.delete(touch.identifier);
+      pinchDistance = activeTouches.size === 2 ? touchSpan() : 0;
+    };
+
     host.addEventListener("wheel", onWorldWheel, { passive: false, capture: true });
-    return () => host.removeEventListener("wheel", onWorldWheel, { capture: true });
-  }, [open, spatialScale]);
+    host.addEventListener("touchstart", onTouchStart, { passive: true });
+    host.addEventListener("touchmove", onTouchMove, { passive: false });
+    host.addEventListener("touchend", onTouchEnd, { passive: true });
+    host.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    /* Offered to overlays only while the host itself would be hit-tested. */
+    worldWheelHandlerRef.current = aptWorldHostTakesInput(spatialScale, spatialTransition)
+      ? onWorldWheel : null;
+    return () => {
+      if (worldWheelHandlerRef.current === onWorldWheel) worldWheelHandlerRef.current = null;
+      host.removeEventListener("wheel", onWorldWheel, { capture: true });
+      host.removeEventListener("touchstart", onTouchStart);
+      host.removeEventListener("touchmove", onTouchMove);
+      host.removeEventListener("touchend", onTouchEnd);
+      host.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [open, requestWorldImageryAdoption, spatialScale, spatialTransition, travelling]);
+
+  /*
+   * A wheel that landed on an overlay control, handed to the world.
+   *
+   * The SAME event, not a copy. Dispatching a synthetic WheelEvent at the host
+   * would run every window capture listener a second time (the activity
+   * monitor, the journey harness's latency probe) and the zoom would count a
+   * notch nobody made. While the world is not taking input the event is left
+   * alone, exactly as the host would have been skipped by hit-testing.
+   */
+  const forwardWheelToWorld = useCallback((event) => {
+    worldWheelHandlerRef.current?.(event);
+  }, []);
+
+  /*
+   * Travel to the other home.
+   *
+   * The gesture is a destination change, so the journey has to read as one:
+   * leave the home you are in through the same collapse the wheel produces,
+   * cross the globe, and select the new map destination at its safely resolved
+   * arrival scale.
+   * Switching the anchor underneath a live view would teleport the camera
+   * across a continent between two frames, which is the one thing the whole
+   * handoff exists to avoid.
+   */
+  const switchInteriorHome = useCallback(async (siteId, options = {}) => {
+    if (!viewOpenRef.current) return false;
+    if (!interiorSessionRef.current) {
+      interiorSessionRef.current = window.HomeApartmentSiteSession.create({
+        registry: window.HomeSpatialViewport,
+        getEngine: () => engineRef.current,
+        begin: () => {
+          const cancelled = cancelSpatialTravel();
+          const generation = ++spatialTravelIntentRef.current;
+          const lifecycle = ++spatialLifecycleRevisionRef.current;
+          return { cancelled, isCurrent: () => generation === spatialTravelIntentRef.current
+            && lifecycle === spatialLifecycleRevisionRef.current && viewOpenRef.current };
+        },
+        beforeSelect: () => {
+          clearInteriorState();
+          worldScaleObserverCleanupRef.current?.(); worldScaleObserverCleanupRef.current = null;
+          worldEntryPrewarmRef.current?.dispose?.(); worldEntryPrewarmRef.current = null;
+          worldEntryPrewarmPromiseRef.current = null;
+          worldSurfacePendingRef.current?.dispose?.(); worldSurfacePendingRef.current = null;
+          worldSurfaceRef.current?.dispose?.(); worldSurfaceRef.current = null;
+          worldSurfacePromiseRef.current = null;
+          worldImageryAdopterRef.current?.cancel?.(); worldImageryAdopterRef.current = null;
+          confirmedWorldAnchorRef.current = null; worldAnchorKeyRef.current = "";
+          aptDisposeHandoffCompositorSlots(handoffCompositorRef, handoffCompositorPendingRef,
+            handoffCompositorPromiseRef, handoffCompositorGenerationRef);
+          worldHostRef.current?.style.setProperty("opacity", "0");
+          hostRef.current?.style.removeProperty("transform");
+          hostRef.current?.style.removeProperty("opacity");
+          if (handoffFallbackRef.current) {
+            handoffFallbackRef.current.style.opacity = "0";
+            handoffFallbackRef.current.style.visibility = "hidden";
+          }
+          spatialCoordinatorRef.current?.dispose?.(); spatialCoordinatorRef.current = null;
+          spatialCoordinatorPromiseRef.current = null;
+          setSpatialScale("apartment"); setSpatialTransition("idle"); setSpatialTransitionDirection(null);
+        },
+        prepare: prepareInteriorForSite,
+        onState: (state) => {
+          setInteriorSwitchState(state);
+          setTravelling(false); travellingRef.current = false;
+          if (state.phase === "ready") engineRef.current?.setRunning(true);
+          if (state.phase === "unavailable") setPhase("ready");
+          if (state.phase === "error") { setPhase("error"); setError(state.error); }
+        },
+      });
+    }
+    return interiorSessionRef.current.request(siteId, options);
+  }, [cancelSpatialTravel, clearInteriorState, prepareInteriorForSite]);
+  interiorSwitchRequestRef.current = switchInteriorHome;
+
+  useEffect(() => {
+    if (!open || travellingRef.current) return;
+    const state = interiorSessionRef.current?.readback?.();
+    const desiredMatches = state?.siteId === selectedSiteId && (state?.contentRevision || null) === selectedContentRevision;
+    if (desiredMatches && ["loading", "ready", "unavailable", "error"].includes(state.phase)) return;
+    const engine = engineRef.current;
+    if (!engine && (!state || state.phase === "idle")) return;
+    if (!engine || engine.siteId !== selectedSiteId || (engine.contentRevision || null) !== selectedContentRevision || state?.phase === "invalidated") {
+      if ((spatialCoordinatorRef.current?.getState?.()?.committedScale ?? spatialScale) === "apartment") {
+        void switchInteriorHome(selectedSiteId, { force: true });
+      }
+    }
+  }, [open, selectedSiteId, selectedContentRevision, switchInteriorHome, spatialScale, interiorSwitchState.phase]);
+
+  useEffect(() => {
+    const api = { selectHome: (siteId) => switchInteriorHome(siteId), readback: () => ({
+      ...interiorSessionRef.current?.readback?.(),
+      loadedSiteId: engineRef.current?.siteId || null,
+      loadedContentRevision: engineRef.current?.contentRevision || null,
+    }) };
+    window.__HOME_APARTMENT_SITE_API = api;
+    return () => { if (window.__HOME_APARTMENT_SITE_API === api) delete window.__HOME_APARTMENT_SITE_API; };
+  }, [switchInteriorHome]);
+
+  const travelToSite = useCallback(async (siteId, options = {}) => {
+    if (options.presentation === "interior" || !aptWorldZoomEnabled()) return switchInteriorHome(siteId, options);
+    const registry = window.HomeSpatialViewport;
+    if (!registry) return false;
+    const wasTravelling = travellingRef.current;
+    const cancelPending = cancelSpatialTravel();
+    const travelIntent = ++spatialTravelIntentRef.current;
+    await cancelPending;
+    await window.HomeContentPacks?.ready;
+    if (spatialTravelIntentRef.current !== travelIntent) return false;
+    const target = registry.getSite?.(siteId);
+    if (!target || (!wasTravelling && siteId === registry.getSelectedSiteId?.())) return false;
+    const destination = registry.getAnchorForSite?.(siteId);
+    if (!destination) return false;
+
+    const lifecycleRevision = spatialLifecycleRevisionRef.current;
+    const travelIsCurrent = () => (
+      spatialTravelIntentRef.current === travelIntent
+      && spatialLifecycleRevisionRef.current === lifecycleRevision
+    );
+    const requireCurrentTravel = () => {
+      if (travelIsCurrent()) return;
+      const error = new Error("Apartment travel superseded");
+      error.name = "AbortError";
+      throw error;
+    };
+
+    parkSpatialControlFocus();
+    travellingRef.current = true;
+    setTravelling(true);
+    setJourneyRecovery(null);
+    setToast(null);
+    const journeyDebug = { siteId, startedFromScale: spatialScale };
+    window.__aptJourneyDebug = journeyDebug;
+    try {
+      await ensureSpatialCoordinator();
+      requireCurrentTravel();
+      journeyDebug.coordinatorPhase = spatialCoordinatorRef.current?.getState?.()?.phase ?? null;
+      journeyDebug.committedScale = spatialCoordinatorRef.current?.getState?.()?.committedScale ?? null;
+      const destinationHero = await worldSurfaceRef.current?.prepareHeroStills?.(
+        destination.heroStills || [], destination,
+      );
+      requireCurrentTravel();
+      if (destinationHero?.ready !== true) {
+        setJourneyRecovery({ kind: "content-unavailable", message: "The destination home pack is not ready for this display." });
+        journeyRetryRef.current = () => travelToSite(siteId);
+        journeyDebug.destinationPresentation = "held-before-departure";
+        return false;
+      }
+
+      /*
+       * Leave the way you always leave.
+       *
+       * If we are inside, the journey starts with the ordinary collapse out of
+       * THIS home -- not the destination. An earlier version re-anchored first
+       * so the particles would assemble into the destination, which loaded
+       * faster but threw away the premise: you never saw the home you were
+       * leaving recede, so the trip had no origin.
+       */
+      if (spatialCoordinatorRef.current?.getState?.()?.committedScale === "apartment") {
+        const rig = engineRef.current?.rig;
+        if (!rig) throw new Error("Apartment camera is unavailable");
+        /* A site can be selected from any interior zoom detent. Collapse must
+         * still begin at the overview boundary: one zoomRequest only advances
+         * one detent, then correctly refuses to create the world surface. Move
+         * to zoom 0 first while preserving azimuth/elevation and await the
+         * actual rig tween. rig.goTo samples Reduce Motion itself. */
+        boundaryMomentumRef.current?.dispatch?.({
+          type: "reset",
+          reason: "site-travel-started",
+        });
+        rig.setOvershoot?.(0);
+        if (rig.zoomIndex?.() !== 0) {
+          rig.goTo({ zoom: 0, dur: 350 });
+        }
+        const overview = await aptWaitForRigSettle(rig, {
+          isCurrent: travelIsCurrent,
+          timeoutMs: aptPrefersReducedMotion() ? 80 : 700,
+        });
+        requireCurrentTravel();
+        journeyDebug.apartmentOverview = overview;
+
+        /*
+         * Leave through zoomApartment, not through the coordinator directly.
+         *
+         * Calling requestSemanticZoom straight skips everything zoomApartment
+         * does first -- most importantly creating the world surface. Without it
+         * the departure silently does nothing, worldSurfaceRef stays null, the
+         * flight below is skipped for want of a surface, and the journey
+         * "completes" having never left the room. -1 is outward.
+         */
+        const departure = await zoomRequestRef.current?.(-1, { source: `travel-out-${siteId}` });
+        requireCurrentTravel();
+        /* Product-safe: a status string and a scale name, no coordinates. The
+         * departure's result was discarded before, which is precisely what let
+         * a silent no-op look like a completed journey. */
+        journeyDebug.departure = departure ?? null;
+        if (departure?.status !== "committed" || departure?.scale !== "parcel") {
+          throw new Error(`home departure did not complete: ${departure?.status || "missing"}`);
+        }
+        journeyDebug.ownerAfterDeparture = document
+          .querySelector('[data-apt-spatial-owner]')?.dataset.aptSpatialOwner ?? null;
+      }
+
+      /*
+       * The journey itself: out to the planet, across, and down again.
+       *
+       * One continuous camera move rather than a cut hidden behind the
+       * firewall. The point of having two homes is that they are on the same
+       * planet, and this is the only moment that says so.
+       */
+      const surface = worldSurfaceRef.current;
+      if (!surface?.flyToSite) throw new Error("world surface is unavailable");
+      let arrivalScale = null;
+      /* Set when the approach down the still stops short: see below. */
+      let approachHeld = null;
+      {
+        const azimuth = destination.localXAxisAzimuthDeg;
+        /*
+         * Registered bearing first; a chosen sight line second; north last.
+         *
+         * The last of those used to be the only one, paired with a -45 pitch
+         * that matched nothing else in the product -- the "frozen literal with
+         * no stated rule" this file's own plan calls out. North is not a
+         * framing decision, it is the absence of one, and at Victoria it aimed
+         * the arrival straight into closed tree canopy with the house behind
+         * it. PARCEL_DESCENT_PITCH_DEG is the same descent Echo Park uses, so
+         * both homes now arrive at the same angle and differ only in bearing.
+         */
+        let headingDeg = Number.isFinite(destination.parcelViewHeadingDeg)
+          ? destination.parcelViewHeadingDeg
+          : 0;
+        /* PARCEL_DESCENT_PITCH_DEG in world-camera.mjs. Repeated as a literal
+         * because this file is a classic script and cannot import the module;
+         * world-camera.test.mjs pins the two to the same number. */
+        let pitchDeg = -35;
+        if (Number.isFinite(azimuth)) {
+          try {
+            const pose = await engineRef.current?.apartmentWorldPose({ localXAxisAzimuthDeg: azimuth });
+            if (pose) { headingDeg = pose.headingDeg; pitchDeg = pose.pitchDeg; }
+          } catch (_) { /* the default framing stands */ }
+          requireCurrentTravel();
+        }
+        /* The destination's stills, armed before the flight so they are decoded
+         * by the time it lands. setAnchor drops the departure's levels; nothing
+         * put the arrival's back, so travelling anywhere left the world showing
+         * raw mesh however many stills that home had declared. */
+        if (destination.heroStills?.length) {
+          headingDeg = destination.heroStills[0].headingDeg;
+          pitchDeg = destination.heroStills[0].pitchDeg;
+        }
+        /*
+         * The flight stops about 1.2 km out and the approach glides the rest:
+         * through the destination's cloud band and down every level of its
+         * still to the handback. Both directions, so the return to Echo Park
+         * shows its still too -- it used to land in the innermost level and go
+         * straight into the particles. A surface without the approach keeps
+         * the old landing at the handback range.
+         */
+        const approachRangeM = destinationHero.rangeM ?? destination.parcelRangeM;
+        const throughHero = typeof surface.approachThroughHero === "function";
+        const flight = await surface.flyToSite({
+          // Preserve the closed calibration fields (site/revision/sample width/
+          // parcel range) instead of silently collapsing this to three numbers.
+          anchor: destination,
+          headingDeg,
+          pitchDeg,
+          rangeM: approachRangeM,
+          throughHero,
+        });
+        requireCurrentTravel();
+        if (flight?.status !== "complete") {
+          throw new Error(`world flight did not complete: ${flight?.status || "missing"}`);
+        }
+        arrivalScale = aptTravelArrivalScale(flight);
+        journeyDebug.flight = {
+          status: flight?.status ?? "missing",
+          arrivalBand: flight?.arrivalBand ?? "missing",
+          rangeM: Number.isFinite(flight?.rangeM) ? Math.round(flight.rangeM) : null,
+          heightResolved: flight?.heightResolved === true,
+        };
+        if (!arrivalScale) {
+          throw new Error(`world flight returned unsafe arrival semantics: ${flight?.arrivalBand || "missing"}`);
+        }
+        /* Only onto a resolved parcel arrival: an unresolved height leaves the
+         * camera at the flight's safe floor and never takes it down the still. */
+        if (throughHero && arrivalScale === "parcel") {
+          const approach = await surface.approachThroughHero({ rangeM: approachRangeM, headingDeg, pitchDeg });
+          requireCurrentTravel();
+          /* Product-safe: a status, a rounded range and the band timing. */
+          journeyDebug.approach = {
+            status: approach?.status ?? "missing",
+            rangeM: Number.isFinite(approach?.rangeM) ? Math.round(approach.rangeM) : null,
+            durationS: Number.isFinite(approach?.durationS) ? Math.round(approach.durationS * 100) / 100 : null,
+          };
+          /*
+           * The flight has already adopted the destination anchor, so an
+           * approach that stops short is still an arrival THERE -- the registry
+           * follows the camera, and throwing here used to leave the world at
+           * the destination with the selection and registration at the origin.
+           * It is an exterior arrival: the particles never run from wherever
+           * the camera was left. A viewer who took the camera (the wheel
+           * cancels the glide) simply has it; anything else is held with a
+           * retry that runs the approach again.
+           */
+          if (approach?.status !== "complete") {
+            approachHeld = { status: approach?.status || "missing", headingDeg, pitchDeg, rangeM: approachRangeM };
+          }
+        }
+      }
+
+      const destinationPresented = await surface.waitForPresentation?.({
+        timeoutMs: APT_HANDOFF_ENDPOINT_BUDGET_MS,
+      });
+      requireCurrentTravel();
+      if (destinationPresented !== true) {
+        setJourneyRecovery({ kind: "content-unavailable", message: "The destination view is not ready. The previous complete view is retained." });
+        journeyRetryRef.current = () => travelToSite(siteId);
+        journeyDebug.destinationPresentation = "held";
+        return false;
+      }
+
+      // The registry follows the camera, so a failed journey does not leave the
+      // app claiming to be somewhere it never went.
+    captureCurrentWorkspace();
+    registry.selectSite(siteId);
+      /* Keep the origin scan active for the visible departure. Registering the
+       * destination before the flight hid the origin immediately and allowed a
+       * cancelled journey to leave the wrong registration active. The target
+      * remains hidden here until its explicit readiness gate below succeeds. */
+      surface.setDollhouseRegistration?.(target.dollhouseRegistration ?? null);
+      /* A provider-height miss intentionally lands at the conservative flight
+       * floor. Never label that view as parcel: hold an honest broader semantic
+       * band until the provider-specific height resolver rebases the camera. */
+      spatialCoordinatorRef.current?.syncWorldScale?.(arrivalScale);
+      confirmedWorldAnchorRef.current = aptConfirmedWorldAnchor(syntheticSpatialQa);
+      worldAnchorKeyRef.current = aptWorldAnchorKey(
+        destination,
+        target.dollhouseRegistration ?? null,
+      );
+
+      if (surface) {
+        /* Post-flight readiness is a bounded refinement, never a second
+         * journey. Imagery and dollhouse loading are independent of the two
+         * height commits, so start them together. Roof then ground remains
+         * sequential because the roof resolver advances the provider/anchor
+         * generation the ground resolver captures. Every branch receives the
+         * same shrinking 500ms deadline; renderer registration generations
+         * prevent a late old-site result or dollhouse reveal from committing. */
+        const readinessStartedAt = performance.now();
+        const remainingTravelReadinessMs = () => Math.max(
+          0,
+          APT_WORLD_TRAVEL_READINESS_BUDGET_MS - (performance.now() - readinessStartedAt),
+        );
+        /* The destination click is explicit visibility authority. If Apartment
+         * entry left a paid global tileset staged, adopt it for the destination
+         * before resolving provider-scoped roof height. This runs after the
+         * continuous flight, so it cannot stall the GTA camera move itself. */
+        const imageryReadiness = requestWorldImageryAdoption("site-travel");
+        const dollhouseReadiness = surface.waitForDollhouse?.({
+          timeoutMs: remainingTravelReadinessMs(),
+        }) ?? Promise.resolve({ status: "not-required" });
+        const providerHeightReadiness = (async () => {
+          await imageryReadiness;
+          requireCurrentTravel();
+          const surfaceHeight = await surface.resolveSurfaceHeight({
+            timeoutMs: remainingTravelReadinessMs(),
+          });
+          requireCurrentTravel();
+          const dollhouseGround = await (
+            surface.resolveDollhouseGroundHeight?.({
+              timeoutMs: remainingTravelReadinessMs(),
+            }) ?? Promise.resolve({ status: "not-required" })
+          );
+          requireCurrentTravel();
+          return { surfaceHeight, dollhouseGround };
+        })();
+        const readinessWindow = await aptSettleWithin(
+          Promise.allSettled([
+            imageryReadiness,
+            dollhouseReadiness,
+            providerHeightReadiness,
+          ]),
+          remainingTravelReadinessMs(),
+        );
+        requireCurrentTravel();
+        journeyDebug.destinationReadiness = readinessWindow.status;
+      }
+
+      if (approachHeld) {
+        journeyDebug.interior = { status: "held", reason: `approach-${approachHeld.status}` };
+        journeyDebug.selectedScale = arrivalScale;
+        if (approachHeld.status === "cancelled") return true;
+        setJourneyRecovery({ kind: "content-unavailable", message: `The approach to ${target.shortName} stopped short. The outside view is kept.` });
+        journeyRetryRef.current = async () => {
+          const again = await worldSurfaceRef.current?.approachThroughHero?.({
+            rangeM: approachHeld.rangeM, headingDeg: approachHeld.headingDeg, pitchDeg: approachHeld.pitchDeg,
+          });
+          if (!travelIsCurrent() || again?.status !== "complete" || target.sceneAvailable !== true) return;
+          if (await prepareInteriorForSite(siteId, travelIsCurrent) && travelIsCurrent()) {
+            await zoomRequestRef.current?.(1, { source: `retry-approach-${siteId}` });
+          }
+        };
+        return false;
+      }
+
+      const interiorReady = target.sceneAvailable === true
+        && await prepareInteriorForSite(siteId, travelIsCurrent);
+      requireCurrentTravel();
+      if (arrivalScale === "parcel" && interiorReady) {
+        await engineRef.current?.pointsPromise;
+        requireCurrentTravel();
+        const arrival = await zoomRequestRef.current?.(1, { source: `travel-in-${siteId}` });
+        requireCurrentTravel();
+        journeyDebug.interior = arrival;
+        if (arrival?.status !== "committed" || arrival?.scale !== "apartment") {
+          throw new Error("destination interior is not ready");
+        }
+      } else if (target.sceneAvailable !== true) {
+        journeyDebug.interior = { status: "not-available", reason: "scan-not-uploaded" };
+        journeyDebug.selectedScale = arrivalScale;
+        showToast(`${target.shortName} · exterior view. Interior scan not uploaded yet.`);
+        return true;
+      } else {
+        setJourneyRecovery({ kind: "content-unavailable", message: `${target.shortName} interior is not ready. Import its home pack to continue.` });
+        journeyRetryRef.current = () => zoomRequestRef.current?.(1, { source: "retry-destination-interior" });
+        journeyDebug.selectedScale = spatialCoordinatorRef.current?.getState?.()?.committedScale ?? arrivalScale;
+        journeyDebug.interior = { status: "held", reason: "content-unavailable" };
+        return false;
+      }
+      journeyDebug.selectedScale = spatialCoordinatorRef.current?.getState?.()?.committedScale
+        ?? arrivalScale;
+      return true;
+    } catch (error) {
+      journeyDebug.error = String(error?.message || error);
+      if (travelIsCurrent() && error?.name !== "AbortError") {
+        showToast("could not travel to that home", { tone: "error" });
+      }
+      return false;
+    } finally {
+      journeyDebug.finishedAt = Math.round(performance.now());
+      if (spatialTravelIntentRef.current === travelIntent) {
+        travellingRef.current = false;
+        setTravelling(false);
+      }
+    }
+  }, [cancelSpatialTravel, ensureSpatialCoordinator, parkSpatialControlFocus, prepareInteriorForSite, requestWorldImageryAdoption,
+    showToast, spatialScale, syntheticSpatialQa, travelling]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const tick = () => {
+      const next = worldSurfaceRef.current?.snapshot?.()?.recovery || null;
+      setSurfaceRecovery((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
+    };
+    tick();
+    const timer = setInterval(tick, 250);
+    const packs = window.HomeContentPacks;
+    const refresh = () => { setContentPacks(packs?.list?.() || []); setHomeSites(window.HomeSpatialViewport?.getSites?.() || []); };
+    void Promise.resolve(packs?.ready).then(refresh);
+    const unsubscribe = packs?.subscribe?.(refresh);
+    return () => { clearInterval(timer); unsubscribe?.(); };
+  }, [open]);
+
+  const returnFromRecovery = useCallback(async () => {
+    await cancelSpatialTravel();
+    spatialLifecycleRevisionRef.current += 1;
+    const surface = worldSurfaceRef.current;
+    surface?.setRunning?.(false);
+    surface?.dismissRecovery?.();
+    // Recovery returns to the actually resident scan, never a label claiming
+    // that another home's pixels belong to the selected missing interior.
+    const residentSiteId = loadedInteriorSiteRef.current;
+    if (residentSiteId) window.HomeSpatialViewport?.selectSite?.(residentSiteId);
+    spatialCoordinatorRef.current?.dispose?.();
+    spatialCoordinatorRef.current = null;
+    spatialCoordinatorPromiseRef.current = null;
+    worldScaleObserverCleanupRef.current?.();
+    worldScaleObserverCleanupRef.current = null;
+    worldEntryPrewarmRef.current?.dispose?.();
+    worldEntryPrewarmRef.current = null;
+    worldEntryPrewarmPromiseRef.current = null;
+    surface?.dispose?.();
+    worldSurfaceRef.current = null;
+    worldSurfacePromiseRef.current = null;
+    worldAnchorKeyRef.current = "";
+    confirmedWorldAnchorRef.current = aptConfirmedWorldAnchor(syntheticSpatialQa);
+    setSpatialScale("apartment"); setSpatialTransition("idle");
+    setSpatialTransitionDirection(null);
+    hostRef.current?.style.setProperty("opacity", "1");
+    worldHostRef.current?.style.setProperty("opacity", "0");
+    engineRef.current?.setRunning(true);
+    setJourneyRecovery(null); setSurfaceRecovery(null);
+  }, [cancelSpatialTravel, syntheticSpatialQa]);
+
+  const retrySpatialRecovery = useCallback(async () => {
+    const surface = worldSurfaceRef.current;
+    const recovery = surface?.snapshot?.()?.recovery;
+    if (!recovery) {
+      setJourneyRecovery(null);
+      await journeyRetryRef.current?.();
+      return;
+    }
+    await cancelSpatialTravel();
+    const recoveryLifecycle = spatialLifecycleRevisionRef.current;
+    const recoveryIntent = spatialTravelIntentRef.current;
+    const recoveryIsCurrent = () => recoveryLifecycle === spatialLifecycleRevisionRef.current
+      && recoveryIntent === spatialTravelIntentRef.current;
+    const action = surface.retryRecovery?.();
+    if (action?.action === "recreate-surface") {
+      const restoreScale = spatialCoordinatorRef.current?.getState?.()?.committedScale || "parcel";
+      setJourneyRecovery({ kind: "render-error", message: "Restoring the outside view…" });
+      spatialCoordinatorRef.current?.dispose?.();
+      spatialCoordinatorRef.current = null; spatialCoordinatorPromiseRef.current = null;
+      worldScaleObserverCleanupRef.current?.(); worldScaleObserverCleanupRef.current = null;
+      worldEntryPrewarmRef.current?.dispose?.(); worldEntryPrewarmRef.current = null;
+      worldEntryPrewarmPromiseRef.current = null;
+      surface.dispose?.(); worldSurfaceRef.current = null; worldSurfacePromiseRef.current = null;
+      worldAnchorKeyRef.current = "";
+      if (restoreScale === "apartment") {
+        setJourneyRecovery(null); setSurfaceRecovery(null);
+        return;
+      }
+      restoredWorldScaleRef.current = restoreScale === "apartment" ? "parcel" : restoreScale;
+      try {
+        const anchor = aptConfirmedWorldAnchor(syntheticSpatialQa);
+        await ensureSpatialCoordinator(anchor);
+        if (!recoveryIsCurrent()) return;
+        const next = worldSurfaceRef.current;
+        next.setAnchor(anchor);
+        next.setHeroStills?.(anchor?.heroStills || [], anchor);
+        next.setRunning(true);
+        await next.navigate({ intentId: `recovery-${++spatialIntentRef.current}`,
+          band: restoredWorldScaleRef.current || restoreScale, motion: "cut", durationMs: 0 });
+        if (!recoveryIsCurrent()) return;
+        if (restoreScale === "parcel" && anchor?.heroStills?.length) next.setRegisteredPose?.({
+          headingDeg: anchor.heroStills[0].headingDeg, pitchDeg: anchor.heroStills[0].pitchDeg,
+          rangeM: next.heroEntryRange?.(anchor) ?? anchor.parcelRangeM,
+        });
+        const ready = await next.waitForPresentation?.({ timeoutMs: APT_HANDOFF_ENDPOINT_BUDGET_MS });
+        if (!recoveryIsCurrent()) return;
+        if (ready) setJourneyRecovery(null);
+        else setJourneyRecovery({ kind: "content-unavailable", message: "The outside view is not ready yet." });
+      } catch (_) {
+        if (!recoveryIsCurrent()) return;
+        setJourneyRecovery({ kind: "render-error", message: "The outside view could not be restored." });
+        journeyRetryRef.current = async () => {
+          await returnFromRecovery();
+          await zoomRequestRef.current?.(-1, { source: "retry-restored-world" });
+        };
+      }
+    } else if (action?.action === "retry-provider") {
+      await requestWorldImageryAdoption("recovery-retry");
+    }
+  }, [cancelSpatialTravel, ensureSpatialCoordinator, requestWorldImageryAdoption, returnFromRecovery, syntheticSpatialQa]);
+
+  const showWorldOverview = useCallback(async () => {
+    await cancelSpatialTravel();
+    const surface = worldSurfaceRef.current;
+    const intent = spatialTravelIntentRef.current;
+    const controller = new AbortController();
+    worldOverviewAbortRef.current = controller;
+    const ready = await surface?.showWorldOverview?.({ signal: controller.signal });
+    if (controller.signal.aborted) return;
+    if (worldOverviewAbortRef.current === controller) worldOverviewAbortRef.current = null;
+    if (intent !== spatialTravelIntentRef.current || surface !== worldSurfaceRef.current) return;
+    if (ready) {
+      spatialCoordinatorRef.current?.syncWorldScale?.("planet");
+      setWorldOverviewActive(true);
+      setJourneyRecovery(null); setSurfaceRecovery(null);
+      showToast("World overview · live local imagery unavailable");
+    }
+  }, [cancelSpatialTravel, showToast]);
+
+  const changeContentPack = useCallback(async (revision = null) => {
+    if (contentPackBusy) return;
+    setContentPackBusy(true);
+    const lifecycle = spatialLifecycleRevisionRef.current;
+    let contentIntent = null;
+    const isCurrent = () => lifecycle === spatialLifecycleRevisionRef.current
+      && (contentIntent === null || contentIntent === spatialTravelIntentRef.current);
+    const pendingContentRetry = journeyRecovery?.kind === "content-unavailable" ? journeyRetryRef.current : null;
+    try {
+      const pendingCancellation = cancelSpatialTravel();
+      contentIntent = spatialTravelIntentRef.current;
+      await pendingCancellation;
+      if (!isCurrent()) return;
+      const packs = window.HomeContentPacks;
+      const previousIndex = JSON.stringify(packs.list());
+      if (revision) await packs.activate(selectedSiteId, revision);
+      else await packs.pickAndImport();
+      if (!isCurrent()) return;
+      if (!revision && JSON.stringify(packs.list()) === previousIndex) return;
+      showToast("home pack verified and available");
+      if (pendingContentRetry) {
+        setJourneyRecovery(null);
+        await pendingContentRetry();
+        return;
+      }
+      const siteId = window.HomeSpatialViewport?.getSelectedSiteId?.();
+      if (spatialScale !== "apartment") {
+        if (await prepareInteriorForSite(siteId, isCurrent)) {
+          setJourneyRecovery(null);
+          await zoomRequestRef.current?.(1, { source: "content-pack-ready" });
+        }
+      } else await interiorSwitchRequestRef.current?.(siteId, { force: true });
+    } catch (_) { showToast("home pack could not be imported; the previous version is still available", { tone: "error" }); }
+    finally { setContentPackBusy(false); }
+  }, [cancelSpatialTravel, contentPackBusy, journeyRecovery, prepareInteriorForSite, selectedSiteId, showToast, spatialScale]);
 
   const callSvc = useCallback(async (domain, service, data) => {
+    if (rehearsalIsolated || window.HomeMapRehearsalOfflineState?.active) return;
+    if (!window.HomeApartmentSiteSession.canControlEcho({
+        sceneSiteId: engineRef.current?.siteId,
+        selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
+        transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready"
+          || (window.HomeSpatialViewport?.getSite?.("echo")?.contentRevision || "legacy") !== (engineRef.current?.contentRevision || "legacy") })) {
+      showToast("Home controls are not configured for this interior"); return;
+    }
+    if (modelScopeRef.current?.authorityKey !== workspaceAuthorityRef.current.key) return;
     const client = window.__hav_haClient;
     if (!client || simActive) { showToast("sim mode - controls disabled"); return; }
+    const engine = engineRef.current;
+    const operation = spatialTravelIntentRef.current;
+    const authority = workspaceAuthorityRef.current.key;
+    const current = () => engineRef.current === engine && spatialTravelIntentRef.current === operation
+      && workspaceAuthorityRef.current.key === authority
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo";
     const entityId = data?.entity_id;
     const prev = entityId ? statesRef.current[entityId] : null;
     const optimistic = aptOptimisticServiceState(prev, domain, service);
@@ -1807,16 +6781,19 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     }
     try {
       await window.HomeApartmentData.callService(client, domain, service, data);
+      if (!current()) return;
       if (entityId && typeof window.HomeApartmentData.readStates === "function") {
         try {
           let verified = null;
           for (const delayMs of [350, 900, 1600]) {
             await aptDelay(delayMs);
-            const states = await window.HomeApartmentData.readStates(client, [entityId]);
+            if (!current()) return;
+            const states = await window.HomeApartmentData.readStates(client, [entityId], { siteId: "echo" });
+            if (!current()) return;
             verified = states[entityId] || null;
             if (verified) {
               statesRef.current[entityId] = verified;
-              if (dev) engineRef.current?.overlay.setDeviceState(dev.id, verified);
+              if (dev) engine.overlay.setDeviceState(dev.id, verified);
               setServicePulse((n) => n + 1);
             }
             if (verified && aptStateMatchesExpected(verified, expected)) break;
@@ -1829,6 +6806,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         }
       }
     } catch (e) {
+      if (!current()) return;
       if (entityId && prev) {
         statesRef.current[entityId] = prev;
         if (dev) engineRef.current?.overlay.setDeviceState(dev.id, prev);
@@ -1839,6 +6817,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   }, [simActive, showToast, model.devices]);
 
   const compareLiveModel = useCallback(async () => {
+    if (!apartmentDeviceControlsEnabled) return { ok: false, site_read_only: true };
+    const scope = aptInteriorWorkspaceScope(selectedSiteId, workspaceAuthorityRef.current.key);
+    const current = () => window.HomeSpatialViewport?.getSelectedSiteId?.() === scope.siteId
+      && workspaceAuthorityRef.current.key === scope.authorityKey
+      && (window.HomeSpatialViewport?.getSite?.(scope.siteId)?.contentRevision || null) === scope.contentRevision;
     if (simActive) return { ok: false, sim: true };
     if (connection !== "online" || !endpoint || !token) {
       const detail = "connect Home Assistant with a valid long-lived token first";
@@ -1848,7 +6831,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       return { ok: false, credentials_required: true };
     }
     setLiveReview({ state: "loading", live: null, detail: "reading authoritative Apartment model" });
-    const result = await window.HomeApartmentData.getAuthoritativeModel({ endpoint, token });
+    const result = await window.HomeApartmentData.getAuthoritativeModel({ endpoint, token, ...scope });
+    if (!current()) return { ok: false, superseded: true };
     if (!result.ok) {
       const detail = result.status === 401
         ? "Home Assistant rejected the token"
@@ -1868,9 +6852,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       showToast("revision conflict · local draft preserved; nothing was written", { tone: "error" });
     }
     return { ...result, comparison };
-  }, [simActive, connection, endpoint, token, model, showToast]);
+  }, [simActive, connection, endpoint, token, model, showToast, apartmentDeviceControlsEnabled, selectedSiteId, selectedContentRevision]);
 
   const saveModel = useCallback(async ({ reviewedDraft = false } = {}) => {
+    if (rehearsalIsolated || window.HomeMapRehearsalOfflineState?.active) return { ok: false, rehearsal: true };
+    if (!apartmentPlacementControlsEnabled) return { ok: false, site_read_only: true };
+    const scope = aptInteriorWorkspaceScope(selectedSiteId, workspaceAuthorityRef.current.key);
+    const operation = spatialTravelIntentRef.current;
     const currentSource = window.HomeApartmentData.modelSourceMeta?.(model) || {};
     if (currentSource.kind === "local_draft" && connection === "online" && !reviewedDraft) {
       return compareLiveModel();
@@ -1886,10 +6874,26 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     }
     setSaving(true);
     setSaveStatus({ state: "saving", detail: "writing authoritative Apartment model" });
-    const res = await window.HomeApartmentData.saveModel(model, { endpoint, token, sim: simActive });
+    const res = await window.HomeApartmentData.saveModel(model, { endpoint, token, sim: simActive, ...scope,
+      equipmentRegistration: scope.siteId === "victoria" && window.HG_WEB_MODE === true });
+    // A save may complete after the owner switches homes. Advance only the
+    // parked copy of the exact submitted draft; never erase newer edits.
+    if (res.ok && res.model && scope.siteId === "victoria") {
+      const parked = window.HomeApartmentData.restoreWorkspace?.(scope);
+      const registration = window.HomeEquipmentRegistration;
+      if (parked?.model?._equipment_registration && registration
+          && registration.canonicalJson(registration.toDocument(parked.model)) === registration.canonicalJson(registration.toDocument(model))) {
+        window.HomeApartmentData.captureWorkspace?.(scope, { model: res.model, dirty: false, view: parked.view });
+      }
+    }
+    if (spatialTravelIntentRef.current !== operation || window.HomeSpatialViewport?.getSelectedSiteId?.() !== scope.siteId
+        || workspaceAuthorityRef.current.key !== scope.authorityKey
+        || (window.HomeSpatialViewport?.getSite?.(scope.siteId)?.contentRevision || null) !== scope.contentRevision
+        || (window.HomeSpatialViewport?.getSite?.(scope.siteId)?.sceneRegistration?.version ?? 0) !== scope.registrationVersion
+        || (window.HomeContentPacks?.get?.(scope.siteId, scope.contentRevision)?.manifest?.assets?.["frame.json"]?.sha256 || null) !== scope.frameDigest) return res;
     setSaving(false);
     if (res.ok) {
-      setModel((m) => ({
+      setModel((m) => res.model || ({
         ...m, revision: res.revision, updated_at: res.updated_at,
         source_kind: "live_ha_model",
         source_detail: { endpoint, revision: res.revision },
@@ -1900,7 +6904,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     } else if (res.conflict) {
       setSaveStatus({ state: "conflict", detail: `server revision ${res.stored?.revision ?? "changed"} · local draft preserved` });
       showToast("model changed elsewhere · local draft preserved; nothing was overwritten", { tone: "error" });
-      if (res.stored) {
+      if (res.stored && scope.siteId === "echo") {
         setLiveReview({
           state: "ready",
           live: { ...res.stored, source_kind: "live_ha_model",
@@ -1914,14 +6918,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     } else if (res.offline || res.sim) {
       setSaveStatus(res.sim
         ? { state: "simulation", detail: "isolated · live model untouched" }
-        : { state: "offline", detail: "local draft · Home Assistant unavailable" });
+        : { state: "offline", detail: scope.siteId === "victoria" ? "session edits preserved · private Home server unavailable" : "local draft · Home Assistant unavailable" });
       showToast("offline — kept as local draft", { tone: "error" });
     } else {
       setSaveStatus({ state: "offline", detail: res.error || "save failed · local draft preserved" });
       showToast(`save failed — ${res.error}`, { tone: "error" });
     }
     return res;
-  }, [model, endpoint, token, simActive, connection, liveReview, compareLiveModel, showToast]);
+  }, [model, endpoint, token, simActive, connection, liveReview, compareLiveModel, showToast, apartmentPlacementControlsEnabled, selectedSiteId, selectedContentRevision]);
 
   const revealCameraFeedWhenReady = useCallback((dev, seq) => {
     const started = performance.now();
@@ -1957,7 +6961,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   }, [showToast, simActive]);
 
   const flyToDeviceView = useCallback((dev) => {
-    if (!dev) return false;
+    if (!dev || !apartmentSceneControlsEnabled) return false;
+    if (!apartmentDeviceControlsEnabled) return false;
     const eng = engineRef.current;
     if (!eng) return false;
     const seq = ++flySeqRef.current;
@@ -2017,7 +7022,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       }
     })();
     return true;
-  }, [mobile, viewport, simActive, revealCameraFeedWhenReady, showToast]);
+  }, [apartmentSceneControlsEnabled, mobile, viewport, simActive,
+    revealCameraFeedWhenReady, showToast]);
 
   useEffect(() => {
     if (!open || typeof window === "undefined") return undefined;
@@ -2038,6 +7044,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         mobile,
         viewport,
         devices: (model.devices || []).length,
+        virtualFixtures: engineRef.current?.overlay?.virtualFixturesReadback?.() || null,
+        inspection: liveShadow ? {display_modes:apartmentDisplayModesEnabled,equipment_markers:apartmentShadowEquipmentDisplayEnabled,
+          placements_writable:apartmentPlacementControlsEnabled,model_is_immutable:model===window.HomeLiveResidentModel,selected_interior:selectedSiteInterior} : null,
         fit: engineRef.current?.debugFit?.() || null,
         modes: engineRef.current?.modes?.debugInfo?.() || null,
         spatialScale,
@@ -2049,6 +7058,254 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       setMode: pickMode,
       zoomIn: () => zoomApartment(1),
       zoomOut: () => zoomApartment(-1),
+      /*
+       * The world's product-safe state, and the one measurement registration
+       * cannot be corrected without.
+       *
+       * Everything reachable here is either a phase, a provider id or an offset
+       * in metres relative to the anchor. No latitude, longitude, address or
+       * tile URL crosses this boundary, which is the same rule every other
+       * diagnostic in this file follows.
+       */
+      world: () => {
+        const surface = worldSurfaceRef.current;
+        if (!surface) return null;
+        return {
+          snapshot: surface.snapshot(),
+          camera: surface.cameraState?.() ?? null,
+          handoff: window.__aptHandoffDebug ?? null,
+          measureGroundOffset: (xFraction, yFraction) =>
+            surface.measureGroundOffset?.({ xFraction, yFraction }) ?? null,
+          /* The world-view options, so a switch can be PROVED to change what
+           * renders rather than assumed to. */
+          viewSelection: () => ({ ...worldViewSelection }),
+          setViewOption: (groupKey, presetId) => { setWorldViewOption(groupKey, presetId); return true; },
+          setCloudDebug: (mode) => surface.setCloudDebug?.(mode) ?? null,
+          /*
+           * Capture the current frame as a hero still and arm it. Returns
+           * metadata only -- never the image itself, which is a picture of the
+           * user's home and has no business in a diagnostic string.
+           */
+          armHeroStill: async (options) => {
+            const captured = await surface.captureHeroStill?.(options);
+            /* Say WHICH half failed. A bare null sent me guessing at a capture
+             * bug that turned out to be a pose refusal, and the two have
+             * completely different fixes. */
+            if (!captured) return { ok: false, reason: 'capture-returned-null' };
+            const adopted = surface.setHeroStill?.(captured);
+            if (!adopted) {
+              return {
+                ok: false,
+                reason: 'pose-refused',
+                stillPose: {
+                  siteId: captured.siteId,
+                  registrationVersion: captured.registrationVersion,
+                  headingDeg: captured.headingDeg,
+                  pitchDeg: captured.pitchDeg,
+                },
+              };
+            }
+            setHeroStill(captured);
+            return {
+              widthPx: captured.widthPx,
+              heightPx: captured.heightPx,
+              rangeM: captured.rangeM,
+              siteId: captured.siteId,
+              registrationVersion: captured.registrationVersion,
+            };
+          },
+          /* Arm an externally produced image at the current pose, which is how
+           * an enhanced still gets in. Same pose check as a captured one. */
+          useHeroStill: (url, options = {}) => {
+            if (typeof url !== 'string' || !url) return null;
+            const camera = surface.cameraState?.();
+            const still = {
+              url,
+              widthPx: options.widthPx ?? null,
+              heightPx: options.heightPx ?? null,
+              rangeM: options.rangeM ?? camera?.rangeM ?? null,
+              headingDeg: options.headingDeg ?? camera?.headingDeg ?? null,
+              pitchDeg: options.pitchDeg ?? camera?.pitchDeg ?? null,
+              siteId: options.siteId ?? null,
+              registrationVersion: options.registrationVersion ?? 0,
+              /*
+               * The measured correction for THIS generated image, or null for
+               * an image that needs none. A generative rebuild is not a
+               * resampler: it returns a frame that is a fraction of a percent
+               * off the one it was given, uniformly. Measured offline by phase
+               * correlation against the source capture and recorded here, so
+               * the number that gets applied is the number that was measured
+               * and can be re-derived. hero-still.mjs refuses an implausible
+               * one rather than moving the house.
+               */
+              registration: options.registration ?? null,
+            };
+            const adopted = surface.setHeroStill?.(still);
+            if (!adopted) return null;
+            setHeroStill(still);
+            return { rangeM: still.rangeM };
+          },
+          /*
+           * Does the enhanced still still depict the same house?
+           *
+           * The metric is structural on purpose. An enhancement is SUPPOSED to
+           * change brightness, contrast and micro-detail, so a raw pixel
+           * difference would flag success as failure. Normalising each image to
+           * zero mean and unit variance throws away exactly the axis the model
+           * is allowed to move and leaves the one it is not: where things ARE.
+           *
+           * Downsampled first, because at 64x64 a repainted roof tile averages
+           * away while a roof that moved does not.
+           *
+           * It cannot see a hallucinated window that happens to land where a
+           * dark patch already was. It is a screen, not a proof; the eye is
+           * still the acceptance test.
+           */
+          compareStills: async (urlA, urlB, { size = 64, block = 8 } = {}) => {
+            const load = (src) => new Promise((resolve, reject) => {
+              const img = new Image();
+              img.onload = () => resolve(img);
+              img.onerror = () => reject(new Error('could not load image'));
+              img.src = src;
+            });
+            const luminance = (img) => {
+              const canvas = document.createElement('canvas');
+              canvas.width = size; canvas.height = size;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0, size, size);
+              const data = ctx.getImageData(0, 0, size, size).data;
+              const out = new Float64Array(size * size);
+              for (let i = 0; i < out.length; i += 1) {
+                out[i] = (0.2126 * data[i * 4]) + (0.7152 * data[i * 4 + 1]) + (0.0722 * data[i * 4 + 2]);
+              }
+              return out;
+            };
+            const normalise = (v) => {
+              let mean = 0;
+              for (let i = 0; i < v.length; i += 1) mean += v[i];
+              mean /= v.length;
+              let variance = 0;
+              for (let i = 0; i < v.length; i += 1) variance += (v[i] - mean) ** 2;
+              const sd = Math.sqrt(variance / v.length) || 1;
+              const out = new Float64Array(v.length);
+              for (let i = 0; i < v.length; i += 1) out[i] = (v[i] - mean) / sd;
+              return out;
+            };
+            const [imgA, imgB] = await Promise.all([load(urlA), load(urlB)]);
+            const a = normalise(luminance(imgA));
+            const b = normalise(luminance(imgB));
+            let total = 0;
+            for (let i = 0; i < a.length; i += 1) total += Math.abs(a[i] - b[i]);
+            const meanAbs = total / a.length;
+            let worst = { value: 0, xFraction: 0, yFraction: 0 };
+            for (let by = 0; by + block <= size; by += block) {
+              for (let bx = 0; bx + block <= size; bx += block) {
+                let sum = 0;
+                for (let y = 0; y < block; y += 1) {
+                  for (let x = 0; x < block; x += 1) {
+                    sum += Math.abs(a[(by + y) * size + bx + x] - b[(by + y) * size + bx + x]);
+                  }
+                }
+                const value = sum / (block * block);
+                if (value > worst.value) {
+                  worst = { value, xFraction: (bx + block / 2) / size, yFraction: (by + block / 2) / size };
+                }
+              }
+            }
+            return {
+              sourcePx: { width: imgA.naturalWidth, height: imgA.naturalHeight },
+              enhancedPx: { width: imgB.naturalWidth, height: imgB.naturalHeight },
+              aspectMatches: Math.abs((imgA.naturalWidth / imgA.naturalHeight)
+                - (imgB.naturalWidth / imgB.naturalHeight)) < 0.01,
+              structuralDrift: Number(meanAbs.toFixed(4)),
+              worstBlock: {
+                drift: Number(worst.value.toFixed(4)),
+                xFraction: Number(worst.xFraction.toFixed(3)),
+                yFraction: Number(worst.yFraction.toFixed(3)),
+              },
+            };
+          },
+          /*
+           * Put the armed still on disk, because the enhancement step runs in a
+           * terminal and a data URL living in the page is no use to it.
+           *
+           * An anchor click rather than anything cleverer: the image is already
+           * a data URL, so this needs no network round trip and no dev-only
+           * upload route, which would be a new authority for a debugging
+           * convenience.
+           */
+          downloadHeroStill: (filename) => {
+            const still = heroStillRef.current;
+            if (!still?.url) return { ok: false, reason: 'nothing armed' };
+            const name = typeof filename === 'string' && filename
+              ? filename
+              : `hero-still-${still.siteId || 'home'}-${still.widthPx}x${still.heightPx}`
+                + (still.format === 'jpeg' ? '.jpg' : '.png');
+            try {
+              const link = document.createElement('a');
+              link.href = still.url;
+              link.download = name;
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+            } catch (error) {
+              return { ok: false, reason: String(error?.message || error) };
+            }
+            return { ok: true, filename: name, widthPx: still.widthPx, heightPx: still.heightPx };
+          },
+          clearHeroStill: () => {
+            surface.setHeroStill?.(null);
+            setHeroStill(null);
+            return true;
+          },
+          /* Per-rendered-frame brightness, for answering "is it flickering"
+           * with pixels instead of a proxy. */
+          /* Sweep where the descent waits for the ground. */
+          setArrivalHold: (options) => surface.setArrivalHold?.(options) ?? null,
+          /* Resolution and multisampling, for measuring the fill-rate ceiling. */
+          setRenderTuning: (options) => surface.setRenderTuning?.(options) ?? null,
+          startFrameSampler: (options) => surface.startFrameSampler?.(options) ?? false,
+          stopFrameSampler: () => surface.stopFrameSampler?.() ?? null,
+          /* What an option costs, and what the depth decode stands on. Frame
+           * counts, milliseconds, byte totals and frustum planes only -- the
+           * same redaction rule as every other diagnostic here. */
+          renderDiagnostics: (options) => {
+            const base = surface.renderDiagnostics?.(options) ?? null;
+            if (!base) return null;
+            /* Provider bytes come from a separate probe: the surface is barred
+             * from touching the network, and a diagnostic does not get to be the
+             * exception that weakens the rule. */
+            if (options?.reset) providerTrafficRef.current?.reset?.();
+            return { ...base, provider: providerTrafficRef.current?.read?.() ?? null };
+          },
+          installTrafficProbe: async () => {
+            if (providerTrafficRef.current) return true;
+            if (providerTrafficPromiseRef.current) {
+              return Boolean(await providerTrafficPromiseRef.current);
+            }
+            const lifecycleRevision = spatialLifecycleRevisionRef.current;
+            const pending = (async () => {
+              const probe = await engineRef.current?.installProviderTrafficProbe?.(window);
+              /* Closing the Apartment while the provider module is importing
+               * must not let its late result re-wrap fetch/XHR after cleanup. */
+              if (spatialLifecycleRevisionRef.current !== lifecycleRevision) {
+                probe?.dispose?.();
+                return null;
+              }
+              providerTrafficRef.current = probe ?? null;
+              return providerTrafficRef.current;
+            })();
+            providerTrafficPromiseRef.current = pending;
+            try {
+              return Boolean(await pending);
+            } finally {
+              if (providerTrafficPromiseRef.current === pending) {
+                providerTrafficPromiseRef.current = null;
+              }
+            }
+          },
+        };
+      },
       flyFirstCamera: () => {
         const dev = (model.devices || []).find((d) => d.type === "camera" || aptCameraCanFeed(d));
         return dev ? flyToDeviceView(dev) : false;
@@ -2101,7 +7358,21 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const cameraAlignment = liveCam ? aptCameraAlignment(liveCam) : null;
   const mobileCameraSnap = mobile && cameraTop;
   const hideViewHud = mobile ? cameraTop : cameraSnap;
-  const showZoomHud = !editing && !cameraTop && phase !== "boot" && phase !== "loading" && phase !== "error";
+  /* Navigation chrome stays fixed above the spatial effect. During a handoff,
+   * the already-targeted direction is the only impossible action; the opposite
+   * button remains enabled and retargets the one live reversible clock. */
+  const showZoomHud = !editing && !cameraTop
+    && phase !== "boot" && phase !== "loading" && phase !== "error";
+  const zoomInTransitionDisabled = travelling || aptZoomTransitionDisabled(
+    spatialTransition,
+    spatialTransitionDirection,
+    "inward",
+  );
+  const zoomOutTransitionDisabled = travelling || aptZoomTransitionDisabled(
+    spatialTransition,
+    spatialTransitionDirection,
+    "outward",
+  );
   const topPad = mobile ? "calc(8px + env(safe-area-inset-top, 0px)) 10px 8px" : "12px 18px";
   const bottomPad = mobile ? "8px 10px calc(10px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
   const mobileCameraFrame = mobile && cameraSnap && liveCam ? aptMobileCameraFrame(viewport, liveCam) : null;
@@ -2201,6 +7472,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       role={embedded ? "region" : "dialog"}
       aria-modal={embedded ? undefined : true}
       aria-label="3d apartment"
+      tabIndex={-1}
       style={{
         position: embedded ? "absolute" : "fixed",
         inset: 0,
@@ -2215,6 +7487,51 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         @keyframes apt-fade-in { from { opacity: 0; } to { opacity: 1; } }
         @keyframes apt-toast-in { from { transform: translateY(8px); opacity: 0; }
                                   to { transform: translateY(0); opacity: 1; } }
+        [data-apt-semantic-navigation="1"] {
+          position: absolute;
+          left: 10px;
+          top: 10px;
+          width: 1px;
+          height: 1px;
+          margin: -1px;
+          padding: 0;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          white-space: nowrap;
+          pointer-events: none;
+          z-index: 8;
+        }
+        [data-apt-semantic-navigation="1"]:focus-within {
+          width: min(330px, calc(100vw - 20px));
+          height: auto;
+          margin: 0;
+          padding: 12px;
+          overflow: visible;
+          clip: auto;
+          clip-path: none;
+          white-space: normal;
+          pointer-events: auto;
+          background: rgba(6, 12, 18, 0.96);
+          border: 1px solid var(--hg-border);
+          box-shadow: 0 12px 32px rgba(0,0,0,0.48);
+        }
+        [data-apt-semantic-navigation="1"] button {
+          min-height: 36px;
+          padding: 5px 7px;
+          font-family: ${APT_FONT_MONO};
+          font-size: 9px;
+          letter-spacing: 0.06em;
+          text-transform: lowercase;
+          color: var(--hg-fg-1);
+          background: rgba(10,12,16,0.55);
+          border: 1px solid var(--hg-border-soft);
+          cursor: pointer;
+        }
+        [data-apt-semantic-navigation="1"] button:disabled {
+          color: var(--hg-fg-5);
+          cursor: default;
+        }
         @media (prefers-reduced-motion: reduce) {
           [data-home-apartment-view] *, [data-home-apartment-view] *::before,
           [data-home-apartment-view] *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
@@ -2223,12 +7540,158 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           [data-apt-aim-inspector="1"] button,
           [data-apt-aim-inspector="1"] select { min-height: 44px !important; }
           [data-apt-hud-button="1"] { min-height: 44px !important; }
+          [data-apt-semantic-navigation="1"] button,
+          [data-apt-semantic-navigation="1"] select { min-height: 44px !important; }
           /* 24px view-angle dots keep their size; an invisible halo grows the
              touch box to 44px without disturbing the row layout */
           [data-apt-az-dot="1"] { position: relative; }
           [data-apt-az-dot="1"]::before { content: ""; position: absolute; inset: -10px; }
         }
       `}</style>
+
+      {phase === "ready" && spatialScale === "apartment" && !editing && !aimMode
+        && selectedSiteInterior !== false && apartmentDeviceControlsEnabled && (
+        <>
+          <AptSemanticNavigation
+            navigation={apartmentSemanticNavigation}
+            devices={semanticDevicesForRoom}
+            roomId={semanticRoomId}
+            deviceId={cardId || semanticDeviceId}
+            onRoomId={selectSemanticRoom}
+            onDeviceId={selectSemanticDevice}
+            onPreviousDevice={() => stepSemanticDevice(-1)}
+            onNextDevice={() => stepSemanticDevice(1)}
+            onOpenDevice={openSemanticDevice}
+            deviceSelectRef={semanticDeviceSelectRef}
+            disabled={!apartmentSceneControlsEnabled}
+          />
+          <div
+            data-apt-semantic-status="1"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            aria-relevant="text"
+            style={{
+              position: "absolute",
+              width: 1,
+              height: 1,
+              overflow: "hidden",
+              clip: "rect(0 0 0 0)",
+              clipPath: "inset(50%)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {semanticRoomStatus || (
+              semanticStatusDeviceId === (cardId || semanticDeviceId || null)
+                ? apartmentSemanticNavigation.statusText
+                : ""
+            )}
+          </div>
+        </>
+      )}
+
+      {/*
+          The discovery panel.
+
+          Dev-only and behind the same flag as the world view itself. It is a
+          diagnostic, so it carries no coordinates, no address, no tile URL and
+          no key -- only preset names and the notes that make them comparable.
+          Rendered above the chrome so it is usable while the world is on
+          screen, and it renders NOTHING when closed beyond its own toggle, so
+          it cannot disturb the layout it exists to evaluate.
+      */}
+      {worldZoomEnabled && (
+        <div
+          data-apt-world-view-panel={worldViewPanelOpen ? "open" : "closed"}
+          style={{
+            position: "absolute", right: 10, top: 92, zIndex: 7,
+            display: "flex", flexDirection: "column", alignItems: "flex-end",
+            gap: 6, pointerEvents: "auto", maxHeight: "72%",
+          }}
+        >
+          <button
+            type="button"
+            data-apt-world-view-toggle="1"
+            aria-expanded={worldViewPanelOpen}
+            aria-controls="apt-world-view-options"
+            onClick={() => setWorldViewPanelOpen((v) => !v)}
+            style={{
+              fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.14em",
+              color: "var(--hg-fg-2)", background: "rgba(6,12,18,0.82)",
+              border: "1px solid var(--hg-border-soft)", padding: "5px 9px",
+              minHeight: mobile ? 44 : 26, cursor: "pointer",
+            }}
+          >
+            {worldViewPanelOpen ? "close options" : "options"}
+          </button>
+          {worldViewPanelOpen && worldViewGroups && (
+            <div
+              id="apt-world-view-options"
+              role="region"
+              aria-label="World view prototype options"
+              style={{
+                background: "rgba(6,12,18,0.93)", border: "1px solid var(--hg-border-soft)",
+                padding: 10, width: mobile ? 230 : 262, overflowY: "auto",
+                maxHeight: "100%", display: "flex", flexDirection: "column", gap: 10,
+              }}
+            >
+              {worldViewGroups.map((group) => {
+                const selectedPresetId = worldViewSelection[group.key] || group.fallback;
+                const selectedPreset = group.presets[selectedPresetId] || group.presets[group.fallback];
+                const noteId = `apt-world-view-note-${group.key}`;
+                return (
+                <div key={group.key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{
+                    fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.18em",
+                    color: "var(--hg-fg-4)", textTransform: "uppercase",
+                  }}>{group.label}</span>
+                  {Object.values(group.presets).map((preset) => {
+                    const active = selectedPresetId === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        data-apt-world-view-option={`${group.key}:${preset.id}`}
+                        aria-pressed={active}
+                        aria-label={`${preset.label}. ${preset.note}`}
+                        aria-describedby={active ? noteId : undefined}
+                        title={preset.note}
+                        onClick={() => setWorldViewOption(group.key, preset.id)}
+                        style={{
+                          textAlign: "left", cursor: "pointer",
+                          fontFamily: APT_FONT_MONO, fontSize: 9.5,
+                          color: active ? "var(--hg-ice)" : "var(--hg-fg-2)",
+                          background: active ? "rgba(120,216,223,0.12)" : "transparent",
+                          border: `1px solid ${active ? "var(--hg-ice)" : "var(--hg-border-soft)"}`,
+                          /* 44 is this view's own mobile floor; the stylesheet enforces it on
+                             every other control and an options list is no exception. */
+                          padding: "5px 7px", minHeight: mobile ? 44 : 24,
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                  <span
+                    id={noteId}
+                    data-apt-world-view-selected-note={group.key}
+                    style={{
+                      fontFamily: APT_FONT_MONO,
+                      fontSize: 8.5,
+                      lineHeight: 1.45,
+                      color: "var(--hg-fg-4)",
+                      padding: "2px 1px 4px",
+                    }}
+                  >
+                    {selectedPreset?.note || "No description available."}
+                  </span>
+                </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* engine canvas is appended imperatively (persistent across mounts —
           see the boot effect); React must never own or recreate it */}
@@ -2240,14 +7703,139 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         style={{
           ...hostFrameStyle,
           opacity: spatialScale === "apartment" ? 1 : 0,
-          pointerEvents: spatialScale === "apartment" ? hostFrameStyle.pointerEvents : "none",
-          transition: "opacity 420ms ease",
+          pointerEvents: apartmentSceneControlsEnabled ? hostFrameStyle.pointerEvents : "none",
+          /* No transition. The handoff writes this opacity every frame from
+             handoffFrame(), and a 420ms ease would chase the written value
+             instead of equalling it: a 0 written at t=300ms still paints ~0.55
+             at t=300ms and does not reach 0 until t~720ms, past the whole 650ms
+             timeline. The Apartment would stay visibly lit through the black
+             firewall and into the particle resolve — exactly the co-existence
+             noCoexistenceViolations() exists to forbid, proved on the curves
+             and violated in the DOM where no test could see it. */
+          transition: "none",
         }}
       />
 
       {/* Renderer-only outer scale layer. It occupies the same viewport while
           every Apartment control and information surface remains a sibling
           above it. No product UI is rendered into this node. */}
+      {/*
+        * A home whose interior is a DISCLOSED placeholder, once inside.
+        *
+        * Unlike the missing-interior panel below, this scene is real and is
+        * this home's own engine (a generic massing model from its own pack),
+        * so it is shown rather than covered -- and named, because a generic
+        * house that looked like a scan would be a fabricated room. The cloud
+        * itself also spells SCAN PENDING in front of the street wall; this is
+        * the part that survives a camera looking the other way. Non-interactive
+        * chrome: the wheel and drags belong to the scene underneath.
+        */}
+      {spatialScale === "apartment" && spatialTransition === "idle" && interiorPlaceholderShown && (
+        <div
+          data-apt-interior-placeholder={interiorPlaceholder.kind}
+          role="note"
+          title={interiorPlaceholder.note || undefined}
+          style={{
+            position: "absolute",
+            top: mobile ? "calc(104px + env(safe-area-inset-top, 0px))" : 64,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 5,
+            pointerEvents: "none",
+            display: "grid",
+            gap: 3,
+            justifyItems: "center",
+            maxWidth: "calc(100% - 32px)",
+            padding: "6px 12px",
+            background: "rgba(5,12,18,.86)",
+            border: "1px solid var(--hg-warn)",
+            textAlign: "center",
+          }}
+        >
+          <span data-apt-scan-pending="1" style={{
+            fontFamily: APT_FONT_MONO, fontSize: 11, letterSpacing: "0.14em",
+            color: "var(--hg-warn)",
+          }}>
+            {`${selectedSiteName} · scan pending`}
+          </span>
+          <span style={{
+            fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.08em",
+            color: "var(--hg-fg-3, rgba(255,255,255,0.62))",
+          }}>
+            generic placeholder model · not the real building
+          </span>
+        </div>
+      )}
+      {/*
+        * A home with no interior, once the collapse has finished.
+        *
+        * Opaque, because the Apartment canvas underneath is showing the OTHER
+        * home's scan -- it is one persistent engine with one fixture, so
+        * without this the descent into Victoria would arrive in Echo Park's
+        * living room and present it as Victoria's.
+        *
+         * The resident canvas is deliberately non-interactive here because it
+         * still contains another home's scan. The sibling zoom-out control is
+         * the explicit mouse/touch/keyboard route back to the map; this opaque
+         * panel must never forward a pointer or double-click to hidden Echo.
+        */}
+      {spatialScale === "apartment" && selectedSiteInterior === false && (
+        <div
+          ref={emptyInteriorRef}
+          data-apt-empty-interior="1"
+          style={{
+            ...hostFrameStyle,
+            left: 0,
+            zIndex: 3,
+            pointerEvents: "auto",
+            touchAction: "none",
+            background: "#05080b",
+            display: "grid",
+            placeItems: "center",
+            textAlign: "center",
+            padding: 24,
+          }}
+        >
+          <div style={{ display: "grid", gap: 10, maxWidth: 320 }}>
+            <span style={{
+              fontFamily: APT_FONT_MONO, fontSize: 11, letterSpacing: "0.14em",
+              color: "var(--hg-fg-1)", textTransform: "lowercase",
+            }}>
+              {`${selectedSiteName} interior`}
+            </span>
+            <span style={{
+              fontFamily: APT_FONT_MONO, fontSize: 10, letterSpacing: "0.08em",
+              color: "var(--hg-fg-3, rgba(255,255,255,0.55))", lineHeight: 1.6,
+            }}>
+              {interiorSwitchState.phase === "loading" ? "loading interior…"
+                : interiorSwitchState.phase === "error" ? interiorSwitchState.error
+                : "interior unavailable · scan import pending"}
+            </span>
+            <span style={{
+              fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.1em",
+              color: "var(--hg-fg-3, rgba(255,255,255,0.38))", marginTop: 6,
+            }}>
+              choose another home above{worldZoomEnabled ? " or zoom out to return to map" : ""}
+            </span>
+            {interiorSwitchState.phase === "error" && (
+              <button type="button" className="hg-focusable" style={{ minHeight: 44 }}
+                onClick={() => { void switchInteriorHome(selectedSiteId, { force: true }); }}>Retry interior</button>
+            )}
+          </div>
+        </div>
+      )}
+      <AptWorldSitePins
+        visible={spatialScale !== "apartment"}
+        surfaceRef={worldSurfaceRef}
+        interactionTargetRef={worldHostRef}
+        sites={homeSites}
+        selectedSiteId={selectedSiteId}
+        travelling={travelling}
+        motionActive={spatialTransition !== "idle"}
+        onSelect={travelToSite}
+        onWheelForward={forwardWheelToWorld}
+        frameStyle={hostFrameStyle}
+      />
       <div
         ref={worldHostRef}
         data-apt-world-surface="1"
@@ -2259,9 +7847,109 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           zIndex: 2,
           opacity: spatialScale === "apartment" ? 0 : 1,
           visibility: spatialScale === "apartment" && spatialTransition === "idle" ? "hidden" : "visible",
-          pointerEvents: spatialScale === "apartment" ? "none" : "auto",
-          transition: "opacity 420ms ease",
+          /* Own reversal input during both halves of a handoff. Apartment input
+             is intentionally suspended then, but the user must still be able
+             to reverse the full-viewport motion before it commits. */
+          pointerEvents: aptWorldHostTakesInput(spatialScale, spatialTransition) ? "auto" : "none",
+          transition: "none",
           background: "#000",
+        }}
+      />
+      <div
+        data-apt-world-credits="1"
+        style={{ position: "absolute", bottom: mobile ? 156 : 90, right: 14, left: 14,
+          /* The recovery card lives in here. When its blackout is up, the
+             whole container is lifted over the overview banner (z8), which the
+             old centred dialog covered too; otherwise it stays under it. */
+          zIndex: aptRecoveryBlackout(journeyRecovery || surfaceRecovery) ? 9 : 7,
+          minHeight: 20, pointerEvents: "auto", fontSize: 10, color: "#fff",
+          display: "grid", gap: 3,
+          visibility: spatialScale !== "apartment" || spatialTransition !== "idle" ? "visible" : "hidden" }}
+      >
+        {(() => {
+          /* "Research imagery" says the pack is unreviewed. It does not say what
+             the picture IS, and for Echo Park that is now the load-bearing fact:
+             the closest still is a generative reconstruction of the map view, so
+             its cars and canopy are drawn rather than observed. The pack already
+             carries that sentence in review.note and nothing rendered it, which
+             made the manifest more honest than the screen. */
+          const reviewed = contentPacks.find((pack) => pack.active
+            && pack.manifest.siteId === selectedSiteId && pack.manifest.review?.status === "research-only");
+          if (!reviewed) return null;
+          /* Local data, but still text rendered into chrome, so it gets what an
+             attribution credit gets: control and bidi characters out, length
+             clamped. A manifest is a file on disk and files get edited. */
+          const note = String(reviewed.manifest.review.note || "")
+            .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ")
+            .replace(/\s+/g, " ").trim().slice(0, 240);
+          /* Only while an AI still is on screen: the handoff included, the
+             interior and the region/planet ranges never. It used to test the
+             scale alone, which kept it up over the live map and the globe and
+             dropped it for the outward handoff's particles. */
+          return (
+            <AptResearchImageryDisclosure
+              surfaceRef={worldSurfaceRef}
+              worldHostRef={worldHostRef}
+              interior={spatialScale === "apartment" && spatialTransition === "idle"}
+              motionActive={spatialTransition !== "idle" || travelling}
+              holdLayout={Boolean(journeyRecovery || surfaceRecovery)}
+              note={note}
+            />
+          );
+        })()}
+        <div ref={worldCreditsRef} style={{ position: "relative", minHeight: 22 }} />
+        {(confirmedWorldAnchorRef.current?.contentAttributions || selectedSiteEntry?.contentAttributions || []).length > 0 && (
+          <div data-apt-pack-attributions="1" style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px",
+            background: "rgba(5,12,18,.85)", padding: "3px 6px", width: "fit-content", maxWidth: "100%" }}>
+            {(confirmedWorldAnchorRef.current?.contentAttributions || selectedSiteEntry?.contentAttributions || []).map((credit, index) => (
+              credit.url
+                ? <a key={index} href={credit.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>{credit.text}</a>
+                : <span key={index}>{credit.text}</span>
+            ))}
+          </div>
+        )}
+        {(journeyRecovery || surfaceRecovery) && (
+          <AptJourneyRecoveryCard
+            message={journeyRecovery?.message || (
+              surfaceRecovery?.kind === "content-unavailable" ? "This view needs a complete home pack."
+                : surfaceRecovery?.kind === "provider-unavailable" ? "Google Maps is unavailable. Retry, return, or open the bundled world overview."
+                : surfaceRecovery?.kind === "render-error" || surfaceRecovery?.kind === "context-lost"
+                  ? "The outside view needs to be restored." : "The outside view is still loading."
+            )}
+            blackout={aptRecoveryBlackout(journeyRecovery || surfaceRecovery)}
+            showOverview={spatialScale !== "apartment"
+              && ["provider-unavailable", "streaming-timeout"].includes(surfaceRecovery?.kind)}
+            onRetry={() => { void retrySpatialRecovery(); }}
+            onReturn={() => { void returnFromRecovery(); }}
+            onShowOverview={() => { void showWorldOverview(); }}
+            onWheelForward={forwardWheelToWorld}
+          />
+        )}
+      </div>
+      {worldOverviewActive && spatialScale !== "apartment" && (
+        <div data-apt-world-overview="1" style={{ position: "absolute", zIndex: 8, left: 16, top: 64,
+          color: "#fff", background: "rgba(5,12,18,.9)", padding: "6px 12px", fontSize: 12 }}>
+          World overview · live local imagery unavailable
+          <button type="button" className="hg-focusable" style={{ marginLeft: 12, minHeight: 44 }}
+            onClick={() => { void showWorldOverview(); }}>Show world overview</button>
+          <button type="button" className="hg-focusable" style={{ marginLeft: 12, minHeight: 44 }}
+            onClick={() => { setWorldOverviewActive(false); void returnFromRecovery(); }}>Return to interior</button>
+        </div>
+      )}
+      <div
+        ref={handoffFallbackRef}
+        data-apt-handoff-fallback="1"
+        aria-hidden="true"
+        style={{
+          ...hostFrameStyle,
+          left: 0,
+          zIndex: 3,
+          pointerEvents: "none",
+          background: "#000",
+          opacity: 0,
+          visibility: "hidden",
+          transition: "none",
+          contain: "strict",
         }}
       />
       <div
@@ -2270,11 +7958,17 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         style={{
           position: "absolute",
           inset: 0,
-          zIndex: 3,
+          /* z3 now belongs to the handoff compositor, which must sit above both
+             renderer hosts and below all product chrome. The scrim IS product
+             chrome, so it moves up rather than competing with the firewall —
+             and it is additionally forced to 0 while the firewall is closed,
+             because a lit gradient over the black gap is the same
+             co-visibility failure in a different layer. */
+          zIndex: 4,
           pointerEvents: "none",
           opacity: spatialScale === "apartment" ? 0 : 1,
           visibility: spatialScale === "apartment" && spatialTransition === "idle" ? "hidden" : "visible",
-          transition: "opacity 420ms ease",
+          transition: "none",
           background: [
             "linear-gradient(to bottom, rgba(3,9,14,0.82) 0, rgba(3,9,14,0.58) 64px, transparent 170px)",
             "linear-gradient(to top, rgba(3,9,14,0.86) 0, rgba(3,9,14,0.62) 76px, transparent 190px)",
@@ -2282,6 +7976,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         }}
       />
       <div
+        data-apt-spatial-status="1"
         role="status"
         aria-live="polite"
         aria-atomic="true"
@@ -2296,7 +7991,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         }}
       >
         {spatialTransition === "idle"
-          ? `Spatial viewport: ${spatialScale}. ${aptSpatialAvailability(spatialScale)}`
+          ? `Spatial viewport: ${spatialScale}. ${aptSpatialAvailability(spatialScale, worldSurfaceRef.current?.snapshot?.())}`
           : "Spatial viewport changing scale"}
       </div>
 
@@ -2309,15 +8004,46 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           gap: mobileCameraSnap ? 8 : mobile ? 7 : 10,
           padding: topPad,
           pointerEvents: "none",
-          flexWrap: mobileCameraSnap ? "nowrap" : mobile ? "wrap" : "nowrap",
+          flexWrap: mobileCameraSnap ? "nowrap" : viewport.width < 1100 ? "wrap" : "nowrap",
           zIndex: 5,
         }}>
           <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
             <span style={{ fontFamily: APT_FONT_SANS, fontSize: 15, fontWeight: 500,
                            color: "var(--hg-fg-0)", letterSpacing: "-0.02em" }}>apartment</span>
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.24em",
-                           color: "var(--hg-fg-4)", marginTop: 3 }}>spatial command center</span>
+                           color: "var(--hg-fg-4)", marginTop: 3 }}>{liveShadow ? 'live geometry · read only' : 'spatial command center'}</span>
           </div>
+          {homeSites.length > 1 && (
+            <label
+              data-apt-site-switcher="1"
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                pointerEvents: "auto",
+                order: mobile ? -1 : 0,
+              }}
+            >
+              <span style={{
+                fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.12em",
+                color: "var(--hg-fg-4)", textTransform: "uppercase",
+              }}>home</span>
+              <select
+                aria-label="Home"
+                className="hg-focusable"
+                value={selectedSiteId || ""}
+                onChange={(event) => { void travelToSite(event.target.value, { presentation: "interior" }); }}
+                style={{
+                  minHeight: 44, maxWidth: mobile ? 140 : 190, padding: "3px 6px",
+                  fontFamily: APT_FONT_MONO, fontSize: 10,
+                  color: "var(--hg-fg-1)", background: "var(--hg-bg-1, #0b1218)",
+                  border: "1px solid var(--hg-border-soft)",
+                }}
+              >
+                {homeSites.map((site) => (
+                  <option key={site.id} value={site.id}>{site.shortName}{site.sceneAvailable ? "" : " · unavailable"}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {mobileCameraSnap && (
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.1em",
                            color: "var(--hg-ice)", lineHeight: 1.35,
@@ -2339,7 +8065,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
               source · {sourceMeta.label}{revisionLabel}
             </span>
           )}
-          {!mobileCameraSnap && sourceMeta.kind !== "simulation" && (
+          {!liveShadow && !mobileCameraSnap && sourceMeta.kind !== "simulation" && (
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.08em",
               color: connection === "online" ? "#91e6bd" : "var(--hg-fg-5)" }}>
               ha · {connection === "online" ? "connected" : connection}
@@ -2359,7 +8085,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
                          color: trackerStatus === "live" ? "var(--hg-ice)" : "var(--hg-fg-5)",
                          marginLeft: mobileCameraSnap ? 0 : mobile ? 0 : 8,
                          display: mobileCameraSnap ? "none" : "inline" }}>
-            tracker · {trackerStatus}
+            {liveShadow ? 'observations · context journal' : 'tracker · ' + trackerStatus}
           </span>
           <span style={{
             marginLeft: mobileCameraSnap ? 0 : "auto",
@@ -2372,29 +8098,46 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             width: mobileCameraSnap ? "100%" : "auto",
           }}>
             {cameraTop && (
-              <AptHudButton label="← back" onClick={exitCameraPose} mobile={mobile} />
+              <AptHudButton label="← back" disabled={!apartmentSceneControlsEnabled}
+                onClick={() => { if (apartmentSceneControlsEnabled) exitCameraPose(); }} mobile={mobile} />
             )}
             {cameraTop && liveCam && !mobile && !simActive && window.HomeApartmentCalibrate && (
-              <AptHudButton label="calibrate" active={!!calibCam} onClick={() => {
+              <AptHudButton label="calibrate" active={!!calibCam}
+                disabled={!apartmentSceneControlsEnabled} onClick={() => {
+                if (!apartmentSceneControlsEnabled) return;
                 setLiveOn(false);
                 const e = engineRef.current;
                 if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
                 e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
                 // snapped pose sits point-blank in the geometry — pull back to
                 // the overview so the room is visible and orbit/zoom unlock
-                e?.rig.returnToOverview();
+                aptBeginDollhouseCalibration(e);
                 calibPairCountRef.current = 0; calibEscArmRef.current = 0;
                 setCalibCam(liveCam);
               }} mobile={mobile} />
             )}
-            {!cameraTop && (
+            {!cameraTop && apartmentDeviceControlsEnabled && (
               <>
-                <AptHudButton label="aim light" active={aimMode} disabled={spatialScale !== "apartment"} onClick={() => {
+                <AptHudButton label="aim light" active={aimMode}
+                  disabled={!apartmentSceneControlsEnabled} onClick={() => {
+                  if (!apartmentSceneControlsEnabled) return;
                   setCardId(null); setAimMode((value) => !value);
                   if (aimMode) setAimDestination(null);
                 }} mobile={mobile} />
-                <AptHudButton label="edit" disabled={spatialScale !== "apartment"} onClick={() => { setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true); }} mobile={mobile} />
+                <AptHudButton label="edit" disabled={!apartmentSceneControlsEnabled} onClick={() => {
+                  if (!apartmentSceneControlsEnabled) return;
+                  setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
+                }} mobile={mobile} />
               </>
+            )}
+            {!cameraTop && selectedSiteId === "victoria" && apartmentPlacementControlsEnabled && (
+              <AptHudButton label="edit" onClick={() => {
+                setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
+              }} mobile={mobile} />
+            )}
+            {!liveShadow && onOpenDynamicReplay && !calibCam && !aimMode && !travelling
+              && spatialScale === "apartment" && spatialTransition === "idle" && (
+              <AptHudButton label="Rehearse moving book" onClick={onOpenDynamicReplay} mobile={mobile} />
             )}
             {!embedded && <AptHudButton label={(mobile || mobileCameraSnap) ? "close" : "close · esc"} onClick={onClose} mobile={mobile} />}
           </span>
@@ -2425,6 +8168,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
 
       {showZoomHud && (
         <div
+          role="group"
           aria-label="apartment zoom controls"
           style={{
             position: "absolute",
@@ -2438,8 +8182,16 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             zIndex: 6,
           }}
         >
-          <AptZoomButton label="+" title="zoom in" onClick={() => zoomApartment(1)} mobile={mobile} />
-          <AptZoomButton label="-" title="zoom out" onClick={() => zoomApartment(-1)} mobile={mobile} />
+          {(spatialTransition !== "idle"
+              || spatialScale !== "apartment"
+              || selectedSiteInterior !== false) && (
+            <AptZoomButton buttonRef={zoomInButtonRef} label="+" title="zoom in"
+              disabled={zoomInTransitionDisabled}
+              onClick={() => zoomApartment(1)} mobile={mobile} />
+          )}
+          <AptZoomButton buttonRef={zoomOutButtonRef} label="-" title="zoom out"
+            disabled={zoomOutTransitionDisabled}
+            onClick={() => zoomApartment(-1)} mobile={mobile} />
         </div>
       )}
 
@@ -2461,7 +8213,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
                         display: mobile && spatialScale === "apartment" ? "none" : "block" }}>
             {spatialScale !== "apartment" ? (<>
               world · {spatialScale}
-              <br />{aptSpatialAvailability(spatialScale).replace(/;/g, " ·")}
+              <br />{aptSpatialAvailability(spatialScale, worldSurfaceRef.current?.snapshot?.()).replace(/;/g, " ·")}
             </>) : stats && (<>
               {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k pts · dpr {stats.pixelRatio}
               {stats.calls != null ? ` · ${stats.calls} dc` : ""}
@@ -2473,6 +8225,33 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
               )}
             </>)}
           </div>
+          {/*
+            * Switching homes without the map.
+            *
+            * The only way to change home was the projected pins, which are
+            * positions on the globe: they exist only while both homes project
+            * into the view, so they vanish exactly when you are close enough to
+            * be looking at one -- and there was then no way back to the other
+            * without first zooming out to the planet. They are also canvas
+            * furniture, so keyboard users never had a route at all.
+            *
+            * A plain select, in the chrome, always reachable.
+            */}
+          {!liveShadow && window.HomeContentPacks?.isNative && (
+            <div style={{ display: "flex", gap: 6, pointerEvents: "auto", alignItems: "center" }}>
+              <button type="button" className="hg-focusable" disabled={contentPackBusy}
+                style={{ minHeight: 44 }} onClick={() => { void changeContentPack(); }}>Import home pack</button>
+              {contentPacks.filter((pack) => pack.manifest.siteId === selectedSiteId).length > 1 && (
+                <select aria-label="Home pack version" disabled={contentPackBusy}
+                  value={contentPacks.find((pack) => pack.active && pack.manifest.siteId === selectedSiteId)?.manifest.revision || ""}
+                  style={{ minHeight: 44 }} onChange={(event) => { void changeContentPack(event.target.value); }}>
+                  {contentPacks.filter((pack) => pack.manifest.siteId === selectedSiteId).map((pack) => (
+                    <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
           <div style={{
             margin: mobile ? "0" : "0 auto",
             display: "flex",
@@ -2483,14 +8262,46 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             width: mobile ? "100%" : "auto",
           }}>
             {liveCam && (
-              <AptHudButton label="live" active={liveOn} onClick={() => setLiveOn(true)} />
+              <AptHudButton label="live" active={selectedSiteInterior !== false && liveOn}
+                ariaLabel={apartmentSceneUnavailableReason
+                  ? `Live view unavailable: ${apartmentSceneUnavailableReason}`
+                  : "Live view"}
+                title={apartmentSceneUnavailableReason || undefined}
+                disabled={!apartmentSceneControlsEnabled}
+                onClick={() => { if (apartmentSceneControlsEnabled) setLiveOn(true); }} />
             )}
-            <AptHudButton label="cloud" active={!liveOn && mode === "points"}
-              onClick={() => { setLiveOn(false); pickMode("points"); }} disabled={spatialScale !== "apartment" || modeLoading === "points"} />
-            <AptHudButton label="photo" active={!liveOn && mode === "splat"}
-              onClick={() => { setLiveOn(false); pickMode("splat"); }} disabled={spatialScale !== "apartment" || modeLoading === "splat"} title={modeError?.mode === "splat" ? modeError.detail : ""} />
-            <AptHudButton label="mesh" active={!liveOn && mode === "mesh"}
-              onClick={() => { setLiveOn(false); pickMode("mesh"); }} disabled={spatialScale !== "apartment" || modeLoading === "mesh"} title={modeError?.mode === "mesh" ? modeError.detail : ""} />
+            <AptHudButton label="cloud" active={selectedSiteInterior !== false && !liveOn && mode === "points"}
+              ariaLabel={apartmentSceneUnavailableReason
+                ? `Cloud view unavailable: ${apartmentSceneUnavailableReason}`
+                : "Cloud view"}
+              onClick={() => {
+                if (!apartmentDisplayModesEnabled) return;
+                setLiveOn(false); pickMode("points");
+              }}
+              disabled={!apartmentDisplayModesEnabled || modeLoading === "points"}
+              title={apartmentSceneUnavailableReason || undefined} />
+            <AptHudButton label="photo" active={selectedSiteInterior !== false && !liveOn && mode === "splat"}
+              ariaLabel={apartmentSceneUnavailableReason || interiorPointsOnlyReason
+                ? `Photo view unavailable: ${apartmentSceneUnavailableReason || interiorPointsOnlyReason}`
+                : "Photo view"}
+              onClick={() => {
+                if (!apartmentDisplayModesEnabled || interiorPointsOnlyReason) return;
+                setLiveOn(false); pickMode("splat");
+              }}
+              disabled={!apartmentDisplayModesEnabled || modeLoading === "splat" || !!interiorPointsOnlyReason}
+              title={apartmentSceneUnavailableReason || interiorPointsOnlyReason
+                || (modeError?.mode === "splat" ? modeError.detail : "")} />
+            <AptHudButton label="mesh" active={selectedSiteInterior !== false && !liveOn && mode === "mesh"}
+              ariaLabel={apartmentSceneUnavailableReason || interiorPointsOnlyReason
+                ? `Mesh view unavailable: ${apartmentSceneUnavailableReason || interiorPointsOnlyReason}`
+                : "Mesh view"}
+              onClick={() => {
+                if (!apartmentDisplayModesEnabled || interiorPointsOnlyReason) return;
+                setLiveOn(false); pickMode("mesh");
+              }}
+              disabled={!apartmentDisplayModesEnabled || modeLoading === "mesh" || !!interiorPointsOnlyReason}
+              title={apartmentSceneUnavailableReason || interiorPointsOnlyReason
+                || (modeError?.mode === "mesh" ? modeError.detail : "")} />
           </div>
           {(modeLoading || modeError) && (
             <div style={{
@@ -2514,19 +8325,27 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
                           justifyContent: mobile ? "center" : "flex-end", marginBottom: 6 }}>
               {Array.from({ length: 8 }).map((_, i) => (
                 <button key={i} className="hg-focusable" data-apt-az-dot="1"
-                  aria-label={"view angle " + (i + 1) + " of 8"}
-                  aria-pressed={i === azIdx}
-                  disabled={spatialScale !== "apartment"}
-                  onClick={() => engineRef.current?.rig.goTo({ az: i, dur: 600 })}
-                  style={{ width: 24, height: 24, borderRadius: 24, padding: 0, cursor: "pointer",
+                  aria-label={apartmentSceneUnavailableReason
+                    ? `View angle ${i + 1} of 8 unavailable: ${apartmentSceneUnavailableReason}`
+                    : `View angle ${i + 1} of 8`}
+                  aria-pressed={selectedSiteInterior === false ? undefined : i === azIdx}
+                  title={apartmentSceneUnavailableReason || undefined}
+                  disabled={!apartmentSceneControlsEnabled}
+                  onClick={() => {
+                    if (!apartmentSceneControlsEnabled) return;
+                    engineRef.current?.rig.goTo({ az: i, dur: 600 });
+                  }}
+                  style={{ width: 24, height: 24, borderRadius: 24, padding: 0,
+                           cursor: apartmentSceneControlsEnabled ? "pointer" : "default",
                            border: "1px solid var(--hg-border)",
-                           background: i === azIdx ? "var(--hg-ice)" : "rgba(10,12,16,0.28)",
-                           opacity: i === azIdx ? 1 : 0.58 }} />
+                           background: selectedSiteInterior !== false && i === azIdx
+                             ? "var(--hg-ice)" : "rgba(10,12,16,0.28)",
+                           opacity: selectedSiteInterior === false ? 0.32 : (i === azIdx ? 1 : 0.58) }} />
               ))}
             </div>
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)",
                            letterSpacing: "0.1em", display: mobile ? "none" : "inline" }}>
-              {spatialScale === "apartment"
+              {liveShadow ? 'Read-only room inspection · physical controls unavailable' : spatialScale === "apartment"
                 ? "drag · wheel zoom · ←→↑↓ · h home · dbl-click toggles lights · n/p select device"
                 : "wheel zoom · + / - scale · zoom in to return to apartment"}
             </span>
@@ -2537,7 +8356,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       {/* live camera feed - prefers HA's signed camera_proxy_stream (same path
           as the fast vision tray), with Frigate as a fallback. Shown over the
           3D canvas while snapped; mode switching returns after backing out. */}
-      {liveCam && liveOn && !calibCam && (
+      {apartmentSceneControlsEnabled && liveCam && liveOn && !calibCam && (
         <div style={mobileCameraFrame
           ? {
               ...mobileCameraFrame,
@@ -2605,7 +8424,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         </div>
       )}
 
-      {calibCam && window.HomeApartmentCalibrate && React.createElement(
+      {apartmentSceneControlsEnabled && calibCam && window.HomeApartmentCalibrate && React.createElement(
         window.HomeApartmentCalibrate.Component, {
           key: `${calibCam.id}-${serviceEpoch}`,
           cam: calibCam.camera.frigate_name,
@@ -2613,6 +8432,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           trackerBase: aptServiceBase("apartment3d.trackerBase", "HG_DEFAULT_TRACKER_BASE", "http://192.168.0.100:8098"),
           onPickRequest: (active) => { calibPickRef.current = active; },
           onIntrinsics: (lens) => {
+            if (workspaceAuthorityRef.current.key !== apartmentAuthorityKey
+                || window.HomeSpatialViewport?.getSelectedSiteId?.() !== selectedSiteId
+                || (window.HomeSpatialViewport?.getSite?.(selectedSiteId)?.contentRevision || null) !== selectedContentRevision) return;
             // persist solved intrinsics into the camera device (app = single writer)
             setModel((m) => {
               const next = { ...m, devices: (m.devices || []).map((d) =>
@@ -2621,7 +8443,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
                       K: lens.K, dist: lens.dist, image_size: lens.image_size,
                       rms_px: lens.rms_px } } }
                   : d) };
-              window.HomeApartmentData.saveModel(next, { endpoint, token, sim: simActive });
+              window.HomeApartmentData.saveModel(next, { endpoint, token, sim: simActive, siteId: selectedSiteId, contentRevision: selectedContentRevision });
               return next;
             });
           },
@@ -2631,6 +8453,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             syncCalibMarkers(pairs);
           },
           onDone: (result) => {
+            if (workspaceAuthorityRef.current.key !== apartmentAuthorityKey
+                || window.HomeSpatialViewport?.getSelectedSiteId?.() !== selectedSiteId
+                || (window.HomeSpatialViewport?.getSite?.(selectedSiteId)?.contentRevision || null) !== selectedContentRevision) return;
             // persist the solved extrinsics into the camera device
             if (result && (result.q || result.R || result.C)) {
               setModel((m) => {
@@ -2639,7 +8464,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
                     ? { ...d, source: "calibrated",
                         camera: { ...(d.camera || {}), extrinsics: result } }
                     : d) };
-                window.HomeApartmentData.saveModel(next, { endpoint, token, sim: simActive });
+                window.HomeApartmentData.saveModel(next, { endpoint, token, sim: simActive, siteId: selectedSiteId, contentRevision: selectedContentRevision });
                 return next;
               });
             }
@@ -2651,7 +8476,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         })}
 
       {/* labels + cards layer */}
-      {phase === "ready" && spatialScale === "apartment" && !editing && (
+      {phase === "ready" && spatialScale === "apartment" && !editing
+        && apartmentSceneControlsEnabled && apartmentDeviceControlsEnabled && (
         <>
           {hoverDevice && !cardDevice && (
             <window.AptDeviceLabel device={hoverDevice} screen={anchors[hoverId]} />
@@ -2675,7 +8501,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         </>
       )}
 
-      {aimMode && spatialScale === "apartment" && phase === "ready" && !editing && window.HomeApartmentAim && (
+      {aimMode && spatialScale === "apartment" && phase === "ready" && !editing
+        && apartmentSceneControlsEnabled && apartmentDeviceControlsEnabled && window.HomeApartmentAim && (
         <window.HomeApartmentAim
           model={model}
           registry={registry}
@@ -2703,8 +8530,148 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         />
       )}
 
+      {selectedSiteId === "victoria" && !rehearsalIsolated && window.HomeApartmentDenPerception && (
+        <window.HomeApartmentDenPerception
+          engine={engineRef.current}
+          active={open && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn}
+          mobile={mobile}
+          onReturnToHome={onClose}
+        />
+      )}
+
+      {virtualFixtureDocument && phase === "ready" && spatialScale === "apartment"
+        && !editing && !calibCam && !liveOn && (
+        <aside data-victoria-virtual-fixtures="1" style={{ position: "absolute", left: 16,
+          bottom: mobile ? 112 : 74, zIndex: 12, maxWidth: "calc(100% - 32px)",
+          width: 292, maxHeight: "calc(100% - 210px)", overflowY: "auto",
+          padding: "10px 12px", background: "rgba(10,17,23,.9)", color: "var(--hg-fg)",
+          border: "1px solid rgba(184,216,255,.25)", fontSize: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={virtualSpotlightsVisible}
+              onChange={(event) => setVirtualSpotlightsVisible(event.target.checked)} />
+            Virtual spotlights
+          </label>
+          <div style={{ marginTop: 5, opacity: .7, fontSize: 10 }}>
+            {virtualFixtureItems.length} fixtures · 6 radial + down + robotic spot each
+          </div>
+          {virtualSpotlightsVisible && (
+            <section aria-label="Desk target" style={{ marginTop: 10 }}>
+              <button type="button" onClick={startDeskTargetSelection} style={{ minHeight: 34 }}>Select desk surface</button>
+              {deskTargetSelection && <>
+                <p role="status" style={{ fontSize: 11, lineHeight: 1.45 }}>
+                  {deskTargetSelection.status === "selecting"
+                    ? `Click the four desktop corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
+                        registered_surface_unavailable: "No registered scan surface at that point.",
+                        registered_collision_unavailable: "Registered scan geometry is not available yet.",
+                        registered_surface_no_hit: "No registered scan triangle at that point.",
+                        registered_surface_raw_hit_unselected: "Scan geometry is under this point, but the displayed surface could not be selected.",
+                        drag_is_not_a_corner: "Drag ignored. Click without moving.",
+                        registered_desk_surface_corner_required: "This surface cannot be used as a desktop corner.",
+                        distinct_registered_desk_corners_required: "That corner is already selected. Choose a different corner.",
+                        registered_desk_normals_disagree: "The corners are on differently facing surfaces. Check the selected surface.",
+                        registered_desk_span_exceeded: "The selected corners are too far apart for one desktop.",
+                        convex_cyclic_registered_desk_corners_required: "Choose the remaining corner in order around the desktop edge.",
+                      }[deskTargetSelection.reason] || "That point was not added. Your selected corners are still kept.") : ""}`
+                    : deskTargetSelection.status === "complete" ? "Four corners selected. Check the numbered markers cover your whole desktop."
+                    : deskTargetSelection.status === "saved" ? "Desk target download prepared. Keep the file private; it enables no automatic light yet."
+                    : "Selection canceled. Start again to choose the desktop."}
+                </p>
+                {deskTargetSelection.status === "complete" && <>
+                  <label style={{ display: "flex", gap: 6, fontSize: 11 }}>
+                    <input type="checkbox" checked={deskTargetSelection.confirmed}
+                      onChange={event => setDeskTargetSelection(value => ({ ...value, confirmed: event.target.checked }))} />
+                    These corners bound my whole desktop.
+                  </label>
+                  <button type="button" disabled={!deskTargetSelection.confirmed} onClick={saveDeskTargetSelection}
+                    style={{ minHeight: 34, marginTop: 7 }}>Save desk target</button>
+                </>}
+                <button type="button" onClick={cancelDeskTargetSelection} style={{ minHeight: 34, marginTop: 7 }}>Clear selection</button>
+              </>}
+            </section>
+          )}
+          {virtualSpotlightsVisible && selectedVirtualFixture && (
+            <details open={virtualFixtureControlsOpen} onToggle={event => setVirtualFixtureControlsOpen(event.currentTarget.open)} style={{ marginTop: 10 }}>
+              <summary style={{ cursor: "pointer", minHeight: 25 }}>Fixture controls</summary>
+              <label style={{ display: "block", marginTop: 8 }}>Fixture
+                <select aria-label="Virtual fixture" value={selectedVirtualFixture.fixture_id}
+                  onChange={(event) => {
+                    setVirtualFixtureId(event.target.value);
+                    engineRef.current?.overlay.setVirtualFixtureSelected?.(event.target.value);
+                  }}
+                  style={{ width: "100%", marginTop: 4, minHeight: 32, background: "#10171e", color: "inherit" }}>
+                  {virtualFixtureItems.map((fixture) => <option key={fixture.fixture_id} value={fixture.fixture_id}>{fixture.label}</option>)}
+                </select>
+              </label>
+              <div style={{ fontSize: 10, opacity: .7, marginTop: 10 }}>RADIAL ZONES</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 4, marginTop: 5 }}>
+                {(selectedVirtualFixture.state?.radials || []).map((zone) => (
+                  <button key={zone.number} type="button" aria-label={`Radial zone ${zone.number}`} aria-pressed={zone.on}
+                    onClick={() => changeVirtualFixture({ radials: [{ number: zone.number, on: !zone.on }] })}
+                    style={{ minHeight: 32, color: zone.on ? "#ffe3ae" : "#88939d", background: zone.on ? "#382f22" : "#111820",
+                      border: "1px solid #5a5141" }}>{zone.number}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 5, marginTop: 7 }}>
+                {[['downward', 'Downward zone'], ['spotlight', 'Robotic spotlight']].map(([key, label]) => (
+                  <button key={key} type="button" aria-label={label} aria-pressed={selectedVirtualFixture.state?.[key]?.on}
+                    onClick={() => changeVirtualFixture({ [key]: { on: !selectedVirtualFixture.state?.[key]?.on } })}
+                    style={{ flex: 1, minHeight: 32, fontSize: 10, color: selectedVirtualFixture.state?.[key]?.on ? "#ffe3ae" : "#88939d",
+                      background: selectedVirtualFixture.state?.[key]?.on ? "#382f22" : "#111820", border: "1px solid #5a5141" }}>{label}</button>
+                ))}
+              </div>
+              <label style={{ display: "block", marginTop: 12 }}>Adjust
+                <select aria-label="Adjust channel" value={virtualFixtureChannel} onChange={(event) => setVirtualFixtureChannel(event.target.value)}
+                  style={{ width: "100%", marginTop: 4, minHeight: 30, background: "#10171e", color: "inherit" }}>
+                  <option value="spotlight">Robotic spotlight</option><option value="downward">Downward zone</option>
+                  {[1,2,3,4,5,6].map((number) => <option key={number} value={`radial-${number}`}>Radial zone {number}</option>)}
+                </select>
+              </label>
+              <label style={{ display: "block", marginTop: 10 }}>Brightness · {Math.round((selectedVirtualChannel?.brightness ?? 1) * 100)}%
+                <input aria-label="Brightness" type="range" min="0" max="100" step="1"
+                  value={Math.round((selectedVirtualChannel?.brightness ?? 1) * 100)} style={{ width: "100%" }}
+                  onChange={(event) => changeVirtualChannel({ brightness: Number(event.target.value) / 100 })} />
+              </label>
+              <label style={{ display: "block", marginTop: 8 }}>Color temperature · {selectedVirtualChannel?.color_temp_kelvin ?? 3000} K
+                <input aria-label="Color temperature" type="range" min={virtualFixtureChannel === "spotlight" ? 2700 : 2200} max="5000" step="100"
+                  value={selectedVirtualChannel?.color_temp_kelvin ?? 3000} style={{ width: "100%" }}
+                  onChange={(event) => changeVirtualChannel({ color_temp_kelvin: Number(event.target.value) })} />
+              </label>
+              {virtualFixtureChannel === "spotlight" && ['pan', 'tilt'].map((axis) => (
+                <label key={axis} style={{ display: "block", marginTop: 8, textTransform: "capitalize" }}>
+                  {axis} · {Math.round(selectedVirtualFixture.state?.[`${axis}_deg`] || 0)}°
+                  <input aria-label={axis === 'pan' ? 'Pan' : 'Tilt'} type="range" step="1"
+                    min={selectedVirtualFixture.limits?.[`${axis}_min_deg`] ?? (axis === 'pan' ? -175 : -5)}
+                    max={selectedVirtualFixture.limits?.[`${axis}_max_deg`] ?? (axis === 'pan' ? 175 : 88)}
+                    value={selectedVirtualFixture.state?.[`${axis}_deg`] || 0} style={{ width: "100%" }}
+                    onChange={(event) => changeVirtualFixture({ [`${axis}_deg`]: Number(event.target.value) })} />
+                </label>
+              ))}
+              <p style={{ margin: "10px 0 6px", fontSize: 11, lineHeight: 1.45 }}>Drag a fixture or its aim handle onto a room surface.</p>
+              <div style={{ display: "flex", gap: 6 }} data-aim-history={virtualAimHistoryVersion}>
+                <button type="button" disabled={!virtualAimHistoryRef.current.undo.length} onClick={() => restoreVirtualAimHistory("undo")}
+                  style={{ minHeight: 34, flex: 1 }}>Undo aim</button>
+                <button type="button" disabled={!virtualAimHistoryRef.current.redo.length} onClick={() => restoreVirtualAimHistory("redo")}
+                  style={{ minHeight: 34, flex: 1 }}>Redo aim</button>
+              </div>
+              {virtualAimNotice && <div role="status" style={{ marginTop: 7, fontSize: 11 }}>{virtualAimNotice}</div>}
+              <div style={{ marginTop: 8, opacity: .65, fontSize: 10 }}>Virtual controls · modeled aim and light guides</div>
+            </details>
+          )}
+        </aside>
+      )}
+
       {/* edit mode */}
-      {editing && spatialScale === "apartment" && phase === "ready" && window.HomeApartmentEdit && (
+      {selectedSiteId === "victoria" && sourceMeta.kind === "equipment_unavailable"
+        && spatialScale === "apartment" && phase === "ready" && (
+        <aside role="status" data-victoria-equipment-unavailable="1" style={{ position: "absolute", top: 110,
+          right: 14, zIndex: 12, maxWidth: 330, padding: 12, background: "rgba(10,17,23,.95)", color: "var(--hg-fg)" }}>
+          Equipment measurements are unavailable. The room is still available for viewing.
+          <div style={{ fontSize: 11, marginTop: 6 }}>{model.source_detail?.error}</div>
+          <button type="button" onClick={() => setEquipmentReloadEpoch((n) => n + 1)} style={{ minHeight: 40, marginTop: 8 }}>Retry equipment</button>
+        </aside>
+      )}
+      {editing && spatialScale === "apartment" && phase === "ready"
+        && apartmentSceneControlsEnabled && apartmentPlacementControlsEnabled && window.HomeApartmentEdit && (
         <window.HomeApartmentEdit
           engine={engineRef.current}
           model={model}
@@ -2726,6 +8693,34 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         />
       )}
 
+      {!rehearsalIsolated && !editing && !aimMode && spatialScale === "apartment" && window.HomeLightingTargetPanel && (
+        <window.HomeLightingTargetPanel engine={engineRef.current} model={model} siteId={selectedSiteId} />
+      )}
+      {!rehearsalIsolated && !editing && !aimMode && spatialScale === "apartment" && window.HomeLightingLivePanel && (
+        <window.HomeLightingLivePanel siteId={selectedSiteId} roomId="den" />
+      )}
+      {mapRehearsalOpen && window.HomeMapRehearsalPanel && (
+        <window.HomeMapRehearsalPanel engine={engineRef.current} model={model}
+          phase={phase} error={mapRehearsalError} onClose={onCloseMapRehearsal} />
+      )}
+      {mapRehearsalOpen && !window.HomeMapRehearsalPanel && (
+        <aside role="alert" style={{ position: 'absolute', right: 14, top: 75, zIndex: 12, padding: 16, background: '#101b24', color: '#edf3f6' }}>
+          The Apartment rehearsal controls are unavailable.
+          <button type="button" style={{ display: 'block', minHeight: 40 }} onClick={() => { window.HomeMapRehearsalOfflineState?.release?.(); onCloseMapRehearsal?.(); }}>Return to Apartment</button>
+        </aside>
+      )}
+      {!mapRehearsalOpen && window.HomeMapRehearsalOfflineState?.cleanupPending?.() && (
+        <div data-home-map-rehearsal-cleanup="unconfirmed" role="status" style={{ position: 'absolute', top: 75, right: 14, zIndex: 12, width: 'min(340px, calc(100% - 28px))', padding: 12, color: '#edf3f6', background: 'rgba(10,17,23,.96)', border: '1px solid #bd934e', borderRadius: 6 }}>
+          Local rehearsal cleanup is unconfirmed. The Apartment preview stays read-only.
+          <button type="button" onClick={onOpenDynamicReplay} style={{ display: 'block', minHeight: 40, marginTop: 8 }}>Reconcile local cleanup</button>
+        </div>
+      )}
+      {!mapRehearsalOpen && window.HomeMapRehearsalOfflineState?.readback?.().preview_released && (
+        <div data-home-map-rehearsal-cleanup="joined" role="status" style={{ position: 'absolute', top: 75, right: 14, zIndex: 12, width: 'min(340px, calc(100% - 28px))', padding: 12, color: '#edf3f6', background: 'rgba(10,17,23,.96)', border: '1px solid #657587', borderRadius: 6 }}>
+          Rehearsal closed. The Apartment remains a local preview; live services stay suspended until you use the existing reconnect action or reload Home.
+        </div>
+      )}
+
       {toast && (
         <div role="status" style={{
           position: "absolute", bottom: 74, left: "50%", transform: "translateX(-50%)",
@@ -2745,6 +8740,45 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       )}
     </div>
   );
+}
+
+/* Local product navigation owns the replay without forwarding live credentials. */
+function HomeApartmentProductView(props) {
+  const [replayOpen, setReplayOpen] = useState(false);
+  const [replayError, setReplayError] = useState("");
+  const openRehearsal = () => {
+    if (window.HomeLiveSceneShadow?.active) return;
+    setReplayError("");
+    try {
+      const resources = window.__HOME_MAP_REHEARSAL_LOCAL_RESOURCES || [
+        ...(window.__HOME_BOOT_FILES || []).map(name => "/" + name),
+        "/home-3d/map-rehearsal-layer.mjs", "/home-3d/markers.js",
+        "/vendor/three-0.180.0/three.module.js", "/vendor/three-0.180.0/three.core.js",
+      ];
+      window.HomeMapRehearsalOffline?.install(window, resources, {
+        permanent: false,
+        apiBase: window.__HOME_MAP_REHEARSAL_BASE_URL ?? "http://127.0.0.1:5193",
+      });
+    } catch (e) { setReplayError(e.message); }
+    setReplayOpen(true);
+  };
+  useEffect(() => { if (!props.open) setReplayOpen(false); }, [props.open]);
+  return React.createElement(HomeApartmentLiveView, {
+    ...props,
+    onOpenDynamicReplay: openRehearsal,
+    mapRehearsalOpen: replayOpen,
+    mapRehearsalError: replayError,
+    onCloseMapRehearsal: () => setReplayOpen(false),
+  });
+}
+
+/* Separate components keep the explicit test branch ahead of every live hook. */
+function HomeApartmentView(props) {
+  if (props.demoMode === "dynamic-synthetic") {
+    if (!window.HomeLightingDynamicPanel) return React.createElement("div", { role: "alert" }, "Synthetic replay viewer modules are unavailable.");
+    return React.createElement(window.HomeLightingDynamicPanel, props);
+  }
+  return React.createElement(HomeApartmentProductView, props);
 }
 
 window.HomeApartmentView = HomeApartmentView;

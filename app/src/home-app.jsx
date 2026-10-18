@@ -619,7 +619,7 @@ function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
-  onOpenVideoLabeler, onOpenApartment, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
+  onOpenVideoLabeler, onOpenApartment, onOpenPerceptionLab, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -802,6 +802,7 @@ function HomeHeader({
             )}
             {onOpenPeople && !mobile && <button type="button" role="menuitem" ref={peopleButtonRef} style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
             {onOpenApartment && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
+            {onOpenPerceptionLab && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenPerceptionLab)}>Perception Lab</button>}
             {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>{mobile ? "lights + travel mode" : "lights"}</button>}
             {onOpenIntelligence && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
             {onOpenVideoLabeler && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenVideoLabeler)}>video labeler</button>}
@@ -1090,6 +1091,7 @@ function HomeHeader({
             <span>{mobile ? "apt" : "apartment"}</span>
           </button>
         )}
+        {onOpenPerceptionLab && <button type="button" aria-label="Open Perception Lab" className="hg-focusable hg-mobile-touch" onClick={onOpenPerceptionLab} style={navChipBtn}>Perception Lab</button>}
         {/* The bench console. A link out, not an embed: the console is a
             safety-audited surface with its own eight test suites, and an
             iframe of it would be a hub client whenever Home is running -
@@ -1157,6 +1159,7 @@ function SpatialModeRail({
   onCameras,
   onPeople,
   onIntelligence,
+  onPerceptionLab,
   onLights,
   onOps,
   onToggleTheme,
@@ -1166,6 +1169,7 @@ function SpatialModeRail({
     { id: "cameras", label: "cams", title: "Camera review", onClick: onCameras, tone: "var(--hg-ice-bright)" },
     { id: "people", label: "people", title: "People tracking", onClick: onPeople, tone: "var(--hg-ice)" },
     { id: "intel", label: "atlas", title: "Intelligence Atlas", onClick: onIntelligence, tone: "var(--hg-ice)" },
+    { id: "perceptionLab", label: "lab", title: "Perception Lab", onClick: onPerceptionLab, tone: "var(--hg-ice)" },
     { id: "lights", label: "lights", title: "Lighting lab", onClick: onLights, tone: "var(--hg-warn)" },
     { id: "ops", label: "ops", title: opsVisible ? "Hide operational tray" : "Show operational tray", onClick: onOps, tone: "var(--hg-fg-2)" },
   ];
@@ -5055,21 +5059,17 @@ function isLightOrLampState(state, apartmentSwitchIds) {
   return /\b(light|lamp|lamps|ambient)\b/.test(haystack);
 }
 
-// When the web gateway holds the HA token it hands the page only a marker,
-// which it swaps for the real token on /proxy/ha. Home then connects without
-// asking. The marker is never persisted and never sent anywhere but the proxy.
-function withGatewayHaToken(prefs) {
-  if (typeof window === "undefined" || window.__HOME_WEB_HA_TOKEN_PROXY !== true ||
-      typeof window.__HOME_WEB_HA_TOKEN !== "string" || !window.__HOME_WEB_HA_TOKEN ||
-      prefs.token || prefs.endpoint !== window.HG_DEFAULT_HA_BASE) return prefs;
-  return { ...prefs, token: window.__HOME_WEB_HA_TOKEN };
-}
-
-function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
+function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
+  const [mapRehearsalOffline, setMapRehearsalOffline] = useState(() => window.HomeMapRehearsalOfflineState?.active === true);
+  useEffect(() => {
+    const sync = () => setMapRehearsalOffline(window.HomeMapRehearsalOfflineState?.active === true);
+    window.addEventListener('home-map-rehearsal-isolation-change', sync);
+    return () => window.removeEventListener('home-map-rehearsal-isolation-change', sync);
+  }, []);
   const viewport = useViewportProfile();
   const mobile = viewport.mobile;
   const videoLabelerAvailable = !mobile;
-  const initialPrefs = useMemo(() => withGatewayHaToken(loadPrefs({
+  const initialPrefs = useMemo(() => loadPrefs({
     endpoint: webDefaultBase("HG_DEFAULT_HA_BASE"),
     token: "",
     model: "",
@@ -5085,7 +5085,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     s2sVoice: "",       // default voice prompt; empty = bridge default (NATM2.pt)
     kokoroVoice: "",    // Kokoro TTS voice — set via /voice <name>; empty = bridge default (am_eric)
     debugMode: false,   // Show internal diag events ([parakeet], [direct], [kokoro], etc.) in feed
-  })), []);
+  }), []);
   const initialEventsFromStorage = useMemo(
     () => {
       const restored = coalesceAssistantTurnEvents(
@@ -5126,12 +5126,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   useEffect(() => {
     if (typeof window !== "undefined") window.__hav_viewport = viewport;
   }, [viewport]);
-  const hasStoredHaCredentials = !!(initialPrefs.endpoint && initialPrefs.token);
+  const hasStoredHaCredentials = !mapRehearsalOffline && !!(initialPrefs.endpoint && initialPrefs.token);
   const [connection, setConnection] = useState(
     hasStoredHaCredentials ? "reconnecting" : "disconnected"
   );
-  const [endpoint, setEndpoint] = useState(initialPrefs.endpoint);
-  const [token, setToken] = useState(initialPrefs.token);
+  const [endpoint, setEndpoint] = useState(mapRehearsalOffline ? "" : initialPrefs.endpoint);
+  const [token, setToken] = useState(mapRehearsalOffline ? "" : initialPrefs.token);
   const [model, setModel] = useState(initialPrefs.model);
   const [metricsBase, setMetricsBase] = useState(initialPrefs.metricsBase);
   const [s2sBase, setS2sBase] = useState(initialPrefs.s2sBase || "");
@@ -5167,6 +5167,23 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // underlying chat feed while the overlay is open.
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
+  const [perceptionLabOpen, setPerceptionLabOpen] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("perceptionLabDemo") === "1"; } catch (_) { return false; }
+  });
+  useEffect(() => { if (perceptionLabOpen) ensureFeature("perceptionLab", "Perception Lab", "navigation"); }, [perceptionLabOpen]);
+  useEffect(() => {
+    const controller = window.HomePerceptionLabController;
+    if (!controller || window.__SIM_ACTIVE || new URLSearchParams(window.location.search).get("perceptionLabDemo") === "1") return undefined;
+    let stopped = false;
+    const observe = (snapshot) => {
+      if (!stopped && snapshot.activeSession) ensureFeature("perceptionLab", "Perception Lab", "recording-status");
+    };
+    const unsubscribe = controller.subscribe(observe);
+    controller.refresh();
+    controller.start();
+    const timer = window.setInterval(() => { if (!window.__SIM_ACTIVE) controller.refresh(); }, 60000);
+    return () => { stopped = true; unsubscribe(); window.clearInterval(timer); };
+  }, []);
   // Addendum 27 / M5 — explainability drawer state. Stores the conv_id
   // whose routing-log entries the drawer renders, or null when closed.
   // Open via /why slash command or by clicking any kind:"home"/"action"/
@@ -5364,7 +5381,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // of authoritative Apartment model reads and writes. While Apartment owns
   // the web surface, pause and abort only those optional HTTP/SSE consumers;
   // the HA and tracker WebSockets remain connected for live model data.
-  const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);
+  const apartmentNetworkPriority = mapRehearsalOffline || !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);
   const [spatialOpsDockOpen, setSpatialOpsDockOpen] = useState(true);
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -5782,13 +5799,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   });
   useEffect(() => {
     if (!sim.active) setSimulationControlsOpen(false);
-  }, [sim.active]);
+  }, [mapRehearsalOffline, sim.active]);
   useEffect(() => {
-    if (sim.active) return;
+    if (sim.active || mapRehearsalOffline) return;
     if (typeof window.saveProactivePending === "function") {
       window.saveProactivePending(proactive);
     }
-  }, [sim.active, proactive]);
+  }, [mapRehearsalOffline, sim.active, proactive]);
   useEffect(() => {
     if (sim.active || connection === "online") return;
     setCameraLabels({});
@@ -5796,12 +5813,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setHostMetrics(null);
     setFrigateMetrics(null);
     setRoomContext(null);
-  }, [connection, sim.active]);
+  }, [mapRehearsalOffline, connection, sim.active]);
   // Bench-console reachability probe (state + rationale comment above, next
   // to `benchConsole`). Lives here so Simulation Mode can suppress it —
   // SIMULATION_MODE.md promises no real network calls while sim is active.
   useEffect(() => {
-    if (sim.active) return undefined; // Sim Mode: no real reachability probes
+    if (sim.active || mapRehearsalOffline) return undefined; // Sim Mode: no real reachability probes
     let live = true;
     const url = "http://127.0.0.1:8765";
     const canProbe = !(window.HG_WEB_MODE && window.location.protocol === "https:");
@@ -5822,7 +5839,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     probe();
     const iv = setInterval(probe, 15000);
     return () => { live = false; clearInterval(iv); };
-  }, [sim.active]);
+  }, [mapRehearsalOffline, sim.active]);
 
   const feedRef = useRef(null);
   const timers = useRef([]);
@@ -6266,7 +6283,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     if (bootPhase !== "ready" || onboardedRef.current) return;
     if (connection === "reconnecting" || connection === "connecting") return; // not terminal yet
     onboardedRef.current = true;
-    if (sim.active) return; // sim entry posts its own catalog — stay silent
+    if (sim.active || mapRehearsalOffline) return; // sim entry posts its own catalog — stay silent
     const hasChatted = events.some((e) => e.kind === "user" || e.kind === "voice");
     if (connection === "online") {
       if (!hasChatted && !onboarding.seenHelpHint) {
@@ -6371,6 +6388,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       addEvent({ kind: "system", text: "invalid Home Assistant URL", tone: "error" });
       return;
     }
+    const rehearsalFence = window.HomeMapRehearsalOfflineState;
+    if (rehearsalFence?.active && (options.manual !== true || rehearsalFence.resumeLive?.() !== true)) return;
     if (!options.profileManaged && window.HomeServices && !window.HG_WEB_MODE) {
       try {
         const currentHa = window.HomeServices.get("ha");
@@ -6649,7 +6668,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * Sim Mode: skip — sim scenarios provide their own connection state
    * via the synthesis effect. */
   useEffect(() => {
-    if (sim.active) return;
+    if (sim.active || mapRehearsalOffline) return;
     if (connection === "reconnecting" && endpoint && token) {
       connectTo(endpoint, token);
     }
@@ -6668,11 +6687,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    *   HA WS so live mode works again — useEffect polling resumes via
    *   dependency-array reruns, but WebSockets need an explicit connect
    *   call. If creds are present, reconnect; otherwise hint the user. */
-  const prevSimActiveRef = useRef(sim.active);
+  const prevSimActiveRef = useRef(sim.active || mapRehearsalOffline);
+  const prevMapRehearsalOfflineRef = useRef(mapRehearsalOffline);
   useEffect(() => {
     const wasActive = prevSimActiveRef.current;
-    const isActive = sim.active;
+    const wasMapRehearsalOffline = prevMapRehearsalOfflineRef.current;
+    const isActive = sim.active || mapRehearsalOffline;
     prevSimActiveRef.current = isActive;
+    prevMapRehearsalOfflineRef.current = mapRehearsalOffline;
+    // A local preview resumes only through the explicit reconnect operation.
+    if (wasMapRehearsalOffline && !mapRehearsalOffline) return;
     if (wasActive === isActive) return; // no-op on first render
 
     if (isActive) {
@@ -6698,11 +6722,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sim.active]);
+  }, [mapRehearsalOffline, sim.active]);
 
   /* ── Metrics polling ──────────────────────────────────────────────── */
   useEffect(() => {
-    if (sim.active) return undefined; // Sim Mode: fixtures injected directly
+    if (sim.active || mapRehearsalOffline) return undefined; // Sim Mode: fixtures injected directly
     if (apartmentNetworkPriority) return undefined;
     if (connection !== "online") return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
@@ -6913,7 +6937,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       clearInterval(tHandle);
       clearInterval(adapter);
     };
-  }, [connection, endpoint, metricsBase, sim.active, apartmentNetworkPriority]);
+  }, [mapRehearsalOffline, connection, endpoint, metricsBase, sim.active, apartmentNetworkPriority]);
 
   /* ── HA conversation: send text via assist_pipeline/run ────────────── */
   const sendToHA = useCallback(async (text, options = {}) => {
@@ -7314,7 +7338,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // Phase 7 destructive guard: the armed clear card was confirmed —
       // perform the wipe that Ctrl+L / /clear used to run instantly.
       stopStreaming();
-      window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
+      window.HomePersonalMemory?.reset();
       window.HomeCameraQuery?.reset({privateData:true});
       clearedEventsRef.current = eventsSnapshotRef.current.filter(
         (e) => !(e.kind === "action" && e.service === "home.clear_conversation")
@@ -7408,7 +7432,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       });
       throw e;
     }
-  }, [addEvent, sim.active]);
+  }, [mapRehearsalOffline, addEvent, sim.active]);
 
   /* ── Inline control cards (light / media) ─────────────────────────────
    * onControlAction is the thin HA executor the cards call to fire a
@@ -7521,7 +7545,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           const parts = arg.split(/\s+/);
           const url = parts[0];
           const tok = parts.slice(1).join(" ") || token;
-          if (tok) connectTo(url, tok);
+          if (tok) connectTo(url, tok, { manual: true });
           else addEvent({ kind: "system", text: "missing token — use /token <token> first or paste both: /connect <url> <token>", tone: "warn" });
         } else {
           addEvent({ kind: "system", text: `usage: /${cmd} <url> [<token>]`, tone: "info" });
@@ -9176,7 +9200,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       const apartmentSwitchIds = new Set();
       try {
         if (window.HomeApartmentData?.getModel && endpoint && token) {
-          const aptModel = await window.HomeApartmentData.getModel({ endpoint, token, sim: false });
+          const aptModel = await window.HomeApartmentData.getModel({ endpoint, token, sim: false, siteId: "echo" });
           for (const dev of aptModel?.devices || []) {
             const entityId = dev?.ha_entity_id;
             if (!entityId) continue;
@@ -9208,51 +9232,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       addEvent({ kind: "system", text: `could not read live light state - ${e?.message || "Home Assistant query failed"}`, tone: "warn" });
     }
     return true;
-  }, [addEvent, connection, endpoint, sim.active, token]);
+  }, [mapRehearsalOffline, addEvent, connection, endpoint, sim.active, token]);
 
   const cameraQueryGenerationRef = useRef(0);
   const [conversationHome, setConversationHome] = useState(() => window.HomeSpatialViewport?.getSelectedSiteId?.() || 'echo');
   const conversationHomeRef = useRef(conversationHome);
   const selectConversationHome = useCallback((next) => {
     if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
-    window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
+    window.HomePersonalMemory?.reset();
     conversationHomeRef.current = next;
     setConversationHome(next);
     cameraQueryGenerationRef.current++;
     window.HomeCameraQuery?.reset();
     window.HomeSpatialViewport?.selectSite?.(next);
   }, []);
-  // "auto": a command naming no home goes to the home you are in (device
-  // network, then phone zone), else the last home acted on. A hand-picked home
-  // lasts for this tab only.
-  const [homeChoice, setHomeChoice] = useState('auto');
-  const homeChoiceRef = useRef('auto');
-  const [autoHome, setAutoHome] = useState(null);
-  const chooseHome = useCallback((next) => {
-    if (!['auto', 'echo', 'victoria'].includes(next)) return;
-    homeChoiceRef.current = next;
-    setHomeChoice(next);
-    if (next !== 'auto') selectConversationHome(next);
-  }, [selectConversationHome]);
-  useEffect(() => {
-    if (!window.HG_WEB_MODE || !window.HomeLightingControl?.resolveHome) return;
-    let live = true;
-    const refresh = () => {
-      if (homeChoiceRef.current !== 'auto') return;
-      window.HomeLightingControl.resolveHome('auto').then(home => {
-        if (!live || homeChoiceRef.current !== 'auto') return;
-        setAutoHome(home);
-      }).catch(() => {});
-    };
-    refresh();
-    const timer = setInterval(refresh, 60000);
-    window.addEventListener('focus', refresh);
-    return () => { live = false; clearInterval(timer); window.removeEventListener('focus', refresh); };
-  }, [homeChoice]);
   const cameraEndpointRef = useRef(endpoint);
   useEffect(() => {
     const clear = () => {
-      window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
+      window.HomePersonalMemory?.reset();
       cameraQueryGenerationRef.current += 1;
       window.HomeCameraQuery?.reset({privateData:true});
       clearedEventsRef.current = null;
@@ -9272,14 +9269,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if(next===site) return;
       site=next;
       if (!['echo', 'victoria'].includes(next) || next === conversationHomeRef.current) return;
-      window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
+      window.HomePersonalMemory?.reset();
       conversationHomeRef.current=next;setConversationHome(next);
       cameraQueryGenerationRef.current++;
       window.HomeCameraQuery?.reset();
     });
   }, []);
   const clearPrivateCameraContext = useCallback(() => {
-    window.HomePersonalMemory?.reset(); window.HomeLightingControl?.reset();
+    window.HomePersonalMemory?.reset();
     cameraQueryGenerationRef.current++;
     window.HomeCameraQuery?.reset({privateData:true});
     clearedEventsRef.current=null;
@@ -9318,7 +9315,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       lookRunner: window.HomeLookReasonZoomRequest,
     });
     return !!result?.handled;
-  }, [addEvent, endpoint, ensureFeature, events, metricsBase, roomContext, sendToHA, sim.active]);
+  }, [mapRehearsalOffline, addEvent, endpoint, ensureFeature, events, metricsBase, roomContext, sendToHA, sim.active]);
 
   /* ── Free-form user input ─────────────────────────────────────────── */
   const sendInput = useCallback(async () => {
@@ -9346,16 +9343,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       window.HomeCameraQuery?.reset();
       return;
     }
-    // Cross-home lighting: commands that name a home, or name none while the
-    // default home is Victoria, are handled here; the rest continue below.
-    if (await window.HomeLightingControl?.run(text, {addEvent, homeChoice: homeChoiceRef.current,
-      isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
-    })) {
-      window.HomeCameraQuery?.reset();
-      return;
-    }
     if (window.HomeCameraQuery && await window.HomeCameraQuery.run(text, {
-      addEvent, simActive: sim.active, homeChoice: homeChoiceRef.current,
+      addEvent, simActive: sim.active,
       validateAuthority: window.HG_WEB_MODE ? () => window.HomeCameraQuery.validateAuthority(clearPrivateCameraContext) : undefined,
       onAuthorityLoss: clearPrivateCameraContext,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
@@ -9383,7 +9372,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } else {
       sendToHA(text);
     }
-  }, [input, handleCommand, answerDirectLightStateQuestion, runNaturalDeepLook, sendToHA, dispatchExternal, addEvent, sim.active]);
+  }, [mapRehearsalOffline, input, handleCommand, answerDirectLightStateQuestion, runNaturalDeepLook, sendToHA, dispatchExternal, addEvent, sim.active]);
 
   /* ── Global keyboard shortcuts ─────────────────────────────────────── */
   useEffect(() => {
@@ -9878,7 +9867,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * user side (keeps instant feedback for typed turns) and add the rest. */
   const seenSsEvents = useRef(new Set());
   useEffect(() => {
-    if (sim.active) return undefined; // Sim Mode: no SSE subscription
+    if (sim.active || mapRehearsalOffline) return undefined; // Sim Mode: no SSE subscription
     if (apartmentNetworkPriority) return undefined;
     if (connection !== "online") return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
@@ -10220,7 +10209,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * — assumes bridge is at the same host as the sidecar on port 8094.
    */
   useEffect(() => {
-    if (sim.active) return undefined; // Sim Mode: no real health polls
+    if (sim.active || mapRehearsalOffline) return undefined; // Sim Mode: no real health polls
     if (apartmentNetworkPriority) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
@@ -10382,7 +10371,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       controller?.abort();
       clearInterval(id);
     };
-  }, [metricsBase, endpoint, sim.active, apartmentNetworkPriority]);
+  }, [mapRehearsalOffline, metricsBase, endpoint, sim.active, apartmentNetworkPriority]);
 
   /* ── Voice PE activity indicator (header + voice state) ──────────────
    *
@@ -10391,7 +10380,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * though we no longer render placeholder turns here. The actual turn
    * content arrives via the SSE feed above. */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const VOICE_PE = (window.PROACTIVE_CONFIG && window.PROACTIVE_CONFIG.VOICE_PE_SATELLITE) || null;
     const unsub = haClientRef.current.subscribeEvents("state_changed", (ev) => {
@@ -10409,7 +10398,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
     });
     return unsub;
-  }, [connection, sim.active]);
+  }, [mapRehearsalOffline, connection, sim.active]);
 
   /* ── Routing decisions → live [route] diag stream ────────────────────
    *
@@ -10429,7 +10418,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    *   ext_reply_snippet, local_reply_chars, local_reply_snippet
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const unsub = haClientRef.current.subscribeEvents(
       "extended_openai_conversation.routing_decision",
@@ -10477,7 +10466,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * R5/converged-plan First-PR observation layer.
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const lightingApi = (typeof window !== "undefined") && window.HomeLightingEvents;
     if (!lightingApi || typeof lightingApi.subscribe !== "function") {
@@ -10506,7 +10495,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * happen to be wired simultaneously today.
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const unsub = haClientRef.current.subscribeEvents(
       "extended_openai_conversation.perception_caption",
@@ -10546,7 +10535,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, [connection]);
 
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const normalizer = window.HomeFrigatePerception;
     if (!normalizer?.normalizeHomePerceptionEvent) return undefined;
@@ -10564,7 +10553,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       },
     );
     return unsub;
-  }, [connection, sim.active]);
+  }, [mapRehearsalOffline, connection, sim.active]);
 
   /* ── Jarvis mute (Addendum 9) — header pill subscription ───────────
    *
@@ -10579,7 +10568,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * Mirrors the routing_decision pattern from Addendum 1.
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     let cancelled = false;
@@ -10647,7 +10636,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * first source's bubbles and skips.
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const unsub = haClientRef.current.subscribeEvents(
       "extended_openai_conversation.conversation.finished",
@@ -10740,7 +10729,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * on app open, not just after the next transition. The bridge has its
    * own occupancy tracking for the LLM side; this hook is UI-only. */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     const cameraIds = (window.HG_CAMERAS || []).map((c) => c.id);
@@ -10774,7 +10763,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    *   - device_tracker.unifi_* (count home/not_home)
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     let cancelled = false;
@@ -10914,7 +10903,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * "host telemetry not enabled" empty-state row with a tooltip.
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     let cancelled = false;
@@ -11018,7 +11007,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * in the tooltip.
    */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     let cancelled = false;
@@ -11097,7 +11086,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   /* ── Tray v3: bridge /rooms endpoint poll (occupancy + visual age) ── */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (apartmentNetworkPriority) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
@@ -11134,7 +11123,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   /* ── Phase 2: vision-sidecar health (phash hit rate, cameras cached) ── */
   useEffect(() => {
-    if (sim.active) return undefined;
+    if (sim.active || mapRehearsalOffline) return undefined;
     if (apartmentNetworkPriority) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
@@ -11201,6 +11190,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     flexDirection: "column",
   };
   const spatialActiveSurface =
+    perceptionLabOpen ? "perceptionLab" :
     videoLabelerOpen ? "cameras" :
     peopleOpen ? "people" :
     intelligenceOpen ? "intel" :
@@ -11221,6 +11211,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * the old "explain wins by DOM order" comment. people/intel/labeler
    * deliberately do NOT close lights or the right-slot drawers. */
   const SURFACE_CLOSERS = {
+    perceptionLab: () => setPerceptionLabOpen(false),
     people: () => setPeopleOpen(false),
     intel: () => setIntelligenceOpen(false),
     labeler: () => setVideoLabelerOpen(false),
@@ -11233,6 +11224,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   };
   const RIGHT_SLOT = ["explain", "world", "spatialD", "look"];
   const SURFACE_POLICY = {
+    perceptionLab: { closes: ["people", "intel", "labeler", "apartment", "lights", ...RIGHT_SLOT], open: () => setPerceptionLabOpen(true), feature: ["perceptionLab", "Perception Lab"] },
     people: { closes: ["intel", "labeler", "apartment"], open: () => setPeopleOpen(true), feature: ["people", "people"] },
     intel: { closes: ["people", "labeler", "apartment"], open: () => setIntelligenceOpen(true), feature: ["intelligence", "intelligence"] },
     labeler: { closes: ["people", "intel", "apartment"], open: () => setVideoLabelerOpen(true), feature: ["videoLabeler", "video labeler"] },
@@ -11242,6 +11234,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const closeSurfaces = (keys) => { keys.forEach((k) => SURFACE_CLOSERS[k]()); };
   const openSurface = (key, source) => {
     const policy = SURFACE_POLICY[key];
+    if (key !== "perceptionLab") setPerceptionLabOpen(false);
     closeSurfaces(policy.closes);
     policy.open();
     ensureFeature(policy.feature[0], policy.feature[1], source || "header");
@@ -11253,7 +11246,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   };
   const closeSpatialToolSurfaces = () => {
     cleanEmbeddedApartmentState();
-    closeSurfaces(["people", "intel", "labeler", "lights", ...RIGHT_SLOT]);
+    closeSurfaces(["people", "intel", "labeler", "lights", "perceptionLab", ...RIGHT_SLOT]);
   };
   /* Named header-wiring helpers — names are pinned by run-bootstrap-tests /
    * run-lights-drawer-tests / qa-browser-smoke; they may be invoked as
@@ -11261,6 +11254,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const srcOf = (source) => (typeof source === "string" ? source : "header");
   const openPeopleFeature = (source) => openSurface("people", srcOf(source));
   const openIntelligenceFeature = (source) => openSurface("intel", srcOf(source));
+  const openPerceptionLabFeature = (source) => openSurface("perceptionLab", srcOf(source));
   const openVideoLabelerFeature = (source) => {
     if (!videoLabelerAvailable) {
       addEvent({
@@ -11378,6 +11372,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               setIntelligenceOpen(true);
               ensureFeature("intelligence", "intelligence", "spatial-rail");
             }}
+            onPerceptionLab={openPerceptionLabFeature}
             onLights={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
@@ -11457,6 +11452,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
         onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}
         onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
+        onOpenPerceptionLab={isSpatialWide ? null : openPerceptionLabFeature}
         onOpenBench={benchConsole === "down" ? null : openBenchConsole}
         benchVerified={benchConsole === "up"}
         onOpenLights={isSpatialWide ? null : openLightsFeature}
@@ -11530,6 +11526,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           spatialMode={isSpatialWide}
         />
       )}
+      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={isSpatialWide} />}
+      {window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
+      {perceptionLabOpen && !window.HomePerceptionLab && <FeatureLoadingSurface open={perceptionLabOpen} title="Perception Lab" status={featureStatusFor("perceptionLab")} error={featureLoadErrors.perceptionLab} onClose={() => setPerceptionLabOpen(false)} onRetry={() => ensureFeature("perceptionLab", "Perception Lab", "retry")} mobile={mobile} />}
       {intelligenceOpen && !window.HomeIntelligenceOverlay && (
         <FeatureLoadingSurface
           open={intelligenceOpen}
@@ -11785,12 +11784,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           paddingBottom: mobile ? 18 : 0,
           boxSizing: "border-box",
         }}>
-        {isFirstRunVisible(connection, events) ? (
+        {!mapRehearsalOffline && isFirstRunVisible(connection, events) ? (
           <FirstRun
             connection={connection}
             endpoint={endpoint}
             token={token}
-            onConnect={connectTo}
+            onConnect={(url, accessToken) => connectTo(url, accessToken, { manual: true })}
             availableModels={availableModels}
             onPickModel={confirmModel}
             onSimulation={() => {
@@ -11862,19 +11861,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       )}
       {window.HG_WEB_MODE && window.HomeCameraQuery && (
         <div style={{display:'flex',alignItems:'center',gap:10,padding:'6px 16px',fontSize:12,color:'var(--hg-fg-2)',flexShrink:0}}>
-          <label htmlFor="conversation-home-view">Home</label>
-          <select id="conversation-home-view" aria-label="Default home for commands" value={homeChoice}
-            onChange={event=>chooseHome(event.target.value)}
+          <label htmlFor="conversation-home-view">Home view</label>
+          <select id="conversation-home-view" aria-label="Conversation home view" value={conversationHome}
+            onChange={event=>selectConversationHome(event.target.value)}
             style={{background:'var(--hg-bg)',color:'var(--hg-fg-1)',border:'1px solid var(--hg-border)',borderRadius:5,padding:'5px 8px',font:'inherit'}}>
-            <option value="auto">Auto</option>
             <option value="echo">Los Angeles</option>
             <option value="victoria">Victoria</option>
           </select>
-          <span style={{fontSize:11,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-            {homeChoice !== 'auto' ? `Light commands without a home go to ${homeChoice === 'victoria' ? 'Victoria' : 'Los Angeles'}`
-              : !autoHome ? 'Finding where you are…'
-              : `${autoHome.site === 'victoria' ? 'Victoria' : 'Los Angeles'}${autoHome.label ? ` — ${autoHome.label}` : ''}`}
-          </span>
+          <span style={{fontSize:11}}>Name a home for commands</span>
         </div>
       )}
       <InputRow
@@ -11908,4 +11902,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
 function EmptyHint() { return <BootBanner />; }
 
+function HomeApp(props) {
+  if (window.HomeLiveSceneShadow?.refused || window.HomeLiveSceneShadowRequested && !window.HomeLiveSceneShadow?.active)
+    return <main role="alert">Live inspection was refused. Isolation remains active. Open a new ordinary Home page to continue.</main>;
+  if (window.HomeLiveSceneShadow?.active && window.HomeLiveSceneShadow.resident_binding) return window.HomeLiveGeometryHost
+    ? <window.HomeLiveGeometryHost /> : <main role="alert">Registered geometry inspection is unavailable. Isolation remains active.</main>;
+  if (window.HomeLiveSceneShadow?.active) return window.HomeLiveScenePanel
+    ? <window.HomeLiveScenePanel /> : <main role="alert">Live scene inspection is unavailable. Isolation remains active.</main>;
+  return <HomeNormalApp {...props} />;
+}
 Object.assign(window, { HomeApp, HomeHeader, MetricsStrip, InputRow, MicButton, VoiceBanner, EventRenderer, fmtTime });

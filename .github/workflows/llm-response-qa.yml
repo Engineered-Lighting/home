@@ -24,7 +24,10 @@ jobs:
           node-version: 20
 
       - name: Install Node dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for authored Apartment acceptance
+        run: npx playwright install --with-deps chromium
 
       - name: Chat de-duplication contracts
         run: node tools/run-chat-dedupe-tests.js
@@ -37,6 +40,9 @@ jobs:
 
       - name: App-shell smoke
         run: node tools/qa-browser-smoke.js
+
+      - name: Authored Apartment shell browser acceptance
+        run: node --test tools/test-apartment-home-shell-browser.mjs
 
       - name: Touched-surface harnesses
         if: github.event_name == 'pull_request'

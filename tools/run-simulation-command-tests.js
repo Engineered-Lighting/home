@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const { inspectHomeApp } = require("./lib/home-app-source-contracts.cjs");
 
 const REPO = path.resolve(__dirname, "..");
 const SRC = path.join(REPO, "app", "src", "simulation.jsx");
@@ -180,10 +181,9 @@ function makeCtx(active, scenario) {
     appSource.includes("const [simulationControlsOpen, setSimulationControlsOpen] = useState(false);") &&
     appSource.includes("onOpenSimulationControls={() => setSimulationControlsOpen(true)}") &&
     /<SimulationControlsDialog[\s\S]*open=\{simulationControlsOpen\}[\s\S]*sim=\{sim\}/.test(appSource));
-  assert("HomeApp declares Simulation hook before sim.active effect dependencies",
-    appSource.indexOf("const sim = window.useSimulation({") >= 0 &&
-    appSource.indexOf("const sim = window.useSimulation({") <
-      appSource.indexOf("}, [connection, sim.active]);"));
+  const hookOrder = inspectHomeApp(appSource).simulationHookOrder();
+  assert("live Home controller declares Simulation hook before every effect dependency that reads sim",
+    hookOrder.ok, hookOrder);
   assert("Simulation controls reuse existing scenario APIs",
     /function SimulationControlsDialog/.test(appSource) &&
     /window\.SimScenarios\?\.list\?\.\(\)/.test(appSource) &&

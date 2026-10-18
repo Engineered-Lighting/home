@@ -3,10 +3,9 @@
  * run-touched-harnesses.mjs — run the test harnesses that guard the files
  * touched by a diff.
  *
- * The 46 tools/run-*.js harnesses are literal-pin and behavioral guards over
- * specific app/src surfaces, but none of them run in CI on pull requests —
- * which is how stale pins have merged silently in the past. This script maps
- * changed files → guarding harnesses and runs exactly that set (plus
+ * The tools/run-*.js harnesses and explicitly mapped Node test suites guard
+ * specific app/src surfaces. This script maps changed files to guarding
+ * harnesses and runs exactly that set (plus
  * check-jsx for any app/src change), so a PR that touches a surface runs the
  * surface's guards.
  *
@@ -14,6 +13,7 @@
  *   node tools/run-touched-harnesses.mjs --base origin/main
  *   node tools/run-touched-harnesses.mjs --files app/src/home-app.jsx,...
  *   node tools/run-touched-harnesses.mjs --all
+ *   node tools/run-touched-harnesses.mjs --all --list
  * ========================================================================= */
 "use strict";
 
@@ -29,17 +29,22 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
+  [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
+  [/^tools\/(?:lib\/home-frontend-inventory|test-home-frontend-inventory)\.cjs$/, ["run-bootstrap-tests.js", "run-lab-tests.js", "test-home-frontend-inventory.cjs"]],
+
   [/^app\/src\/home-app\.jsx$/, [
     "run-chat-dedupe-tests", "run-slash-command-tests", "run-recovery-scenarios-tests",
     "run-bootstrap-tests", "run-lights-drawer-tests", "run-chat-ui-regression",
     "run-lab-tests", "run-capabilities-tests", "run-simulation-command-tests",
     "run-app-frigate-label-tests",
+    "run-apartment-shell-tests.js", "test-home-app-source-contracts.cjs",
   ]],
   [/^app\/src\/home-events\.jsx$/, ["run-events-tests", "run-chat-ui-regression", "run-slash-command-tests"]],
   [/^app\/src\/home-lights\.jsx$/, ["run-lights-drawer-tests", "run-recovery-scenarios-tests"]],
   [/^app\/src\/home-people(\.jsx|-helpers\.js|-prewarm\.js)$/, ["run-people-tests"]],
   [/^app\/src\/home-intelligence\.jsx$/, ["run-intelligence-tests"]],
-  [/^app\/src\/home-apartment/, ["run-apartment-3d-contract-tests", "run-apartment-aiming-tests", "run-apartment-data-tests"]],
+  [/^app\/src\/home-apartment/, ["run-apartment-3d-contract-tests", "run-apartment-aiming-tests", "run-apartment-data-tests", "test-apartment-travel-guard.cjs"]],
   [/^app\/src\/home-3d\//, ["run-apartment-3d-contract-tests"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
@@ -77,14 +82,22 @@ const MAP = [
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
     "run-native-agent-security-tests",
   ]],
+  [/^tools\/lib\/home-app-source-contracts\.cjs$/, ["run-bootstrap-tests.js", "run-simulation-command-tests.js", "test-home-app-source-contracts.cjs"]],
+  [/^tools\/(?:run-bootstrap-tests|run-simulation-command-tests)\.js$/, ["test-home-app-source-contracts.cjs"]],
+  [/^tools\/test-home-app-source-contracts\.cjs$/, ["test-home-app-source-contracts.cjs"]],
+  [/^tools\/test-apartment-travel-guard\.cjs$/, ["test-apartment-travel-guard.cjs"]],
+  [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-shell-tests.js", "run-apartment-data-tests.js", "test-apartment-travel-guard.cjs", "test-home-app-source-contracts.cjs"]],
 ];
 
+const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}.js`;
+
 function parseArgs(argv) {
-  const out = { base: null, files: null, all: false };
+  const out = { base: null, files: null, all: false, list: false };
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--base") out.base = argv[++i];
     else if (argv[i] === "--files") out.files = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
     else if (argv[i] === "--all") out.all = true;
+    else if (argv[i] === "--list") out.list = true;
   }
   return out;
 }
@@ -98,18 +111,26 @@ function changedFiles(base) {
 const args = parseArgs(process.argv);
 let files = [];
 let harnesses = new Set();
+const addHarness = name => harnesses.add(harnessFileName(name));
 
 if (args.all) {
   for (const f of fs.readdirSync(TOOLS)) {
-    if (/^run-.*\.js$/.test(f)) harnesses.add(f.replace(/\.js$/, ""));
+    if (/^run-.*\.js$/.test(f)) addHarness(f);
   }
+  // Include mapped .cjs/.mjs suites without sweeping optional browser, GPU or
+  // service workloads from every test-* file in the repository.
+  for (const [, names] of MAP) names.forEach(addHarness);
 } else {
   files = args.files || changedFiles(args.base || "origin/main");
   for (const file of files) {
     const posix = file.replace(/\\/g, "/");
     for (const [pattern, names] of MAP) {
-      if (pattern.test(posix)) names.forEach((n) => harnesses.add(n));
+      if (pattern.test(posix)) names.forEach(addHarness);
     }
+    // An edit to a harness exercises that harness even without an app edit.
+    // The dispatcher itself is mapped above instead of recursively running it.
+    const ownHarness = /^tools\/(run-[^/]+\.(?:js|cjs|mjs))$/.exec(posix);
+    if (ownHarness && ownHarness[1] !== "run-touched-harnesses.mjs") addHarness(ownHarness[1]);
   }
 }
 
@@ -124,13 +145,16 @@ if (!list.length && !touchedAppSrc) {
 
 let failed = [];
 for (const name of list) {
-  const file = path.join(TOOLS, `${name}.js`);
+  const file = path.join(TOOLS, name);
   if (!fs.existsSync(file)) {
-    console.log(`  SKIP ${name} (harness file missing)`);
+    console.log(`  FAIL ${name} (mapped harness file missing)`);
+    failed.push(name);
     continue;
   }
+  if (args.list) { console.log(`  PLAN ${name}`); continue; }
   process.stdout.write(`  RUN  ${name} ... `);
-  const res = spawnSync(process.execPath, [file], { cwd: REPO, encoding: "utf8", timeout: 180000 });
+  const nodeArgs = /^test-.*\.(?:cjs|mjs|js)$/.test(name) ? ["--test", file] : [file];
+  const res = spawnSync(process.execPath, nodeArgs, { cwd: REPO, encoding: "utf8", timeout: 180000 });
   if (res.status === 0) {
     console.log("ok");
   } else {
@@ -141,7 +165,8 @@ for (const name of list) {
   }
 }
 
-if (touchedAppSrc) {
+if (touchedAppSrc && args.list) console.log("  PLAN check-jsx.js");
+if (touchedAppSrc && !args.list) {
   process.stdout.write("  RUN  check-jsx ... ");
   const res = spawnSync(process.execPath, [path.join(TOOLS, "check-jsx.js")], { cwd: REPO, encoding: "utf8", timeout: 180000 });
   if (res.status === 0) console.log("ok");
@@ -174,4 +199,4 @@ if (failed.length) {
   console.log(`\n[touched-harnesses] FAILED: ${failed.join(", ")}`);
   process.exit(1);
 }
-console.log("\n[touched-harnesses] all green");
+console.log(args.list ? "\n[touched-harnesses] plan complete (no harnesses executed)" : "\n[touched-harnesses] all green");

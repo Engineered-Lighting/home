@@ -933,7 +933,8 @@
     "failure": "Screenshot compositor timed out after fonts loaded; no production source change",
     "repair": "Pause only the current unified engine during still capture, then verify renderer frame advancement after resuming; retain bounded authored diagnostics in CI.",
     "second_ubuntu_failure": "https://github.com/Engineered-Lighting/home/actions/runs/39098012751",
-    "drag_repair": "Wait for actual camera/host/pivot stability, retain preprojection, and bind the 3cm expected target to the actual pointer-up visible canonical collision hit in the same input turn."
+    "drag_repair": "Wait for allocated host/projection readiness and three advancing render frames, retain the moving camera diagnostics and preprojection, and bind the unchanged 3cm limit to the actual pointer-up canonical collision hit.",
+    "third_ubuntu_failure": "https://github.com/Engineered-Lighting/home/actions/runs/39098419466"
   },
   "drag_input_frame_verification": {
     "fixture_id": "victoria-den-mount-03-virtual-fixture",

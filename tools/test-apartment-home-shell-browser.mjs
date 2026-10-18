@@ -313,16 +313,16 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.setViewportSize({ width: 1366, height: 768 }); await tab('Controls');
     await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
 
-    async function settleAimView(stage) {
-      // ResizeObserver can refit after the viewport changes. The real rig also
-      // retains its damped hover pivot across snapHome(0), so a target projected
-      // before the mouse reaches a fixture is not yet a stationary screen ray.
+    async function waitAimViewport(stage) {
+      // Wait for actual host/projection readiness after ResizeObserver refits.
+      // Ambient hover parallax may keep moving the camera; the pointer-up
+      // observer below binds its expected ray to that actual input frame.
       const settled = await page.evaluate(async () => {
-        const engine = window.__APT_ENGINE, started = performance.now();
+        const engine = window.__APT_ENGINE, identity = engine.sceneIdentity, started = performance.now();
         let previous = null, stableFrames = 0, sample = null;
         while (performance.now() - started < 12000) {
           await new Promise(resolve => requestAnimationFrame(resolve));
-          if (window.__APT_ENGINE !== engine || engine.siteId !== 'victoria'
+          if (window.__APT_ENGINE !== engine || engine.siteId !== 'victoria' || engine.sceneIdentity !== identity
               || !document.querySelector('.apt-home-shell[data-home-layout="unified"]')) throw Error('aim view scope changed while settling');
           const canvas = engine.renderer.domElement, rect = canvas.getBoundingClientRect(), host = canvas.parentElement.getBoundingClientRect();
           const pivot = engine.rig.state.pivot;
@@ -332,22 +332,22 @@ test('unified shell keeps the real room, private controls and one chat controlle
             aspect: engine.camera.aspect, pivot: { ...pivot }, pivot_error: pivotError,
             camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements],
             root: [...engine.apartmentRoot.matrixWorld.elements] };
-          const values = [rect.x, rect.y, rect.width, rect.height, ...sample.camera, ...sample.projection, ...sample.root];
+          const values = [rect.x, rect.y, rect.width, rect.height, ...sample.projection];
           const allocated = rect.width > 0 && rect.height > 0 && Math.abs(rect.width - host.width) < .5
             && Math.abs(rect.height - host.height) < .5 && Math.abs(engine.camera.aspect - rect.width / rect.height) < 1e-6;
           if (previous && sample.frame > previous.frame) {
             const unchanged = values.every((value, index) => Math.abs(value - previous.values[index]) < 1e-4);
-            stableFrames = allocated && unchanged && !engine.rig.isTweening() && pivotError < 5e-5 ? stableFrames + 1 : 0;
+            stableFrames = allocated && unchanged ? stableFrames + 1 : 0;
             if (stableFrames >= 3) return { ...sample, stable_frames: stableFrames, elapsed_ms: performance.now() - started };
           }
           if (!previous || sample.frame > previous.frame) previous = { frame: sample.frame, values };
         }
-        throw Error('12s aim camera/layout did not settle: ' + JSON.stringify(sample));
+        throw Error('12s aim viewport/projection did not settle: ' + JSON.stringify(sample));
       });
       checks.push({ stage, ...settled });
       return settled;
     }
-    await settleAimView('desktop_camera_and_host_settled_before_picking');
+    await waitAimViewport('desktop_viewport_ready_before_picking');
     const aimDescriptor = id => page.evaluate(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), id);
     async function fixturePoint(id) {
       return page.evaluate(id => {
@@ -399,10 +399,10 @@ test('unified shell keeps the real room, private controls and one chat controlle
     const directId = fixtureIds[2];
     let cylinder = await fixturePoint(directId);
     await page.mouse.move(cylinder.x, cylinder.y);
-    await settleAimView('fixture_hover_camera_settled_before_drag');
+    await waitAimViewport('fixture_hover_viewport_ready_before_drag');
     cylinder = await fixturePoint(directId);
     await page.mouse.move(cylinder.x, cylinder.y);
-    await settleAimView('final_fixture_hover_camera_settled_before_drag');
+    await waitAimViewport('final_fixture_hover_viewport_ready_before_drag');
     assert.equal(await page.evaluate(({ x, y }) => {
       const engine = window.__APT_ENGINE;
       return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;

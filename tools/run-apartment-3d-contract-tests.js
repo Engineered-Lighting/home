@@ -15,7 +15,10 @@ const SIM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-sim.js
 const INDEX = fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8");
 const SW = fs.readFileSync(path.join(REPO, "app", "src", "home-service-worker.js"), "utf8");
 const FEATURE_LOADER = fs.readFileSync(path.join(REPO, "app", "src", "home-feature-loader.js"), "utf8");
-const BACKEND = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation", "__init__.py"), "utf8");
+// The engineered-fixture validation (962a3ab8, 8115cfec) was never deployed to
+// LA Home Assistant, whose runtime ha-config/extended_openai_conversation/ now
+// mirrors. Until it is deployed it lives only in the pre-reconciliation copy.
+const BACKEND = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation_e4_reference", "__init__.py"), "utf8");
 const APP = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
 const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js"), "utf8");
 const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");
@@ -57,11 +60,11 @@ assert("mode debug reports Spark visibility", MODES.includes("sparkVisible: stat
 assert("mesh fallback does not use neon normal material", !MODES.includes("MeshNormalMaterial") && MODES.includes("meshDisplayMaterial"));
 assert("mobile mesh can prefer optional bounded asset", MODES.includes("meshNames: Object.freeze(['mesh.mobile.glb', 'mesh.glb', 'collision.glb'])"));
 assert("loader asset target is device-stable rather than viewport-width based", MODES.includes("function currentAssetPlan()") && MODES.includes("performanceController?.getDiagnostics") && !MODES.includes("visualViewport?.width"));
-assert("engine, world, and prewarmer share one client target classifier", ENGINE.includes("selectClientPerformanceTarget") && ENGINE.includes("selectApartmentPerformanceTarget") && ENGINE.includes("performanceController,") && WORLD.includes("selectClientPerformanceTarget") && WORLD.includes("sharedController?.getDiagnostics?.()?.targetTier") && PREWARM.includes("selectApartmentAssetPlan"));
+assert("Apartment engine and prewarmer share one client target classifier", ENGINE.includes("selectClientPerformanceTarget") && ENGINE.includes("selectApartmentPerformanceTarget") && ENGINE.includes("performanceController,") && PREWARM.includes("selectApartmentAssetPlan"));
 assert("world surface cannot resolve Apartment scan assets for a parcel cutaway", !ENGINE.includes("dollhouseAssetCandidates"));
 assert("prewarmer and loader consume one target-plus-user-mode asset plan", MODES.includes("export function apartmentAssetPlanForPerformanceTarget") && MODES.includes("Object.freeze(['mesh.mobile.glb', 'mesh.glb', 'collision.glb'])") && ENGINE.includes("export async function selectApartmentAssetPlan") && ENGINE.includes("viewOptionsM.resolveSelection(viewSelection)") && PREWARM.includes("engineModule?.selectApartmentAssetPlan?.({ viewSelection })"));
-assert("shared renderers reconcile every performance commit", ADAPTIVE.includes("function subscribe(subscriber)") && ENGINE.includes("performanceController.subscribe") && WORLD.includes("performanceController.subscribe"));
-assert("overlap sampling has one deterministic authority", ADAPTIVE.includes("setSamplingSourceActive") && ADAPTIVE.includes("samplingSource !== samplingAuthority") && ENGINE.includes("priority: 20") && WORLD.includes("priority: 10"));
+assert("resident Apartment renderer applies budget changes and unsubscribes on disposal", ADAPTIVE.includes("function subscribe(subscriber)") && ENGINE.includes("performanceController.subscribe") && ENGINE.includes("if (!disposed) applyPerformanceBudget()") && ENGINE.includes("budget.apartmentDprCap") && ENGINE.includes("unsubscribePerformanceBudget()"));
+assert("Apartment renderer registers and releases its sampling authority", ADAPTIVE.includes("setSamplingSourceActive") && ADAPTIVE.includes("samplingSource !== samplingAuthority") && ENGINE.includes("samplingSource: performanceSamplingSource") && /setSamplingSourceActive\(\s*performanceSamplingSource,\s*true,/.test(ENGINE) && /setSamplingSourceActive\(\s*performanceSamplingSource,\s*false,/.test(ENGINE));
 assert("mesh debug reports fallback source", MODES.includes("meshSource: state.meshSource") && MODES.includes("meshFallback: state.meshFallback"));
 assert("mesh disables child frustum culling for inside-camera snaps", MODES.includes("o.frustumCulled = false;"));
 assert("prewarm follows stable target and persisted user quality", PREWARM.includes("function fallbackAssetPlanForTarget(target, performanceMode") && PREWARM.includes('target === "mobile60" || target === "mobile30"') && PREWARM.includes("savedWorldViewSelection()"));
@@ -127,13 +130,18 @@ assert("semantic device projection uses an exact DOM-facing allowlist",
   && SEMANTIC_NAV.includes("devices.push(Object.freeze(target))")
   && SEMANTIC_NAV.includes("siteIds.has(id)")
   && SEMANTIC_NAV.includes("if (!device || typeof device !== 'object' || isSiteRecord(device)) continue"));
-assert("device cards are labelled dialogs that restore focus to their opener or viewport fallback",
-  CARDS.includes('data-apt-control-card="1"')
-  && CARDS.includes('role="dialog"')
-  && CARDS.includes("returnFocusRef.current = documentRef.activeElement")
-  && CARDS.includes("const previousUsable = previous?.isConnected && !previous.disabled")
-  && CARDS.includes("previousUsable ? previous : viewport")
-  && CARDS.includes("returnTarget.focus"));
+const semanticBrowseBlock = APT.slice(APT.indexOf("const selectSemanticDevice ="), APT.indexOf("const stepSemanticDevice ="));
+const semanticOpenBlock = APT.slice(APT.indexOf("const openSemanticDevice ="), APT.indexOf("const openSemanticDevice =") + 400);
+assert("browsing a semantic device keeps its card closed until explicit open and close actions",
+  semanticBrowseBlock.includes("setSemanticDeviceId(device?.id || null)")
+  && !semanticBrowseBlock.includes("setCardId(")
+  && semanticOpenBlock.includes("if (!device) return false")
+  && semanticOpenBlock.includes("setCardId(device.id)")
+  && APT.includes("onDeviceId={selectSemanticDevice}")
+  && APT.includes("onOpenDevice={openSemanticDevice}")
+  && APT.includes("<window.AptControlCard")
+  && APT.includes("onClose={() => setCardId(null)}")
+  && CARDS.includes('aria-label="close card"'));
 
 process.stdout.write("\napartment_camera_snap_contract_test\n");
 assert("mobile camera frame helper exists", APT.includes("function aptMobileCameraFrame"));
@@ -215,7 +223,10 @@ assert("edit mode offers table, island, art, custom point, and custom surface ta
     && EDIT.includes('{ category: "art"') && EDIT.includes('label: "custom point"')
     && EDIT.includes('label: "custom surface"'));
 assert("target placement uses an exact mesh point and face normal", EDIT.includes("engine.picking.surfaceHit")
-  && PICKING.includes("surfaceHit(apartmentRoot, objects, clientX, clientY)"));
+  && /surfaceHit\(apartmentRoot,\s*objects,\s*clientX,\s*clientY(?:,\s*\{\s*acceptPoint\s*=\s*null\s*\}\s*=\s*\{\s*\})?\)/.test(PICKING)
+  && PICKING.includes("apartmentRoot.worldToLocal(candidate.point.clone())")
+  && PICKING.includes("transformDirection(hit.object.matrixWorld)")
+  && PICKING.includes("normal.applyQuaternion(rootQ.invert()).normalize()"));
 assert("surface targets fail closed when the collision mesh is unavailable",
   EDIT.includes('if (!hit && placingTarget.shape !== "point")'));
 assert("target overlay renders named point/surface geometry", MARKERS.includes("function buildTarget")

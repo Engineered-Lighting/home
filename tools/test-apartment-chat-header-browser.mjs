@@ -42,7 +42,8 @@ function binding(name) {
 function copyScopeEffect() {
   const found = [];
   walk(normal, node => {
-    if (node.type === 'ExpressionStatement' && node.expression?.callee?.name === 'useEffect'
+    if (node.type === 'ExpressionStatement' && node.expression?.callee?.object?.name === 'React'
+        && node.expression?.callee?.property?.name === 'useLayoutEffect'
         && text(node).includes('conversationCopyAttemptRef.current += 1;')) found.push(node);
   });
   assert.equal(found.length, 1, 'one actual copy lifetime effect'); return text(found[0]);

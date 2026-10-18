@@ -55,3 +55,8 @@ presentation, installed behavior and physical qualification remain distinct.
 
 F05/F06 remain contract preparation only. No merge, deployment or production
 host operation is authorized.
+
+Hosted CI caught a copy-feedback scope race at the existing scope-change
+assertion. Copy lifetime invalidation now runs during the layout commit,
+clearing pending feedback before a replacement conversation is presented.
+The same forty focused browser assertions and deadlines are retained.

@@ -12,7 +12,7 @@ passed **40 checkpoints** across dark/light desktop (1366 × 768, fine pointer)
 and dark/light phone (390 × 844, coarse pointer).
 
 The local receipt is
-`.tmp/apartment-chat-header-browser/run-1792362784813/receipt.json`.
+`.tmp/apartment-chat-header-browser/run-1792363340009/receipt.json`.
 It records zero HTTP requests, WebSocket attempts and page errors. No room
 assets, registration, household content, model, camera or service is loaded.
 The browser was closed after the proof. No screenshots were captured.
@@ -21,7 +21,7 @@ Exact source SHA-256 values at this check:
 
 | Source | SHA-256 |
 | --- | --- |
-| `home-app.jsx` | `0fa87bd8e22048c4af757f7e573cadce905a10e0e32f2abd857c3e289d71080a` |
+| `home-app.jsx` | `8dd091a176896e946beb98e185bc80b6c05307627e53b2c292e159499a559d16` |
 | `home-chat-header-actions.jsx` | `496cf080e03e88f80d373179c33990e0ac4913f54e6925b12096960e5c2ed559` |
 | `home-tokens.css` | `0f44fcbeb87b89ee53a4025007f1db337823f8a50d6ad1e9ceee83fb8835fc9f` |
 | `home-overlay.js` | `526732928cc62cc072f557d981b1918ddb117fe5ff6ff962fba3921e9de16975` |
@@ -76,3 +76,8 @@ cannot copy its unclaimed placeholder. Existing slash completion, microphone
 and Stop behavior remain owned by their existing controller paths. Their
 broader regressions are separate from this focused header proof. F05/F06 remain
 contract preparation only.
+
+The hosted scope-change failure prompted commit-phase copy invalidation. The
+same forty browser checks passed again against the source pins above; no
+assertions or deadlines were removed or extended. The separately recorded
+unread proof predates this lifetime-only correction.

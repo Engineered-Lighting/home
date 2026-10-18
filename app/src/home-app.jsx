@@ -11494,7 +11494,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const [conversationCopyState, setConversationCopyState] = useState("");
   const conversationCopyBusyRef = useRef(false);
   const conversationCopyAttemptRef = useRef(0);
-  useEffect(() => {
+  // Invalidate during the commit, before an old clipboard promise can publish
+  // feedback into the replacement conversation or leave its pending status.
+  React.useLayoutEffect(() => {
     conversationCopyAttemptRef.current += 1;
     conversationCopyBusyRef.current = false;
     setConversationCopyState("");

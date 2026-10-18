@@ -39,6 +39,21 @@ summaries are superseded explicitly in the QA report.
 
 ## Remaining acceptance
 
+The first hosted run reached its initial site wait before the application had
+mounted. The authored receipt had no room-asset reads, missing code, route
+violations or page errors. A controlled 16-second application-entry delay
+reproduced that exact premature 15-second wait failure with no shell, site API
+or engine. The harness now asserts the existing full-shell proof's separate
+45-second shell-readiness precondition before the unchanged 15-second site
+waits. The global deadline remains 145 seconds, and every functional assertion
+is retained. The same delayed startup then passed all nine stages in 44.85
+seconds; the final native run passed in 29.33 seconds, receipt
+`.tmp/apartment-overlay-bridge-browser/run-1792365261595-candidate/receipt.json`.
+Targeted startup phase/response diagnostics remain; the artificial delay was
+removed. Slow cold compilation as the original Linux trigger is inferred, not
+proven by its older receipt. This test-only correction changes no production
+source pin and makes no new paired-performance acceptance claim.
+
 **F01 remains partial and this PR remains a draft.** The corrected authored
 single-dot Mesh frame-p95 median rises 0.075 ms against a 0.050 ms local empty
 spread. Photo frame samples also extend beyond their local empty range. The

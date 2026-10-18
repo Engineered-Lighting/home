@@ -75,7 +75,8 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     household_data:false,physical_commands:0,camera_sessions:0,model_sessions:0,survey_writes:0,screenshots:false,
     source_phase:phase,engine_source:baselineEngine?{mode:'public-baseline-engine-only',commit:baselineCommit,sha256:hash(baselineEngine),other_sources:'current-worktree'}
       :{mode:'candidate-worktree',sha256:hash(fs.readFileSync(path.join(SRC,'home-3d/engine.js')))},
-    checks:[],performance:[],requests:[],forbidden:[],missing_code:[],errors:[],served:{},browser:browserOptions()};
+    checks:[],performance:[],requests:[],forbidden:[],missing_code:[],errors:[],served:{},browser:browserOptions(),startup:{checkpoints:[],responses:[]}};
+  const proofStarted=Date.now(),markStartup=name=>receipt.startup.checkpoints.push({name,elapsed_ms:Date.now()-proofStarted});
   let server,browser,context,page,origin,handler,timer,releaseLeafRequest;
   const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{browser?.close().catch(()=>{});server?.closeAllConnections();reject(Error('145s overlay bridge browser deadline'));},145000)});
   async function proof(){
@@ -119,10 +120,19 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     });
     await context.routeWebSocket('**/*',socket=>socket.close());
     page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>receipt.errors.push(error.message));
+    page.on('response',response=>{const pathname=new URL(response.url()).pathname;if(['/home-app.jsx','/home-mount.jsx','/home-apartment.jsx','/auth/status','/content-packs/index.json'].includes(pathname))receipt.startup.responses.push({path:pathname,status:response.status(),elapsed_ms:Date.now()-proofStarted});});
+    markStartup('navigation-start');
     await page.goto(origin+'/?apartmentRedesign=1&worldZoom=off',{waitUntil:'domcontentloaded'});
+    markStartup('dom-content-loaded');
+    // Match the retained full-shell proof: cold Babel/app boot is a separate
+    // precondition; each actual room load still has the original 15s budget.
+    await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({timeout:45000});
+    markStartup('unified-shell-ready');
     await page.waitForFunction(()=>window.__HOME_APARTMENT_SITE_API?.readback().phase==='ready'&&window.__APT_ENGINE?.siteId==='echo');
+    markStartup('echo-ready');
     await page.getByRole('group',{name:'Home',exact:true}).getByRole('button',{name:'Victoria',exact:true}).click();
     await page.waitForFunction(()=>window.__HOME_APARTMENT_SITE_API?.readback().phase==='ready'&&window.__APT_ENGINE?.siteId==='victoria');
+    markStartup('victoria-ready');
     receipt.graphics=await page.evaluate(()=>{const engine=window.__APT_ENGINE,renderer=engine.renderer,gl=renderer.getContext();return {gpu:engine.gpu,pixelRatio:renderer.getPixelRatio(),canvas:[renderer.domElement.width,renderer.domElement.height],contextLost:gl.isContextLost(),viewport:[innerWidth,innerHeight]}});
     assert.equal(receipt.graphics.contextLost,false);receipt.browser_version=browser.version();
     if(phase==='candidate')assert.equal(await page.evaluate(()=>typeof window.__APT_ENGINE.createUiOverlayLayer),'function');
@@ -265,6 +275,6 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     receipt.functional_result='passed';receipt.performance_result=receipt.performance.every(row=>row.comparisons.every(item=>item.interpretation==='within-observed-baseline-variability'))?'within-observed-baseline-variability':'requires-review';
   }
   try{await Promise.race([proof(),deadline]);receipt.result='passed';}
-  catch(error){receipt.result='failed';receipt.failure=error.stack||String(error);throw error;}
+  catch(error){receipt.result='failed';receipt.failure=error.stack||String(error);if(page&&!page.isClosed())receipt.startup.failure_state=await page.evaluate(()=>({document_ready:document.readyState,unified_shell_count:document.querySelectorAll('.apt-home-shell[data-home-layout="unified"]').length,registry_present:!!window.HomeSpatialViewport,selected_site:window.HomeSpatialViewport?.getSelectedSiteId?.()||null,site_phase:window.__HOME_APARTMENT_SITE_API?.readback().phase||null,engine_site:window.__APT_ENGINE?.siteId||null})).catch(()=>null);throw error;}
   finally{clearTimeout(timer);releaseLeafRequest?.();await context?.close();await browser?.close();server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(run,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');console.log(JSON.stringify({receipt:path.join(run,'receipt.json'),result:receipt.result,functional:receipt.functional_result,performance:receipt.performance_result,checks:receipt.checks.length}));}
 });

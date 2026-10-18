@@ -136,12 +136,15 @@ function destinationKey(destination) {
 function HomeApartmentAim({
   model, registry, states, sim, connection, engine, fixtureId, onFixtureId,
   destination, onDestination, onModel, onDirty, onStateReadback, onClose, mobile,
-  onSave, saveStatus, saving,
+  onSave, saveStatus, saving, isControlCurrent,
 }) {
   const A = window.HomeApartmentAiming;
   const fixtures = useMemo(() => (model.devices || []).filter((d) => window.HomeApartmentData.isCeilingLight(d)), [model]);
   const engineered = useMemo(() => fixtures.filter((d) => d.fixture_kind === A.ENGINEERED_KIND), [fixtures]);
   const fixture = fixtures.find((d) => d.id === fixtureId) || engineered[0] || fixtures[0] || null;
+  const controlContextRef = useRef(null), controlMountedRef = useRef(true);
+  controlContextRef.current = { engine, model, fixtureId: fixture?.id, connection, sim, isControlCurrent };
+  useEffect(() => { controlMountedRef.current = true; return () => { controlMountedRef.current = false; }; }, []);
   const [tab, setTab] = useState("aim");
   const [telemetryPacket, setTelemetryPacket] = useState(null);
   const [telemetryStatus, setTelemetryStatus] = useState({ state: sim ? "simulation" : "unavailable" });
@@ -421,10 +424,11 @@ function HomeApartmentAim({
     updateFixture(next);
   };
 
-  const readback = async (entityIds) => {
+  const readback = async (entityIds, isCurrent = () => true) => {
     if (sim) return {};
     const client = window.__hav_haClient;
     const latest = await window.HomeApartmentData.readStates(client, entityIds);
+    if (!isCurrent()) return {};
     onStateReadback?.(latest);
     return latest;
   };
@@ -433,6 +437,7 @@ function HomeApartmentAim({
     const ids = [...new Set(entityIds.filter(Boolean))];
     if (!ids.length) return {};
     setRoleStatus((s) => ({ ...s, [statusKey]: "pending" }));
+    let current = null;
     try {
       if (sim) {
         if (statusKey === "spotlight") window.__SIM_APARTMENT_AIM_RUNTIME?.setSpotlight?.(
@@ -448,14 +453,25 @@ function HomeApartmentAim({
         return {};
       }
       if (connection !== "online") throw new Error("Home Assistant is not connected");
-      await window.HomeApartmentData.callService(window.__hav_haClient, "light", service,
-        { entity_id: ids, ...data });
+      const client = window.__hav_haClient, context = controlContextRef.current;
+      current = () => {
+        const latest = controlContextRef.current;
+        return controlMountedRef.current && latest.engine === context.engine && latest.model === context.model
+          && latest.fixtureId === context.fixtureId && latest.connection === "online" && !latest.sim
+          && window.__hav_haClient === client && typeof latest.isControlCurrent === "function" && latest.isControlCurrent() === true;
+      };
+      await window.HomeApartmentData.callService(client, "light", service,
+        { entity_id: ids, ...data }, { siteId: "echo", isCurrent: current });
+      if (!current()) return null;
       setRoleStatus((s) => ({ ...s, [statusKey]: "accepted" }));
       await new Promise((resolve) => setTimeout(resolve, 420));
-      const latest = await readback(ids);
+      if (!current()) return null;
+      const latest = await readback(ids, current);
+      if (!current()) return null;
       setRoleStatus((s) => ({ ...s, [statusKey]: "verified" }));
       return latest;
     } catch (error) {
+      if (current && !current()) return null;
       setRoleStatus((s) => ({ ...s, [statusKey]: "failed" }));
       setNotice(String(error?.message || error));
       return null;

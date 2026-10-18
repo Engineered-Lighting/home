@@ -2226,7 +2226,17 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   );
 }
 
-function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "" }) {
+function AptHomePanelSlot({ enabled, target, children, className }) {
+  if (!enabled) return children;
+  return target ? ReactDOM.createPortal(className ? <div className={className}>{children}</div> : children, target) : null;
+}
+
+function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "", unifiedShell = false, shellControlsHost = null, shellCameraHost = null, onShellState, onShowShellControls }) {
+  const controlConnectionRef = useRef({ connection, endpoint, token, generation: 0 });
+  if (controlConnectionRef.current.connection !== connection || controlConnectionRef.current.endpoint !== endpoint
+      || controlConnectionRef.current.token !== token) {
+    controlConnectionRef.current = { connection, endpoint, token, generation: controlConnectionRef.current.generation + 1 };
+  }
   const liveShadow = window.HomeLiveSceneShadow?.active === true;
   const viewport = useAptViewport();
   const mobile = viewport.mobile;
@@ -4969,6 +4979,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       onSelect: id => {
         overlay.setVirtualFixtureSelected(id); setVirtualFixtureId(id); setVirtualFixtureChannel("spotlight");
         setVirtualFixtureControlsOpen(true); setVirtualAimNotice("Drag a fixture or its aim handle onto a room surface.");
+        if (unifiedShell) onShowShellControls?.();
       },
       onPreview: info => {
         if (!current()) return;
@@ -4994,7 +5005,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       overlay.setVirtualFixtureSelected(null);
     };
   }, [open, phase, virtualFixtureBindingKey, virtualFixtureDocument, apartmentAuthorityKey,
-    editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale, rehearsalIsolated]);
+    editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale, rehearsalIsolated, unifiedShell, onShowShellControls]);
 
   /*
    * The engine owns the ESM/classic-script boundary. Rebuild the small frozen
@@ -5155,12 +5166,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
 
   /* HA entity state binding */
   useEffect(() => {
-    if (!open || phase !== "ready" || simActive || rehearsalIsolated || selectedSiteId !== "echo") return undefined;
+    if (!open || phase !== "ready" || simActive || rehearsalIsolated || selectedSiteId !== "echo" || connection !== "online") return undefined;
     const client = window.__hav_haClient;
     if (!client) return undefined;
     const engine = engineRef.current;
     const authority = workspaceAuthorityRef.current.key;
+    const connectionGeneration = controlConnectionRef.current.generation;
     const current = () => engineRef.current === engine && engine?.siteId === "echo"
+      && window.__hav_haClient === client && controlConnectionRef.current.connection === "online"
+      && controlConnectionRef.current.generation === connectionGeneration
       && workspaceAuthorityRef.current.key === authority
       && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo"
       && (window.HomeSpatialViewport?.getSite?.("echo")?.contentRevision || "legacy") === (engine.contentRevision || "legacy");
@@ -5171,7 +5185,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (dev) engine.overlay.setDeviceState(dev.id, st);
       setServicePulse((n) => n + 1);
     }, { siteId: selectedSiteId, isCurrent: current });
-  }, [open, phase, model, simActive, rehearsalIsolated, selectedSiteId, selectedContentRevision, endpoint, token]);
+  }, [open, phase, model, simActive, rehearsalIsolated, selectedSiteId, selectedContentRevision, endpoint, token, connection]);
 
   /* tracker WS -> person dot / room pulse */
   useEffect(() => {
@@ -5237,8 +5251,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             setServicePulse((value) => value + 1);
             showToast(`radial ${zoneNumber} · ${next?.zones?.[zoneNumber]?.state || "updated"} · simulation`);
           } else if (radialZone?.entity_id) {
-            callSvc("light", "toggle", { entity_id: radialZone.entity_id });
-            showToast(`radial ${zoneNumber} · command accepted`);
+            void callSvc("light", "toggle", { entity_id: radialZone.entity_id });
           } else {
             showToast(`radial ${zoneNumber} is not mapped to Home Assistant`);
           }
@@ -6743,6 +6756,23 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     finally { setContentPackBusy(false); }
   }, [cancelSpatialTravel, contentPackBusy, journeyRecovery, prepareInteriorForSite, selectedSiteId, showToast, spatialScale]);
 
+  const isControlCurrent = useMemo(() => {
+    const generation = controlConnectionRef.current.generation;
+    const engine = engineRef.current;
+    const authority = workspaceAuthorityRef.current.key;
+    const client = window.__hav_haClient;
+    const intent = spatialTravelIntentRef.current;
+    return () => viewOpenRef.current && !simActive && !rehearsalIsolated
+      && controlConnectionRef.current.connection === "online" && controlConnectionRef.current.generation === generation
+      && window.__hav_haClient === client && engineRef.current === engine && engine?.siteId === "echo"
+      && spatialTravelIntentRef.current === intent && workspaceAuthorityRef.current.key === authority
+      && modelScopeRef.current?.authorityKey === authority && modelSiteRef.current === "echo"
+      && window.HomeApartmentSiteSession.canControlEcho({ selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
+        sceneSiteId: engine?.siteId, transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready" })
+      && (window.HomeSpatialViewport?.getSite?.("echo")?.contentRevision || "legacy") === (engine?.contentRevision || "legacy");
+  }, [connection, endpoint, token, selectedSiteId, selectedContentRevision, phase, simActive, rehearsalIsolated, serviceEpoch,
+    spatialTravelIntentRef.current, engineRef.current, apartmentAuthorityKey]);
+
   const callSvc = useCallback(async (domain, service, data) => {
     if (rehearsalIsolated || window.HomeMapRehearsalOfflineState?.active) return;
     if (!window.HomeApartmentSiteSession.canControlEcho({
@@ -6760,20 +6790,21 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const authority = workspaceAuthorityRef.current.key;
     const current = () => engineRef.current === engine && spatialTravelIntentRef.current === operation
       && workspaceAuthorityRef.current.key === authority
-      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo";
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo" && isControlCurrent();
     const entityId = data?.entity_id;
     const prev = entityId ? statesRef.current[entityId] : null;
     const optimistic = aptOptimisticServiceState(prev, domain, service);
     const expected = aptExpectedServiceState(domain, service, optimistic);
     const dev = entityId ? (model.devices || []).find((d) => d.ha_entity_id === entityId) : null;
+    try {
+      await window.HomeApartmentData.callService(client, domain, service, data, { siteId: "echo", isCurrent: () => current() && isControlCurrent() });
+      if (!current()) return;
     if (entityId && optimistic) {
       statesRef.current[entityId] = optimistic;
       if (dev) engineRef.current?.overlay.setDeviceState(dev.id, optimistic);
       setServicePulse((n) => n + 1);
     }
-    try {
-      await window.HomeApartmentData.callService(client, domain, service, data);
-      if (!current()) return;
+
       if (entityId && typeof window.HomeApartmentData.readStates === "function") {
         try {
           let verified = null;
@@ -6799,14 +6830,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       }
     } catch (e) {
       if (!current()) return;
-      if (entityId && prev) {
-        statesRef.current[entityId] = prev;
-        if (dev) engineRef.current?.overlay.setDeviceState(dev.id, prev);
-        setServicePulse((n) => n + 1);
-      }
-      showToast(`${entityId || domain} didn't respond`, { tone: "error" });
+      showToast(e?.message?.includes("Travel Mode") ? e.message : `${entityId || domain} didn't respond`, { tone: "error" });
     }
-  }, [simActive, showToast, model.devices]);
+  }, [simActive, showToast, model.devices, isControlCurrent]);
 
   const compareLiveModel = useCallback(async () => {
     if (!apartmentDeviceControlsEnabled) return { ok: false, site_read_only: true };
@@ -7337,6 +7363,19 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const liveCameraExact = !!(liveCam && aptCameraAlignment(liveCam).exact);
   const cameraSurroundActive = !!(open && liveOn && liveCam && mobile && !calibCam && liveCameraExact && cameraPoseReady);
 
+  useEffect(() => {
+    if (!unifiedShell || !onShellState) return;
+    onShellState({ siteId: selectedSiteId, sites: window.HomeSpatialViewport?.getSites?.() || [], phase,
+      sourceLabel: sourceMeta.label, saveState: saveStatus.state, saveDetail: saveStatus.detail,
+      physicalControls: apartmentDeviceControlsEnabled && connection === "online",
+      hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception,
+      selectHome: id => travelToSite(id, { presentation: "interior" }) });
+  }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
+    saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite]);
+  useEffect(() => {
+    if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
+  }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);
+
   if (!open) return null;
 
   const pct = progress.total ? Math.floor((progress.loaded / progress.total) * 100) : 0;
@@ -7458,7 +7497,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     <div
       ref={viewRootRef}
       data-home-apartment-view="1"
-      data-theme="dark"
+      data-theme={unifiedShell ? undefined : "dark"}
+      data-unified-apartment={unifiedShell ? "1" : undefined}
       role={embedded ? "region" : "dialog"}
       aria-modal={embedded ? undefined : true}
       aria-label="3d apartment"
@@ -7469,7 +7509,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         zIndex: embedded ? 0 : 1000,
         background: "#000",
         display: "flex", flexDirection: "column", overflow: "hidden",
-        minHeight: mobile ? "100dvh" : 0,
+        minHeight: mobile && !unifiedShell ? "100dvh" : 0,
         animation: "apt-fade-in 260ms ease-out",
       }}
     >
@@ -7987,7 +8027,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
 
       {/* top bar */}
       {!editing && (
-        <div style={{
+        <div data-apt-legacy-toolbar="1" style={{
           position: "absolute", top: 0, left: 0, right: 0, display: "flex",
           flexDirection: mobileCameraSnap ? "column" : "row",
           alignItems: mobileCameraSnap ? "stretch" : mobile ? "flex-start" : "center",
@@ -8477,7 +8517,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           )}
           {track && !track.pos && <window.AptRoomChip track={track} />}
           {cardDevice && !aimMode && (
-            <window.AptControlCard
+            <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost} className="apt-home-card"><window.AptControlCard
               device={cardDevice}
               state={cardState}
               screen={anchors[cardId] || { x: (hostSize.width || window.innerWidth) / 2, y: 100 }}
@@ -8486,7 +8526,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               onService={callSvc}
               onFlyTo={flyToDeviceView}
               sim={simActive}
-            />
+            /></AptHomePanelSlot>
           )}
         </>
       )}
@@ -8499,6 +8539,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           states={statesRef.current}
           sim={simActive}
           connection={connection}
+          isControlCurrent={isControlCurrent}
           engine={engineRef.current}
           fixtureId={aimFixtureId}
           onFixtureId={setAimFixtureId}
@@ -8521,17 +8562,31 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       )}
 
       {selectedSiteId === "victoria" && !rehearsalIsolated && window.HomeApartmentDenPerception && (
-        <window.HomeApartmentDenPerception
+        <AptHomePanelSlot enabled={unifiedShell} target={shellCameraHost}><window.HomeApartmentDenPerception
           engine={engineRef.current}
           active={open && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn}
           mobile={mobile}
           onReturnToHome={onClose}
-        />
+        /></AptHomePanelSlot>
+      )}
+
+      {unifiedShell && !virtualFixtureDocument && !cardDevice && phase === "ready" && (
+        <AptHomePanelSlot enabled={true} target={shellControlsHost}>
+          <section className="apt-home-empty"><h2>Room controls</h2>
+            <p>Select a device in the room or below to open its existing controls.</p>
+            {(model.devices || []).filter(device => device.ha_entity_id).map(device => (
+              <button type="button" key={device.id} onClick={() => { setCardId(device.id); onShowShellControls?.(); }}>
+                {device.name || device.label || device.id}
+              </button>
+            ))}
+            {!(model.devices || []).some(device => device.ha_entity_id) && <p>No connected devices are configured for this home.</p>}
+          </section>
+        </AptHomePanelSlot>
       )}
 
       {virtualFixtureDocument && phase === "ready" && spatialScale === "apartment"
         && !editing && !calibCam && !liveOn && (
-        <aside data-victoria-virtual-fixtures="1" style={{ position: "absolute", left: 16,
+        <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost}><aside data-victoria-virtual-fixtures="1" style={{ position: "absolute", left: 16,
           bottom: mobile ? 112 : 74, zIndex: 12, maxWidth: "calc(100% - 32px)",
           width: 292, maxHeight: "calc(100% - 210px)", overflowY: "auto",
           padding: "10px 12px", background: "rgba(10,17,23,.9)", color: "var(--hg-fg)",
@@ -8647,7 +8702,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               <div style={{ marginTop: 8, opacity: .65, fontSize: 10 }}>Virtual controls · modeled aim and light guides</div>
             </details>
           )}
-        </aside>
+        </aside></AptHomePanelSlot>
       )}
 
       {/* edit mode */}

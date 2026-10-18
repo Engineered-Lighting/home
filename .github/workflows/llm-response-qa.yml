@@ -24,7 +24,10 @@ jobs:
           node-version: 20
 
       - name: Install Node dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for authored Apartment acceptance
+        run: npx playwright install --with-deps chromium
 
       - name: Chat de-duplication contracts
         run: node tools/run-chat-dedupe-tests.js
@@ -38,6 +41,21 @@ jobs:
       - name: App-shell smoke
         run: node tools/qa-browser-smoke.js
 
+      - name: Authored Apartment shell browser acceptance
+        run: node --test tools/test-apartment-home-shell-browser.mjs
+
       - name: Touched-surface harnesses
         if: github.event_name == 'pull_request'
         run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}"
+
+      - name: Retain authored browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: apartment-shell-authored-browser
+          path: |
+            .tmp/apartment-home-shell-browser/run-*/*receipt.json
+            .tmp/apartment-home-shell-browser/run-*/*.png
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7

@@ -5130,7 +5130,83 @@ function withGatewayHaToken(prefs) {
   return { ...prefs, token: window.__HOME_WEB_HA_TOKEN };
 }
 
-function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
+/* Phase 1 is UI composition only. URL links remain stronger than saved UI preferences. */
+function resolveApartmentHomeLayout(search, storage) {
+  const params = new URLSearchParams(search || "");
+  const explicit = params.get("apartmentRedesign");
+  if (explicit === "1") return "unified";
+  if (explicit === "0") return "classic";
+  const raw = String(params.get("layout") || params.get("view") || params.get("home2") || "").toLowerCase();
+  if (["spatial", "home2", "2"].includes(raw)) return "spatial";
+  if (["classic", "chat", "off", "1"].includes(raw)) return "classic";
+  if (params.has("spatial2") || params.has("spatial-home") || params.get("home2") === "") return "spatial";
+  try {
+    const saved = storage?.getItem("home.apartmentRedesign.v1");
+    if (saved === "0") return "classic";
+  } catch (_) { /* Private browsing still has the default screen. */ }
+  return "unified";
+}
+if (typeof window !== "undefined") window.HomeApartmentShell = { resolveLayout: resolveApartmentHomeLayout };
+
+/* Remains mounted when its tab is hidden: drafts, feed, voice and action owners stay in HomeNormalApp. */
+function HomeChatSurface({ children, unified, active, style }) {
+  return <div className={unified ? "apt-home-chat" : undefined} hidden={unified && !active}
+    data-home-chat-surface="1" style={unified ? undefined : style}>{children}</div>;
+}
+
+function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
+    rootRef: menuRef, trap: false, initialFocus: "first", onEscape: () => setMenuOpen(false) });
+  const run = action => { setMenuOpen(false); action?.(); };
+  return <header className="apt-home-topbar">
+    <span className="apt-home-wordmark">Home</span>
+    <label className="apt-home-switcher"><span className="sr-only">Home</span>
+      <select aria-label="Home" value={state?.siteId || ""} disabled={!state?.selectHome}
+        onChange={event => state?.selectHome?.(event.target.value)}>
+        {!state?.sites?.length && <option value="">Loading home…</option>}
+        {(state?.sites || []).map(site => <option key={site.id} value={site.id}>
+          {site.shortName}{site.sceneAvailable ? "" : " · unavailable"}</option>)}
+      </select>
+    </label>
+    <details className="apt-home-status"><summary aria-label="Home status">
+      <span className="apt-home-status-dot" data-state={state?.phase || "loading"} />
+      <span className="apt-home-status-summary">{state?.sourceLabel || "Loading room"}
+        {state?.saveState ? ` · ${state.saveState}` : ""}</span>
+    </summary><div role="status">
+      <p>Room: {state?.phase || "loading"}</p>
+      <p>{state?.sourceLabel || "Source unavailable"}</p>
+      <p>Save: {state?.saveState || "unavailable"}{state?.saveDetail ? ` · ${state.saveDetail}` : ""}</p>
+      <p>{state?.physicalControls ? "Home Assistant connected · output guards apply" : "Physical controls unavailable for this home"}</p>
+      <p>Video, analyzed frames, pose and inference have separate states in Camera · JEV. Missing pose does not mean vacant.</p>
+    </div></details>
+    <button type="button" className="apt-home-travel" onClick={() => onFeature("lights")}>Lights / Travel Mode</button>
+    <div className="apt-home-menu" ref={menuRef}>
+      <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"
+        onClick={() => setMenuOpen(value => !value)}>Menu</button>
+      {menuOpen && <><button className="apt-home-menu-dismiss" aria-label="Close Home menu" onClick={() => setMenuOpen(false)} />
+        <div role="menu" aria-label="Home features" onKeyDown={event => {
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const items = Array.from(event.currentTarget.querySelectorAll('[role="menuitem"]'));
+          const index = items.indexOf(document.activeElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+            : (index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+          items[next]?.focus();
+        }}>
+          {[["perceptionLab", "Perception Lab"], ["metrics", "Metrics"], ["people", "People"],
+            ["intel", "Intelligence"], ["labeler", "Video labeler"], ["lights", "Lights / Travel Mode"],
+            ["preferences", "Preferences / connection"], ["simulation", "Simulation"]].map(([key, label]) =>
+            <button type="button" role="menuitem" key={key} onClick={() => run(() => onFeature(key))}>{label}</button>)}
+          <button type="button" role="menuitem" onClick={() => run(onTheme)}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
+          <button type="button" role="menuitem" onClick={() => run(onPreviousHome)}>Previous Home</button>
+        </div></>}
+    </div>
+  </header>;
+}
+
+function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const viewport = useViewportProfile();
   const mobile = viewport.mobile;
   const videoLabelerAvailable = !mobile;
@@ -5431,17 +5507,45 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const [spatialLayout, setSpatialLayout] = useState(() => {
-    try {
-      if (typeof window === "undefined") return false;
-      const params = new URLSearchParams(window.location.search || "");
-      const raw = String(params.get("layout") || params.get("view") || params.get("home2") || "").toLowerCase();
-      if (["spatial", "home2", "2"].includes(raw)) return true;
-      if (["classic", "chat", "off", "1"].includes(raw)) return false;
-      if (params.has("spatial2") || params.has("spatial-home") || params.get("home2") === "") return true;
-      return window.localStorage?.getItem("hg-layout-v2") === "spatial";
-    } catch (e) { return false; }
+  const [homeLayout, setHomeLayout] = useState(() => {
+    let storage;
+    try { storage = window.localStorage; } catch (_) {}
+    return resolveApartmentHomeLayout(window.location.search, storage);
   });
+  const unifiedHome = homeLayout === "unified";
+  const spatialLayout = homeLayout !== "classic";
+  const [shellTab, setShellTab] = useState("controls");
+  const [shellDetent, setShellDetent] = useState("peek");
+  const [shellState, setShellState] = useState(null);
+  const [shellControlsHost, setShellControlsHost] = useState(null);
+  const [shellCameraHost, setShellCameraHost] = useState(null);
+  const [shellMetricsOpen, setShellMetricsOpen] = useState(false);
+  const shellMetricsRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({ key: "apartment-home-metrics", active: unifiedHome && shellMetricsOpen,
+    rootRef: shellMetricsRef, trap: true, initialFocus: "first", onEscape: () => setShellMetricsOpen(false) });
+  const chooseHomeLayout = useCallback((next) => {
+    setHomeLayout(next);
+    try {
+      localStorage.setItem("home.apartmentRedesign.v1", next === "unified" ? "1" : "0");
+      const url = new URL(window.location.href);
+      ["layout", "view", "home2", "spatial2", "spatial-home"].forEach(key => url.searchParams.delete(key));
+      if (next === "spatial") { url.searchParams.delete("apartmentRedesign"); url.searchParams.set("layout", "spatial"); }
+      else url.searchParams.set("apartmentRedesign", next === "unified" ? "1" : "0");
+      window.history.replaceState(null, "", url);
+    } catch (_) { /* State still switches if storage/history are unavailable. */ }
+  }, []);
+  const setSpatialLayout = useCallback(next => chooseHomeLayout(next ? "spatial" : "classic"), [chooseHomeLayout]);
+  const showShellTab = useCallback(tab => {
+    setShellTab(tab);
+    setShellDetent(value => value === "peek" ? "half" : value);
+  }, []);
+  const showShellControls = useCallback(() => showShellTab("controls"), [showShellTab]);
+  useEffect(() => {
+    if (!unifiedHome) return;
+    const resize = () => { if (window.innerWidth >= 600) setShellTab(tab => tab === "camera" ? "controls" : tab); };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [unifiedHome]);
   // Browser HTTP/1.1 limits can let optional offline-service polls queue ahead
   // of authoritative Apartment model reads and writes. While Apartment owns
   // the web surface, pause and abort only those optional HTTP/SSE consumers;
@@ -11284,7 +11388,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     };
   }, [metricsBase, endpoint, apartmentNetworkPriority]);
 
-  const isSpatialWide = spatialLayout && wideMode;
+  const isSpatialWide = unifiedHome || spatialLayout && wideMode;
   const spatialRailWidth = wideMode ? SPATIAL_CHAT_RAIL_WIDTH : "100%";
   const spatialStageRight = wideMode ? spatialRailWidth : 0;
   if (typeof window !== "undefined") window.__HOME_SPATIAL_MODE = isSpatialWide;
@@ -11432,7 +11536,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   );
 
   return (
-    <div ref={rootRef} data-theme={theme} style={{
+    <div ref={rootRef} data-theme={theme} className={unifiedHome ? "apt-home-shell" : undefined}
+      data-home-layout={homeLayout} data-panel={shellTab} data-has-perception={shellState?.hasPerception ? "1" : "0"} style={{
+      "--apt-sheet-height": shellDetent === "full" ? "calc(100% - 52px)" : shellDetent === "half" ? "50%" : "150px",
       "--hg-row-py": density === "condensed" ? `${8}px` : `${14}px`,
       position: "relative",
       display: "flex", flexDirection: "column",
@@ -11445,8 +11551,48 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       overflow: "hidden",
       paddingBottom: 0,
     }}>
+      {unifiedHome && <>
+        <ApartmentHomeBar state={shellState} theme={theme} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+          onPreviousHome={() => chooseHomeLayout("classic")} onFeature={key => {
+            if (key === "metrics") { setShellMetricsOpen(true); return; }
+            if (key === "preferences") { showShellTab("chat"); setRemotePanelOpen(true); return; }
+            if (key === "simulation") { setSimulationControlsOpen(true); return; }
+            if (key === "labeler") { openVideoLabelerFeature("home-menu"); return; }
+            openSurface(key, "home-menu");
+          }} />
+        <aside className="apt-home-panel" aria-label="Home workspace">
+          <nav className="apt-home-tabs" aria-label="Home workspace tabs">
+            <div role="tablist" aria-label="Home panels">
+              {[["controls", "Controls"], ["camera", "Camera · JEV"], ["chat", "Chat"]].map(([key, label]) =>
+                <button type="button" role="tab" key={key} id={`apt-home-tab-${key}`}
+                  aria-selected={shellTab === key} aria-controls={`apt-home-panel-${key}`}
+                  tabIndex={shellTab === key ? 0 : -1}
+                  onKeyDown={event => {
+                    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const keys = ["controls", "camera", "chat"].filter(value => document.getElementById(`apt-home-tab-${value}`)?.getClientRects().length);
+                    const index = keys.indexOf(key);
+                    const next = event.key === "Home" ? keys[0] : event.key === "End" ? keys[keys.length - 1]
+                      : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length];
+                    showShellTab(next); document.getElementById(`apt-home-tab-${next}`)?.focus();
+                  }} onClick={() => showShellTab(key)}>{label}</button>)}
+            </div>
+            <button type="button" className="apt-home-sheet-toggle" aria-label="Resize Home sheet"
+              onClick={() => setShellDetent(value => value === "peek" ? "half" : value === "half" ? "full" : "peek")}>↕</button>
+          </nav>
+          <div className="apt-home-controls" id="apt-home-panel-controls" role="tabpanel" aria-labelledby="apt-home-tab-controls"
+            hidden={shellTab !== "controls"} ref={setShellControlsHost} />
+          <div className="apt-home-camera" id="apt-home-panel-camera" role="tabpanel" aria-labelledby="apt-home-tab-camera" ref={setShellCameraHost}>
+            {!shellState?.hasPerception && <div className="apt-home-empty"><h2>Camera · JEV</h2>
+              <p>No analyzed-frame source is configured for this home.</p><p>Existing camera views remain available from the room.</p>
+              <p>Presence, video, pose and inference are independent. Presence sensors are not configured here.</p></div>}
+          </div>
+        </aside>
+        {shellMetricsOpen && <div ref={shellMetricsRef} className="apt-home-metrics" role="dialog" aria-modal="true" aria-label="Home metrics">
+          <button type="button" onClick={() => setShellMetricsOpen(false)}>Close metrics</button>{metricsStrip}</div>}
+      </>}
       {isSpatialWide && window.HomeApartmentView && (
-        <div data-theme="dark" style={{
+        <div className={unifiedHome ? "apt-home-stage" : undefined} data-theme={unifiedHome ? theme : "dark"} style={{
           position: "absolute",
           top: 0,
           left: 0,
@@ -11465,8 +11611,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             token={token}
             sim={sim}
             connection={connection}
+            unifiedShell={unifiedHome}
+            shellControlsHost={shellControlsHost}
+            shellCameraHost={shellCameraHost}
+            onShellState={setShellState}
+            onShowShellControls={showShellControls}
           />
-          <SpatialModeRail
+          {!unifiedHome && <SpatialModeRail
             active={spatialActiveSurface}
             theme={theme}
             opsVisible={spatialOpsDockOpen}
@@ -11504,8 +11655,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               setSpatialOpsDockOpen((open) => !open);
             }}
             onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
-          />
-          {spatialOpsDockOpen && (
+          />}
+          { !unifiedHome && spatialOpsDockOpen && (
             <div
               className="hg-fade"
               style={{
@@ -11530,7 +11681,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         </div>
       )}
       {isSpatialWide && !window.HomeApartmentView && (
-        <div data-theme="dark" style={{
+        <div className={unifiedHome ? "apt-home-stage" : undefined} data-theme={unifiedHome ? theme : "dark"} style={{
           position: "absolute",
           top: 0,
           left: 0,
@@ -11552,38 +11703,6 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           />
         </div>
       )}
-      <div style={appColumnStyle}>
-      <HomeHeader
-        theme={theme}
-        onToggleTheme={isSpatialWide ? null : () => setTheme((t) => t === "dark" ? "light" : "dark")}
-        voice={voice}
-        connection={connection}
-        sidecarOnline={sidecarOnline}
-        bridgeOnline={bridgeOnline}
-        bridgeHealth={bridgeHealth}
-        visionSidecarOnline={visionSidecarOnline}
-        visionHealth={visionHealth}
-        frigateMetrics={frigateMetrics}
-        cameraLabels={cameraLabels}
-        sim={sim}
-        muteState={muteState}
-        onUnmuteClick={handleUnmuteClick}
-        onOpenPeople={isSpatialWide ? null : openPeopleFeature}
-        onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
-        onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}
-        onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
-        onOpenPerceptionLab={isSpatialWide ? null : openPerceptionLabFeature}
-        onOpenBench={benchConsole === "down" ? null : openBenchConsole}
-        benchVerified={benchConsole === "up"}
-        onOpenLights={isSpatialWide ? null : openLightsFeature}
-        onOpenSimulationControls={() => setSimulationControlsOpen(true)}
-        aiStackState={aiStackState}
-        metrics={metrics}
-        serviceProfile={serviceProfile}
-        onOpenRemoteProfile={() => setRemotePanelOpen(true)}
-        peopleButtonRef={peopleButtonRef}
-        mobile={mobile}
-      />
       <SimulationControlsDialog
         open={simulationControlsOpen}
         sim={sim}
@@ -11731,6 +11850,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               `2. Propose specific values to try (give me concrete numbers, not ranges).\n` +
               `3. Tell me exactly how to apply the change — file path + the lines to edit + any rebuild/restart steps.`;
             if (typeof setInput === "function") setInput(text);
+            if (unifiedHome) {
+              showShellTab("chat");
+              setFocusToken(value => value + 1);
+            }
           }}
         />
       )}
@@ -11858,6 +11981,41 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           mobile={mobile}
         />
       )}
+      <HomeChatSurface unified={unifiedHome} active={shellTab === "chat"} style={appColumnStyle}>
+      <div id="apt-home-panel-chat" role={unifiedHome ? "tabpanel" : undefined}
+        aria-labelledby={unifiedHome ? "apt-home-tab-chat" : undefined} style={{display:"contents"}}>
+      {!unifiedHome && <button type="button" className="apt-home-enable" onClick={() => chooseHomeLayout("unified")}>Open redesigned Home</button>}
+      <HomeHeader
+        theme={theme}
+        onToggleTheme={isSpatialWide ? null : () => setTheme((t) => t === "dark" ? "light" : "dark")}
+        voice={voice}
+        connection={connection}
+        sidecarOnline={sidecarOnline}
+        bridgeOnline={bridgeOnline}
+        bridgeHealth={bridgeHealth}
+        visionSidecarOnline={visionSidecarOnline}
+        visionHealth={visionHealth}
+        frigateMetrics={frigateMetrics}
+        cameraLabels={cameraLabels}
+        sim={sim}
+        muteState={muteState}
+        onUnmuteClick={handleUnmuteClick}
+        onOpenPeople={isSpatialWide ? null : openPeopleFeature}
+        onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
+        onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}
+        onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
+        onOpenPerceptionLab={isSpatialWide ? null : openPerceptionLabFeature}
+        onOpenBench={benchConsole === "down" ? null : openBenchConsole}
+        benchVerified={benchConsole === "up"}
+        onOpenLights={isSpatialWide ? null : openLightsFeature}
+        onOpenSimulationControls={() => setSimulationControlsOpen(true)}
+        aiStackState={aiStackState}
+        metrics={metrics}
+        serviceProfile={serviceProfile}
+        onOpenRemoteProfile={() => setRemotePanelOpen(true)}
+        peopleButtonRef={peopleButtonRef}
+        mobile={mobile}
+      />
       {/* Boot sequence — one atomic conditional. While bootPhase !== "ready"
           the whole middle of the app (WelcomeBanner → VoiceBanner) is replaced
           by BootSequence; HomeHeader + InputRow stay mounted so the frame
@@ -12008,6 +12166,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         mobile={mobile}
         theme={theme}
       />
+      </div>
+      </HomeChatSurface>
       {/* External Reasoning provider key-entry modal. position:fixed
        * inside the component itself, so this can render anywhere. See
        * home-external.jsx for the modal definition. */}
@@ -12020,11 +12180,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }}
         />
       )}
-      </div>
     </div>
   );
 }
 
 function EmptyHint() { return <BootBanner />; }
 
+function HomeApp(props) { return <HomeNormalApp {...props} />; }
 Object.assign(window, { HomeApp, HomeHeader, MetricsStrip, InputRow, MicButton, VoiceBanner, EventRenderer, fmtTime });

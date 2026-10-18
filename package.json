@@ -44,6 +44,7 @@
     "test:home2": "npm --workspace apps/home-2 run test"
   },
   "devDependencies": {
+    "playwright": "1.61.1",
     "serve": "^14.2.4"
   }
 }

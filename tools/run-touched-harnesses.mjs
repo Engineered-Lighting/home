@@ -38,13 +38,13 @@ const MAP = [
     "run-bootstrap-tests", "run-lights-drawer-tests", "run-chat-ui-regression",
     "run-lab-tests", "run-capabilities-tests", "run-simulation-command-tests",
     "run-app-frigate-label-tests",
-    "test-home-app-source-contracts.cjs",
+    "run-apartment-shell-tests.js", "test-home-app-source-contracts.cjs",
   ]],
   [/^app\/src\/home-events\.jsx$/, ["run-events-tests", "run-chat-ui-regression", "run-slash-command-tests"]],
   [/^app\/src\/home-lights\.jsx$/, ["run-lights-drawer-tests", "run-recovery-scenarios-tests"]],
   [/^app\/src\/home-people(\.jsx|-helpers\.js|-prewarm\.js)$/, ["run-people-tests"]],
   [/^app\/src\/home-intelligence\.jsx$/, ["run-intelligence-tests"]],
-  [/^app\/src\/home-apartment/, ["run-apartment-3d-contract-tests", "run-apartment-aiming-tests", "run-apartment-data-tests"]],
+  [/^app\/src\/home-apartment/, ["run-apartment-3d-contract-tests", "run-apartment-aiming-tests", "run-apartment-data-tests", "test-apartment-travel-guard.cjs"]],
   [/^app\/src\/home-3d\//, ["run-apartment-3d-contract-tests"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
@@ -85,7 +85,8 @@ const MAP = [
   [/^tools\/lib\/home-app-source-contracts\.cjs$/, ["run-bootstrap-tests.js", "run-simulation-command-tests.js", "test-home-app-source-contracts.cjs"]],
   [/^tools\/(?:run-bootstrap-tests|run-simulation-command-tests)\.js$/, ["test-home-app-source-contracts.cjs"]],
   [/^tools\/test-home-app-source-contracts\.cjs$/, ["test-home-app-source-contracts.cjs"]],
-  [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-data-tests.js", "test-home-app-source-contracts.cjs"]],
+  [/^tools\/test-apartment-travel-guard\.cjs$/, ["test-apartment-travel-guard.cjs"]],
+  [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-shell-tests.js", "run-apartment-data-tests.js", "test-apartment-travel-guard.cjs", "test-home-app-source-contracts.cjs"]],
 ];
 
 const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}.js`;

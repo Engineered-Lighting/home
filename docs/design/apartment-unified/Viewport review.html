@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apartment · viewport review</title>
+<style>
+@font-face{font-family:"Geist";font-weight:400 600;src:url("prototype/fonts/geist-latin.woff2") format("woff2")}
+:root{--bg:#050505;--fg:#EDEDED;--fg2:#A1A1A1;--line:rgba(255,255,255,.1)}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font-family:"Geist",system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#B8D8FF}a:hover{color:#DDEAFF}
+header{max-width:1200px;margin:0 auto;padding:32px 24px 8px;display:grid;gap:6px}
+h1{margin:0;font-size:22px;font-weight:560;letter-spacing:-.02em}
+header p{margin:0;color:var(--fg2);max-width:70ch;text-wrap:pretty}
+main{max-width:1200px;margin:0 auto;padding:16px 24px 64px;display:grid;gap:36px}
+.row{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--min,320px)),1fr));align-items:start}
+figure{margin:0;display:grid;gap:10px}
+figcaption{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+figcaption b{font-weight:560}figcaption span{color:var(--fg2);font-size:13px}
+.vp{position:relative;width:100%;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#000}
+.vp iframe{position:absolute;left:0;top:0;border:0;transform-origin:0 0}
+</style>
+</head>
+<body>
+<header>
+<h1>Apartment · viewport review</h1>
+<p>Live frames of the same prototype at four viewport classes. Each frame is the real page at its stated size, scaled to fit. Open any one directly with the link beside it.</p>
+</header>
+<main>
+<div class="row" style="--min:900px">
+<figure><figcaption><b>Large desktop · 1600 × 1000</b><span>Victoria · Socket 4 selected · Aim · camera dock open</span><a href="prototype/index.html?home=victoria&amp;sel=vic-s4&amp;tab=aim" target="_blank">open</a></figcaption><div class="vp" data-w="1600" data-h="1000"><iframe title="Large desktop" src="prototype/index.html?home=victoria&amp;sel=vic-s4&amp;tab=aim"></iframe></div></figure>
+</div>
+<div class="row" style="--min:520px">
+<figure><figcaption><b>1366 × 768</b><span>Victoria · room overview</span><a href="prototype/index.html?home=victoria" target="_blank">open</a></figcaption><div class="vp" data-w="1366" data-h="768"><iframe title="1366 Victoria" src="prototype/index.html?home=victoria"></iframe></div></figure>
+<figure><figcaption><b>1366 × 768</b><span>Echo Park · Front left · Aim</span><a href="prototype/index.html?home=echo&amp;sel=front_left&amp;tab=aim" target="_blank">open</a></figcaption><div class="vp" data-w="1366" data-h="768"><iframe title="1366 Echo Park" src="prototype/index.html?home=echo&amp;sel=front_left&amp;tab=aim"></iframe></div></figure>
+</div>
+<div class="row" style="--min:240px">
+<figure><figcaption><b>Tablet · 820 × 1180</b><span>Victoria · light</span><a href="prototype/index.html?home=victoria&amp;sel=vic-s4" target="_blank">open</a></figcaption><div class="vp" data-w="820" data-h="1180"><iframe title="Tablet" src="prototype/index.html?home=victoria&amp;sel=vic-s4"></iframe></div></figure>
+<figure><figcaption><b>Phone · 390 × 844</b><span>Light sheet</span><a href="prototype/index.html?home=victoria&amp;sel=vic-s4&amp;tab=aim" target="_blank">open</a></figcaption><div class="vp" data-w="390" data-h="844"><iframe title="Phone light" src="prototype/index.html?home=victoria&amp;sel=vic-s4&amp;tab=aim"></iframe></div></figure>
+<figure><figcaption><b>Phone · 390 × 844</b><span>Camera · JEV sheet</span><a href="prototype/index.html?home=victoria&amp;panel=camera" target="_blank">open</a></figcaption><div class="vp" data-w="390" data-h="844"><iframe title="Phone camera" src="prototype/index.html?home=victoria&amp;panel=camera"></iframe></div></figure>
+</div>
+</main>
+<script>
+function fitFrames(){document.querySelectorAll(".vp").forEach(function(v){var w=+v.dataset.w,h=+v.dataset.h,s=v.clientWidth/w;v.style.height=Math.round(h*s)+"px";var f=v.querySelector("iframe");f.style.width=w+"px";f.style.height=h+"px";f.style.transform="scale("+s+")";});}
+window.addEventListener("resize",fitFrames);fitFrames();
+</script>
+</body>
+</html>

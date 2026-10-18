@@ -183,7 +183,8 @@ assert("apartment service calls support HA callService and raw call", DATA.inclu
 assert("apartment service payload uses HA target fields", DATA.includes('const targetKeys = new Set(["entity_id", "area_id", "device_id"])') && DATA.includes("payload.target = target"));
 assert("apartment data exposes HA readback helper", DATA.includes("async function readStates") && DATA.includes("readStates, bindStates"));
 assert("apartment controls optimistically update selected state", APT.includes("function aptOptimisticServiceState") && APT.includes("setServicePulse((n) => n + 1)") && APT.includes("statesRef.current[entityId] = optimistic"));
-assert("apartment controls rollback optimistic state on failure", APT.includes("statesRef.current[entityId] = prev") && APT.includes("didn't respond"));
+assert("apartment controls wait for guarded dispatch before optimistic state", APT.indexOf('await window.HomeApartmentData.callService(client, domain, service, data,')
+  < APT.indexOf('statesRef.current[entityId] = optimistic') && !APT.includes('statesRef.current[entityId] = prev'));
 assert("apartment controls verify scoped state after accepted HA service calls", APT.includes("function aptExpectedServiceState") && APT.includes('window.HomeApartmentData.readStates(client, [entityId], { siteId: "echo" })') && APT.includes("is still ${verified.state} in Home Assistant"));
 assert("apartment debug API can open a controllable card for button audits", APT.includes("openFirstControllableCard") && APT.includes("setCardId(dev.id)"));
 
@@ -438,7 +439,8 @@ assert("six radial mappings are deliberate and removable", AIM.includes("radial 
   && AIM.includes("Change ${role} link") && AIM.includes("Remove ${role} link"));
 assert("HA controls are capability and Kelvin-bound aware", AIM.includes("lightCapabilities")
   && AIM.includes("min_kelvin") && AIM.includes("max_kelvin") && AIM.includes("cap.brightness &&"));
-assert("batch writes use one typed call followed by readback", AIM.includes("callService(window.__hav_haClient")
+assert("batch writes use one typed call with current context followed by readback", AIM.includes('const client = window.__hav_haClient, context = controlContextRef.current;')
+  && AIM.includes('callService(client, "light", service,') && AIM.includes('{ siteId: "echo", isCurrent: current }')
   && AIM.includes("readStates(client, entityIds)") && AIM.includes("entity_id: ids"));
 assert("zone identification restores only after safe readback and offers Restore", AIM.includes("automatic restore cancelled")
   && AIM.includes("identify_brightness") && AIM.includes(">Restore</AimButton>"));

@@ -470,8 +470,11 @@ async function main() {
   cleanup();
   assert("bindStates cleanup calls subscription unsubscribe", unsubCalled === true);
   const svcCalls = [];
-  const svcClient = { call: async (payload) => { svcCalls.push(payload); return { ok: true }; } };
-  await D.callService(svcClient, "light", "turn_on", { entity_id: "light.bound", brightness_pct: 80 });
+  const svcClient = { call: async (payload) => {
+    if (payload.type === "get_states") return [{ entity_id: "input_boolean.living_lights_travel_mode", state: "off" }];
+    svcCalls.push(payload); return { ok: true };
+  } };
+  await D.callService(svcClient, "light", "turn_on", { entity_id: "light.bound", brightness_pct: 80 }, { siteId: "echo", isCurrent: () => true });
   await D.callService(svcClient, "media_player", "media_pause", { area_id: "living_room" });
   assert("callService shapes entity target and service_data", svcCalls[0].target.entity_id === "light.bound" && svcCalls[0].service_data.brightness_pct === 80 && !("entity_id" in svcCalls[0].service_data), svcCalls[0]);
   assert("callService maps HA target data out of service_data", svcCalls[1].target.area_id === "living_room" && !("area_id" in svcCalls[1].service_data), svcCalls[1]);

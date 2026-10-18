@@ -57,7 +57,9 @@ function worktreeSources() {
 function browserLaunchOptions(platform = process.platform) {
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
   if (platform === 'win32') args.unshift('--use-angle=d3d11');
-  else if (platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
+  // Keep real SwiftShader WebGL, while avoiding GPU-style browser compositing
+  // on a CPU-only runner. See Chromium's docs/gpu/swiftshader.md.
+  else if (platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
   const installed = fs.existsSync(chromium.executablePath());
   assert.ok(installed || platform === 'win32', 'the pinned Playwright Chromium browser must be available on this platform');
   return { headless: true, args, ...(!installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
@@ -230,6 +232,15 @@ test('unified shell keeps the real room, private controls and one chat controlle
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
     browser = await chromium.launch(launchOptions);
+    const graphicsSession = await browser.newBrowserCDPSession();
+    try {
+      const { gpu } = await graphicsSession.send('SystemInfo.getInfo');
+      receipt.browser_graphics = { version: browser.version(), feature_status: gpu.featureStatus };
+      if (process.platform === 'linux') {
+        assert.match(gpu.featureStatus.gpu_compositing, /software/,
+          'Linux browser compositing uses software while real WebGL remains SwiftShader');
+      }
+    } finally { await graphicsSession.detach(); }
     await chatPresenterMountProof();
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, serviceWorkers: 'block' });
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
@@ -276,6 +287,23 @@ test('unified shell keeps the real room, private controls and one chat controlle
         ? window.__APT_ENGINE : null);
       const capture = { name, started_at: Date.now(), completed: false };
       (receipt.captures ||= []).push(capture);
+      capture.graphics = await engine.evaluate(value => {
+        if (!value) return null;
+        const renderer = value.renderer, gl = renderer.getContext();
+        const info = gl.getExtension('WEBGL_debug_renderer_info');
+        return { renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+          version: gl.getParameter(gl.VERSION), context_lost: gl.isContextLost(),
+          pixel_ratio: renderer.getPixelRatio(), width: gl.drawingBufferWidth, height: gl.drawingBufferHeight,
+          canvas_width: renderer.domElement.width, canvas_height: renderer.domElement.height };
+      });
+      if (capture.graphics) {
+        assert.equal(capture.graphics.context_lost, false, 'the real renderer retains its WebGL context');
+        assert.ok(capture.graphics.width > 0 && capture.graphics.height > 0, 'the real WebGL framebuffer remains allocated');
+        assert.equal(capture.graphics.width, capture.graphics.canvas_width);
+        assert.equal(capture.graphics.height, capture.graphics.canvas_height);
+        if (process.platform === 'linux') assert.match(capture.graphics.renderer, /SwiftShader/i,
+          'Linux acceptance still renders the production scene through SwiftShader WebGL');
+      }
       await engine.evaluate(value => value?.setRunning?.(false));
       try {
         const file = name + '.png';

@@ -118,3 +118,39 @@ the two drag phases took 194 ms and 155 ms. All 90 original assertion call texts
 remain, with one additional range-focus assertion. Local GPU timing does not
 establish Linux SwiftShader timing; the PR's hosted check is the applicable
 confirmation for that environment.
+
+## CI compositor correction
+
+The native-input correction alone did not resolve the Linux deadline. Its
+receipt completed both canonical drags and all radial cases, while nine stills
+consumed 41.4 seconds before the final classic reload reached the deadline.
+
+The Linux launch now uses `--use-gl=angle --use-angle=swiftshader-webgl` with
+the existing explicit unsafe SwiftShader opt-in. Chromium distinguishes this
+WebGL fallback from the previous `--use-angle=swiftshader` GPU-style browser
+path: both use SwiftShader for WebGL, while the fallback runs browser
+compositing in software. See the [primary Chromium documentation](https://chromium.googlesource.com/chromium/src/+/main/docs/gpu/swiftshader.md).
+
+The receipt records browser graphics feature status, actual WebGL driver and
+version, pixel ratio, and canvas/framebuffer dimensions. Linux assertions now
+require software browser compositing and a healthy, allocated SwiftShader
+WebGL context. Every earlier assertion, all 28 checkpoints, ten screenshots,
+native input and drag paths, source and registration pins, network/output
+guards, default DPR and viewport dimensions remain unchanged. The 145-second
+timer still starts before browser launch and Chat proof; the outer test bound
+is unchanged. No product or workflow source is modified by this correction.
+
+Windows probes establish the graphics-path distinction but do not reproduce
+the Linux timing. The full hosted Linux test remains the performance oracle;
+local renderer evidence is not substituted for that gate.
+
+A controlled local diagnostic copy using the WebGL-only mode completed the
+full existing scenario in 89.33 seconds: 28 checkpoints, ten screenshots,
+software browser compositing, real SwiftShader WebGL, and no errors or forbidden
+requests. Its receipt is
+`.tmp/apartment-home-shell-browser/run-1792355912118/receipt.json`. This is a
+Windows software-rendering diagnostic, not the hosted Linux acceptance result.
+
+The patched harness also passed the normal Windows launch in 25.94 seconds,
+retaining all 28 checkpoints and ten screenshots in
+`.tmp/apartment-home-shell-browser/run-1792356026860/receipt.json`.

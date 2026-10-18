@@ -119,26 +119,26 @@ remain, with one additional range-focus assertion. Local GPU timing does not
 establish Linux SwiftShader timing; the PR's hosted check is the applicable
 confirmation for that environment.
 
-## CI compositor correction
+## CI graphics and browser diagnosis
 
 The native-input correction alone did not resolve the Linux deadline. Its
 receipt completed both canonical drags and all radial cases, while nine stills
 consumed 41.4 seconds before the final classic reload reached the deadline.
 
-The Linux launch now uses `--use-gl=angle --use-angle=swiftshader-webgl` with
+One controlled Linux experiment used `--use-gl=angle --use-angle=swiftshader-webgl` with
 the existing explicit unsafe SwiftShader opt-in. Chromium distinguishes this
 WebGL fallback from the previous `--use-angle=swiftshader` GPU-style browser
 path: both use SwiftShader for WebGL, while the fallback runs browser
 compositing in software. See the [primary Chromium documentation](https://chromium.googlesource.com/chromium/src/+/main/docs/gpu/swiftshader.md).
 
 The receipt records browser graphics feature status, actual WebGL driver and
-version, pixel ratio, and canvas/framebuffer dimensions. Linux assertions now
-require software browser compositing and a healthy, allocated SwiftShader
-WebGL context. Every earlier assertion, all 28 checkpoints, ten screenshots,
+version, pixel ratio, and canvas/framebuffer dimensions. The experiment required
+software browser compositing and a healthy, allocated SwiftShader WebGL
+context. Every earlier assertion, all 28 checkpoints, ten screenshots,
 native input and drag paths, source and registration pins, network/output
-guards, default DPR and viewport dimensions remain unchanged. The 145-second
+guards, default DPR and viewport dimensions remained unchanged. The 145-second
 timer still starts before browser launch and Chat proof; the outer test bound
-is unchanged. No product or workflow source is modified by this correction.
+was unchanged. No product or workflow source was modified by that experiment.
 
 Windows probes establish the graphics-path distinction but do not reproduce
 the Linux timing. The full hosted Linux test remains the performance oracle;
@@ -154,3 +154,29 @@ Windows software-rendering diagnostic, not the hosted Linux acceptance result.
 The patched harness also passed the normal Windows launch in 25.94 seconds,
 retaining all 28 checkpoints and ten screenshots in
 `.tmp/apartment-home-shell-browser/run-1792356026860/receipt.json`.
+
+The Linux experiment reached only 15 checkpoints before the deadline. Stills
+fell to 2.2 seconds, but interactions slowed; that configuration was rejected.
+The original Linux graphics flags and screenshot options are restored.
+
+The current correction selects `channel: 'chromium'` on Linux. Playwright's
+default headless launch uses the separate headless-shell binary; this channel
+uses full bundled Chromium in new headless mode. Both binaries are pinned to
+revision 1228 / Chromium 149.0.7827.55 by repository Playwright 1.61.1, and the
+existing CI install already supplies both. See [Playwright's documentation](https://playwright.dev/docs/browsers#chromium-new-headless-mode).
+
+The existing executable-availability guard checks full Chromium. A new runtime
+assertion resolves the actual browser process executable through Linux `/proc`
+and requires that same pinned binary. The receipt records its basename/channel,
+graphics feature status, healthy real SwiftShader WebGL context and unchanged
+framebuffer dimensions. Capture pause, screenshot and resume durations are
+recorded separately. No rendering work, assertions, captures, source or safety
+guards are removed, and the original deadline placement/value is preserved.
+
+Local bundled Playwright is 1.62.1 and uses Edge on this workstation; local
+results do not establish pinned Linux timing. The hosted full scenario is the
+performance and acceptance gate for this correction.
+
+The current harness passed locally in 32.70 seconds with 28 checkpoints and
+ten screenshots; receipt
+`.tmp/apartment-home-shell-browser/run-1792356636111/receipt.json`.

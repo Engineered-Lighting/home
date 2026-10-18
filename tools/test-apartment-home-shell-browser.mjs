@@ -57,12 +57,13 @@ function worktreeSources() {
 function browserLaunchOptions(platform = process.platform) {
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
   if (platform === 'win32') args.unshift('--use-angle=d3d11');
-  // Keep real SwiftShader WebGL, while avoiding GPU-style browser compositing
-  // on a CPU-only runner. See Chromium's docs/gpu/swiftshader.md.
-  else if (platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  else if (platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
   const installed = fs.existsSync(chromium.executablePath());
   assert.ok(installed || platform === 'win32', 'the pinned Playwright Chromium browser must be available on this platform');
-  return { headless: true, args, ...(!installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
+  // Use the full pinned browser that executablePath() verifies, rather than
+  // Playwright's separate legacy headless shell on CPU-only Linux runners.
+  return { headless: true, args, ...(platform === 'linux' ? { channel: 'chromium' }
+    : !installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
 }
 
 test('unified shell keeps the real room, private controls and one chat controller through responsive navigation', { timeout: 180000 }, async () => {
@@ -235,11 +236,17 @@ test('unified shell keeps the real room, private controls and one chat controlle
     const graphicsSession = await browser.newBrowserCDPSession();
     try {
       const { gpu } = await graphicsSession.send('SystemInfo.getInfo');
-      receipt.browser_graphics = { version: browser.version(), feature_status: gpu.featureStatus };
+      let executable = null;
       if (process.platform === 'linux') {
-        assert.match(gpu.featureStatus.gpu_compositing, /software/,
-          'Linux browser compositing uses software while real WebGL remains SwiftShader');
+        const { processInfo } = await graphicsSession.send('SystemInfo.getProcessInfo');
+        const browserProcess = processInfo.find(item => item.type === 'browser');
+        assert.ok(Number.isSafeInteger(browserProcess?.id) && browserProcess.id > 0, 'the Linux browser process is identified');
+        executable = fs.realpathSync('/proc/' + browserProcess.id + '/exe');
+        assert.equal(executable, fs.realpathSync(chromium.executablePath()),
+          'Linux acceptance uses the full pinned Chromium binary, not a system browser or headless shell');
       }
+      receipt.browser_graphics = { version: browser.version(), feature_status: gpu.featureStatus,
+        executable: executable && path.basename(executable), channel: launchOptions.channel || null };
     } finally { await graphicsSession.detach(); }
     await chatPresenterMountProof();
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, serviceWorkers: 'block' });
@@ -305,12 +312,16 @@ test('unified shell keeps the real room, private controls and one chat controlle
           'Linux acceptance still renders the production scene through SwiftShader WebGL');
       }
       await engine.evaluate(value => value?.setRunning?.(false));
+      capture.pause_ms = Date.now() - capture.started_at;
       try {
         const file = name + '.png';
+        const shotStarted = Date.now();
         await page.screenshot({ path: path.join(run, file), timeout: 30000 });
+        capture.screenshot_ms = Date.now() - shotStarted;
         screenshots.push(file); capture.completed = true;
       } finally {
         capture.duration_ms = Date.now() - capture.started_at;
+        const resumeStarted = Date.now();
         const frame = await engine.evaluate(value => {
           if (value && value === window.__APT_ENGINE && document.querySelector('.apt-home-shell[data-home-layout="unified"]')) {
             const frame = value.renderer.info.render.frame;
@@ -324,6 +335,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
           capture.renderer_resumed = true;
         }
         await engine.dispose();
+        capture.resume_ms = Date.now() - resumeStarted;
       }
     }
     async function tab(name) {

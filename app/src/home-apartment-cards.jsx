@@ -164,7 +164,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           {device.name}
         </span>
         <span style={{ marginLeft: "auto", fontFamily: CARD_FONT_MONO, fontSize: 9,
-                       color: on ? "var(--hg-ice)" : "var(--hg-fg-5)" }}>
+                       color: on ? "var(--hg-ice)" : "var(--hg-fg-3)" }}>
           {state?.state || "unknown"}
         </span>
         <button type="button"
@@ -255,7 +255,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           <div style={row}>
             {btn("fly to view", () => { onFlyTo && onFlyTo(device); onClose(); }, true)}
           </div>
-          <div style={{ marginTop: 6, fontFamily: CARD_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)" }}>
+          <div style={{ marginTop: 6, fontFamily: CARD_FONT_MONO, fontSize: 11.5, color: "var(--hg-fg-3)" }}>
             {device.camera?.extrinsics ? "calibrated pose" : "not calibrated — approximate pose"}
             {" · live feed needs go2rtc :1984 exposed"}
           </div>

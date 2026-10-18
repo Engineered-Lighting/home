@@ -2751,13 +2751,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     return () => window.removeEventListener("home-services-change", bump);
   }, []);
 
-  const toastTimerRef = useRef(null);
   const showToast = useCallback((text, opts) => {
     const sticky = !!(opts && (opts.sticky || opts.tone === "error"));
-    if (toastTimerRef.current) { clearTimeout(toastTimerRef.current); toastTimerRef.current = null; }
-    setToast({ text, sticky });
-    if (!sticky) toastTimerRef.current = setTimeout(() => setToast(null), 2800);
+    // Actions delegate to an existing caller-owned operation and its currentness
+    // check. A function without that guard is never exposed as an action.
+    const action = typeof opts?.action === "function" && typeof opts?.isCurrent === "function"
+      ? window.HomeApartmentUI.createToastAction(opts.action, { isCurrent: opts.isCurrent }) : null;
+    setToast({ text, sticky, timeoutMs: opts?.timeoutMs, actionLabel: opts?.actionLabel, action });
   }, []);
+  const dismissToast = useCallback((dismissed) => setToast(current => current === dismissed ? null : current), []);
 
   const cancelSpatialTravel = useCallback(async () => {
     worldOverviewAbortRef.current?.abort();
@@ -9083,23 +9085,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         </div>
       )}
 
-      {toast && (
-        <div role="status" style={{
-          position: "absolute", bottom: 74, left: "50%", transform: "translateX(-50%)",
-          fontFamily: APT_FONT_MONO, fontSize: 10, color: "var(--hg-fg-1)",
-          background: "rgba(10,12,16,0.85)", border: "1px solid var(--hg-border-soft)",
-          padding: "7px 13px", animation: "apt-toast-in 180ms ease-out", zIndex: 6,
-        }}>
-          {toast.text}
-          {toast.sticky && (
-            <button type="button" className="hg-focusable" aria-label="dismiss message"
-              onClick={() => setToast(null)}
-              style={{ marginLeft: 9, padding: "0 4px", background: "transparent", border: "none",
-                       color: "var(--hg-fg-3)", cursor: "pointer",
-                       fontFamily: APT_FONT_MONO, fontSize: 11 }}>×</button>
-          )}
-        </div>
-      )}
+      <window.HomeApartmentUI.Toast toast={toast} onDismiss={dismissToast} />
     </div>
   );
 }

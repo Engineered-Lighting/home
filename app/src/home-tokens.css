@@ -393,6 +393,41 @@ button.hg-no-press:active {
   }
 }
 /* Apartment Home: prototype chrome and presentational atoms. Classic surfaces keep their styles. */
+:root, [data-theme="dark"] {
+  --apt-proposed: #45dfff; --apt-ok: #91e6bd; --apt-attn: #ffb45f;
+  --apt-blocked: #ff625f; --apt-warm: #ffddb0;
+  --apt-fill: rgba(255,255,255,.035); --apt-fill-2: rgba(255,255,255,.06);
+}
+[data-theme="light"] {
+  --apt-proposed: #0a6f86; --apt-ok: #1f6e48; --apt-attn: #8a4e13;
+  --apt-blocked: #b33a37; --apt-warm: #8a5310;
+  --apt-fill: rgba(26,24,18,.035); --apt-fill-2: rgba(26,24,18,.065);
+}
+.apt-ui-badge { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 6px; border: 1px solid currentColor; border-radius: 5px; color: var(--hg-fg-3); font: 500 11.5px/1.4 'Geist Mono', monospace; }
+.apt-ui-badge[data-tone="ok"] { color: var(--apt-ok); }
+.apt-ui-badge[data-tone="proposed"] { color: var(--apt-proposed); }
+.apt-ui-badge[data-tone="attn"] { color: var(--apt-attn); }
+.apt-ui-badge[data-tone="blocked"] { color: var(--apt-blocked); }
+.apt-ui-badge:is([data-state="authored"], [data-state="simulated"]) { border-style: dashed; }
+.apt-ui-badge-marker { display: inline-block; width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: currentColor; }
+.apt-ui-badge-marker:is([data-shape="ring"], [data-shape="spinner"]) { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
+.apt-ui-badge-marker[data-shape="live"] { box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 18%, transparent); }
+.apt-ui-badge-marker[data-shape="diamond"] { border-radius: 0; transform: rotate(45deg); }
+.apt-ui-badge[data-tone="neutral"] .apt-ui-badge-marker[data-shape="diamond"] { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
+.apt-ui-badge-marker[data-shape="bar"] { height: 2px; border-radius: 0; }
+.apt-ui-profile-status { flex-shrink: 0; }
+.apt-home-shell .apt-ui-badge[data-tone="ok"] { color: var(--apt-ok); }
+.apt-home-shell .apt-ui-badge[data-tone="proposed"] { color: var(--apt-proposed); }
+.apt-home-shell .apt-ui-badge[data-tone="attn"] { color: var(--apt-attn); }
+.apt-home-shell .apt-ui-badge[data-tone="blocked"] { color: var(--apt-blocked); }
+.apt-home-shell .apt-ui-badge:is([data-tone="neutral"], [data-tone="muted"]) { color: var(--hg-fg-3); }
+.apt-home-shell .apt-ui-badge:is([data-state="authored"], [data-state="simulated"]) { border-style: dashed; }
+.apt-ui-toast { position: absolute; bottom: 74px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--hg-border-strong); border-radius: 9px; background: var(--hg-bg-2); color: var(--hg-fg-1); font: 400 12px/1.4 'Geist', sans-serif; }
+.apt-ui-toast-message { min-width: 0; overflow-wrap: anywhere; }
+.apt-ui-toast .apt-ui-button { min-height: 36px; padding: 5px 9px; border: 1px solid var(--hg-border-strong); border-radius: 6px; background: var(--hg-bg-3); color: var(--hg-fg-1); cursor: pointer; }
+.apt-ui-toast .apt-ui-button:focus-visible { outline: 2px solid var(--hg-ice); outline-offset: 2px; }
+@media (pointer: coarse) { .apt-ui-toast .apt-ui-button { min-width: 44px; min-height: 44px; } }
+
 .apt-home-shell {
   --apt-column-width: 360px;
   --apt-surface: var(--hg-bg-1, #0a0a0a);

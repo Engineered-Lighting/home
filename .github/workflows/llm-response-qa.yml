@@ -56,6 +56,8 @@ jobs:
           path: |
             .tmp/apartment-home-shell-browser/run-*/*receipt.json
             .tmp/apartment-home-shell-browser/run-*/*.png
+            .tmp/apartment-aim-theme-browser/run-*/receipt.json
+            .tmp/apartment-aim-theme-browser/run-*/*.png
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7

@@ -641,11 +641,15 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-key-values dd { min-width: 0; margin: 0; text-align: right; overflow-wrap: anywhere; }
 
 /* Existing chat/controller remains mounted; these classes change its chrome only. */
-.apt-home-shell .apt-ui-chat-header { display: flex; align-items: center; gap: 2px; min-width: 0; padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--apt-border-soft); background: var(--apt-surface); }
+.apt-home-shell .apt-ui-chat-header { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--apt-border-soft); background: var(--apt-surface); }
 .apt-home-shell .apt-ui-chat-source { flex: 1 1 auto; min-width: 0; color: var(--apt-muted); font-size: 12px; line-height: 1.5; }
 .apt-home-shell .apt-ui-chat-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
 .apt-home-shell .apt-ui-chat-header-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 26px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--hg-fg-2); font-size: 12px; cursor: pointer; }
 .apt-home-shell .apt-ui-chat-header-actions > button:hover { border-color: var(--apt-border); color: var(--hg-fg-0); }
+.apt-home-shell .apt-ui-chat-conversation-actions { display: flex; flex: 1 0 100%; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding-top: 6px; }
+.apt-home-shell .apt-ui-chat-conversation-actions > button { flex: 1 1 0; min-width: 0; min-height: 32px; }
+.apt-home-shell .apt-ui-chat-transcript-scope, .apt-home-shell .apt-ui-chat-copy-status { flex: 1 0 100%; color: var(--hg-fg-3); font: 400 11px/1.5 'Geist', sans-serif; overflow-wrap: anywhere; }
+@media (pointer: coarse) { .apt-home-shell .apt-ui-chat-conversation-actions > button { min-width: 44px; min-height: 44px; } }
 .apt-home-shell .apt-ui-chat-warning { flex: 0 0 auto; padding: 8px 16px; border-bottom: 1px solid var(--apt-border-soft); color: var(--apt-attn); font-size: 12px; line-height: 1.5; }
 .apt-home-shell .apt-ui-chat-feed { padding: 14px 16px!important; font-family: 'Geist', sans-serif; font-size: 13.5px; line-height: 1.55; }
 .apt-home-shell .apt-ui-composer { position: relative; display: grid; grid-template-columns: minmax(0,1fr); gap: 7px; flex: 0 0 auto; margin: 0!important; padding: 10px 12px!important; border-top: 1px solid var(--apt-border-soft); background: var(--apt-surface); }

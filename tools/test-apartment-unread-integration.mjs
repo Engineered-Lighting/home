@@ -260,6 +260,39 @@ test('actual unread hook and shell tabs preserve Chat owners and accessible resp
     await checkUnread(true,'new_eligible_reply_can_alert_after_retirement');
     await update({events:[...overlayEvents,home('eligible','eligible-turn','')]});
     await checkUnread(false,'sanitizing_last_reply_content_clears_the_dot');
+    let producerEvents = overlayEvents;
+    for (const kind of ['proactive','assistant']) {
+      await select('controls');
+      const fresh=home(kind+'-fresh',kind+'-turn','Authored '+kind+' reply',{kind,convId:'authored-first-conversation'});
+      producerEvents=[...producerEvents,fresh];
+      await update({events:producerEvents});
+      await checkUnread(true,kind+'_producer_hidden_reply_sets_unread');
+      await select('chat');
+      await checkUnread(false,kind+'_producer_visible_chat_consumes_reply');
+      await select('controls');
+      producerEvents=producerEvents.map(event=>event.id===fresh.id?{...event,text:'Authored same-turn update',streaming:true}:event);
+      await update({events:producerEvents});
+      await checkUnread(false,kind+'_producer_same_id_stream_patch_stays_read');
+      producerEvents=[...producerEvents,
+        home(kind+'-background',kind+'-background-turn','Authored background',{kind,backgroundPerception:true}),
+        home(kind+'-onboarding',kind+'-onboarding-turn','Authored hint',{kind,onboarding:true}),
+        home(kind+'-foreign',kind+'-foreign-turn','Authored other conversation',{kind,convId:'other-conversation'}),
+        home(kind+'-empty',kind+'-empty-turn','  ',{kind}),{kind,text:'Authored output without stable ID'}];
+      await update({events:producerEvents});
+      await checkUnread(false,kind+'_producer_filters_background_onboarding_foreign_empty_and_missing_id');
+      producerEvents=[home(kind+'-history',kind+'-history-turn','Authored restored history',{kind}),...producerEvents];
+      await update({events:producerEvents});
+      await checkUnread(false,kind+'_producer_history_prepend_is_read');
+      const next=home(kind+'-next',kind+'-next-turn','Authored next producer reply',{kind});
+      await update({events:[...producerEvents,next]});
+      await checkUnread(true,kind+'_producer_can_receive_next_unread_reply');
+      await update({events:producerEvents});
+      await checkUnread(false,kind+'_producer_retired_unread_reply_clears_dot');
+      await select('chat');
+      producerEvents=[...producerEvents,home(kind+'-visible',kind+'-visible-turn','Authored visible producer reply',{kind})];
+      await update({events:producerEvents});
+      await checkUnread(false,kind+'_producer_visible_arrival_is_read');
+    }
     await select('chat');
     const identity=await page.evaluate(()=>{
       const state=window.__unreadProof;

@@ -642,7 +642,8 @@ function createApartmentChatUnreadTracker() {
     sync({ events, scope, conversationId = null, visible = false }) {
       const rows = Array.isArray(events) ? events : [];
       const keyOf = event => typeof event?.id === "string" && event.id ? event.id : null;
-      const qualifies = event => (event?.kind === "home" || event?.kind === "external")
+      const qualifies = event => (event?.kind === "home" || event?.kind === "external"
+        || event?.kind === "proactive" || event?.kind === "assistant")
         && !event.backgroundPerception && !event.onboarding
         && typeof event.text === "string" && event.text.trim().length > 0
         && (!event.convId || !conversationId || event.convId === conversationId);
@@ -736,6 +737,7 @@ function HomeHeader({
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
   onOpenVideoLabeler, onOpenApartment, onOpenPerceptionLab, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false, unified = false,
+  onExplainLastAnswer, onCopyTranscript, onNewConversation, conversationCopyState, conversationCopyDisabledReason,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   // Phase 5: the header dropdown is an overlay layer — topmost-only Escape
@@ -971,6 +973,9 @@ function HomeHeader({
       {onOpenBench && <button type="button" className="apt-ui-button is-small" onClick={onOpenBench}>Bench</button>}
       {actionMenu}
     </span>
+    <window.HomeChatHeaderActions onExplain={onExplainLastAnswer} onCopy={onCopyTranscript}
+      onNewConversation={onNewConversation} copyDisabledReason={conversationCopyDisabledReason} />
+    {conversationCopyState && <span className="apt-ui-chat-copy-status" role="status">{conversationCopyState}</span>}
   </header>;
   return (
     <header
@@ -11486,6 +11491,37 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     };
   }, [metricsBase, endpoint, apartmentNetworkPriority]);
 
+  const [conversationCopyState, setConversationCopyState] = useState("");
+  const conversationCopyBusyRef = useRef(false);
+  const conversationCopyAttemptRef = useRef(0);
+  useEffect(() => {
+    conversationCopyAttemptRef.current += 1;
+    conversationCopyBusyRef.current = false;
+    setConversationCopyState("");
+    return () => { conversationCopyAttemptRef.current += 1; };
+  }, [conversationId, endpoint, token]);
+  const conversationVoiceBusy = !!voice.state && !["inactive", "ready", "idle", "error", "no-mic"].includes(voice.state);
+  const copyConversationTranscript = useCallback(async () => {
+    if (conversationCopyBusyRef.current || conversationVoiceBusy) return;
+    const attempt = ++conversationCopyAttemptRef.current;
+    conversationCopyBusyRef.current = true;
+    setConversationCopyState("Copying conversation text…");
+    const result = await window.HomeChatTranscript.copy({
+      events, excludedIds: [s2sPlaceholderRef.current],
+      writeText: typeof navigator.clipboard?.writeText === "function"
+        ? text => navigator.clipboard.writeText(text) : null,
+    });
+    if (attempt !== conversationCopyAttemptRef.current) return;
+    conversationCopyBusyRef.current = false;
+    setConversationCopyState(result.ok ? "Conversation text copied."
+      : result.reason === "empty" ? "No completed conversation text to copy."
+      : "Could not copy conversation text. Clipboard access is unavailable or was denied.");
+  }, [events, conversationVoiceBusy]);
+  const conversationCopyDisabledReason = conversationVoiceBusy ? "Finish the active voice turn before copying."
+    : conversationCopyBusyRef.current ? "Copying conversation text."
+    : !window.HomeChatTranscript.buildText(events, { excludedIds: [s2sPlaceholderRef.current] }) ? "No completed conversation text to copy."
+    : typeof navigator.clipboard?.writeText !== "function" ? "Clipboard access is unavailable in this browser." : undefined;
+
   const isSpatialWide = unifiedHome || spatialLayout && wideMode;
   const spatialRailWidth = wideMode ? SPATIAL_CHAT_RAIL_WIDTH : "100%";
   const spatialStageRight = wideMode ? spatialRailWidth : 0;
@@ -12090,6 +12126,11 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       {!unifiedHome && <button type="button" className="apt-home-enable" onClick={() => chooseHomeLayout("unified")}>Open redesigned Home</button>}
       <HomeHeader
         unified={unifiedHome}
+        onExplainLastAnswer={() => handleCommand("/why")}
+        onCopyTranscript={copyConversationTranscript}
+        onNewConversation={requestClearConfirm}
+        conversationCopyState={conversationCopyState}
+        conversationCopyDisabledReason={conversationCopyDisabledReason}
         theme={theme}
         onToggleTheme={isSpatialWide ? null : () => setTheme((t) => t === "dark" ? "light" : "dark")}
         voice={voice}

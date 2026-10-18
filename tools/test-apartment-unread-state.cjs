@@ -96,3 +96,33 @@ test("retired unread events clear the dot without discarding other unread replie
   assert.equal(sync({ events: [read, two] }), true, "another unread reply remains");
   assert.equal(sync({ events: [read] }), false);
 });
+
+for (const kind of ["proactive", "assistant"]) {
+  test(kind + " producer replies alert once while hidden and retain history, stream and retirement behavior", () => {
+    const seed = reply(kind + "-seed", "History", { kind, convId: "current" });
+    const fresh = reply(kind + "-fresh", "New conversation output", { kind, convId: "current" });
+    const { sync } = setup([seed], "current");
+    assert.equal(sync({ events: [seed, fresh] }), true, "the actual producer kind must set unread");
+    assert.equal(sync({ visible: true }), false);
+    assert.equal(sync({ visible: false, events: [seed, { ...fresh, text: "Updated same turn", streaming: true }] }), false);
+    const history = reply(kind + "-old", "Older restored output", { kind, convId: "current" });
+    assert.equal(sync({ events: [history, seed, fresh] }), false, "prepending history is not new output");
+    const next = reply(kind + "-next", "Next reply", { kind, convId: "current" });
+    assert.equal(sync({ events: [history, seed, fresh, next] }), true);
+    assert.equal(sync({ events: [history, seed, fresh] }), false, "retiring the sole unread reply clears its dot");
+    assert.equal(sync({ scope: {}, events: [history, seed, fresh, next] }), false, "scope change baselines current output");
+  });
+
+  test(kind + " producer kind retains background, onboarding, empty, ID and conversation guards", () => {
+    const seed = reply(kind + "-guard-seed", "History", { kind, convId: "current" });
+    const { sync } = setup([seed], "current");
+    const blocked = [
+      reply(kind + "-background", "Background", { kind, backgroundPerception: true }),
+      reply(kind + "-onboarding", "Onboarding", { kind, onboarding: "hint" }),
+      reply(kind + "-empty", "   ", { kind }), { kind, text: "No stable ID" },
+      reply(kind + "-foreign", "Another conversation", { kind, convId: "other" }),
+    ];
+    assert.equal(sync({ events: [seed, ...blocked] }), false);
+    assert.equal(sync({ events: [seed, ...blocked, reply(kind + "-allowed", "Actual reply", { kind, convId: "current" })] }), true);
+  });
+}

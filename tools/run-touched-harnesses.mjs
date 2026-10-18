@@ -82,6 +82,9 @@ const MAP = [
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
     "run-native-agent-security-tests",
   ]],
+  [/^(?:web-gateway\/server\.mjs|tools\/test-web-gateway-upgrade-reset\.mjs)$/, [
+    "test-web-gateway-upgrade-reset.mjs", "run-web-gateway-ha-token-tests.mjs",
+  ]],
   [/^tools\/lib\/home-app-source-contracts\.cjs$/, ["run-bootstrap-tests.js", "run-simulation-command-tests.js", "test-home-app-source-contracts.cjs"]],
   [/^tools\/(?:run-bootstrap-tests|run-simulation-command-tests)\.js$/, ["test-home-app-source-contracts.cjs"]],
   [/^tools\/test-home-app-source-contracts\.cjs$/, ["test-home-app-source-contracts.cjs"]],

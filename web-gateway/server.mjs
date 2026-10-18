@@ -1638,9 +1638,16 @@ function rewriteHaAuthFrame(frame) {
 
 function pipeWithHaAuth(socket, upstream, head) {
   let pending = head?.length ? Buffer.from(head) : Buffer.alloc(0);
-  const fail = () => { socket.destroy(); upstream.destroy(); };
-  socket.once("close", () => upstream.destroy());
+  const detach = () => {
+    socket.off("data", onData);
+    socket.off("end", fail);
+    socket.off("close", detach);
+    upstream.off("close", detach);
+    pending = null;
+  };
+  const fail = () => { detach(); socket.destroy(); upstream.destroy(); };
   const onData = (chunk) => {
+    if (!pending || socket.destroyed || upstream.destroyed) { fail(); return; }
     pending = Buffer.concat([pending, chunk]);
     const frame = parseMaskedFrame(pending);
     if (frame === null) {
@@ -1648,14 +1655,17 @@ function pipeWithHaAuth(socket, upstream, head) {
       return;
     }
     if (frame.error) { fail(); return; }
-    socket.off("data", onData);
     const rewritten = rewriteHaAuthFrame(frame);
-    upstream.write(rewritten || pending.subarray(0, frame.size));
+    const first = rewritten || pending.subarray(0, frame.size);
     const rest = pending.subarray(frame.size);
+    detach();
+    upstream.write(first);
     if (rest.length) upstream.write(rest);
-    pending = null;
     socket.pipe(upstream);
   };
+  socket.once("close", detach);
+  socket.once("end", fail);
+  upstream.once("close", detach);
   socket.on("data", onData);
   if (pending.length) onData(Buffer.alloc(0));
 }
@@ -1679,7 +1689,12 @@ function proxyUpgrade(req, socket, head, route) {
     return;
   }
 
+  let upstreamResponseStarted = false;
   const upstream = net.connect(targetUrl.port || 80, targetUrl.hostname, () => {
+    if (socket.destroyed || socket.writableEnded || upstream.destroyed) {
+      closePair();
+      return;
+    }
     const headers = proxyHeaders(req.headers, route, suffix);
     let request = `${req.method} ${targetUrl.pathname}${targetUrl.search} HTTP/${req.httpVersion}\r\n`;
     for (const [key, value] of Object.entries(headers)) {
@@ -1699,9 +1714,15 @@ function proxyUpgrade(req, socket, head, route) {
     if (head?.length) upstream.write(head);
     socket.pipe(upstream);
   });
+  const closePair = () => { socket.destroy(); upstream.destroy(); };
+  socket.once("close", closePair);
+  upstream.once("close", closePair);
+  upstream.once("data", () => { upstreamResponseStarted = true; });
   upstream.on("error", () => {
-    socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-    socket.destroy();
+    if (!upstreamResponseStarted && !socket.destroyed && socket.writable && !socket.writableEnded) {
+      socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    }
+    closePair();
   });
 }
 
@@ -1836,6 +1857,7 @@ server.maxRequestsPerSocket = 100;
 server.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS);
 
 server.on("upgrade", (req, socket, head) => {
+  socket.on("error", () => socket.destroy());
   const browserAgentUpgrade = classifyAgentOrigin(req.headers, agentOriginBoundary);
   const nativeAgentUpgrade = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
   if (browserAgentUpgrade.agentHost || nativeAgentUpgrade.agentHost) {

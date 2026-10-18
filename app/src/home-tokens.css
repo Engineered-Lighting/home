@@ -747,6 +747,7 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-toolbar-recovery { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .apt-home-shell .apt-ui-toolbar-recovery .apt-ui-button { color: inherit; border-color: currentColor; }
 @media (pointer: coarse) { .apt-home-shell .apt-ui-toolbar-recovery .apt-ui-button { min-width: 44px; min-height: 44px; } }
+[data-home-apartment-view="1"]:has(.apt-ui-toolbar-recovery) > .apt-ui-toast { top: 12px; bottom: auto; }
 .apt-home-shell .apt-ui-radial-ring text { fill: currentColor; font-size: 12px; }
 .apt-home-shell [aria-label="apartment zoom controls"] { right: 14px!important; }
 .apt-home-shell [aria-label="apartment zoom controls"] button { width: 26px!important; min-width: 26px!important; height: 26px!important; min-height: 26px!important; padding: 0!important; border-radius: 7px!important; background: var(--apt-glass)!important; color: #ededed!important; font: 500 13px 'Geist', sans-serif!important; }

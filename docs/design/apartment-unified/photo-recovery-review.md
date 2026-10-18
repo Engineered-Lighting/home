@@ -9,8 +9,16 @@ approved the narrow asynchronous request and cancellation ownership additions.
 
 Standards: **0 findings** after the final cancellation additions. Spec: **one
 initial P2, resolved; 0 remaining findings**. Both final reviews independently
-ran all 46 source-derived cases. The final 44-checkpoint mounted browser receipt
+ran all 46 source-derived cases. The final 48-checkpoint mounted browser receipt
 matches the production source pins recorded in `wave5-photo-recovery-qa.md`.
+
+The final composed-view check exposed a sticky error Toast intercepting native
+recovery clicks. Repair approved a position-only rule while recovery is visible.
+Independent delta reviews found no remaining Standards or Spec findings after
+folding the change note into its required two sentences. The authored regression
+first reproduces the interception, then proves native Retry and Back to Cloud in
+both themes and sizes, unchanged Toast identity/content/lifetime, restored normal
+bottom positioning and reachable native dismissal.
 
 The initial publication guard correctly ignored an old request, but same-home
 travel cancellation could leave its loading indicator stranded. Importing a
@@ -33,10 +41,18 @@ save authority or loader/generation change.
 - 46 source-derived tests cover current success/failure, explicit Cloud,
   locks/placeholders, unavailable owner context, stale home and A-to-B-to-A,
   Photo-to-Cloud-to-Photo races, cancellation and installed scene retirement.
-- 44 mounted checks cover both themes, desktop and coarse phone, keyboard and
-  native touch, plus the actual mode/cancellation publication paths. Authored
+- 48 mounted checks cover both themes, desktop and coarse phone, keyboard and
+  native touch, actual Toast coexistence and mode/cancellation publication paths. Authored
   promises and inert producers replace asset/transport work in this focused
   proof. Network, WebSocket attempts and page errors are zero.
+- A separate private check composes these approved changes with the accepted
+  actual Den source and saved room inputs: 13 checks pass, including controlled
+  Photo read refusal, native Retry/Cloud recovery, real Cloud/Photo/Mesh loading,
+  desktop/tablet/phone layouts and retained selection, Escape and Chat controls.
+  Exact fixture/channel readback and saved registration stay unchanged; rendering's
+  monotonic diagnostic pass counter is checked separately. Commands, equipment
+  saves, session starts and page errors are zero. Private imagery and inputs
+  remain outside this PR and CI; this is local browser evidence, not deployment.
 - The source change includes no renderer, loader, rig, generation, camera/feed,
   selector, channel mapping, authority or backend schema modification.
 

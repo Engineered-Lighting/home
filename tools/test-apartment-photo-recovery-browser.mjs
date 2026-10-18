@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 const require=createRequire(import.meta.url),{chromium}=require('playwright');
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),SRC=path.join(ROOT,'app/src');
 const read=name=>fs.readFileSync(path.join(SRC,name),'utf8'),sha=value=>createHash('sha256').update(value).digest('hex');
-const source=read('home-apartment.jsx'),css=read('home-tokens.css'),babel=require(path.join(SRC,'vendor/babel-7.29.0/babel.min.js'));
+const source=read('home-apartment.jsx'),css=read('home-tokens.css'),uiSource=read('home-apartment-ui.jsx'),babel=require(path.join(SRC,'vendor/babel-7.29.0/babel.min.js'));
 const ast=babel.transform(source,{parserOpts:{plugins:['jsx']},ast:true,code:false}).ast.program,text=node=>source.slice(node.start,node.end);
 function walk(node,visit){if(!node||typeof node!=='object')return;if(node.type)visit(node);for(const[key,value]of Object.entries(node)){if(['loc','extra','leadingComments','trailingComments','innerComments'].includes(key))continue;if(Array.isArray(value))value.forEach(item=>walk(item,visit));else if(value&&typeof value==='object')walk(value,visit)}}
 const declaration=name=>{const found=ast.body.filter(node=>node.type==='FunctionDeclaration'&&node.id?.name===name);assert.equal(found.length,1,'one actual '+name);return text(found[0])};
@@ -72,7 +72,7 @@ test('Photo recovery uses the existing mode owner and preserves scope, locks and
   const run=path.join(ROOT,'.tmp/apartment-photo-recovery-browser','run-'+Date.now());fs.mkdirSync(run,{recursive:true});
   const receipt={schema:'home-apartment-photo-recovery-browser-1',actual_toolbar:true,actual_mode_callback:true,actual_cancel_callback:true,actual_renderer_mode_method:true,actual_installed_mode_subscription:true,authored_engine_promises:true,
     complete_home_app:false,real_renderer:false,room_assets_loaded:false,household_data_loaded:false,physical_commands:0,camera_sessions:0,model_sessions:0,screenshots:false,
-    sources:{'home-apartment.jsx':sha(source),'home-tokens.css':sha(css),'home-overlay.js':sha(read('home-overlay.js')),'home-3d/modes.js':sha(rendererSource)},checks:[],requests:[],websocket_attempts:[],errors:[]};
+    sources:{'home-apartment.jsx':sha(source),'home-tokens.css':sha(css),'home-overlay.js':sha(read('home-overlay.js')),'home-3d/modes.js':sha(rendererSource),'home-apartment-ui.jsx':sha(uiSource)},checks:[],toast_coexistence:[],requests:[],websocket_attempts:[],errors:[]};
   let browser;
   try{
     const installed=fs.existsSync(chromium.executablePath());browser=await chromium.launch({headless:true,args:['--disable-background-networking','--renderer-process-limit=2','--js-flags=--max-old-space-size=512'],...(!installed&&process.platform==='win32'?{channel:'msedge'}:{})});
@@ -84,6 +84,7 @@ test('Photo recovery uses the existing mode owner and preserves scope, locks and
         await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body,#root{margin:0;width:100%;height:100%;overflow:hidden}</style><div id="root"></div>');
         await page.addStyleTag({content:css.replace(/@font-face\s*\{[^}]*\}/g,'')});
         for(const name of ['vendor/react-18.3.1/react.production.min.js','vendor/react-18.3.1/react-dom.production.min.js','home-overlay.js'])await page.addScriptTag({content:read(name)});
+        await page.addScriptTag({content:babel.transform(uiSource,{presets:['react']}).code});
         await page.addScriptTag({content:'const {useState,useRef,useCallback}=React;\n'+babel.transform(declaration('AptUnifiedIcon')+'\n'+declaration('AptUnifiedRoomToolbar'),{presets:['react']}).code});
         const wrapper=`
           (()=>{
@@ -95,22 +96,27 @@ test('Photo recovery uses the existing mode owner and preserves scope, locks and
             window.HomeSpatialViewport={getSelectedSiteId:()=>proof.selected,getSite:site=>({shortName:'Authored '+site,contentRevision:'authored-'+site+'-r1'})};
             function PhotoRecoveryProof(){
               const [snapshot,setSnapshot]=useState({disabled:false,pointsOnlyReason:null,liveCam:null,calibCam:null,selectedSiteInterior:true}),
-                [mode,setMode]=useState('points'),[modeLoading,setModeLoading]=useState(null),[modeError,setModeError]=useState({mode:'splat',message:'photo unavailable',detail:'Authored unavailable Photo'});
+                [mode,setMode]=useState('points'),[modeLoading,setModeLoading]=useState(null),[modeError,setModeError]=useState({mode:'splat',message:'photo unavailable',detail:'Authored unavailable Photo'}),[toast,setToast]=useState(null);
               const engineRef=useRef(proof.engines.victoria),preSnapModeRef=useRef(null),viewOpenRef=useRef(true),spatialLifecycleRevisionRef=useRef(1),spatialTravelIntentRef=useRef(1),
                 workspaceAuthorityRef=useRef({key:'authored-authority'});
               const selectedSiteId=proof.selected,selectedContentRevision='authored-'+proof.selected+'-r1',apartmentAuthorityKey='authored-authority',selectedSiteInterior=snapshot.selectedSiteInterior,
                 liveCam=snapshot.liveCam,calibCam=snapshot.calibCam,apartmentSceneControlsEnabled=!snapshot.disabled&&selectedSiteInterior;
-              const showToast=(...args)=>proof.toasts.push(args),refitMobileOverview=value=>proof.refits.push(value),setLiveOn=value=>{proof.liveOn=value};
+              const refitMobileOverview=value=>proof.refits.push(value),setLiveOn=value=>{proof.liveOn=value};
+              ${binding('showToast')}
+              ${binding('dismissToast')}
               ${binding('modeRequestRef')}
               ${binding('pickMode')}
-              proof.state={mode,modeLoading,modeError};proof.pick=pickMode;
+              if(toast&&toast!==proof.lastToast)proof.toasts.push(toast);proof.lastToast=toast;
+              proof.state={mode,modeLoading,modeError,toast};proof.pick=pickMode;
               proof.update=patch=>ReactDOM.flushSync(()=>setSnapshot(previous=>({...previous,...patch})));
               proof.error=error=>ReactDOM.flushSync(()=>setModeError(error));
               proof.switchHome=(site,loading=null)=>ReactDOM.flushSync(()=>{proof.selected=site;engineRef.current=proof.engines[site];spatialLifecycleRevisionRef.current++;spatialTravelIntentRef.current++;setMode('points');setModeError(null);setModeLoading(loading);setSnapshot(previous=>({...previous}))});
               proof.close=()=>{viewOpenRef.current=false};
               return h('section',{className:'apt-home-shell','data-theme':${JSON.stringify(scenario.theme)},style:{position:'relative',width:'100%',height:'100%',background:'var(--apt-surface)'}},
+                h('div',{'data-home-apartment-view':'1',style:{position:'relative',width:'100%',height:'100%'}},
                 h(AptUnifiedRoomToolbar,{mode,modeLoading,modeError,sourceLabel:'Authored source',sourceDetail:'Authored component proof',view:0,disabled:!apartmentSceneControlsEnabled,
-                  pointsOnlyReason:snapshot.pointsOnlyReason,modeLockedReason:${prop('modeLockedReason')},onMode:${prop('onMode')},onOrbit:()=>{},onFit:()=>{}}));
+                  pointsOnlyReason:snapshot.pointsOnlyReason,modeLockedReason:${prop('modeLockedReason')},onMode:${prop('onMode')},onOrbit:()=>{},onFit:()=>{}}),
+                h(window.HomeApartmentUI.Toast,{toast,onDismiss:dismissToast})));
             }
             const root=ReactDOM.createRoot(document.getElementById('root'));ReactDOM.flushSync(()=>root.render(h(PhotoRecoveryProof)));proof.unmount=()=>ReactDOM.flushSync(()=>root.unmount());
           })();`;
@@ -135,6 +141,51 @@ test('Photo recovery uses the existing mode owner and preserves scope, locks and
           if(scenario.coarse)await retry().tap();else await retry().click();
           await page.waitForFunction(()=>window.__photoRecoveryProof.state.modeLoading===null&&window.__photoRecoveryProof.state.modeError?.mode==='splat');
           assert.equal(await group().isVisible(),true);assert.equal(await page.evaluate(()=>window.__photoRecoveryProof.selected),'victoria');assert.equal((await state()).mode,'splat');
+        });
+        await check('actual error Toast coexists with immediate native Cloud recovery and readable native dismissal',async()=>{
+          const toast=page.locator('.apt-ui-toast'),dismiss=page.getByRole('button',{name:'Dismiss message',exact:true});
+          await toast.waitFor();await toast.hover();
+          const layout=await page.evaluate(()=>{
+            const toast=document.querySelector('.apt-ui-toast'),recovery=document.querySelector('.apt-ui-toolbar-notice'),back=document.querySelector('.apt-ui-toolbar-recovery button:last-child'),dismiss=toast.querySelector('[aria-label="Dismiss message"]'),message=toast.querySelector('.apt-ui-toast-message');
+            const box=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}},a=box(toast),b=box(recovery),target=box(back),close=box(dismiss),style=getComputedStyle(message),background=getComputedStyle(toast).backgroundColor;
+            return {toast:a,recovery:b,back:target,dismiss:close,nonoverlap:a.right<=b.x||b.right<=a.x||a.bottom<=b.y||b.bottom<=a.y,
+              backReceivesPointer:back.contains(document.elementFromPoint(target.x+target.width/2,target.y+target.height/2)),
+              dismissReceivesPointer:dismiss.contains(document.elementFromPoint(close.x+close.width/2,close.y+close.height/2)),
+              message:message.textContent,fontSize:parseFloat(style.fontSize),foreground:style.color,background};
+          });receipt.toast_coexistence.push({scenario:label,...layout});
+          await page.evaluate(()=>{window.__photoRecoveryProof.behavior='success'});
+          if(scenario.coarse)await back().tap({timeout:1000});else await back().click({timeout:1000});
+          assert.equal(layout.nonoverlap,true);assert.equal(layout.backReceivesPointer,true);assert.equal(layout.dismissReceivesPointer,true);
+          assert.match(layout.message,/photo unavailable/);assert.ok(layout.fontSize>=12);assert.notEqual(layout.foreground,layout.background);
+          for(const rect of [layout.toast,layout.recovery,layout.dismiss])assert.ok(rect.x>=0&&rect.right<=scenario.width+.5&&rect.y>=0&&rect.bottom<=scenario.height+.5);
+          if(scenario.coarse)assert.ok(layout.dismiss.width>=44&&layout.dismiss.height>=44);
+          await page.waitForFunction(()=>window.__photoRecoveryProof.state.mode==='points'&&window.__photoRecoveryProof.state.modeLoading===null);
+          assert.equal(await toast.isVisible(),true,'explicit recovery does not rewrite the retained sticky Toast lifetime');
+          if(scenario.coarse)await dismiss.tap();else await dismiss.click();
+          assert.equal(await toast.count(),0);
+          await page.evaluate(async()=>{const proof=window.__photoRecoveryProof;proof.behavior='failure';await proof.pick('splat')});
+          await page.waitForFunction(()=>window.__photoRecoveryProof.state.modeLoading===null&&window.__photoRecoveryProof.state.modeError?.mode==='splat');
+          assert.equal(await group().isVisible(),true);assert.equal(await toast.isVisible(),true);
+          await page.evaluate(()=>{const proof=window.__photoRecoveryProof;proof.behavior='pending';proof.retainedToast=proof.state.toast;proof.retainedToastElement=document.querySelector('.apt-ui-toast')});
+          if(scenario.coarse)await retry().tap({timeout:1000});else await retry().click({timeout:1000});
+          assert.equal((await state()).modeLoading,'splat');assert.equal(await group().count(),0);assert.equal(await toast.isVisible(),true);
+          await page.evaluate(()=>window.__photoRecoveryProof.pending.shift().resolve());
+          await page.waitForFunction(()=>window.__photoRecoveryProof.state.mode==='splat'&&window.__photoRecoveryProof.state.modeLoading===null);
+          assert.equal(await page.getByRole('button',{name:'Photo view',exact:true}).getAttribute('aria-pressed'),'true');
+          const restored=await page.evaluate(()=>{
+            const proof=window.__photoRecoveryProof,element=document.querySelector('.apt-ui-toast'),dismiss=element.querySelector('[aria-label="Dismiss message"]'),r=dismiss.getBoundingClientRect(),style=getComputedStyle(element);
+            return {sameToast:proof.state.toast===proof.retainedToast,sameElement:element===proof.retainedToastElement,message:element.querySelector('.apt-ui-toast-message').textContent,
+              expectedMessage:proof.retainedToast.text,sticky:proof.state.toast.sticky,top:style.top,bottom:style.bottom,bottomGap:element.parentElement.getBoundingClientRect().bottom-element.getBoundingClientRect().bottom,
+              actualMode:proof.engines.victoria.modes.mode,mode:proof.state.mode,
+              dismissReceivesPointer:dismiss.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};
+          });receipt.toast_coexistence.at(-1).after_native_retry=restored;
+          assert.equal(restored.sameToast,true);assert.equal(restored.sameElement,true);assert.equal(restored.message,restored.expectedMessage);assert.equal(restored.sticky,true);
+          assert.notEqual(restored.bottom,'auto');assert.ok(Math.abs(restored.bottomGap-parseFloat(restored.bottom))<.5);assert.equal(restored.actualMode,'splat');assert.equal(restored.mode,restored.actualMode);assert.equal(restored.dismissReceivesPointer,true);
+          if(scenario.coarse)await dismiss.tap();else await dismiss.click();
+          assert.equal(await toast.count(),0);
+          await page.evaluate(async()=>{const proof=window.__photoRecoveryProof;proof.behavior='failure';await proof.pick('splat')});
+          await page.waitForFunction(()=>window.__photoRecoveryProof.state.modeLoading===null&&window.__photoRecoveryProof.state.modeError?.mode==='splat');
+          assert.equal(await group().isVisible(),true);assert.equal(await toast.isVisible(),true);
         });
         await check('Back to Cloud is an explicit points-mode operation with native Space activation',async()=>{
           await page.evaluate(()=>{window.__photoRecoveryProof.behavior='success'});const count=await page.evaluate(()=>window.__photoRecoveryProof.calls.length);await back().focus();await page.keyboard.press('Space');

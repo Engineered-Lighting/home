@@ -7,6 +7,11 @@
  * zone outline pulses instead (never a guessed dot).
  */
 import * as THREE from 'three';
+import { createDirectAimGestureController } from './direct-aim-gesture.mjs';
+import { createDeskTargetCapture, sealRegisteredDeskTarget } from './registered-desk-target.mjs';
+
+const { createEquipmentVirtualFixtures } = await import(
+    `./equipment-virtual-fixtures.mjs${new URL(import.meta.url).search}`);
 
 const ICE = new THREE.Color(0xb8d8ff);
 const SURVEY = new THREE.Color(0xffb45f);
@@ -18,6 +23,7 @@ const TYPE_COLOR = {
     tv: new THREE.Color(0xd8a8ff),
     amp: new THREE.Color(0xd8a8ff),
     camera: new THREE.Color(0xa8c8ff),
+    mount: SURVEY,
     other: new THREE.Color(0xcccccc),
 };
 const TARGET_COLOR = {
@@ -110,10 +116,12 @@ export function createOverlay(apartmentRoot) {
     const zoneDraftGroup = new THREE.Group();
     const targetsGroup = new THREE.Group();
     const fixtureMeasureGroup = new THREE.Group();
+    const equipmentReferenceGroup = new THREE.Group();
+    const virtualFixtures = createEquipmentVirtualFixtures(overlayRoot);
     const aimBeamGroup = new THREE.Group();
     const aimTransitionGroup = new THREE.Group();
     overlayRoot.add(devicesGroup, camerasGroup, personGroup, zonesGroup,
-        targetsGroup, fixtureMeasureGroup, aimBeamGroup, aimTransitionGroup);
+        targetsGroup, fixtureMeasureGroup, equipmentReferenceGroup, aimBeamGroup, aimTransitionGroup);
     zonesGroup.add(zoneDraftGroup);
 
     const glowTex = makeGlowTexture();
@@ -163,8 +171,11 @@ export function createOverlay(apartmentRoot) {
         const group = new THREE.Group();
         group.position.set(device.pos[0], device.pos[1], device.pos[2] ?? 0);
 
+        const equipment = device.equipment_record;
         const core = new THREE.Mesh(
-            new THREE.SphereGeometry(0.055, 16, 12),
+            equipment?.kind === 'mount' ? equipment.physical_kind === 'socket'
+                ? new THREE.BoxGeometry(0.10, 0.10, 0.05) : new THREE.OctahedronGeometry(0.075)
+                : new THREE.SphereGeometry(0.055, 16, 12),
             new THREE.MeshBasicMaterial({ color }),
         );
         const ghost = new THREE.Mesh(
@@ -193,9 +204,32 @@ export function createOverlay(apartmentRoot) {
         stem.position.z = -h / 2;
         group.add(core, ghost, glow, pick, stem);
 
+        if (equipment) {
+            group.userData.equipmentKind = equipment.kind;
+            const tag = makeTagSprite(equipment.label, color, { compact: true });
+            tag.position.z = 0.18;
+            group.add(tag);
+            const direction = equipment.orientation?.direction_unit;
+            if (equipment.kind === 'camera' && Array.isArray(direction) && direction.length === 3
+                && direction.every(Number.isFinite) && Math.abs(Math.hypot(...direction) - 1) < 1e-6) {
+                const axis = new THREE.Vector3(...direction);
+                const side = new THREE.Vector3().crossVectors(axis,
+                    Math.abs(axis.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)).normalize();
+                const tip = axis.clone().multiplyScalar(0.7);
+                const shoulder = axis.clone().multiplyScalar(0.55);
+                const arrow = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(), tip, tip, shoulder.clone().addScaledVector(side, 0.065),
+                    tip, shoulder.clone().addScaledVector(side, -0.065),
+                ]), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false }));
+                arrow.name = 'equipment-direction-arrow';
+                arrow.renderOrder = 32;
+                group.add(arrow);
+            }
+        }
+
         // camera devices: a small always-on frustum cone along yaw (40%),
         // landmark + click affordance for the fly-to
-        if (device.type === 'camera') {
+        if (device.type === 'camera' && !equipment) {
             const L = 0.7, tan = 0.45, tanV = 0.3;
             const corners = [
                 new THREE.Vector3(L, L * tan, -L * tanV), new THREE.Vector3(L, -L * tan, -L * tanV),
@@ -211,13 +245,29 @@ export function createOverlay(apartmentRoot) {
                 new THREE.LineBasicMaterial({ color: TYPE_COLOR.camera, transparent: true, opacity: 0.4 }),
             );
             cone.rotation.z = device.yaw_rad || 0;
+            cone.name = 'legacy-camera-frustum';
             group.add(cone);
         }
         return { group, core, ghost, glow, pick, device, state: null };
     }
 
     function setDevices(devices) {
-        for (const { group } of markersById.values()) devicesGroup.remove(group);
+        // A survey edit replaces the marker projection. Release its owned
+        // resources, retaining only the overlay's shared glow texture.
+        const geometries = new Set(), materials = new Set(), textures = new Set();
+        for (const { group } of markersById.values()) {
+            devicesGroup.remove(group);
+            group.traverse((node) => {
+                if (node.geometry) geometries.add(node.geometry);
+                for (const material of Array.isArray(node.material) ? node.material : node.material ? [node.material] : []) {
+                    materials.add(material);
+                    if (material.map && material.map !== glowTex) textures.add(material.map);
+                }
+            });
+        }
+        textures.forEach((texture) => texture.dispose());
+        materials.forEach((material) => material.dispose());
+        geometries.forEach((geometry) => geometry.dispose());
         markersById.clear();
         for (const disc of glowDiscsById.values()) {
             floorGlowGroup.remove(disc);
@@ -226,11 +276,81 @@ export function createOverlay(apartmentRoot) {
         glowDiscsById.clear();
         hoverRing.visible = false;
         for (const d of devices || []) {
-            if (!Array.isArray(d.pos)) continue;
+            if (!Array.isArray(d.pos) || d.pos.length !== 3 || !d.pos.every(Number.isFinite)) continue;
             const m = buildMarker(d);
             markersById.set(d.id, m);
             devicesGroup.add(m.group);
         }
+    }
+
+    /* Immutable named survey planes. Reference traces and measurement lines
+     * use the same apartment frame as markers; no cardinal-axis assumption. */
+    function setEquipmentRegistration(document, { selectedId = null, referenceId = null } = {}) {
+        clearDisposableGroup(equipmentReferenceGroup);
+        if (!selectedId && !referenceId) return;
+        const refs = document?.references;
+        const finiteVector = (value, length) => Array.isArray(value) && value.length === length && value.every(Number.isFinite);
+        if (!refs || !Array.isArray(refs.walls) || refs.walls.length < 3
+            || !finiteVector(refs.floor?.normal, 3) || !Number.isFinite(refs.floor.offset_m)
+            || refs.floor.normal[2] <= 1e-8 || refs.walls.some((wall) =>
+                !finiteVector(wall.normal_xy, 2) || !Number.isFinite(wall.offset_m))) return;
+        const floorZ = (x, y) => (refs.floor.offset_m - refs.floor.normal[0] * x - refs.floor.normal[1] * y) / refs.floor.normal[2];
+        const corners = [];
+        for (let i = 0; i < refs.walls.length; i++) for (let j = i + 1; j < refs.walls.length; j++) {
+            const a = refs.walls[i], b = refs.walls[j];
+            const det = a.normal_xy[0] * b.normal_xy[1] - a.normal_xy[1] * b.normal_xy[0];
+            if (Math.abs(det) < 1e-6) continue;
+            const x = (a.offset_m * b.normal_xy[1] - a.normal_xy[1] * b.offset_m) / det;
+            const y = (a.normal_xy[0] * b.offset_m - a.offset_m * b.normal_xy[0]) / det;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || refs.walls.some((wall) => wall.normal_xy[0] * x + wall.normal_xy[1] * y < wall.offset_m - 1e-6)) continue;
+            if (!corners.some((point) => Math.hypot(point[0] - x, point[1] - y) < 1e-6)) corners.push([x, y]);
+        }
+        if (corners.length < 3) return;
+        const center = corners.reduce((sum, point) => [sum[0] + point[0] / corners.length, sum[1] + point[1] / corners.length], [0, 0]);
+        corners.sort((a, b) => Math.atan2(a[1] - center[1], a[0] - center[0]) - Math.atan2(b[1] - center[1], b[0] - center[0]));
+        const addLine = (points, color, name, opacity = 0.9) => {
+            const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),
+                new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false }));
+            line.name = name; line.renderOrder = 33; equipmentReferenceGroup.add(line); return line;
+        };
+        if (referenceId === refs.floor.id) {
+            const positions = [];
+            for (let i = 1; i < corners.length - 1; i++) for (const point of [corners[0], corners[i], corners[i + 1]]) positions.push(point[0], point[1], floorZ(...point) + 0.012);
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            const fill = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: SURVEY, transparent: true,
+                opacity: 0.13, side: THREE.DoubleSide, depthTest: false, depthWrite: false }));
+            fill.name = 'equipment-reference-floor'; equipmentReferenceGroup.add(fill);
+        }
+        for (const wall of refs.walls) {
+            const points = corners.filter((point) => Math.abs(wall.normal_xy[0] * point[0] + wall.normal_xy[1] * point[1] - wall.offset_m) < 1e-5);
+            if (points.length !== 2) continue;
+            const active = referenceId === wall.id;
+            const line = addLine(points.map((point) => new THREE.Vector3(...point, floorZ(...point) + 0.025)),
+                active ? SURVEY : ICE, 'equipment-reference-wall', active ? 1 : 0.3);
+            line.userData.referenceId = wall.id;
+            if (active) {
+                const tag = makeTagSprite(wall.label, SURVEY, { compact: true });
+                const mid = points.reduce((sum, point) => [sum[0] + point[0] / 2, sum[1] + point[1] / 2], [0, 0]);
+                tag.position.set(...mid, floorZ(...mid) + 0.13); equipmentReferenceGroup.add(tag);
+            }
+        }
+        const record = document.equipment?.find((entry) => entry.id === selectedId);
+        if (!finiteVector(record?.position_m, 3)) return;
+        const position = record.position_m;
+        for (const measurement of record.measurements?.wall_distances || []) {
+            const wall = refs.walls.find((entry) => entry.id === measurement.wall_id);
+            if (!wall || !Number.isFinite(measurement.distance_m)) continue;
+            const n = wall.normal_xy, norm2 = n[0] ** 2 + n[1] ** 2;
+            if (norm2 < 1e-8) continue;
+            const distance = (n[0] * position[0] + n[1] * position[1] - wall.offset_m) / norm2;
+            const end = [position[0] - n[0] * distance, position[1] - n[1] * distance, position[2]];
+            const line = addLine([new THREE.Vector3(...position), new THREE.Vector3(...end)], SURVEY, 'equipment-wall-measurement');
+            line.userData.referenceId = wall.id;
+        }
+        if (Number.isFinite(record.measurements?.height_above_floor_m)) addLine([
+            new THREE.Vector3(...position), new THREE.Vector3(position[0], position[1], floorZ(position[0], position[1])),
+        ], SURVEY, 'equipment-floor-measurement');
     }
 
     /* ---------------- named aiming targets ---------------- */
@@ -1009,8 +1129,45 @@ export function createOverlay(apartmentRoot) {
         }
     }
 
+    let disposed = false;
+    function dispose() {
+        if (disposed) return;
+        disposed = true;
+        virtualFixtures.dispose();
+        const geometries = new Set([floorGlowGeo]);
+        const materials = new Set();
+        const textures = new Set([glowTex]);
+        overlayRoot.traverse((node) => {
+            if (node.geometry) geometries.add(node.geometry);
+            for (const material of Array.isArray(node.material) ? node.material : node.material ? [node.material] : []) {
+                materials.add(material);
+                if (material.map) textures.add(material.map);
+            }
+        });
+        textures.forEach((texture) => texture.dispose());
+        materials.forEach((material) => material.dispose());
+        geometries.forEach((geometry) => geometry.dispose());
+        overlayRoot.removeFromParent();
+        overlayRoot.clear();
+        markersById.clear(); zonesById.clear(); targetsById.clear(); glowDiscsById.clear();
+        aimRadialPickObjects = [];
+    }
+
     return {
-        devicesGroup, camerasGroup, personGroup, zonesGroup, targetsGroup,
+        overlayRoot, dispose, devicesGroup, camerasGroup, personGroup, zonesGroup, targetsGroup,
+        equipmentReferenceGroup, setEquipmentRegistration,
+        virtualFixturesGroup: virtualFixtures.root,
+        setVirtualFixtures: virtualFixtures.setDocument,
+        setVirtualFixtureState: virtualFixtures.setFixtureState,
+        setVirtualFixturesVisible: virtualFixtures.setVisible,
+        virtualFixturesReadback: virtualFixtures.readback,
+        virtualFixturePickObjects: virtualFixtures.pickObjects,
+        virtualFixtureInteractionDescriptor: virtualFixtures.interactionDescriptor,
+        aimVirtualFixtureAtTarget: virtualFixtures.aimAtTarget,
+        restoreVirtualFixtureAim: virtualFixtures.restoreAim,
+        setVirtualFixtureSelected: virtualFixtures.setSelected,
+        createVirtualFixtureAimGesture: createDirectAimGestureController,
+        createDeskTargetCapture, sealRegisteredDeskTarget,
         markersById, zonesById, setCalibMarkers, calibGroup, moveCalibMarker,
         targetsById, setTargets, setTargetHover, setFixtureCalibration, setAimBeam, setAimBeams,
         animateAimTransition, aimBeamGroup, aimTransitionGroup,

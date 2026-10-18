@@ -1,9 +1,15 @@
 /* home-3d/rig.js — the constrained camera rig.
  *
  * Quantized navigation per the plan: 8 azimuth stops (45°), 2 elevation stops
- * (35°/60°), 3 zoom detents (overview/room/close), rubber-band drag previews
- * with snap-back, and the engineered.lighting micro-pivot (double-lerp drift,
- * dt-corrected). No free-fly, ever.
+ * (35°/60°), 5 zoom detents (overview, three room steps, close), rubber-band
+ * drag previews with snap-back, and the engineered.lighting micro-pivot
+ * (double-lerp drift, dt-corrected). No free-fly, ever.
+ *
+ * Inside the overview, a wheel zooms toward the point under the cursor: the
+ * orbit centre moves along the pick ray exactly as far as keeps that point
+ * still on screen. Detent 0 always orbits the fitted centre, so the world pose
+ * derived from it (and the outward handoff) never depends on where the user
+ * looked inside.
  *
  * Works in three.js world space (Y-up; the apartmentRoot converts the Z-up data).
  */
@@ -11,8 +17,14 @@ import * as THREE from 'three';
 
 const AZ_STOPS = 8;
 const ELEVATIONS = [35, 60];          // degrees
-const ZOOM_FACTORS = [1.0, 0.55, 0.3]; // × fitDistance
+/* × fitDistance. Detent 0 is unchanged; the old 0.55/0.3 pair became four
+ * roughly geometric steps so each notch is a similar perceived zoom. */
+export const ZOOM_FACTORS = Object.freeze([1.0, 0.72, 0.52, 0.38, 0.28]);
 const HOME = { az: 1, el: 0, zoom: 0 };
+/* Pull-back ceiling for the reversible pre-zoom band, as a fraction of the
+ * overview radius. At 0.25 the Apartment reads as clearly receding (apparent
+ * scale 0.8) while staying well inside the camera's 200 m far plane. */
+const MAX_OVERSHOOT = 0.25;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 const MAX_PREVIEW = THREE.MathUtils.degToRad(20);
@@ -82,6 +94,14 @@ export function createRig(camera) {
         previewAz: 0, previewEl: 0,
         pivot: { tx: 0, ty: 0, cx: 0, cy: 0, dx: 0, dy: 0 },
         locked: false,        // true while snapped to a real camera (P4)
+        /* Continuous pull-back past the outermost detent, as a multiplier on the
+         * detent radius. It deliberately does NOT live in cur.radius: goTo()
+         * overwrites that from zoomRadius(), and update() rewrites it every frame
+         * during a tween, so an overshoot stored there is destroyed by any
+         * rotation. The eight azimuth dots stay live during the pre-zoom band, so
+         * "drag to look around while pulled back" must not silently inflate the
+         * Apartment back to full size. */
+        overshoot: 0,
     };
 
     const cur = { az: azRad(HOME.az), el: elRad(HOME.el), radius: 18 };
@@ -90,6 +110,13 @@ export function createRig(camera) {
     let heldPose = null;    // held camera pose after arrival
     let editReturn = null;  // detented pose restored when Apartment editing ends
     const BASE_FOV = camera.fov;
+    /* Where detent 0 orbits (fitBounds() sets it), the world-space box the
+     * zoom focus may not leave, and the cursor of the wheel event being
+     * handled right now (normalized device coordinates, or null). */
+    const homeTarget = state.target.clone();
+    let targetBounds = null;
+    let zoomFocus = null;
+    const raycaster = new THREE.Raycaster();
 
     function applyCustomProjection(matrix) {
         if (!matrix) return false;
@@ -120,14 +147,68 @@ export function createRig(camera) {
         } catch (_) { return false; }
     }
 
-    function startTween(toAz, toEl, toRadius, dur = 450) {
+    function startTween(toAz, toEl, toRadius, dur = 450, toTarget = state.target) {
         if (reducedMotion()) dur = 1;
         tween = {
             t: 0, dur,
             fromAz: cur.az, dAz: shortestAngle(cur.az, toAz),
             fromEl: cur.el, dEl: toEl - cur.el,
             fromR: cur.radius, dR: toRadius - cur.radius,
+            /* The centre moves on the same eased clock as the radius. That is
+             * what keeps a cursor-focused point still for the WHOLE tween, not
+             * just at its ends: eye = focus + (1 - k*s) * (eye0 - focus). */
+            fromTarget: state.target.clone(), toTarget: toTarget.clone(),
         };
+    }
+
+    /* The world point under a cursor, for zoom-to-cursor.
+     *
+     * The pick ray meets the horizontal plane through the orbit centre, which
+     * is where the eye reads "the room" at every elevation stop; a ray that
+     * never descends to it (a cursor above the horizon) falls back to the
+     * plane facing the camera. Clamped to the fitted bounds, so a cursor over
+     * empty space zooms toward the nearest part of the Apartment instead of
+     * walking the orbit centre out of it. */
+    function zoomFocusPoint(ndc) {
+        if (!ndc) return null;
+        camera.updateMatrixWorld(true);
+        raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), camera);
+        const hit = new THREE.Vector3();
+        const floor = new THREE.Plane(WORLD_UP.clone(), -state.target.y);
+        if (!raycaster.ray.intersectPlane(floor, hit)) {
+            const facing = new THREE.Plane().setFromNormalAndCoplanarPoint(
+                camera.getWorldDirection(new THREE.Vector3()),
+                state.target,
+            );
+            if (!raycaster.ray.intersectPlane(facing, hit)) return null;
+        }
+        if (targetBounds) hit.clamp(targetBounds.min, targetBounds.max);
+        return hit;
+    }
+
+    /* The orbit centre for a detent change.
+     *
+     * Detent 0 is the fitted centre, exactly. Inward with a focus, the centre
+     * moves toward it by 1 - r'/r, measured from the LIVE pose, which keeps
+     * that point fixed under the cursor even when a notch lands mid-tween.
+     * Outward, the offset from home shrinks in proportion to (1 - factor), the
+     * exact inverse of zooming in on one point, so it reaches zero at detent
+     * 0 by construction. Anything else keeps the pending goal: a rotation
+     * during a zoom must not freeze the centre wherever the tween had got to. */
+    function detentTarget(fromZoom, toZoom, goal, focus) {
+        if (toZoom === 0) return homeTarget.clone();
+        if (toZoom > fromZoom && focus) {
+            const share = THREE.MathUtils.clamp(
+                1 - zoomRadius(toZoom) / Math.max(1e-6, cur.radius), 0, 1);
+            const next = state.target.clone().lerp(focus, share);
+            return targetBounds ? next.clamp(targetBounds.min, targetBounds.max) : next;
+        }
+        if (toZoom < fromZoom) {
+            const fromWeight = 1 - ZOOM_FACTORS[fromZoom];
+            const scale = fromWeight > 1e-9 ? (1 - ZOOM_FACTORS[toZoom]) / fromWeight : 0;
+            return homeTarget.clone().addScaledVector(goal.clone().sub(homeTarget), scale);
+        }
+        return goal.clone();
     }
 
     function quadraticBezier(out, a, b, c, t) {
@@ -154,7 +235,7 @@ export function createRig(camera) {
         const p = state.pivot;
         const az = cur.az + state.previewAz;
         const el = THREE.MathUtils.clamp(cur.el + state.previewEl, 0.05, Math.PI / 2 - 0.02);
-        const r = cur.radius;
+        const r = cur.radius * (1 + state.overshoot);
         const t = state.target;
         camera.position.set(
             t.x + r * Math.cos(el) * Math.sin(az),
@@ -175,21 +256,34 @@ export function createRig(camera) {
         camera.updateProjectionMatrix();
     }
 
-    function goTo({ az = state.az, el = state.el, zoom = state.zoom, dur = 450 }) {
+    /* `target` restores a centre saved from an earlier pose (edit mode's
+     * return). Detent 0 still lands on the fitted centre, and the saved centre
+     * is clamped to the current bounds in case the Apartment was refitted. */
+    function goTo({ az = state.az, el = state.el, zoom = state.zoom, dur = 450, focus = null, target = null }) {
+        const fromZoom = state.zoom;
+        const goalTarget = tween ? tween.toTarget : state.target;
         state.az = ((az % AZ_STOPS) + AZ_STOPS) % AZ_STOPS;
         state.el = THREE.MathUtils.clamp(el, 0, ELEVATIONS.length - 1);
         state.zoom = THREE.MathUtils.clamp(zoom, 0, ZOOM_FACTORS.length - 1);
         const toAz = azRad(state.az);
         const toEl = elRad(state.el);
         const toRadius = zoomRadius(state.zoom);
+        let toTarget;
+        if (target && state.zoom > 0) {
+            toTarget = target.clone();
+            if (targetBounds) toTarget.clamp(targetBounds.min, targetBounds.max);
+        } else {
+            toTarget = detentTarget(fromZoom, state.zoom, goalTarget, focus);
+        }
         if (dur <= 0) {
             tween = null;
             cur.az = toAz;
             cur.el = toEl;
             cur.radius = toRadius;
+            state.target.copy(toTarget);
             applyOrbitPose();
         } else {
-            startTween(toAz, toEl, toRadius, dur);
+            startTween(toAz, toEl, toRadius, dur, toTarget);
         }
     }
 
@@ -208,9 +302,27 @@ export function createRig(camera) {
                     zoom: state.zoom,
                 };
             }
-            goTo({ zoom: next, dur });
+            // Only a wheel supplies a cursor; buttons and keys zoom on the centre.
+            const focus = next > state.zoom ? zoomFocusPoint(zoomFocus) : null;
+            goTo({ zoom: next, dur, focus });
             return { accepted: true, zoom: state.zoom };
         },
+        /* The cursor of the wheel event currently being dispatched, as
+         * normalized device coordinates, or null. attachInput() sets it around
+         * the synchronous zoom call and clears it straight after, so a later
+         * button or keyboard step can never inherit a stale cursor. */
+        setZoomFocus(ndc) {
+            const x = Number(ndc?.x);
+            const y = Number(ndc?.y);
+            zoomFocus = Number.isFinite(x) && Number.isFinite(y)
+                ? { x: THREE.MathUtils.clamp(x, -1, 1), y: THREE.MathUtils.clamp(y, -1, 1) }
+                : null;
+        },
+        detentCount() { return ZOOM_FACTORS.length; },
+        detentRadius(i) {
+            return zoomRadius(THREE.MathUtils.clamp(Math.trunc(Number(i) || 0), 0, ZOOM_FACTORS.length - 1));
+        },
+        homeTarget() { return homeTarget.clone(); },
         snapHome(dur = 500) { if (!state.locked) goTo({ ...HOME, dur }); },
 
         /* Fit the apartment bounds (world space). Desktop keeps the established
@@ -222,6 +334,8 @@ export function createRig(camera) {
             const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
             state.target.copy(sphere.center);
             state.target.y = Math.min(Math.max(0.9, sphere.center.y * 0.6), sphere.center.y);
+            homeTarget.copy(state.target);
+            targetBounds = box3.clone();
             const viewport = fitViewport(camera.aspect || 1);
             const sphereFit = (sphere.radius * 0.85) / Math.sin(Math.min(fovV, fovH) / 2);
             const viewFit = projectedFitDistance(
@@ -309,8 +423,11 @@ export function createRig(camera) {
                 cur.az = tween.fromAz + tween.dAz * k;
                 cur.el = tween.fromEl + tween.dEl * k;
                 cur.radius = tween.fromR + tween.dR * k;
+                state.target.lerpVectors(tween.fromTarget, tween.toTarget, k);
                 if (tween.t >= tween.dur) {
                     cur.az = ((tween.fromAz + tween.dAz) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+                    // Land exactly: detent 0 must be the fitted centre, not a lerp away from it.
+                    state.target.copy(tween.toTarget);
                     tween = null;
                 }
             }
@@ -331,14 +448,136 @@ export function createRig(camera) {
         elevationIndex() { return state.el; },
         zoomIndex() { return state.zoom; },
         atWorldBoundary() { return !state.locked && state.zoom === 0; },
-        currentRadius() { return cur.radius; },
+        currentRadius() { return cur.radius * (1 + state.overshoot); },
+
+        /* Continuous pre-zoom past the overview detent. `k` is a fraction of the
+         * detent radius; 0 restores the detent exactly. */
+        setOvershoot(k) {
+            if (state.locked) return state.overshoot;
+            const next = Number(k);
+            state.overshoot = Number.isFinite(next) ? THREE.MathUtils.clamp(next, 0, MAX_OVERSHOOT) : 0;
+            applyOrbitPose();
+            return state.overshoot;
+        },
+        overshoot() { return state.overshoot; },
+        maxOvershoot() { return MAX_OVERSHOOT; },
+
+        /* Everything needed to put the camera back exactly where it left.
+         *
+         * goTo() cannot express this: it takes quantized detent indices, and at
+         * dur <= 0 it overwrites cur.* from zoomRadius(state.zoom), discarding
+         * overshoot, drag previews, and any mid-tween pose. The handoff can begin
+         * mid-tween, because atWorldBoundary() says nothing about isTweening(). */
+        snapshotPose() {
+            return {
+                az: state.az, el: state.el, zoom: state.zoom,
+                curAz: cur.az, curEl: cur.el, curRadius: cur.radius,
+                previewAz: state.previewAz, previewEl: state.previewEl,
+                overshoot: state.overshoot,
+                fitDistance: state.fitDistance,
+                target: state.target.clone(),
+                homeTarget: homeTarget.clone(),
+                targetBounds: targetBounds ? targetBounds.clone() : null,
+                pivot: { ...state.pivot },
+            };
+        },
+
+        restorePose(snapshot) {
+            if (!snapshot) return false;
+            tween = null;
+            poseTween = null;
+            heldPose = null;
+            state.locked = false;
+            state.az = snapshot.az;
+            state.el = snapshot.el;
+            state.zoom = snapshot.zoom;
+            state.previewAz = snapshot.previewAz || 0;
+            state.previewEl = snapshot.previewEl || 0;
+            state.overshoot = snapshot.overshoot || 0;
+            if (Number.isFinite(snapshot.fitDistance)) state.fitDistance = snapshot.fitDistance;
+            if (snapshot.target) state.target.copy(snapshot.target);
+            if (snapshot.homeTarget) homeTarget.copy(snapshot.homeTarget);
+            if (snapshot.targetBounds) targetBounds = snapshot.targetBounds.clone();
+            if (snapshot.pivot) Object.assign(state.pivot, snapshot.pivot);
+            cur.az = snapshot.curAz;
+            cur.el = snapshot.curEl;
+            cur.radius = snapshot.curRadius;
+            camera.fov = BASE_FOV;
+            camera.updateProjectionMatrix();
+            applyOrbitPose();
+            return true;
+        },
+
+        /* Camera forward and up in Apartment-local Z-up coordinates.
+         *
+         * Direction vectors go through the rotation only, matching picking.js:
+         * worldToLocal is a point transform, correct here only for the eye.
+         *
+         * The hover micro-pivot is excluded by default. Two orthogonal rotations
+         * of PIVOT_MAX compose to 0.81 degrees of forward deviation and induce
+         * roll of about dx*sin(el), which is 0.50 degrees at the 60-degree
+         * elevation stop: exactly the continuity budget the world pose is held
+         * to. Excluding it makes roll identically zero and the round trip exact.
+         * It is also continuous drift state that no snapshot can pin, because it
+         * keeps integrating toward the live hover target for as long as the world
+         * owns the viewport. */
+        cameraBasisApartmentLocal(apartmentRoot, { includePivot = false } = {}) {
+            if (!apartmentRoot) return null;
+            apartmentRoot.updateMatrixWorld(true);
+            const invRoot = apartmentRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
+            const az = cur.az + state.previewAz;
+            const el = THREE.MathUtils.clamp(cur.el + state.previewEl, 0.05, Math.PI / 2 - 0.02);
+            const radius = cur.radius * (1 + state.overshoot);
+            const t = state.target;
+
+            let forwardWorld;
+            let upWorld;
+            if (includePivot) {
+                camera.updateMatrixWorld(true);
+                const q = camera.getWorldQuaternion(new THREE.Quaternion());
+                forwardWorld = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+                upWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+            } else {
+                // The pure lookAt basis, recomputed from detent geometry so no
+                // pivot, tween, or held pose can contaminate it.
+                const eye = new THREE.Vector3(
+                    t.x + radius * Math.cos(el) * Math.sin(az),
+                    t.y + radius * Math.sin(el),
+                    t.z + radius * Math.cos(el) * Math.cos(az),
+                );
+                forwardWorld = new THREE.Vector3().subVectors(t, eye).normalize();
+                const right = new THREE.Vector3().crossVectors(forwardWorld, WORLD_UP);
+                if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+                right.normalize();
+                upWorld = new THREE.Vector3().crossVectors(right, forwardWorld).normalize();
+            }
+
+            const forward = forwardWorld.clone().applyQuaternion(invRoot);
+            const up = upWorld.clone().applyQuaternion(invRoot);
+            return {
+                forwardLocal: [forward.x, forward.y, forward.z],
+                upLocal: [up.x, up.y, up.z],
+                verticalFovDeg: camera.fov,
+                rangeM: radius,
+                includedPivot: includePivot === true,
+            };
+        },
 
         /* Edit mode stays inside the detent system so pointer drag, keyboard
          * arrows, and explicit orbit controls all remain useful. Keep the
          * current azimuth and use the 35-degree isometric elevation so wall
          * faces are visible from the first editor frame. */
         goEditPose(dur = 0) {
-            if (!editReturn) editReturn = { az: state.az, el: state.el, zoom: state.zoom };
+            /* The centre is part of the pose: at a detent reached by zooming
+             * toward the cursor it is off the fitted centre, and detent 0 is
+             * about to re-centre it. Save the tween's goal, not wherever a
+             * zoom in flight had got to. */
+            if (!editReturn) {
+                editReturn = {
+                    az: state.az, el: state.el, zoom: state.zoom,
+                    target: (tween ? tween.toTarget : state.target).clone(),
+                };
+            }
             clearAbsolutePose();
             goTo({ az: state.az, el: 0, zoom: 0, dur });
         },
@@ -403,6 +642,9 @@ export function createRig(camera) {
             state.locked = false;
             state.previewAz = 0;
             state.previewEl = 0;
+            // A close while pulled back must not strand the overshoot on the
+            // resident rig; the reopened view would start silently zoomed out.
+            state.overshoot = 0;
             state.pivot.tx = 0; state.pivot.ty = 0;
             state.pivot.cx = 0; state.pivot.cy = 0;
             state.pivot.dx = 0; state.pivot.dy = 0;
@@ -450,11 +692,38 @@ export function attachInput(el, rig, { onZoomStep = null } = {}) {
     const onWheel = (e) => {
         e.preventDefault();
         const now = performance.now();
-        if (now - wheelAt < 150) return; // one detent per gesture
-        wheelAt = now;
         const direction = e.deltaY > 0 ? -1 : 1;
-        if (typeof onZoomStep === 'function') onZoomStep(direction, { source: 'wheel' });
-        else rig.stepZoom(direction);
+        /* Keep the established one-detent cadence INSIDE the Apartment. At the
+         * outer boundary every native delta instead feeds the elastic momentum
+         * band; suppressing 149ms of a trackpad gesture is what made the seam
+         * feel like a button rather than a continuation of scroll. */
+        const continuousBoundary = direction < 0 && rig.atWorldBoundary?.();
+        if (!continuousBoundary && now - wheelAt < 150) return;
+        if (!continuousBoundary) wheelAt = now;
+        /* The host's zoom path reaches rig.stepZoom() synchronously for an
+         * interior detent, so the cursor is lent for exactly this dispatch.
+         * If that path ever becomes asynchronous the zoom degrades to the
+         * centre, never to a stale cursor. */
+        let rect = null;
+        try { rect = el.getBoundingClientRect?.() ?? null; } catch (err) { /* */ }
+        rig.setZoomFocus?.(rect && rect.width > 0 && rect.height > 0 ? {
+            x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+            y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
+        } : null);
+        try {
+            if (typeof onZoomStep === 'function') onZoomStep(direction, {
+                source: 'wheel',
+                continuousBoundary,
+                deltaY: e.deltaY,
+                deltaMode: e.deltaMode,
+                viewportHeightPx: el.clientHeight || 800,
+                // The boundary counts slow notches across an idle pull by this.
+                timeStamp: e.timeStamp,
+            });
+            else rig.stepZoom(direction);
+        } finally {
+            rig.setZoomFocus?.(null);
+        }
     };
     const onLeave = () => rig.hoverPivot(0, 0);
 

@@ -2362,10 +2362,6 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const selectedSiteName = selectedSiteEntry?.shortName || "this home";
   const selectedContentRevision = selectedSiteEntry?.contentRevision || null;
   const apartmentSceneControlsEnabled = !liveShadow && apartmentOwnsInput && phase === "ready" && selectedSiteInterior === true;
-  // Binding4 commissions these local display modes separately from writers,
-  // tracking, camera capture and scene-edit controls, which remain disabled.
-  const apartmentDisplayModesEnabled = apartmentSceneControlsEnabled || (liveShadow
-    && [4,5,6].includes(window.HomeLiveSceneShadow.resident_binding?.version) && phase === "ready" && selectedSiteInterior === true);
   // The current HA model belongs to Echo. Importing a scan grants no control
   // binding for another home; that requires its own reviewed integration.
   apartmentSceneControlsEnabledRef.current = apartmentSceneControlsEnabled;
@@ -2481,13 +2477,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     && modelScopeRef.current?.authorityKey === workspaceAuthorityRef.current.key;
   workspaceStateRef.current = { model, dirty: ["unsaved", "saving", "validation", "offline", "conflict", "simulation"].includes(saveStatus.state) };
   const rehearsalIsolated = liveShadow || mapRehearsalOpen || window.HomeMapRehearsalOfflineState?.active === true;
-  const apartmentShadowEquipmentDisplayEnabled = liveShadow && [4,5,6].includes(window.HomeLiveSceneShadow.resident_binding?.version)
-    && apartmentDisplayModesEnabled && model === window.HomeLiveResidentModel && model.source_detail?.read_only === true;
-  const apartmentPlacementDisplayEnabled = apartmentShadowEquipmentDisplayEnabled || (apartmentSceneControlsEnabled && !rehearsalIsolated
+  const apartmentPlacementDisplayEnabled = apartmentSceneControlsEnabled && !rehearsalIsolated
     && modelScopeRef.current?.authorityKey === workspaceAuthorityRef.current.key
     && modelSiteRef.current === selectedSiteId
-    && (selectedSiteId === "echo" || selectedSiteId === "victoria" && !!model._equipment_registration));
-  const apartmentPlacementControlsEnabled = !liveShadow && apartmentPlacementDisplayEnabled
+    && (selectedSiteId === "echo" || selectedSiteId === "victoria" && !!model._equipment_registration);
+  const apartmentPlacementControlsEnabled = apartmentPlacementDisplayEnabled
     && (selectedSiteId === "echo" || model.source_detail?.read_only === false);
   const syntheticSpatialQa = aptUseSyntheticSpatialQa(
     simActive,
@@ -4217,8 +4211,6 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     try {
       next = await module.createEngine({ canvas, hostEl: hostRef.current, sim: simActive, siteId,
         contentRevision: revision === "legacy" ? null : revision,
-      assetSelection: [4,5,6].includes(window.HomeLiveSceneShadow?.resident_binding?.version)
-          ? window.HomeLiveSceneShadow.resident_binding.asset_selection : null,
         signal: pending.controller.signal,
         performanceController: oldEngine?.performanceController });
       next.contentRevision = revision;
@@ -4648,7 +4640,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     return () => { dead = true; };
   /* selectedSiteId included: the seed model is per-site, so switching homes
    * must reload it rather than leaving the previous home's in place. */
-  }, [open, endpoint, token, simActive, selectedSiteId, selectedContentRevision, mapRehearsalOpen, equipmentReloadEpoch, liveShadow && [4,5,6].includes(window.HomeLiveSceneShadow.resident_binding?.version) && phase === "ready"]);
+  }, [open, endpoint, token, simActive, selectedSiteId, selectedContentRevision, mapRehearsalOpen, equipmentReloadEpoch]);
 
   /* Registry inventory follows the authenticated HA connection separately
      from the Apartment document. Reconnecting must refresh all real lights,
@@ -4762,7 +4754,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
 
   /* model -> overlay sync */
   useEffect(() => {
-    if (mapRehearsalOpen || liveShadow && !apartmentShadowEquipmentDisplayEnabled) return;
+    if (liveShadow || mapRehearsalOpen) return;
     const engine = engineRef.current;
     if (!engine || phase !== "ready") return;
     if (engine.siteId !== selectedSiteId || !apartmentPlacementDisplayEnabled) {
@@ -7070,8 +7062,6 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         viewport,
         devices: (model.devices || []).length,
         virtualFixtures: engineRef.current?.overlay?.virtualFixturesReadback?.() || null,
-        inspection: liveShadow ? {display_modes:apartmentDisplayModesEnabled,equipment_markers:apartmentShadowEquipmentDisplayEnabled,
-          placements_writable:apartmentPlacementControlsEnabled,model_is_immutable:model===window.HomeLiveResidentModel,selected_interior:selectedSiteInterior} : null,
         fit: engineRef.current?.debugFit?.() || null,
         modes: engineRef.current?.modes?.debugInfo?.() || null,
         spatialScale,
@@ -8314,20 +8304,20 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                 ? `Cloud view unavailable: ${apartmentSceneUnavailableReason}`
                 : "Cloud view"}
               onClick={() => {
-                if (!apartmentDisplayModesEnabled) return;
+                if (!apartmentSceneControlsEnabled) return;
                 setLiveOn(false); pickMode("points");
               }}
-              disabled={!apartmentDisplayModesEnabled || modeLoading === "points"}
+              disabled={!apartmentSceneControlsEnabled || modeLoading === "points"}
               title={apartmentSceneUnavailableReason || undefined} />
             <AptHudButton label="photo" active={selectedSiteInterior !== false && !liveOn && mode === "splat"}
               ariaLabel={apartmentSceneUnavailableReason || interiorPointsOnlyReason
                 ? `Photo view unavailable: ${apartmentSceneUnavailableReason || interiorPointsOnlyReason}`
                 : "Photo view"}
               onClick={() => {
-                if (!apartmentDisplayModesEnabled || interiorPointsOnlyReason) return;
+                if (!apartmentSceneControlsEnabled || interiorPointsOnlyReason) return;
                 setLiveOn(false); pickMode("splat");
               }}
-              disabled={!apartmentDisplayModesEnabled || modeLoading === "splat" || !!interiorPointsOnlyReason}
+              disabled={!apartmentSceneControlsEnabled || modeLoading === "splat" || !!interiorPointsOnlyReason}
               title={apartmentSceneUnavailableReason || interiorPointsOnlyReason
                 || (modeError?.mode === "splat" ? modeError.detail : "")} />
             <AptHudButton label="mesh" active={selectedSiteInterior !== false && !liveOn && mode === "mesh"}
@@ -8335,10 +8325,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                 ? `Mesh view unavailable: ${apartmentSceneUnavailableReason || interiorPointsOnlyReason}`
                 : "Mesh view"}
               onClick={() => {
-                if (!apartmentDisplayModesEnabled || interiorPointsOnlyReason) return;
+                if (!apartmentSceneControlsEnabled || interiorPointsOnlyReason) return;
                 setLiveOn(false); pickMode("mesh");
               }}
-              disabled={!apartmentDisplayModesEnabled || modeLoading === "mesh" || !!interiorPointsOnlyReason}
+              disabled={!apartmentSceneControlsEnabled || modeLoading === "mesh" || !!interiorPointsOnlyReason}
               title={apartmentSceneUnavailableReason || interiorPointsOnlyReason
                 || (modeError?.mode === "mesh" ? modeError.detail : "")} />
           </div>
@@ -8819,7 +8809,9 @@ function HomeApartmentProductView(props) {
   useEffect(() => { if (!props.open) setReplayOpen(false); }, [props.open]);
   return React.createElement(HomeApartmentLiveView, {
     ...props,
-    onOpenDynamicReplay: openRehearsal,
+    onOpenDynamicReplay: typeof window.HomeMapRehearsalOffline?.install === "function"
+      && typeof window.HomeMapRehearsalUI?.close === "function" && window.HomeMapRehearsalPanel
+      ? openRehearsal : undefined,
     mapRehearsalOpen: replayOpen,
     mapRehearsalError: replayError,
     onCloseMapRehearsal: () => setReplayOpen(false),

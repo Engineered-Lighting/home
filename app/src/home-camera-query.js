@@ -141,11 +141,23 @@
         !['queued','dispatching','running','indeterminate','terminal'].includes(value.state)) throw new Error('invalid receipt');
     return value;
   }
-  function pause(signal) {
+  // Budgeted status polling: 300 ms before each of the first 6 status reads,
+  // then 1 s, and at most 12 status reads per question. With the single
+  // context and image GETs that is at most 14 GETs, so two questions a minute
+  // stay under the Jetson's 30 GETs/min refresh cap. The Jetson keeps working
+  // until the 15 s deadline, so the last read waits until LAST_READ_MARGIN_S
+  // before it (never less than 1 s): a slow answer is still delivered, and the
+  // margin leaves time for that read and the context and image reads.
+  const FAST_STATUS_READS = 6, FAST_PAUSE_MS = 300, SLOW_PAUSE_MS = 1000, MAX_STATUS_READS = 12;
+  const LAST_READ_MARGIN_S = 1.5;
+  const statusPause = (read, remainingSeconds) => read <= FAST_STATUS_READS ? FAST_PAUSE_MS :
+    read < MAX_STATUS_READS ? SLOW_PAUSE_MS :
+      Math.max(SLOW_PAUSE_MS, (remainingSeconds - LAST_READ_MARGIN_S) * 1000);
+  function pause(signal, ms) {
     return new Promise((resolve, reject) => {
       if (signal.aborted) return reject(new Error('cancelled'));
       const abort = () => { clearTimeout(timer); reject(new Error('cancelled')); };
-      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, 1000);
+      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms);
       signal.addEventListener('abort', abort, {once:true});
     });
   }
@@ -174,16 +186,21 @@
       // interval gives a conservative upper bound on server time, independent of
       // the desktop wall clock. Slow transport shortens usable freshness.
       const serverNowUpper = () => accepted.accepted_at + (root.performance.now() - started) / 1000 + .001;
+      let statusReads = 0;
       while (!controller.signal.aborted && !cancelled && options.isCurrent()) {
         if (state.accepted_at !== accepted.accepted_at || state.deadline !== accepted.deadline ||
             serverNowUpper() > state.deadline || state.state === 'indeterminate') throw new Error('refresh unresolved');
         if (state.state === 'terminal') {
           settled = true;
           if (state.outcome !== 'completed') throw new Error('refresh failed');
+          // One context read per question: a terminal request's context does
+          // not change, so a mismatch is reported unavailable, not re-polled.
           value = await call('cameras.context');
-          if (value?.request_id === requestId) break;
+          if (value?.request_id !== requestId) throw new Error('refresh failed');
+          break;
         }
-        await pause(controller.signal);
+        if (statusReads >= MAX_STATUS_READS) throw new Error('refresh unresolved');
+        await pause(controller.signal, statusPause(++statusReads, state.deadline - serverNowUpper()));
         state = receipt(await call('cameras.refreshStatus'), requestId);
       }
       if (!cancelled && !controller.signal.aborted && options.isCurrent()) {

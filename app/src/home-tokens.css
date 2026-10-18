@@ -497,6 +497,7 @@ button.hg-no-press:active {
   border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--hg-fg-2); font-size: 13px; font-weight: 540; cursor: pointer;
 }
 .apt-home-shell .apt-home-tabs [role="tab"]:hover { color: var(--hg-fg-0); }
+.apt-home-shell .apt-home-unread { display: inline-block; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--hg-accent); }
 .apt-home-shell .apt-home-tabs [aria-selected="true"] { color: var(--hg-fg-0); border-bottom-color: var(--hg-fg-0); }
 .apt-home-shell .apt-home-tabs #apt-home-tab-camera, .apt-home-shell .apt-home-sheet-grip, .apt-home-shell .apt-home-sheet-toggle { display: none; }
 .apt-home-shell .apt-home-controls { position: relative; flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 0; }

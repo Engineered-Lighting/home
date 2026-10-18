@@ -633,6 +633,65 @@ function coalesceAssistantTurnEvents(events) {
   return coalesced;
 }
 
+// Presentation-only unread state. Retain only current-feed identities, never
+// message bodies or credentials. History replacement/prepending is not arrival.
+function createApartmentChatUnreadTracker() {
+  let initialized = false, previousScope, previousConversation = null;
+  let previousIds = new Set(), notifiedIds = new Set(), unreadIds = new Set();
+  return {
+    sync({ events, scope, conversationId = null, visible = false }) {
+      const rows = Array.isArray(events) ? events : [];
+      const keyOf = event => typeof event?.id === "string" && event.id ? event.id : null;
+      const qualifies = event => (event?.kind === "home" || event?.kind === "external")
+        && !event.backgroundPerception && !event.onboarding
+        && typeof event.text === "string" && event.text.trim().length > 0
+        && (!event.convId || !conversationId || event.convId === conversationId);
+      const ids = new Set(rows.map(keyOf).filter(Boolean));
+      let lastRetained = -1;
+      rows.forEach((event, index) => { if (previousIds.has(keyOf(event))) lastRetained = index; });
+      // The initial server conversation id adopts the current turn; resetting
+      // it would swallow the first reply arriving in that same React update.
+      const adoption = previousConversation === null && conversationId !== null;
+      const reset = !initialized || previousScope !== scope
+        || (previousConversation !== conversationId && !adoption)
+        || (previousIds.size > 0 && ids.size > 0 && lastRetained < 0);
+      const nextNotified = new Set([...notifiedIds].filter(id => ids.has(id)));
+      const eligibleIds = new Set(rows.filter(qualifies).map(keyOf).filter(Boolean));
+      const nextUnread = new Set([...unreadIds].filter(id => eligibleIds.has(id)));
+      rows.forEach((event, index) => {
+        const id = keyOf(event);
+        if (!id || !qualifies(event)) return;
+        if (!reset && !notifiedIds.has(id) && (previousIds.has(id) || index > lastRetained)) nextUnread.add(id);
+        nextNotified.add(id);
+      });
+      unreadIds = reset || visible ? new Set() : nextUnread;
+      initialized = true; previousScope = scope; previousConversation = conversationId;
+      previousIds = ids; notifiedIds = nextNotified;
+      return unreadIds.size > 0;
+    },
+  };
+}
+
+function useApartmentChatUnread({ events, endpoint, token, conversationId, visible }) {
+  const tracker = useRef(null);
+  if (!tracker.current) tracker.current = createApartmentChatUnreadTracker();
+  // Opaque identity avoids copying credentials into derived unread state.
+  const scope = useMemo(() => ({}), [endpoint, token]);
+  const [pageVisible, setPageVisible] = useState(() => typeof document === "undefined" || !document.hidden);
+  const [state, setState] = useState({ scope, conversationId, unread: false });
+  useEffect(() => {
+    const update = () => setPageVisible(!document.hidden);
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  useEffect(() => {
+    const unread = tracker.current.sync({ events, scope, conversationId, visible: visible && pageVisible });
+    setState(previous => previous.scope === scope && previous.conversationId === conversationId && previous.unread === unread
+      ? previous : { scope, conversationId, unread });
+  }, [events, scope, conversationId, visible, pageVisible]);
+  return !(visible && pageVisible) && state.scope === scope && state.conversationId === conversationId && state.unread;
+}
+
 function readViewportProfile() {
   if (typeof window === "undefined") {
     return { width: 1024, height: 768, mobile: false, phone: false };
@@ -5602,6 +5661,11 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   // Pushed inside the same /metrics polling effect that updates `metrics`.
   const [metricsHistory, setMetricsHistory] = useState(emptyMetricsHistory);
   const [conversationId, setConversationId] = useState(initialConvId);
+  const shellChatUnread = useApartmentChatUnread({ events, endpoint, token, conversationId,
+    visible: !(perceptionLabOpen || videoLabelerOpen || peopleOpen || intelligenceOpen || shellMetricsOpen
+      || remotePanelOpen || externalKeyModalOpen || simulationControlsOpen || worldStateDrawerOpen
+      || lightsOpen || spatialDrawerOpen || lookDrawerOpen || (apartmentOpen && !unifiedHome))
+      && (!unifiedHome || (shellTab === "chat" && !(viewport.width < 900 && shellDetent === "peek"))) });
   // Live Frigate-derived detection labels per camera, e.g.
   //   { kitchen: ["person"], driveway: ["car", "person"] }
   // Sourced from binary_sensor.{camera}_{label}_occupancy state_changed events.
@@ -11605,6 +11669,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
               {[["controls", "Controls"], ["camera", "Camera · JEV"], ["chat", "Chat"]].map(([key, label]) =>
                 <button type="button" role="tab" key={key} id={`apt-home-tab-${key}`}
                   aria-selected={shellTab === key} aria-controls={`apt-home-panel-${key}`}
+                  aria-label={key === "chat" && shellChatUnread ? "Chat, unread replies" : undefined}
                   tabIndex={shellTab === key ? 0 : -1}
                   onKeyDown={event => {
                     if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
@@ -11614,7 +11679,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
                     const next = event.key === "Home" ? keys[0] : event.key === "End" ? keys[keys.length - 1]
                       : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length];
                     showShellTab(next); document.getElementById(`apt-home-tab-${next}`)?.focus();
-                  }} onClick={() => showShellTab(key)}>{label}</button>)}
+                  }} onClick={() => showShellTab(key)}>{label}{key === "chat" && shellChatUnread
+                    && <span className="apt-home-unread" data-apartment-chat-unread="1" aria-hidden="true" />}</button>)}
             </div>
           </nav>
           <div className="apt-home-controls" id="apt-home-panel-controls" role="tabpanel" aria-labelledby="apt-home-tab-controls"

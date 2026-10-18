@@ -621,8 +621,8 @@ function HomeApartmentAim({
     style={{ position: "absolute", zIndex: 8, pointerEvents: "auto", overflow: "hidden",
       ...(mobile ? { left: 10, right: 10, bottom: "calc(10px + env(safe-area-inset-bottom, 0px))", maxHeight: "52dvh", borderRadius: 16 }
         : { top: 86, right: 18, bottom: 18, width: 338, borderRadius: 16 }),
-      display: "flex", flexDirection: "column", background: "rgba(12,14,18,0.86)",
-      border: "1px solid rgba(255,255,255,0.10)", boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+      display: "flex", flexDirection: "column", background: "var(--hg-bg-2)",
+      border: "1px solid var(--hg-border)", boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
       backdropFilter: "blur(24px) saturate(1.25)", color: "var(--hg-fg-1)", minWidth: 0 }}>
     <div style={{ padding: "15px 15px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "grid", gap: 11 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -649,7 +649,7 @@ function HomeApartmentAim({
         </div>
         <div data-apt-profile-view={profileView} role="group" aria-label="Lighting profile view"
           style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 3,
-            padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.22)" }}>
+            padding: 3, borderRadius: 10, background: "var(--apt-fill-2)" }}>
           {[["auto", "Auto"], ["current", "Current"], ["engineered", "Engineered"], ["both", "Both"]].map(([mode, label]) =>
             <AimButton key={mode} active={profileView === mode} aria-pressed={profileView === mode}
               disabled={!engineeredConfigured && ["engineered", "both"].includes(mode)}
@@ -810,7 +810,7 @@ function HomeApartmentAim({
                 : !destination ? "Choose a destination first" : undefined}
             onClick={setSimulatedDestination}
             style={{ minHeight: 42,
-              ...(canSetDestination ? { borderColor: AIM_CYAN, background: AIM_CYAN, color: "#071014",
+              ...(canSetDestination ? { borderColor: AIM_CYAN, background: AIM_CYAN, color: "var(--hg-bg-0)",
                 boxShadow: "0 8px 24px rgba(69,223,255,0.13)" } : {}),
               ...(destinationIsCurrent ? { borderColor: "rgba(255,221,176,0.38)",
                 background: "rgba(255,221,176,0.10)", color: AIM_WARM } : {}) }}>

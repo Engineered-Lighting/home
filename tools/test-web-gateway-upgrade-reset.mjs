@@ -28,18 +28,23 @@ async function until(check, description, ms = 2500) {
   assert.ok(check(), description);
 }
 
-function request(port, urlPath, authorization = BASIC) {
+function request(port, urlPath, authorization = BASIC, timeoutMs = 1500) {
   return new Promise((resolve, reject) => {
+    let timer;
+    const finish = (error, result) => {
+      clearTimeout(timer);
+      if (error) reject(error); else resolve(result);
+    };
     const req = http.get({ hostname: '127.0.0.1', port, path: urlPath,
       headers: authorization ? { Authorization: authorization } : {}, agent: false }, res => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { body += chunk; });
-      res.once('end', () => resolve({ status: res.statusCode, body }));
-      res.once('error', reject);
+      res.once('end', () => finish(null, { status: res.statusCode, body }));
+      res.once('error', finish);
     });
-    req.once('error', reject);
-    req.setTimeout(1500, () => req.destroy(Error('bounded local HTTP request timeout')));
+    req.once('error', finish);
+    timer = setTimeout(() => req.destroy(Error('bounded local HTTP request timeout')), timeoutMs);
   });
 }
 
@@ -103,29 +108,61 @@ async function startUpstream() {
   return { server, sockets, upgrades, port: server.address().port };
 }
 
+async function stopGateway(gateway) {
+  const child = gateway?.child;
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  if (!child?.pid || exited()) return;
+  child.kill();
+  try { await until(exited, 'gateway child terminates after SIGTERM', 1000); }
+  catch {
+    child.kill('SIGKILL');
+    await until(exited, 'gateway child terminates after SIGKILL', 500);
+  }
+}
+
 async function startGateway(temp, upstream) {
   const port = await freePort();
   const tokenFile = path.join(temp, 'authored-ha-token');
   fs.writeFileSync(tokenFile, TOKEN + '\n', { mode: 0o600 });
   // Prevent inherited operator configuration from reaching another upstream.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('HOME_WEB_')));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('HOME_WEB_')));
+  const loopback = 'http://127.0.0.1:' + upstream.port;
+  // Denial regressions must reach this fixture, never the gateway's LAN defaults.
+  for (const name of ['AGENT_BFF', 'HA', 'METRICS', 'VLLM', 'VISION', 'INTELLIGENCE',
+    'SUPERVISOR', 'S2S', 'TRACKER', 'VIDEO_LABELER', 'FRIGATE', 'PERCEPTION']) env['HOME_WEB_' + name + '_TARGET'] = loopback;
   Object.assign(env, { NODE_ENV: 'test', HOME_WEB_HOST: '127.0.0.1', HOME_WEB_PORT: String(port),
+    APPDATA: temp, LOCALAPPDATA: temp, XDG_CONFIG_HOME: temp,
+    HOME_CONTENT_PACKS_DIR: path.join(temp, 'absent-content-packs'),
+    HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: path.join(temp, 'authored-equipment-registration'),
+    HOME_WEB_APARTMENT_ASSETS_DIR: path.join(temp, 'absent-apartment-assets'),
+    HOME_WEB_GOOGLE_TILES_KEY_FILE: path.join(temp, 'absent-google-tiles-key'),
     HOME_WEB_AUTH_REQUIRED: '1', HOME_WEB_AUTH_FILE: path.join(temp, 'absent-auth.json'), HOME_WEB_BASIC_AUTH: PAIR,
     HOME_WEB_ENABLE_LEGACY_HA_PROXY: '1', HOME_WEB_ENABLE_LEGACY_TRACKER_PROXY: '1',
-    HOME_WEB_HA_TARGET: 'http://127.0.0.1:' + upstream.port, HOME_WEB_TRACKER_TARGET: 'http://127.0.0.1:' + upstream.port,
     HOME_WEB_HA_TOKEN_FILE: tokenFile, HOME_WEB_STACK_TOKEN: '', STACK_TOKEN: '', HOME_WEB_STACK_TOKEN_FILE: path.join(temp, 'absent-stack-token'),
     HOME_WEB_AGENT_ORIGINS: 'https://agent-authored.example.invalid', HOME_WEB_NATIVE_AGENT_ORIGIN: 'https://native-authored.example.invalid',
     HOME_WEB_SITE_LANS: '', HOME_WEB_SITE_ZONES: '', HOME_WEB_LOCATION_PERSON: '', HOME_WEB_ASSET_VERSION: 'authored-upgrade-reset-test' });
   const child = spawn(process.execPath, [SERVER], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  let output = '';
+  let output = '', startupError;
+  child.once('error', error => { startupError = error; });
   for (const pipe of [child.stdout, child.stderr]) pipe.on('data', chunk => { output = (output + chunk.toString()).slice(-16000); });
   const gateway = { child, port, pid: child.pid, output: () => output };
-  for (let attempt = 0; attempt < 100; attempt++) {
-    assert.equal(child.exitCode, null, 'gateway stays alive during startup: ' + output);
-    try { if ((await request(port, '/healthz')).status === 200) return gateway; } catch { /* bounded startup retry */ }
-    await delay(20);
+  try {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (startupError) throw startupError;
+      assert.equal(child.exitCode, null, 'gateway stays alive during startup: ' + output);
+      assert.equal(child.signalCode, null, 'gateway was not killed during startup: ' + output);
+      try {
+        if ((await request(port, '/healthz', BASIC, Math.max(1, Math.min(500, deadline - Date.now())))).status === 200) return gateway;
+      } catch { /* retry only within the startup wall deadline */ }
+      await delay(Math.min(20, Math.max(0, deadline - Date.now())));
+    }
+    throw Error('gateway did not start within 5000 ms: ' + output);
+  } catch (error) {
+    // The caller does not own this child until readiness succeeds.
+    await stopGateway(gateway);
+    throw error;
   }
-  throw Error('gateway did not start: ' + output);
 }
 
 async function openUpgrade(gateway, urlPath = '/proxy/ha/api/websocket', authorization = BASIC, headers = {}) {
@@ -259,8 +296,7 @@ test('real upgraded socket disconnects preserve the same gateway, auth fences an
     }
   } finally {
     client?.socket.destroy();
-    if (gateway?.child.exitCode === null) gateway.child.kill();
-    if (gateway) await until(() => gateway.child.exitCode !== null || gateway.child.signalCode !== null, 'gateway child terminates', 1500);
+    await stopGateway(gateway);
     if (upstream) {
       for (const socket of upstream.sockets) socket.destroy();
       upstream.server.closeAllConnections();

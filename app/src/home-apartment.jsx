@@ -2252,12 +2252,15 @@ function AptUnifiedIcon({ name }) {
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || ""} /></svg>;
 }
 
-function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, view,
+function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
   onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible }) {
   const [popover, setPopover] = useState(null);
   const popoverRef = useRef(null);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-room-toolbar", active: !!popover, rootRef: popoverRef,
     trap: false, initialFocus: "first", onEscape: () => setPopover(null) });
+  const photoError = !modeLoading && modeError?.mode === "splat";
+  const retryPhotoDisabled = !!(disabled || pointsOnlyReason || modeLockedReason);
+  const backToCloudDisabled = !!(disabled || modeLockedReason);
   return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view">
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
@@ -2309,7 +2312,16 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
           {` · visible ${String(stats.modeDebug.splatVisible)} · parent ${stats.modeDebug.srParent}`}</>}
       </p></details>}
       <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close source</button></div>}
-    {(modeLoading || modeError) && <span className="apt-ui-toolbar-notice" role="status">{modeLoading ? `Loading ${modeLoading === "splat" ? "Photo" : modeLoading}` : modeError.message}</span>}
+    {(modeLoading || modeError) && <div className="apt-ui-toolbar-notice">
+      <span role="status">{modeLoading ? `Loading ${modeLoading === "splat" ? "Photo" : modeLoading}` : modeError.message}</span>
+      {photoError && <div className="apt-ui-toolbar-recovery" role="group" aria-label="Photo recovery">
+        <button type="button" className="apt-ui-button is-small" aria-label="Retry Photo" disabled={retryPhotoDisabled}
+          title={modeLockedReason || pointsOnlyReason || undefined}
+          onClick={() => { if (!retryPhotoDisabled) onMode("splat"); }}>Retry</button>
+        <button type="button" className="apt-ui-button is-small" disabled={backToCloudDisabled} title={modeLockedReason || undefined}
+          onClick={() => { if (!backToCloudDisabled) onMode("points"); }}>Back to Cloud</button>
+      </div>}
+    </div>}
   </div>;
 }
 
@@ -2498,6 +2510,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [mode, setMode] = useState("points");
   const [modeLoading, setModeLoading] = useState(null);
   const [modeError, setModeError] = useState(null);
+  const modeRequestRef = useRef(null);
   /* The loaded interior's disclosed placeholder (engine.scenePlaceholder), or
    * null for a real scan. Drives the "scan pending" badge and points-only. */
   const [interiorPlaceholder, setInteriorPlaceholder] = useState(null);
@@ -2770,7 +2783,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     worldOverviewAbortRef.current = null;
     const active = travellingRef.current
       || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle";
+    const ownedModeRequest = modeRequestRef.current;
     ++spatialTravelIntentRef.current;
+    if (ownedModeRequest && modeRequestRef.current === ownedModeRequest) {
+      modeRequestRef.current = null;
+      setModeLoading(null);
+    }
     worldSurfaceRef.current?.cancelNavigation?.("user-cancelled");
     travellingRef.current = false;
     setTravelling(false);
@@ -4329,11 +4347,37 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         // the engine directly, so subscribe rather than trusting local state —
         // and re-sync NOW: the close path restores the pre-snap mode AFTER
         // these listeners were unsubscribed, so local `mode` can be stale
+        const modePresentationScope = engine.sceneIdentity ? { ...engine.sceneIdentity } : null;
+        const modePresentationLifecycle = spatialLifecycleRevisionRef.current;
+        const modePresentationIsCurrent = () => {
+          try {
+            if (!modePresentationScope?.siteId || !viewOpenRef.current || engineRef.current !== engine
+              || spatialLifecycleRevisionRef.current !== modePresentationLifecycle) return false;
+            const site = window.HomeSpatialViewport?.getSite?.(modePresentationScope.siteId);
+            if (!site || window.HomeSpatialViewport?.getSelectedSiteId?.() !== modePresentationScope.siteId
+              || typeof window.HomeContentPacks?.get !== "function") return false;
+            const revision = site.contentRevision || null;
+            const manifest = window.HomeContentPacks.get(modePresentationScope.siteId, revision || undefined)?.manifest;
+            const identity = engine.sceneIdentity;
+            return engine.siteId === modePresentationScope.siteId && identity?.siteId === modePresentationScope.siteId
+              && (engine.contentRevision || "legacy") === (modePresentationScope.contentRevision || "legacy")
+              && (identity.contentRevision || "legacy") === (modePresentationScope.contentRevision || "legacy")
+              && (revision || "legacy") === (modePresentationScope.contentRevision || "legacy")
+              && (!manifest || (manifest.revision || "legacy") === (revision || "legacy"))
+              && (identity.registrationVersion ?? null) === (modePresentationScope.registrationVersion ?? null)
+              && (identity.frameDigest ?? null) === (modePresentationScope.frameDigest ?? null)
+              && (manifest?.registrationVersion ?? site.sceneRegistration?.version ?? null) === (modePresentationScope.registrationVersion ?? null)
+              && (manifest?.assets?.["frame.json"]?.sha256 ?? null) === (modePresentationScope.frameDigest ?? null);
+          } catch (_) { return false; }
+        };
         const unsubs = [
           engine.on("progress", (p) => { if (current()) setProgress({ ...p }); }),
           engine.on("stats", (s) => { if (current()) setStats(s); }),
           engine.on("contextlost", () => { if (current()) showToast("graphics context lost — recovering"); }),
-          engine.modes.onChange((next) => { if (current()) { setMode(next); persistView(); } }),
+          engine.modes.onChange((next) => {
+            if (modePresentationIsCurrent()) setMode(next);
+            if (current()) persistView();
+          }),
         ];
         setMode(engine.modes.mode);
         engine.picking.setHost?.(hostRef.current);
@@ -5750,6 +5794,21 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       showToast("camera view is locked to mesh - tap back to change modes");
       return;
     }
+    const siteId = engine.siteId;
+    const revision = engine.contentRevision || "legacy";
+    const lifecycle = spatialLifecycleRevisionRef.current;
+    const intent = spatialTravelIntentRef.current;
+    const contextIsCurrent = () => {
+      try {
+        const site = window.HomeSpatialViewport?.getSite?.(siteId);
+        return !!siteId && !!site && viewOpenRef.current && engineRef.current === engine
+          && engine.siteId === siteId && (engine.contentRevision || "legacy") === revision
+          && spatialLifecycleRevisionRef.current === lifecycle && spatialTravelIntentRef.current === intent
+          && window.HomeSpatialViewport?.getSelectedSiteId?.() === siteId
+          && (site.contentRevision || "legacy") === revision;
+      } catch (_) { return false; }
+    };
+    if (!contextIsCurrent()) return;
     // explicit pick overrides any pending post-snap restore
     preSnapModeRef.current = null;
     // ALWAYS delegate to the engine — modes.setMode dedups same-mode (cheaply
@@ -5757,12 +5816,22 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     // The old `if (m === engine.modes.mode) return` short-circuit dropped a
     // 'cloud' click made while a slow mesh load was still in flight (the
     // engine's mode had not flipped yet), leaving the mesh on screen.
-    setModeLoading(m);
-    setModeError(null);
+    let request;
+    const isCurrent = () => modeRequestRef.current === request && contextIsCurrent();
     try {
-      await engine.modes.setMode(m);
+      // Own only this host's publication. The renderer retains its existing
+      // mode generation and load deduplication; no second mode call is made.
+      request = engine.modes.setMode(m);
+      modeRequestRef.current = request;
+      if (isCurrent()) {
+        setModeLoading(m);
+        setModeError(null);
+      }
+      await request;
+      if (!isCurrent()) return;
       setMode(m);
     } catch (e) {
+      if (!isCurrent()) return;
       const assetHint = m === "splat" ? "check apartment.spz" : "check mesh.glb / collision.glb";
       setModeError({
         mode: m,
@@ -5772,8 +5841,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       showToast(m === "splat" ? "photo unavailable — check apartment.spz asset"
                               : "mesh unavailable — check collision.glb asset", { tone: "error" });
     } finally {
-      setModeLoading(null);
-      refitMobileOverview(m === "points" ? 360 : 520);
+      if (isCurrent()) {
+        setModeLoading(null);
+        refitMobileOverview(m === "points" ? 360 : 520);
+      }
+      if (modeRequestRef.current === request) modeRequestRef.current = null;
     }
   }, [showToast, refitMobileOverview, liveCam, calibCam, selectedSiteInterior]);
 
@@ -8493,6 +8565,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       {unifiedShell && !editing && !hideViewHud && spatialScale === "apartment" && (
         <AptUnifiedRoomToolbar mode={mode} modeLoading={modeLoading} modeError={modeError}
           sourceLabel={sourceMeta.label} disabled={!apartmentSceneControlsEnabled} pointsOnlyReason={interiorPointsOnlyReason}
+          modeLockedReason={(liveCam || engineRef.current?.rig?.inCameraPose?.()) && !calibCam
+            ? "Camera view is locked to mesh. Return to room to change modes." : null}
           sourceDetail={`${sourceMeta.label}${revisionLabel}`} stats={stats} sourceStatus={<>
             <p className="apt-ui-meta">Save · {saveStatus.state}{saveStatus.detail ? ` · ${saveStatus.detail}` : ""}</p>
             <p className="apt-ui-meta">{liveShadow ? "Observations · context journal" : `Tracker · ${trackerStatus}`}</p>

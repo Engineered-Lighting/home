@@ -73,9 +73,15 @@ Local receipts are under `.tmp/apartment-ui-browser/run-1792353253298/` and
 `.tmp/apartment-home-shell-browser/run-1792353187509/`; temporary output is not
 part of the PR. The public images above come from the final focused run.
 
-This is authored software verification. Actual Victoria Den visual acceptance,
-installed-source verification, merge, deployment and physical qualification have
-not occurred in this wave. Wider legacy chrome still contains independent
+The component and full-shell results above are authored software verification.
+A separate private read-only smoke check composed the narrow unread/foundation
+patches onto the accepted Den source, preserving its selector and canonical
+asset/registration bindings. It rendered the four saved fixtures at 1920x1080,
+1366x768, 768x1024 and 390x844, retained selection and Chat/Controls navigation,
+and recorded no page errors, physical output, equipment saves or session starts.
+Private images and operational receipt contents are excluded from this PR.
+Full owner visual acceptance, installed-source verification, merge, deployment
+and physical qualification remain separate. Wider legacy chrome still contains independent
 status styling and informative `--hg-fg-5` uses; #221 remains partial outside the
 shared component and approved Aim/card migration. This wave does not close
 global primitive accessibility acceptance for unrelated legacy controls.

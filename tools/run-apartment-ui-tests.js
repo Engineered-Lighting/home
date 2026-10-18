@@ -97,12 +97,12 @@ test("shared vocabulary includes text and a distinct decorative shape for every 
 test("an action consumes itself before callback reentry and remains consumed after a thrown callback", () => {
   const { ui } = fixture();
   let calls = 0, action;
-  action = ui.createToastAction(() => { calls++; assert.equal(action.run(), false); });
+  action = ui.createToastAction(() => { calls++; assert.equal(action.run(), false); }, { isCurrent: () => true });
   assert.equal(action.run(), true);
   assert.equal(action.run(), false);
   assert.equal(action.cancel(), false);
   assert.equal(calls, 1);
-  const failing = ui.createToastAction(() => { throw new Error("authored failure"); });
+  const failing = ui.createToastAction(() => { throw new Error("authored failure"); }, { isCurrent: () => true });
   assert.throws(() => failing.run(), /authored failure/);
   assert.equal(failing.run(), false);
 });
@@ -119,7 +119,9 @@ test("cancelled or stale actions cannot run, and source currentness is checked a
   assert.equal(action.cancel("again"), false);
   const throwing = ui.createToastAction(() => calls++, { isCurrent: () => { throw new Error("unavailable"); } });
   assert.equal(throwing.run(), false);
-  const cancelled = ui.createToastAction(() => calls++);
+  const unguarded = ui.createToastAction(() => calls++);
+  assert.equal(unguarded.run(), false);
+  const cancelled = ui.createToastAction(() => calls++, { isCurrent: () => true });
   assert.equal(cancelled.cancel("home changed"), true);
   assert.equal(cancelled.run(), false);
   assert.equal(calls, 0);
@@ -127,7 +129,7 @@ test("cancelled or stale actions cannot run, and source currentness is checked a
 
 test("default expiry cancels the action and dismisses the original toast identity", () => {
   const f = fixture(), dismissed = [], reasons = [];
-  const action = f.ui.createToastAction(() => assert.fail("expired Undo ran"), { onCancel: (reason) => reasons.push(reason) });
+  const action = f.ui.createToastAction(() => assert.fail("expired Undo ran"), { isCurrent: () => true, onCancel: (reason) => reasons.push(reason) });
   const toast = { text: "Preview changed", action };
   f.render({ toast, onDismiss: (value) => dismissed.push(value) });
   f.advance(2799);
@@ -141,7 +143,7 @@ test("default expiry cancels the action and dismisses the original toast identit
 test("action and dismiss are native buttons; a repeated activation executes Undo once", () => {
   const f = fixture(), dismissed = [];
   let calls = 0;
-  const toast = { text: "Aim changed", action: f.ui.createToastAction(() => calls++) };
+  const toast = { text: "Aim changed", action: f.ui.createToastAction(() => calls++, { isCurrent: () => true }) };
   const element = f.render({ toast, onDismiss: (value) => dismissed.push(value) });
   const undo = button(element, "Undo"), dismiss = button(element, "Dismiss message");
   assert.equal(undo.props.type, "button");
@@ -182,10 +184,10 @@ test("focus moving between toast buttons keeps expiry paused", () => {
 test("replacement and unmount cancel old handles and queued old clicks do not dismiss the newer notice", () => {
   const f = fixture(), dismissed = [];
   let calls = 0;
-  const first = { text: "First", action: f.ui.createToastAction(() => calls++), timeoutMs: 100 };
+  const first = { text: "First", action: f.ui.createToastAction(() => calls++, { isCurrent: () => true }), timeoutMs: 100 };
   const oldElement = f.render({ toast: first, onDismiss: (value) => dismissed.push(value) });
   f.advance(40);
-  const second = { text: "Second", action: f.ui.createToastAction(() => calls++), timeoutMs: 200 };
+  const second = { text: "Second", action: f.ui.createToastAction(() => calls++, { isCurrent: () => true }), timeoutMs: 200 };
   f.render({ toast: second, onDismiss: (value) => dismissed.push(value) });
   button(oldElement, "Undo").props.onClick();
   assert.equal(first.action.run(), false);
@@ -201,7 +203,7 @@ test("replacement and unmount cancel old handles and queued old clicks do not di
 
 test("sticky notices do not expire and explicit dismissal cancels the action", () => {
   const f = fixture(), dismissed = [];
-  const action = f.ui.createToastAction(() => assert.fail("dismissed action ran"));
+  const action = f.ui.createToastAction(() => assert.fail("dismissed action ran"), { isCurrent: () => true });
   const toast = { text: "Review needed", action, sticky: true };
   const element = f.render({ toast, onDismiss: (value) => dismissed.push(value) });
   f.advance(100000);

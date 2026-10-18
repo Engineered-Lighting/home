@@ -30,7 +30,7 @@
   /* Consume before calling user code, including throwing or asynchronous code.
    * isCurrent is the caller's existing authority check, evaluated at activation.
    * A cancelled action cannot be revived by a queued click or retained handle. */
-  function createToastAction(callback, { isCurrent = () => true, onCancel } = {}) {
+  function createToastAction(callback, { isCurrent = () => false, onCancel } = {}) {
     if (typeof callback !== "function") throw new TypeError("Toast action must be a function");
     let active = true;
     let run = callback;

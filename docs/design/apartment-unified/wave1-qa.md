@@ -66,7 +66,7 @@ are not passes.
 | `node tools/test-apartment-unread-integration.mjs` | Passed on corrected source: 1 browser test, 62 checkpoints, no HTTP/WebSocket attempts or page errors |
 | `HOME_APARTMENT_BROWSER_SCREENSHOTS=0 node tools/test-apartment-home-shell-browser.mjs` | Passed on corrected source: 1 browser test, 28 checkpoints, screenshots disabled |
 | Foundations focused checks | Foundations lane reports 11 unit cases, 768 contrast combinations, 33 aiming checks, 174 3D checks and 28 authored shell checkpoints; separate PR/evidence |
-| Actual Den private browser verification | Pending integrator decision/window |
+| Actual Den private browser verification | Passed bounded read-only combined-composition smoke check at 1920x1080, 1366x768, 768x1024 and 390x844; four saved fixtures, selection and Chat/Controls navigation retained; zero page errors, output, saves or session starts |
 
 The browser commands require the existing Playwright runtime, supplied through
 `NODE_PATH` where it is not installed in the worktree. They do not install

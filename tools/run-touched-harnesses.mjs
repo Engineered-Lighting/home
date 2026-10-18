@@ -78,7 +78,9 @@ const MAP = [
   [/^app\/src\/simulation(-data)?\.jsx$/, ["run-simulation-scenario-tests"]],
   [/^app\/src\/index\.html$/, ["run-lab-tests", "run-bootstrap-tests", "run-resilience-tests"]],
   [/^app\/src\/home-tokens\.css$/, ["run-focus-visibility-tests", "run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
-  [/^app\/src\/home-overlay\.js$/, ["run-overlay-stack-tests"]],
+  [/^app\/src\/home-overlay\.js$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
+  [/^app\/src\/home-apartment(?:-edit)?\.jsx$/, ["test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
+  [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",

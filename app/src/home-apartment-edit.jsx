@@ -415,6 +415,9 @@ function HomeApartmentEdit({
   const dragRef = useRef(null);
   const placementGestureRef = useRef(null);
   const targetModeRef = useRef(null);
+  const editorToolbarRef = useRef(null);
+  const editorPaletteRef = useRef(null);
+  const editorInspectorRef = useRef(null);
   const equipmentDocument = model._equipment_registration || null;
   const isEquipmentRegistration = !!equipmentDocument;
   const equipmentDisabled = !!saving || sim || model._equipment_registration_writable === false;
@@ -628,6 +631,35 @@ function HomeApartmentEdit({
     setZoneNaming(null);
     setNotice("Finish cancelled · the new boundary is still available");
   }, []);
+
+  const cancelTargetPlacement = useCallback(() => {
+    const draftId = targetDraftId;
+    if (draftId) mutate((m) => {
+      m.targets = (m.targets || []).filter((target) => target.id !== draftId);
+    });
+    setTargetDraftId(null); setSelectedTargetId(null); setMoveTargetId(null);
+    setPlacingTarget(null); setNotice("target placement cancelled");
+  }, [targetDraftId, mutate]);
+
+  const selectEditorTool = useCallback(() => {
+    setTool("select"); setPlacing(null); setPlacingTarget(null); setMoveTargetId(null);
+  }, []);
+
+  const cancelEditorToolOperation = useCallback(() => {
+    if (tool === "targets" && moveTargetId) {
+      setMoveTargetId(null); setNotice("target move cancelled");
+      return true;
+    }
+    if (tool === "add" && placing) {
+      setPlacing(null); setNotice("device placement cancelled");
+      return true;
+    }
+    if (tool === "measure") {
+      selectEditorTool();
+      return true;
+    }
+    return false;
+  }, [tool, moveTargetId, placing, selectEditorTool]);
 
   /* canvas interactions while edit mode is active */
   useEffect(() => {
@@ -1048,12 +1080,41 @@ function HomeApartmentEdit({
   }, [engine, isEquipmentRegistration, tool, placing, placingTarget, moveTargetId, zoneDrawing, finishZone,
     mutate, roomAt, undo, redo, model.zones, model.targets]);
 
+  // These are armed UI tools, not geometry rollback. Keep the model, selection
+  // and undo history intact when leaving one before leaving Setup itself.
+  window.HomeOverlay.useOverlayLayer({
+    key: "apartment-editor-tool",
+    active: !!((tool === "targets" && moveTargetId) || (tool === "add" && placing) || tool === "measure"),
+    rootRef: editorInspectorRef,
+    getRoots: () => [editorToolbarRef.current, editorPaletteRef.current],
+    onEscape: cancelEditorToolOperation,
+    initialFocus: "none",
+    restoreTo: editorToolbarRef,
+  });
+
+  // Escape invokes the same undoable Cancel as the existing button. The
+  // operation's opener is restored on pop; Setup itself remains mounted.
+  window.HomeOverlay.useOverlayLayer({
+    key: "apartment-target-placement",
+    active: !!(tool === "targets" && (placingTarget || targetDraftId)),
+    rootRef: editorInspectorRef,
+    getRoots: () => [editorToolbarRef.current, editorPaletteRef.current],
+    onEscape: () => {
+      if (tool !== "targets" || !(placingTarget || targetDraftId)) return false;
+      cancelTargetPlacement();
+    },
+    initialFocus: "none",
+    restoreTo: editorToolbarRef,
+  });
+
   /* Overlay layer: while a new zone is being drawn, Escape cancels the draft
      via HomeOverlay (topmost-only — no more double-firing with the view's
      own Escape chain). */
   window.HomeOverlay.useOverlayLayer({
     key: "apartment-zones",
     active: !!(tool === "zones" && zoneDrawing),
+    rootRef: editorInspectorRef,
+    getRoots: () => [editorToolbarRef.current, editorPaletteRef.current],
     onEscape: () => {
       setZoneDraft([]);
       setZoneDrawing(false);
@@ -1061,6 +1122,7 @@ function HomeApartmentEdit({
       setNotice("new zone cancelled · existing room boundaries were not changed");
     },
     initialFocus: "none",
+    restoreTo: editorToolbarRef,
   });
 
   const setHeight = (h, preset) => mutate((m) => {
@@ -1284,7 +1346,7 @@ function HomeApartmentEdit({
       {/* toolbar — centered on desktop; a full-width horizontally scrollable
           strip on phones (EdButton opts out of flex shrink, so the ~9 buttons
           scroll instead of wrapping or overlapping the canvas) */}
-      <div className={mobile ? "hg-mobile-scroll" : undefined} style={mobile ? {
+      <div ref={editorToolbarRef} tabIndex={-1} className={mobile ? "hg-mobile-scroll" : undefined} style={mobile ? {
         position: "absolute", top: "calc(8px + env(safe-area-inset-top, 0px))",
         left: 0, right: 0, padding: "0 10px",
         display: "flex", gap: 6, alignItems: "center", zIndex: 4,
@@ -1295,9 +1357,7 @@ function HomeApartmentEdit({
       }} data-apt-edit-ui="toolbar">
         <span style={{ fontFamily: ED_MONO, fontSize: 10, color: "var(--hg-fg-2)",
                        letterSpacing: "0.14em", marginRight: 8 }}>edit</span>
-        <EdButton label="select" active={tool === "select"} onClick={() => {
-          setTool("select"); setPlacing(null); setPlacingTarget(null); setMoveTargetId(null);
-        }} />
+        <EdButton label="select" active={tool === "select"} onClick={selectEditorTool} />
         {!isEquipmentRegistration && <>
         <EdButton label="+ smart device" active={tool === "add"} onClick={() => {
           setTool("add"); setSelectedTargetId(null); setPlacingTarget(null); setMoveTargetId(null);
@@ -1367,7 +1427,7 @@ function HomeApartmentEdit({
           one fixed bottom sheet on phones */}
       <EdMobileSheet mobile={mobile}>
       {/* left: task rail */}
-      <div style={mobile ? panel : { ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
+      <div ref={editorPaletteRef} style={mobile ? panel : { ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
         {isEquipmentRegistration ? <EdEquipmentList document={equipmentDocument} selectedId={selectedId}
           onSelect={setSelectedId} referenceId={equipmentReferenceId} onReference={setEquipmentReferenceId}
           onAddSocket={addEquipmentSocket} atCapacity={equipmentDocument.equipment.length >= window.HomeEquipmentRegistration.MAX_EQUIPMENT}
@@ -1462,14 +1522,7 @@ function HomeApartmentEdit({
                       ? "placement finished · click Save changes to write the Home Apartment model"
                       : "placement finished · Home Assistant is offline, so Save creates only a local draft");
                 }} />}
-                <EdButton label="Cancel" onClick={() => {
-                  const draftId = targetDraftId;
-                  if (draftId) mutate((m) => {
-                    m.targets = (m.targets || []).filter((target) => target.id !== draftId);
-                  });
-                  setTargetDraftId(null); setSelectedTargetId(null); setMoveTargetId(null);
-                  setPlacingTarget(null); setNotice("target placement cancelled");
-                }} />
+                <EdButton label="Cancel" onClick={cancelTargetPlacement} />
               </div>
             )}
             <div style={heading}>placed · {(model.targets || []).length}</div>
@@ -1764,7 +1817,7 @@ function HomeApartmentEdit({
       </div>
 
       {/* right: inspector */}
-      <div style={mobile
+      <div ref={editorInspectorRef} style={mobile
         ? { ...panel, borderTop: "1px solid var(--hg-border-soft)" }
         : { ...panel, right: 12 }} data-apt-edit-ui="inspector">
         {isEquipmentRegistration ? <EdEquipmentFields key={selectedId} record={selected?.equipment_record}

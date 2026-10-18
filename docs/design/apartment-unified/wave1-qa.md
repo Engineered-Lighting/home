@@ -92,3 +92,29 @@ including the ten radial power cases, both canonical drag/Undo paths and
 controller/canvas/composer identity. It recorded no page errors, forbidden
 requests, physical commands, survey writes or camera/model sessions. Its room
 and registration remain disposable authored inputs, not actual Den acceptance.
+
+## Hosted browser timing follow-up
+
+The final documentation-only push twice reached the unchanged 145-second
+authored browser deadline after 27 of 28 checkpoints. The earlier hosted pass
+served identical product source bytes and completed all 28 checkpoints in
+89.9 seconds. Failure receipts retained zero page errors or forbidden requests;
+both canonical drag paths and all radial cases had completed. Capture and
+interaction timings show cumulative worker/render timing sensitivity.
+
+Repair and Den separately released a temporary harness-only edit window.
+Repeated radial preset/group activations now use native Enter after the first
+pointer cases, and each restoration range is focused once before the same eight
+native keys. The harness records separate radial and drag timings. All 28
+checkpoints, ten screenshots, source pins, 3 cm collision tolerance and the
+145-second deadline are retained. No product bytes changed in this correction.
+
+The corrected screenshots-enabled local run passed in 28.93 seconds using the
+existing Edge browser. Receipt
+`.tmp/apartment-home-shell-browser/run-1792354328296/receipt.json` retains 28
+checkpoints, ten screenshots and ten radial cases, with zero page errors,
+forbidden requests or output/session operations. The radial phase took 401 ms;
+the two drag phases took 194 ms and 155 ms. All 90 original assertion call texts
+remain, with one additional range-focus assertion. Local GPU timing does not
+establish Linux SwiftShader timing; the PR's hosted check is the applicable
+confirmation for that environment.

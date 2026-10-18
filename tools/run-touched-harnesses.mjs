@@ -45,6 +45,8 @@ const MAP = [
   [/^app\/src\/home-people(\.jsx|-helpers\.js|-prewarm\.js)$/, ["run-people-tests"]],
   [/^app\/src\/home-intelligence\.jsx$/, ["run-intelligence-tests"]],
   [/^app\/src\/home-apartment/, ["run-apartment-3d-contract-tests", "run-apartment-aiming-tests", "run-apartment-data-tests", "test-apartment-travel-guard.cjs"]],
+  [/^app\/src\/home-apartment(?:-ui|-aim|-cards)?\.jsx$/, ["run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
+  [/^tools\/(?:run-apartment-ui-tests\.js|test-apartment-ui-browser\.mjs)$/, ["run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["run-apartment-3d-contract-tests"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
@@ -74,7 +76,7 @@ const MAP = [
   [/^app\/src\/simulation-controls\.jsx$/, ["run-simulation-control-tests"]],
   [/^app\/src\/simulation(-data)?\.jsx$/, ["run-simulation-scenario-tests"]],
   [/^app\/src\/index\.html$/, ["run-lab-tests", "run-bootstrap-tests", "run-resilience-tests"]],
-  [/^app\/src\/home-tokens\.css$/, ["run-focus-visibility-tests"]],
+  [/^app\/src\/home-tokens\.css$/, ["run-focus-visibility-tests", "run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
   [/^app\/src\/home-overlay\.js$/, ["run-overlay-stack-tests"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [

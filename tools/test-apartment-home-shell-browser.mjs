@@ -303,6 +303,12 @@ test('unified shell keeps the real room, private controls and one chat controlle
       const semantic = tabs.getByRole('tab', { name, exact: true });
       await (await semantic.count() ? semantic : tabs.getByRole('button', { name, exact: true })).click();
     }
+    async function timedPhase(name, operation) {
+      const phase = { name, started_at: Date.now(), completed: false };
+      (receipt.phases ||= []).push(phase);
+      try { const result = await operation(); phase.completed = true; return result; }
+      finally { phase.duration_ms = Date.now() - phase.started_at; }
+    }
     async function selectedTab(key) {
       await page.waitForFunction(key => document.activeElement?.id === 'apt-home-tab-' + key
         && document.getElementById('apt-home-tab-' + key)?.getAttribute('aria-selected') === 'true', key);
@@ -633,7 +639,8 @@ test('unified shell keeps the real room, private controls and one chat controlle
       assert.ok(original.every(zone => zone.on && zone.brightness === .75), 'authored fixture restoration precondition');
       const range = page.getByRole('slider', { name: 'Radial brightness', exact: true });
       await range.press('End');
-      for (let step = 0; step < 25; step++) await range.press('ArrowLeft');
+      await range.press('PageDown'); await range.press('PageDown');
+      for (let step = 0; step < 5; step++) await range.press('ArrowLeft');
       await assertRadials('native_restoration', id, original);
     }
     assert.deepEqual(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures), overviewFixtures,
@@ -787,22 +794,31 @@ test('unified shell keeps the real room, private controls and one chat controlle
     assert.equal(await page.getByRole('combobox', { name: 'Command input', exact: true }).inputValue(), 'Authored unsent shell draft');
     checks.push({ stage: 'classic_ui_escape_hatch_keeps_chat_draft' });
     await capture('previous-home-classic-390x844');
-    await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
-    await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 }); await waitSite('echo');
-    await page.goto(origin + '/?apartmentRedesign=0&worldZoom=off', { waitUntil: 'domcontentloaded' });
-    await page.getByRole('button', { name: 'Open apartment view', exact: true }).waitFor();
-    assert.equal(await page.locator('.apt-home-shell[data-home-layout="unified"]').count(), 0);
+    await timedPhase('url_override_unified_reload', async () => {
+      await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
+      await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 }); await waitSite('echo');
+    });
+    await timedPhase('url_override_classic_reload', async () => {
+      await page.goto(origin + '/?apartmentRedesign=0&worldZoom=off', { waitUntil: 'domcontentloaded' });
+      await page.getByRole('button', { name: 'Open apartment view', exact: true }).waitFor();
+      assert.equal(await page.locator('.apt-home-shell[data-home-layout="unified"]').count(), 0);
+    });
     checks.push({ stage: 'explicit_url_override_reenables_and_rolls_back_shell' });
 
     // The unified-only portal wrapper must not change the incumbent classic
     // card's absolute canvas placement or its actual close action.
-    await page.getByRole('button', { name: 'Open apartment view', exact: true }).click();
-    await waitSite('echo');
-    const classicSelect = page.locator('[data-apt-semantic-device-select="1"]');
-    await classicSelect.focus(); await classicSelect.selectOption('authored-echo-light');
-    const classicOpen = page.locator('[data-apt-semantic-open="1"]');
-    await classicOpen.focus(); await classicOpen.press('Enter');
-    const classicClose = page.getByRole('button', { name: 'close card', exact: true }); await classicClose.waitFor();
+    await timedPhase('classic_apartment_mount', async () => {
+      await page.getByRole('button', { name: 'Open apartment view', exact: true }).click();
+      await waitSite('echo');
+    });
+    const classicClose = page.getByRole('button', { name: 'close card', exact: true });
+    await timedPhase('classic_generic_card_open', async () => {
+      const classicSelect = page.locator('[data-apt-semantic-device-select="1"]');
+      await classicSelect.focus(); await classicSelect.selectOption('authored-echo-light');
+      const classicOpen = page.locator('[data-apt-semantic-open="1"]');
+      await classicOpen.focus(); await classicOpen.press('Enter');
+      await classicClose.waitFor();
+    });
     const classicCard = await classicClose.evaluate(button => ({
       position: getComputedStyle(button.parentElement.parentElement).position,
       inUnifiedWrapper: !!button.closest('.apt-home-card'), inControls: !!button.closest('.apt-home-controls'),
@@ -810,7 +826,9 @@ test('unified shell keeps the real room, private controls and one chat controlle
     }));
     assert.equal(classicCard.position, 'absolute'); assert.equal(classicCard.inUnifiedWrapper, false); assert.equal(classicCard.inControls, false);
     await capture('classic-echo-card-390x844');
-    await classicClose.focus(); await classicClose.press('Enter'); await classicClose.waitFor({ state: 'hidden' });
+    await timedPhase('classic_generic_card_close', async () => {
+      await classicClose.focus(); await classicClose.press('Enter'); await classicClose.waitFor({ state: 'hidden' });
+    });
     checks.push({ stage: 'classic_generic_card_retains_canvas_positioning_and_closes', ...classicCard });
 
     assert.deepEqual(readRegistration(privateRoot, { contentPacksDir: packs }), initial);

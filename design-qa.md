@@ -144,6 +144,13 @@ Behavioral review also found and fixed two regressions before acceptance:
   contract harnesses plus JSX parsing pass after the correction. The updated
   public and accepted-composition browser suites both pass, with zero output
   commands. The independent Den patch still reconstructs the accepted UI exactly.
+- Hosted run 39112240176 passed all ten radial cases and both canonical drag/Undo
+  cases, then reached the 145s global deadline near its final classic-view check.
+  Repetitive restoration now uses eight native keys per fixture instead of 26,
+  with the same exact 75% and full-fixture assertions. Final URL reload, mount
+  and card phases retain timestamps. The deadline, coverage, renderer and 3cm
+  canonical tolerance are unchanged; the corrected local run passes all 28
+  checkpoints and ten radial cases. Hosted CI must pass on the revised head.
 - Repair released the UI lane. Den was notified; its selector changes are kept
   outside this PR and reconstruct the accepted composition when applied
   separately. Shared branch/index are unchanged. No host deployment occurred.

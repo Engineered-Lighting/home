@@ -334,5 +334,18 @@
         true
       ]
     }
-  ]
+  ],
+  "harness_followup": {
+    "failed_hosted_run": 39112240176,
+    "diagnosis": "All ten radial cases and both drag/Undo cases passed; global145s deadline reached near final classic check",
+    "browser_test_sha256": "410fde9a7d823c88aeec7721dc01df2857f294b45d509b49e6c981ab70243001",
+    "change": "Native End, PageDown twice, five ArrowLeft keys restore exact75percent in8keys instead26; final phase timestamps added",
+    "deadline_unchanged": true,
+    "coverage_unchanged": true,
+    "local_tests_passed": 1,
+    "local_browser_checkpoints": 28,
+    "local_radial_cases": 10,
+    "local_browser_receipt_sha256": "5198b24112731300ce85a48bf921227a50c0d3982f1e755777e2ef73694e9c0f",
+    "product_ui_unchanged": true
+  }
 }

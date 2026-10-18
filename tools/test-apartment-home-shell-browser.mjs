@@ -60,7 +60,10 @@ function browserLaunchOptions(platform = process.platform) {
   else if (platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
   const installed = fs.existsSync(chromium.executablePath());
   assert.ok(installed || platform === 'win32', 'the pinned Playwright Chromium browser must be available on this platform');
-  return { headless: true, args, ...(!installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
+  // Use the full pinned browser that executablePath() verifies, rather than
+  // Playwright's separate legacy headless shell on CPU-only Linux runners.
+  return { headless: true, args, ...(platform === 'linux' ? { channel: 'chromium' }
+    : !installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
 }
 
 test('unified shell keeps the real room, private controls and one chat controller through responsive navigation', { timeout: 180000 }, async () => {
@@ -230,6 +233,21 @@ test('unified shell keeps the real room, private controls and one chat controlle
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
     browser = await chromium.launch(launchOptions);
+    const graphicsSession = await browser.newBrowserCDPSession();
+    try {
+      const { gpu } = await graphicsSession.send('SystemInfo.getInfo');
+      let executable = null;
+      if (process.platform === 'linux') {
+        const { processInfo } = await graphicsSession.send('SystemInfo.getProcessInfo');
+        const browserProcess = processInfo.find(item => item.type === 'browser');
+        assert.ok(Number.isSafeInteger(browserProcess?.id) && browserProcess.id > 0, 'the Linux browser process is identified');
+        executable = fs.realpathSync('/proc/' + browserProcess.id + '/exe');
+        assert.equal(executable, fs.realpathSync(chromium.executablePath()),
+          'Linux acceptance uses the full pinned Chromium binary, not a system browser or headless shell');
+      }
+      receipt.browser_graphics = { version: browser.version(), feature_status: gpu.featureStatus,
+        executable: executable && path.basename(executable), channel: launchOptions.channel || null };
+    } finally { await graphicsSession.detach(); }
     await chatPresenterMountProof();
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, serviceWorkers: 'block' });
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
@@ -276,13 +294,34 @@ test('unified shell keeps the real room, private controls and one chat controlle
         ? window.__APT_ENGINE : null);
       const capture = { name, started_at: Date.now(), completed: false };
       (receipt.captures ||= []).push(capture);
+      capture.graphics = await engine.evaluate(value => {
+        if (!value) return null;
+        const renderer = value.renderer, gl = renderer.getContext();
+        const info = gl.getExtension('WEBGL_debug_renderer_info');
+        return { renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+          version: gl.getParameter(gl.VERSION), context_lost: gl.isContextLost(),
+          pixel_ratio: renderer.getPixelRatio(), width: gl.drawingBufferWidth, height: gl.drawingBufferHeight,
+          canvas_width: renderer.domElement.width, canvas_height: renderer.domElement.height };
+      });
+      if (capture.graphics) {
+        assert.equal(capture.graphics.context_lost, false, 'the real renderer retains its WebGL context');
+        assert.ok(capture.graphics.width > 0 && capture.graphics.height > 0, 'the real WebGL framebuffer remains allocated');
+        assert.equal(capture.graphics.width, capture.graphics.canvas_width);
+        assert.equal(capture.graphics.height, capture.graphics.canvas_height);
+        if (process.platform === 'linux') assert.match(capture.graphics.renderer, /SwiftShader/i,
+          'Linux acceptance still renders the production scene through SwiftShader WebGL');
+      }
       await engine.evaluate(value => value?.setRunning?.(false));
+      capture.pause_ms = Date.now() - capture.started_at;
       try {
         const file = name + '.png';
+        const shotStarted = Date.now();
         await page.screenshot({ path: path.join(run, file), timeout: 30000 });
+        capture.screenshot_ms = Date.now() - shotStarted;
         screenshots.push(file); capture.completed = true;
       } finally {
         capture.duration_ms = Date.now() - capture.started_at;
+        const resumeStarted = Date.now();
         const frame = await engine.evaluate(value => {
           if (value && value === window.__APT_ENGINE && document.querySelector('.apt-home-shell[data-home-layout="unified"]')) {
             const frame = value.renderer.info.render.frame;
@@ -296,6 +335,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
           capture.renderer_resumed = true;
         }
         await engine.dispose();
+        capture.resume_ms = Date.now() - resumeStarted;
       }
     }
     async function tab(name) {
@@ -541,6 +581,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     assert.deepEqual(await aimDescriptor(channelId), channelsBefore, 'native Spot control restores the exact original virtual descriptor');
     assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'channel controls send no output command');
     checks.push({ stage: 'spot_brightness_preserves_down_and_six_radial_channels' });
+    await timedPhase('radial_controls_and_native_restoration', async () => {
     const radialPanel = page.locator('section[aria-label="Radial channel"]');
     const radialOutput = id => page.evaluate(id => {
       const overlay = window.__APT_ENGINE.overlay, descriptor = overlay.virtualFixtureInteractionDescriptor(id);
@@ -590,15 +631,17 @@ test('unified shell keeps the real room, private controls and one chat controlle
     }
     const halfRadials = channelsBefore.state.radials.map(zone => ({ ...zone, on: true, brightness: .5 }));
     await assertRadials('all_zero_radial_master_on', channelId, halfRadials);
-    await radialPanel.getByRole('button', { name: 'Off', exact: true }).click();
-    await page.getByRole('button', { name: 'All on', exact: true }).click();
+    // Pointer activation is covered above; repeated scenarios also exercise
+    // native keyboard activation without another compositor-stability wait.
+    await radialPanel.getByRole('button', { name: 'Off', exact: true }).press('Enter');
+    await page.getByRole('button', { name: 'All on', exact: true }).press('Enter');
     await assertRadials('all_zero_fixture_all_on', channelId, halfRadials);
 
     // Author a mixed pattern through the real per-zone controls. A group power
     // operation must preserve its zero, partial and full levels independently.
     for (const [number, preset] of [[2, 'Off'], [3, '25%'], [5, '100%']]) {
       await radialPanel.getByRole('button', { name: 'Radial zone ' + number, exact: true }).press('Enter');
-      await radialPanel.getByRole('button', { name: preset, exact: true }).click();
+      await radialPanel.getByRole('button', { name: preset, exact: true }).press('Enter');
     }
     const mixedRadials = (await aimDescriptor(channelId)).state.radials.map(zone => ({ ...zone, on: true }));
     assert.deepEqual(mixedRadials.map(zone => zone.brightness), [.5, 0, .25, .5, 1, .5]);
@@ -607,8 +650,8 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await assertRadials('mixed_levels_radial_master_on', channelId, mixedRadials);
     assert.equal(await radialPanel.getByRole('button', { name: 'Radial zone 5', exact: true }).getAttribute('aria-pressed'), 'true',
       'group power preserves the selected zone');
-    await page.getByRole('button', { name: 'All off', exact: true }).click();
-    await page.getByRole('button', { name: 'All on', exact: true }).click();
+    await page.getByRole('button', { name: 'All off', exact: true }).press('Enter');
+    await page.getByRole('button', { name: 'All on', exact: true }).press('Enter');
     await assertRadials('mixed_levels_fixture_all_on', channelId, mixedRadials);
 
     const roomZeroId = fixtureIds[0];
@@ -621,10 +664,10 @@ test('unified shell keeps the real room, private controls and one chat controlle
       await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Light', exact: true }).click();
     }
     await openFixtureFromRoom(roomZeroId);
-    await radialPanel.getByRole('button', { name: 'Off', exact: true }).click();
+    await radialPanel.getByRole('button', { name: 'Off', exact: true }).press('Enter');
     await page.getByRole('button', { name: 'Back to room', exact: true }).click();
-    await page.getByRole('button', { name: 'All off', exact: true }).click();
-    await page.getByRole('button', { name: 'All on', exact: true }).click();
+    await page.getByRole('button', { name: 'All off', exact: true }).press('Enter');
+    await page.getByRole('button', { name: 'All on', exact: true }).press('Enter');
     for (const id of fixtureIds) {
       const expected = id === roomZeroId ? before[id].state.radials.map(zone => ({ ...zone, on: true, brightness: .5 }))
         : id === channelId ? mixedRadials : before[id].state.radials;
@@ -638,15 +681,16 @@ test('unified shell keeps the real room, private controls and one chat controlle
       const original = before[id].state.radials;
       assert.ok(original.every(zone => zone.on && zone.brightness === .75), 'authored fixture restoration precondition');
       const range = page.getByRole('slider', { name: 'Radial brightness', exact: true });
-      await range.press('End');
-      await range.press('PageDown'); await range.press('PageDown');
-      for (let step = 0; step < 5; step++) await range.press('ArrowLeft');
+      await range.focus();
+      assert.equal(await range.evaluate(element => element === document.activeElement), true, 'native radial restoration starts on the actual focused range');
+      for (const key of ['End', 'PageDown', 'PageDown', ...Array(5).fill('ArrowLeft')]) await page.keyboard.press(key);
       await assertRadials('native_restoration', id, original);
     }
     assert.deepEqual(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures), overviewFixtures,
       'radial regression restores all four authored fixtures exactly');
     assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'radial controls send no output commands');
     checks.push({ stage: 'radial_master_fixture_and_room_power_preserve_levels_identity_and_modeled_output', cases: radialCases.length });
+    });
     // Selecting the already-selected cylinder must reveal its existing Controls
     // panel even when no fixture ID or details-open state changes.
     await tab('Chat');
@@ -754,10 +798,10 @@ test('unified shell keeps the real room, private controls and one chat controlle
       checks.push({ stage: focusCase === 'setup_keyboard' ? 'four_actual_fixture_clicks_surface_drag_and_undo' : 'focused_spot_slider_surface_drag_and_undo',
         fixtureIds, focus_case: focusCase, aimed, undo: await aimDescriptor(directId) });
     }
-    await dragAndUndo('setup_keyboard', 'Virtual fixture');
+    await timedPhase('canonical_drag_setup', () => dragAndUndo('setup_keyboard', 'Virtual fixture'));
     await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Light', exact: true }).click();
     await page.getByRole('slider', { name: 'Brightness', exact: true }).focus();
-    await dragAndUndo('spot_slider', 'Brightness');
+    await timedPhase('canonical_drag_spot', () => dragAndUndo('spot_slider', 'Brightness'));
 
     await capture('unified-fixture-controls-1366x768');
 

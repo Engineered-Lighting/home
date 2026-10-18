@@ -71,6 +71,7 @@
         ["home-apartment-perception-view.js", false],
         ["home-apartment-perception-player.js", false],
         ["home-apartment-den-perception.jsx", true],
+        ["home-apartment-ui.jsx", true],
         ["home-apartment-cards.jsx", true],
         ["home-apartment-aim.jsx", true],
         ["home-apartment-calibrate.jsx", true],

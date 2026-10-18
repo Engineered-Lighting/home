@@ -12,4 +12,4 @@ These screenshots show **authored room data and generated sockets on Home's prod
 | Echo phone controls | ![Echo phone](unified-echo-card-390x844.png) |
 | Previous Home | ![Previous Home](previous-home-classic-390x844.png) |
 
-`verification.json` records the clean-worktree source pins, 17 tested behavior checkpoints, ten screenshots and the retained initial timeout. This is local software verification, not deployment or physical acceptance.
+`verification.json` records the clean-worktree source pins, 20 tested behavior checkpoints, ten screenshots and the retained initial timeout. This is local software verification, not deployment or physical acceptance.

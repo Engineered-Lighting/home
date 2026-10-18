@@ -216,8 +216,278 @@
       ]
     },
     {
+      "stage": "desktop_camera_and_host_settled_before_picking",
+      "frame": 72,
+      "rect": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "host": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "aspect": 1.4329608938547487,
+      "pivot": {
+        "tx": 0,
+        "ty": 0,
+        "cx": 0,
+        "cy": 0,
+        "dx": 0,
+        "dy": 0
+      },
+      "pivot_error": 0,
+      "camera": [
+        0.7071067811865477,
+        8.326672684688674e-17,
+        -0.7071067811865474,
+        0,
+        -0.4055797876726388,
+        0.8191520442889918,
+        -0.4055797876726389,
+        0,
+        0.579227965339569,
+        0.573576436351046,
+        0.5792279653395693,
+        0,
+        8.203350633252796,
+        7.04282452258884,
+        4.203350633252797,
+        1
+      ],
+      "projection": [
+        2.213315671044893,
+        0,
+        0,
+        0,
+        0,
+        3.171594802363213,
+        0,
+        0,
+        0,
+        0,
+        -1.000500125031258,
+        -1,
+        0,
+        0,
+        -0.1000250062515629,
+        0
+      ],
+      "root": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        2.220446049250313e-16,
+        -1,
+        0,
+        0,
+        1,
+        2.220446049250313e-16,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "stable_frames": 3,
+      "elapsed_ms": 57.599999994039536
+    },
+    {
       "stage": "same_fixture_click_from_chat_and_native_keyboard_selection_reveal_controls",
       "keyboard_selected_fixture": "victoria-den-proposed-fixture-02"
+    },
+    {
+      "stage": "fixture_hover_camera_settled_before_drag",
+      "frame": 794,
+      "rect": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "host": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "aspect": 1.4329608938547487,
+      "pivot": {
+        "tx": -2.070198282166924e-07,
+        "ty": 0.005401453625556477,
+        "cx": -2.091429548654279e-07,
+        "cy": 0.005401342699778985,
+        "dx": -7.004107823763882e-07,
+        "dy": 0.00535302268039637
+      },
+      "pivot_error": 4.832001938261457e-05,
+      "camera": [
+        0.7071071868838865,
+        4.01739120664546e-07,
+        -0.7071063754888618,
+        0,
+        -0.40247337379567705,
+        0.8222106609860547,
+        -0.40247336849337056,
+        0,
+        0.5813902386888532,
+        0.5691832999664641,
+        0.5813912292050893,
+        0,
+        8.203350633252796,
+        7.04282452258884,
+        4.203350633252797,
+        1
+      ],
+      "projection": [
+        2.213315671044893,
+        0,
+        0,
+        0,
+        0,
+        3.171594802363213,
+        0,
+        0,
+        0,
+        0,
+        -1.000500125031258,
+        -1,
+        0,
+        0,
+        -0.1000250062515629,
+        0
+      ],
+      "root": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        2.220446049250313e-16,
+        -1,
+        0,
+        0,
+        1,
+        2.220446049250313e-16,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "stable_frames": 3,
+      "elapsed_ms": 5899.300000011921
+    },
+    {
+      "stage": "final_fixture_hover_camera_settled_before_drag",
+      "frame": 994,
+      "rect": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "host": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "aspect": 1.4329608938547487,
+      "pivot": {
+        "tx": -1.546699865961898e-08,
+        "ty": 0.005227347432568086,
+        "cx": -2.4822874850328755e-08,
+        "cy": 0.00523575259658372,
+        "dx": -1.9872198740003574e-07,
+        "dy": 0.005284357669809792
+      },
+      "pivot_error": 4.860507322607208e-05,
+      "camera": [
+        0.7071068962918662,
+        1.1398224936121082e-07,
+        -0.707106666081201,
+        0,
+        -0.4025132921391276,
+        0.8221715760704542,
+        -0.4025132906540435,
+        0,
+        0.5813629562225352,
+        0.5692397557284735,
+        0.5813632372539413,
+        0,
+        8.203350633252796,
+        7.04282452258884,
+        4.203350633252797,
+        1
+      ],
+      "projection": [
+        2.213315671044893,
+        0,
+        0,
+        0,
+        0,
+        3.171594802363213,
+        0,
+        0,
+        0,
+        0,
+        -1.000500125031258,
+        -1,
+        0,
+        0,
+        -0.1000250062515629,
+        0
+      ],
+      "root": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        2.220446049250313e-16,
+        -1,
+        0,
+        0,
+        1,
+        2.220446049250313e-16,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "stable_frames": 3,
+      "elapsed_ms": 1648.5
     },
     {
       "stage": "four_actual_fixture_clicks_surface_drag_and_undo",
@@ -313,13 +583,13 @@
             "brightness": 1,
             "color_temp_kelvin": 3000
           },
-          "pan_deg": -12.302729286639433,
-          "tilt_deg": 52.449771388510705
+          "pan_deg": -12.26357577915962,
+          "tilt_deg": 52.382542862797244
         },
         "target": {
           "point": [
-            2.3973182093870697,
-            2.1030316444278165,
+            2.4000997051451893,
+            2.099894532065454,
             0
           ],
           "normal": [
@@ -598,69 +868,447 @@
   "still_capture_verification": {
     "worktree_only": true,
     "source_pins_unchanged": true,
-    "checks": 17,
+    "checks": 20,
     "capture_results": [
       {
         "name": "unified-echo-card-1366x768",
         "completed": true,
-        "duration_ms": 71,
+        "duration_ms": 60,
         "renderer_resumed": true
       },
       {
         "name": "unified-echo-card-390x844",
         "completed": true,
-        "duration_ms": 23,
+        "duration_ms": 32,
         "renderer_resumed": true
       },
       {
         "name": "unified-controls-1366x768",
         "completed": true,
-        "duration_ms": 73,
+        "duration_ms": 60,
         "renderer_resumed": true
       },
       {
         "name": "unified-controls-768x1024",
         "completed": true,
-        "duration_ms": 47,
+        "duration_ms": 39,
         "renderer_resumed": true
       },
       {
         "name": "unified-controls-390x844",
         "completed": true,
-        "duration_ms": 51,
+        "duration_ms": 33,
         "renderer_resumed": true
       },
       {
         "name": "unified-chat-390x844",
         "completed": true,
-        "duration_ms": 43,
+        "duration_ms": 40,
         "renderer_resumed": true
       },
       {
         "name": "unified-fixture-controls-1366x768",
         "completed": true,
-        "duration_ms": 45,
+        "duration_ms": 42,
         "renderer_resumed": true
       },
       {
         "name": "unified-camera-unavailable-390x844",
         "completed": true,
-        "duration_ms": 35,
+        "duration_ms": 27,
         "renderer_resumed": true
       },
       {
         "name": "previous-home-classic-390x844",
         "completed": true,
-        "duration_ms": 40
+        "duration_ms": 34
       },
       {
         "name": "classic-echo-card-390x844",
         "completed": true,
-        "duration_ms": 48
+        "duration_ms": 57
       }
     ],
     "first_ubuntu_failure": "https://github.com/Engineered-Lighting/home/actions/runs/39097669493",
     "failure": "Screenshot compositor timed out after fonts loaded; no production source change",
-    "repair": "Pause only the current unified engine during still capture, then verify renderer frame advancement after resuming; retain bounded authored diagnostics in CI."
+    "repair": "Pause only the current unified engine during still capture, then verify renderer frame advancement after resuming; retain bounded authored diagnostics in CI.",
+    "second_ubuntu_failure": "https://github.com/Engineered-Lighting/home/actions/runs/39098012751",
+    "drag_repair": "Wait for actual camera/host/pivot stability, retain preprojection, and bind the 3cm expected target to the actual pointer-up visible canonical collision hit in the same input turn."
+  },
+  "drag_input_frame_verification": {
+    "fixture_id": "victoria-den-mount-03-virtual-fixture",
+    "cylinder": {
+      "x": 512.9992054449614,
+      "y": 222.8609588783004
+    },
+    "expected": {
+      "x": 549.3371766248453,
+      "y": 504.2781809231529,
+      "hit": {
+        "point": [
+          2.399999999999997,
+          2.1000000000000076,
+          0
+        ],
+        "normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "display_hit": {
+        "point": [
+          2.399999999999997,
+          2.1000000000000076,
+          0
+        ],
+        "normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "frame": 994,
+      "rect": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "camera": [
+        0.7071068962918662,
+        1.1398224936121082e-07,
+        -0.707106666081201,
+        0,
+        -0.4025132921391276,
+        0.8221715760704542,
+        -0.4025132906540435,
+        0,
+        0.5813629562225352,
+        0.5692397557284735,
+        0.5813632372539413,
+        0,
+        8.203350633252796,
+        7.04282452258884,
+        4.203350633252797,
+        1
+      ],
+      "projection": [
+        2.213315671044893,
+        0,
+        0,
+        0,
+        0,
+        3.171594802363213,
+        0,
+        0,
+        0,
+        0,
+        -1.000500125031258,
+        -1,
+        0,
+        0,
+        -0.1000250062515629,
+        0
+      ]
+    },
+    "selected_after_down": "victoria-den-mount-03-virtual-fixture",
+    "pointer_up": {
+      "x": 549.337158203125,
+      "y": 504.2781677246094,
+      "frame": 1018,
+      "current_engine": true,
+      "site": "victoria",
+      "scene_identity": {
+        "siteId": "victoria",
+        "contentRevision": "authored-victoria-r1",
+        "registrationVersion": 1,
+        "frameDigest": "d13e63c04c161941a3d91660aeaf8635d77694f8e68d057ff1addbf42be5c150"
+      },
+      "selected_fixture_id": "victoria-den-mount-03-virtual-fixture",
+      "visible_hit": {
+        "point": [
+          2.4000997051451893,
+          2.099894532065454,
+          0
+        ],
+        "normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "raw_hit": {
+        "point": [
+          2.4000997051451893,
+          2.099894532065454,
+          0
+        ],
+        "normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "rect": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "host": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "camera": [
+        0.7071068793929718,
+        9.724823396561888e-08,
+        -0.7071066829801029,
+        0,
+        -0.40251813265510367,
+        0.822166836345346,
+        -0.4025181313900448,
+        0,
+        0.5813596253602253,
+        0.5692466014074001,
+        0.5813598651327274,
+        0,
+        8.203350633252796,
+        7.04282452258884,
+        4.203350633252797,
+        1
+      ],
+      "projection": [
+        2.213315671044893,
+        0,
+        0,
+        0,
+        0,
+        3.171594802363213,
+        0,
+        0,
+        0,
+        0,
+        -1.000500125031258,
+        -1,
+        0,
+        0,
+        -0.1000250062515629,
+        0
+      ],
+      "root": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        2.220446049250313e-16,
+        -1,
+        0,
+        0,
+        1,
+        2.220446049250313e-16,
+        0,
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    "aimed": {
+      "schema": "home-virtual-fixture-interaction-1",
+      "generation": 1,
+      "fixture_id": "victoria-den-mount-03-virtual-fixture",
+      "mount_id": "victoria-den-mount-03",
+      "binding": {
+        "canonical_collision_digest": "42d9ba40ed1dca5af6b85f3380d2bf9a021434f8b4ade5fbe86889b30009edb2",
+        "content_revision": "authored-victoria-r1",
+        "frame_digest": "d13e63c04c161941a3d91660aeaf8635d77694f8e68d057ff1addbf42be5c150",
+        "manifest_digest": "b826d5d8d6b6187e6a5fee431fb658ad6cb3593312b551f06a3f7ef3beb7768d",
+        "registration_version": 1
+      },
+      "equipment_revision": 0,
+      "equipment_digest": "a32f7c49b333fd906084b4dae93350c95a7c7a3f69dd5bdc9fcdd8af6616d9f0",
+      "display_anchor_m": [
+        1,
+        3,
+        2.3
+      ],
+      "display_origin_m": [
+        1,
+        3,
+        2.1599999999999997
+      ],
+      "horizontal_world_reference": [
+        0.7071067811865475,
+        -0.7071067811865475,
+        0
+      ],
+      "origin_role": "mount_anchor",
+      "optical_origin_m": null,
+      "state": {
+        "radials": [
+          {
+            "number": 1,
+            "on": true,
+            "brightness": 0.75,
+            "color_temp_kelvin": 3000,
+            "azimuth_deg": 0
+          },
+          {
+            "number": 2,
+            "on": true,
+            "brightness": 0.75,
+            "color_temp_kelvin": 3000,
+            "azimuth_deg": 60
+          },
+          {
+            "number": 3,
+            "on": true,
+            "brightness": 0.75,
+            "color_temp_kelvin": 3000,
+            "azimuth_deg": 120
+          },
+          {
+            "number": 4,
+            "on": true,
+            "brightness": 0.75,
+            "color_temp_kelvin": 3000,
+            "azimuth_deg": 180
+          },
+          {
+            "number": 5,
+            "on": true,
+            "brightness": 0.75,
+            "color_temp_kelvin": 3000,
+            "azimuth_deg": 240
+          },
+          {
+            "number": 6,
+            "on": true,
+            "brightness": 0.75,
+            "color_temp_kelvin": 3000,
+            "azimuth_deg": 300
+          }
+        ],
+        "downward": {
+          "on": true,
+          "brightness": 0.75,
+          "color_temp_kelvin": 3000
+        },
+        "spotlight": {
+          "on": true,
+          "brightness": 1,
+          "color_temp_kelvin": 3000
+        },
+        "pan_deg": -12.26357577915962,
+        "tilt_deg": 52.382542862797244
+      },
+      "target": {
+        "point": [
+          2.4000997051451893,
+          2.099894532065454,
+          0
+        ],
+        "normal": [
+          0,
+          0,
+          1
+        ],
+        "surface_id": null,
+        "kind": "registered_mesh"
+      },
+      "truth_role": "virtual_preview",
+      "physical_commands": false
+    },
+    "after": {
+      "x": 549.3371846779842,
+      "y": 504.2686618220629,
+      "hit": {
+        "point": [
+          2.39999999999997,
+          2.1000000000000236,
+          0
+        ],
+        "normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "display_hit": {
+        "point": [
+          2.39999999999997,
+          2.1000000000000236,
+          0
+        ],
+        "normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "frame": 1018,
+      "rect": {
+        "x": 0,
+        "y": 52,
+        "width": 1026,
+        "height": 716,
+        "top": 52,
+        "right": 1026,
+        "bottom": 768,
+        "left": 0
+      },
+      "camera": [
+        0.7071068793929718,
+        9.724823396561888e-08,
+        -0.7071066829801029,
+        0,
+        -0.40251813265510367,
+        0.822166836345346,
+        -0.4025181313900448,
+        0,
+        0.5813596253602253,
+        0.5692466014074001,
+        0.5813598651327274,
+        0,
+        8.203350633252796,
+        7.04282452258884,
+        4.203350633252797,
+        1
+      ],
+      "projection": [
+        2.213315671044893,
+        0,
+        0,
+        0,
+        0,
+        3.171594802363213,
+        0,
+        0,
+        0,
+        0,
+        -1.000500125031258,
+        -1,
+        0,
+        0,
+        -0.1000250062515629,
+        0
+      ]
+    }
   }
 }

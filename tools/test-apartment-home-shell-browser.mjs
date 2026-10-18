@@ -313,6 +313,41 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.setViewportSize({ width: 1366, height: 768 }); await tab('Controls');
     await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
 
+    async function settleAimView(stage) {
+      // ResizeObserver can refit after the viewport changes. The real rig also
+      // retains its damped hover pivot across snapHome(0), so a target projected
+      // before the mouse reaches a fixture is not yet a stationary screen ray.
+      const settled = await page.evaluate(async () => {
+        const engine = window.__APT_ENGINE, started = performance.now();
+        let previous = null, stableFrames = 0, sample = null;
+        while (performance.now() - started < 12000) {
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          if (window.__APT_ENGINE !== engine || engine.siteId !== 'victoria'
+              || !document.querySelector('.apt-home-shell[data-home-layout="unified"]')) throw Error('aim view scope changed while settling');
+          const canvas = engine.renderer.domElement, rect = canvas.getBoundingClientRect(), host = canvas.parentElement.getBoundingClientRect();
+          const pivot = engine.rig.state.pivot;
+          const pivotError = Math.max(Math.abs(pivot.tx - pivot.cx), Math.abs(pivot.ty - pivot.cy),
+            Math.abs(pivot.cx - pivot.dx), Math.abs(pivot.cy - pivot.dy));
+          sample = { frame: engine.renderer.info.render.frame, rect: rect.toJSON(), host: host.toJSON(),
+            aspect: engine.camera.aspect, pivot: { ...pivot }, pivot_error: pivotError,
+            camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements],
+            root: [...engine.apartmentRoot.matrixWorld.elements] };
+          const values = [rect.x, rect.y, rect.width, rect.height, ...sample.camera, ...sample.projection, ...sample.root];
+          const allocated = rect.width > 0 && rect.height > 0 && Math.abs(rect.width - host.width) < .5
+            && Math.abs(rect.height - host.height) < .5 && Math.abs(engine.camera.aspect - rect.width / rect.height) < 1e-6;
+          if (previous && sample.frame > previous.frame) {
+            const unchanged = values.every((value, index) => Math.abs(value - previous.values[index]) < 1e-4);
+            stableFrames = allocated && unchanged && !engine.rig.isTweening() && pivotError < 5e-5 ? stableFrames + 1 : 0;
+            if (stableFrames >= 3) return { ...sample, stable_frames: stableFrames, elapsed_ms: performance.now() - started };
+          }
+          if (!previous || sample.frame > previous.frame) previous = { frame: sample.frame, values };
+        }
+        throw Error('12s aim camera/layout did not settle: ' + JSON.stringify(sample));
+      });
+      checks.push({ stage, ...settled });
+      return settled;
+    }
+    await settleAimView('desktop_camera_and_host_settled_before_picking');
     const aimDescriptor = id => page.evaluate(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), id);
     async function fixturePoint(id) {
       return page.evaluate(id => {
@@ -332,7 +367,11 @@ test('unified shell keeps the real room, private controls and one chat controlle
         const rect = engine.renderer.domElement.getBoundingClientRect();
         const x = rect.left + (projected.x + 1) * rect.width / 2, y = rect.top + (1 - projected.y) * rect.height / 2;
         const hit = engine.picking.surfaceHit(engine.apartmentRoot, [engine.modes.getCollision()], x, y);
-        return { x, y, hit: hit && { point: hit.point, normal: hit.normal } };
+        const displayHit = engine.displaySurfaceHit(x, y);
+        return { x, y, hit: hit && { point: hit.point, normal: hit.normal },
+          display_hit: displayHit && { point: displayHit.point, normal: displayHit.normal },
+          frame: engine.renderer.info.render.frame, rect: rect.toJSON(),
+          camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements] };
       }, point);
     }
     const fixtureIds = await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.map(item => item.fixture_id));
@@ -357,14 +396,59 @@ test('unified shell keeps the real room, private controls and one chat controlle
     assert.equal(await page.locator('#apt-home-panel-controls').isVisible(), true);
     checks.push({ stage: 'same_fixture_click_from_chat_and_native_keyboard_selection_reveal_controls',
       keyboard_selected_fixture: await fixtureSelect.inputValue() });
-    const directId = fixtureIds[2], cylinder = await fixturePoint(directId), target = await targetPoint([2.4,2.1,0]);
+    const directId = fixtureIds[2];
+    let cylinder = await fixturePoint(directId);
+    await page.mouse.move(cylinder.x, cylinder.y);
+    await settleAimView('fixture_hover_camera_settled_before_drag');
+    cylinder = await fixturePoint(directId);
+    await page.mouse.move(cylinder.x, cylinder.y);
+    await settleAimView('final_fixture_hover_camera_settled_before_drag');
+    assert.equal(await page.evaluate(({ x, y }) => {
+      const engine = window.__APT_ENGINE;
+      return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
+    }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
+    const target = await targetPoint([2.4,2.1,0]);
     assert.ok(target.hit, 'direct aim target comes from the actual registered authored collision mesh');
-    await page.mouse.move(cylinder.x, cylinder.y); await page.mouse.down();
+    assert.ok(target.display_hit && Math.hypot(...target.display_hit.point.map((value, axis) => value - target.hit.point[axis])) < 1e-6,
+      'the expected collision hit is also a visible canonical display surface');
+    receipt.drag = { fixture_id: directId, cylinder, expected: target };
+    // Observe the actual input frame before the element's production capture
+    // handler. Ambient camera motion is legitimate; the committed target must
+    // bind the qualified visible collision ray at pointer-up in that same turn.
+    await page.evaluate(() => {
+      const engine = window.__APT_ENGINE;
+      window.__shellDragPointerUp = null;
+      window.addEventListener('pointerup', event => {
+        const raw = engine.picking.surfaceHit(engine.apartmentRoot, [engine.modes.getCollision()], event.clientX, event.clientY);
+        const visible = engine.displaySurfaceHit(event.clientX, event.clientY);
+        window.__shellDragPointerUp = { x: event.clientX, y: event.clientY, frame: engine.renderer.info.render.frame,
+          current_engine: window.__APT_ENGINE === engine, site: engine.siteId, scene_identity: engine.sceneIdentity,
+          selected_fixture_id: document.querySelector('select[aria-label="Virtual fixture"]')?.value,
+          visible_hit: visible && { point: [...visible.point], normal: [...visible.normal] },
+          raw_hit: raw && { point: [...raw.point], normal: [...raw.normal] },
+          rect: engine.renderer.domElement.getBoundingClientRect().toJSON(),
+          host: engine.renderer.domElement.parentElement.getBoundingClientRect().toJSON(),
+          camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements],
+          root: [...engine.apartmentRoot.matrixWorld.elements] };
+      }, { capture: true, once: true });
+    });
+    await page.mouse.down();
+    await page.waitForFunction(id => document.querySelector('select[aria-label="Virtual fixture"]')?.value === id, directId);
+    receipt.drag.selected_after_down = await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue();
+    assert.equal(receipt.drag.selected_after_down, directId, 'pointer-down selected the fixture being dragged');
     await page.mouse.move(target.x, target.y, { steps: 12 }); await page.mouse.up();
+    receipt.drag.pointer_up = await page.evaluate(() => window.__shellDragPointerUp);
+    assert.equal(receipt.drag.pointer_up?.current_engine, true, 'pointer-up belongs to the same actual engine');
+    assert.equal(receipt.drag.pointer_up.selected_fixture_id, directId, 'pointer-up retains the fixture being dragged');
+    assert.equal(await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue(), directId);
+    assert.ok(receipt.drag.pointer_up.visible_hit, 'actual pointer-up has a qualified visible canonical collision hit');
     await page.waitForFunction(id => !!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.target, directId);
     const aimed = await aimDescriptor(directId);
+    receipt.drag.aimed = aimed;
+    receipt.drag.after = await targetPoint([2.4,2.1,0]);
     assert.deepEqual(aimed.display_anchor_m, before[directId].display_anchor_m, 'aiming leaves the saved socket fixed');
-    assert.ok(Math.hypot(...aimed.target.point.map((value, axis) => value - target.hit.point[axis])) < .03);
+    assert.ok(Math.hypot(...aimed.target.point.map((value, axis) => value - receipt.drag.pointer_up.visible_hit.point[axis])) < .03,
+      'committed aim stays within 3cm of the actual pointer-up visible canonical collision hit');
     assert.equal(aimed.physical_commands, false);
     await page.getByRole('button', { name: 'Undo aim', exact: true }).click();
     await page.waitForFunction(({ id, pan }) => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.pan_deg === pan,

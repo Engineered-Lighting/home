@@ -15,7 +15,8 @@
     "candidate_overlay": false,
     "accepted_baseline_commit": "68a62fb3",
     "phase_composition_commit": "93567c6e",
-    "predecessor_composition_manifest_sha256": "1ae04b1e221a1e2e71b4d4546494de8a431cb4097c00bd4bf41c376d4d26a70a"
+    "predecessor_composition_manifest_sha256": "1ae04b1e221a1e2e71b4d4546494de8a431cb4097c00bd4bf41c376d4d26a70a",
+    "coordinated_candidate02_manifest_sha256": "4cf2dc92fc4f14df90aff1ae855526a9ac9d78025baf89fb275e75a7ad689326"
   },
   "browser_platform": "win32",
   "checks": [
@@ -593,5 +594,73 @@
     "red": "Canvas-absolute card left 1558 exceeded the desktop Controls right edge 1366",
     "green": "Actual semantic-opened cards fit desktop and phone Controls; keyboard close works; classic card retains its original placement",
     "physical_commands": 0
+  },
+  "still_capture_verification": {
+    "worktree_only": true,
+    "source_pins_unchanged": true,
+    "checks": 17,
+    "capture_results": [
+      {
+        "name": "unified-echo-card-1366x768",
+        "completed": true,
+        "duration_ms": 71,
+        "renderer_resumed": true
+      },
+      {
+        "name": "unified-echo-card-390x844",
+        "completed": true,
+        "duration_ms": 23,
+        "renderer_resumed": true
+      },
+      {
+        "name": "unified-controls-1366x768",
+        "completed": true,
+        "duration_ms": 73,
+        "renderer_resumed": true
+      },
+      {
+        "name": "unified-controls-768x1024",
+        "completed": true,
+        "duration_ms": 47,
+        "renderer_resumed": true
+      },
+      {
+        "name": "unified-controls-390x844",
+        "completed": true,
+        "duration_ms": 51,
+        "renderer_resumed": true
+      },
+      {
+        "name": "unified-chat-390x844",
+        "completed": true,
+        "duration_ms": 43,
+        "renderer_resumed": true
+      },
+      {
+        "name": "unified-fixture-controls-1366x768",
+        "completed": true,
+        "duration_ms": 45,
+        "renderer_resumed": true
+      },
+      {
+        "name": "unified-camera-unavailable-390x844",
+        "completed": true,
+        "duration_ms": 35,
+        "renderer_resumed": true
+      },
+      {
+        "name": "previous-home-classic-390x844",
+        "completed": true,
+        "duration_ms": 40
+      },
+      {
+        "name": "classic-echo-card-390x844",
+        "completed": true,
+        "duration_ms": 48
+      }
+    ],
+    "first_ubuntu_failure": "https://github.com/Engineered-Lighting/home/actions/runs/39097669493",
+    "failure": "Screenshot compositor timed out after fonts loaded; no production source change",
+    "repair": "Pause only the current unified engine during still capture, then verify renderer frame advancement after resuming; retain bounded authored diagnostics in CI."
   }
 }

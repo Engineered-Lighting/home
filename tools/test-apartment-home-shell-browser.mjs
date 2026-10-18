@@ -62,7 +62,7 @@ function browserLaunchOptions(platform = process.platform) {
   return { headless: true, args, ...(!installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
 }
 
-test('unified shell keeps the real room, private controls and one chat controller through responsive navigation', { timeout: 150000 }, async () => {
+test('unified shell keeps the real room, private controls and one chat controller through responsive navigation', { timeout: 180000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-home-shell-browser', 'run-' + Date.now());
   fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -169,7 +169,34 @@ test('unified shell keeps the real room, private controls and one chat controlle
           color: '#fff', background: '#111c', padding: '3px 5px', font: '8px system-ui,sans-serif', letterSpacing: '.06em' });
         document.body.append(note);
       });
-      const file = name + '.png'; await page.screenshot({ path: path.join(run, file) }); screenshots.push(file);
+      // Continuous WebGL draws can starve Chromium's screenshot compositor on
+      // CI's software GPU. Pause only for the still, using the existing engine
+      // interface; all navigation, picking and drag assertions run resumed.
+      const engine = await page.evaluateHandle(() => document.querySelector('.apt-home-shell[data-home-layout="unified"]')
+        ? window.__APT_ENGINE : null);
+      const capture = { name, started_at: Date.now(), completed: false };
+      (receipt.captures ||= []).push(capture);
+      await engine.evaluate(value => value?.setRunning?.(false));
+      try {
+        const file = name + '.png';
+        await page.screenshot({ path: path.join(run, file), timeout: 30000 });
+        screenshots.push(file); capture.completed = true;
+      } finally {
+        capture.duration_ms = Date.now() - capture.started_at;
+        const frame = await engine.evaluate(value => {
+          if (value && value === window.__APT_ENGINE && document.querySelector('.apt-home-shell[data-home-layout="unified"]')) {
+            const frame = value.renderer.info.render.frame;
+            value.setRunning(true);
+            return frame;
+          }
+          return null;
+        });
+        if (frame !== null) {
+          await page.waitForFunction(previous => window.__APT_ENGINE?.renderer.info.render.frame > previous, frame, { timeout: 10000 });
+          capture.renderer_resumed = true;
+        }
+        await engine.dispose();
+      }
     }
     async function tab(name) {
       const tabs = page.locator('.apt-home-tabs');
@@ -429,7 +456,8 @@ test('unified shell keeps the real room, private controls and one chat controlle
         return { selector, rect: rect?.toJSON(), display: element && getComputedStyle(element).display,
           visibility: element && getComputedStyle(element).visibility };
       })).catch(() => []);
-      await page.screenshot({ path: path.join(run, 'failure.png') }).catch(() => {});
+      await page.evaluate(() => window.__APT_ENGINE?.setRunning?.(false)).catch(() => {});
+      await page.screenshot({ path: path.join(run, 'failure.png'), timeout: 5000 }).catch(() => {});
     }
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nAuthored shell failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });

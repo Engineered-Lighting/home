@@ -454,7 +454,8 @@ button.hg-no-press:active {
 /* Keep the mandatory label on the room even when the media tab is hidden. */
 .apt-home-camera [data-apartment-approximate-badge="1"] { position: fixed!important; top: 110px!important;
   left: calc((100% - var(--apt-column-width)) / 2)!important; max-width: min(360px, calc(100vw - 32px))!important; pointer-events: none; }
-.apt-home-controls [data-victoria-virtual-fixtures="1"], .apt-home-controls [data-apt-control-card="1"] {
+.apt-home-controls [data-victoria-virtual-fixtures="1"], .apt-home-controls [data-apt-control-card="1"],
+.apt-home-controls .apt-home-card > div {
   position: relative!important; inset: auto!important; width: 100%!important; max-width: none!important; max-height: none!important;
   margin: 0; padding: 0!important; overflow: visible!important; border: 0!important; box-shadow: none!important;
   background: transparent!important; color: var(--apt-text)!important; }

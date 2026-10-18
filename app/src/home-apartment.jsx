@@ -2226,8 +2226,9 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   );
 }
 
-function AptHomePanelSlot({ enabled, target, children }) {
-  return enabled ? (target ? ReactDOM.createPortal(children, target) : null) : children;
+function AptHomePanelSlot({ enabled, target, children, className }) {
+  if (!enabled) return children;
+  return target ? ReactDOM.createPortal(className ? <div className={className}>{children}</div> : children, target) : null;
 }
 
 function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "", unifiedShell = false, shellControlsHost = null, shellCameraHost = null, onShellState, onShowShellControls }) {
@@ -8516,7 +8517,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           )}
           {track && !track.pos && <window.AptRoomChip track={track} />}
           {cardDevice && !aimMode && (
-            <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost}><window.AptControlCard
+            <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost} className="apt-home-card"><window.AptControlCard
               device={cardDevice}
               state={cardState}
               screen={anchors[cardId] || { x: (hostSize.width || window.innerWidth) / 2, y: 100 }}

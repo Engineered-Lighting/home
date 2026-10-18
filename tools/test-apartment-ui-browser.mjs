@@ -175,11 +175,18 @@ test('authored shared UI keeps status contrast and safe native toast actions in 
         }
         await page.locator('#focus-start').focus();
         await page.keyboard.press('Tab');
-        const focus = await page.locator('.apt-ui-toast-action').evaluate(element => ({
-          active: element === document.activeElement, style: getComputedStyle(element).outlineStyle,
-          width: parseFloat(getComputedStyle(element).outlineWidth),
-        }));
-        assert.equal(focus.active, true); assert.notEqual(focus.style, 'none'); assert.ok(focus.width >= 1);
+        const focus = await page.locator('.apt-ui-toast-action').evaluate(element => {
+          const style = getComputedStyle(element), probe = document.createElement('span');
+          probe.style.color = style.getPropertyValue('--hg-blue');
+          document.body.append(probe);
+          const expectedColor = getComputedStyle(probe).color;
+          probe.remove();
+          return { active: element === document.activeElement, style: style.outlineStyle,
+            width: parseFloat(style.outlineWidth), color: style.outlineColor, expectedColor };
+        });
+        assert.equal(focus.active, true); assert.equal(focus.style, 'solid');
+        assert.equal(focus.width, 1, 'toast uses the shared 1px keyboard focus ring');
+        assert.equal(focus.color, focus.expectedColor, 'toast uses the shared blue keyboard focus ring');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'gallery and toast stay in viewport');
         await page.locator('#toast-stage').scrollIntoViewIfNeeded();
         const screenshot = `${theme}-${coarse ? 'phone-coarse' : 'desktop'}-authored-components.png`;

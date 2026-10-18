@@ -425,7 +425,6 @@ button.hg-no-press:active {
 .apt-ui-toast { position: absolute; bottom: 74px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--hg-border-strong); border-radius: 9px; background: var(--hg-bg-2); color: var(--hg-fg-1); font: 400 12px/1.4 'Geist', sans-serif; }
 .apt-ui-toast-message { min-width: 0; overflow-wrap: anywhere; }
 .apt-ui-toast .apt-ui-button { min-height: 36px; padding: 5px 9px; border: 1px solid var(--hg-border-strong); border-radius: 6px; background: var(--hg-bg-3); color: var(--hg-fg-1); cursor: pointer; }
-.apt-ui-toast .apt-ui-button:focus-visible { outline: 2px solid var(--hg-ice); outline-offset: 2px; }
 @media (pointer: coarse) { .apt-ui-toast .apt-ui-button { min-width: 44px; min-height: 44px; } }
 
 .apt-home-shell {

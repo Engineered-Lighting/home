@@ -17,6 +17,7 @@ const require = createRequire(import.meta.url), { chromium } = require('playwrig
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'app/src');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const screenshotsEnabled = process.env.HOME_APARTMENT_BROWSER_SCREENSHOTS !== '0';
 
 // Source assets are served only from this public-code inventory. Authored pack
 // assets have their own fixture routes and never come from app runtime data.
@@ -80,11 +81,100 @@ test('unified shell keeps the real room, private controls and one chat controlle
     real_household_data: false, live_camera: false, model_session_started: false, physical_commands: 0, survey_writes: 0,
     source_provenance: { mode: 'worktree_only', root: fs.realpathSync(SRC), candidate_overlay: false },
     browser_launch: { platform: process.platform, ...launchOptions },
+    screenshots_enabled: screenshotsEnabled,
     checks, screenshots, requests, forbidden, missing_resources: missingResources, missing_code_sources: missingCodeSources, errors, served };
   let server, browser, page, origin, handler, timer;
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
     browser?.close().catch(() => {}); server?.closeAllConnections(); reject(new Error('145s authored shell browser deadline'));
   }, 145000); });
+
+  async function chatPresenterMountProof() {
+    const source = name => {
+      const selected = sources.get('/' + name)?.selected;
+      assert.ok(selected, 'Chat proof code belongs to the bounded worktree source inventory: ' + name);
+      const bytes = fs.readFileSync(selected);
+      return { selected, sha256: hash(bytes), text: bytes.toString('utf8') };
+    };
+    const assets = Object.fromEntries(['vendor/react-18.3.1/react.production.min.js', 'vendor/react-18.3.1/react-dom.production.min.js',
+      'vendor/babel-7.29.0/babel.min.js', 'home-events.jsx', 'home-app.jsx'].map(name => [name, source(name)]));
+    const babel = require(assets['vendor/babel-7.29.0/babel.min.js'].selected);
+    const app = assets['home-app.jsx'].text;
+    const presenter = babel.transform(app, { parserOpts: { plugins: ['jsx'] }, ast: true, code: false }).ast.program.body
+      .find(node => node.type === 'FunctionDeclaration' && node.id.name === 'ApartmentChatTurn');
+    assert.ok(presenter, 'actual Chat presenter is available for the stateful React proof');
+    const proofContext = await browser.newContext({ serviceWorkers: 'block' }), network = [];
+    await proofContext.route('**/*', route => { network.push(route.request().url()); return route.abort(); });
+    await proofContext.routeWebSocket('**/*', socket => socket.close());
+    const proofPage = await proofContext.newPage(); proofPage.setDefaultTimeout(5000);
+    proofPage.on('pageerror', error => errors.push('authored actual Chat proof: ' + error.message));
+    try {
+      await proofPage.setContent('<main id="authored-chat-root"></main>');
+      for (const name of ['vendor/react-18.3.1/react.production.min.js', 'vendor/react-18.3.1/react-dom.production.min.js']) {
+        await proofPage.addScriptTag({ content: assets[name].text });
+      }
+      await proofPage.addScriptTag({ content: babel.transform(assets['home-events.jsx'].text, { presets: ['react'] }).code });
+      await proofPage.addScriptTag({ content: babel.transform(app.slice(presenter.start, presenter.end), { presets: ['react'] }).code });
+      const snapshots = [];
+      for (const conditionalTypeMutation of [false, true]) {
+        await proofPage.evaluate(conditional => {
+          const state = window.__chatActualProof = { mounts: 0, cleanups: 0, loads: 0, undoCalls: [], conditional };
+          const mountReview = slot => {
+            state.mounts++;
+            const frame = document.createElement('iframe'); frame.title = 'Authored private review';
+            frame.srcdoc = '<script>parent.__chatActualProof.loads += 1</' + 'script>';
+            state.originalFrame ||= frame; state.currentFrame = frame; slot.append(frame);
+            return () => { state.cleanups++; frame.remove(); };
+          };
+          state.group = { speaker: 'home', time: '12:00:00', events: [
+            { id: 'authored-stream', kind: 'home', text: 'Authored streaming partial', streaming: true },
+            { id: 'authored-external', kind: 'external', text: 'Authored external partial', streaming: true },
+            { id: 'authored-action', kind: 'action', title: 'Authored local action', service: 'light.turn_on', target: 'authored.only', status: 'success' },
+            { id: 'authored-review', kind: 'personal-memory-review', text: 'Authored private review', mountReview },
+          ] };
+          state.root = ReactDOM.createRoot(document.getElementById('authored-chat-root'));
+          window.__renderActualChatProof = unified => ReactDOM.flushSync(() => state.root.render(React.createElement(
+            conditional && !unified ? window.TurnBlock : ApartmentChatTurn,
+            { group: state.group, density: 'compact', unified, onUndoAction: async action => { state.undoCalls.push(action); } })));
+          window.__renderActualChatProof(true);
+        }, conditionalTypeMutation);
+        await proofPage.waitForFunction(() => window.__chatActualProof.loads === 1);
+        await proofPage.getByRole('button', { name: 'undo', exact: true }).click();
+        await proofPage.waitForFunction(() => window.__chatActualProof.undoCalls.length === 1
+          && ![...document.querySelectorAll('button')].some(button => button.textContent === 'undo'));
+        for (const unified of conditionalTypeMutation ? [false] : [false, true]) {
+          await proofPage.evaluate(mode => window.__renderActualChatProof(mode), unified);
+          if (conditionalTypeMutation) await proofPage.waitForFunction(() => window.__chatActualProof.loads === 2);
+          const observed = await proofPage.evaluate(() => {
+            const state = window.__chatActualProof;
+            return { mounts: state.mounts, cleanups: state.cleanups, loads: state.loads, undoCalls: state.undoCalls.length,
+              undoButtons: [...document.querySelectorAll('button')].filter(button => button.textContent === 'undo').length,
+              streamingCarets: document.querySelectorAll('.hg-caret').length,
+              sameReviewFrame: document.querySelector('iframe') === state.originalFrame };
+          });
+          snapshots.push({ conditional_type_mutation: conditionalTypeMutation, unified, ...observed });
+          assert.deepEqual(observed, conditionalTypeMutation
+            ? { mounts: 2, cleanups: 1, loads: 2, undoCalls: 1, undoButtons: 1, streamingCarets: 2, sameReviewFrame: false }
+            : { mounts: 1, cleanups: 0, loads: 1, undoCalls: 1, undoButtons: 0, streamingCarets: 2, sameReviewFrame: true });
+        }
+        if (!conditionalTypeMutation) {
+          await proofPage.evaluate(() => {
+            const state = window.__chatActualProof;
+            state.group.events[0] = { ...state.group.events[0], text: 'Authored streaming completion', streaming: false };
+            window.__renderActualChatProof(true);
+          });
+          await proofPage.getByText('Authored streaming completion', { exact: true }).waitFor();
+          const updated = await proofPage.evaluate(() => ({ carets: document.querySelectorAll('.hg-caret').length,
+            mounts: window.__chatActualProof.mounts, loads: window.__chatActualProof.loads }));
+          assert.deepEqual(updated, { carets: 1, mounts: 1, loads: 1 });
+        }
+        await proofPage.evaluate(() => ReactDOM.flushSync(() => window.__chatActualProof.root.unmount()));
+      }
+      assert.deepEqual(network, [], 'the stateful Chat proof performs no URL requests');
+      receipt.chat_presenter = { actual_react: true, actual_event_content: true, snapshots, network_requests: network,
+        sources: Object.fromEntries(Object.entries(assets).map(([name, value]) => [name, { file: value.selected, sha256: value.sha256 }])) };
+      checks.push({ stage: 'actual_react_chat_undo_review_and_stream_survive_layout_switch' });
+    } finally { await proofContext.close(); }
+  }
 
   async function exercise() {
     server = http.createServer(async (req, res) => {
@@ -140,6 +230,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
     browser = await chromium.launch(launchOptions);
+    await chatPresenterMountProof();
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, serviceWorkers: 'block' });
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
     await context.addInitScript(() => {
@@ -161,6 +252,15 @@ test('unified shell keeps the real room, private controls and one chat controlle
     page.on('pageerror', error => errors.push(error.message));
 
     async function capture(name) {
+      if (!screenshotsEnabled) {
+        // Functional-only runs leave visual review to the CUA browser. Retain
+        // the real renderer-advancement assertion without producing a still.
+        const frame = await page.evaluate(() => document.querySelector('.apt-home-shell[data-home-layout="unified"]')
+          ? window.__APT_ENGINE?.renderer.info.render.frame : null);
+        if (frame != null) await page.waitForFunction(previous => window.__APT_ENGINE?.renderer.info.render.frame > previous, frame);
+        (receipt.captures ||= []).push({ name, screenshot: false, renderer_advancing: frame != null });
+        return;
+      }
       await page.evaluate(() => {
         if (document.getElementById('authored-shell-proof-note')) return;
         const note = document.createElement('aside'); note.id = 'authored-shell-proof-note';
@@ -222,12 +322,13 @@ test('unified shell keeps the real room, private controls and one chat controlle
       const controls = [page.locator('.apt-home-chat'), page.getByRole('combobox', { name: 'Command input', exact: true }),
         page.getByRole('button', { name: 'Send', exact: true }), page.getByRole('button', { name: 'Start voice mode', exact: true })];
       const viewport = page.viewportSize(), bounds = [];
+      receipt.phone_composer = { viewport, bounds };
       for (const [index, control] of controls.entries()) {
         const rect = await control.boundingBox(); assert.ok(rect, 'phone composer control ' + index + ' is visible');
+        bounds.push(rect);
         assert.ok(rect.width > 0 && rect.height > 0 && rect.x >= -.5 && rect.y >= -.5
           && rect.x + rect.width <= viewport.width + .5 && rect.y + rect.height <= viewport.height + .5,
         'phone composer control ' + index + ' stays inside viewport: ' + JSON.stringify(rect));
-        bounds.push(rect);
       }
       for (const control of controls.slice(1)) {
         await control.focus(); assert.equal(await control.evaluate(element => element === document.activeElement), true);
@@ -237,6 +338,12 @@ test('unified shell keeps the real room, private controls and one chat controlle
     async function waitSite(site) {
       await page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
         && window.__APT_ENGINE?.siteId === site, site);
+    }
+    async function selectHome(site) {
+      const homes = page.getByRole('group', { name: 'Home', exact: true });
+      const button = homes.getByRole('button', { name: site === 'victoria' ? 'Victoria' : 'Echo Park', exact: true });
+      await button.click(); await waitSite(site);
+      assert.equal(await button.getAttribute('aria-pressed'), 'true', 'segmented Home control reflects the selected site');
     }
     async function echoCardBounds() {
       const results = [];
@@ -290,9 +397,21 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 });
     await waitSite('echo');
     await echoCardBounds();
-    await page.getByRole('combobox', { name: 'Home', exact: true }).selectOption('victoria');
-    await waitSite('victoria');
+    await selectHome('victoria');
     await page.waitForFunction(() => window.__APT_ENGINE?.overlay.virtualFixturesGroup?.children.length === 4);
+    const overviewFixtures = await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures);
+    assert.equal(overviewFixtures.length, 4);
+    await page.getByRole('button', { name: 'All off', exact: true }).click();
+    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item =>
+      item.state.spotlight.on === false && item.state.downward.on === false && item.state.radials.length === 6
+        && item.state.radials.every(zone => zone.on === false)));
+    await page.getByRole('button', { name: 'All on', exact: true }).click();
+    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item =>
+      item.state.spotlight.on === true && item.state.downward.on === true && item.state.radials.every(zone => zone.on === true)));
+    assert.deepEqual(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures), overviewFixtures,
+      'modeled batch on/off restores the exact four authored fixtures without changing their channels or registration');
+    assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'modeled batch controls send no output command');
+    checks.push({ stage: 'four_fixture_modeled_batch_has_no_output_and_restores_initial_state' });
     await tab('Chat');
     const command = page.getByRole('combobox', { name: 'Command input', exact: true });
     await command.fill('Authored unsent shell draft');
@@ -301,13 +420,31 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await tab('Controls'); await tab('Chat'); await identityCheck('desktop_tabs_keep_unsent_chat');
     await keyboardTabs(false);
     await tab('Controls');
-    for (const [width, height] of [[1366,768], [768,1024], [390,844]]) {
+    for (const [width, height] of [[1366,768], [820,1180], [390,844]]) {
       await page.setViewportSize({ width, height });
       await page.waitForFunction(() => window.__APT_ENGINE?.renderer.domElement.width > 0);
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await identityCheck('viewport_' + width + 'x' + height);
       await capture('unified-controls-' + width + 'x' + height);
     }
+    const lastRoomFixture = overviewFixtures.at(-1);
+    const roomFixtureButton = page.getByRole('button', { name: 'Select ' + (lastRoomFixture.label || lastRoomFixture.fixture_id), exact: true });
+    await roomFixtureButton.scrollIntoViewIfNeeded();
+    const roomScrollBefore = await page.locator('#apt-home-panel-controls').evaluate(panel => panel.scrollTop);
+    assert.ok(roomScrollBefore > 0, 'the phone room list genuinely scrolls before selecting its fourth fixture');
+    await roomFixtureButton.click();
+    await page.getByRole('button', { name: 'Back to room', exact: true }).waitFor();
+    const selectedPhoneBounds = await page.locator('[aria-label="Fixture lighting inspector"] .apt-ui-title').evaluate(title => {
+      const panel = document.getElementById('apt-home-panel-controls');
+      return { title: title.getBoundingClientRect().toJSON(), panel: panel.getBoundingClientRect().toJSON(), scrollTop: panel.scrollTop };
+    });
+    assert.equal(selectedPhoneBounds.scrollTop, 0, 'phone list selection starts the inspector at its header');
+    assert.ok(selectedPhoneBounds.title.top >= selectedPhoneBounds.panel.top - .5
+      && selectedPhoneBounds.title.bottom <= selectedPhoneBounds.panel.bottom + .5, 'the selected phone fixture title is visible inside Controls');
+    await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+    assert.equal(await page.locator('#apt-home-panel-controls').evaluate(panel => panel.scrollTop), 0, 'returning to the room starts at its header');
+    checks.push({ stage: 'phone_scrolled_room_list_selection_starts_at_inspector_top', room_scroll_before: roomScrollBefore,
+      selected_fixture_id: lastRoomFixture.fixture_id, ...selectedPhoneBounds });
     await keyboardTabs(true);
     await tab('Chat'); await identityCheck('phone_chat_draft'); await phoneComposerBounds(); await capture('unified-chat-390x844');
     await page.setViewportSize({ width: 1366, height: 768 }); await tab('Controls');
@@ -379,9 +516,25 @@ test('unified shell keeps the real room, private controls and one chat controlle
     const before = Object.fromEntries(await Promise.all(fixtureIds.map(async id => [id, await aimDescriptor(id)])));
     for (const id of fixtureIds) {
       const point = await fixturePoint(id); await page.mouse.click(point.x, point.y);
+      await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Setup', exact: true }).click();
       await page.waitForFunction(id => document.querySelector('select[aria-label="Virtual fixture"]')?.value === id, id);
       assert.deepEqual((await aimDescriptor(id)).display_anchor_m, before[id].display_anchor_m);
     }
+    const channelId = fixtureIds.at(-1), channelsBefore = await aimDescriptor(channelId);
+    await page.getByRole('tab', { name: 'Light', exact: true }).click();
+    const spotBrightness = page.getByRole('slider', { name: 'Brightness', exact: true });
+    await spotBrightness.focus(); await spotBrightness.press('Home');
+    await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === 0, channelId);
+    const channelsChanged = await aimDescriptor(channelId);
+    assert.deepEqual(channelsChanged.state.downward, channelsBefore.state.downward, 'Spot brightness leaves Down independent');
+    assert.deepEqual(channelsChanged.state.radials, channelsBefore.state.radials, 'Spot brightness leaves all six radial zones independent');
+    assert.deepEqual(channelsChanged.state.spotlight, { ...channelsBefore.state.spotlight, brightness: 0 });
+    await spotBrightness.press('End');
+    await page.waitForFunction(({ id, brightness }) => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === brightness,
+      { id: channelId, brightness: channelsBefore.state.spotlight.brightness });
+    assert.deepEqual(await aimDescriptor(channelId), channelsBefore, 'native Spot control restores the exact original virtual descriptor');
+    assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'channel controls send no output command');
+    checks.push({ stage: 'spot_brightness_preserves_down_and_six_radial_channels' });
     // Selecting the already-selected cylinder must reveal its existing Controls
     // panel even when no fixture ID or details-open state changes.
     await tab('Chat');
@@ -389,6 +542,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.mouse.click(selectedCylinder.x, selectedCylinder.y);
     await page.waitForFunction(() => document.getElementById('apt-home-tab-controls')?.getAttribute('aria-selected') === 'true'
       && document.getElementById('apt-home-panel-controls')?.hidden === false);
+    await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Setup', exact: true }).click();
     const fixtureSelect = page.getByRole('combobox', { name: 'Virtual fixture', exact: true });
     await fixtureSelect.focus(); await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown');
     assert.equal(await fixtureSelect.evaluate(element => element === document.activeElement), true);
@@ -397,64 +551,102 @@ test('unified shell keeps the real room, private controls and one chat controlle
     checks.push({ stage: 'same_fixture_click_from_chat_and_native_keyboard_selection_reveal_controls',
       keyboard_selected_fixture: await fixtureSelect.inputValue() });
     const directId = fixtureIds[2];
-    let cylinder = await fixturePoint(directId);
-    await page.mouse.move(cylinder.x, cylinder.y);
-    await waitAimViewport('fixture_hover_viewport_ready_before_drag');
-    cylinder = await fixturePoint(directId);
-    await page.mouse.move(cylinder.x, cylinder.y);
-    await waitAimViewport('final_fixture_hover_viewport_ready_before_drag');
-    assert.equal(await page.evaluate(({ x, y }) => {
-      const engine = window.__APT_ENGINE;
-      return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
-    }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
-    const target = await targetPoint([2.4,2.1,0]);
-    assert.ok(target.hit, 'direct aim target comes from the actual registered authored collision mesh');
-    assert.ok(target.display_hit && Math.hypot(...target.display_hit.point.map((value, axis) => value - target.hit.point[axis])) < 1e-6,
-      'the expected collision hit is also a visible canonical display surface');
-    receipt.drag = { fixture_id: directId, cylinder, expected: target };
-    // Observe the actual input frame before the element's production capture
-    // handler. Ambient camera motion is legitimate; the committed target must
-    // bind the qualified visible collision ray at pointer-up in that same turn.
-    await page.evaluate(() => {
-      const engine = window.__APT_ENGINE;
-      window.__shellDragPointerUp = null;
-      window.addEventListener('pointerup', event => {
-        const raw = engine.picking.surfaceHit(engine.apartmentRoot, [engine.modes.getCollision()], event.clientX, event.clientY);
-        const visible = engine.displaySurfaceHit(event.clientX, event.clientY);
-        window.__shellDragPointerUp = { x: event.clientX, y: event.clientY, frame: engine.renderer.info.render.frame,
-          current_engine: window.__APT_ENGINE === engine, site: engine.siteId, scene_identity: engine.sceneIdentity,
-          selected_fixture_id: document.querySelector('select[aria-label="Virtual fixture"]')?.value,
-          visible_hit: visible && { point: [...visible.point], normal: [...visible.normal] },
-          raw_hit: raw && { point: [...raw.point], normal: [...raw.normal] },
-          rect: engine.renderer.domElement.getBoundingClientRect().toJSON(),
-          host: engine.renderer.domElement.parentElement.getBoundingClientRect().toJSON(),
-          camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements],
-          root: [...engine.apartmentRoot.matrixWorld.elements] };
-      }, { capture: true, once: true });
-    });
-    await page.mouse.down();
-    await page.waitForFunction(id => document.querySelector('select[aria-label="Virtual fixture"]')?.value === id, directId);
-    receipt.drag.selected_after_down = await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue();
-    assert.equal(receipt.drag.selected_after_down, directId, 'pointer-down selected the fixture being dragged');
-    await page.mouse.move(target.x, target.y, { steps: 12 }); await page.mouse.up();
-    receipt.drag.pointer_up = await page.evaluate(() => window.__shellDragPointerUp);
-    assert.equal(receipt.drag.pointer_up?.current_engine, true, 'pointer-up belongs to the same actual engine');
-    assert.equal(receipt.drag.pointer_up.selected_fixture_id, directId, 'pointer-up retains the fixture being dragged');
-    assert.equal(await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue(), directId);
-    assert.ok(receipt.drag.pointer_up.visible_hit, 'actual pointer-up has a qualified visible canonical collision hit');
-    await page.waitForFunction(id => !!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.target, directId);
-    const aimed = await aimDescriptor(directId);
-    receipt.drag.aimed = aimed;
-    receipt.drag.after = await targetPoint([2.4,2.1,0]);
-    assert.deepEqual(aimed.display_anchor_m, before[directId].display_anchor_m, 'aiming leaves the saved socket fixed');
-    assert.ok(Math.hypot(...aimed.target.point.map((value, axis) => value - receipt.drag.pointer_up.visible_hit.point[axis])) < .03,
-      'committed aim stays within 3cm of the actual pointer-up visible canonical collision hit');
-    assert.equal(aimed.physical_commands, false);
-    await page.getByRole('button', { name: 'Undo aim', exact: true }).click();
-    await page.waitForFunction(({ id, pan }) => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.pan_deg === pan,
-      { id: directId, pan: before[directId].state.pan_deg });
-    assert.deepEqual((await aimDescriptor(directId)).target, before[directId].target);
-    checks.push({ stage: 'four_actual_fixture_clicks_surface_drag_and_undo', fixtureIds, aimed, undo: await aimDescriptor(directId) });
+    async function dragAndUndo(focusCase, expectedFocus) {
+      const focusBefore = await page.evaluate(() => ({ tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') }));
+      assert.equal(focusBefore.label, expectedFocus, 'the real inspector control retains focus before the drag');
+      let cylinder = await fixturePoint(directId);
+      await page.mouse.move(cylinder.x, cylinder.y);
+      await waitAimViewport('fixture_hover_viewport_ready_before_drag');
+      cylinder = await fixturePoint(directId);
+      await page.mouse.move(cylinder.x, cylinder.y);
+      await waitAimViewport('final_fixture_hover_viewport_ready_before_drag');
+      assert.equal(await page.evaluate(({ x, y }) => {
+        const engine = window.__APT_ENGINE;
+        return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
+      }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
+      const target = await targetPoint([2.4,2.1,0]);
+      assert.ok(target.hit, 'direct aim target comes from the actual registered authored collision mesh');
+      assert.ok(target.display_hit && Math.hypot(...target.display_hit.point.map((value, axis) => value - target.hit.point[axis])) < 1e-6,
+        'the expected collision hit is also a visible canonical display surface');
+      const drag = { fixture_id: directId, focus_case: focusCase, focus_before: focusBefore, cylinder, expected: target };
+      receipt[focusCase === 'setup_keyboard' ? 'drag' : 'focused_spot_drag'] = drag;
+      // Observe the actual input frame before the element's production capture
+      // handler. Ambient camera motion is legitimate; the committed target must
+      // bind the qualified visible collision ray at pointer-up in that same turn.
+      await page.evaluate(() => {
+        const engine = window.__APT_ENGINE;
+        window.__shellDragPointerUp = null;
+        window.__shellDragFocusCleanup?.();
+        window.__shellDragFocusEvents = [];
+        const observeFocus = event => {
+          window.__shellDragFocusEvents.push({ type: event.type, target: event.target?.tagName || (event.target === window ? 'window' : null),
+            target_label: event.target?.getAttribute?.('aria-label'), active: document.activeElement?.tagName,
+            active_label: document.activeElement?.getAttribute?.('aria-label'), frame: engine.renderer.info.render.frame });
+        };
+        const focusEventTypes = ['pointerdown', 'blur', 'pointercancel', 'lostpointercapture'];
+        for (const type of focusEventTypes) window.addEventListener(type, observeFocus, { capture: true });
+        window.__shellDragFocusCleanup = () => {
+          for (const type of focusEventTypes) window.removeEventListener(type, observeFocus, { capture: true });
+          window.__shellDragFocusCleanup = null;
+        };
+        window.addEventListener('pointerup', event => {
+          const raw = engine.picking.surfaceHit(engine.apartmentRoot, [engine.modes.getCollision()], event.clientX, event.clientY);
+          const visible = engine.displaySurfaceHit(event.clientX, event.clientY);
+          // Setup's native picker legitimately unmounts when a real drag reveals
+          // Aim. Bind identity to the visible selected inspector in this input
+          // frame; labels must resolve uniquely to actual registered fixtures.
+          const selectedLabel = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
+          const selectedMatches = engine.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === selectedLabel);
+          window.__shellDragPointerUp = { x: event.clientX, y: event.clientY, frame: engine.renderer.info.render.frame,
+            current_engine: window.__APT_ENGINE === engine, site: engine.siteId, scene_identity: engine.sceneIdentity,
+            selected_fixture_id: selectedMatches.length === 1 ? selectedMatches[0].fixture_id : null,
+            selected_fixture_label: selectedLabel, selected_fixture_matches: selectedMatches.length,
+            visible_hit: visible && { point: [...visible.point], normal: [...visible.normal] },
+            raw_hit: raw && { point: [...raw.point], normal: [...raw.normal] },
+            rect: engine.renderer.domElement.getBoundingClientRect().toJSON(),
+            host: engine.renderer.domElement.parentElement.getBoundingClientRect().toJSON(),
+            camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements],
+            root: [...engine.apartmentRoot.matrixWorld.elements] };
+        }, { capture: true, once: true });
+      });
+      await page.mouse.down();
+      const selectedAfterDown = await page.waitForFunction(id => {
+        const label = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
+        const matches = window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === label);
+        return matches.length === 1 && matches[0].fixture_id === id ? id : false;
+      }, directId);
+      drag.selected_after_down = await selectedAfterDown.jsonValue();
+      assert.equal(drag.selected_after_down, directId, 'pointer-down selected the fixture being dragged');
+      await page.mouse.move(target.x, target.y, { steps: 12 }); await page.mouse.up();
+      drag.pointer_up = await page.evaluate(() => window.__shellDragPointerUp);
+      drag.focus_events = await page.evaluate(() => { const events = window.__shellDragFocusEvents; window.__shellDragFocusCleanup?.(); return events; });
+      assert.equal(drag.pointer_up?.current_engine, true, 'pointer-up belongs to the same actual engine');
+      assert.equal(drag.pointer_up.selected_fixture_matches, 1, 'the rendered selected inspector identifies exactly one registered fixture');
+      assert.equal(drag.pointer_up.selected_fixture_id, directId, 'pointer-up retains the fixture being dragged');
+      await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Setup', exact: true }).click();
+      assert.equal(await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue(), directId);
+      await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Aim', exact: true }).click();
+      assert.ok(drag.pointer_up.visible_hit, 'actual pointer-up has a qualified visible canonical collision hit');
+      await page.waitForFunction(id => !!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.target, directId);
+      const aimed = await aimDescriptor(directId);
+      drag.aimed = aimed;
+      drag.after = await targetPoint([2.4,2.1,0]);
+      assert.deepEqual(aimed.display_anchor_m, before[directId].display_anchor_m, 'aiming leaves the saved socket fixed');
+      assert.ok(Math.hypot(...aimed.target.point.map((value, axis) => value - drag.pointer_up.visible_hit.point[axis])) < .03,
+        'committed aim stays within 3cm of the actual pointer-up visible canonical collision hit');
+      assert.equal(aimed.physical_commands, false);
+      await page.getByRole('button', { name: 'Undo aim', exact: true }).click();
+      await page.waitForFunction(({ id, pan }) => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.pan_deg === pan,
+        { id: directId, pan: before[directId].state.pan_deg });
+      assert.deepEqual((await aimDescriptor(directId)).target, before[directId].target);
+      checks.push({ stage: focusCase === 'setup_keyboard' ? 'four_actual_fixture_clicks_surface_drag_and_undo' : 'focused_spot_slider_surface_drag_and_undo',
+        fixtureIds, focus_case: focusCase, aimed, undo: await aimDescriptor(directId) });
+    }
+    await dragAndUndo('setup_keyboard', 'Virtual fixture');
+    await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Light', exact: true }).click();
+    await page.getByRole('slider', { name: 'Brightness', exact: true }).focus();
+    await dragAndUndo('spot_slider', 'Brightness');
+
     await capture('unified-fixture-controls-1366x768');
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -540,8 +732,10 @@ test('unified shell keeps the real room, private controls and one chat controlle
         return { selector, rect: rect?.toJSON(), display: element && getComputedStyle(element).display,
           visibility: element && getComputedStyle(element).visibility };
       })).catch(() => []);
-      await page.evaluate(() => window.__APT_ENGINE?.setRunning?.(false)).catch(() => {});
-      await page.screenshot({ path: path.join(run, 'failure.png'), timeout: 5000 }).catch(() => {});
+      if (screenshotsEnabled) {
+        await page.evaluate(() => window.__APT_ENGINE?.setRunning?.(false)).catch(() => {});
+        await page.screenshot({ path: path.join(run, 'failure.png'), timeout: 5000 }).catch(() => {});
+      }
     }
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nAuthored shell failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });

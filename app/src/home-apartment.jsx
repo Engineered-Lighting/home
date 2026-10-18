@@ -2231,6 +2231,204 @@ function AptHomePanelSlot({ enabled, target, children, className }) {
   return target ? ReactDOM.createPortal(className ? <div className={className}>{children}</div> : children, target) : null;
 }
 
+function AptUnifiedRange({ label, ariaLabel, value, min = 0, max = 100, step = 1, suffix = "%", onChange }) {
+  return <label className="apt-ui-slider">
+    <span className="apt-ui-row"><span className="grow">{label}</span><span className="apt-ui-value">{Math.round(value || 0)}{suffix}</span></span>
+    <input className={`apt-ui-range${String(suffix).trim() === "K" ? " is-temperature" : ""}`} type="range" aria-label={ariaLabel || label} min={min} max={max} step={step}
+      value={value ?? min} onChange={event => onChange(Number(event.target.value))} />
+  </label>;
+}
+
+/* The handoff's existing 16px icon paths match Home's restrained stroke treatment. */
+function AptUnifiedIcon({ name }) {
+  const paths = {
+    back: "M10 3L5 8l5 5", close: "M4 4l8 8M12 4l-8 8", chevL: "M10 3L5 8l5 5", chevR: "M6 3l5 5-5 5",
+    chevD: "M3 6l5 5 5-5", chevU: "M3 10l5-5 5 5",
+    layers: "M8 2l6 3-6 3-6-3 6-3zM2 8l6 3 6-3M2 11l6 3 6-3", help: "M6 6a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.2V10M8 12.5v.5",
+    fit: "M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4", info: "M8 7v5M8 4.5V5M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14z",
+    expand: "M9 3h4v4M7 13H3V9M13 3L9 7M3 13l4-4", collapse: "M13 7H9V3M3 9h4v4M9 7l4-4M7 9l-4 4",
+  };
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || ""} /></svg>;
+}
+
+function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, view,
+  onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible }) {
+  const [popover, setPopover] = useState(null);
+  const popoverRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({ key: "apartment-room-toolbar", active: !!popover, rootRef: popoverRef,
+    trap: false, initialFocus: "first", onEscape: () => setPopover(null) });
+  return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view">
+    <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
+    <span className="apt-ui-toolbar-separator hide-small" />
+    <div className="apt-ui-seg" role="group" aria-label="Scene mode">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
+      <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key}
+        title={key !== "points" && pointsOnlyReason ? pointsOnlyReason : undefined}
+        disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)} onClick={() => onMode(key)}>{label}</button>)}
+      <button type="button" disabled title="Lit mode is planned; current scan modes remain available">Lit</button>
+    </div><span className="apt-ui-toolbar-separator apt-ui-orbit" />
+    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
+    <span className="apt-home-toolbar-detent apt-ui-value apt-ui-orbit" aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
+    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit right" disabled={disabled} onClick={() => onOrbit(1)}><AptUnifiedIcon name="chevR" /></button>
+    <button type="button" className="apt-ui-button is-small hide-small" aria-label="Fit room" disabled={disabled} onClick={onFit}><AptUnifiedIcon name="fit" />Fit</button>
+    <span className="apt-ui-toolbar-separator hide-small" />
+    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-small" aria-label="Layers"
+      aria-expanded={popover === "layers"} onClick={() => setPopover(popover === "layers" ? null : "layers")}><AptUnifiedIcon name="layers" /><span className="apt-ui-toolbar-word">Layers</span></button>
+      {popover === "layers" && <div ref={popoverRef} role="dialog" aria-label="Room layers">
+        <h3 className="apt-ui-heading">Room layers</h3>
+        {hasVirtualFixtures ? <label className="apt-ui-row apt-ui-copy"><input type="checkbox" checked={virtualVisible}
+          aria-label="Show virtual spotlights layer" onChange={event => onVirtualVisible(event.target.checked)} />Virtual spotlights</label>
+          : <p className="apt-ui-copy">Mapped lights and room surfaces follow the current scene.</p>}
+        <p className="apt-ui-meta">Body and analyzed-frame layers are controlled in Camera · JEV.</p>
+        <p className="apt-ui-meta">Shadows and body occlusion are planned.</p>
+        <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close layers</button>
+      </div>}
+    </div>
+    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-icon is-small" aria-label="Room help"
+      aria-expanded={popover === "help"} onClick={() => setPopover(popover === "help" ? null : "help")}><AptUnifiedIcon name="help" /></button>
+      {popover === "help" && <div ref={popoverRef} role="dialog" aria-label="Room navigation help"><h3 className="apt-ui-heading">Room navigation</h3>
+        <p className="apt-ui-copy">Drag empty space to orbit. Scroll or pinch to zoom. Select a fixture to open its controls.</p>
+        <p className="apt-ui-meta">Arrow keys change the room view. H returns home. N / P selects a mapped device.</p>
+        {onRehearse && <button type="button" className="apt-ui-button is-small" onClick={() => { setPopover(null); onRehearse(); }}>Rehearse moving book</button>}
+        {nativePacks && <section className="apt-ui-channel"><h3 className="apt-ui-heading">Home pack</h3>
+          <button type="button" className="apt-ui-button" disabled={packBusy} onClick={() => { setPopover(null); onPackChange(); }}>Import home pack</button>
+          {nativePacks.length > 1 && <select className="apt-ui-input" aria-label="Home pack version" value={packVersion} disabled={packBusy}
+            onChange={event => { setPopover(null); onPackChange(event.target.value); }}>{nativePacks.map(pack =>
+              <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>)}</select>}
+        </section>}
+        <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close help</button></div>}
+    </div>
+    {popover === "source" && <div ref={popoverRef} className="apt-ui-toolbar-source-detail" role="dialog" aria-label="Scene source">
+      <h3 className="apt-ui-heading">Scene source</h3><p className="apt-ui-copy">{sourceDetail || sourceLabel}</p>{sourceStatus}
+      <p className="apt-ui-meta">Cloud, Photo and Mesh use this home's existing scene assets.</p>
+      {stats && <details><summary className="apt-ui-meta">Renderer details</summary><p className="apt-ui-meta">
+        {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k points · DPR {stats.pixelRatio}
+        {stats.calls != null ? ` · ${stats.calls} draw calls` : ""}{stats.tris ? ` · ${(stats.tris / 1e6).toFixed(1)}m triangles` : ""}
+        <br />{String(stats.gpu).slice(0, 48)}
+        {mode === "splat" && stats.modeDebug && <><br />Photo {stats.modeDebug.numSplats ? (stats.modeDebug.numSplats / 1000).toFixed(0) + "k" : "—"}
+          {` · visible ${String(stats.modeDebug.splatVisible)} · parent ${stats.modeDebug.srParent}`}</>}
+      </p></details>}
+      <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close source</button></div>}
+    {(modeLoading || modeError) && <span className="apt-ui-toolbar-notice" role="status">{modeLoading ? `Loading ${modeLoading === "splat" ? "Photo" : modeLoading}` : modeError.message}</span>}
+  </div>;
+}
+
+/* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
+function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
+  onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls }) {
+  const [tab, setTab] = useState("light");
+  const [zone, setZone] = useState(null);
+  useEffect(() => { setZone(null); }, [fixture?.fixture_id]);
+  useEffect(() => {
+    if (/^(Aiming at|Aim updated|No visible room surface|That aim is unavailable|Aim canceled|Aim undone|Aim restored|This aim belongs)/.test(notice || "")) setTab("aim");
+  }, [notice]);
+  const isLit = item => !!(item.state?.spotlight?.on || item.state?.downward?.on || item.state?.radials?.some(radial => radial.on));
+  const visibility = <label className="apt-ui-row apt-ui-meta"><input type="checkbox" checked={visible}
+    aria-label="Virtual spotlights" onChange={event => onVisible(event.target.checked)} />Virtual spotlights</label>;
+  const list = <ul className="apt-ui-list">{fixtures.map(item => <li key={item.fixture_id}>
+    <button type="button" className="apt-ui-list-button" aria-label={`Select ${item.label || item.fixture_id}`}
+      aria-current={selected && fixture?.fixture_id === item.fixture_id ? "true" : undefined} onClick={() => onSelect(item.fixture_id)}>
+      <span className={`apt-ui-lamp${isLit(item) ? " is-on" : ""}`} aria-hidden="true" />
+      <span className="nm">{item.label || item.fixture_id}</span><span className="vl">{isLit(item) ? "On" : "Off"}</span>
+    </button></li>)}</ul>;
+  if (!selected || !fixture) return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Room lighting inspector">
+    <header className="apt-ui-header"><div><h2 className="apt-ui-title">{homeName}</h2>
+      <div className="apt-ui-sub">{fixtures.length} fixtures at mapped sockets · {fixtures.filter(isLit).length} lit</div></div>
+      <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled</span><span className="apt-ui-badge">Not commissioned</span></div>
+    </header>
+    <section className="apt-ui-section"><div className="apt-ui-row"><h3 className="apt-ui-heading grow">Quick</h3>
+      {[true, false].map(on => <button type="button" key={String(on)} className="apt-ui-button is-small" disabled={!fixtures.length}
+        onClick={() => onPatchAll(on)}>All {on ? "on" : "off"}</button>)}</div><p className="apt-ui-meta">Modeled channels · nothing is sent to hardware.</p></section>
+    <section className="apt-ui-section"><h3 className="apt-ui-heading">Lights</h3>{list}</section>
+    <section className="apt-ui-section">{visibility}<p className="apt-ui-meta">Select a light in the room or list to adjust its channels and aim.</p>
+      <p className="apt-ui-meta">{sourceLabel}</p></section>
+  </aside>;
+  const state = fixture.state || {}, radials = state.radials || [];
+  const selectedRadials = zone == null ? radials : radials.filter(item => item.number === zone);
+  const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.brightness ?? 1), 0) / selectedRadials.length : 0;
+  const patchRadials = patch => onPatch({ radials: selectedRadials.map(item => ({ number: item.number, ...patch })) });
+  const channel = (key, title, desc, brightnessLabel, temperatureLabel, minimum) => {
+    const current = state[key] || {};
+    return <section className="apt-ui-channel" aria-label={`${title} channel`}>
+      <div className="apt-ui-channel-head"><div className="apt-ui-grow"><div className="apt-ui-channel-name">{title}</div>
+        <div className="apt-ui-channel-desc">{desc}</div></div><label className="apt-ui-switch">
+        <input type="checkbox" aria-label={`${title} power`} checked={!!current.on}
+          onChange={event => onPatch({ [key]: { on: event.target.checked } })} /><span>{current.on ? "On" : "Off"}</span></label></div>
+      <AptUnifiedRange label="Brightness" ariaLabel={brightnessLabel} value={(current.brightness ?? 1) * 100}
+        onChange={value => onPatch({ [key]: { brightness: value / 100 } })} />
+      <AptUnifiedRange label="Color temp" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
+        min={minimum} max={5000} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value } })} />
+      {key === "spotlight" && <div className="apt-ui-row"><span className="apt-ui-meta grow">Where it points is set in Aim.</span>
+        <button type="button" className="apt-ui-button is-small" onClick={() => setTab("aim")}>Aim</button></div>}
+    </section>;
+  };
+  return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Fixture lighting inspector">
+    <header className="apt-ui-header"><div className="apt-ui-header-row">
+      <button type="button" className="apt-ui-button is-icon" aria-label="Back to room" onClick={onBack}><AptUnifiedIcon name="back" /></button>
+      <div className="apt-ui-grow"><h2 className="apt-ui-title">{fixture.label || fixture.fixture_id}</h2>
+        <div className="apt-ui-sub">{homeName} · {isLit(fixture) ? "Light on" : "Light off"}</div></div>
+      <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
+      <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled</span><span className="apt-ui-badge">Virtual channels</span></div>
+      <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">{[["light", "Light"], ["aim", "Aim"], ["setup", "Setup"]].map(([key, label]) =>
+        <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-virtual-${key}`} onClick={() => setTab(key)}>{label}</button>)}
+      </div>
+    </header>
+    {tab === "light" && <section className="apt-ui-section" id="apt-ui-virtual-light" role="tabpanel" aria-label="Light channels">
+      <div className="apt-ui-row"><span className="apt-ui-meta grow">All channels</span>{[true, false].map(on =>
+        <button type="button" key={String(on)} className="apt-ui-button is-small" onClick={() => onPatch({
+          spotlight: { on }, downward: { on }, radials: radials.map(item => ({ number: item.number, on })) })}>All {on ? "on" : "off"}</button>)}</div>
+      {channel("spotlight", "Spot", "Hidden robotic spotlight", "Brightness", "Color temperature", 2700)}
+      {channel("downward", "Down", "Downward LED zone", "Down brightness", "Down color temperature", 2200)}
+      <section className="apt-ui-channel" aria-label="Radial channel"><div className="apt-ui-channel-head">
+        <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser</div></div>
+        <label className="apt-ui-switch"><input type="checkbox" aria-label="Radial power" checked={radials.some(item => item.on)}
+          onChange={event => onPatch({ radials: radials.map(item => ({ number: item.number, on: event.target.checked })) })} />
+          <span>{radials.some(item => item.on) ? "On" : "Off"}</span></label></div>
+        <div className="apt-ui-row"><svg className="apt-ui-radial-ring" viewBox="0 0 118 118" role="group" aria-label="Radial zones">
+          {radials.map((item, index) => { const point = (radius, angle) => `${59 + radius * Math.cos(angle)} ${59 + radius * Math.sin(angle)}`;
+            const start = (index * 60 - 118) * Math.PI / 180, end = (index * 60 - 62) * Math.PI / 180;
+            return <path key={item.number} role="button" tabIndex={0} aria-label={`Radial zone ${item.number}`} aria-pressed={zone === item.number}
+              d={`M${point(55, start)} A55 55 0 0 1 ${point(55, end)} L${point(32, end)} A32 32 0 0 0 ${point(32, start)} Z`}
+              style={{ fill: item.on ? "var(--apt-warm)" : "var(--apt-fill-2)", fillOpacity: item.on ? .25 + (item.brightness ?? 1) * .65 : 1 }}
+              onClick={() => setZone(zone === item.number ? null : item.number)} onKeyDown={event => {
+                if (["Enter", " "].includes(event.key)) { event.preventDefault(); setZone(zone === item.number ? null : item.number); }
+              }} />;
+          })}<text x="59" y="57" textAnchor="middle" className="apt-ui-value">{Math.round(radialLevel * 100)}%</text>
+          <text x="59" y="73" textAnchor="middle" className="apt-ui-meta">{zone == null ? "all zones" : `zone ${zone}`}</text>
+        </svg><div className="apt-ui-grow"><div className="apt-ui-row"><div className="apt-ui-channel-name grow">{zone == null ? "All zones" : `Zone ${zone}`}</div>
+          {zone != null && <label className="apt-ui-switch"><input type="checkbox" aria-label={`Radial zone ${zone} power`}
+            checked={!!selectedRadials[0]?.on} onChange={event => patchRadials({ on: event.target.checked })} /><span>{selectedRadials[0]?.on ? "On" : "Off"}</span></label>}</div>
+          <p className="apt-ui-meta">Select a segment to adjust one radial LED strip.</p></div></div>
+        <div className="apt-ui-actions">{[0, 25, 50, 100].map(value => <button type="button" className="apt-ui-button is-small" key={value}
+          onClick={() => patchRadials({ on: value > 0, brightness: value / 100 })}>{value ? `${value}%` : "Off"}</button>)}</div>
+        <AptUnifiedRange label="Brightness" ariaLabel="Radial brightness" value={radialLevel * 100} onChange={value => patchRadials({ brightness: value / 100 })} />
+        <AptUnifiedRange label="Color temp" ariaLabel="Radial color temperature" min={2200} max={5000} step={100} suffix=" K"
+          value={selectedRadials[0]?.color_temp_kelvin ?? 3000} onChange={value => patchRadials({ color_temp_kelvin: value })} />
+      </section>
+      <p className="apt-ui-meta">Virtual preview · no hardware command sent.</p>
+    </section>}
+    {tab === "aim" && <section className="apt-ui-section" id="apt-ui-virtual-aim" role="tabpanel" aria-label="Fixture aim">
+      <h3 className="apt-ui-heading">Spotlight aim</h3><p className="apt-ui-copy">Drag the fixture or its aim handle onto a visible room surface. Its socket stays fixed.</p>
+      {['pan', 'tilt'].map(axis => <AptUnifiedRange key={axis} label={axis === 'pan' ? 'Pan' : 'Tilt'} ariaLabel={axis === 'pan' ? 'Pan' : 'Tilt'} suffix="°"
+        min={fixture.limits?.[`${axis}_min_deg`] ?? (axis === 'pan' ? -175 : -5)} max={fixture.limits?.[`${axis}_max_deg`] ?? (axis === 'pan' ? 175 : 88)}
+        value={state[`${axis}_deg`] || 0} onChange={value => onPatch({ [`${axis}_deg`]: value })} />)}
+      <div className="apt-ui-actions"><button type="button" className="apt-ui-button" disabled={!canUndo} onClick={onUndo}>Undo aim</button>
+        <button type="button" className="apt-ui-button" disabled={!canRedo} onClick={onRedo}>Redo aim</button></div>
+      {notice && <p role="status" className="apt-ui-copy">{notice}</p>}<p className="apt-ui-meta">Modeled aim · virtual preview only.</p>
+    </section>}
+    {tab === "setup" && <section className="apt-ui-section" id="apt-ui-virtual-setup" role="tabpanel" aria-label="Fixture setup">
+      <h3 className="apt-ui-heading">Fixture</h3><select className="apt-ui-input" aria-label="Virtual fixture" value={fixture.fixture_id} onChange={event => onSelect(event.target.value)}>
+        {fixtures.map(item => <option key={item.fixture_id} value={item.fixture_id}>{item.label || item.fixture_id}</option>)}
+      </select><div className="apt-ui-row"><span className="apt-ui-meta grow">Identity</span><span className="apt-ui-value">{fixture.fixture_id}</span></div>
+      <p className="apt-ui-copy">Six radial LED-strip zones, one downward zone and a hidden robotic spotlight inside the white diffuser cylinder.</p>
+      {visibility}<button type="button" className="apt-ui-button" disabled={!canSetup} onClick={onSetup}>Edit fixture placement</button>
+      <h3 className="apt-ui-heading">Registered desk target</h3>{deskControls}
+      {notice && !/^(Drag a fixture|Aiming at|Aim updated|No visible room surface|That aim is unavailable|Aim canceled|Aim undone|Aim restored|This aim belongs)/.test(notice)
+        && <p role="status" className="apt-ui-copy">{notice}</p>}
+    </section>}
+  </aside>;
+}
+
 function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "", unifiedShell = false, shellControlsHost = null, shellCameraHost = null, onShellState, onShowShellControls }) {
   const controlConnectionRef = useRef({ connection, endpoint, token, generation: 0 });
   if (controlConnectionRef.current.connection !== connection || controlConnectionRef.current.endpoint !== endpoint
@@ -2495,6 +2693,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [virtualFixtureId, setVirtualFixtureId] = useState("");
   const [virtualFixtureChannel, setVirtualFixtureChannel] = useState("spotlight");
   const [virtualFixtureControlsOpen, setVirtualFixtureControlsOpen] = useState(false);
+  const [unifiedDockCollapsed, setUnifiedDockCollapsed] = useState(false);
+  const [unifiedDockExpanded, setUnifiedDockExpanded] = useState(false);
   const [virtualAimNotice, setVirtualAimNotice] = useState("");
   const [virtualAimHistoryVersion, setVirtualAimHistoryVersion] = useState(0);
   const virtualAimHistoryRef = useRef({ undo: [], redo: [] });
@@ -4820,13 +5020,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     }
     setVirtualFixturePreview(result);
   };
-  const changeVirtualFixture = (patch) => {
+  const changeVirtualFixture = (patch, fixtureId = selectedVirtualFixture?.fixture_id) => {
     const engine = engineRef.current, binding = virtualFixtureDocument?.binding, identity = engine?.sceneIdentity;
-    if (!selectedVirtualFixture || !binding || phase !== "ready" || workspaceAuthorityRef.current.key !== apartmentAuthorityKey
+    if (!virtualFixtureItems.some(fixture => fixture.fixture_id === fixtureId) || !binding || phase !== "ready" || workspaceAuthorityRef.current.key !== apartmentAuthorityKey
       || identity?.siteId !== "victoria"
       || identity.contentRevision !== binding.content_revision || identity.registrationVersion !== binding.registration_version
       || identity.frameDigest !== binding.frame_digest) return;
-    const result = engine.overlay.setVirtualFixtureState?.(selectedVirtualFixture.fixture_id, patch);
+    const result = engine.overlay.setVirtualFixtureState?.(fixtureId, patch);
     if (!result?.ok) return;
     syncVirtualFixturePreview(engine);
   };
@@ -7363,18 +7563,36 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const liveCameraExact = !!(liveCam && aptCameraAlignment(liveCam).exact);
   const cameraSurroundActive = !!(open && liveOn && liveCam && mobile && !calibCam && liveCameraExact && cameraPoseReady);
 
+  const openUnifiedSetup = useCallback(() => {
+    if (!apartmentSceneControlsEnabled || !(apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)) return;
+    setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
+    onShowShellControls?.();
+  }, [apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  const unifiedSelectionLabel = virtualFixtureControlsOpen && selectedVirtualFixture
+    ? selectedVirtualFixture.label || selectedVirtualFixture.fixture_id
+    : (model.devices || []).find(device => device.id === cardId)?.name || null;
   useEffect(() => {
     if (!unifiedShell || !onShellState) return;
     onShellState({ siteId: selectedSiteId, sites: window.HomeSpatialViewport?.getSites?.() || [], phase,
       sourceLabel: sourceMeta.label, saveState: saveStatus.state, saveDetail: saveStatus.detail,
       physicalControls: apartmentDeviceControlsEnabled && connection === "online",
       hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception,
+      dockState: selectedSiteId === "victoria" && window.HomeApartmentDenPerception
+        ? unifiedDockCollapsed ? "collapsed" : unifiedDockExpanded ? "expanded" : "default" : "hidden",
+      selectionLabel: unifiedSelectionLabel, setupActive: editing,
+      canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
+      openSetup: openUnifiedSetup,
       selectHome: id => travelToSite(id, { presentation: "interior" }) });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
-    saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite]);
+    saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite,
+    unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
+    unifiedDockCollapsed, unifiedDockExpanded]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);
+  React.useLayoutEffect(() => {
+    if (unifiedShell && shellControlsHost) shellControlsHost.scrollTop = 0;
+  }, [unifiedShell, shellControlsHost, cardId, virtualFixtureId, virtualFixtureControlsOpen, aimMode, editing]);
 
   if (!open) return null;
 
@@ -7503,6 +7721,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       aria-modal={embedded ? undefined : true}
       aria-label="3d apartment"
       tabIndex={-1}
+      onPointerDownCapture={event => {
+        if (!unifiedShell || !apartmentSceneControlsEnabled || event.button !== 0 || event.isPrimary === false
+            || event.target !== engineRef.current?.renderer.domElement) return;
+        // End inspector focus before the native canvas gesture starts. Opening
+        // Aim can then replace that input without canceling an active drag.
+        event.currentTarget.focus({ preventScroll: true });
+      }}
       style={{
         position: embedded ? "absolute" : "fixed",
         inset: 0,
@@ -8025,8 +8250,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           : "Spatial viewport changing scale"}
       </div>
 
-      {/* top bar */}
-      {!editing && (
+      {/* Classic tools remain available while a camera pose is active. */}
+      {!editing && (!unifiedShell || cameraTop) && (
         <div data-apt-legacy-toolbar="1" style={{
           position: "absolute", top: 0, left: 0, right: 0, display: "flex",
           flexDirection: mobileCameraSnap ? "column" : "row",
@@ -8225,8 +8450,26 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         </div>
       )}
 
-      {/* bottom HUD (view mode) */}
-      {!editing && !hideViewHud && (
+      {unifiedShell && !editing && !hideViewHud && spatialScale === "apartment" && (
+        <AptUnifiedRoomToolbar mode={mode} modeLoading={modeLoading} modeError={modeError}
+          sourceLabel={sourceMeta.label} disabled={!apartmentSceneControlsEnabled} pointsOnlyReason={interiorPointsOnlyReason}
+          sourceDetail={`${sourceMeta.label}${revisionLabel}`} stats={stats} sourceStatus={<>
+            <p className="apt-ui-meta">Save · {saveStatus.state}{saveStatus.detail ? ` · ${saveStatus.detail}` : ""}</p>
+            <p className="apt-ui-meta">{liveShadow ? "Observations · context journal" : `Tracker · ${trackerStatus}`}</p>
+            {simActive && <p className="apt-ui-meta">Simulation</p>}</>}
+          view={((azIdx % 8) + 8) % 8} onMode={next => { if (apartmentSceneControlsEnabled) { setLiveOn(false); pickMode(next); } }}
+          onOrbit={direction => { if (apartmentSceneControlsEnabled) engineRef.current?.rig.stepAzimuth(direction); }}
+          onFit={() => { if (apartmentSceneControlsEnabled) engineRef.current?.refit?.({ dur: 300 }); }}
+          onRehearse={!liveShadow && onOpenDynamicReplay && !calibCam && !aimMode && !travelling
+            && spatialScale === "apartment" && spatialTransition === "idle" ? onOpenDynamicReplay : null}
+          nativePacks={!liveShadow && window.HomeContentPacks?.isNative ? contentPacks.filter(pack => pack.manifest.siteId === selectedSiteId) : null}
+          packVersion={contentPacks.find(pack => pack.active && pack.manifest.siteId === selectedSiteId)?.manifest.revision || ""}
+          packBusy={contentPackBusy} onPackChange={version => { void changeContentPack(version); }}
+          hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible} />
+      )}
+
+      {/* Established HUD stays intact for Classic and the wider world view. */}
+      {!editing && !hideViewHud && (!unifiedShell || spatialScale !== "apartment") && (
         <div style={{
           position: "absolute", left: 0, right: 0, bottom: 0, display: "flex",
           alignItems: mobile ? "stretch" : "flex-end",
@@ -8533,7 +8776,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
 
       {aimMode && spatialScale === "apartment" && phase === "ready" && !editing
         && apartmentSceneControlsEnabled && apartmentDeviceControlsEnabled && window.HomeApartmentAim && (
-        <window.HomeApartmentAim
+        <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost} className="apt-ui-advanced-aim"><window.HomeApartmentAim
           model={model}
           registry={registry}
           states={statesRef.current}
@@ -8558,11 +8801,23 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             setAimMode(false); setAimDestination(null);
           }}
           mobile={mobile}
-        />
+        /></AptHomePanelSlot>
       )}
 
       {selectedSiteId === "victoria" && !rehearsalIsolated && window.HomeApartmentDenPerception && (
-        <AptHomePanelSlot enabled={unifiedShell} target={shellCameraHost}><window.HomeApartmentDenPerception
+        <AptHomePanelSlot enabled={unifiedShell} target={shellCameraHost}>
+          {unifiedShell && <header className="apt-ui-dock-header" data-collapsed={unifiedDockCollapsed ? "true" : "false"}>
+            <div className="apt-ui-grow"><h2 className="apt-ui-heading">Camera · JEV</h2><p className="apt-ui-meta">Den · video and analyzed frames</p></div>
+            <button type="button" className="apt-ui-button is-icon" aria-label={unifiedDockExpanded ? "Restore camera dock size" : "Expand camera dock"}
+              aria-pressed={unifiedDockExpanded} onClick={() => { setUnifiedDockExpanded(value => !value); setUnifiedDockCollapsed(false); }}>
+              <AptUnifiedIcon name={unifiedDockExpanded ? "collapse" : "expand"} /></button>
+            <button type="button" className="apt-ui-button is-icon" aria-label={unifiedDockCollapsed ? "Show camera dock" : "Collapse camera dock"}
+              aria-expanded={!unifiedDockCollapsed} onClick={() => { setUnifiedDockCollapsed(value => !value); setUnifiedDockExpanded(false); }}>
+              <AptUnifiedIcon name={unifiedDockCollapsed ? "chevU" : "chevD"} /></button>
+          </header>}
+          {unifiedShell && <section className="apt-ui-dock-intro"><h3 className="apt-ui-heading">Camera view closed</h3>
+            <p className="apt-ui-copy">Open this view to inspect live video and analyzed frames. Their status is shown separately.</p></section>}
+          <window.HomeApartmentDenPerception
           engine={engineRef.current}
           active={open && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn}
           mobile={mobile}
@@ -8570,21 +8825,77 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         /></AptHomePanelSlot>
       )}
 
-      {unifiedShell && !virtualFixtureDocument && !cardDevice && phase === "ready" && (
+      {unifiedShell && !virtualFixtureDocument && !cardDevice && !aimMode && phase === "ready" && (
         <AptHomePanelSlot enabled={true} target={shellControlsHost}>
-          <section className="apt-home-empty"><h2>Room controls</h2>
-            <p>Select a device in the room or below to open its existing controls.</p>
-            {(model.devices || []).filter(device => device.ha_entity_id).map(device => (
-              <button type="button" key={device.id} onClick={() => { setCardId(device.id); onShowShellControls?.(); }}>
-                {device.name || device.label || device.id}
-              </button>
-            ))}
-            {!(model.devices || []).some(device => device.ha_entity_id) && <p>No connected devices are configured for this home.</p>}
-          </section>
+          <section className="apt-ui-inspector" aria-label="Room controls"><header className="apt-ui-header">
+            <h2 className="apt-ui-title">{selectedSiteName}</h2><div className="apt-ui-sub">{(model.devices || []).filter(device => device.ha_entity_id).length} mapped devices</div>
+            <div className="apt-ui-actions"><span className="apt-ui-badge" data-state={connection === "online" && apartmentDeviceControlsEnabled ? "current" : "unavailable"}>
+              Home Assistant {connection === "online" && apartmentDeviceControlsEnabled ? "connected" : "unavailable"}</span></div>
+          </header><section className="apt-ui-section"><h3 className="apt-ui-heading">Quick</h3>
+            <button type="button" className="apt-ui-button" disabled={!apartmentDeviceControlsEnabled}
+              onClick={() => { if (!apartmentDeviceControlsEnabled) return; setCardId(null); setAimMode(true); onShowShellControls?.(); }}>Aim a light</button>
+          </section><section className="apt-ui-section"><h3 className="apt-ui-heading">Lights and devices</h3>
+            <ul className="apt-ui-list">{(model.devices || []).filter(device => device.ha_entity_id).map(device => {
+              const state = statesRef.current[device.ha_entity_id];
+              return <li key={device.id}><button type="button" className="apt-ui-list-button"
+                onClick={() => { setCardId(device.id); onShowShellControls?.(); }}>
+                <span className={`apt-ui-lamp${["on", "playing"].includes(state?.state) ? " is-on" : ""}`} aria-hidden="true" />
+                <span className="nm">{device.name || device.label || device.id}</span><span className="vl">{state?.state || "Unavailable"}</span>
+              </button></li>;
+            })}</ul>
+            {!(model.devices || []).some(device => device.ha_entity_id) && <p className="apt-ui-copy">No connected devices are configured for this home.</p>}
+          </section><section className="apt-ui-section"><p className="apt-ui-meta">Select a light or device in the room or list.</p>
+            <p className="apt-ui-meta">{sourceMeta.label}</p></section></section>
         </AptHomePanelSlot>
       )}
 
-      {virtualFixtureDocument && phase === "ready" && spatialScale === "apartment"
+      {unifiedShell && virtualFixtureDocument && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn && (
+        <AptHomePanelSlot enabled={true} target={shellControlsHost}>
+          <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
+            selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
+            onSelect={id => {
+              setVirtualFixtureId(id); setVirtualFixtureControlsOpen(true);
+              engineRef.current?.overlay.setVirtualFixtureSelected?.(id); onShowShellControls?.();
+            }}
+            onBack={() => { setVirtualFixtureControlsOpen(false); engineRef.current?.overlay.setVirtualFixtureSelected?.(null); }}
+            onPatch={changeVirtualFixture} onPatchAll={on => {
+              for (const fixture of virtualFixtureItems) changeVirtualFixture({ spotlight: { on }, downward: { on },
+                radials: (fixture.state?.radials || []).map(zone => ({ number: zone.number, on })) }, fixture.fixture_id);
+            }} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
+            canUndo={!!virtualAimHistoryRef.current.undo.length} canRedo={!!virtualAimHistoryRef.current.redo.length}
+            notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
+            canSetup={apartmentPlacementControlsEnabled}
+            deskControls={<section aria-label="Desk target" className="apt-ui-channel">
+              <button type="button" className="apt-ui-button" disabled={!virtualSpotlightsVisible} onClick={startDeskTargetSelection}>Select desk surface</button>
+              {deskTargetSelection && <>
+                <p role="status" className="apt-ui-copy">{deskTargetSelection.status === "selecting"
+                  ? `${deskTargetSelection.surface_ref ? "Detailed registered scan mesh. " : ""}Click the four desktop corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
+                    registered_surface_unavailable: "No registered scan surface at that point.",
+                    registered_collision_unavailable: "Registered scan geometry is not available yet.",
+                    registered_surface_no_hit: "No registered scan triangle at that point.",
+                    registered_surface_raw_hit_unselected: "Scan geometry is under this point, but the displayed surface could not be selected.",
+                    drag_is_not_a_corner: "Drag ignored. Click without moving.",
+                    registered_desk_surface_corner_required: "This surface cannot be used as a desktop corner.",
+                    distinct_registered_desk_corners_required: "That corner is already selected. Choose a different corner.",
+                    registered_desk_normals_disagree: "The corners are on differently facing surfaces. Check the selected surface.",
+                    registered_desk_span_exceeded: "The selected corners are too far apart for one desktop.",
+                    convex_cyclic_registered_desk_corners_required: "Choose the remaining corner in order around the desktop edge.",
+                  }[deskTargetSelection.reason] || "That point was not added. Your selected corners are still kept.") : ""}`
+                  : deskTargetSelection.status === "complete" ? "Four corners selected. Check the numbered markers cover your whole desktop."
+                  : deskTargetSelection.status === "saved" ? "Desk target download prepared. Keep the file private; it enables no automatic light yet."
+                  : "Selection canceled. Start again to choose the desktop."}</p>
+                {deskTargetSelection.status === "complete" && <>
+                  <label className="apt-ui-row apt-ui-copy"><input type="checkbox" checked={deskTargetSelection.confirmed}
+                    onChange={event => setDeskTargetSelection(value => ({ ...value, confirmed: event.target.checked }))} />These corners bound my whole desktop.</label>
+                  <button type="button" className="apt-ui-button" disabled={!deskTargetSelection.confirmed} onClick={saveDeskTargetSelection}>Save desk target</button>
+                </>}
+                <button type="button" className="apt-ui-button" onClick={cancelDeskTargetSelection}>Clear selection</button>
+              </>}
+            </section>} />
+        </AptHomePanelSlot>
+      )}
+
+      {!unifiedShell && virtualFixtureDocument && phase === "ready" && spatialScale === "apartment"
         && !editing && !calibCam && !liveOn && (
         <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost}><aside data-victoria-virtual-fixtures="1" style={{ position: "absolute", left: 16,
           bottom: mobile ? 112 : 74, zIndex: 12, maxWidth: "calc(100% - 32px)",

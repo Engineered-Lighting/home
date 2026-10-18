@@ -2,8 +2,14 @@
  * are supplied by the renderer. Native and browser boundaries validate again. */
 (function (root) {
   "use strict";
+  // index.html boots this file and the feature loader may execute it again. A
+  // second instance would reset the epoch and manifests, and its first native
+  // call would invalidate the working instance's in-flight reads and saves.
+  if (root.HomePerceptionLabTransport) return;
   const PREFIX = "/api/perception-lab/v1";
   const MAX_JSON = 4 * 1024 * 1024;
+  // Graph, timeline and replay projections are bounded to 1 MiB upstream.
+  const GRAPH_READS = new Set(["sessions.graph", "sessions.timeline", "sessions.replay"]), MAX_GRAPH_JSON = 1024 * 1024;
   const MAX_MEDIA = 4 * 1024 * 1024;
   const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
   let connectionEpoch = 0, nativeGeneration = null;
@@ -12,6 +18,13 @@
     constructor(code, status) { super(code); this.name = "LabTransportError"; this.code = code; this.status = status || 0; }
   }
   function fail(code, status) { throw new LabTransportError(code, status); }
+  // Native errors are lab_ codes, optionally with an HTTP status (lab_code:503)
+  // so busy, unreachable and missing/deleted media classify as on the web path.
+  function nativeError(error, fallback) {
+    if (error instanceof LabTransportError) return error;
+    const match = typeof error === "string" && /^(lab_[a-z0-9_]+)(?::([1-5][0-9]{2}))?$/.exec(error);
+    return match ? new LabTransportError(match[1], match[2] && Number(match[2])) : new LabTransportError(fallback);
+  }
   function id(value) { if (typeof value !== "string" || !ID.test(value)) fail("lab_invalid_identifier"); return value; }
   function site(value) { if (value !== "echo" && value !== "victoria") fail("lab_invalid_site"); return value; }
   function integer(value, min, max) { if (!Number.isSafeInteger(value) || value < min || value > max) fail("lab_invalid_range"); return value; }
@@ -44,6 +57,9 @@
         if (!['depth','left','right'].includes(args.modality)) fail('lab_unsupported_plane');
         path = "/cameras/" + id(args.cameraId) + "/planes/" + args.modality; break;
       case "cameras.context": path = "/cameras/" + id(args.cameraId) + "/context"; break;
+      case "cameras.structuredContext":
+        if (siteId !== 'victoria' || args.cameraId !== 'den' || Object.keys(args).some(key => !['siteId','cameraId'].includes(key))) fail('lab_invalid_arguments');
+        path = '/cameras/den/structured-context'; break;
       case "cameras.refresh":
       case "cameras.refreshStatus":
       case "cameras.refreshImage": {
@@ -58,6 +74,15 @@
       case "sessions.list": path = "/sessions"; break;
       case "sessions.get": path = sessionPath() + (args.atMs===undefined?'':'?at_ms='+integer(args.atMs,0,1800000)); break;
       case "sessions.live": path = sessionPath() + "/live"; break;
+      case "sessions.graph": path = sessionPath() + "/graph" + (args.atMs === undefined ? "" : "?at_ms=" + integer(args.atMs, 0, 1800000)); break;
+      case "sessions.replay": path = sessionPath() + "/replay?at_ms=" + integer(args.atMs, 0, 1800000); break;
+      case "sessions.timeline": {
+        const query = [];
+        if (args.fromMs !== undefined) query.push("from_ms=" + integer(args.fromMs, 0, 1800000));
+        if (args.toMs !== undefined) query.push("to_ms=" + integer(args.toMs, 0, 1800000));
+        if (args.fromMs !== undefined && args.toMs !== undefined && args.fromMs > args.toMs) fail("lab_invalid_range");
+        path = sessionPath() + "/timeline" + (query.length ? "?" + query.join("&") : ""); break;
+      }
       case "sessions.findings": path = sessionPath() + "/findings"; break;
       case "sessions.start": method = "POST"; path = "/sessions"; break;
       case "sessions.stop": method = "POST"; path = sessionPath() + "/stop"; break;
@@ -162,7 +187,7 @@
       if (seen.has(mediaId)) fail("lab_invalid_manifest"); seen.add(mediaId);
       const oldItem = items.get(mediaId);
       if (oldItem && (oldItem.size !== size || oldItem.contentType !== item.content_type)) fail("lab_invalid_manifest");
-      items.set(mediaId, { size, contentType: item.content_type });
+      items.set(mediaId, { size, contentType: item.content_type, nativeReadable: item.native_readable !== false });
       while (items.size > 4096) items.delete(items.keys().next().value);
     });
     if (manifests.size >= 16 && !manifests.has(key)) manifests.clear();
@@ -186,15 +211,25 @@
     const route = describe(operation, args);
     const epoch = connectionEpoch;
     if (nativeContext()) {
-      if (operation === 'cameras.preview' || operation === 'cameras.context' || operation === 'cameras.plane' || operation === 'cameras.video' || operation === 'cameras.refresh' || operation === 'cameras.refreshStatus' || operation === 'cameras.refreshImage') fail('lab_native_preview_not_available');
+      // Camera reads are typed native operations. Refresh has no native scope or
+      // namespace, and never falls back to HTTP.
+      if (operation === 'cameras.structuredContext' || operation === 'cameras.refresh' || operation === 'cameras.refreshStatus' || operation === 'cameras.refreshImage') fail('lab_native_preview_not_available');
       const invoke = nativeInvoke(); if (!invoke) fail("lab_native_transport_unavailable");
+      // Only the fields each camera read uses, already validated by describe().
+      // Like an aborted fetch, a live view the caller abandoned is never delivered.
+      const live = operation.startsWith("cameras."); if (live && options?.signal?.aborted) fail("lab_unavailable");
+      const camera = !live ? {} : Object.assign({ cameraId: args.cameraId },
+        operation === "cameras.video" ? { afterSequence: args.afterSequence ?? null, videoGeneration: args.videoGeneration ?? null } : {},
+        operation === "cameras.plane" ? { modality: args.modality } : {});
+      // The timeline range exists only on the timeline read, like camera fields.
+      if (operation === "sessions.timeline") Object.assign(camera, { fromMs: args.fromMs ?? null, toMs: args.toMs ?? null });
       let response;
-      try { response = await invoke("lab_request", { request: { operation, connectionGeneration: await generation(), siteId: route.siteId,
+      try { response = await invoke("lab_request", { request: Object.assign({ operation, connectionGeneration: await generation(), siteId: route.siteId,
         sessionId: args.sessionId || null, jobId: args.jobId || null,
         annotationId: args.annotationId || null, mediaId: args.mediaId || null, generation: args.generation ?? null,
-        cursor: args.cursor ?? null, limit: args.limit ?? null, snapshotId:args.snapshotId??null, kind:args.kind??null, atMs:args.atMs??null, encodedAtMs:args.encodedAtS===undefined?null:Math.round(args.encodedAtS*1000), radiusMs:args.radiusMs??null, body: route.body || null } }); }
-      catch (error) { fail(typeof error === "string" && /^lab_[a-z0-9_]+$/.test(error) ? error : "lab_native_transport_failed"); }
-      current(epoch);
+        cursor: args.cursor ?? null, limit: args.limit ?? null, snapshotId:args.snapshotId??null, kind:args.kind??null, atMs:args.atMs??null, encodedAtMs:args.encodedAtS===undefined?null:Math.round(args.encodedAtS*1000), radiusMs:args.radiusMs??null, body: route.body || null }, camera) }); }
+      catch (error) { throw nativeError(error, "lab_native_transport_failed"); }
+      current(epoch); if (live && options?.signal?.aborted) fail("lab_unavailable");
       if (response.status < 200 || response.status >= 300) fail(decodedError(response.payload, response.status), response.status);
       if (operation === "media.manifest") rememberManifest(args, response.payload);
       if (operation === "media.describe") rememberManifest(args, { generation: args.generation, items: [response.payload] });
@@ -207,7 +242,7 @@
         route.body ? { "Content-Type": "application/json", "X-Home-Lab-CSRF": "1" } : {}),
       body: route.body ? JSON.stringify(route.body) : undefined,
     }, options);
-    let payload; const bytes = await boundedBytes(response, MAX_JSON);
+    let payload; const bytes = await boundedBytes(response, operation === 'cameras.structuredContext' ? 32768 : GRAPH_READS.has(operation) ? MAX_GRAPH_JSON : MAX_JSON);
     try { payload = JSON.parse(new TextDecoder().decode(bytes)); } catch (_) { fail("lab_invalid_response", response.status); }
     current(epoch);
     if (!response.ok) fail(decodedError(payload, response.status), response.status);
@@ -233,6 +268,8 @@
       }
       if (manifest.generation !== generation) fail("lab_stale_generation");
       const handle = manifest.items.get(mediaId); if (!handle || offset >= handle.size) fail("lab_media_unknown");
+      // Native lists every stored item but registers only readable types.
+      if (!handle.nativeReadable) fail("lab_media_type_denied");
       let response;
       const read = async () => invoke("lab_media_read", { request: { connectionGeneration: await nativeGeneration, siteId, sessionId, mediaId, generation, offset, length } });
       try {
@@ -243,7 +280,7 @@
           current(epoch); response = await read();
         }
       }
-      catch (error) { fail(typeof error === "string" && /^lab_[a-z0-9_]+$/.test(error) ? error : "lab_native_media_failed"); }
+      catch (error) { throw nativeError(error, "lab_native_media_failed"); }
       current(epoch);
       if (!(response instanceof ArrayBuffer)) fail("lab_native_binary_required");
       const data = new Uint8Array(response), end = Math.min(offset + length, handle.size) - 1;
@@ -324,8 +361,7 @@
       await sink.close();return {...result,bytes:size};
     } catch(error){
       try{await sink.abort();}catch(_){}
-      throw error instanceof LabTransportError ? error : new LabTransportError(
-        typeof error==='string'&&/^lab_[a-z0-9_]+$/.test(error)?error:'lab_archive_failed');
+      throw nativeError(error,'lab_archive_failed');
     } finally {
       try{await reader?.cancel();}catch(_){}
       if(abortNative)options?.signal?.removeEventListener('abort',abortNative);

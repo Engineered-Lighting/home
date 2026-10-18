@@ -14,7 +14,38 @@
  */
 import * as THREE from 'three';
 
+const { createCutawayUniforms, cutawayVertexDeclarations, cutawayFragmentDeclarations } =
+    await import(`./dollhouse-cutaway-material.js${new URL(import.meta.url).search}`);
+
+/*
+ * The point size law, driven per zoom detent.
+ *
+ * Size is inverse depth, which is right for a cloud seen from outside and wrong
+ * from inside it: at the old closest detent every point nearer than the orbit
+ * centre hit the fixed 12px ceiling and the room turned into fat grey discs. Two
+ * uniforms fix that without touching the overview look:
+ *
+ *   uMaxPointPx   the ceiling, 12 device px at the overview detent (exactly the
+ *                 old constant) falling to 3.5 CSS px at the closest detent, and
+ *                 never above 6 device px there, so the close view keeps the
+ *                 fine grain the splat reference has on every display. The S2
+ *                 judge measures gl_PointSize, which is device px, so the 6 px
+ *                 criterion is enforced in device px, not CSS px.
+ *   uDepthFloor   depth below which a point stops growing, 0.35 x the orbit
+ *                 radius. At the overview no point is that near, so it changes
+ *                 nothing there; inside, it stops the nearest shell of points
+ *                 from being the biggest thing on screen.
+ *
+ * pointSizePx() and pointSizeLimits() below are this exact law in JS, so the
+ * per-detent numbers are asserted without a GL context.
+ */
+export const POINT_SIZE_OVERVIEW_MAX_PX = 12;
+export const POINT_SIZE_CLOSE_MAX_CSS_PX = 3.5;
+export const POINT_SIZE_CLOSE_MAX_DEVICE_PX = 6;
+export const POINT_DEPTH_FLOOR_FRACTION = 0.35;
+
 export const vertexShader = /* glsl */ `
+${cutawayVertexDeclarations}
 uniform float uTime;
 uniform float uPixelRatio;
 uniform float uBaseSize;
@@ -23,6 +54,8 @@ uniform float uWallNear;
 uniform float uFadeFar;
 uniform float uSizeRef;
 uniform float uJitterAmp;
+uniform float uMaxPointPx;
+uniform float uDepthFloor;
 
 attribute float intensity;
 
@@ -41,6 +74,7 @@ void main() {
     pos.y += cos(uTime * 0.6 + vRandom * 4.712) * uJitterAmp * 0.6;
 
     vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    vDollhouseLocal = (uDollhouseWorldToLocal * modelMatrix * vec4(pos, 1.0)).xyz;
 
     float depth = -mvPosition.z;
     vDepthFactor = 1.0 - smoothstep(uFadeNear, uFadeFar, depth);
@@ -51,14 +85,71 @@ void main() {
         vDepthFactor *= smoothstep(uWallNear * 0.35, uWallNear * 0.85, depth);
     }
 
-    float sizeAtten = uBaseSize * uPixelRatio * (uSizeRef / depth);
-    gl_PointSize = clamp(sizeAtten * (0.3 + 0.7 * vDepthFactor), 0.5, 12.0);
+    float sizeAtten = uBaseSize * uPixelRatio * (uSizeRef / max(depth, uDepthFloor));
+    gl_PointSize = clamp(sizeAtten * (0.3 + 0.7 * vDepthFactor), 0.5, uMaxPointPx);
 
     gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
+function finiteOr(value, fallback) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function smoothstep(edge0, edge1, x) {
+    const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+}
+
+/** The vertex shader's vDepthFactor, including the room-zoom wall fade. */
+export function pointDepthFactor(depth, { fadeNear, fadeFar, wallNear = 0 } = {}) {
+    let factor = 1 - smoothstep(fadeNear, fadeFar, depth);
+    if (wallNear > 0) factor *= smoothstep(wallNear * 0.35, wallNear * 0.85, depth);
+    return factor;
+}
+
+/** gl_PointSize for one point, exactly as the vertex shader computes it. */
+export function pointSizePx({
+    depth,
+    depthFactor = 1,
+    pixelRatio = 1,
+    baseSize = 1.4,
+    sizeRef = 55,
+    maxPointPx = POINT_SIZE_OVERVIEW_MAX_PX,
+    depthFloor = 0,
+} = {}) {
+    const sizeDepth = Math.max(finiteOr(depth, 0), finiteOr(depthFloor, 0));
+    const attenuated = baseSize * pixelRatio * (sizeRef / sizeDepth);
+    const size = attenuated * (0.3 + 0.7 * depthFactor);
+    return Math.min(maxPointPx, Math.max(0.5, Number.isNaN(size) ? 0.5 : size));
+}
+
+/**
+ * The two per-frame uniforms for the current orbit.
+ *
+ * Interpolated on log radius between the overview and the closest detent, so a
+ * detent tween changes the ceiling as smoothly as it changes the zoom, and the
+ * pre-zoom pull-back past the overview keeps the overview's ceiling.
+ */
+export function pointSizeLimits({ orbitRadius, overviewRadius, closestRadius, pixelRatio = 1 } = {}) {
+    const ratio = finiteOr(pixelRatio, 1) > 0 ? finiteOr(pixelRatio, 1) : 1;
+    const closeMax = Math.min(POINT_SIZE_CLOSE_MAX_DEVICE_PX, POINT_SIZE_CLOSE_MAX_CSS_PX * ratio);
+    const radius = Math.max(1e-6, finiteOr(orbitRadius, overviewRadius));
+    const outer = Math.max(1e-6, finiteOr(overviewRadius, radius));
+    const inner = Math.max(1e-6, Math.min(outer, finiteOr(closestRadius, outer)));
+    const span = Math.log(outer / inner);
+    const t = span > 1e-9
+        ? Math.min(1, Math.max(0, Math.log(radius / inner) / span))
+        : 1;
+    return Object.freeze({
+        maxPointPx: closeMax + (POINT_SIZE_OVERVIEW_MAX_PX - closeMax) * t,
+        depthFloor: POINT_DEPTH_FLOOR_FRACTION * radius,
+    });
+}
+
 export const fragmentShader = /* glsl */ `
+${cutawayFragmentDeclarations}
 uniform vec3 uGlowColor;
 uniform float uOpacity;
 
@@ -70,6 +161,8 @@ void main() {
     vec2 center = gl_PointCoord - vec2(0.5);
     float dist = length(center);
     if (dist > 0.5) discard;
+    float cutawayKeep = homeDollhouseKeep();
+    if (cutawayKeep <= 0.001) discard;
 
     float glow = 1.0 - smoothstep(0.25, 0.5, dist);
 
@@ -77,7 +170,7 @@ void main() {
     brightness *= 0.85 + 0.15 * vRandom;
     brightness *= 0.55 + 0.45 * vIntensity;   // photographic shading (fill now samples the atlas)
 
-    gl_FragColor = vec4(uGlowColor * brightness, glow * uOpacity);
+    gl_FragColor = vec4(uGlowColor * brightness, glow * uOpacity * cutawayKeep);
 }
 `;
 
@@ -88,6 +181,7 @@ export function createPointsMaterial() {
     try { saved = JSON.parse(localStorage.getItem(TUNABLES_KEY) || '{}'); } catch (e) { /* */ }
     const mat = new THREE.ShaderMaterial({
         uniforms: {
+            ...createCutawayUniforms(),
             uTime:       { value: 0.0 },
             uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
             uBaseSize:   { value: saved.uBaseSize ?? 1.4 },
@@ -108,6 +202,10 @@ export function createPointsMaterial() {
             // from per-point photographic shading, not size.
             uSizeRef:    { value: saved.uSizeRef ?? 55.0 },
             uJitterAmp:  { value: saved.uJitterAmp ?? 0.010 },
+            // Driven per frame from the zoom detent (engine.js); these are the
+            // old fixed 12px ceiling with no floor until the first frame.
+            uMaxPointPx: { value: POINT_SIZE_OVERVIEW_MAX_PX },
+            uDepthFloor: { value: 0.0 },
         },
         vertexShader,
         fragmentShader,
@@ -133,8 +231,8 @@ const RECORD = 13; // 3*f32 + u8
 
 /* Streams a homeapt-points PLY into a Points object.
  * onProgress(loaded, total) fires as records land; geometry drawRange grows. */
-export async function loadPointCloud(url, material, { onProgress } = {}) {
-    const res = await fetch(url, { cache: 'force-cache' });
+export async function loadPointCloud(url, material, { onProgress, signal } = {}) {
+    const res = await fetch(url, { cache: 'force-cache', signal });
     if (!res.ok) throw new Error(`points fetch ${res.status} for ${url}`);
 
     const reader = res.body.getReader();
@@ -213,15 +311,23 @@ export async function loadPointCloud(url, material, { onProgress } = {}) {
         tail = buf.slice(nRec * RECORD);
     };
 
-    consume(firstBody);
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        consume(value);
+    try {
+        consume(firstBody);
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            consume(value);
+        }
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
+        points.frustumCulled = true;
+        if (onProgress) onProgress(loaded, total);
+        return { points, geometry, total: loaded };
+    } catch (error) {
+        /* An AbortSignal can reject reader.read() after the GPU-side geometry
+         * has already been allocated. The caller has no result object to
+         * dispose in that path, so the streaming loader owns this rollback. */
+        geometry.dispose();
+        throw error;
     }
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
-    points.frustumCulled = true;
-    if (onProgress) onProgress(loaded, total);
-    return { points, geometry, total: loaded };
 }

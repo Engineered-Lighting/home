@@ -6,6 +6,11 @@
   ];
 
   const FEATURES = {
+    perceptionLab: {
+      label: "Perception Lab",
+      files: [["home-perception-lab-archive.js", false], ["home-perception-lab-transport.js", false], ["home-perception-lab-data.js", false], ["home-perception-lab-media.js", false], ["home-perception-lab-graph.jsx", true], ["home-perception-lab.jsx", true]],
+      ready: () => !!window.HomePerceptionLab,
+    },
     people: {
       label: "people",
       files: [["home-people-helpers.js", false], ["home-people.jsx", true]],
@@ -50,8 +55,22 @@
       files: [
         ["home-apartment-aiming.js", false],
         ["home-apartment-gimbal-telemetry.js", false],
+        ["home-equipment-registration.js", false],
         ["home-apartment-data.js", false],
+        ["home-apartment-site-session.js", false],
         ["home-apartment-sim.js", false],
+        ["home-perception-lab-archive.js", false],
+        ["home-perception-lab-transport.js", false],
+        ["home-perception-lab-data.js", false],
+        ["home-perception-lab-media.js", false],
+        ["home-perception-lab-graph.jsx", true],
+        ["home-apartment-camera-source.js", false],
+        ["home-apartment-camera.jsx", true],
+        ["home-den-lab-stream.js", false],
+        ["home-apartment-perception-source.js", false],
+        ["home-apartment-perception-view.js", false],
+        ["home-apartment-perception-player.js", false],
+        ["home-apartment-den-perception.jsx", true],
         ["home-apartment-cards.jsx", true],
         ["home-apartment-aim.jsx", true],
         ["home-apartment-calibrate.jsx", true],

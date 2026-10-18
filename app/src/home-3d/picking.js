@@ -43,16 +43,26 @@ export function createPicking(camera, hostEl) {
          * normal are both converted back into the shared Z-up apartment
          * frame, so edit tools can place horizontal work surfaces and
          * vertical art/custom aim planes directly on the runtime mesh. */
-        surfaceHit(apartmentRoot, objects, clientX, clientY) {
+        surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null } = {}) {
             const hits = this.pick(objects || [], clientX, clientY);
-            const hit = hits.find((candidate) => candidate.point);
-            if (!hit) return null;
             apartmentRoot.updateMatrixWorld(true);
+            // Presentation filtering chooses a visible deeper face without
+            // modifying the collision mesh used for independent world queries.
+            let hit = null, point = null;
+            for (const candidate of hits) {
+                if (!candidate.point) continue;
+                const local = apartmentRoot.worldToLocal(candidate.point.clone());
+                if (acceptPoint && !acceptPoint([local.x, local.y, local.z], candidate)) continue;
+                hit = candidate; point = local; break;
+            }
+            if (!hit) return null;
             hit.object.updateMatrixWorld(true);
-            const point = apartmentRoot.worldToLocal(hit.point.clone());
             let normal = new THREE.Vector3(0, 0, 1);
             if (hit.face?.normal) {
                 normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+                // Double-sided scan triangles have mixed winding. Use the
+                // geometric normal facing the viewing ray, as Three does.
+                if (normal.dot(raycaster.ray.direction) > 0) normal.negate();
                 const rootQ = new THREE.Quaternion();
                 apartmentRoot.getWorldQuaternion(rootQ);
                 normal.applyQuaternion(rootQ.invert()).normalize();

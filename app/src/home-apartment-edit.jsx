@@ -68,18 +68,23 @@ function EdButton({ label, onClick, active, danger, disabled, title, ariaLabel }
   );
 }
 
-function EdTapeInput({ meters, onCommit, optional = false, label }) {
+function EdTapeInput({ meters, onCommit, optional = false, label, onFocus, disabled = false }) {
   const format = window.HomeApartmentData.formatTapeMeasurement;
   const parse = window.HomeApartmentData.parseTapeMeasurement;
   const [draft, setDraft] = useState(() => format(meters));
   const [invalid, setInvalid] = useState(false);
-  useEffect(() => { setDraft(format(meters)); setInvalid(false); }, [meters]);
+  const displayed = useRef(format(meters));
+  useEffect(() => { displayed.current = format(meters); setDraft(displayed.current); setInvalid(false); }, [meters]);
   const commit = () => {
-    if (!String(draft).trim()) { setInvalid(false); onCommit(null); return; }
+    // Formatting rounds for display. Merely focusing/blurring must preserve
+    // the stored measurement, including precision beyond the display text.
+    if (disabled || draft === displayed.current) return;
+    if (!String(draft).trim()) { displayed.current = ""; setInvalid(false); onCommit(null); return; }
     const next = parse(draft);
     if (!Number.isFinite(next) || next < 0) { setInvalid(true); return; }
     setInvalid(false);
-    setDraft(format(next));
+    displayed.current = format(next);
+    setDraft(displayed.current);
     onCommit(Math.round(next * 10000) / 10000);
   };
   return (
@@ -87,7 +92,7 @@ function EdTapeInput({ meters, onCommit, optional = false, label }) {
       <span style={{ fontSize: 8.5, color: "var(--hg-fg-4)", letterSpacing: "0.08em" }}>
         {label}{optional ? " · optional" : ""}
       </span>
-      <input value={draft} placeholder={optional ? "optional" : "e.g. 8′ 0″"}
+      <input value={draft} disabled={disabled} onFocus={onFocus} placeholder={optional ? "optional" : "e.g. 8′ 0″"}
         onChange={(e) => setDraft(e.target.value)} onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
         className="hg-focusable" aria-invalid={invalid ? "true" : "false"}
@@ -233,6 +238,156 @@ function EdMobileSheet({ mobile, children }) {
   );
 }
 
+const ED_EQUIPMENT_FIELD = { width: "100%", background: "var(--hg-bg-0)", border: "1px solid var(--hg-border-soft)",
+  color: "var(--hg-fg-1)", fontFamily: ED_MONO, fontSize: 10, padding: "5px 6px" };
+const ED_EQUIPMENT_NOTE = { color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSize: 10, lineHeight: 1.5 };
+
+function EdEquipmentList({ document, selectedId, onSelect, onAddSocket, atCapacity, referenceId, onReference, onConfirm, disabled, heading, saveStatus }) {
+  const references = document.references;
+  const fixtures = document.equipment.filter((record) => record.kind === "fixture");
+  const renderRecord = (record) => <button key={record.id} type="button"
+    data-equipment-id={record.id} onClick={() => onSelect(record.id)} className="hg-focusable"
+    style={{ ...ED_EQUIPMENT_FIELD, textAlign: "left", cursor: "pointer", marginBottom: 5,
+      borderColor: selectedId === record.id ? "var(--hg-ice)" : "var(--hg-border-soft)" }}>
+    <span style={{ color: record.kind === "mount" ? SURVEY_ORANGE : "var(--hg-ice)" }}>{record.kind === "mount" ? "◇" : record.kind === "camera" ? "◉" : "○"}</span> {record.label}
+    <span style={{ display: "block", marginTop: 3, fontSize: 8, color: "var(--hg-fg-4)" }}>{record.kind === "fixture" ? `${record.installation_status} fixture · ` : ""}{record.position_status === "missing" ? "position unresolved" : record.position_status}</span>
+  </button>;
+  return <div data-equipment-registration="list">
+    <div style={heading}>Sockets and camera</div>
+    <div style={ED_EQUIPMENT_NOTE}>Measure from two named walls and directly above the floor. Blank values keep a position unresolved.</div>
+    <div role="status" style={{ ...ED_EQUIPMENT_NOTE, margin: "8px 0" }}>
+      revision {document.revision} · {saveStatus?.state || "unsaved"}
+    </div>
+    <div data-equipment-primary="1">{document.equipment.filter((record) => record.kind !== "fixture").map(renderRecord)}</div>
+    <div style={{ display: "grid", margin: "7px 0 12px" }}>
+      <EdButton label="+ Add socket" ariaLabel="Add socket" active onClick={onAddSocket} disabled={disabled || !!atCapacity}
+        title={atCapacity ? "Equipment capacity reached" : "Add another socket location to measure"} />
+      {atCapacity && <div role="status" style={{ ...ED_EQUIPMENT_NOTE, marginTop: 5 }}>Equipment capacity reached.</div>}
+    </div>
+    {fixtures.length > 0 && <details data-equipment-fixtures="optional"
+      open={fixtures.some((record) => record.id === selectedId) || undefined} style={{ margin: "10px 0 14px" }}>
+      <summary className="hg-focusable" style={{ color: "var(--hg-fg-3)", fontSize: 9, cursor: "pointer", marginBottom: 7 }}>Fixtures at sockets · optional</summary>
+      <div style={{ ...ED_EQUIPMENT_NOTE, marginBottom: 7 }}>These describe fixtures at existing sockets. Use Add socket for another physical location.</div>
+      {fixtures.map(renderRecord)}
+    </details>}
+    <div style={heading}>wall + floor references</div>
+    <div style={ED_EQUIPMENT_NOTE}>{references.confirmed ? "Owner confirmed reference surfaces." : "Scan-derived approximate references · confirm the highlighted surfaces before treating tape results as measured."} Geometry stays locked.</div>
+    <div style={{ display: "grid", gap: 5, margin: "8px 0" }}>
+      {references.walls.map((wall) => <EdButton key={wall.id} label={wall.label}
+        active={referenceId === wall.id} onClick={() => onReference(wall.id)} />)}
+      <EdButton label="floor" active={referenceId === references.floor.id} onClick={() => onReference(references.floor.id)} />
+    </div>
+    <label style={{ display: "flex", gap: 6, fontSize: 9, color: "var(--hg-fg-2)", lineHeight: 1.5 }}>
+      <input type="checkbox" checked={references.confirmed} disabled={disabled}
+        onChange={(event) => onConfirm(event.target.checked)} />
+      I confirm these named wall and floor references
+    </label>
+  </div>;
+}
+
+function EdEquipmentFields({ record, document, onUpdate, onReference, disabled, heading, error }) {
+  if (!record) return <div style={ED_EQUIPMENT_NOTE}>Select a mount, proposed fixture or OAK-D Pro.</div>;
+  const references = document.references;
+  const measurements = record.measurements;
+  const rows = [0, 1].map((index) => measurements.wall_distances[index] || { wall_id: "", distance_m: null });
+  const updateWall = (index, patch) => {
+    const next = rows.map((row, i) => i === index ? { ...row, ...patch } : row).filter((row) => row.wall_id);
+    onUpdate({ measurements: { wall_distances: next } });
+  };
+  const direction = record.orientation.direction_unit;
+  const directionWall = references.walls.find((wall) => direction &&
+    Math.abs(direction[0] + wall.normal_xy[0]) < 1e-7 && Math.abs(direction[1] + wall.normal_xy[1]) < 1e-7 && Math.abs(direction[2]) < 1e-7);
+  const placement = window.HomeEquipmentRegistration.solvePlacement(record, references, {
+    mount: document.equipment.find((candidate) => candidate.id === record.mounted_at_ref),
+  });
+  return <fieldset disabled={disabled} data-equipment-registration="inspector" data-equipment-selected={record.id}
+    style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+    <div style={heading}>{record.kind === "fixture" ? "fixture placement" : record.kind === "camera" ? "OAK-D Pro placement" : "socket / mounting point"}</div>
+    <label style={{ display: "grid", gap: 4, fontSize: 9, color: "var(--hg-fg-4)" }}>label
+      <input aria-label="Equipment label" value={record.label} maxLength={160} style={ED_EQUIPMENT_FIELD}
+        onChange={(event) => { if (event.target.value.trim()) onUpdate({ label: event.target.value }); }} />
+    </label>
+    {record.kind === "mount" && <>
+      <div style={heading}>physical point</div>
+      <select aria-label="Physical point kind" value={record.physical_kind} style={ED_EQUIPMENT_FIELD}
+        onChange={(event) => onUpdate({ physical_kind: event.target.value })}>
+        <option value="unconfirmed">unconfirmed</option><option value="socket">socket</option><option value="mount_candidate">mount candidate</option>
+      </select>
+    </>}
+    <div style={heading}>mounting type</div>
+    <select aria-label="Mounting type" value={record.mount_type} style={ED_EQUIPMENT_FIELD}
+      onChange={(event) => onUpdate({ mount_type: event.target.value })}>
+      <option value="unknown">unknown</option><option value="wall">wall</option><option value="ceiling">ceiling</option>
+    </select>
+    {record.kind === "fixture" ? <>
+      <div style={heading}>installation</div>
+      <select aria-label="Fixture installation status" style={ED_EQUIPMENT_FIELD} value={record.installation_status || "proposed"}
+        onChange={(event) => onUpdate({ installation_status: event.target.value })}>
+        <option value="proposed">proposed virtual fixture</option><option value="installed">installed fixture</option>
+      </select>
+      <div style={{ ...ED_EQUIPMENT_NOTE, marginTop: 10 }}>This fixture belongs to {document.equipment.find((candidate) => candidate.id === record.mounted_at_ref)?.label || record.mounted_at_ref}. For another socket location use Add socket.</div>
+      <details style={{ marginTop: 8 }}><summary style={{ ...ED_EQUIPMENT_NOTE, cursor: "pointer" }}>Fixture origin details</summary>
+        <div style={{ ...ED_EQUIPMENT_NOTE, marginTop: 5 }}>The socket position is separate from the fixture bottom and optical pivot. Unknown offsets stay unresolved.</div>
+      </details>
+    </> : <>
+      <div style={heading}>position from two walls</div>
+      <div style={ED_EQUIPMENT_NOTE}>Distances are perpendicular to the named surfaces. Choose two walls that meet; opposite walls cannot locate a point.</div>
+      {rows.map((measurement, index) => <div key={index} style={{ marginTop: 9, display: "grid", gap: 6 }}>
+        <select aria-label={`Reference wall ${index + 1}`} style={ED_EQUIPMENT_FIELD} value={measurement.wall_id}
+          disabled={index === 1 && !rows[0].wall_id}
+          onFocus={() => measurement.wall_id && onReference(measurement.wall_id)}
+          onChange={(event) => { updateWall(index, { wall_id: event.target.value, distance_m: null }); onReference(event.target.value || null); }}>
+          <option value="">choose wall {index + 1}</option>
+          {references.walls.map((wall) => {
+            const other = references.walls.find((candidate) => candidate.id === rows[1 - index].wall_id);
+            const parallel = other && Math.abs(wall.normal_xy[0] * other.normal_xy[1] - wall.normal_xy[1] * other.normal_xy[0]) <= 1e-6;
+            return <option key={wall.id} value={wall.id} disabled={!!parallel}>{wall.label}</option>;
+          })}
+        </select>
+        <EdTapeInput key={measurement.wall_id} label={`wall ${index + 1} → ${record.kind === "camera" ? "camera mount" : "mounting point"}`}
+          meters={measurement.distance_m} disabled={!measurement.wall_id}
+          onFocus={() => onReference(measurement.wall_id)} onCommit={(value) => updateWall(index, { distance_m: value })} />
+      </div>)}
+      <div style={{ marginTop: 10 }}><EdTapeInput label={`floor → ${record.kind === "camera" ? "camera mount" : "mounting point"}`}
+        meters={measurements.height_above_floor_m} onFocus={() => onReference(references.floor.id)}
+        onCommit={(value) => onUpdate({ measurements: { height_above_floor_m: value } })} /></div>
+    </>}
+    <div style={heading}>measurement method</div>
+    <select aria-label="Measurement method" style={ED_EQUIPMENT_FIELD} value={measurements.method || ""}
+      onChange={(event) => onUpdate({ measurements: { method: event.target.value || null } })}>
+      <option value="">unknown</option><option value="tape">tape</option><option value="laser">laser</option>
+      <option value="estimated">estimated</option><option value="modeled">modeled</option>
+    </select>
+    <div style={{ marginTop: 9 }}><EdTapeInput optional label="measurement uncertainty" meters={measurements.uncertainty_m}
+      onCommit={(value) => onUpdate({ measurements: { uncertainty_m: value } })} /></div>
+    {record.kind === "camera" && <>
+      <div style={heading}>optional pointing direction</div>
+      <select aria-label="Camera pointing direction" style={ED_EQUIPMENT_FIELD}
+        value={directionWall?.id || (direction ? "custom" : "")}
+        onChange={(event) => {
+          const wall = references.walls.find((candidate) => candidate.id === event.target.value);
+          onUpdate({ orientation: { direction_unit: wall ? [-wall.normal_xy[0], -wall.normal_xy[1], 0] : null } });
+        }}>
+        <option value="">unknown · no arrow</option>
+        {direction && !directionWall && <option value="custom" disabled>saved room-relative direction</option>}
+        {references.walls.map((wall) => <option key={wall.id} value={wall.id}>toward {wall.label}</option>)}
+      </select>
+      <label style={{ display: "grid", gap: 4, marginTop: 9, fontSize: 9, color: "var(--hg-fg-4)" }}>roll degrees · optional
+        <input type="number" aria-label="Camera roll degrees" step="any" style={ED_EQUIPMENT_FIELD}
+          value={record.orientation.roll_rad === null ? "" : Number((record.orientation.roll_rad * 180 / Math.PI).toFixed(6))}
+          onChange={(event) => { const raw = event.target.value; const value = raw.trim() === "" ? null : Number(raw);
+            if (value === null || Number.isFinite(value)) onUpdate({ orientation: { roll_rad: value === null ? null : value * Math.PI / 180 } }); }} />
+      </label>
+      <div style={{ ...ED_EQUIPMENT_NOTE, marginTop: 8 }}>The wall arrow is an approximate, horizontal direction aid. Camera body placement is separate from the unknown optical pivot. Intrinsics and optical extrinsics remain unknown.</div>
+    </>}
+    <div role="status" data-equipment-position-status={record.position_status} style={{ ...ED_EQUIPMENT_NOTE, marginTop: 12 }}>
+      {record.position_status === "missing" ? "Position unresolved · " + String(placement.reason || "measurements missing").replace(/_/g, " ")
+        : `${record.position_status} position · ${record.position_m.map((value) => value.toFixed(3)).join(", ")} m`}
+    </div>
+    {error && <div role="alert" style={{ ...ED_EQUIPMENT_NOTE, color: "var(--hg-crit)", marginTop: 8 }}>{error}</div>}
+  </fieldset>;
+}
+
 function HomeApartmentEdit({
   engine, model, onModel, seedModel, registry, onSave, onDirtyChange,
   onExit, sim, connection, sourceMeta, saveStatus, saving,
@@ -254,10 +409,15 @@ function HomeApartmentEdit({
   const [dirty, setDirty] = useState(false);
   const [pendingLinkEntity, setPendingLinkEntity] = useState("");
   const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const [equipmentReferenceId, setEquipmentReferenceId] = useState(null);
+  const [equipmentError, setEquipmentError] = useState("");
   const undoRef = useRef({ stack: [], redo: [] });
   const dragRef = useRef(null);
   const placementGestureRef = useRef(null);
   const targetModeRef = useRef(null);
+  const equipmentDocument = model._equipment_registration || null;
+  const isEquipmentRegistration = !!equipmentDocument;
+  const equipmentDisabled = !!saving || sim || model._equipment_registration_writable === false;
 
   const palette = useMemo(
     () => window.HomeApartmentData.buildPalette(registry, model),
@@ -293,6 +453,38 @@ function HomeApartmentEdit({
     setDirty(true);
     onDirtyChange?.();
   }, [onModel, onDirtyChange]);
+
+  const updateEquipment = (patch) => {
+    if (equipmentDisabled || !selectedId) return;
+    try {
+      window.HomeEquipmentRegistration.updateModelEquipment(model, selectedId, patch);
+      mutate((next) => Object.assign(next, window.HomeEquipmentRegistration.updateModelEquipment(next, selectedId, patch)));
+      setEquipmentError("");
+    } catch (error) { setEquipmentError(error.message); }
+  };
+  const confirmEquipmentReferences = (confirmed) => {
+    if (equipmentDisabled) return;
+    mutate((next) => Object.assign(next, window.HomeEquipmentRegistration.updateModelReferences(next, { confirmed })));
+  };
+  const addEquipmentSocket = () => {
+    if (equipmentDisabled) return;
+    try {
+      const next = window.HomeEquipmentRegistration.addSocket(model);
+      const existingIds = new Set(equipmentDocument.equipment.map((record) => record.id));
+      const added = next._equipment_registration.equipment.find((record) => !existingIds.has(record.id));
+      if (!added) throw new Error("socket_not_added");
+      mutate((current) => Object.assign(current, window.HomeEquipmentRegistration.addSocket(current)));
+      setSelectedId(added.id);
+      setEquipmentError("");
+    } catch (error) { setEquipmentError(error.message); }
+  };
+
+  useEffect(() => {
+    if (isEquipmentRegistration && !equipmentDocument.equipment.some((record) => record.id === selectedId)) {
+      setSelectedId(equipmentDocument.equipment[0]?.id || null);
+    }
+    setEquipmentError("");
+  }, [isEquipmentRegistration, equipmentDocument, selectedId]);
 
   const undo = useCallback(() => {
     const u = undoRef.current;
@@ -364,9 +556,15 @@ function HomeApartmentEdit({
 
   useEffect(() => {
     if (!engine) return;
-    const fixture = window.HomeApartmentData.isCeilingLight(selected) ? selected : null;
+    const fixture = !isEquipmentRegistration && window.HomeApartmentData.isCeilingLight(selected) ? selected : null;
     engine.overlay.setFixtureCalibration?.(fixture, selectedRoom);
-  }, [engine, selected, selectedRoom]);
+  }, [engine, selected, selectedRoom, isEquipmentRegistration]);
+
+  useEffect(() => {
+    if (!isEquipmentRegistration || !engine) return undefined;
+    engine.overlay.setEquipmentRegistration?.(equipmentDocument, { selectedId, referenceId: equipmentReferenceId });
+    return () => engine.overlay.setEquipmentRegistration?.(null);
+  }, [engine, equipmentDocument, isEquipmentRegistration, selectedId, equipmentReferenceId]);
 
   useEffect(() => {
     if (!engine || tool !== "targets") return undefined;
@@ -435,6 +633,25 @@ function HomeApartmentEdit({
   useEffect(() => {
     if (!engine) return undefined;
     const host = engine.renderer.domElement.parentElement;
+
+    // Registration positions come only from the survey record. A click can
+    // select a marker, while the normal rig retains ownership of orbit drags.
+    if (isEquipmentRegistration) {
+      let start = null;
+      const down = (event) => { if (event.button === 0 && !event.target.closest?.('[data-apt-edit-ui]')) start = [event.clientX, event.clientY]; };
+      const up = (event) => {
+        if (start && Math.hypot(event.clientX - start[0], event.clientY - start[1]) < 5) {
+          const hit = engine.picking.pick(engine.overlay.pickObjects(), event.clientX, event.clientY)[0];
+          if (hit?.object.userData.deviceId) setSelectedId(hit.object.userData.deviceId);
+        }
+        start = null;
+      };
+      const cancel = () => { start = null; };
+      host.addEventListener('pointerdown', down);
+      host.addEventListener('pointerup', up);
+      host.addEventListener('pointercancel', cancel);
+      return () => { host.removeEventListener('pointerdown', down); host.removeEventListener('pointerup', up); host.removeEventListener('pointercancel', cancel); };
+    }
 
     const placeTargetAt = (clientX, clientY) => {
       if (tool !== "targets" || !placingTarget) return false;
@@ -828,7 +1045,7 @@ function HomeApartmentEdit({
       host.removeEventListener("pointercancel", onUp, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [engine, tool, placing, placingTarget, moveTargetId, zoneDrawing, finishZone,
+  }, [engine, isEquipmentRegistration, tool, placing, placingTarget, moveTargetId, zoneDrawing, finishZone,
     mutate, roomAt, undo, redo, model.zones, model.targets]);
 
   /* Overlay layer: while a new zone is being drawn, Escape cancels the draft
@@ -1042,17 +1259,21 @@ function HomeApartmentEdit({
   };
   const heading = { fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase",
                     color: "var(--hg-fg-4)", margin: "10px 0 6px" };
-  const draftOnline = !sim && sourceMeta?.kind === "local_draft" && connection === "online";
+  const draftOnline = !isEquipmentRegistration && !sim && sourceMeta?.kind === "local_draft" && connection === "online";
   const reviewedDraftReady = draftOnline && liveReview?.state === "ready" && liveComparison?.canPublish;
+  const equipmentDirty = isEquipmentRegistration && (dirty
+    || ["unsaved", "offline", "conflict", "validation", "saving"].includes(saveStatus?.state));
   const saveLabel = saving ? "saving…"
+    : isEquipmentRegistration ? (saveStatus?.state === "conflict" ? "conflict !" : equipmentDirty ? "save equipment •" : saveStatus?.state === "saved" ? "saved ✓" : "save")
     : draftOnline && liveReview?.state === "loading" ? "comparing…"
       : reviewedDraftReady ? "publish draft"
         : draftOnline ? "compare live"
           : saveStatus?.state === "conflict" ? "conflict !"
             : dirty ? (connection === "online" ? "save changes •" : "save local draft •")
               : saveStatus?.state === "saved" ? "saved ✓" : "save";
-  const saveDisabled = saving || sim || (draftOnline ? false : !dirty);
+  const saveDisabled = saving || sim || (isEquipmentRegistration ? equipmentDisabled || !equipmentDirty : draftOnline ? false : !dirty);
   const saveTitle = sim ? "simulation cannot save"
+    : isEquipmentRegistration ? "Save equipment positions for this Victoria Den scan revision"
     : reviewedDraftReady ? "Publish the reviewed local draft to the authoritative Home Assistant Apartment model"
       : draftOnline ? "Read and compare the authoritative Home Assistant model; this does not write anything"
         : connection === "online" ? "Save to the authoritative Home Assistant Apartment model"
@@ -1077,6 +1298,7 @@ function HomeApartmentEdit({
         <EdButton label="select" active={tool === "select"} onClick={() => {
           setTool("select"); setPlacing(null); setPlacingTarget(null); setMoveTargetId(null);
         }} />
+        {!isEquipmentRegistration && <>
         <EdButton label="+ smart device" active={tool === "add"} onClick={() => {
           setTool("add"); setSelectedTargetId(null); setPlacingTarget(null); setMoveTargetId(null);
         }} />
@@ -1106,12 +1328,13 @@ function HomeApartmentEdit({
           setSelectedZoneVertex(null);
           setNotice("select a shaded room · drag a round corner to reshape it, or drag inside to move it");
         }} />
+        </>}
         <span style={{ width: 12 }} />
-        <EdButton label="undo" onClick={undo} disabled={!undoRef.current.stack.length} />
-        <EdButton label="redo" onClick={redo} disabled={!undoRef.current.redo.length} />
+        <EdButton label="undo" onClick={undo} disabled={!undoRef.current.stack.length || (isEquipmentRegistration && equipmentDisabled)} />
+        <EdButton label="redo" onClick={redo} disabled={!undoRef.current.redo.length || (isEquipmentRegistration && equipmentDisabled)} />
         <span style={{ width: 12 }} />
         <EdButton label={saveLabel}
-                  active={dirty || draftOnline || saveStatus?.state === "conflict"} disabled={saveDisabled}
+                  active={dirty || equipmentDirty || draftOnline || saveStatus?.state === "conflict"} disabled={saveDisabled}
                   onClick={() => reviewedDraftReady ? onSave({ reviewedDraft: true })
                     : draftOnline ? onCompareLive() : onSave()}
                   title={saveTitle} />
@@ -1135,7 +1358,7 @@ function HomeApartmentEdit({
           onClick={() => engine?.rig.stepAzimuth(-1)} />
         <span style={{ color: "var(--hg-fg-4)", fontSize: 8.5, letterSpacing: "0.08em",
           whiteSpace: "nowrap", minWidth: 0, overflow: "hidden",
-          textOverflow: "ellipsis" }}>drag canvas to orbit · click surface to place</span>
+          textOverflow: "ellipsis" }}>{isEquipmentRegistration ? "drag canvas to orbit · select equipment to measure" : "drag canvas to orbit · click surface to place"}</span>
         <EdButton label="→" ariaLabel="Orbit room right" title="Orbit room 45° right"
           onClick={() => engine?.rig.stepAzimuth(1)} />
       </div>
@@ -1145,6 +1368,10 @@ function HomeApartmentEdit({
       <EdMobileSheet mobile={mobile}>
       {/* left: task rail */}
       <div style={mobile ? panel : { ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
+        {isEquipmentRegistration ? <EdEquipmentList document={equipmentDocument} selectedId={selectedId}
+          onSelect={setSelectedId} referenceId={equipmentReferenceId} onReference={setEquipmentReferenceId}
+          onAddSocket={addEquipmentSocket} atCapacity={equipmentDocument.equipment.length >= window.HomeEquipmentRegistration.MAX_EQUIPMENT}
+          onConfirm={confirmEquipmentReferences} disabled={equipmentDisabled} heading={heading} saveStatus={saveStatus} /> : <>
         <div role="status" data-apartment-source={sourceMeta?.kind || "empty"} style={{
           margin: "0 0 8px", padding: "7px 8px", border: `1px solid ${sourceMeta?.live
             ? "rgba(145,230,189,0.35)" : sourceMeta?.kind === "simulation"
@@ -1533,13 +1760,16 @@ function HomeApartmentEdit({
               color: "var(--hg-fg-3)", fontSize: 8.5, lineHeight: 1.5 }}>{notice}</div>}
           </>
         )}
+        </>}
       </div>
 
       {/* right: inspector */}
       <div style={mobile
         ? { ...panel, borderTop: "1px solid var(--hg-border-soft)" }
         : { ...panel, right: 12 }} data-apt-edit-ui="inspector">
-        {tool === "zones" && zoneDrawing && zoneNaming ? (
+        {isEquipmentRegistration ? <EdEquipmentFields key={selectedId} record={selected?.equipment_record}
+          document={equipmentDocument} onUpdate={updateEquipment} onReference={setEquipmentReferenceId}
+          disabled={equipmentDisabled} heading={heading} error={equipmentError} /> : tool === "zones" && zoneDrawing && zoneNaming ? (
           <>
             <div style={heading}>new room name</div>
             <div style={{ color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSize: 9, lineHeight: 1.45, marginBottom: 7 }}>

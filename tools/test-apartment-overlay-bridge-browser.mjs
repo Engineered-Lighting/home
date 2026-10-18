@@ -18,6 +18,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), S
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const phase=process.env.HOME_APARTMENT_OVERLAY_PROOF_PHASE||'candidate';
 assert.ok(['candidate','baseline-before','baseline-after'].includes(phase),'only explicit baseline or candidate benchmark phases are allowed');
+const profile=process.env.HOME_APARTMENT_OVERLAY_PROOF_PROFILE||'functional';
+assert.ok(['functional','desktop-benchmark'].includes(profile),'only functional or desktop-benchmark resource profiles are allowed');
+assert.ok(phase==='candidate'||profile==='desktop-benchmark','source-paired baseline phases require the explicit desktop-benchmark profile');
+const viewport=profile==='functional'?{width:390,height:844}:{width:1366,height:768};
 const baselineCommit='557164592f916cc4f93b79214f560d24d6f797b6';
 const baselineEngine=phase==='candidate'?null:execFileSync('git',['show',baselineCommit+':app/src/home-3d/engine.js'],{cwd:ROOT,maxBuffer:2*1024*1024});
 
@@ -73,7 +77,9 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
   const protectedHashes=Object.fromEntries(protectedFiles.map(file=>[file,hash(fs.readFileSync(file))]));
   const sources=publicSources(SRC),receipt={schema:'home-apartment-overlay-bridge-authored-browser-1',authored_room:true,real_renderer:true,
     household_data:false,physical_commands:0,camera_sessions:0,model_sessions:0,survey_writes:0,screenshots:false,
-    source_phase:phase,engine_source:baselineEngine?{mode:'public-baseline-engine-only',commit:baselineCommit,sha256:hash(baselineEngine),other_sources:'current-worktree'}
+    source_phase:phase,proof_profile:profile,configured_viewport:viewport,
+    performance_scope:profile==='functional'?'functional-viewport-capacity-only':'desktop-benchmark-requires-paired-review',
+    engine_source:baselineEngine?{mode:'public-baseline-engine-only',commit:baselineCommit,sha256:hash(baselineEngine),other_sources:'current-worktree'}
       :{mode:'candidate-worktree',sha256:hash(fs.readFileSync(path.join(SRC,'home-3d/engine.js')))},
     checks:[],performance:[],requests:[],forbidden:[],missing_code:[],errors:[],served:{},browser:browserOptions(),startup:{checkpoints:[],responses:[]}};
   const proofStarted=Date.now(),markStartup=name=>receipt.startup.checkpoints.push({name,elapsed_ms:Date.now()-proofStarted});
@@ -108,7 +114,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     });
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;
     handler=createEquipmentRegistrationGateway({env:{NODE_ENV:'test',HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED:'1',HOME_WEB_EQUIPMENT_REGISTRATION_ROOT:privateRoot,HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN:origin,HOME_CONTENT_PACKS_DIR:packs},authenticate:req=>req.headers.cookie?.includes('authored_owner_session=1')===true});
-    browser=await chromium.launch(receipt.browser);context=await browser.newContext({viewport:{width:1366,height:768},serviceWorkers:'block'});
+    browser=await chromium.launch(receipt.browser);context=await browser.newContext({viewport,serviceWorkers:'block'});
     await context.addCookies([{name:'authored_owner_session',value:'1',url:origin}]);
     await context.addInitScript(()=>{localStorage.setItem('apartment3d.site','echo');localStorage.setItem('home.perf.backgroundWarmup','off');window.HG_DISABLE_SERVICE_WORKER=true;});
     let notifyLeafRequest;const firstLeafRequest=new Promise(resolve=>{notifyLeafRequest=resolve});let blockedOnce=false;
@@ -185,7 +191,22 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     }
     await page.evaluate(()=>{
       const p=window.__overlayBridgeProof;
-      p.warm=()=>new Promise((resolve,reject)=>{let ticks=0;const timeout=setTimeout(()=>reject(Error('120-frame warmup deadline')),25000);const step=()=>{if(++ticks>=120){clearTimeout(timeout);resolve()}else requestAnimationFrame(step)};requestAnimationFrame(step)});
+      p.warmups=[];
+      p.warm=()=>new Promise((resolve,reject)=>{
+        const started=performance.now(),firstFrame=p.engine.renderer.info.render.frame,stats=[];
+        let ticks=0,last=started,maxGap=0,raf,settled=false;
+        const off=p.engine.on('stats',value=>{stats.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,calls:value.calls,tris:value.tris});if(stats.length>4)stats.shift()});
+        const finish=result=>{
+          if(settled)return;settled=true;clearTimeout(timeout);cancelAnimationFrame(raf);off();
+          p.warmups.push({result,target_rafs:120,observed_rafs:ticks,renderer_frames:p.engine.renderer.info.render.frame-firstFrame,
+            elapsed_ms:performance.now()-started,max_raf_gap_ms:maxGap,visibility:document.visibilityState,mode:p.engine.modes.mode,
+            canvas:[p.engine.renderer.domElement.width,p.engine.renderer.domElement.height],performance:p.engine.performanceDiagnostics(),recent_stats:stats});
+          if(result==='passed')resolve();else reject(Error('120-frame warmup deadline'));
+        };
+        const timeout=setTimeout(()=>finish('deadline'),25000);
+        const step=()=>{const now=performance.now();maxGap=Math.max(maxGap,now-last);last=now;if(++ticks>=120)finish('passed');else raf=requestAnimationFrame(step)};
+        raf=requestAnimationFrame(step);
+      });
       p.stats=()=>new Promise((resolve,reject)=>{const rows=[],timeout=setTimeout(()=>{off();reject(Error('production stats deadline'))},10000);const off=p.engine.on('stats',value=>{rows.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,pixelRatio:value.pixelRatio,calls:value.calls,tris:value.tris,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,...(p.expectActive?{dotDraws:p.timedDraws,labelHidden:p.label.hidden,dotVisible:p.layer.group.children[0]?.visible,layerAttached:!!p.layer.group.parent,projection:p.layer.project(p.point)}:{})});if(rows.length===4){clearTimeout(timeout);off();resolve(rows)}})});
     });
     for(const mode of ['points','splat','mesh']){
@@ -276,5 +297,5 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
   }
   try{await Promise.race([proof(),deadline]);receipt.result='passed';}
   catch(error){receipt.result='failed';receipt.failure=error.stack||String(error);if(page&&!page.isClosed())receipt.startup.failure_state=await page.evaluate(()=>({document_ready:document.readyState,unified_shell_count:document.querySelectorAll('.apt-home-shell[data-home-layout="unified"]').length,registry_present:!!window.HomeSpatialViewport,selected_site:window.HomeSpatialViewport?.getSelectedSiteId?.()||null,site_phase:window.__HOME_APARTMENT_SITE_API?.readback().phase||null,engine_site:window.__APT_ENGINE?.siteId||null})).catch(()=>null);throw error;}
-  finally{clearTimeout(timer);releaseLeafRequest?.();await context?.close();await browser?.close();server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(run,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');console.log(JSON.stringify({receipt:path.join(run,'receipt.json'),result:receipt.result,functional:receipt.functional_result,performance:receipt.performance_result,checks:receipt.checks.length}));}
+  finally{clearTimeout(timer);releaseLeafRequest?.();if(page&&!page.isClosed())receipt.warmups=await page.evaluate(()=>window.__overlayBridgeProof?.warmups||[]).catch(()=>[]);await context?.close();await browser?.close();server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(run,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');console.log(JSON.stringify({receipt:path.join(run,'receipt.json'),result:receipt.result,functional:receipt.functional_result,performance:receipt.performance_result,checks:receipt.checks.length}));}
 });

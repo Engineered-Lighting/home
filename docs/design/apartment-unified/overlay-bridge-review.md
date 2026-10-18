@@ -54,6 +54,65 @@ removed. Slow cold compilation as the original Linux trigger is inferred, not
 proven by its older receipt. This test-only correction changes no production
 source pin and makes no new paired-performance acceptance claim.
 
+The next hosted run, `39175767856` at `c5760653`, reached the selected Victoria
+engine in 18.67 seconds and passed the first two functional stages. It then
+missed the unchanged 25-second, 120-RAF warm-up deadline in Cloud, before an
+active overlay or performance sample existed. Its 1366 by 768 viewport produced
+a 1026 by 716 canvas through Chromium/SwiftShader at DPR 1. The context remained
+available; forbidden requests, missing code and page errors were zero.
+
+A controlled Windows Edge probe forced the same SwiftShader graphics backend
+without installing anything or changing production source. At the original
+desktop size, all nine stages passed in 144.73 seconds, with 120-RAF warm-ups
+taking 8.70 to 10.54 seconds. The single-variable 390 by 844 product viewport
+produced a 390 by 370 canvas and passed those same stages in 76.68 seconds;
+warm-ups took 3.71 to 4.79 seconds. Both runs remained visible, at
+`maxFidelity`/`maximum`, and recorded 240 to 265 renderer frame increments per
+120 observed RAFs. Neither showed stalled RAFs or a lost context. Receipts:
+
+- `.tmp/apartment-overlay-bridge-diagnosis/run-1792365806659-candidate/receipt.json`
+- `.tmp/apartment-overlay-bridge-diagnosis/run-1792365973492-candidate/receipt.json`
+
+This supports sustained software-rendering throughput as the cause of the
+resource sensitivity. The faster workstation did not reproduce the hosted
+25-second failure, so the exact hosted slowdown remains an inference. Neither
+probe clears desktop performance acceptance; both report `requires-review`.
+
+The test now defaults to the explicit `functional` resource profile at 390 by
+844 on every platform. It retains all nine stages, three actual mode-readiness
+and dot-draw checks, races, performance assertions, twelve 120-RAF warm-ups,
+the 25-second warm-up deadline and the 145-second global deadline. Bounded
+warm-up diagnostics record observed RAFs, renderer frame increments, timing,
+visibility, canvas, quality and four recent stats events. The receipt records
+its configured profile/viewport and limits functional timings to that viewport.
+Hosted verification of the profile correction is still pending.
+
+Run the default functional check with no source-phase override:
+
+```powershell
+$env:HOME_APARTMENT_OVERLAY_PROOF_PROFILE = 'functional'
+$env:HOME_APARTMENT_OVERLAY_PROOF_PHASE = 'candidate'
+node --test tools/test-apartment-overlay-bridge-browser.mjs
+```
+
+The desktop comparison remains a separate, explicitly selected profile. Each
+phase must use the same desktop profile; baseline phases refuse the default
+functional profile. Review all three receipts together:
+
+```powershell
+$env:HOME_APARTMENT_OVERLAY_PROOF_PROFILE = 'desktop-benchmark'
+$env:HOME_APARTMENT_OVERLAY_PROOF_PHASE = 'baseline-before'
+node --test tools/test-apartment-overlay-bridge-browser.mjs
+$env:HOME_APARTMENT_OVERLAY_PROOF_PROFILE = 'desktop-benchmark'
+$env:HOME_APARTMENT_OVERLAY_PROOF_PHASE = 'candidate'
+node --test tools/test-apartment-overlay-bridge-browser.mjs
+$env:HOME_APARTMENT_OVERLAY_PROOF_PROFILE = 'desktop-benchmark'
+$env:HOME_APARTMENT_OVERLAY_PROOF_PHASE = 'baseline-after'
+node --test tools/test-apartment-overlay-bridge-browser.mjs
+Remove-Item Env:HOME_APARTMENT_OVERLAY_PROOF_PROFILE
+Remove-Item Env:HOME_APARTMENT_OVERLAY_PROOF_PHASE
+```
+
 **F01 remains partial and this PR remains a draft.** The corrected authored
 single-dot Mesh frame-p95 median rises 0.075 ms against a 0.050 ms local empty
 spread. Photo frame samples also extend beyond their local empty range. The

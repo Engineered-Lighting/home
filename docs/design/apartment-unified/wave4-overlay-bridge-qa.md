@@ -10,6 +10,18 @@ records, the real renderer and canonical picking. It is not actual-room visual
 acceptance, installed-source verification, live perception or physical evidence.
 No household pack, coordinates or private registration is published here.
 
+The desktop measurements below are retained historical evidence. The browser
+harness now defaults to a cross-platform `functional` profile at a 390 by 844
+product viewport; its timings establish functional capacity only at that
+viewport. An explicit `desktop-benchmark` profile retains the original 1366 by
+768 viewport and identical assertions for source-paired comparisons. All nine
+stages, mode-readiness/dot-draw/race checks, performance assertions, twelve
+120-RAF warm-ups and the 25/145-second deadlines remain unchanged. Profile and
+configured viewport are recorded in each new receipt. Compact functional CI
+results do not clear the desktop frame-cost qualification above. The measured
+SwiftShader diagnosis, limits and explicit profile commands are documented in
+`overlay-bridge-review.md`; hosted verification remains pending.
+
 ## Sources and receipts
 
 The final candidate's exact source SHA-256 values are:

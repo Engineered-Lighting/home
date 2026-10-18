@@ -33,7 +33,7 @@ contains the frozen renderer hashes below. This PR does not edit those files.
 | picking.js | `da9ff80de476bf3b121ea9e17f4e03c12c59fe2bc5fde78679afd94fa6dbb17c` |
 | registered-desk-target.mjs | `fac01892e1fbbdc38fa7b7d6068492bef301f541292f621e11c160294fb0931b` |
 
-UI hashes: home-app `832e877c4c082a1fed424be44dfc0b8bf6d557a5de342667e9c07f41fd58ff4e`,
+Paired-capture UI hashes: home-app `832e877c4c082a1fed424be44dfc0b8bf6d557a5de342667e9c07f41fd58ff4e`,
 CSS `db498031887c85777e5168b1b2107584c6ad2f8331dc5ebd6d2dc3239dcc452d`.
 The accepted-source Apartment UI is `66f243ff18322a4c47ba07e44f99fed4286a52360ca72aed20db45db44b968dc`.
 The public PR Apartment UI is `7a7ccf30032aa018909b9f46c5ca246d86125a92151f4d4cea075ea25be43e91`:
@@ -41,10 +41,25 @@ it excludes the independently owned Den selector changes absent from main.
 The UI-only patch applies to either baseline; applying the separate Den patch
 to public main plus this UI reproduces the accepted composition byte-for-byte.
 
-Authored accepted-source verification: 5 tests / 27 browser checkpoints, all
+Authored accepted-source verification after the radial correction: 5 tests / 28 browser checkpoints, all
 134 pins unchanged, zero physical commands, saves, camera/model session starts
 or test screenshots. Visual screenshots above were captured separately through
 the browser. Public-source browser acceptance also passes without a source overlay.
+
+Independent review then found and corrected one radial control defect: Off sets
+all six zones to zero, so bulk On must restore 50% when every level is zero.
+Radial master, fixture All on and room All on now apply that fallback; mixed and
+nonzero levels, zone identities and per-zone behavior are preserved. The paired
+images above retain their original provenance because this changes only power
+patches, not layout or styling. The current Apartment UI hashes are public
+`0ad360d9bfa66fe6c0080b21c2a186318afd717b7a7a95e15dc9fb65f86c7716`
+and accepted composition `c2a554da7792fa764f60128e066f9eec8cab2e6f6af08693a3a2a77b6787f1e7`.
+
+[Corrected radial control](radial-power-restored.jpg) shows Off then On at 50%.
+[Red/green regression evidence](radial-power-regression.json) records the failing
+baseline and passing public/accepted source runs: 28 checkpoints including ten
+actual radial/output cases, with registered-reference modeled receiver patches,
+no physical output, and all four authored fixture states restored exactly.
 
 ## Rollback and rollout
 

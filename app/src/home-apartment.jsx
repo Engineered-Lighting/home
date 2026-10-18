@@ -2313,6 +2313,12 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
   </div>;
 }
 
+// Bulk radial power preserves saved levels unless every zone is fully dark.
+function aptUnifiedRadialPowerPatch(radials, on) {
+  const restoreLevel = on && radials.length > 0 && radials.every(zone => zone.brightness === 0);
+  return radials.map(zone => ({ number: zone.number, on, ...(restoreLevel ? { brightness: .5 } : {}) }));
+}
+
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls }) {
@@ -2376,13 +2382,13 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
     {tab === "light" && <section className="apt-ui-section" id="apt-ui-virtual-light" role="tabpanel" aria-label="Light channels">
       <div className="apt-ui-row"><span className="apt-ui-meta grow">All channels</span>{[true, false].map(on =>
         <button type="button" key={String(on)} className="apt-ui-button is-small" onClick={() => onPatch({
-          spotlight: { on }, downward: { on }, radials: radials.map(item => ({ number: item.number, on })) })}>All {on ? "on" : "off"}</button>)}</div>
+          spotlight: { on }, downward: { on }, radials: aptUnifiedRadialPowerPatch(radials, on) })}>All {on ? "on" : "off"}</button>)}</div>
       {channel("spotlight", "Spot", "Hidden robotic spotlight", "Brightness", "Color temperature", 2700)}
       {channel("downward", "Down", "Downward LED zone", "Down brightness", "Down color temperature", 2200)}
       <section className="apt-ui-channel" aria-label="Radial channel"><div className="apt-ui-channel-head">
         <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser</div></div>
         <label className="apt-ui-switch"><input type="checkbox" aria-label="Radial power" checked={radials.some(item => item.on)}
-          onChange={event => onPatch({ radials: radials.map(item => ({ number: item.number, on: event.target.checked })) })} />
+          onChange={event => onPatch({ radials: aptUnifiedRadialPowerPatch(radials, event.target.checked) })} />
           <span>{radials.some(item => item.on) ? "On" : "Off"}</span></label></div>
         <div className="apt-ui-row"><svg className="apt-ui-radial-ring" viewBox="0 0 118 118" role="group" aria-label="Radial zones">
           {radials.map((item, index) => { const point = (radius, angle) => `${59 + radius * Math.cos(angle)} ${59 + radius * Math.sin(angle)}`;
@@ -8860,7 +8866,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             onBack={() => { setVirtualFixtureControlsOpen(false); engineRef.current?.overlay.setVirtualFixtureSelected?.(null); }}
             onPatch={changeVirtualFixture} onPatchAll={on => {
               for (const fixture of virtualFixtureItems) changeVirtualFixture({ spotlight: { on }, downward: { on },
-                radials: (fixture.state?.radials || []).map(zone => ({ number: zone.number, on })) }, fixture.fixture_id);
+                radials: aptUnifiedRadialPowerPatch(fixture.state?.radials || [], on) }, fixture.fixture_id);
             }} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
             canUndo={!!virtualAimHistoryRef.current.undo.length} canRedo={!!virtualAimHistoryRef.current.redo.length}
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}

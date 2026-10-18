@@ -535,6 +535,111 @@ test('unified shell keeps the real room, private controls and one chat controlle
     assert.deepEqual(await aimDescriptor(channelId), channelsBefore, 'native Spot control restores the exact original virtual descriptor');
     assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'channel controls send no output command');
     checks.push({ stage: 'spot_brightness_preserves_down_and_six_radial_channels' });
+    const radialPanel = page.locator('section[aria-label="Radial channel"]');
+    const radialOutput = id => page.evaluate(id => {
+      const overlay = window.__APT_ENGINE.overlay, descriptor = overlay.virtualFixtureInteractionDescriptor(id);
+      const fixture = overlay.virtualFixturesGroup.getObjectByName('equipment-virtual-fixture:' + id);
+      return descriptor.state.radials.map(zone => {
+        const group = fixture.getObjectByName('radial-zone-' + zone.number);
+        const sector = group.getObjectByName('radial-diffuser-sector-' + zone.number);
+        const patch = group.getObjectByName('radial-receiver-patch-' + zone.number);
+        return { number: zone.number, channel: { ...group.userData.channel }, sector_visible: sector.visible,
+          sector_opacity: sector.material.opacity, patch_visible: patch.visible, patch_opacity: patch.material.opacity,
+          receiver_kind: patch.userData.receiver_kind, illumination_role: patch.userData.illumination_role,
+          receiver_vertices: patch.geometry.drawRange.count, truth_role: patch.userData.truth_role,
+          metric_geometry: patch.userData.metric_geometry, physical_commands: patch.userData.physical_commands };
+      });
+    }, id);
+    await radialPanel.getByRole('button', { name: 'Off', exact: true }).click();
+    await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials
+      .every(zone => !zone.on && zone.brightness === 0), channelId);
+    await page.getByRole('checkbox', { name: 'Radial power', exact: true }).check();
+    await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials.every(zone => zone.on), channelId);
+    const radialMasterOn = await aimDescriptor(channelId);
+    receipt.radial_power = { fixture_id: channelId, original: channelsBefore.state.radials,
+      master_on_after_off: radialMasterOn.state.radials, modeled_output: await radialOutput(channelId) };
+    assert.deepEqual(radialMasterOn.state.radials, channelsBefore.state.radials.map(zone => ({ ...zone, on: true, brightness: .5 })),
+      'Radial Off then master On starts all six zero-brightness zones at 50%');
+    const radialCases = receipt.radial_power.cases = [];
+    async function assertRadials(stage, id, expected) {
+      await page.waitForFunction(({ id, expected }) => JSON.stringify(window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials)
+        === JSON.stringify(expected), { id, expected });
+      const descriptor = await aimDescriptor(id), output = await radialOutput(id);
+      assert.deepEqual(descriptor.state.radials, expected, stage + ' preserves every zone number, direction and color temperature');
+      assert.deepEqual(descriptor.state.spotlight, before[id].state.spotlight, stage + ' leaves Spot unchanged');
+      assert.deepEqual(descriptor.state.downward, before[id].state.downward, stage + ' leaves Down unchanged');
+      for (const [index, modeled] of output.entries()) {
+        const channel = expected[index], active = channel.on && channel.brightness > 0;
+        assert.equal(modeled.number, channel.number); assert.deepEqual(modeled.channel, channel);
+        assert.equal(modeled.sector_visible, active, stage + ' drives the modeled diffuser sector');
+        assert.equal(modeled.patch_visible, active, stage + ' drives the registered-reference receiver patch');
+        assert.equal(modeled.illumination_role, 'modeled_outward_strip');
+        assert.ok(['floor', 'wall'].includes(modeled.receiver_kind) && modeled.receiver_vertices >= 3,
+          stage + ' output belongs to an authored registered reference surface');
+        assert.equal(modeled.truth_role, 'virtual_preview'); assert.equal(modeled.metric_geometry, false);
+        assert.equal(modeled.physical_commands, false);
+        if (active) assert.ok(modeled.sector_opacity > 0 && modeled.patch_opacity > 0, stage + ' has positive modeled output');
+      }
+      radialCases.push({ stage, fixture_id: id, radials: descriptor.state.radials, modeled_output: output });
+    }
+    const halfRadials = channelsBefore.state.radials.map(zone => ({ ...zone, on: true, brightness: .5 }));
+    await assertRadials('all_zero_radial_master_on', channelId, halfRadials);
+    await radialPanel.getByRole('button', { name: 'Off', exact: true }).click();
+    await page.getByRole('button', { name: 'All on', exact: true }).click();
+    await assertRadials('all_zero_fixture_all_on', channelId, halfRadials);
+
+    // Author a mixed pattern through the real per-zone controls. A group power
+    // operation must preserve its zero, partial and full levels independently.
+    for (const [number, preset] of [[2, 'Off'], [3, '25%'], [5, '100%']]) {
+      await radialPanel.getByRole('button', { name: 'Radial zone ' + number, exact: true }).press('Enter');
+      await radialPanel.getByRole('button', { name: preset, exact: true }).click();
+    }
+    const mixedRadials = (await aimDescriptor(channelId)).state.radials.map(zone => ({ ...zone, on: true }));
+    assert.deepEqual(mixedRadials.map(zone => zone.brightness), [.5, 0, .25, .5, 1, .5]);
+    await page.getByRole('checkbox', { name: 'Radial power', exact: true }).uncheck();
+    await page.getByRole('checkbox', { name: 'Radial power', exact: true }).check();
+    await assertRadials('mixed_levels_radial_master_on', channelId, mixedRadials);
+    assert.equal(await radialPanel.getByRole('button', { name: 'Radial zone 5', exact: true }).getAttribute('aria-pressed'), 'true',
+      'group power preserves the selected zone');
+    await page.getByRole('button', { name: 'All off', exact: true }).click();
+    await page.getByRole('button', { name: 'All on', exact: true }).click();
+    await assertRadials('mixed_levels_fixture_all_on', channelId, mixedRadials);
+
+    const roomZeroId = fixtureIds[0];
+    async function openFixtureFromRoom(id) {
+      if (await page.getByRole('button', { name: 'Back to room', exact: true }).isVisible()) {
+        await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+      }
+      const fixture = overviewFixtures.find(item => item.fixture_id === id);
+      await page.getByRole('button', { name: 'Select ' + (fixture.label || id), exact: true }).click();
+      await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Light', exact: true }).click();
+    }
+    await openFixtureFromRoom(roomZeroId);
+    await radialPanel.getByRole('button', { name: 'Off', exact: true }).click();
+    await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+    await page.getByRole('button', { name: 'All off', exact: true }).click();
+    await page.getByRole('button', { name: 'All on', exact: true }).click();
+    for (const id of fixtureIds) {
+      const expected = id === roomZeroId ? before[id].state.radials.map(zone => ({ ...zone, on: true, brightness: .5 }))
+        : id === channelId ? mixedRadials : before[id].state.radials;
+      await assertRadials('room_all_on_per_fixture_levels', id, expected);
+    }
+
+    // Restore through native range-key interactions; no overlay setter or
+    // hidden application state is used to prepare or undo these cases.
+    for (const id of [roomZeroId, channelId]) {
+      await openFixtureFromRoom(id);
+      const original = before[id].state.radials;
+      assert.ok(original.every(zone => zone.on && zone.brightness === .75), 'authored fixture restoration precondition');
+      const range = page.getByRole('slider', { name: 'Radial brightness', exact: true });
+      await range.press('End');
+      for (let step = 0; step < 25; step++) await range.press('ArrowLeft');
+      await assertRadials('native_restoration', id, original);
+    }
+    assert.deepEqual(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures), overviewFixtures,
+      'radial regression restores all four authored fixtures exactly');
+    assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'radial controls send no output commands');
+    checks.push({ stage: 'radial_master_fixture_and_room_power_preserve_levels_identity_and_modeled_output', cases: radialCases.length });
     // Selecting the already-selected cylinder must reveal its existing Controls
     // panel even when no fixture ID or details-open state changes.
     await tab('Chat');

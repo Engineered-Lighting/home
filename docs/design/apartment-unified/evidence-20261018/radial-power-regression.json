@@ -1,0 +1,338 @@
+{
+  "kind": "authored-radial-power-red-green-summary",
+  "base_head": "906bd9b405f80fbea2d8c1320c5908e249e7f873",
+  "authored_data_only": true,
+  "actual_renderer": true,
+  "household_data": false,
+  "physical_commands": 0,
+  "survey_writes": 0,
+  "red": {
+    "sha256": "df86548799ddda5cbda9a776ea7fe8cdce2e1ce12c7e6680f07f19d3df26094f",
+    "observed": "six on flags at brightness0 with hidden modeled output after Radial Off to On"
+  },
+  "public_green": {
+    "sha256": "236f2603604dd1a7074456a5c0c2f2a0dbe157258b99e802d9209e8e3f704519",
+    "log_sha256": "ca8ffb8b4194d1ce4b1b70b54a7966b3b25ec9f3bac1842ae8dc3c1a37b99ebf",
+    "tests": 1,
+    "checks": 28,
+    "radial_cases": 10,
+    "screenshots": 0,
+    "errors": 0,
+    "forbidden": 0,
+    "missing_code": 0,
+    "physical_commands": 0,
+    "survey_writes": 0
+  },
+  "browser_test_sha256": "88e0fc8695d9257442644a2dcf860150e214e64e0e1a004ebd3a3e84a7b2d2dd",
+  "public_ui": {
+    "home-app.jsx": "832e877c4c082a1fed424be44dfc0b8bf6d557a5de342667e9c07f41fd58ff4e",
+    "home-apartment.jsx": "0ad360d9bfa66fe6c0080b21c2a186318afd717b7a7a95e15dc9fb65f86c7716",
+    "home-tokens.css": "db498031887c85777e5168b1b2107584c6ad2f8331dc5ebd6d2dc3239dcc452d"
+  },
+  "accepted_composition": {
+    "kind": "pinned-accepted-composition-radial-fix-acceptance",
+    "created_at": "2026-10-18T08:37:56.561Z",
+    "composition_manifest_sha256": "ea74e25a5d64bbfc3c1898df35f8c2e4e339d7ea18d504ddbf8eca9186713e2b",
+    "browser_receipt_sha256": "195ef423768ab568a89eb39f5c69b2f2e3ad66dd5ba6b39053980c81217ff77a",
+    "log_sha256": "1e2212eed1802652cf3181d7bafffe3c03eebcb3baa1e214f15089b433ce8611",
+    "tests_passed": 5,
+    "browser_checkpoints": 28,
+    "radial_output_cases": 10,
+    "source_files_unchanged": 134,
+    "screenshots": 0,
+    "errors": 0,
+    "forbidden": 0,
+    "missing_code": 0,
+    "physical_commands": 0,
+    "survey_writes": 0,
+    "ui_delta_commutes_byte_exact": true,
+    "apartment": {
+      "sha256": "c2a554da7792fa764f60128e066f9eec8cab2e6f6af08693a3a2a77b6787f1e7",
+      "public_sha256": "0ad360d9bfa66fe6c0080b21c2a186318afd717b7a7a95e15dc9fb65f86c7716",
+      "independent_den_patch_sha256": "e24678cee6544be69c7b0db267a05fede4d6a99c60a4eebe6a9d344d0234207c"
+    },
+    "browser_test_sha256": "88e0fc8695d9257442644a2dcf860150e214e64e0e1a004ebd3a3e84a7b2d2dd"
+  },
+  "cases": [
+    {
+      "stage": "all_zero_radial_master_on",
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "visible_receiver_patches": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "all_zero_fixture_all_on",
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "visible_receiver_patches": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "mixed_levels_radial_master_on",
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.5,
+        0,
+        0.25,
+        0.5,
+        1,
+        0.5
+      ],
+      "visible_receiver_patches": [
+        true,
+        false,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "mixed_levels_fixture_all_on",
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.5,
+        0,
+        0.25,
+        0.5,
+        1,
+        0.5
+      ],
+      "visible_receiver_patches": [
+        true,
+        false,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "room_all_on_per_fixture_levels",
+      "fixture_id": "victoria-den-proposed-fixture-01",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "visible_receiver_patches": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "room_all_on_per_fixture_levels",
+      "fixture_id": "victoria-den-proposed-fixture-02",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75
+      ],
+      "visible_receiver_patches": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "room_all_on_per_fixture_levels",
+      "fixture_id": "victoria-den-mount-03-virtual-fixture",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75
+      ],
+      "visible_receiver_patches": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "room_all_on_per_fixture_levels",
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.5,
+        0,
+        0.25,
+        0.5,
+        1,
+        0.5
+      ],
+      "visible_receiver_patches": [
+        true,
+        false,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "native_restoration",
+      "fixture_id": "victoria-den-proposed-fixture-01",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75
+      ],
+      "visible_receiver_patches": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "stage": "native_restoration",
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "zone_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "brightness": [
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75,
+        0.75
+      ],
+      "visible_receiver_patches": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  ]
+}

@@ -101,15 +101,24 @@ Behavioral review also found and fixed two regressions before acceptance:
   classes. Actual React tests preserve consumed Undo, the same review iframe
   and streaming updates. A conditional-type mutation reproduces the original
   failure, showing that the regression check detects it.
+- Independent exact-head review found that Radial Off followed by On could
+  leave six On flags at 0% with no modeled output. The new browser regression
+  reproduced that failure before the fix. A presentation-only patch now restores
+  50% only when all six levels are zero, including fixture and room All on.
+  Mixed/nonzero levels and selected-zone behavior remain unchanged. Ten authored
+  cases check actual descriptor levels and modeled diffuser/receiver visibility,
+  preserve zone identity and restore all four fixtures exactly. See the
+  [red/green evidence](docs/design/apartment-unified/evidence-20261018/radial-power-regression.json)
+  and [corrected control capture](docs/design/apartment-unified/evidence-20261018/radial-power-restored.jpg).
 
 ## Verification and limits
 
 - Public PR source: 18 touched harnesses plus JSX parsing pass. The authored
-  browser suite passes 27 checkpoints with screenshots disabled and no source
+  browser suite passes 28 checkpoints, including 10 radial/output cases, with screenshots disabled and no source
   overlay. The slash control contract now parses required props instead of
   rejecting an extra optional presentation prop; negative callback/default
   mutations remain rejected.
-- Accepted-source composition: 5 tests and 27 browser checkpoints pass; all
+- Accepted-source composition: 5 tests and 28 browser checkpoints pass; all
   134 source/helper pins remain unchanged. No physical commands, survey writes,
   equipment saves or camera/model session starts occurred.
 - Checks include four actual fixture picks, six radial/down/spot independence,
@@ -129,6 +138,12 @@ Behavioral review also found and fixed two regressions before acceptance:
   fixtures and restored Cloud. The local preview initially blocked the renderer's
   embedded WASM/texture fetches; its tooling-only policy now permits data/blob
   bytes while excluding external household endpoints. No renderer code changed.
+- The nine paired visual captures predate the narrow radial power correction;
+  it changes only the three bulk power patches, with no layout/style changes.
+  A new browser capture verifies Off then On visibly reads 50%. Five affected
+  contract harnesses plus JSX parsing pass after the correction. The updated
+  public and accepted-composition browser suites both pass, with zero output
+  commands. The independent Den patch still reconstructs the accepted UI exactly.
 - Repair released the UI lane. Den was notified; its selector changes are kept
   outside this PR and reconstruct the accepted composition when applied
   separately. Shared branch/index are unchanged. No host deployment occurred.

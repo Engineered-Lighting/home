@@ -8,45 +8,42 @@
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
 const AIM_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const AIM_SANS = '"Geist", "Inter", sans-serif';
-const AIM_CYAN = "#45dfff";
-const AIM_WARM = "#ffddb0";
-const AIM_AMBER = "#ffb45f";
-const AIM_GREEN = "#91e6bd";
-const AIM_RED = "#ff625f";
+const AIM_CYAN = "var(--apt-proposed)";
+const AIM_WARM = "var(--apt-warm)";
+const AIM_AMBER = "var(--apt-attn)";
+const AIM_GREEN = "var(--apt-ok)";
+const AIM_RED = "var(--apt-blocked)";
 
 function AimButton({ children, onClick, active, disabled, danger, title, style, ...rest }) {
   return <button type="button" className="hg-focusable" onClick={onClick} disabled={disabled} title={title} {...rest}
     style={{ minHeight: 40, padding: "9px 12px", borderRadius: 9,
       minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
       border: `1px solid ${danger ? AIM_RED : active ? AIM_CYAN : "var(--hg-border-soft)"}`,
-      background: active ? "#f4f6f8" : "rgba(255,255,255,0.035)",
-      color: danger ? AIM_RED : active ? "#071014" : disabled ? "var(--hg-fg-5)" : "var(--hg-fg-1)",
+      background: active ? "var(--hg-ice-bright)" : "var(--apt-fill)",
+      color: danger ? AIM_RED : active ? "var(--hg-bg-0)" : "var(--hg-fg-1)",
       fontFamily: AIM_SANS, fontSize: 11, fontWeight: 540, letterSpacing: "0.01em",
       cursor: disabled ? "default" : "pointer", ...style }}>{children}</button>;
 }
 
 function AimStatus({ label, status, detail }) {
-  const colors = { verified: AIM_GREEN, calibrated: AIM_CYAN, measured: AIM_AMBER,
-    proposed: "var(--hg-fg-5)", current: AIM_GREEN, pending: AIM_AMBER,
-    accepted: AIM_CYAN, failed: AIM_RED, unavailable: "var(--hg-fg-5)" };
+  // Calibration/acceptance words describe source evidence, not freshness or a
+  // reported device state. Preserve their text without promoting their meaning.
+  const states = { verified: "recorded", calibrated: "recorded", measured: "recorded",
+    proposed: "proposed", current: "current", pending: "held", accepted: "recorded", failed: "blocked" };
   return <div title={detail || ""} style={{ display: "flex", justifyContent: "space-between", gap: 10,
-    fontFamily: AIM_MONO, fontSize: 9, lineHeight: 1.45 }}>
-    <span style={{ color: "var(--hg-fg-4)" }}>{label}</span>
-    <span style={{ color: colors[status] || "var(--hg-fg-2)" }}>{status || "unavailable"}</span>
+    fontFamily: AIM_MONO, fontSize: 11.5, lineHeight: 1.45 }}>
+    <span style={{ color: "var(--hg-fg-3)" }}>{label}</span>
+    <window.HomeApartmentUI.Badge state={states[status] || "unavailable"}>{status || "unavailable"}</window.HomeApartmentUI.Badge>
   </div>;
 }
 
 function ProfileStatus({ label, detail, tone = "offline" }) {
-  const color = tone === "online" ? AIM_GREEN : tone === "preview" ? AIM_CYAN
-    : tone === "warning" ? AIM_AMBER : "var(--hg-fg-5)";
+  const state = tone === "online" ? "connected" : tone === "preview" ? "modeled"
+    : tone === "warning" ? "held" : "unavailable";
   return <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 7,
-    fontFamily: AIM_SANS, fontSize: 10.5, color: "var(--hg-fg-2)" }}>
-    <span aria-hidden="true" style={{ width: 6, height: 6, flex: "0 0 auto", borderRadius: "50%",
-      background: tone === "preview" ? "transparent" : color,
-      border: `1px solid ${color}`, boxShadow: tone === "online" ? `0 0 10px ${color}` : "none" }} />
+    fontFamily: AIM_SANS, fontSize: 11.5, color: "var(--hg-fg-2)" }}>
     <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-    <span style={{ marginLeft: "auto", color, fontFamily: AIM_MONO, fontSize: 8.5,
-      whiteSpace: "nowrap" }}>{detail}</span>
+    <window.HomeApartmentUI.Badge state={state} className="apt-ui-profile-status">{detail}</window.HomeApartmentUI.Badge>
   </div>;
 }
 
@@ -55,7 +52,7 @@ function AimSelect({ value, onChange, children, label, disabled }) {
     color: "var(--hg-fg-4)", letterSpacing: "0.06em", minWidth: 0 }}>
     {label}
     <select className="hg-focusable" value={value || ""} disabled={disabled} onChange={(e) => onChange(e.target.value || null)}
-      style={{ minHeight: 36, width: "100%", minWidth: 0, background: "#080b10", color: "var(--hg-fg-1)",
+      style={{ minHeight: 36, width: "100%", minWidth: 0, background: "var(--hg-input-bg)", color: "var(--hg-fg-1)",
         border: "1px solid var(--hg-border-soft)", borderRadius: 9, fontFamily: AIM_SANS, fontSize: 11, padding: "7px 9px" }}>
       {children}
     </select>
@@ -73,7 +70,7 @@ function AimTextInput({ value, onCommit, label, placeholder, type = "text", min,
       onBlur={() => onCommit(type === "number" ? (draft === "" ? null : +draft) : (String(draft).trim() || null))}
       onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
       style={{ minHeight: 36, width: "100%", minWidth: 0, boxSizing: "border-box",
-        background: "#080b10", color: "var(--hg-fg-1)", border: "1px solid var(--hg-border-soft)",
+        background: "var(--hg-input-bg)", color: "var(--hg-fg-1)", border: "1px solid var(--hg-border-soft)",
         fontFamily: AIM_MONO, fontSize: 9, padding: "5px 7px" }} />
   </label>;
 }
@@ -800,7 +797,7 @@ function HomeApartmentAim({
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
             minHeight: 26, padding: "0 2px", fontFamily: AIM_MONO, fontSize: 8.5 }}>
-            <span style={{ color: "var(--hg-fg-5)", textTransform: "uppercase", letterSpacing: "0.09em" }}>Current aim</span>
+            <span style={{ color: "var(--hg-fg-3)", textTransform: "uppercase", letterSpacing: "0.09em" }}>Current aim</span>
             <span style={{ color: currentDestination ? AIM_WARM : "var(--hg-fg-4)", textAlign: "right",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {currentDestination ? targetLabel(currentDestination) : "measured pose"}
@@ -827,7 +824,7 @@ function HomeApartmentAim({
 
         <details style={{ borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 10 }}>
           <summary className="hg-focusable" style={{ cursor: "pointer", listStyle: "none", fontFamily: AIM_SANS,
-            fontSize: 11, color: "var(--hg-fg-3)", padding: "7px 0" }}>Details & calibration status <span style={{ float: "right", color: "var(--hg-fg-5)" }}>⌄</span></summary>
+            fontSize: 11, color: "var(--hg-fg-3)", padding: "7px 0" }}>Details & calibration status <span style={{ float: "right", color: "var(--hg-fg-3)" }}>⌄</span></summary>
         <section style={{ paddingTop: 8, display: "grid", gap: 5 }}>
           <div style={{ display: "grid", gap: 4, fontFamily: AIM_MONO, fontSize: 9, lineHeight: 1.45, marginBottom: 6 }}>
             <div style={{ color: "var(--hg-fg-4)" }}>HA · <span style={{ color: "var(--hg-fg-2)" }}>{fixture.ha_entity_id || "none"} / {spotlightEntity || "unmapped"}</span></div>
@@ -849,7 +846,7 @@ function HomeApartmentAim({
           </div>
           <div style={{ marginTop: 5, fontFamily: AIM_MONO, fontSize: 9, lineHeight: 1.55 }}>
             <div style={{ color: AIM_WARM }}>raw encoder · {telemetry.raw ? `${telemetry.raw.pan.toFixed(2)}° / ${telemetry.raw.tilt.toFixed(2)}°` : "unavailable"}</div>
-            <div style={{ color: mechanical.ok ? AIM_CYAN : "var(--hg-fg-5)" }}>mechanical · {mechanical.ok ? `${mechanical.pan.toFixed(2)}° pan / ${mechanical.tilt.toFixed(2)}° tilt` : "not calibrated"}</div>
+            <div style={{ color: mechanical.ok ? AIM_CYAN : "var(--hg-fg-3)" }}>mechanical · {mechanical.ok ? `${mechanical.pan.toFixed(2)}° pan / ${mechanical.tilt.toFixed(2)}° tilt` : "not calibrated"}</div>
             <div style={{ color: "var(--hg-fg-4)" }}>source · {sim ? "bench simulation" : telemetry.source || telemetryStatus.state} · age {telemetry.ages_ms ? `${Math.max(telemetry.ages_ms.pan, telemetry.ages_ms.tilt).toFixed(0)} ms` : "—"}</div>
             <div style={{ color: "var(--hg-fg-4)" }}>activity/readiness · {telemetry.activity || "idle"} / {String(telemetry.readiness ?? "unknown")}</div>
           </div>
@@ -865,7 +862,7 @@ function HomeApartmentAim({
           <div>movement · {solve.physical_travel ? `${solve.physical_travel.pan_deg.toFixed(2)}° pan / ${solve.physical_travel.tilt_deg.toFixed(2)}° tilt` : "fresh measured pose unavailable"}</div>
           <div>mesh footprint · {beamAnalysis?.footprint_kind || "unavailable"}{beamAnalysis?.footprint_hit_fraction != null ? ` · ${Math.round(beamAnalysis.footprint_hit_fraction * 100)}% sampled` : ""}</div>
           <div style={{ color: beamAnalysis?.blocked ? AIM_RED : "var(--hg-fg-3)" }}>obstruction · {beamAnalysis?.blocked ? "geometry hit before destination" : beamAnalysis?.collision_available ? "none before requested destination" : "collision proxy unavailable"}</div>
-          <div style={{ color: "var(--hg-fg-5)" }}>beam overlap with named surfaces is estimated; no completed operation is correlated.</div>
+          <div style={{ color: "var(--hg-fg-3)" }}>beam overlap with named surfaces is estimated; no completed operation is correlated.</div>
         </section>}
 
         <section style={{ borderTop: "1px solid var(--hg-border-soft)", paddingTop: 10, display: "grid", gap: 7 }}>

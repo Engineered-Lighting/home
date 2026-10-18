@@ -744,6 +744,9 @@ button.hg-no-press:active {
 .apt-home-shell :is(.apt-home-room-toolbar, .apt-ui-room-toolbar) svg { flex: 0 0 auto; }
 .apt-home-shell .apt-ui-toolbar-source-detail { position: absolute; left: 0; bottom: calc(100% + 10px); display: grid; gap: 10px; width: min(330px, calc(100vw - 32px)); max-height: min(430px, 65vh); overflow-y: auto; padding: 12px 14px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: #111; color: #ededed; white-space: normal; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
 .apt-home-shell .apt-ui-toolbar-notice { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translateX(-50%); width: max-content; max-width: min(380px, calc(100vw - 32px)); padding: 8px 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; background: #111; color: #ededed; font-size: 12.5px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.apt-home-shell .apt-ui-toolbar-recovery { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.apt-home-shell .apt-ui-toolbar-recovery .apt-ui-button { color: inherit; border-color: currentColor; }
+@media (pointer: coarse) { .apt-home-shell .apt-ui-toolbar-recovery .apt-ui-button { min-width: 44px; min-height: 44px; } }
 .apt-home-shell .apt-ui-radial-ring text { fill: currentColor; font-size: 12px; }
 .apt-home-shell [aria-label="apartment zoom controls"] { right: 14px!important; }
 .apt-home-shell [aria-label="apartment zoom controls"] button { width: 26px!important; min-width: 26px!important; height: 26px!important; min-height: 26px!important; padding: 0!important; border-radius: 7px!important; background: var(--apt-glass)!important; color: #ededed!important; font: 500 13px 'Geist', sans-serif!important; }

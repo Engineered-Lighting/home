@@ -285,6 +285,23 @@ test('actual Aim sender preserves explicit off while avoiding stale accepted/rea
   assert.equal(staleFixture.dispatches.length, 0); assert.equal(staleAim.state.readbacks, 0);
 });
 
+test('superseded Aim refusals do not write failed status or notices into a newer fixture context', async () => {
+  for (const mutate of [(aim) => { aim.contextRef.current = { ...aim.context, fixtureId: 'fixture-b' }; },
+    (aim) => { aim.contextRef.current = { ...aim.context, model: {} }; },
+    (_aim, f) => { f.window.__hav_haClient = {}; },
+    (aim) => { aim.contextRef.current = { ...aim.context, connection: 'reconnecting' }; }]) {
+    const pending = deferred(), f = fixture({ read: () => pending.promise }), aim = aimSender(f);
+    const operation = aim.send(['light.test'], 'turn_on', {}, 'spotlight');
+    mutate(aim, f);
+    aim.state.roleStatus = { other: 'idle' }; aim.state.notice = 'Current fixture notice';
+    pending.resolve([{ entity_id: ENTITY, state: 'off' }]);
+    assert.equal(await operation, null);
+    assert.equal(f.dispatches.length, 0); assert.equal(aim.state.readbacks, 0);
+    assert.deepEqual(aim.state.roleStatus, { other: 'idle' });
+    assert.equal(aim.state.notice, 'Current fixture notice');
+  }
+});
+
 test('actual host accepts legacy ready context without an interior-session object', async () => {
   const f = fixture(), host = hostSender(f);
   assert.equal(host.authority, 'apartment-authority-1', 'real initial authority is established before the host gate');

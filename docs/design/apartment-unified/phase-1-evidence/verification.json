@@ -63,7 +63,7 @@
       "browser_served_sha256": "b3910f72d06534eadda34a398ae9a85defa9b4955463007a50af00031a660d3e"
     },
     "home-apartment-aim.jsx": {
-      "current_sha256": "1934847a801f6c19f244e33af27b9dd5716d25f2a68f35923575b90ce60bb439",
+      "current_sha256": "e4e0f23d82203aea8e2259cb1a389733a8c304a77550107839fc76b8642e080a",
       "browser_served_sha256": "1934847a801f6c19f244e33af27b9dd5716d25f2a68f35923575b90ce60bb439"
     },
     "home-tokens.css": {
@@ -74,7 +74,7 @@
   "css_post_browser_change": "removed one trailing blank line only",
   "passing_suites": {
     "shell": 11,
-    "travel": 24,
+    "travel": 25,
     "data": 74,
     "aiming": 33,
     "perception_video": 136,
@@ -88,6 +88,9 @@
     "bootstrap": 4,
     "site_session": 6,
     "3d_source_contract": 1,
-    "broad_classic_jsx_discovery": 3
-  }
+    "broad_classic_jsx_discovery": 3,
+    "simulation_source_contract": 1
+  },
+  "github_ci": "blocked: missing baseline adaptive-performance.mjs and inherited bootstrap/simulation source assertions",
+  "post_browser_aim_change": "Retired Aim failures no longer publish notices into a new fixture; actual sender covered by focused suite25"
 }

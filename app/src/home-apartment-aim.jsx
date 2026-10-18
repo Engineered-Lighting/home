@@ -437,6 +437,7 @@ function HomeApartmentAim({
     const ids = [...new Set(entityIds.filter(Boolean))];
     if (!ids.length) return {};
     setRoleStatus((s) => ({ ...s, [statusKey]: "pending" }));
+    let current = null;
     try {
       if (sim) {
         if (statusKey === "spotlight") window.__SIM_APARTMENT_AIM_RUNTIME?.setSpotlight?.(
@@ -453,7 +454,7 @@ function HomeApartmentAim({
       }
       if (connection !== "online") throw new Error("Home Assistant is not connected");
       const client = window.__hav_haClient, context = controlContextRef.current;
-      const current = () => {
+      current = () => {
         const latest = controlContextRef.current;
         return controlMountedRef.current && latest.engine === context.engine && latest.model === context.model
           && latest.fixtureId === context.fixtureId && latest.connection === "online" && !latest.sim
@@ -470,6 +471,7 @@ function HomeApartmentAim({
       setRoleStatus((s) => ({ ...s, [statusKey]: "verified" }));
       return latest;
     } catch (error) {
+      if (current && !current()) return null;
       setRoleStatus((s) => ({ ...s, [statusKey]: "failed" }));
       setNotice(String(error?.message || error));
       return null;

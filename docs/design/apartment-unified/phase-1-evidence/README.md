@@ -8,6 +8,8 @@ These screenshots show **authored room data and generated sockets on Home's prod
 | Tablet controls and camera dock | ![Tablet](unified-controls-768x1024.png) |
 | Phone controls | ![Phone controls](unified-controls-390x844.png) |
 | Phone Chat | ![Phone chat](unified-chat-390x844.png) |
+| Echo desktop controls | ![Echo desktop](unified-echo-card-1366x768.png) |
+| Echo phone controls | ![Echo phone](unified-echo-card-390x844.png) |
 | Previous Home | ![Previous Home](previous-home-classic-390x844.png) |
 
-`verification.json` records source pins, tested scenarios, passing suites and known baseline failures. This is local software verification, not deployment or physical acceptance.
+`verification.json` records the clean-worktree source pins, 17 tested behavior checkpoints, ten screenshots and the retained initial timeout. This is local software verification, not deployment or physical acceptance.

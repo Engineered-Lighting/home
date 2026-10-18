@@ -7,39 +7,59 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
-import { deflateSync } from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import Core from '../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
+import { installPack, authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'app/src');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
-// Reuse only the existing authored asset/registration fixture constructors.
-// Importing that test module would also run its independent browser workload.
-const fixtureSource = fs.readFileSync(path.join(ROOT, 'tools/test-victoria-virtual-fixtures-browser.mjs'), 'utf8');
-const fixtureStart = fixtureSource.indexOf('function authoredPositions()');
-const fixtureEnd = fixtureSource.indexOf('\ntest(', fixtureStart);
-assert.ok(fixtureStart >= 0 && fixtureEnd > fixtureStart, 'shared authored fixture constructors must be present');
-const { installPack, authoredDocument } = new Function('fs', 'path', 'hash', 'Core', 'deflateSync', 'Buffer',
-  fixtureSource.slice(fixtureStart, fixtureEnd) + '\nreturn { installPack, authoredDocument };')
-  (fs, path, hash, Core, deflateSync, Buffer);
+// Source assets are served only from this public-code inventory. Authored pack
+// assets have their own fixture routes and never come from app runtime data.
+function staticSources(root) {
+  const sources = new Map(), excluded = new Set(['node_modules', 'data', 'artifacts', 'private', 'recordings', 'logs']);
+  const rootStat = fs.lstatSync(root);
+  assert.ok(rootStat.isDirectory() && !rootStat.isSymbolicLink(), 'static source root must be an ordinary directory');
+  let entries = 0, bytes = 0;
+  function walk(directory, depth = 0) {
+    assert.ok(depth <= 12, 'static source depth is bounded');
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      assert.ok(++entries <= 10000, 'static source inventory is bounded');
+      if (entry.name.startsWith('.') || excluded.has(entry.name)) continue;
+      const file = path.join(directory, entry.name), relative = path.relative(root, file).split(path.sep).join('/');
+      if (relative === 'assets/apartment' || relative.startsWith('assets/apartment/')) continue;
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) { walk(file, depth + 1); continue; }
+      if (!stat.isFile()) continue;
+      const trustedAsset = /^(?:vendor|fonts|icons)\//.test(relative)
+        && /\.(?:wasm|woff2?|ttf|otf|png|jpe?g|webp|svg|ico|ktx2|json)$/.test(entry.name);
+      const rootAsset = directory === root && ['index.html', 'favicon.svg', 'favicon.ico', 'favicon-32.png', 'apple-touch-icon.png', 'site.webmanifest'].includes(entry.name);
+      if (!/\.(?:js|mjs|jsx|css)$/.test(entry.name) && !trustedAsset && !rootAsset) continue;
+      bytes += stat.size;
+      assert.ok(stat.size <= 32 * 1024 * 1024 && bytes <= 256 * 1024 * 1024, 'static source bytes are bounded');
+      sources.set('/' + relative, { selected: file, relative });
+    }
+  }
+  walk(root); return sources;
+}
 
-function candidateSources() {
-  const raw = process.env.HOME_APARTMENT_CANDIDATE_ROOT;
-  const candidate = raw && path.resolve(raw);
-  const overlay = candidate && (fs.existsSync(path.join(candidate, 'app/src/home-app.jsx')) ? path.join(candidate, 'app/src') : candidate);
-  const sources = require('./serve-home-map-rehearsal.cjs').sourceFiles();
-  return new Map([...sources].flatMap(([url, baseline]) => {
-    const relative = path.relative(SRC, baseline);
-    const changed = overlay && path.join(overlay, relative);
-    const selected = changed && fs.existsSync(changed) ? changed : baseline;
-    return fs.existsSync(selected) && fs.lstatSync(selected).isFile() && !fs.lstatSync(selected).isSymbolicLink()
-      ? [[url, { selected, relative: relative.split(path.sep).join('/'), candidate: selected === changed }]] : [];
-  }));
+function worktreeSources() {
+  assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'standalone browser proof must use this worktree; candidate source overlays are forbidden');
+  return staticSources(SRC);
+}
+
+function browserLaunchOptions(platform = process.platform) {
+  const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
+  if (platform === 'win32') args.unshift('--use-angle=d3d11');
+  else if (platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
+  const installed = fs.existsSync(chromium.executablePath());
+  assert.ok(installed || platform === 'win32', 'the pinned Playwright Chromium browser must be available on this platform');
+  return { headless: true, args, ...(!installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
 }
 
 test('unified shell keeps the real room, private controls and one chat controller through responsive navigation', { timeout: 150000 }, async () => {
@@ -49,14 +69,18 @@ test('unified shell keeps the real room, private controls and one chat controlle
   const echo = installPack(packs, 'echo'), victoria = installPack(packs, 'victoria');
   fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1,
     packs: [echo, victoria].map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
-  const initial = initRegistration(privateRoot, authoredDocument(readActiveBinding(packs)), { contentPacksDir: packs });
+  const initial = initRegistration(privateRoot, authoredDocument(readActiveBinding(packs), Core), { contentPacksDir: packs });
   const protectedFiles = [echo, victoria].flatMap(item => Object.keys(item.files).map(name => path.join(packs, item.site, item.revision, name)));
   protectedFiles.push(path.join(packs, 'echo/ACTIVE'), path.join(packs, 'victoria/ACTIVE'), path.join(packs, 'index.json'));
   const protectedHashes = Object.fromEntries(protectedFiles.map(file => [file, hash(fs.readFileSync(file))]));
-  const sources = candidateSources(), requests = [], forbidden = [], errors = [], checks = [], screenshots = [], served = {};
+  const sources = worktreeSources(), requests = [], forbidden = [], missingResources = [], missingCodeSources = [],
+    errors = [], checks = [], screenshots = [], served = {};
+  const launchOptions = browserLaunchOptions();
   const receipt = { schema: 'home-apartment-shell-authored-browser-1', authored_room: true, real_renderer: true,
     real_household_data: false, live_camera: false, model_session_started: false, physical_commands: 0, survey_writes: 0,
-    checks, screenshots, requests, forbidden, errors, served };
+    source_provenance: { mode: 'worktree_only', root: fs.realpathSync(SRC), candidate_overlay: false },
+    browser_launch: { platform: process.platform, ...launchOptions },
+    checks, screenshots, requests, forbidden, missing_resources: missingResources, missing_code_sources: missingCodeSources, errors, served };
   let server, browser, page, origin, handler, timer;
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
     browser?.close().catch(() => {}); server?.closeAllConnections(); reject(new Error('145s authored shell browser deadline'));
@@ -92,12 +116,20 @@ test('unified shell keeps the real room, private controls and one chat controlle
         }
         const entry = sources.get(url.pathname === '/' ? '/index.html' : url.pathname);
         if (!body && entry && !url.pathname.startsWith('/assets/apartment/')) {
-          body = fs.readFileSync(entry.selected); served[entry.relative] = { sha256: hash(body), candidate: entry.candidate };
+          const relative = path.relative(fs.realpathSync(SRC), fs.realpathSync(entry.selected)).split(path.sep).join('/');
+          assert.ok(relative === entry.relative && !relative.startsWith('../') && !path.isAbsolute(relative), 'served source stays in this worktree');
+          body = fs.readFileSync(entry.selected);
+          served[entry.relative] = { sha256: hash(body), source: 'worktree', path: 'app/src/' + entry.relative };
           type = /\.(?:js|mjs|jsx)$/.test(entry.selected) ? 'text/javascript' : entry.selected.endsWith('.html') ? 'text/html'
             : entry.selected.endsWith('.css') ? 'text/css' : /\.(?:json|webmanifest)$/.test(entry.selected) ? 'application/json'
               : entry.selected.endsWith('.svg') ? 'image/svg+xml' : type;
         }
-        if (!body) { res.writeHead(404); res.end(); return; }
+        if (!body) {
+          const missing = { path: url.pathname, method: req.method, status: 404 };
+          missingResources.push(missing);
+          if (/\.(?:js|mjs|jsx|css|wasm)$/.test(url.pathname)) missingCodeSources.push(missing);
+          res.writeHead(404); res.end(); return;
+        }
         res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length, 'Cache-Control': 'no-store' });
         res.end(req.method === 'HEAD' ? undefined : body);
       } catch (error) { errors.push('authored HTTP handler: ' + error.message); res.writeHead(500); res.end(); }
@@ -107,8 +139,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     handler = createEquipmentRegistrationGateway({ env: { NODE_ENV: 'test', HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: '1',
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
-    browser = await chromium.launch({ headless: true, args: ['--use-angle=d3d11', '--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'],
-      ...(!fs.existsSync(chromium.executablePath()) ? { channel: 'msedge' } : {}) });
+    browser = await chromium.launch(launchOptions);
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, serviceWorkers: 'block' });
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
     await context.addInitScript(() => {
@@ -180,6 +211,36 @@ test('unified shell keeps the real room, private controls and one chat controlle
       await page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
         && window.__APT_ENGINE?.siteId === site, site);
     }
+    async function echoCardBounds() {
+      const results = [];
+      for (const [width, height] of [[1366,768], [390,844]]) {
+        await page.setViewportSize({ width, height }); await tab('Controls');
+        const select = page.locator('[data-apt-semantic-device-select="1"]');
+        await select.focus(); await select.selectOption('authored-echo-light');
+        const open = page.locator('[data-apt-semantic-open="1"]');
+        await open.focus(); await open.press('Enter');
+        const close = page.getByRole('button', { name: 'close card', exact: true });
+        await close.waitFor();
+        const bounds = await close.evaluate(button => {
+          const card = button.parentElement.parentElement, panel = document.querySelector('.apt-home-controls');
+          return { card: card.getBoundingClientRect().toJSON(), panel: panel.getBoundingClientRect().toJSON(),
+            close: button.getBoundingClientRect().toJSON(), inControls: !!button.closest('.apt-home-controls'),
+            name: card.innerText, panelScrollWidth: panel.scrollWidth, panelClientWidth: panel.clientWidth };
+        });
+        const inside = (inner, outer) => inner.width > 0 && inner.height > 0 && inner.left >= outer.left - 1
+          && inner.right <= outer.right + 1 && inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1;
+        const result = { stage: 'echo_generic_card_within_controls', viewport: { width, height }, ...bounds,
+          cardInside: inside(bounds.card, bounds.panel), closeInside: inside(bounds.close, bounds.panel) };
+        checks.push(result); results.push(result);
+        await capture('unified-echo-card-' + width + 'x' + height);
+        await close.focus(); await close.press('Enter'); await close.waitFor({ state: 'hidden' });
+        assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'opening and closing the generic card sends no service command');
+      }
+      await page.setViewportSize({ width: 1366, height: 768 });
+      assert.deepEqual(results.filter(result => !result.inControls || !result.cardInside || !result.closeInside
+        || result.panelScrollWidth > result.panelClientWidth + 1), [],
+        'the actual generic Echo card and close control must fit their control pane at desktop and phone widths');
+    }
     async function identityCheck(stage) {
       const state = await page.evaluate(() => ({
         engine: window.__APT_ENGINE === window.__shellProof.engine,
@@ -201,6 +262,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 });
     await waitSite('echo');
+    await echoCardBounds();
     await page.getByRole('combobox', { name: 'Home', exact: true }).selectOption('victoria');
     await waitSite('victoria');
     await page.waitForFunction(() => window.__APT_ENGINE?.overlay.virtualFixturesGroup?.children.length === 4);
@@ -318,15 +380,41 @@ test('unified shell keeps the real room, private controls and one chat controlle
     checks.push({ stage: 'classic_ui_escape_hatch_keeps_chat_draft' });
     await capture('previous-home-classic-390x844');
     await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
-    await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor(); await waitSite('echo');
+    await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 }); await waitSite('echo');
     await page.goto(origin + '/?apartmentRedesign=0&worldZoom=off', { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: 'Open apartment view', exact: true }).waitFor();
     assert.equal(await page.locator('.apt-home-shell[data-home-layout="unified"]').count(), 0);
     checks.push({ stage: 'explicit_url_override_reenables_and_rolls_back_shell' });
 
+    // The unified-only portal wrapper must not change the incumbent classic
+    // card's absolute canvas placement or its actual close action.
+    await page.getByRole('button', { name: 'Open apartment view', exact: true }).click();
+    await waitSite('echo');
+    const classicSelect = page.locator('[data-apt-semantic-device-select="1"]');
+    await classicSelect.focus(); await classicSelect.selectOption('authored-echo-light');
+    const classicOpen = page.locator('[data-apt-semantic-open="1"]');
+    await classicOpen.focus(); await classicOpen.press('Enter');
+    const classicClose = page.getByRole('button', { name: 'close card', exact: true }); await classicClose.waitFor();
+    const classicCard = await classicClose.evaluate(button => ({
+      position: getComputedStyle(button.parentElement.parentElement).position,
+      inUnifiedWrapper: !!button.closest('.apt-home-card'), inControls: !!button.closest('.apt-home-controls'),
+      name: button.parentElement.parentElement.innerText,
+    }));
+    assert.equal(classicCard.position, 'absolute'); assert.equal(classicCard.inUnifiedWrapper, false); assert.equal(classicCard.inControls, false);
+    await capture('classic-echo-card-390x844');
+    await classicClose.focus(); await classicClose.press('Enter'); await classicClose.waitFor({ state: 'hidden' });
+    checks.push({ stage: 'classic_generic_card_retains_canvas_positioning_and_closes', ...classicCard });
+
     assert.deepEqual(readRegistration(privateRoot, { contentPacksDir: packs }), initial);
     assert.deepEqual(Object.fromEntries(protectedFiles.map(file => [file, hash(fs.readFileSync(file))])), protectedHashes);
-    assert.deepEqual(forbidden, []); assert.deepEqual(errors, []);
+    assert.deepEqual(forbidden, []); assert.deepEqual(errors, []); assert.deepEqual(missingCodeSources, []);
+    for (const file of ['home-app.jsx', 'home-apartment.jsx', 'home-tokens.css', 'home-3d/engine.js']) {
+      assert.equal(served[file]?.source, 'worktree', 'required production code was served from this worktree: ' + file);
+    }
+    for (const [relative, record] of Object.entries(served)) {
+      assert.equal(record.source, 'worktree');
+      assert.equal(record.sha256, hash(fs.readFileSync(path.join(SRC, relative))), 'served code stayed stable during this browser run: ' + relative);
+    }
     receipt.registration_digest = initial.digest; receipt.protected_asset_hashes = protectedHashes; receipt.ok = true;
     fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     process.stdout.write('Authored Apartment shell browser evidence: ' + path.join(run, 'receipt.json') + '\n');

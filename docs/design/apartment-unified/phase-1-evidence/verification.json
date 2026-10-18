@@ -1,0 +1,93 @@
+{
+  "schema": "apartment-home-phase1-verification-1",
+  "date_utc": "2026-10-18",
+  "deployed": false,
+  "authored_room": true,
+  "real_renderer": true,
+  "live_camera": false,
+  "physical_commands": 0,
+  "new_camera_or_model_session": false,
+  "browser_passed": true,
+  "checks": [
+    {
+      "width": 1026,
+      "height": 716
+    },
+    "desktop_keyboard_skips_hidden_camera_tab",
+    {
+      "width": 1026,
+      "height": 716
+    },
+    {
+      "width": 768,
+      "height": 460
+    },
+    {
+      "width": 390,
+      "height": 370
+    },
+    "phone_keyboard_visible_tabs",
+    {
+      "width": 390,
+      "height": 370
+    },
+    "phone_chat_composer_send_and_mic_inside_viewport",
+    "same_fixture_click_from_chat_and_native_keyboard_selection_reveal_controls",
+    "four_actual_fixture_clicks_surface_drag_and_undo",
+    {
+      "width": 390,
+      "height": 370
+    },
+    "metrics_escape_closes_dialog_and_restores_focus",
+    "classic_ui_escape_hatch_keeps_chat_draft",
+    "explicit_url_override_reenables_and_rolls_back_shell"
+  ],
+  "screenshots": [
+    "unified-fixture-controls-1366x768.png",
+    "unified-controls-768x1024.png",
+    "unified-controls-390x844.png",
+    "unified-chat-390x844.png",
+    "previous-home-classic-390x844.png"
+  ],
+  "pins": {
+    "home-app.jsx": {
+      "current_sha256": "dfc230c55d2d25af25c817aa812810f4d601bc39cadcdfc623099356447d830a",
+      "browser_served_sha256": "dfc230c55d2d25af25c817aa812810f4d601bc39cadcdfc623099356447d830a"
+    },
+    "home-apartment.jsx": {
+      "current_sha256": "63f6bcab4175ff7a3d52581f7084c4df4b47812490e16a8ed3cd6a26314c5a26",
+      "browser_served_sha256": "63f6bcab4175ff7a3d52581f7084c4df4b47812490e16a8ed3cd6a26314c5a26"
+    },
+    "home-apartment-data.js": {
+      "current_sha256": "b3910f72d06534eadda34a398ae9a85defa9b4955463007a50af00031a660d3e",
+      "browser_served_sha256": "b3910f72d06534eadda34a398ae9a85defa9b4955463007a50af00031a660d3e"
+    },
+    "home-apartment-aim.jsx": {
+      "current_sha256": "1934847a801f6c19f244e33af27b9dd5716d25f2a68f35923575b90ce60bb439",
+      "browser_served_sha256": "1934847a801f6c19f244e33af27b9dd5716d25f2a68f35923575b90ce60bb439"
+    },
+    "home-tokens.css": {
+      "current_sha256": "f13c709bbee418b1f2332d5450c6b3d466c957efaa07d430755b36c0c523f41a",
+      "browser_served_sha256": "9c70b4b653a50f0d76da6f079c8e16da7abeea39a5abaf860bcc19c73dd5e20a"
+    }
+  },
+  "css_post_browser_change": "removed one trailing blank line only",
+  "passing_suites": {
+    "shell": 11,
+    "travel": 24,
+    "data": 74,
+    "aiming": 33,
+    "perception_video": 136,
+    "state_equipment_gateway": 84,
+    "chat": 46,
+    "control_cards": 58,
+    "lights": 67,
+    "changed_source_parse": 4
+  },
+  "baseline_failures": {
+    "bootstrap": 4,
+    "site_session": 6,
+    "3d_source_contract": 1,
+    "broad_classic_jsx_discovery": 3
+  }
+}

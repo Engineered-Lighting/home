@@ -1145,9 +1145,17 @@
     if (rehearsalIsolated()) return () => {};
     if (!client) return () => {};
     const ids = new Set((model.devices || []).map((d) => d.ha_entity_id).filter(Boolean));
-    if (!ids.size) return () => {};
+    // Travel Mode is a control guard, even when this model has no devices.
+    // Observe the existing helper through this same owned subscription.
+    ids.add(TRAVEL_MODE_ENTITY);
     let unsub = null, closed = false;
-    const current = () => !closed && !signal?.aborted && !rehearsalIsolated() && isCurrent();
+    const authority = workspaceAuthority;
+    const current = () => {
+      const selected = window.HomeSpatialViewport?.getSelectedSiteId?.();
+      return !closed && !signal?.aborted && !rehearsalIsolated() && isCurrent()
+        && workspaceAuthority === authority && (!selected || selected === "echo")
+        && (!window.__hav_haClient || window.__hav_haClient === client);
+    };
     const close = () => {
       if (closed) return;
       closed = true;
@@ -1160,6 +1168,7 @@
       try {
         const states = await readStates(client, [...ids], { siteId });
         if (!current()) return;
+        publishTravelModeState(states[TRAVEL_MODE_ENTITY]?.state);
         for (const [entityId, state] of Object.entries(states)) {
           if (!current()) return;
           onState(entityId, state);
@@ -1168,7 +1177,8 @@
         const nextUnsub = await client.subscribeEvents("state_changed", (ev) => {
           if (!current()) return;
           const d = ev?.data;
-          if (d && ids.has(d.entity_id) && d.new_state) onState(d.entity_id, d.new_state);
+          if (d?.entity_id === TRAVEL_MODE_ENTITY) publishTravelModeState(d.new_state?.state);
+          if (current() && d && ids.has(d.entity_id) && d.new_state) onState(d.entity_id, d.new_state);
         });
         if (!current()) nextUnsub?.(); else unsub = nextUnsub;
       } catch (e) {
@@ -1192,17 +1202,111 @@
     return payload;
   }
 
-  async function callService(client, domain, service, data = {}, { siteId = "echo" } = {}) {
+  const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";
+  const TRAVEL_MODE_CACHE_KEY = "home.lights.travelMode.state.v1";
+
+  function publishTravelModeState(state) {
+    const normalized = state === "on" || state === "off" ? state : null;
+    // Unknown withdraws a previous global off, while retaining any cached on
+    // until an actual current helper observation confirms off.
+    window.__HOME_TRAVEL_MODE_STATE = normalized;
+    try { window.dispatchEvent?.(new CustomEvent("home-travel-mode-change", { detail: { state: normalized } })); } catch (_) { /* older webview */ }
+    try {
+      const storage = window.localStorage || localStorage;
+      if (normalized === "on") storage.setItem(TRAVEL_MODE_CACHE_KEY, "on");
+      else if (normalized === "off") storage.removeItem(TRAVEL_MODE_CACHE_KEY);
+    } catch (_) { /* unavailable browser storage does not change live state */ }
+  }
+
+  function serviceMayEnergizeLights(domain, service) {
+    const kind = String(domain || "").toLowerCase(), action = String(service || "").toLowerCase();
+    if (kind === "scene") return action === "turn_on" || action === "apply";
+    // An arbitrary script or aggregate HA target can include lighting. The
+    // Apartment does not have a reviewed effect map for either kind.
+    if (kind === "script") return action !== "turn_off";
+    return ["light", "switch", "homeassistant"].includes(kind) && ["turn_on", "toggle"].includes(action);
+  }
+
+  function cachedTravelModeOn() {
+    if (window.__HOME_TRAVEL_MODE_STATE === "on") return true;
+    try { return (window.localStorage || localStorage).getItem(TRAVEL_MODE_CACHE_KEY) === "on"; }
+    catch (_) { return false; }
+  }
+
+  async function verifyTravelModeForOutput(client, isCurrent) {
+    if (typeof isCurrent !== "function") throw new Error("Current Home control context is required for lighting output");
+    const authority = workspaceAuthority;
+    const requireCurrent = () => {
+      const selected = window.HomeSpatialViewport?.getSelectedSiteId?.();
+      if (isCurrent() !== true || rehearsalIsolated() || workspaceAuthority !== authority
+          || selected && selected !== "echo" || window.__hav_haClient && window.__hav_haClient !== client) {
+        throw new Error("Home control context changed; no command was sent");
+      }
+    };
+    requireCurrent();
+    if (typeof client.call !== "function") throw new Error("Travel Mode cannot be verified; lighting output is blocked");
+    const initiallyCachedOn = cachedTravelModeOn();
+    let observedOn = false, observedUnknown = false, timeout;
+    const travelChanged = event => {
+      if (event?.detail?.state === "on") observedOn = true;
+      else if (event?.detail?.state !== "off") observedUnknown = true;
+    };
+    const storageChanged = event => { if (event?.key === TRAVEL_MODE_CACHE_KEY && event.newValue === "on") observedOn = true; };
+    window.addEventListener?.("home-travel-mode-change", travelChanged);
+    window.addEventListener?.("storage", storageChanged);
+    const dispose = () => {
+      clearTimeout(timeout);
+      window.removeEventListener?.("home-travel-mode-change", travelChanged);
+      window.removeEventListener?.("storage", storageChanged);
+    };
+    const requireDispatch = () => {
+      requireCurrent();
+      if (observedOn || !initiallyCachedOn && cachedTravelModeOn()) throw new Error("Travel Mode is on; lighting output is blocked");
+      if (observedUnknown) throw new Error("Travel Mode is unavailable; lighting output is blocked");
+    };
+    try {
+      let states;
+      try {
+        states = await Promise.race([
+          client.call({ type: "get_states" }),
+          new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Travel Mode read timed out")), 4000); }),
+        ]);
+      } catch (_) { throw new Error("Travel Mode is unavailable; lighting output is blocked"); }
+      requireDispatch();
+      const helpers = Array.isArray(states) ? states.filter(state => state?.entity_id === TRAVEL_MODE_ENTITY) : [];
+      if (helpers.length !== 1 || helpers[0].state !== "off") {
+        throw new Error(helpers.length === 1 && helpers[0].state === "on"
+          ? "Travel Mode is on; lighting output is blocked" : "Travel Mode is unavailable; lighting output is blocked");
+      }
+      // A cached on is a lock until this exact client confirms the helper is
+      // off. No cached off or prior successful request can admit a later call.
+      requireDispatch();
+      // Retain the pending-on latch through the caller's final microtask and
+      // release it immediately after invoking the selected transport.
+      return { requireDispatch, dispose };
+    } catch (error) { dispose(); throw error; }
+  }
+
+  async function callService(client, domain, service, data = {}, { siteId = "echo", isCurrent } = {}) {
     if (siteId !== "echo") throw new Error("Home controls are not configured for this home");
     if (rehearsalIsolated()) throw new Error("Physical controls are disabled in rehearsal");
     if (!client) throw new Error("Home Assistant client is not ready");
-    if (typeof client.callService === "function") {
-      return client.callService(domain, service, data || {});
+    if (typeof isCurrent === "function" && isCurrent() !== true) throw new Error("Home control context changed; no command was sent");
+    const output = serviceMayEnergizeLights(domain, service);
+    // Snapshot the submitted output before awaiting its guard. A caller may
+    // not replace targets or parameters while an older helper read is pending.
+    const submitted = output ? cloneState(data || {}) : data || {};
+    let gate;
+    if (output) {
+      if (!submitted || typeof submitted !== "object" || Array.isArray(submitted)) throw new Error("Lighting service data is invalid");
+      gate = await verifyTravelModeForOutput(client, isCurrent);
     }
-    if (typeof client.call !== "function") {
-      throw new Error("Home Assistant client cannot call services");
-    }
-    return client.call(buildServicePayload(domain, service, data));
+    try {
+      gate?.requireDispatch();
+      if (typeof client.callService === "function") return client.callService(domain, service, submitted);
+      if (typeof client.call !== "function") throw new Error("Home Assistant client cannot call services");
+      return client.call(buildServicePayload(domain, service, submitted));
+    } finally { gate?.dispose(); }
   }
 
   /* ---------------- tracker WS ---------------- */

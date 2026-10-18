@@ -1,0 +1,518 @@
+{
+  "schema": "home-apartment-prerequisite-source-1",
+  "main_commit": "41a6ce7f",
+  "replaces_review_baseline": "fc03450352bbaa00ad8603170fac317467652b42",
+  "accepted_manifest_sha256": "194ebb11eabaa08edfbd50293d7a905378de67d71e10bbd142471f67dd2c6f53",
+  "fresh_manifest_sha256": "9320545403299f36e15faf7bede3ad4a52821dbe6aa97e1f9d9bbdeb85a93021",
+  "excluded_unused_files": [
+    "app/src/home-apartment-memory.jsx",
+    "app/src/home-apartment-perception.jsx",
+    "app/src/vendor/cesium-1.144.0/index.js"
+  ],
+  "files": [
+    {
+      "path": "app/src/home-3d/adaptive-performance.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "893c0175f9f259eaa9f1e2d239472b1e3c5810a0fa23cff34ddc0afe407e503b",
+      "sha256": "893c0175f9f259eaa9f1e2d239472b1e3c5810a0fa23cff34ddc0afe407e503b",
+      "bytes": 24034,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/apartment-boundary-momentum.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "7e0e0eaf56fde9b640528779fb8aaa8a7a9ae1f7532dfdcc106aac60a713b199",
+      "sha256": "7e0e0eaf56fde9b640528779fb8aaa8a7a9ae1f7532dfdcc106aac60a713b199",
+      "bytes": 25234,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/apartment-perception-layer.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "31081abe67159137058451cce56376ab63ff302dba9c51f6731fa574ed6d7acd",
+      "sha256": "31081abe67159137058451cce56376ab63ff302dba9c51f6731fa574ed6d7acd",
+      "bytes": 13744,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/apartment-semantic-navigation.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "4ae20300192c95fcae8762d61e339fa7c77b7bd732067bc308ea58023cf127e8",
+      "sha256": "4ae20300192c95fcae8762d61e339fa7c77b7bd732067bc308ea58023cf127e8",
+      "bytes": 10193,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/asset-byte-cache.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "d65f66d339a508d48e1f802bb18bd523b56b04a66bfad4a1fc4388b363eeaac2",
+      "sha256": "d65f66d339a508d48e1f802bb18bd523b56b04a66bfad4a1fc4388b363eeaac2",
+      "bytes": 12004,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/assets.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "9ff6baf73cacf3d1dbec888983a3904a37c5583869f5c19949adb7c43ef28482",
+      "sha256": "9ff6baf73cacf3d1dbec888983a3904a37c5583869f5c19949adb7c43ef28482",
+      "bytes": 4805,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/async-frame-readback.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "ea73750fb838140bcd20976bfb0a13eda26d734e27788318df771f28fcae184b",
+      "sha256": "ea73750fb838140bcd20976bfb0a13eda26d734e27788318df771f28fcae184b",
+      "bytes": 20048,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/cloud-handoff.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "44aef9e7d037b1a23ac12fad23c2f72458ed9aacb1c89bc40f72fb903f618c71",
+      "sha256": "44aef9e7d037b1a23ac12fad23c2f72458ed9aacb1c89bc40f72fb903f618c71",
+      "bytes": 17761,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/descent-cloud-plan.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "7d4c967d8c5e8959ebf0c6fe461ac8981b9e87ed8374e63e2223b2026d3ae00d",
+      "sha256": "7d4c967d8c5e8959ebf0c6fe461ac8981b9e87ed8374e63e2223b2026d3ae00d",
+      "bytes": 30272,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/direct-aim-gesture.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "b5cc0b730865191c4427bc5e2bcdb8dadbad50e3430ae18a031456cdf7a444cd",
+      "sha256": "b5cc0b730865191c4427bc5e2bcdb8dadbad50e3430ae18a031456cdf7a444cd",
+      "bytes": 6549,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/dollhouse-cutaway-material.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "6d580fb3486c97757e6e1479304e2f16129627d9895c7200b22cec7d28d183ae",
+      "sha256": "6d580fb3486c97757e6e1479304e2f16129627d9895c7200b22cec7d28d183ae",
+      "bytes": 2920,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/dollhouse-cutaway.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "94421ea9c5bceb8e7d401c8c2169582cdaebb72744b531ded35317ef9be1a64a",
+      "sha256": "94421ea9c5bceb8e7d401c8c2169582cdaebb72744b531ded35317ef9be1a64a",
+      "bytes": 12200,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/engine.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "0e5d4928bc1d7819bd19c6482cee0e56789d85d7005a13e71f267f7358357fcb",
+      "sha256": "0e5d4928bc1d7819bd19c6482cee0e56789d85d7005a13e71f267f7358357fcb",
+      "bytes": 49267,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/equipment-spotlight-visual.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "c6ddf61e02338b59b7441971384824f2ae43322e749c1880d0273ac90d554285",
+      "sha256": "c6ddf61e02338b59b7441971384824f2ae43322e749c1880d0273ac90d554285",
+      "bytes": 17030,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/equipment-virtual-fixtures.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "d2e2ca6c9a730cc573e5cbad5896a952dd591a294e86ce946c30782bfb51b951",
+      "sha256": "d2e2ca6c9a730cc573e5cbad5896a952dd591a294e86ce946c30782bfb51b951",
+      "bytes": 42253,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/handoff-timeline.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "f121648630480a6deccce989f87c38a2cc1bfe6e27d4dd391c15372fb881f8d9",
+      "sha256": "f121648630480a6deccce989f87c38a2cc1bfe6e27d4dd391c15372fb881f8d9",
+      "bytes": 36152,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/markers.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "01236057d64d8adf418900da73da99c08cd34859e763ceeb51706aa431c1d350",
+      "sha256": "01236057d64d8adf418900da73da99c08cd34859e763ceeb51706aa431c1d350",
+      "bytes": 61397,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/modes.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "64d141cdb1538177ea9611506c7162cd33f46d02a9496f83636d49d0ca2567d3",
+      "sha256": "64d141cdb1538177ea9611506c7162cd33f46d02a9496f83636d49d0ca2567d3",
+      "bytes": 46588,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/photo-floor-support.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "13b698e73c62557b0de5ac1edee26a88b84451944d69a50995cfe2be61751ccc",
+      "sha256": "13b698e73c62557b0de5ac1edee26a88b84451944d69a50995cfe2be61751ccc",
+      "bytes": 1113,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/picking.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "3fda0bb288ea47d9944a98205bf270b4dadc33f12e2844f4d15adf7dd51a46d9",
+      "sha256": "3fda0bb288ea47d9944a98205bf270b4dadc33f12e2844f4d15adf7dd51a46d9",
+      "bytes": 8038,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/pointcloud.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "b06ade420709ca785d97d911b3a1896886752b5d5edd5a61e979460ef62903b6",
+      "sha256": "b06ade420709ca785d97d911b3a1896886752b5d5edd5a61e979460ef62903b6",
+      "bytes": 13637,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/registered-desk-target.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "98f4b873f04ac491a636352dfe4465811fae3aaa4d7e0a00dc5aa24cf6373ba7",
+      "sha256": "98f4b873f04ac491a636352dfe4465811fae3aaa4d7e0a00dc5aa24cf6373ba7",
+      "bytes": 11333,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/rig.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "3423f5fc1a6a75618db886bd039b42f0028eb1461c43d47d7a8abc8c2ee9142d",
+      "sha256": "3423f5fc1a6a75618db886bd039b42f0028eb1461c43d47d7a8abc8c2ee9142d",
+      "bytes": 34634,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/scene-placeholder.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "f4e00aaf83b0a30392372bebda0bc0551d1f5bf1dc9e48f9eb4d7bb11767bf94",
+      "sha256": "f4e00aaf83b0a30392372bebda0bc0551d1f5bf1dc9e48f9eb4d7bb11767bf94",
+      "bytes": 3888,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/splat-cutaway.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "1f9fe2a13681fcc44770e277c34b213f773af09d454024a9c975dbb2b53cbc65",
+      "sha256": "1f9fe2a13681fcc44770e277c34b213f773af09d454024a9c975dbb2b53cbc65",
+      "bytes": 7651,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/splat-exterior-cleanup.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "e7a569bfd425751bc3be90ebcea712e0da22c6712b98a9f8a3a0961643c08491",
+      "sha256": "e7a569bfd425751bc3be90ebcea712e0da22c6712b98a9f8a3a0961643c08491",
+      "bytes": 4957,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/world-surface-core.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "3970f63b408866a4c0b26722b6d2125e76769e06adefde03d9d04115f76da004",
+      "sha256": "3970f63b408866a4c0b26722b6d2125e76769e06adefde03d9d04115f76da004",
+      "bytes": 23570,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-3d/world-view-options.mjs",
+      "source": "accepted-frontend08",
+      "source_sha256": "ce533e0d2935a052cffb5cc7ce9f7e3846012c4caef68be650614888bc1e9d55",
+      "sha256": "ce533e0d2935a052cffb5cc7ce9f7e3846012c4caef68be650614888bc1e9d55",
+      "bytes": 25694,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-aim.jsx",
+      "source": "fresh-live-01",
+      "source_sha256": "e3e0e68bb2ba4bc42bae372245d23b68c31c67d30d12eeac7ed1d2cf07f7be7d",
+      "sha256": "e3e0e68bb2ba4bc42bae372245d23b68c31c67d30d12eeac7ed1d2cf07f7be7d",
+      "bytes": 72900,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-camera-source.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "fa9eb251ce5e0dd5d51ebdcd794e2e633902f03cbfffca0d0e96cb1d3d1f13c9",
+      "sha256": "fa9eb251ce5e0dd5d51ebdcd794e2e633902f03cbfffca0d0e96cb1d3d1f13c9",
+      "bytes": 25622,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-camera.jsx",
+      "source": "accepted-frontend08",
+      "source_sha256": "d55ce26927c10a81a83c133744300c475d2343acc72eedc40a317a4781b9c981",
+      "sha256": "d55ce26927c10a81a83c133744300c475d2343acc72eedc40a317a4781b9c981",
+      "bytes": 11696,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-data.js",
+      "source": "fresh-live-01",
+      "source_sha256": "7d8842cdb2031e8df2f85b62cea740b3075c9a83d67a38ac197facf9d309658d",
+      "sha256": "7d8842cdb2031e8df2f85b62cea740b3075c9a83d67a38ac197facf9d309658d",
+      "bytes": 62081,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-den-perception.jsx",
+      "source": "accepted-frontend08",
+      "source_sha256": "c85fd515f36c4824f406908c995fdfe7d5c2f1cdd494b3ff4343cdf03942f313",
+      "sha256": "c85fd515f36c4824f406908c995fdfe7d5c2f1cdd494b3ff4343cdf03942f313",
+      "bytes": 24266,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-edit.jsx",
+      "source": "accepted-frontend08",
+      "source_sha256": "5dfeb6b299fdc9bdd6d1f9124f8dbc0dcf1cb7bc3858f92ff2d901a29bd93d28",
+      "sha256": "5dfeb6b299fdc9bdd6d1f9124f8dbc0dcf1cb7bc3858f92ff2d901a29bd93d28",
+      "bytes": 123253,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-perception-player.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "f1d5072b8d5376c12d0e01113a508e9f71ebd8fe1cacd2597a75c0e434c277c9",
+      "sha256": "f1d5072b8d5376c12d0e01113a508e9f71ebd8fe1cacd2597a75c0e434c277c9",
+      "bytes": 21190,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-perception-source.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "0259d4c4e363bf272a9fe17e4c745b55a897182e43831e144a6f4116035df62f",
+      "sha256": "0259d4c4e363bf272a9fe17e4c745b55a897182e43831e144a6f4116035df62f",
+      "bytes": 16765,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-perception-view.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "ba8e955708e2e463ced02ddb4fec85e9aec8f4eb826ee1758ee9506e5773e18a",
+      "sha256": "ba8e955708e2e463ced02ddb4fec85e9aec8f4eb826ee1758ee9506e5773e18a",
+      "bytes": 31400,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-prewarm.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "d928ebc1306f8d7c001b006da777f7755666cf0a2c92d4cc0bccc206feb7b2e0",
+      "sha256": "d928ebc1306f8d7c001b006da777f7755666cf0a2c92d4cc0bccc206feb7b2e0",
+      "bytes": 15676,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment-site-session.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "44c5e6c0b2027aa010f84d1e61be4d5b4d2f0e38e32994bdc0fe17b5e881a250",
+      "sha256": "44c5e6c0b2027aa010f84d1e61be4d5b4d2f0e38e32994bdc0fe17b5e881a250",
+      "bytes": 3422,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-apartment.jsx",
+      "source": "fresh-live-01",
+      "source_sha256": "a4a689419e9b9cea3fd14206d7fc9aec63f8db75cee16d4c5c87f309c198a606",
+      "sha256": "a4a689419e9b9cea3fd14206d7fc9aec63f8db75cee16d4c5c87f309c198a606",
+      "bytes": 417097,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-app.jsx",
+      "source": "fresh-live-01",
+      "source_sha256": "88c7ce509a7abbad3e749385d60ce9d153cd7d43d1b40d4587385231eb3afa07",
+      "sha256": "88c7ce509a7abbad3e749385d60ce9d153cd7d43d1b40d4587385231eb3afa07",
+      "bytes": 539266,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-camera-query.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "dd899667a6aad3a10239ccc9edb25ff8d726d22142e7eb2b1620a66afa240939",
+      "sha256": "dd899667a6aad3a10239ccc9edb25ff8d726d22142e7eb2b1620a66afa240939",
+      "bytes": 25114,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-content-packs.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "f04f889861e33580b1172a347d4124ad979cff1473ef142b56947f928d0d17de",
+      "sha256": "f04f889861e33580b1172a347d4124ad979cff1473ef142b56947f928d0d17de",
+      "bytes": 11200,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-den-fixtures.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "6b3fb57efafde538ba3cca59324fcbcb55b51909a0afdd68e1a3ad7192344263",
+      "sha256": "6b3fb57efafde538ba3cca59324fcbcb55b51909a0afdd68e1a3ad7192344263",
+      "bytes": 16838,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-den-lab-stream.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "41e7212f2f09d556becb2841e13d6819bfa031486e657ec707d2431d3340c5d3",
+      "sha256": "41e7212f2f09d556becb2841e13d6819bfa031486e657ec707d2431d3340c5d3",
+      "bytes": 32083,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-equipment-registration.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "4925cbbac20fc137cf000795101b28c5c6837fe62ed732b9e8d37a533db35a13",
+      "sha256": "4925cbbac20fc137cf000795101b28c5c6837fe62ed732b9e8d37a533db35a13",
+      "bytes": 19086,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-feature-loader.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "714d410963005caba9386eea12692d951055e0482306f81621f794a3beaa3e67",
+      "sha256": "714d410963005caba9386eea12692d951055e0482306f81621f794a3beaa3e67",
+      "bytes": 11375,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-people.jsx",
+      "source": "accepted-frontend08",
+      "source_sha256": "eac852587b1b4a410eb27752e569cb96089e3f91361697c431850fda1746abb8",
+      "sha256": "eac852587b1b4a410eb27752e569cb96089e3f91361697c431850fda1746abb8",
+      "bytes": 220464,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-perception-lab-archive.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "6b8976f73ce2b623221c36cdbdccc219e4dedcb40c047726f7a5322aa2d7f415",
+      "sha256": "6b8976f73ce2b623221c36cdbdccc219e4dedcb40c047726f7a5322aa2d7f415",
+      "bytes": 4790,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-perception-lab-data.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "dfd3786e02941b72da1e37a00675fedc02ad5cd62047b68a35fef19f5a810df5",
+      "sha256": "dfd3786e02941b72da1e37a00675fedc02ad5cd62047b68a35fef19f5a810df5",
+      "bytes": 134941,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-perception-lab-graph.jsx",
+      "source": "accepted-frontend08",
+      "source_sha256": "b4a97f2c9b4f26e098ad1d34f2173d03274186c7e627d6860c49f6810a7ce236",
+      "sha256": "b4a97f2c9b4f26e098ad1d34f2173d03274186c7e627d6860c49f6810a7ce236",
+      "bytes": 115988,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-perception-lab-media.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "f2b7890a0c3fc2738644e8c5e2eb533c2931f121db682920071932661a96405b",
+      "sha256": "f2b7890a0c3fc2738644e8c5e2eb533c2931f121db682920071932661a96405b",
+      "bytes": 14518,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-perception-lab-transport.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "fa899d2b910922c7c0bbb618d54bd5634aab402fadca58c7d4de32253e6c58ee",
+      "sha256": "fa899d2b910922c7c0bbb618d54bd5634aab402fadca58c7d4de32253e6c58ee",
+      "bytes": 26362,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-perception-lab.css",
+      "source": "accepted-e2e-01",
+      "source_sha256": "b3334e30453226b7a150a2097878cfd766c90b67dd2c035846def615a69f51a1",
+      "sha256": "b3334e30453226b7a150a2097878cfd766c90b67dd2c035846def615a69f51a1",
+      "bytes": 67614,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-perception-lab.jsx",
+      "source": "accepted-frontend08",
+      "source_sha256": "34e56ac8ab1256ab1148d634e80e2c335ff1ba3421797fbaca9a2095c2148f88",
+      "sha256": "34e56ac8ab1256ab1148d634e80e2c335ff1ba3421797fbaca9a2095c2148f88",
+      "bytes": 173733,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-security.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "33e142611c2138b0a7e930ecabe4da30ad4c26226a296f48605019db1a553611",
+      "sha256": "33e142611c2138b0a7e930ecabe4da30ad4c26226a296f48605019db1a553611",
+      "bytes": 9133,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-site-registry.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "a133d0c554f929324d89e572e62acb6d02ddcaa47b738fe53255ac8c195b9011",
+      "sha256": "a133d0c554f929324d89e572e62acb6d02ddcaa47b738fe53255ac8c195b9011",
+      "bytes": 18789,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-tauri.jsx",
+      "source": "accepted-frontend08",
+      "source_sha256": "847dd1fd69e8d057dabfaf7be3350d658a58358dd41af5952225cee4d2b03319",
+      "sha256": "847dd1fd69e8d057dabfaf7be3350d658a58358dd41af5952225cee4d2b03319",
+      "bytes": 6285,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-tokens.css",
+      "source": "fresh-live-01",
+      "source_sha256": "6267400dc900c5ff783bbda11c859fc8761ebd142970e444d9015b53a883720a",
+      "sha256": "6267400dc900c5ff783bbda11c859fc8761ebd142970e444d9015b53a883720a",
+      "bytes": 14191,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/home-world-providers.js",
+      "source": "accepted-frontend08",
+      "source_sha256": "fe97e985f8ce490087d2aac8d21791bf75da0777fe8b2fa5d1de3a145ae7d7d0",
+      "sha256": "fe97e985f8ce490087d2aac8d21791bf75da0777fe8b2fa5d1de3a145ae7d7d0",
+      "bytes": 7644,
+      "adaptation": null
+    },
+    {
+      "path": "app/src/index.html",
+      "source": "accepted-frontend08",
+      "source_sha256": "3041ea4ed601ce59d6b96805036104eff1b752835f6a686af2bdfb3773ea5c67",
+      "sha256": "fb59641daf1253fd3ebf1211c4bb10f4c8b1c123f0065dc42715662e7478d775",
+      "bytes": 32732,
+      "adaptation": "remove unused Cesium import-map and legacy memory/perception boot entries"
+    },
+    {
+      "path": "tools/content-packs.mjs",
+      "source": "accepted-e2e-01",
+      "source_sha256": "b0d46a17b6d961eec18b1bfa7085006736cc756347ab933567c876b4e44fe14a",
+      "sha256": "b0d46a17b6d961eec18b1bfa7085006736cc756347ab933567c876b4e44fe14a",
+      "bytes": 8123,
+      "adaptation": null
+    },
+    {
+      "path": "web-gateway/equipment-registration.mjs",
+      "source": "accepted-e2e-01",
+      "source_sha256": "9e8adf869a5c2bfcf7066ebc5c7a53c0a045117f0676bf7baed5d3caf1336a99",
+      "sha256": "9e8adf869a5c2bfcf7066ebc5c7a53c0a045117f0676bf7baed5d3caf1336a99",
+      "bytes": 17918,
+      "adaptation": null
+    }
+  ]
+}

@@ -1187,22 +1187,18 @@ process.stdout.write("\n[1mindex.html cache-busting loader[0m\n");
     src.includes("cb=' + Date.now()") || src.includes("cb=\" + Date.now()"),
     "loader missing — JSX changes will be served from WebView2 cache");
 
-  // Every JSX/JS file in app/src/ MUST appear in the loader. Otherwise
-  // adding a new file silently breaks (won't be loaded at all).
+  // Every JSX/JS file must be reachable from boot or an actual lazy feature.
+  // Inventory local module imports too, without exempting orphaned sources.
   const srcDir = path.join(__dirname, "..", "app", "src");
-  const srcFiles = fs.readdirSync(srcDir)
-    .filter((f) => (f.endsWith(".jsx") || f.endsWith(".js")) &&
-                   !f.endsWith(".test.js") && f !== "babel-config.js" &&
-                   // Registered from home-web-runtime.js, never via index.html.
-                   f !== "home-service-worker.js");
-  const missing = srcFiles.filter((f) =>
-    !src.includes("'" + f + "'") && !src.includes('"' + f + '"') &&
-    // Head-loaded scripts and the service worker are referenced with a ./
-    // prefix (<script src="./x.js"> / register("./x.js?...")) — count those.
-    !src.includes("'./" + f) && !src.includes('"./' + f));
-  assert("every JSX/JS in app/src is listed in index.html loader",
-    missing.length === 0,
-    { missing });
+  const inventory = require("./lib/home-frontend-inventory.cjs").inspectFrontendInventory(srcDir, {
+    indexSource: src,
+    featureLoaderSource: fs.readFileSync(path.join(srcDir, "home-feature-loader.js"), "utf8"),
+    runtimeSource: fs.readFileSync(path.join(srcDir, "home-web-runtime.js"), "utf8"),
+  });
+  assert("every declared boot, lazy feature and imported script exists", inventory.missingDeclared.length === 0,
+    { missing: inventory.missingDeclared });
+  assert("every JSX/JS in app/src is reachable from the frontend loaders", inventory.orphanedFiles.length === 0,
+    { orphaned: inventory.orphanedFiles });
 
   // No static `<script type="text/babel" src="`-tags remain (regression
   // guard — the fix replaced them all with the dynamic loader).

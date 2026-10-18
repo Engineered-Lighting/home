@@ -4,6 +4,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { inspectHomeApp } = require("./lib/home-app-source-contracts.cjs");
 
 const REPO = path.resolve(__dirname, "..");
 const SRC_DIR = path.join(REPO, "app", "src");
@@ -18,6 +19,7 @@ const featureLoaderSource = fs.readFileSync(path.join(SRC_DIR, "home-feature-loa
 const serviceWorkerSource = fs.readFileSync(path.join(SRC_DIR, "home-service-worker.js"), "utf8");
 const mountSource = fs.readFileSync(MOUNT, "utf8");
 const appSource = fs.readFileSync(HOME_APP, "utf8");
+const homeContracts = inspectHomeApp(appSource);
 const iconsSource = fs.readFileSync(path.join(SRC_DIR, "home-icons.jsx"), "utf8");
 const auditSource = fs.readFileSync(AUDIT, "utf8");
 const fetchRetrySource = fs.readFileSync(path.join(SRC_DIR, "home-fetch-with-retry.js"), "utf8");
@@ -90,8 +92,9 @@ const sidecarSseBlock = sliceBetween(appSource, "/* ── Single source of trut
 const serviceHealthBlock = sliceBetween(appSource, "/* ── Phase B F0-08", "/* ── Voice PE activity");
 const roomPollBlock = sliceBetween(appSource, "/* ── Tray v3: bridge /rooms", "/* ── Phase 2: vision-sidecar");
 const visionPollBlock = sliceBetween(appSource, "/* ── Phase 2: vision-sidecar", "const isSpatialWide");
-assert("web Apartment state owns an explicit network-priority gate",
-  appSource.includes("const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);"));
+const priorityCases = homeContracts.priorityCases();
+assert("Apartment network priority respects web and available isolation boundaries",
+  priorityCases.every(row => row.ok), priorityCases.filter(row => !row.ok));
 assert("optional metrics and chat SSE pause while Apartment has priority",
   metricsPollBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
     sidecarSseBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
@@ -135,20 +138,14 @@ assert("boot chain has no duplicate files", unique(names).length === names.lengt
 assert("every boot-chain file exists", entries.every((entry) => fs.existsSync(path.join(SRC_DIR, entry.name))),
   entries.filter((entry) => !fs.existsSync(path.join(SRC_DIR, entry.name))).map((entry) => entry.name));
 
-const sourceFiles = fs.readdirSync(SRC_DIR)
-  .filter((name) => (name.endsWith(".jsx") || name.endsWith(".js")) &&
-    !name.endsWith(".test.js") &&
-    name !== "babel-config.js")
-  .sort();
 const staticScripts = Array.from(indexSource.matchAll(/<script\s+src=["']\.\/([^"']+)["']/g))
   .map((match) => match[1]);
-const registeredStaticFiles = ["home-service-worker.js"];
-const missingSourceFiles = sourceFiles.filter((name) => !positions.has(name) &&
-  !staticScripts.includes(name) &&
-  !registeredStaticFiles.includes(name));
-assert("every top-level app/src JS/JSX file is in the boot chain or static pre-runtime",
-  missingSourceFiles.length === 0,
-  missingSourceFiles);
+const frontendInventory = require("./lib/home-frontend-inventory.cjs").inspectFrontendInventory(SRC_DIR,
+  { indexSource, featureLoaderSource, runtimeSource });
+assert("every boot, lazy feature and imported frontend script exists",
+  frontendInventory.missingDeclared.length === 0, frontendInventory.missingDeclared);
+assert("every top-level app/src JS/JSX file is reachable from boot, lazy features or the web runtime",
+  frontendInventory.orphanedFiles.length === 0, frontendInventory.orphanedFiles);
 assert("web runtime and service resolver load before ordered boot chain",
   staticScripts.includes("home-web-runtime.js") &&
     staticScripts.includes("home-services.js") &&
@@ -478,7 +475,7 @@ const connectBlock = sliceBetween(appSource, "const connectTo = useCallback", "c
 const confirmModelBlock = sliceBetween(appSource, "const confirmModel = useCallback", "/* Auto-reconnect on launch");
 const reconnectBlock = sliceBetween(appSource, "/* Auto-reconnect on launch", "/* Sim Mode transitions");
 const focusBlock = sliceBetween(appSource, "/* Input focus", "/* \u2500\u2500 HA client lifecycle");
-const renderGateBlock = sliceBetween(appSource, "{isFirstRunVisible(connection, events) ? (", "<MetricsStrip");
+const firstRunContract = homeContracts.firstRunContract();
 const spatialRailRenderBlock = sliceBetween(appSource, "<SpatialModeRail", "{spatialOpsDockOpen && (");
 const inputRowBlock = sliceBetween(appSource, "function InputRow", "/* VoiceModeButton");
 assert("FirstRun accepts S88 connection props",
@@ -488,9 +485,9 @@ assert("FirstRun seeds endpoint and token fields from persisted props",
   /useState\(endpoint \|\| webDefaultBase\("HG_DEFAULT_HA_BASE"\) \|\| "http:\/\/192\.168\.0\.125:8123"\)/.test(firstRunBlock) &&
     /connection === "offline" \|\| connection === "auth_invalid"[\s\S]*\? "" : \(token \|\| ""\)/.test(firstRunBlock),
   firstRunBlock.slice(0, 700));
-assert("FirstRun submit prevents default and calls onConnect with typed url and token",
-  /<form onSubmit=\{\(e\) => \{ e\.preventDefault\(\); onConnect\(url, tok\); \}\}/.test(firstRunBlock),
-  firstRunBlock.slice(2500, 3900));
+const firstRunSubmissions = homeContracts.firstRunSubmissionCases();
+assert("FirstRun submit prevents default and forwards typed credentials and the available remember choice",
+  firstRunSubmissions.every(row => row.ok), firstRunSubmissions.filter(row => !row.ok));
 assert("FirstRun Connect button is disabled while connecting or missing credentials",
   /type="submit" disabled=\{isConnecting \|\| !url \|\| !tok\}/.test(firstRunBlock),
   firstRunBlock.slice(3600, 5100));
@@ -506,26 +503,23 @@ assert("FirstRun empty model-list fallback can continue without a model name",
 assert("FirstRun visibility gate keeps picker and auth errors on the form surface",
   /return connection !== "online" && connection !== "reconnecting";/.test(firstRunGateBlock),
   firstRunGateBlock);
-assert("HomeApp render gate mounts FirstRun with live connect and picker props",
-  /<FirstRun[\s\S]*connection=\{connection\}[\s\S]*endpoint=\{endpoint\}[\s\S]*token=\{token\}[\s\S]*onConnect=\{connectTo\}[\s\S]*availableModels=\{availableModels\}[\s\S]*onPickModel=\{confirmModel\}[\s\S]*onSimulation=\{\(\) => \{/.test(renderGateBlock),
-  renderGateBlock.slice(0, 900));
+assert("live Home controller mounts FirstRun with live connect and picker props",
+  firstRunContract.forwarded && firstRunContract.picker && firstRunContract.connectAuthorized && firstRunContract.simulationActivated,
+  firstRunContract);
+assert("FirstRun render gate preserves auth/model recovery and available rehearsal isolation",
+  firstRunContract.gateCases.every(row => row.ok), firstRunContract.gateCases.filter(row => !row.ok));
 assert("Spatial ops rail clears tool surfaces before toggling the ops dock",
   /onOps=\{\(\) => \{[\s\S]*closeSpatialToolSurfaces\(\);[\s\S]*setSpatialOpsDockOpen\(\(open\) => !open\);[\s\S]*\}\}/.test(spatialRailRenderBlock),
   spatialRailRenderBlock);
-assert("stored events do not make an uncredentialed launch look online",
-  /const hasStoredHaCredentials = !!\(initialPrefs\.endpoint && initialPrefs\.token\);[\s\S]*const \[connection, setConnection\] = useState\(\s*hasStoredHaCredentials \? "reconnecting" : "disconnected"\s*\);/.test(appSource) &&
-    !/initialEvents \? "online"/.test(appSource),
-  appSource.slice(appSource.indexOf("const hasStoredHaCredentials") - 300, appSource.indexOf("const hasStoredHaCredentials") + 500));
+const initializationCases = homeContracts.initializationCases();
+assert("stored events cannot imply online state and available isolation cannot retain live credentials",
+  initializationCases.every(row => row.ok), initializationCases.filter(row => !row.ok));
 assert("prefs persistence keeps endpoint/model but excludes bearer token",
   /savePrefs\(\{\s*endpoint,\s*model,/.test(prefsBlock) &&
     /\[endpoint,\s*model,/.test(prefsBlock) &&
     !/savePrefs\(\{[^}]*\btoken\b/.test(prefsBlock) &&
     !/\[endpoint,\s*token,/.test(prefsBlock),
   prefsBlock);
-assert("connectTo persists typed endpoint/token before attempting HA connect",
-  /setEndpoint\(haUrl\);[\s\S]*setToken\(accessToken\);[\s\S]*setAvailableModels\(null\);[\s\S]*setConnection\("connecting"\);/.test(connectBlock) &&
-    /haClientRef\.current\.connect\(haUrl, accessToken\)/.test(connectBlock),
-  connectBlock.slice(0, 900));
 assert("connectTo discovers vLLM models from the AI host and maps id plus context",
   /let vllmBase = webDefaultBase\("HG_DEFAULT_VLLM_BASE"\)/.test(connectBlock) &&
     /const aiHost = new URL\(mBase\)\.hostname/.test(connectBlock) &&
@@ -557,11 +551,22 @@ assert("InputRow mount still ignores the initial zero focus token",
   /useEffect\(\(\) => \{ if \(focusToken\) inputRef\.current\?\.focus\(\); \}, \[focusToken\]\)/.test(inputRowBlock),
   inputRowBlock.slice(0, 700));
 
-process.stdout.write("\n");
-process.stdout.write(`${passes} pass . ${fails} fail\n`);
-if (failures.length) {
-  for (const failure of failures) {
-    process.stdout.write(`  FAIL: ${failure.name}\n`);
+(async function finishExtractedContracts() {
+  const connectionCases = await homeContracts.connectPreparationCases();
+  assert("connectTo forwards browser remember intent and refuses native bearer login before connect or persistence",
+    connectionCases.every(row => row.ok), connectionCases.filter(row => !row.ok));
+  const gatewayCases = homeContracts.gatewayTokenCases();
+  assert("available gateway marker injection is limited to its own proxy and never overwrites an existing token",
+    gatewayCases.every(row => row.ok), gatewayCases.filter(row => !row.ok));
+  process.stdout.write("\n");
+  process.stdout.write(`${passes} pass . ${fails} fail\n`);
+  if (failures.length) {
+    for (const failure of failures) {
+      process.stdout.write(`  FAIL: ${failure.name}\n`);
+    }
+    process.exit(1);
   }
+})().catch(error => {
+  process.stderr.write(String(error.stack || error) + "\n");
   process.exit(1);
-}
+});

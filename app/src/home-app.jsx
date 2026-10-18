@@ -233,6 +233,62 @@ if (typeof window !== "undefined") {
   window.HomeNormalizeChatEventText = normalizeChatEventText;
 }
 
+// The legacy shared-model tee also broadcasts unattended camera analysis.
+// Identify this producer, not JSON in general: real chat may legitimately use JSON.
+function isBackgroundPerceptionTurn(entry) {
+  if (["background:apartment-perception", "background:home-memory"].includes(entry?.source)) return true;
+  const text = typeof entry?.user === "string" ? entry.user : "";
+  if (text.startsWith("[background:home-memory]\n") || /^These are \d+ ordered full camera frames, numbered 0 through \d+, spanning /.test(text)
+    && text.includes("All SIX observation fields are mandatory")
+    && text.includes("These are full scene images, not tracked person crops.")) return true;
+  // Older tee records lack producer provenance. Match the internal request
+  // contracts for the second reasoning pass, including already-saved history.
+  // Never classify a reply merely because it contains JSON or model metadata.
+  let packet;
+  try { packet = JSON.parse(text); } catch { return false; }
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) return false;
+  const visual = packet.visual_observation;
+  if (!visual || typeof visual.observations !== "object"
+      || !Array.isArray(visual.activity_hypotheses)) return false;
+  const context = packet.context;
+  if (context?.schema === "continuity-context/v1"
+      && typeof context.job_id === "string"
+      && typeof context.episode_id === "string"
+      && Array.isArray(context.evidence)
+      && Array.isArray(context.claims)
+      && Array.isArray(context.frame_refs)) return true;
+  return Object.keys(packet).length === 4
+    && !!packet.device_reports && typeof packet.device_reports === "object"
+    && !!packet.perception_reports && typeof packet.perception_reports === "object"
+    && Array.isArray(packet.allowed_evidence_ids);
+}
+
+function markArchivedBackgroundPerception(events) {
+  const isArchivedRequest = (event) => {
+    if (event?.kind !== "voice" || !String(event.turnKey || "").startsWith("sse:")) return false;
+    if (isBackgroundPerceptionTurn({ user: event.text })) return true;
+    // Chat's old prose deduper can truncate/reorder raw scene JSON before it
+    // reaches storage. Its internal schema and job metadata still identify the
+    // SSE request; requiring valid JSON would leave those leaked turns visible.
+    const text = typeof event.text === "string" ? event.text : "";
+    return /"schema"\s*:\s*"continuity-context\/v1"/.test(text)
+      && /"job_id"\s*:\s*"/.test(text)
+      && /"episode_id"\s*:\s*"/.test(text)
+      && /"read_versions"\s*:\s*\{/.test(text);
+  };
+  const background = events.filter((event) =>
+    isBackgroundPerceptionTurn({ source: event?.source })
+    || isArchivedRequest(event));
+  const keys = new Set(background.flatMap((event) =>
+    [event.turnKey, event.sourceTurnId].filter(Boolean)));
+  const marked = new Set(background);
+  // Preserve historical data, but remove these machine turns from conversation.
+  // Match linked SSE turns only; never hide adjacent human messages or generic JSON.
+  return events.map((event) => marked.has(event) || keys.has(event?.turnKey) || keys.has(event?.sourceTurnId)
+    ? { ...event, kind: "diag", channel: "background-perception", backgroundPerception: true }
+    : event);
+}
+
 function sanitizeChatEventForStorage(ev) {
   if (!ev || typeof ev !== "object") return ev;
   const next = ev.text
@@ -619,7 +675,7 @@ function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
-  onOpenVideoLabeler, onOpenApartment, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
+  onOpenVideoLabeler, onOpenApartment, onOpenPerceptionLab, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -802,6 +858,7 @@ function HomeHeader({
             )}
             {onOpenPeople && !mobile && <button type="button" role="menuitem" ref={peopleButtonRef} style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
             {onOpenApartment && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
+            {onOpenPerceptionLab && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenPerceptionLab)}>Perception Lab</button>}
             {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>{mobile ? "lights + travel mode" : "lights"}</button>}
             {onOpenIntelligence && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
             {onOpenVideoLabeler && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenVideoLabeler)}>video labeler</button>}
@@ -1090,6 +1147,7 @@ function HomeHeader({
             <span>{mobile ? "apt" : "apartment"}</span>
           </button>
         )}
+        {onOpenPerceptionLab && <button type="button" aria-label="Open Perception Lab" className="hg-focusable hg-mobile-touch" onClick={onOpenPerceptionLab} style={navChipBtn}>Perception Lab</button>}
         {/* The bench console. A link out, not an embed: the console is a
             safety-audited surface with its own eight test suites, and an
             iframe of it would be a hub client whenever Home is running -
@@ -1157,6 +1215,7 @@ function SpatialModeRail({
   onCameras,
   onPeople,
   onIntelligence,
+  onPerceptionLab,
   onLights,
   onOps,
   onToggleTheme,
@@ -1166,6 +1225,7 @@ function SpatialModeRail({
     { id: "cameras", label: "cams", title: "Camera review", onClick: onCameras, tone: "var(--hg-ice-bright)" },
     { id: "people", label: "people", title: "People tracking", onClick: onPeople, tone: "var(--hg-ice)" },
     { id: "intel", label: "atlas", title: "Intelligence Atlas", onClick: onIntelligence, tone: "var(--hg-ice)" },
+    { id: "perceptionLab", label: "lab", title: "Perception Lab", onClick: onPerceptionLab, tone: "var(--hg-ice)" },
     { id: "lights", label: "lights", title: "Lighting lab", onClick: onLights, tone: "var(--hg-warn)" },
     { id: "ops", label: "ops", title: opsVisible ? "Hide operational tray" : "Show operational tray", onClick: onOps, tone: "var(--hg-fg-2)" },
   ];
@@ -3631,6 +3691,9 @@ function FirstRun({
   const [tok, setTok] = useState(
     (connection === "offline" || connection === "auth_invalid") ? "" : (token || "")
   );
+  const [rememberHa, setRememberHa] = useState(() => {
+    try { return window.HomeSecurity?.remembersHaLogin?.(window.localStorage) ?? true; } catch (_) { return false; }
+  });
   const isConnecting   = connection === "connecting";
   const isOffline      = connection === "offline";
   const isAuthInvalid  = connection === "auth_invalid";
@@ -3764,7 +3827,7 @@ function FirstRun({
         running={serviceProbeRunning}
         compact={compact}
       />
-      <form onSubmit={(e) => { e.preventDefault(); onConnect(url, tok); }} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <form onSubmit={(e) => { e.preventDefault(); onConnect(url, tok, { rememberHa }); }} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         <div>
           <label style={{ fontFamily: "'Geist Mono', monospace", fontSize: 9.5, letterSpacing: "0.18em", color: "var(--hg-fg-4)" }}>home assistant url</label>
           <div style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${borderTone}`, paddingBottom: 6, marginTop: 6 }}>
@@ -3805,6 +3868,7 @@ function FirstRun({
             }}>{isConnecting ? "connecting…" : (isOffline || isAuthInvalid) ? "retry ↵" : "connect ↵"}</button>
           </div>
         </div>
+        {window.HG_WEB_MODE && !nativeSecure && <label style={{display:"flex",gap:8,alignItems:"center",fontSize:12,color:"var(--hg-fg-3)"}}><input type="checkbox" checked={rememberHa} onChange={e=>setRememberHa(e.target.checked)}/>Remember on this browser</label>}
       </form>
       <div style={{
         marginTop: compact ? 20 : 28,
@@ -4161,6 +4225,7 @@ const SLASH_CMDS = [
   // ── setup / infra: connection ─────────────────────────────────
   { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint", category: "connection" },
   { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url", category: "connection" },
+  { cmd: "/forget-ha", hint: "", desc: "forget this browser’s saved HA login", category: "connection" },
   { cmd: "/token",    hint: "<token>", desc: "update the HA long-lived access token", category: "connection" },
   { cmd: "/stack-token", hint: "", desc: "disabled: stack credentials are server-side only", category: "connection" },
   { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url", category: "connection" },
@@ -5089,7 +5154,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const initialEventsFromStorage = useMemo(
     () => {
       const restored = coalesceAssistantTurnEvents(
-        (initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
+        markArchivedBackgroundPerception(initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
       );
       // Rehydrate the module-level id counter past any restored `e-N` ids.
       // The counter resets to 0 on reload while restored events keep their
@@ -5167,6 +5232,23 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // underlying chat feed while the overlay is open.
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
+  const [perceptionLabOpen, setPerceptionLabOpen] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("perceptionLabDemo") === "1"; } catch (_) { return false; }
+  });
+  useEffect(() => { if (perceptionLabOpen) ensureFeature("perceptionLab", "Perception Lab", "navigation"); }, [perceptionLabOpen]);
+  useEffect(() => {
+    const controller = window.HomePerceptionLabController;
+    if (!controller || window.__SIM_ACTIVE || new URLSearchParams(window.location.search).get("perceptionLabDemo") === "1") return undefined;
+    let stopped = false;
+    const observe = (snapshot) => {
+      if (!stopped && snapshot.activeSession) ensureFeature("perceptionLab", "Perception Lab", "recording-status");
+    };
+    const unsubscribe = controller.subscribe(observe);
+    controller.refresh();
+    controller.start();
+    const timer = window.setInterval(() => { if (!window.__SIM_ACTIVE) controller.refresh(); }, 60000);
+    return () => { stopped = true; unsubscribe(); window.clearInterval(timer); };
+  }, []);
   // Addendum 27 / M5 — explainability drawer state. Stores the conv_id
   // whose routing-log entries the drawer renders, or null when closed.
   // Open via /why slash command or by clicking any kind:"home"/"action"/
@@ -5983,7 +6065,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   useEffect(() => { setFeedWindowSize(120); }, [conversationId]);
   const feedGroups = useMemo(
     () => groupEventsBySpeaker(
-      debugMode ? events : events.filter((e) => e.kind !== "diag")
+      events.filter((e) => !e.backgroundPerception && (debugMode || e.kind !== "diag"))
     ),
     [events, debugMode],
   );
@@ -6305,7 +6387,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // Map HAClient states to the UI's connection states.
       if (state === "connecting")          setConnection("connecting");
       else if (state === "online")         setConnection((c) => c === "picking-model" ? c : "online");
-      else if (state === "auth_invalid")   setConnection("auth_invalid");
+      else if (state === "auth_invalid") {
+        setConnection("auth_invalid");
+        if (window.HG_WEB_MODE && !window.IS_TAURI) {
+          try { window.HomeSecurity?.forgetHaLogin?.(window.localStorage, client.url, client.token); } catch (_) {}
+        }
+      }
       else if (state === "offline")        setConnection((c) => c === "disconnected" ? c : "offline");
       if (message) addEvent({ kind: "system", text: message, tone: "warn" });
     });
@@ -6385,7 +6472,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setConnection("connecting");
     addEvent({ kind: "system", text: `connecting to ${haUrl}`, tone: "info" });
     try {
-      await haClientRef.current.connect(haUrl, accessToken);
+      const client = haClientRef.current;
+      if (client.url && (client.url !== haUrl || client.token !== accessToken)) client.disconnect();
+      if (window.HG_WEB_MODE && options.rememberHa === false) {
+        try { window.HomeSecurity?.saveHaLogin?.(window.localStorage, "", "", false); } catch (_) {}
+      }
+      await client.connect(haUrl, accessToken);
+      if (window.HG_WEB_MODE && client.url === haUrl && client.token === accessToken) {
+        try {
+          const remember = options.rememberHa ?? window.HomeSecurity?.remembersHaLogin?.(window.localStorage) ?? true;
+          const saved = window.HomeSecurity?.saveHaLogin?.(window.localStorage, haUrl, accessToken, remember);
+          if (remember && !saved) addEvent({kind:"system",text:"Connected, but this browser could not remember the HA login.",tone:"warn"});
+        } catch (_) { addEvent({kind:"system",text:"Connected, but browser storage is unavailable; HA login will be needed after refresh.",tone:"warn"}); }
+      }
     } catch (e) {
       addEvent({ kind: "system", text: `unreachable · ${e?.message || haUrl}`, tone: "error" });
       return;
@@ -7526,6 +7625,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         } else {
           addEvent({ kind: "system", text: `usage: /${cmd} <url> [<token>]`, tone: "info" });
         }
+        return true;
+      case "forget-ha":
+        if (window.IS_TAURI) return true;
+        try { window.HomeSecurity?.saveHaLogin?.(window.localStorage, "", "", false); } catch (_) {}
+        haClientRef.current?.disconnect();
+        setToken(""); setConnection("disconnected");
+        addEvent({kind:"system",text:"Saved HA login forgotten on this browser.",tone:"info"});
         return true;
       case "token":
         if (window.IS_TAURI) {
@@ -9910,6 +10016,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       let entry;
       try { entry = JSON.parse(ev.data); }
       catch { return; }
+      // Background camera jobs are not user turns, proactive replies or actions.
+      if (isBackgroundPerceptionTurn(entry)) return;
       console.log("[sse] event", entry);
       // Phase 1: identity / presence events come through the SSE pipe
       // too (so text-only mode still gets the UX). Dispatch to the same
@@ -10104,7 +10212,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           // No local user event → originated outside the Home app (Voice PE).
           newUserEvents.push({
             id: nextId(), kind: "voice", time: fmtTime(),
-            text: correctedUser, turnKey,
+            text: correctedUser, turnKey, source: entry.source,
           });
         }
         // Tag bridge-emitted diag events ([parakeet] heard, [direct]
@@ -10177,6 +10285,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               text: correctedAssistant,
               turnKey,
               sourceTurnId,
+              source: entry.source,
             }]
           : [];
         // Defensive dedupe (May 2026): assistant text occasionally arrives
@@ -11201,6 +11310,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     flexDirection: "column",
   };
   const spatialActiveSurface =
+    perceptionLabOpen ? "perceptionLab" :
     videoLabelerOpen ? "cameras" :
     peopleOpen ? "people" :
     intelligenceOpen ? "intel" :
@@ -11221,6 +11331,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * the old "explain wins by DOM order" comment. people/intel/labeler
    * deliberately do NOT close lights or the right-slot drawers. */
   const SURFACE_CLOSERS = {
+    perceptionLab: () => setPerceptionLabOpen(false),
     people: () => setPeopleOpen(false),
     intel: () => setIntelligenceOpen(false),
     labeler: () => setVideoLabelerOpen(false),
@@ -11233,6 +11344,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   };
   const RIGHT_SLOT = ["explain", "world", "spatialD", "look"];
   const SURFACE_POLICY = {
+    perceptionLab: { closes: ["people", "intel", "labeler", "apartment", "lights", ...RIGHT_SLOT], open: () => setPerceptionLabOpen(true), feature: ["perceptionLab", "Perception Lab"] },
     people: { closes: ["intel", "labeler", "apartment"], open: () => setPeopleOpen(true), feature: ["people", "people"] },
     intel: { closes: ["people", "labeler", "apartment"], open: () => setIntelligenceOpen(true), feature: ["intelligence", "intelligence"] },
     labeler: { closes: ["people", "intel", "apartment"], open: () => setVideoLabelerOpen(true), feature: ["videoLabeler", "video labeler"] },
@@ -11242,6 +11354,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const closeSurfaces = (keys) => { keys.forEach((k) => SURFACE_CLOSERS[k]()); };
   const openSurface = (key, source) => {
     const policy = SURFACE_POLICY[key];
+    if (key !== "perceptionLab") setPerceptionLabOpen(false);
     closeSurfaces(policy.closes);
     policy.open();
     ensureFeature(policy.feature[0], policy.feature[1], source || "header");
@@ -11253,7 +11366,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   };
   const closeSpatialToolSurfaces = () => {
     cleanEmbeddedApartmentState();
-    closeSurfaces(["people", "intel", "labeler", "lights", ...RIGHT_SLOT]);
+    closeSurfaces(["people", "intel", "labeler", "lights", "perceptionLab", ...RIGHT_SLOT]);
   };
   /* Named header-wiring helpers — names are pinned by run-bootstrap-tests /
    * run-lights-drawer-tests / qa-browser-smoke; they may be invoked as
@@ -11261,6 +11374,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const srcOf = (source) => (typeof source === "string" ? source : "header");
   const openPeopleFeature = (source) => openSurface("people", srcOf(source));
   const openIntelligenceFeature = (source) => openSurface("intel", srcOf(source));
+  const openPerceptionLabFeature = (source) => openSurface("perceptionLab", srcOf(source));
   const openVideoLabelerFeature = (source) => {
     if (!videoLabelerAvailable) {
       addEvent({
@@ -11378,6 +11492,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               setIntelligenceOpen(true);
               ensureFeature("intelligence", "intelligence", "spatial-rail");
             }}
+            onPerceptionLab={openPerceptionLabFeature}
             onLights={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
@@ -11457,6 +11572,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
         onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}
         onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
+        onOpenPerceptionLab={isSpatialWide ? null : openPerceptionLabFeature}
         onOpenBench={benchConsole === "down" ? null : openBenchConsole}
         benchVerified={benchConsole === "up"}
         onOpenLights={isSpatialWide ? null : openLightsFeature}
@@ -11530,6 +11646,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           spatialMode={isSpatialWide}
         />
       )}
+      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={isSpatialWide} />}
+      {window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
+      {perceptionLabOpen && !window.HomePerceptionLab && <FeatureLoadingSurface open={perceptionLabOpen} title="Perception Lab" status={featureStatusFor("perceptionLab")} error={featureLoadErrors.perceptionLab} onClose={() => setPerceptionLabOpen(false)} onRetry={() => ensureFeature("perceptionLab", "Perception Lab", "retry")} mobile={mobile} />}
       {intelligenceOpen && !window.HomeIntelligenceOverlay && (
         <FeatureLoadingSurface
           open={intelligenceOpen}

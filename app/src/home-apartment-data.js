@@ -13,7 +13,9 @@
   const TRACKER_KEY = "apartment3d.trackerBase";
   const DRAFT_KEY = "apartment3d.modelDraft";
   const REMOTE_CACHE_KEY = "apartment3d.remoteCache";
+  const VIEW_KEY_PREFIX = "apartment3d.view.";
   const DEFAULT_TRACKER = "ws://192.168.0.100:8098";
+  const rehearsalIsolated = () => window.HomeLiveSceneShadow?.active === true || window.HomeMapRehearsalOfflineState?.active === true;
 
   function defaultTrackerBase() {
     try {
@@ -49,6 +51,141 @@
     zones: [], devices: [], targets: [],
   };
 
+  // Private models remain in process memory. Only discrete, coordinate-free
+  // navigation preferences go to browser storage; the legacy draft/cache keys
+  // remain Echo-owned and retain the security bootstrap's existing purge.
+  const workspaces = new Map();
+  let workspaceAuthority = null;
+  let workspaceCredentialScope = null;
+  let workspaceAuthoritySequence = 0;
+  const DEFAULT_VIEW = Object.freeze({ mode: "points", az: 1, el: 0, zoom: 0 });
+
+  function stateScope(input = {}) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+    const { siteId = "echo", contentRevision = null, registrationVersion = 0, frameDigest = null } = input;
+    if (typeof siteId !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(siteId)
+        || !Number.isInteger(registrationVersion) || registrationVersion < 0
+        || (frameDigest !== null && !/^[a-f0-9]{64}$/.test(frameDigest))) return null;
+    return { siteId, contentRevision, registrationVersion, frameDigest };
+  }
+
+  function cloneState(value) {
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return null; }
+  }
+
+  function modelBelongsToSite(model, siteId) {
+    return [model?.site, model?.site_id, model?.source_detail?.site_id, model?.meta?.site_id]
+      .every((declared) => declared === undefined || declared === null || declared === siteId);
+  }
+
+  function workspaceKey(scope) {
+    return JSON.stringify([scope.siteId, scope.registrationVersion, scope.frameDigest,
+      ...(scope.siteId === "victoria" ? [scope.contentRevision] : [])]);
+  }
+
+  function clearWorkspaces() {
+    if (window.HomeLiveSceneShadow?.active) return 0;
+    const count = workspaces.size;
+    workspaces.clear();
+    return count;
+  }
+
+  function setWorkspaceAuthority(authorityKey = "") {
+    if (window.HomeLiveSceneShadow?.active) return false;
+    const next = String(authorityKey);
+    if (next === workspaceAuthority) return false;
+    clearWorkspaces();
+    workspaceAuthority = next;
+    workspaceCredentialScope = null;
+    return true;
+  }
+
+  function ensureWorkspaceAuthority({ endpoint = "", token = "", simulation = false } = {}) {
+    if (window.HomeLiveSceneShadow?.active) return { key: null, changed: false, shadow: true };
+    // Credentials are compared privately in this app-lifetime closure. They
+    // never appear in workspace snapshots, returned keys or browser storage.
+    const nextScope = {
+      endpoint: typeof endpoint === "string" ? endpoint.trim().replace(/\/+$/, "") : "",
+      token: typeof token === "string" ? token : "",
+      simulation: simulation === true,
+    };
+    if (workspaceCredentialScope && workspaceCredentialScope.endpoint === nextScope.endpoint
+        && workspaceCredentialScope.token === nextScope.token
+        && workspaceCredentialScope.simulation === nextScope.simulation) {
+      return { key: workspaceAuthority, changed: false };
+    }
+    let key;
+    do { key = `apartment-authority-${++workspaceAuthoritySequence}`; } while (key === workspaceAuthority);
+    setWorkspaceAuthority(key);
+    workspaceCredentialScope = nextScope;
+    return { key, changed: true };
+  }
+
+  function workspaceScope(input = {}) {
+    if (!input || typeof input !== "object") return null;
+    if (Object.prototype.hasOwnProperty.call(input, "authorityKey")) {
+      if (workspaceAuthority === null) setWorkspaceAuthority(input.authorityKey);
+      if (String(input.authorityKey) !== workspaceAuthority) return null;
+    }
+    return stateScope(input);
+  }
+
+  function normalizedView(scope, view = {}) {
+    if (!view || typeof view !== "object") view = {};
+    return {
+      version: 1, ...scope,
+      mode: ["points", "splat", "mesh"].includes(view.mode) ? view.mode : DEFAULT_VIEW.mode,
+      az: Number.isInteger(view.az) && view.az >= 0 && view.az < 8 ? view.az : DEFAULT_VIEW.az,
+      el: Number.isInteger(view.el) && view.el >= 0 && view.el < 2 ? view.el : DEFAULT_VIEW.el,
+      zoom: Number.isInteger(view.zoom) && view.zoom >= 0 && view.zoom < 5 ? view.zoom : DEFAULT_VIEW.zoom,
+    };
+  }
+
+  function captureWorkspace(input, { model = null, dirty = false, view = null } = {}) {
+    if (window.HomeLiveSceneShadow?.active) return null;
+    const scope = workspaceScope(input);
+    if (!scope || rehearsalIsolated()) return null;
+    const copy = cloneState(model);
+    if (model !== null && (copy === null || !modelBelongsToSite(copy, scope.siteId))) return null;
+    const placementWorkspace = scope.siteId === "victoria" && copy?._equipment_registration?.scope?.site_id === "victoria";
+    const saved = { scope, model: copy, dirty: (scope.siteId === "echo" || placementWorkspace) && dirty === true,
+      view: view ? normalizedView(scope, view) : null };
+    workspaces.set(workspaceKey(scope), saved);
+    return cloneState(saved);
+  }
+
+  function restoreWorkspace(input) {
+    const scope = workspaceScope(input);
+    if (!scope || rehearsalIsolated()) return null;
+    return cloneState(workspaces.get(workspaceKey(scope)) || null);
+  }
+
+  function readViewPreference(input) {
+    const scope = stateScope(input);
+    if (!scope) return { ...DEFAULT_VIEW };
+    try {
+      const saved = JSON.parse(localStorage.getItem(VIEW_KEY_PREFIX + scope.siteId) || "null");
+      if (saved?.version === 1 && saved.siteId === scope.siteId
+          && saved.registrationVersion === scope.registrationVersion
+          && (saved.frameDigest ?? null) === scope.frameDigest) return normalizedView(scope, saved);
+    } catch (_) { /* blocked or malformed preference storage uses normal navigation */ }
+    return normalizedView(scope);
+  }
+
+  function saveViewPreference(input, view) {
+    if (window.HomeLiveSceneShadow?.active) return false;
+    const scope = stateScope(input);
+    if (!scope || rehearsalIsolated()) return false;
+    const saved = normalizedView(scope, view);
+    // contentRevision is useful for in-memory workspace provenance, but does
+    // not belong in the preference or invalidate navigation on cosmetic packs.
+    delete saved.contentRevision;
+    try {
+      localStorage.setItem(VIEW_KEY_PREFIX + scope.siteId, JSON.stringify(saved));
+      return true;
+    } catch (_) { return false; }
+  }
+
   const MODEL_SOURCE_META = {
     simulation: { label: "Simulation", tone: "sim", writable: false, live: false },
     local_draft: { label: "Local draft", tone: "warn", writable: true, live: false },
@@ -57,6 +194,8 @@
     tracker_live: { label: "Tracker / live spatial data", tone: "tracker", writable: false, live: true },
     cached_live_model: { label: "Cached live model", tone: "offline", writable: true, live: false },
     empty: { label: "No Apartment model", tone: "offline", writable: true, live: false },
+    equipment_registration: { label: "Private Victoria equipment", tone: "live", writable: true, live: false },
+    equipment_unavailable: { label: "Victoria equipment unavailable", tone: "offline", writable: false, live: false },
   };
 
   function withModelSource(model, sourceKind, detail = {}) {
@@ -68,8 +207,11 @@
   }
 
   function modelSourceMeta(model) {
+    if (rehearsalIsolated()) return { kind: model?.source_kind || "empty", label: "Read-only rehearsal map", tone: "sim", writable: false, live: false };
     const kind = model?.source_kind || (model?.seeded ? "seed_model" : "empty");
     const meta = { kind, ...(MODEL_SOURCE_META[kind] || MODEL_SOURCE_META.empty) };
+    if (model?.source_detail?.read_only === true) meta.writable = false;
+    if (kind === "equipment_unavailable" && model?.source_detail?.error) meta.label += ` · ${model.source_detail.error}`;
     if (kind === "simulation" && Number.isInteger(model?.source_detail?.layout_revision)) {
       meta.label = "Simulation · saved layout snapshot";
     }
@@ -79,11 +221,14 @@
   // Read-only evaluation input for Simulation. This intentionally ignores the
   // recovery draft: only the last model successfully read from the
   // authoritative Apartment endpoint may seed a simulated spatial preview.
-  async function getSavedLayoutSnapshot() {
+  async function getSavedLayoutSnapshot({ siteId = "echo", contentRevision } = {}) {
+    if (window.HomeLiveSceneShadow?.active) return null;
+    if (siteId !== "echo") return null;
+    if (rehearsalIsolated()) return window.HomeMapRehearsalOfflineState.bootstrap()?.model || null;
     let cachedModel = null;
     try {
       const cached = JSON.parse(localStorage.getItem(REMOTE_CACHE_KEY) || "null");
-      if (cached && cached.source_kind !== "simulation" && !cached?.source_detail?.isolated) {
+      if (cached && modelBelongsToSite(cached, siteId) && cached.source_kind !== "simulation" && !cached?.source_detail?.isolated) {
         cachedModel = ensureModelShape(JSON.parse(JSON.stringify(cached)));
       }
     } catch (e) { /* continue to the local runtime recovery export */ }
@@ -92,7 +237,7 @@
       if (!response.ok) return cachedModel;
       const backup = await response.json();
       const model = backup?.apartment_model || backup?.model || backup;
-      const backupModel = model?.devices && model?.targets ? ensureModelShape(model) : null;
+      const backupModel = model?.devices && model?.targets && modelBelongsToSite(model, siteId) ? ensureModelShape(model) : null;
       if (!backupModel) return cachedModel;
       if (!cachedModel || (+backupModel.revision || 0) >= (+cachedModel.revision || 0)) return backupModel;
       return cachedModel;
@@ -148,7 +293,9 @@
    * this to inspect the current authoritative revision before a local draft is
    * eligible to publish. It deliberately does not mutate either browser
    * cache: comparing live state must never make the recovery draft disappear. */
-  async function getAuthoritativeModel({ endpoint, token } = {}) {
+  async function getAuthoritativeModel({ endpoint, token, siteId = "echo", contentRevision } = {}) {
+    if (siteId !== "echo") return { ok: false, site_read_only: true, error: "This home has no configured model authority" };
+    if (rehearsalIsolated()) return { ok: false, rehearsal: true, error: "Authoritative reads are disabled in rehearsal" };
     if (!endpoint || !token) return { ok: false, credentials_required: true };
     try {
       const base = endpoint.replace(/\/+$/, "");
@@ -158,11 +305,11 @@
       });
       if (!r.ok) return { ok: false, status: r.status, error: `HTTP ${r.status}` };
       const raw = await r.json();
-      if (!raw || typeof raw.revision !== "number") {
+      if (!raw || typeof raw.revision !== "number" || !modelBelongsToSite(raw, siteId)) {
         return { ok: false, error: "invalid Apartment model response" };
       }
       const model = withModelSource(ensureModelShape(raw), "live_ha_model", {
-        endpoint: base, revision: raw.revision, read_only: true,
+        endpoint: base, revision: raw.revision, read_only: true, site_id: siteId, content_revision: contentRevision,
       });
       return { ok: true, model };
     } catch (e) {
@@ -457,7 +604,8 @@
 
   function parseTapeMeasurement(raw) {
     if (isFiniteNumber(raw)) return raw * 0.0254;
-    const text = String(raw ?? "").trim().toLowerCase();
+    const text = String(raw ?? "").trim().toLowerCase()
+      .replace(/[\u2032\u2018\u2019]/g, "'").replace(/[\u2033\u201c\u201d]/g, '"');
     if (!text) return null;
     const metric = text.match(/^(-?\d+(?:\.\d+)?)\s*(m|cm|mm)$/);
     if (metric) {
@@ -489,8 +637,44 @@
 
   /* seed-model.json — generated device/zone inventory (55_seed_model.py).
    * Tries the data dir (asset protocol manual URL) then the bundled copy. */
-  async function fetchSeed() {
+  /*
+   * The seed model for ONE home.
+   *
+   * seed-model.json is a per-site content-pack asset: Echo's packs carry one and
+   * Victoria's do not. Every path below this comment is an Echo path -- two
+   * `assets/apartment/...` relatives and an absolute
+   * `C:/Claude/home/app/data/apartment/...` -- so without a site the function
+   * answered for Echo whoever was asking, and a second home would have been
+   * furnished with Echo's zones, devices and targets. That is invisible in the
+   * data (a seeded model looks like a real one) and only shows up as another
+   * home's furniture in your house.
+   *
+   * With a siteId, the pack is the answer and its absence is also an answer:
+   * a home whose pack has no seed model gets null, not Echo's. Without one the
+   * legacy behaviour is preserved exactly, so existing callers do not shift.
+   */
+  async function fetchSeed(siteId, contentRevision) {
     const urls = [];
+    if (siteId) {
+      /*
+       * The site's own pack, and ONLY it. Falling through to the paths below on
+       * a miss or a failed fetch would hand this home Echo's furniture, which
+       * is the exact failure this argument exists to prevent -- so a site that
+       * has no seed model, or whose fetch fails, gets null.
+       */
+      let packUrl = null;
+      try { packUrl = window.HomeContentPacks?.resolve?.(siteId, "seed-model.json", contentRevision) || null; } catch (e) { /* */ }
+      if (!packUrl) return null;
+      try {
+        const fetcher = ((window.IS_TAURI || window.__TAURI__) && window.tauriFetch) || fetch;
+        const r = await fetcher(packUrl, { cache: "no-store" });
+        if (r.ok) {
+          const seed = await r.json();
+          return modelBelongsToSite(seed, siteId) ? seed : null;
+        }
+      } catch (e) { /* fall through to null, never to another home */ }
+      return null;
+    }
     try {
       const resolved = window.HomeServices?.get?.("apartmentAssets");
       if (resolved) urls.push(`${String(resolved).replace(/\/+$/, "")}/seed-model.json`);
@@ -507,15 +691,25 @@
       try {
         const fetcher = ((window.IS_TAURI || window.__TAURI__) && window.tauriFetch) || fetch;
         const r = await fetcher(u, { cache: "no-store" });
-        if (r.ok) return await r.json();
+        if (r.ok) {
+          const seed = await r.json();
+          if (modelBelongsToSite(seed, "echo")) return seed;
+        }
       } catch (e) { /* next */ }
     }
     return null;
   }
 
-  async function getSeedModel() {
-    const seed = await fetchSeed();
-    return seed ? ensureModelShape(withModelSource(seed, "seed_model")) : null;
+  async function getSeedModel(siteId, { contentRevision } = {}) {
+    if (siteId && typeof siteId === "object") ({ siteId = "echo", contentRevision } = siteId);
+    if (siteId === undefined && contentRevision !== undefined) siteId = "echo";
+    if (siteId !== undefined && (typeof siteId !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(siteId))) return null;
+    if (rehearsalIsolated()) return null;
+    const seed = await fetchSeed(siteId, contentRevision);
+    if (seed && !modelBelongsToSite(seed, siteId || "echo")) return null;
+    return seed ? ensureModelShape(withModelSource(seed, "seed_model", {
+      site_id: siteId || "echo", content_revision: contentRevision, read_only: !!siteId && siteId !== "echo",
+    })) : null;
   }
 
   async function fetchTrackerModel() {
@@ -533,7 +727,7 @@
         const r = await fetcher(`${base}/model`, { cache: "no-store" });
         if (!r.ok) continue;
         const model = await r.json();
-        if (model && Array.isArray(model.devices)) {
+        if (model && Array.isArray(model.devices) && modelBelongsToSite(model, "echo")) {
           try { localStorage.setItem(REMOTE_CACHE_KEY, JSON.stringify(model)); } catch (e) { /* */ }
           return { ...model, tracker_cached: true };
         }
@@ -583,11 +777,106 @@
 
   /* ---------------- model ---------------- */
 
-  async function getModel({ endpoint, token, sim } = {}) {
+  const EQUIPMENT_REGISTRATION_URL = "/api/apartment/v1/sites/victoria/maps/victoria-den/rooms/den/registration";
+
+  async function equipmentDigest(value) {
+    const api = window.HomeEquipmentRegistration;
+    if (!api?.canonicalJson || !globalThis.crypto?.subtle) throw new Error("registration_verifier_unavailable");
+    const bytes = new TextEncoder().encode(api.canonicalJson(value));
+    const hash = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(hash), (v) => v.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function equipmentBinding({ siteId, contentRevision, registrationVersion, frameDigest } = {}) {
+    if (siteId !== "victoria" || rehearsalIsolated()) throw new Error("registration_scope_denied");
+    const pack = window.HomeContentPacks?.get?.(siteId, contentRevision)?.manifest;
+    if (!pack || pack.siteId !== siteId || pack.revision !== contentRevision
+        || !pack.assets?.["frame.json"] || !pack.assets?.["collision.glb"]
+        || registrationVersion !== undefined && pack.registrationVersion !== registrationVersion
+        || frameDigest && pack.assets["frame.json"].sha256 !== frameDigest) throw new Error("registration_pack_mismatch");
+    return { content_revision: pack.revision, registration_version: pack.registrationVersion,
+      manifest_digest: await equipmentDigest(pack), frame_digest: pack.assets["frame.json"].sha256,
+      canonical_collision_digest: pack.assets["collision.glb"].sha256 };
+  }
+
+  async function verifyEquipmentResponse(payload, binding) {
+    const doc = payload?.registration;
+    const result = window.HomeEquipmentRegistration?.validateDocument?.(doc, { binding });
+    if (!payload?.ok || !result?.ok || !/^[a-f0-9]{64}$/.test(doc?.digest || "")) throw new Error("registration_response_invalid");
+    const unsigned = { ...doc }; delete unsigned.digest;
+    if (await equipmentDigest(unsigned) !== doc.digest) throw new Error("registration_digest_mismatch");
+    return doc;
+  }
+
+  async function getEquipmentRegistration(options = {}) {
+    const binding = await equipmentBinding(options);
+    const revision = options.revision;
+    if (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 0)) throw new Error("registration_revision_invalid");
+    const url = EQUIPMENT_REGISTRATION_URL + (revision === undefined ? "" : `/revisions/${revision}`);
+    const response = await fetch(url, { signal: options.signal, cache: "no-store", credentials: "same-origin", redirect: "error" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload?.error?.code || payload?.error || "registration_unavailable");
+    const registration = await verifyEquipmentResponse(payload, binding);
+    if (options.digest && options.digest !== registration.digest) throw new Error("registration_snapshot_mismatch");
+    return { registration, capabilities: payload.capabilities || { read: true, write: false } };
+  }
+
+  async function getEquipmentModel(options) {
+    try {
+      const { registration, capabilities } = await getEquipmentRegistration(options);
+      return window.HomeEquipmentRegistration.toModel(registration, { writable: capabilities.write === true });
+    } catch (error) {
+      return withModelSource({ ...cloneState(EMPTY_MODEL), site: "victoria" }, "equipment_unavailable", {
+        site_id: "victoria", read_only: true, error: error.message || "registration_unavailable",
+      });
+    }
+  }
+
+  async function saveEquipmentModel(model, options) {
+    if (options.sim || rehearsalIsolated()) return { ok: false, rehearsal: true, error: "Placement writes are unavailable during rehearsal" };
+    try {
+      const binding = await equipmentBinding(options);
+      if (!modelBelongsToSite(model, "victoria") || model.source_detail?.read_only === true) throw new Error("registration_scope_denied");
+      const doc = window.HomeEquipmentRegistration?.toDocument(model);
+      if (!window.HomeEquipmentRegistration?.validateDocument(doc, { binding, verifyDigest: false, verifyPositions: false }).ok) throw new Error("registration_document_invalid");
+      const response = await fetch(EQUIPMENT_REGISTRATION_URL, {
+        method: "PUT", signal: options.signal, cache: "no-store", credentials: "same-origin", redirect: "error",
+        headers: { "Content-Type": "application/json", "X-Home-Equipment-CSRF": "1" }, body: JSON.stringify(doc),
+      });
+      const payload = await response.json();
+      if (response.status === 409) return { ok: false, conflict: true, stored: payload.registration || payload.stored,
+        error: "Equipment changed elsewhere; your session edits are preserved" };
+      if (!response.ok) return { ok: false, error: payload?.error?.code || payload?.error || "registration_save_failed" };
+      const registration = await verifyEquipmentResponse(payload, binding);
+      return { ok: true, revision: registration.revision, registration,
+        model: window.HomeEquipmentRegistration.toModel(registration, { writable: payload.capabilities?.write === true }) };
+    } catch (error) { return { ok: false, error: error.message || "registration_save_failed" }; }
+  }
+
+  async function getModel({ endpoint, token, sim, siteId = "echo", contentRevision, equipmentRegistration = false,
+    registrationVersion, frameDigest, signal } = {}) {
+    if (window.HomeLiveSceneShadow?.active) return cloneState(window.HomeLiveResidentModel || EMPTY_MODEL);
+    if (siteId === "victoria" && equipmentRegistration && !sim && !rehearsalIsolated()) {
+      return getEquipmentModel({ siteId, contentRevision, registrationVersion, frameDigest, signal });
+    }
+    // Importing another home's scene grants no Echo model/tracker authority.
+    // This branch is before simulation and legacy recovery storage too.
+    if (siteId !== "echo") {
+      const seed = rehearsalIsolated() ? null : await getSeedModel(siteId, { contentRevision });
+      return seed || withModelSource(ensureModelShape(cloneState(EMPTY_MODEL)), "empty", {
+        site_id: siteId, content_revision: contentRevision, read_only: true,
+      });
+    }
+    if (rehearsalIsolated()) {
+      try {
+        const value = await window.HomeMapRehearsalBinding.loadBootstrap();
+        return value.model ? JSON.parse(JSON.stringify(value.model)) : JSON.parse(JSON.stringify(EMPTY_MODEL));
+      } catch (_) { return ensureModelShape(JSON.parse(JSON.stringify(EMPTY_MODEL))); }
+    }
     if (sim) {
       try {
         if (typeof window.__SIM_APARTMENT_MODEL_FIXTURE === "function") {
-          const savedLayout = await getSavedLayoutSnapshot();
+          const savedLayout = await getSavedLayoutSnapshot({ siteId, contentRevision });
           return withModelSource(
             ensureModelShape(window.__SIM_APARTMENT_MODEL_FIXTURE(savedLayout) || EMPTY_MODEL),
             "simulation",
@@ -605,7 +894,7 @@
     // save removes this key.
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
-      if (draft) return withModelSource(ensureModelShape({ ...draft, offline_draft: true }), "local_draft", {
+      if (draft && modelBelongsToSite(draft, siteId)) return withModelSource(ensureModelShape({ ...draft, offline_draft: true }), "local_draft", {
         revision: draft.revision,
       });
     } catch (e) { /* */ }
@@ -618,12 +907,12 @@
         });
         if (r.ok) {
           const model = await r.json();
-          if (model && typeof model.revision === "number") {
+          if (model && typeof model.revision === "number" && modelBelongsToSite(model, siteId)) {
             // Empty model -> merge the generated seed (real light/camera
             // inventory at proposed positions). Saving in edit mode persists
             // it for real; until then it's an in-memory overlay.
             if (!(model.zones || []).length && !(model.devices || []).length) {
-              const seed = await fetchSeed();
+              const seed = await fetchSeed(contentRevision === undefined ? undefined : siteId, contentRevision);
               if (seed) return withModelSource(ensureModelShape({
                 ...model, zones: seed.zones, devices: seed.devices,
                 targets: seed.targets || [], seeded: true,
@@ -657,11 +946,11 @@
     // user's real saved layout, not the seed.
     try {
       const cached = JSON.parse(localStorage.getItem(REMOTE_CACHE_KEY) || "null");
-      if (cached) return withModelSource(ensureModelShape({ ...cached, remote_cached: true }), "cached_live_model", {
+      if (cached && modelBelongsToSite(cached, siteId)) return withModelSource(ensureModelShape({ ...cached, remote_cached: true }), "cached_live_model", {
         revision: cached.revision,
       });
     } catch (e) { /* */ }
-    const seed = await fetchSeed();
+    const seed = await fetchSeed(contentRevision === undefined ? undefined : siteId, contentRevision);
     if (seed) return withModelSource(ensureModelShape({
       ...EMPTY_MODEL, zones: seed.zones, devices: seed.devices,
       targets: seed.targets || [], seeded: true,
@@ -670,7 +959,15 @@
   }
 
   /* Save the full model. Returns {ok, revision} | {conflict, stored} | {offline}. */
-  async function saveModel(model, { endpoint, token, sim } = {}) {
+  async function saveModel(model, { endpoint, token, sim, siteId = "echo", contentRevision,
+    equipmentRegistration = false, registrationVersion, frameDigest, signal } = {}) {
+    if (siteId === "victoria" && equipmentRegistration && model?._equipment_registration) {
+      return saveEquipmentModel(model, { siteId, contentRevision, registrationVersion, frameDigest, sim, signal });
+    }
+    if (siteId !== "echo" || !modelBelongsToSite(model, siteId)) {
+      return { ok: false, site_read_only: true, error: "This home has no configured model authority" };
+    }
+    if (rehearsalIsolated()) return { ok: false, rehearsal: true, error: "Saved Apartment state is read-only during rehearsal" };
     // Simulation is fully isolated: it cannot POST to HA and cannot replace
     // the non-simulation recovery draft or last-good live cache.
     if (sim) return { ok: false, sim: true };
@@ -707,7 +1004,9 @@
 
   /* ---------------- HA registries (edit-mode palette) ---------------- */
 
-  async function getRegistry(client) {
+  async function getRegistry(client, { siteId = "echo" } = {}) {
+    if (siteId !== "echo") return { entities: [], areas: [], devices: [], states: {} };
+    if (rehearsalIsolated()) return { entities: [], areas: [], devices: [], states: {} };
     // entity + area + device registries via the existing HAClient WS
     const out = { entities: [], areas: [], devices: [], states: {} };
     if (!client) return out;
@@ -827,7 +1126,9 @@
 
   /* ---------------- entity state binding ---------------- */
 
-  async function readStates(client, ids = []) {
+  async function readStates(client, ids = [], { siteId = "echo" } = {}) {
+    if (siteId !== "echo") return {};
+    if (rehearsalIsolated()) return {};
     if (!client || typeof client.call !== "function") return {};
     const wanted = new Set((ids || []).filter(Boolean));
     const states = await client.call({ type: "get_states" });
@@ -839,23 +1140,42 @@
     return out;
   }
 
-  function bindStates(client, model, onState) {
+  function bindStates(client, model, onState, { siteId = "echo", isCurrent = () => true, signal } = {}) {
+    if (siteId !== "echo" || signal?.aborted || !isCurrent()) return () => {};
+    if (rehearsalIsolated()) return () => {};
     if (!client) return () => {};
     const ids = new Set((model.devices || []).map((d) => d.ha_entity_id).filter(Boolean));
-    let unsub = null;
+    if (!ids.size) return () => {};
+    let unsub = null, closed = false;
+    const current = () => !closed && !signal?.aborted && !rehearsalIsolated() && isCurrent();
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      const stop = unsub;
+      unsub = null;
+      try { stop?.(); } catch (e) { /* */ }
+    };
+    signal?.addEventListener?.("abort", close, { once: true });
     (async () => {
       try {
-        const states = await readStates(client, [...ids]);
-        for (const [entityId, state] of Object.entries(states)) onState(entityId, state);
-        unsub = await client.subscribeEvents("state_changed", (ev) => {
+        const states = await readStates(client, [...ids], { siteId });
+        if (!current()) return;
+        for (const [entityId, state] of Object.entries(states)) {
+          if (!current()) return;
+          onState(entityId, state);
+        }
+        if (!current()) return;
+        const nextUnsub = await client.subscribeEvents("state_changed", (ev) => {
+          if (!current()) return;
           const d = ev?.data;
           if (d && ids.has(d.entity_id) && d.new_state) onState(d.entity_id, d.new_state);
         });
+        if (!current()) nextUnsub?.(); else unsub = nextUnsub;
       } catch (e) {
         console.warn("[apartment] state binding failed", e);
       }
     })();
-    return () => { try { unsub && unsub(); } catch (e) { /* */ } };
+    return () => { signal?.removeEventListener?.("abort", close); close(); };
   }
 
   function buildServicePayload(domain, service, data = {}) {
@@ -872,7 +1192,9 @@
     return payload;
   }
 
-  async function callService(client, domain, service, data = {}) {
+  async function callService(client, domain, service, data = {}, { siteId = "echo" } = {}) {
+    if (siteId !== "echo") throw new Error("Home controls are not configured for this home");
+    if (rehearsalIsolated()) throw new Error("Physical controls are disabled in rehearsal");
     if (!client) throw new Error("Home Assistant client is not ready");
     if (typeof client.callService === "function") {
       return client.callService(domain, service, data || {});
@@ -885,37 +1207,55 @@
 
   /* ---------------- tracker WS ---------------- */
 
-  function openTracks({ sim, replay, onTracks, onStatus } = {}) {
+  function openTracks({ sim, replay, onTracks, onStatus, siteId = "echo", isCurrent = () => true, signal } = {}) {
+    if (siteId !== "echo" || signal?.aborted || !isCurrent()) { onStatus?.("home-unconfigured"); return () => {}; }
+    if (rehearsalIsolated()) { onStatus?.("rehearsal-paused"); return () => {}; }
     if (sim && typeof window.__SIM_APARTMENT_TRACKS === "function") {
       // sim fixture: scripted walk, 5 Hz
-      const timer = setInterval(() => onTracks(window.__SIM_APARTMENT_TRACKS()), 200);
+      let closed = false;
+      const timer = setInterval(() => {
+        if (!closed && !signal?.aborted && isCurrent() && !rehearsalIsolated()) onTracks(window.__SIM_APARTMENT_TRACKS());
+      }, 200);
       onStatus && onStatus("sim");
-      return () => clearInterval(timer);
+      const close = () => { if (!closed) { closed = true; clearInterval(timer); } };
+      signal?.addEventListener?.("abort", close, { once: true });
+      return () => { signal?.removeEventListener?.("abort", close); close(); };
     }
     if (sim) { onStatus && onStatus("sim-empty"); return () => {}; }
 
-    let ws = null, closed = false, backoff = 1000;
+    let ws = null, closed = false, backoff = 1000, retryTimer = null;
+    const current = () => !closed && !signal?.aborted && !rehearsalIsolated() && isCurrent();
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(retryTimer);
+      retryTimer = null;
+      try { ws && ws.close(); } catch (e) { /* */ }
+    };
+    signal?.addEventListener?.("abort", close, { once: true });
     const url = `${toWsBase(trackerBase())}/ws/tracks${replay ? `?replay=${replay}` : ""}`;
     const connect = () => {
-      if (closed) return;
+      if (!current()) return;
       try { ws = new WebSocket(url); } catch (e) { retry(); return; }
-      ws.onopen = () => { backoff = 1000; onStatus && onStatus("live"); };
+      ws.onopen = () => { if (current()) { backoff = 1000; onStatus && onStatus("live"); } };
       ws.onmessage = (m) => {
+        if (!current()) return;
         try {
           const frame = JSON.parse(m.data);
           if (frame.type === "tracks") onTracks(frame);
         } catch (e) { /* */ }
       };
-      ws.onclose = () => { onStatus && onStatus("offline"); retry(); };
+      ws.onclose = () => { if (current()) { onStatus && onStatus("offline"); retry(); } };
       ws.onerror = () => { try { ws.close(); } catch (e) { /* */ } };
     };
     const retry = () => {
-      if (closed) return;
-      setTimeout(connect, backoff);
+      if (!current()) return;
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 15000);
     };
     connect();
-    return () => { closed = true; try { ws && ws.close(); } catch (e) { /* */ } };
+    return () => { signal?.removeEventListener?.("abort", close); close(); };
   }
 
   window.HomeApartmentData = {
@@ -928,5 +1268,8 @@
     modelSourceMeta, modelForPersistence, registryLightEntities, buildFixtureMapping,
     spatialGeometrySnapshot, compareSpatialGeometry, reconcileFixtureEntityLink,
     getSavedLayoutSnapshot,
+    getEquipmentRegistration,
+    captureWorkspace, restoreWorkspace, clearWorkspaces, setWorkspaceAuthority, ensureWorkspaceAuthority,
+    readViewPreference, saveViewPreference,
   };
 })();

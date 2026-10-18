@@ -104,6 +104,10 @@ function loadPrefs(defaults = {}) {
       if (window.HG_DEFAULT_METRICS_BASE && isDefaultLan(prefs.metricsBase, 8092)) prefs.metricsBase = window.HG_DEFAULT_METRICS_BASE;
       if (window.HG_DEFAULT_S2S_BASE && isDefaultLan(prefs.s2sBase, 8094)) prefs.s2sBase = window.HG_DEFAULT_S2S_BASE;
     }
+    if (window.HG_WEB_MODE && !window.IS_TAURI) {
+      const saved = window.HomeSecurity?.readHaLogin?.(localStorage, prefs.endpoint);
+      if (saved) prefs.token = saved.token;
+    }
     return prefs;
   } catch {
     return { ...defaults };

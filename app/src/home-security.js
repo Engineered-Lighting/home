@@ -176,7 +176,44 @@
     }
   }
 
+  // Explicitly remembered HA connection only. General preferences and other
+  // credentials still pass through the existing secret-stripping migration.
+  const HA_LOGIN_KEY = "home.ha.remembered-login.v1";
+  const HA_REMEMBER_KEY = "home.ha.remember-login";
+  function remembersHaLogin(storage) {
+    try { return storage.getItem(HA_REMEMBER_KEY) !== "off"; } catch (_) { return false; }
+  }
+  function readHaLogin(storage, endpoint) {
+    try {
+      const row = JSON.parse(storage.getItem(HA_LOGIN_KEY) || "null");
+      const expected = sanitizeServiceUrl(endpoint);
+      if (!remembersHaLogin(storage) || !row || row.endpoint !== expected || !expected) return null;
+      if (typeof row.token !== "string" || !row.token.trim() || row.token.length > 16384) return null;
+      return { endpoint: expected, token: row.token };
+    } catch (_) { return null; }
+  }
+  function saveHaLogin(storage, endpoint, token, remember = true) {
+    try {
+      storage.setItem(HA_REMEMBER_KEY, remember ? "on" : "off");
+      if (!remember) { storage.removeItem(HA_LOGIN_KEY); return true; }
+      const safe = sanitizeServiceUrl(endpoint);
+      if (!safe || typeof token !== "string" || !token.trim() || token.length > 16384) return false;
+      storage.setItem(HA_LOGIN_KEY, JSON.stringify({ endpoint: safe, token: token.trim() }));
+      return true;
+    } catch (_) { return false; }
+  }
+  function forgetHaLogin(storage, endpoint, token) {
+    try {
+      if (endpoint) {
+        const saved = readHaLogin(storage, endpoint);
+        if (!saved || (token && saved.token !== token)) return;
+      }
+      storage.removeItem(HA_LOGIN_KEY);
+    } catch (_) {}
+  }
+
   const api = Object.freeze({
+    HA_LOGIN_KEY, HA_REMEMBER_KEY, remembersHaLogin, readHaLogin, saveHaLogin, forgetHaLogin,
     PREFS_KEY,
     SERVICES_KEY,
     CACHE_MIGRATION_KEY,

@@ -764,6 +764,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     // Never render a prior principal's identities, faces, or authorization
     // decision while a fresh HA-admin request is pending.
     setIdentities(null);
+    setAgentEdges([]);
     setLegacyBoundary(null);
     setHouseholdSource(null);
     setFrigateDiagnostics(null);
@@ -914,6 +915,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           setNotReady({
             error: payload.setup_error || "identity_store initialization failed",
             fallback: agentError.message || String(agentError),
+            fallbackStatus: agentError.status || null,
           });
           setAgentEdges([]);
           setIdentities([]);
@@ -1020,6 +1022,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     principalDataScopeRef.current = null;
     requestGenerationRef.current += 1;
     setIdentities(null);
+    setAgentEdges([]);
     setLegacyBoundary(null);
     setHouseholdSource(null);
     setSelectedUuid(null);
@@ -1369,15 +1372,27 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             fontSize: 11, letterSpacing: "0.04em",
             marginBottom: 16,
           }}>
-            <strong style={{ marginRight: 8 }}>identity store not ready:</strong>
-            {notReady.error}
-            <div style={{
-              marginTop: 6, fontSize: 10, color: "var(--hg-fg-3)",
-              letterSpacing: 0,
-            }}>
-              Check Home Assistant logs: <code>ha core logs | grep identity_store</code>.
-              The integration loaded but the SQLite database did not open.
-            </div>
+            {notReady.error === "legacy_identity_semantics_frozen" ? <>
+              <strong>{notReady.fallbackStatus === 401 ? "Sign in to load People" : "People service unavailable"}</strong>
+              <p style={{margin:"6px 0"}}>People records are now served by the Home Agent. The legacy identity store is intentionally read-only.</p>
+              <p style={{margin:"6px 0"}}>{notReady.fallbackStatus === 401
+                ? (window.HG_AGENT_ORIGIN
+                  ? "The household is kept by the Home Agent on its own secure address. Open it there to view and manage People."
+                  : "Your People session is missing or expired. Sign in with Home Assistant, then return here and retry.")
+                : notReady.fallbackStatus === 403 ? "Your current Home Agent session cannot access the household."
+                : "The Home Agent could not load the household. Your saved people have not been deleted."}</p>
+              {notReady.fallbackStatus === 401 && <a href={(window.HG_AGENT_ORIGIN || "") + "/home-agent/"} target="_blank" rel="noopener noreferrer" style={{color:"var(--hg-ice)",marginRight:12}}>{window.HG_AGENT_ORIGIN ? "Open People in the Home Agent ↗" : "Open Home Assistant sign-in ↗"}</a>}
+              <button onClick={refresh} style={{font:"inherit",color:"inherit",background:"transparent",border:"1px solid currentColor",padding:"4px 10px",cursor:"pointer"}}>Retry People</button>
+              <details style={{marginTop:8}}><summary>Connection details</summary><code>{notReady.fallback}</code></details>
+            </> : <>
+              <strong style={{ marginRight: 8 }}>identity store not ready:</strong>
+              {notReady.error}
+              <div style={{marginTop:6,fontSize:10,color:"var(--hg-fg-3)",letterSpacing:0}}>
+                The legacy identity service reported an initialization problem.
+                {notReady.fallback && <div>Household fallback: {notReady.fallback}</div>}
+              </div>
+              <button onClick={refresh}>Retry People</button>
+            </>}
           </div>
         )}
         {showingAgentHousehold && !notReady && (
@@ -1449,7 +1464,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         {identities === null && !error && !notReady && reconnecting == null && (
           <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>loading identities…</div>
         )}
-        {identities !== null && (
+        {identities !== null && !error && !notReady && (
           <>
             {view === "graph" && (
               <PeopleGraphView

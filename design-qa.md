@@ -22,6 +22,10 @@ It does not qualify camera, perception, physical output or commissioning.
   breakpoint, as the reference does. Orbit arrows remain available.
 - Closed camera chrome now uses a truthful closed-view card, with the existing
   perception component and its callbacks retained.
+- A tablet reference captured during its resize transition and one combined
+  image captured before the offscreen image painted were rejected. They were
+  recaptured and reopened: the tablet inspector measures exactly y590/h590;
+  both source/implementation images are visibly present in the final pairs.
 
 ## Final comparison inputs
 
@@ -121,6 +125,10 @@ Behavioral review also found and fixed two regressions before acceptance:
   distinct from runtime acceptance. Historical shared-checkout failures are
   recorded in the Phase 1 evidence; this report does not claim the shared dirty
   checkout or the whole repository has a green baseline.
+- Final manual mode checks rendered Cloud, Photo and Mesh with all four authored
+  fixtures and restored Cloud. The local preview initially blocked the renderer's
+  embedded WASM/texture fetches; its tooling-only policy now permits data/blob
+  bytes while excluding external household endpoints. No renderer code changed.
 - Repair released the UI lane. Den was notified; its selector changes are kept
   outside this PR and reconstruct the accepted composition when applied
   separately. Shared branch/index are unchanged. No host deployment occurred.

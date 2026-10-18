@@ -49,7 +49,7 @@ function ProfileStatus({ label, detail, tone = "offline" }) {
 
 function AimSelect({ value, onChange, children, label, disabled }) {
   return <label style={{ display: "grid", gap: 4, fontFamily: AIM_MONO, fontSize: 8.5,
-    color: "var(--hg-fg-4)", letterSpacing: "0.06em", minWidth: 0 }}>
+    color: "var(--hg-fg-3)", letterSpacing: "0.06em", minWidth: 0 }}>
     {label}
     <select className="hg-focusable" value={value || ""} disabled={disabled} onChange={(e) => onChange(e.target.value || null)}
       style={{ minHeight: 36, width: "100%", minWidth: 0, background: "var(--hg-input-bg)", color: "var(--hg-fg-1)",
@@ -63,7 +63,7 @@ function AimTextInput({ value, onCommit, label, placeholder, type = "text", min,
   const [draft, setDraft] = useState(value ?? "");
   useEffect(() => setDraft(value ?? ""), [value]);
   return <label style={{ display: "grid", gap: 4, minWidth: 0, fontFamily: AIM_MONO,
-    fontSize: 8.5, color: "var(--hg-fg-4)", letterSpacing: "0.06em" }}>
+    fontSize: 8.5, color: "var(--hg-fg-3)", letterSpacing: "0.06em" }}>
     {label}
     <input className="hg-focusable" type={type} min={min} max={max} step={step} value={draft}
       placeholder={placeholder} onChange={(e) => setDraft(e.target.value)}
@@ -622,13 +622,13 @@ function HomeApartmentAim({
       ...(mobile ? { left: 10, right: 10, bottom: "calc(10px + env(safe-area-inset-bottom, 0px))", maxHeight: "52dvh", borderRadius: 16 }
         : { top: 86, right: 18, bottom: 18, width: 338, borderRadius: 16 }),
       display: "flex", flexDirection: "column", background: "var(--hg-bg-2)",
-      border: "1px solid var(--hg-border)", boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+      border: "1px solid var(--hg-border)", boxShadow: "var(--hg-app-shadow)",
       backdropFilter: "blur(24px) saturate(1.25)", color: "var(--hg-fg-1)", minWidth: 0 }}>
-    <div style={{ padding: "15px 15px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "grid", gap: 11 }}>
+    <div style={{ padding: "15px 15px 12px", borderBottom: "1px solid var(--hg-border-soft)", display: "grid", gap: 11 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: AIM_SANS, fontSize: 17, fontWeight: 560, letterSpacing: "-0.025em" }}>Lighting</div>
-          <div style={{ fontFamily: AIM_MONO, fontSize: 9, color: "var(--hg-fg-4)", letterSpacing: "0.08em", marginTop: 3 }}>
+          <div style={{ fontFamily: AIM_MONO, fontSize: 9, color: "var(--hg-fg-3)", letterSpacing: "0.08em", marginTop: 3 }}>
             {sim ? "simulation · saved layout · controls simulated" : "live model · fixture-bottom origin"}
           </div>
         </div>
@@ -642,7 +642,7 @@ function HomeApartmentAim({
         {fixtures.map((f) => <option key={f.id} value={f.id}>{f.name}{f.fixture_kind === A.ENGINEERED_KIND ? " · engineered" : " · ordinary"}</option>)}
       </AimSelect>
       {fixture && <section data-apt-shared-mount="1" style={{ padding: 10, borderRadius: 12,
-        border: "1px solid rgba(255,255,255,0.085)", background: "rgba(255,255,255,0.025)", display: "grid", gap: 9 }}>
+        border: "1px solid var(--hg-border)", background: "var(--hg-bg-2)", display: "grid", gap: 9 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <span style={{ fontFamily: AIM_SANS, fontSize: 12, fontWeight: 570 }}>One ceiling position</span>
           <span style={{ marginLeft: "auto", fontFamily: AIM_MONO, fontSize: 10.5, color: "var(--hg-fg-3)" }}>shared measurements</span>
@@ -682,7 +682,7 @@ function HomeApartmentAim({
           next?.click();
         }}
         style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 5,
-        padding: 3, borderRadius: 11, background: "rgba(255,255,255,0.035)" }}>
+        padding: 3, borderRadius: 11, background: "var(--hg-bg-2)" }}>
         {[["aim", "Light"], ["zones", "Radials"], ["setup", "Setup"]].map(([name, label]) =>
           <AimButton key={name} active={tab === name} role="tab" aria-selected={tab === name} onClick={() => {
             setTab(name);
@@ -700,8 +700,8 @@ function HomeApartmentAim({
           Reuse this exact ceiling position and all of its measurements. The current light remains linked; no second fixture is placed.
         </div>
         {!confirmAdopt ? <AimButton onClick={() => setConfirmAdopt(true)}>Add Engineered profile</AimButton> :
-          <div style={{ border: "1px solid rgba(69,223,255,0.28)", borderRadius: 12, padding: 10,
-            background: "rgba(69,223,255,0.045)", display: "grid", gap: 9 }}>
+          <div style={{ border: "1px solid color-mix(in srgb, var(--apt-proposed) 28%, transparent)", borderRadius: 12, padding: 10,
+            background: "color-mix(in srgb, var(--apt-proposed) 4.5%, var(--hg-bg-2))", display: "grid", gap: 9 }}>
             <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: AIM_CYAN, lineHeight: 1.5 }}>
               Position, room, target relationships, and Fixture position measurements stay unchanged. This sends no light or gimbal command.
             </div>
@@ -713,14 +713,14 @@ function HomeApartmentAim({
       </section>}
 
       {fixture?.fixture_kind === A.ENGINEERED_KIND && tab === "aim" && <>
-        {profileResolution.show_current && <section data-apt-current-profile="1" style={{ border: "1px solid rgba(255,255,255,0.085)", borderRadius: 13,
-          padding: 12, display: "grid", gap: 11, background: "rgba(255,255,255,0.025)" }}>
+        {profileResolution.show_current && <section data-apt-current-profile="1" style={{ border: "1px solid var(--hg-border)", borderRadius: 13,
+          padding: 12, display: "grid", gap: 11, background: "var(--hg-bg-2)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: AIM_SANS, fontSize: 14, fontWeight: 560,
                 whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentProfileName}</div>
               <div style={{ fontFamily: AIM_MONO, fontSize: 9,
-                color: primaryCapabilities.available ? (primaryState?.state === "on" ? AIM_WARM : "var(--hg-fg-4)") : AIM_AMBER,
+                color: primaryCapabilities.available ? (primaryState?.state === "on" ? AIM_WARM : "var(--hg-fg-3)") : AIM_AMBER,
                 marginTop: 3 }}>
                 {!primaryCapabilities.available ? "Offline · position retained"
                   : primaryState?.state === "on" ? `${Math.round((+primaryState?.attributes?.brightness || 0) / 2.55)}% · ${primaryState?.attributes?.color_temp_kelvin || "—"} K`
@@ -749,13 +749,13 @@ function HomeApartmentAim({
           </div>
         </section>}
         {profileResolution.show_engineered && <>
-        <section style={{ border: "1px solid rgba(255,255,255,0.085)", borderRadius: 13,
-          padding: 12, display: "grid", gap: 11, background: "rgba(255,255,255,0.025)" }}>
+        <section style={{ border: "1px solid var(--hg-border)", borderRadius: 13,
+          padding: 12, display: "grid", gap: 11, background: "var(--hg-bg-2)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: AIM_SANS, fontSize: 14, fontWeight: 560, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Engineered spotlight</div>
               <div style={{ fontFamily: AIM_MONO, fontSize: 9,
-                color: !spotlightCapabilities.available && !sim ? AIM_CYAN : spotlightHaState?.state === "on" ? AIM_WARM : "var(--hg-fg-4)", marginTop: 3 }}>
+                color: !spotlightCapabilities.available && !sim ? AIM_CYAN : spotlightHaState?.state === "on" ? AIM_WARM : "var(--hg-fg-3)", marginTop: 3 }}>
                 {!spotlightCapabilities.available && !sim ? "Offline · simulated preview only"
                   : spotlightHaState?.state === "on" ? `${Math.round((+spotlightHaState?.attributes?.brightness || 0) / 2.55)}% · ${spotlightHaState?.attributes?.color_temp_kelvin || "—"} K`
                     : "Off · aim retained"}
@@ -780,7 +780,7 @@ function HomeApartmentAim({
         </section>
         <section style={{ display: "grid", gap: 7 }}>
           <div style={{ fontFamily: AIM_MONO, fontSize: 9.5, color: "var(--hg-fg-3)", letterSpacing: "0.12em" }}>DESTINATION</div>
-          <div style={{ fontFamily: AIM_SANS, fontSize: 13, color: destination ? AIM_CYAN : "var(--hg-fg-4)", lineHeight: 1.35 }}>{targetLabel(destination)}{destination?.kind === "mirror" ? " · approximate soft reflection" : ""}</div>
+          <div style={{ fontFamily: AIM_SANS, fontSize: 13, color: destination ? AIM_CYAN : "var(--hg-fg-3)", lineHeight: 1.35 }}>{targetLabel(destination)}{destination?.kind === "mirror" ? " · approximate soft reflection" : ""}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, maxHeight: 122, overflowY: "auto" }}>
             <AimButton active={destination?.kind === "mirror"}
               disabled={aimTransitioning}
@@ -792,13 +792,13 @@ function HomeApartmentAim({
               onClick={() => onDestination({ kind: "named", id: target.id, name: target.name, pos: target.pos,
                 normal: target.normal, target })}>{target.name}</AimButton>)}
           </div>
-          <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-4)", lineHeight: 1.5 }}>
+          <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)", lineHeight: 1.5 }}>
             Choose a saved location, Mirror wash, or click the mesh. Dragging still orbits.
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
             minHeight: 26, padding: "0 2px", fontFamily: AIM_MONO, fontSize: 8.5 }}>
             <span style={{ color: "var(--hg-fg-3)", textTransform: "uppercase", letterSpacing: "0.09em" }}>Current aim</span>
-            <span style={{ color: currentDestination ? AIM_WARM : "var(--hg-fg-4)", textAlign: "right",
+            <span style={{ color: currentDestination ? AIM_WARM : "var(--hg-fg-3)", textAlign: "right",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {currentDestination ? targetLabel(currentDestination) : "measured pose"}
             </span>
@@ -811,9 +811,9 @@ function HomeApartmentAim({
             onClick={setSimulatedDestination}
             style={{ minHeight: 42,
               ...(canSetDestination ? { borderColor: AIM_CYAN, background: AIM_CYAN, color: "var(--hg-bg-0)",
-                boxShadow: "0 8px 24px rgba(69,223,255,0.13)" } : {}),
-              ...(destinationIsCurrent ? { borderColor: "rgba(255,221,176,0.38)",
-                background: "rgba(255,221,176,0.10)", color: AIM_WARM } : {}) }}>
+                boxShadow: "0 8px 24px color-mix(in srgb, var(--apt-proposed) 13%, transparent)" } : {}),
+              ...(destinationIsCurrent ? { borderColor: "color-mix(in srgb, var(--apt-warm) 38%, transparent)",
+                background: "color-mix(in srgb, var(--apt-warm) 10%, transparent)", color: "var(--hg-fg-1)" } : {}) }}>
             {!sim ? "Set destination unavailable" : aimTransitioning ? "Aiming…"
               : destinationIsCurrent ? "Simulated aim set" : "Set simulated aim"}
           </AimButton>
@@ -822,14 +822,14 @@ function HomeApartmentAim({
           </div>}
         </section>
 
-        <details style={{ borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 10 }}>
+        <details style={{ borderTop: "1px solid var(--hg-border-soft)", paddingTop: 10 }}>
           <summary className="hg-focusable" style={{ cursor: "pointer", listStyle: "none", fontFamily: AIM_SANS,
             fontSize: 11, color: "var(--hg-fg-3)", padding: "7px 0" }}>Details & calibration status <span style={{ float: "right", color: "var(--hg-fg-3)" }}>⌄</span></summary>
         <section style={{ paddingTop: 8, display: "grid", gap: 5 }}>
           <div style={{ display: "grid", gap: 4, fontFamily: AIM_MONO, fontSize: 9, lineHeight: 1.45, marginBottom: 6 }}>
-            <div style={{ color: "var(--hg-fg-4)" }}>HA · <span style={{ color: "var(--hg-fg-2)" }}>{fixture.ha_entity_id || "none"} / {spotlightEntity || "unmapped"}</span></div>
-            <div style={{ color: "var(--hg-fg-4)" }}>gimbal · <span style={{ color: "var(--hg-fg-2)" }}>{fixtureBindingId(fixture) || "unbound"}</span></div>
-            <div style={{ color: "var(--hg-fg-4)" }}>optic · <span style={{ color: "var(--hg-fg-2)" }}>{fixture.spotlight?.optic_profile?.manufacturer || "unknown"} {fixture.spotlight?.optic_profile?.part || ""} · {fixture.spotlight?.optic_profile?.configured_fwhm_deg || "—"}° FWHM</span></div>
+            <div style={{ color: "var(--hg-fg-3)" }}>HA · <span style={{ color: "var(--hg-fg-2)" }}>{fixture.ha_entity_id || "none"} / {spotlightEntity || "unmapped"}</span></div>
+            <div style={{ color: "var(--hg-fg-3)" }}>gimbal · <span style={{ color: "var(--hg-fg-2)" }}>{fixtureBindingId(fixture) || "unbound"}</span></div>
+            <div style={{ color: "var(--hg-fg-3)" }}>optic · <span style={{ color: "var(--hg-fg-2)" }}>{fixture.spotlight?.optic_profile?.manufacturer || "unknown"} {fixture.spotlight?.optic_profile?.part || ""} · {fixture.spotlight?.optic_profile?.configured_fwhm_deg || "—"}° FWHM</span></div>
           </div>
           <AimStatus label="telemetry" status={sim ? "measured" : telemetry.valid ? "current" : "unavailable"}
             detail={telemetry.blockers?.join(", ")} />
@@ -837,7 +837,7 @@ function HomeApartmentAim({
           <AimStatus label="visualization" status={calibration ? calibrationCompatible ? calibration.status : "failed" : "proposed"}
             detail={calibration && !calibrationCompatible ? "invalidated by status, Product profile, or collision geometry digest" : ""} />
           <AimStatus label="radial" status={fixture.radial_zones?.orientation_calibration?.status || "proposed"} />
-          <div style={{ marginTop: 4, fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-4)", lineHeight: 1.5 }}>
+          <div style={{ marginTop: 4, fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)", lineHeight: 1.5 }}>
             walls · {(fixture.fixture_calibration?.wall_distances || []).map((w) => `${w.wall} ${Number.isFinite(w.distance_m) ? w.distance_m.toFixed(3) + " m" : "—"}`).join(" · ") || "—"}<br />
             floor → ceiling · {fixture.fixture_calibration?.floor_to_ceiling_m ?? "—"} m<br />
             ceiling → fixture bottom · {fixture.fixture_calibration?.ceiling_to_fixture_bottom_m ?? "—"} m<br />
@@ -847,8 +847,8 @@ function HomeApartmentAim({
           <div style={{ marginTop: 5, fontFamily: AIM_MONO, fontSize: 9, lineHeight: 1.55 }}>
             <div style={{ color: AIM_WARM }}>raw encoder · {telemetry.raw ? `${telemetry.raw.pan.toFixed(2)}° / ${telemetry.raw.tilt.toFixed(2)}°` : "unavailable"}</div>
             <div style={{ color: mechanical.ok ? AIM_CYAN : "var(--hg-fg-3)" }}>mechanical · {mechanical.ok ? `${mechanical.pan.toFixed(2)}° pan / ${mechanical.tilt.toFixed(2)}° tilt` : "not calibrated"}</div>
-            <div style={{ color: "var(--hg-fg-4)" }}>source · {sim ? "bench simulation" : telemetry.source || telemetryStatus.state} · age {telemetry.ages_ms ? `${Math.max(telemetry.ages_ms.pan, telemetry.ages_ms.tilt).toFixed(0)} ms` : "—"}</div>
-            <div style={{ color: "var(--hg-fg-4)" }}>activity/readiness · {telemetry.activity || "idle"} / {String(telemetry.readiness ?? "unknown")}</div>
+            <div style={{ color: "var(--hg-fg-3)" }}>source · {sim ? "bench simulation" : telemetry.source || telemetryStatus.state} · age {telemetry.ages_ms ? `${Math.max(telemetry.ages_ms.pan, telemetry.ages_ms.tilt).toFixed(0)} ms` : "—"}</div>
+            <div style={{ color: "var(--hg-fg-3)" }}>activity/readiness · {telemetry.activity || "idle"} / {String(telemetry.readiness ?? "unknown")}</div>
           </div>
         </section>
 
@@ -871,7 +871,7 @@ function HomeApartmentAim({
             <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-2)", lineHeight: 1.45 }}>{`SIMULATION ONLY\nPOST ${product.endpoint}\n${JSON.stringify(product.body, null, 2)}`}</pre>
             <AimButton onClick={() => navigator.clipboard?.writeText(JSON.stringify(product.body))}>copy simulated request</AimButton>
           </> : <>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-4)", lineHeight: 1.45 }}>{`POST /api/group/aim\n{ target_x_m, target_y_m, post_dwell_ms }`}</pre>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)", lineHeight: 1.45 }}>{`POST /api/group/aim\n{ target_x_m, target_y_m, post_dwell_ms }`}</pre>
             {liveBlockers.map((b) => <div key={b} style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: AIM_AMBER }}>blocked · {b}</div>)}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
               <AimButton disabled>copy command</AimButton><AimButton disabled>move light</AimButton>
@@ -923,7 +923,7 @@ function HomeApartmentAim({
             {roleOptions(zone.entity_id).map((e) => <option key={e.entity_id} value={e.entity_id}>{entityName(e, states)} · {e.entity_id}</option>)}
           </AimSelect>)}
         </div>
-        <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-4)", lineHeight: 1.5 }}>
+        <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)", lineHeight: 1.5 }}>
           Available Home Assistant lights · {lightEntities.length}. Names are never used to map roles automatically. Duplicate placement is blocked across fixtures.
         </div>
       </section>}
@@ -940,7 +940,7 @@ function HomeApartmentAim({
         return <section style={{ display: "grid", gap: 13 }}>
           <div>
             <div style={{ fontFamily: AIM_SANS, fontSize: 14, fontWeight: 560 }}>Radial glow</div>
-            <div style={{ fontFamily: AIM_SANS, fontSize: 11, lineHeight: 1.45, color: "var(--hg-fg-4)", marginTop: 4 }}>
+            <div style={{ fontFamily: AIM_SANS, fontSize: 11, lineHeight: 1.45, color: "var(--hg-fg-3)", marginTop: 4 }}>
               Tap a segment here—or around the fixture in the room—to toggle it.
             </div>
           </div>
@@ -952,10 +952,10 @@ function HomeApartmentAim({
                 aria-label={`Toggle radial zone ${item.number}`} aria-pressed={on}
                 onClick={() => { setSelectedZone(item.number); sendLights([item.entity_id], on ? "turn_off" : "turn_on", {}, `zone-${item.number}`); }}
                 disabled={!item.entity_id}
-                style={{ minHeight: 62, borderRadius: 14, border: `1px solid ${selectedZone === item.number ? "rgba(255,255,255,0.34)" : "rgba(255,255,255,0.08)"}`,
-                  background: on ? "radial-gradient(circle at 50% 40%, rgba(255,238,202,0.28), rgba(255,198,112,0.06) 70%)" : "rgba(255,255,255,0.025)",
-                  boxShadow: on ? "inset 0 0 24px rgba(255,211,150,0.08)" : "none",
-                  color: on ? "#fff3dc" : "var(--hg-fg-4)", fontFamily: AIM_SANS, fontSize: 12, cursor: item.entity_id ? "pointer" : "default" }}>
+                style={{ minHeight: 62, borderRadius: 14, border: `1px solid ${selectedZone === item.number ? AIM_WARM : "var(--hg-border)"}`,
+                  background: on ? "radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--apt-warm) 28%, transparent), color-mix(in srgb, var(--apt-warm) 6%, transparent) 70%)" : "var(--hg-bg-2)",
+                  boxShadow: on ? "inset 0 0 24px color-mix(in srgb, var(--apt-warm) 8%, transparent)" : "none",
+                  color: on ? "var(--hg-fg-1)" : "var(--hg-fg-3)", fontFamily: AIM_SANS, fontSize: 12, cursor: item.entity_id ? "pointer" : "default" }}>
                 <span style={{ display: "block", fontSize: 16, marginBottom: 3 }}>{item.number}</span>
                 <span style={{ fontFamily: AIM_MONO, fontSize: 8 }}>{item.entity_id ? (on ? "ON" : "OFF") : "UNMAPPED"}</span>
               </button>;
@@ -965,11 +965,11 @@ function HomeApartmentAim({
             <AimButton onClick={() => sendLights(mappedIds, "turn_on", {}, "radials-all")}>All on</AimButton>
             <AimButton onClick={() => sendLights(mappedIds, "turn_off", {}, "radials-all")}>All off</AimButton>
           </div>
-          <div style={{ border: "1px solid rgba(255,255,255,0.085)", borderRadius: 13, padding: 12, display: "grid", gap: 10,
-            background: "rgba(255,255,255,0.025)" }}>
+          <div style={{ border: "1px solid var(--hg-border)", borderRadius: 13, padding: 12, display: "grid", gap: 10,
+            background: "var(--hg-bg-2)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontFamily: AIM_SANS, fontSize: 13, fontWeight: 560 }}>Zone {zone.number}</div>
-              <div style={{ marginLeft: "auto", fontFamily: AIM_MONO, fontSize: 9, color: zoneState?.state === "on" ? AIM_WARM : "var(--hg-fg-4)" }}>{cap.available ? zoneState?.state : "unavailable"}</div>
+              <div style={{ marginLeft: "auto", fontFamily: AIM_MONO, fontSize: 9, color: zoneState?.state === "on" ? AIM_WARM : "var(--hg-fg-3)" }}>{cap.available ? zoneState?.state : "unavailable"}</div>
             </div>
             {cap.brightness && <label style={{ display: "grid", gap: 5, fontFamily: AIM_SANS, fontSize: 11, color: "var(--hg-fg-3)" }}>
               <span style={{ display: "flex", justifyContent: "space-between" }}><span>Brightness</span><span>{Math.round((+zoneState?.attributes?.brightness || 0) / 2.55)}%</span></span>
@@ -992,12 +992,12 @@ function HomeApartmentAim({
       })()}
 
       {fixture?.fixture_kind === A.ENGINEERED_KIND && tab === "setup" && <section style={{ display: "grid", gap: 13,
-        borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 14 }}>
+        borderTop: "1px solid var(--hg-border-soft)", paddingTop: 14 }}>
         <div style={{ fontFamily: AIM_SANS, fontSize: 14, fontWeight: 560 }}>Calibration</div>
         <div style={{ display: "grid", gap: 7 }}>
           <div style={{ fontFamily: AIM_MONO, fontSize: 9, color: AIM_CYAN }}>Gimbal direction · visualization only</div>
           {!sim && <>{liveBlockers.slice(0, 2).map((b) => <div key={b} style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: AIM_AMBER }}>blocked · {b}</div>)}</>}
-          <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-4)", lineHeight: 1.5 }}>
+          <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)", lineHeight: 1.5 }}>
             Corner · {destination?.kind === "mesh" ? targetLabel(destination) : "click an exact collision-mesh corner"}<br />
             Horizontal reference · apartment +Y<br />
             Ideal axes cannot correct mounting roll, a nonvertical pan axis, or mechanical nonorthogonality.
@@ -1017,14 +1017,14 @@ function HomeApartmentAim({
 
         <div style={{ borderTop: "1px solid var(--hg-border-soft)", paddingTop: 11, display: "grid", gap: 8 }}>
           <div style={{ fontFamily: AIM_MONO, fontSize: 9, color: AIM_WARM }}>Radial orientation · floor looking upward</div>
-          <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-4)" }}>Identify the mapped zone facing the selected exact mesh corner. Entering this workflow never illuminates a zone.</div>
+          <div style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)" }}>Identify the mapped zone facing the selected exact mesh corner. Entering this workflow never illuminates a zone.</div>
           <AimSelect label="anchor zone" value={String(radialDraft.anchor_zone)} onChange={(v) => setRadialDraft((d) => ({ ...d, anchor_zone: +v }))}>
             {fixture.radial_zones.zones.map((z) => <option key={z.number} value={z.number}>zone {z.number}{z.entity_id ? " · mapped" : " · unmapped"}</option>)}
           </AimSelect>
           <AimSelect label="order as viewed from floor" value={radialDraft.order} onChange={(v) => setRadialDraft((d) => ({ ...d, order: v }))}>
             <option value="clockwise">clockwise</option><option value="counterclockwise">counterclockwise</option>
           </AimSelect>
-          <label style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-4)" }}>
+          <label style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)" }}>
             angular fine adjustment · {radialDraft.fine_adjust_deg}°
             <input className="hg-focusable" type="range" min="-30" max="30" step="0.5" value={radialDraft.fine_adjust_deg}
               onChange={(e) => setRadialDraft((d) => ({ ...d, fine_adjust_deg: +e.target.value }))} style={{ width: "100%" }} />

@@ -12,12 +12,16 @@ No household pack, coordinates or private registration is published here.
 
 The desktop measurements below are retained historical evidence. The browser
 harness now defaults to a cross-platform `functional` profile at a 390 by 844
-product viewport; its timings establish functional capacity only at that
-viewport. An explicit `desktop-benchmark` profile retains the original 1366 by
-768 viewport and identical assertions for source-paired comparisons. All nine
+CSS product viewport and browser DPR 0.5 (195 by 185 backing canvas in the
+authored layout). Its timings establish reduced-resolution functional capacity
+only. An explicit `desktop-benchmark` profile retains the original 1366 by
+768 viewport at DPR 1 and identical assertions for source-paired comparisons. All nine
 stages, mode-readiness/dot-draw/race checks, performance assertions, twelve
 120-RAF warm-ups and the 25/145-second deadlines remain unchanged. Profile and
-configured viewport are recorded in each new receipt. Compact functional CI
+configured viewport/device scale are recorded and asserted in each new receipt;
+every sampled window retains `maxFidelity`/`maximum` and its configured DPR.
+Actual draw callbacks establish draw admission, not full-resolution pixel
+quality. Compact functional CI
 results do not clear the desktop frame-cost qualification above. The measured
 SwiftShader diagnosis, limits and explicit profile commands are documented in
 `overlay-bridge-review.md`; hosted verification remains pending.

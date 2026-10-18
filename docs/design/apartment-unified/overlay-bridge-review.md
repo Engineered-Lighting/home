@@ -79,13 +79,62 @@ resource sensitivity. The faster workstation did not reproduce the hosted
 probe clears desktop performance acceptance; both report `requires-review`.
 
 The test now defaults to the explicit `functional` resource profile at 390 by
-844 on every platform. It retains all nine stages, three actual mode-readiness
+844 on every platform, with browser `deviceScaleFactor: 0.5`. It retains all nine stages, three actual mode-readiness
 and dot-draw checks, races, performance assertions, twelve 120-RAF warm-ups,
 the 25-second warm-up deadline and the 145-second global deadline. Bounded
 warm-up diagnostics record observed RAFs, renderer frame increments, timing,
 visibility, canvas, quality and four recent stats events. The receipt records
-its configured profile/viewport and limits functional timings to that viewport.
-Hosted verification of the profile correction is still pending.
+its configured profile/viewport/device scale and limits functional timings to
+those resource conditions. The explicit desktop benchmark remains DPR 1.
+
+Hosted run `39176891782` at `3f477072` confirmed that the phone viewport alone
+was insufficient. At DPR 1, its first Cloud warm-up completed 120 RAFs and 240
+renderer frame increments in 24.055 seconds. The next reached 118 RAFs and 236
+renderer frames before the unchanged 25-second deadline. It remained visible
+at `maxFidelity`/`maximum`, with zero forbidden requests, missing code or page
+errors. Twelve warm-ups at that cadence cannot fit the global budget. The
+equipment depth pass uses the drawing-buffer dimensions capped at 1024, rather
+than a fixed 1024 texture, so lowering browser DPR reduces both its pixels and
+the main framebuffer's pixels without changing room assets or geometry.
+
+The final bounded workstation probes kept the 390 by 844 CSS viewport and all
+assertions/deadlines. Only the browser backend or browser device scale changed:
+
+| SwiftShader mode | DPR | Canvas | Nine-stage duration | Receipt suffix |
+| --- | ---: | --- | ---: | --- |
+| GLES driver, unchanged backend | 0.5 | 195 by 185 | 48.58 s | `run-1792366882372-candidate` |
+| WebGL-only fallback | 1 | 390 by 370 | 66.96 s | `run-1792366980475-candidate` |
+| WebGL-only fallback | 0.5 | 195 by 185 | 48.24 s | `run-1792367063563-candidate` |
+
+Each receipt is under `.tmp/apartment-overlay-bridge-diagnosis/<suffix>/receipt.json`.
+All three retained twelve 120-RAF warm-ups, maximum fidelity, actual mode
+readiness, dot draws and lifecycle races. The final run recorded 240 to 278
+renderer frame increments per warm-up; its GPU was ANGLE/Vulkan SwiftShader,
+with unmasked vendor `Google Inc. (Google)`. Both fallback probes recorded the
+actual WebGL vendor/renderer. The combined run does not establish a further
+improvement over DPR 0.5 alone, and workstation timing cannot guarantee hosted
+headroom.
+
+Linux now selects the documented
+[WebGL-only SwiftShader fallback](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/gpu/swiftshader.md)
+with `--use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader`.
+Windows retains its existing D3D11 choice. The functional profile changes only
+the browser's device scale; it does not change renderer code or its quality
+governor. The test asserts the configured CSS viewport, DPR and backing canvas
+dimensions, and checks DPR plus `maxFidelity`/`maximum` in every sampled window.
+It also asserts nine stages and twelve completed 120-RAF warm-ups. The desktop
+benchmark explicitly fixes DPR 1 for all three source phases.
+
+This is reduced-resolution functional capacity evidence. `onBeforeRender`
+establishes draw admission, not full-resolution pixel quality. Historical
+desktop noise measurements remain qualified, performance remains
+`requires-review`, and hosted verification of this correction is pending.
+The exact official harness then passed all nine stages in 47.03 seconds with
+its retained Windows D3D11 backend, functional DPR 0.5 and a 195 by 185 canvas;
+all twelve warm-ups recorded 120 RAFs and maximum quality. Its receipt is
+`.tmp/apartment-overlay-bridge-browser/run-1792367181807-candidate/receipt.json`.
+Forbidden requests, missing code and page errors were zero. This verifies the
+final local harness bytes and does not substitute for the next hosted run.
 
 Run the default functional check with no source-phase override:
 
@@ -96,7 +145,7 @@ node --test tools/test-apartment-overlay-bridge-browser.mjs
 ```
 
 The desktop comparison remains a separate, explicitly selected profile. Each
-phase must use the same desktop profile; baseline phases refuse the default
+phase must use the same desktop profile at DPR 1; baseline phases refuse the default
 functional profile. Review all three receipts together:
 
 ```powershell

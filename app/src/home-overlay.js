@@ -19,7 +19,8 @@
  *     then preventDefault()s and stopImmediatePropagation()s so nothing
  *     else (e.g. home-app's pending-confirm cancel) sees it.
  *   - Scoped input guard: the press is yielded to a focused editable
- *     element ONLY when that element is inside the top layer's root — a
+ *     element ONLY when that element is inside the top layer's root or an
+ *     explicitly owned portal root (getRoots) — a
  *     field inside the layer (labeler picker input) handles its own Escape;
  *     a focused chat composer BEHIND the layer does not swallow the close.
  *
@@ -28,7 +29,7 @@
  *     layer next frame (explicit ref → first focusable → root w/ tabindex).
  *   - trap: Tab wraps within the layer root.
  *   - on pop (topmost only): focus returns to the recorded opener if still
- *     connected, else options.restoreTo, else the app fallback
+ *     usable, else options.restoreTo, else the app fallback
  *     (setFallbackFocus, registered once by home-app).
  *
  * The core is framework-free and Node-testable (tools/run-overlay-stack-
@@ -80,6 +81,63 @@
     return null;
   }
 
+  // Extra roots affect editable ownership only. They never widen a modal's
+  // focus trap or make an unrelated editor behind the layer own Escape.
+  function _containsTarget(layer, target) {
+    var root = _rootOf(layer);
+    if (root && root.contains && root.contains(target)) return true;
+    var roots;
+    try { roots = typeof layer.getRoots === "function" ? layer.getRoots() : null; }
+    catch (e) { return false; }
+    if (!Array.isArray(roots)) return false;
+    for (var i = 0; i < roots.length; i++) {
+      var extra = roots[i];
+      if (extra && extra.contains && extra.contains(target)) return true;
+    }
+    return false;
+  }
+
+  function _canFocus(el) {
+    if (!HAS_DOM || !el || typeof el.focus !== "function" || !el.isConnected || el.disabled) return false;
+    // A canvas click can leave body active. Its no-op focus must not count
+    // as restoration and suppress the deliberate viewport/list fallback.
+    var doc = el.ownerDocument || document;
+    if ((el === doc.body || el === doc.documentElement) && !el.hasAttribute("tabindex")) return false;
+    try {
+      if (el.matches && el.matches(":disabled")) return false;
+      if (el.hidden || el.inert || (el.closest && el.closest("[hidden], [inert]"))) return false;
+      if (el.getClientRects && el.getClientRects().length === 0) return false;
+      var view = el.ownerDocument && el.ownerDocument.defaultView || window;
+      var style = view.getComputedStyle ? view.getComputedStyle(el) : null;
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse")) return false;
+    } catch (e) { return false; }
+    return true;
+  }
+
+  function _tryFocus(el) {
+    if (!_canFocus(el)) return false;
+    try { el.focus({ preventScroll: true }); }
+    catch (e) { try { el.focus(); } catch (e2) { return false; } }
+    // focus() can silently refuse a target; only a successful focus ends the
+    // fallback chain. This also covers a target invalidated during focus.
+    return (el.ownerDocument || document).activeElement === el;
+  }
+
+  function _focusTarget(value) {
+    try {
+      if (typeof value === "function") value = value();
+      if (value && typeof value === "object" && "current" in value) value = value.current;
+      if (typeof value === "string") value = document.querySelector(value);
+      return value || null;
+    } catch (e) { return null; }
+  }
+
+  function restoreFocus(opener, fallback) {
+    if (!HAS_DOM) return false;
+    return _tryFocus(_focusTarget(opener)) || _tryFocus(_focusTarget(fallback))
+      || _tryFocus(_focusTarget(_fallbackFocus));
+  }
+
   var FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), ' +
     'select:not([disabled]), textarea:not([disabled]), summary, ' +
     '[tabindex]:not([tabindex="-1"])';
@@ -90,9 +148,7 @@
     var out = [];
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i];
-      // visible enough: has layout boxes (display:none/detached have none)
-      if (n.getClientRects && n.getClientRects().length === 0) continue;
-      out.push(n);
+      if (_canFocus(n)) out.push(n);
     }
     return out;
   }
@@ -106,38 +162,16 @@
       }
     } catch (e) { /* ignore */ }
     var root = _rootOf(layer);
-    if (!target && layer.initialFocus === "first" && root) target = _focusables(root)[0] || null;
-    if (!target && root) {
+    if (_tryFocus(target)) return;
+    if ((target || layer.initialFocus === "first") && root && _tryFocus(_focusables(root)[0])) return;
+    if (root) {
       if (!root.hasAttribute("tabindex")) root.setAttribute("tabindex", "-1");
-      target = root;
-    }
-    if (target && typeof target.focus === "function") {
-      try { target.focus({ preventScroll: true }); } catch (e) { try { target.focus(); } catch (e2) { /* ok */ } }
+      _tryFocus(root);
     }
   }
 
   function _restoreFocus(layer) {
-    if (!HAS_DOM) return;
-    var el = layer.opener;
-    if (el && el.isConnected && typeof el.focus === "function") {
-      try { el.focus({ preventScroll: true }); return; } catch (e) { /* fall through */ }
-    }
-    var alt = null;
-    try {
-      if (layer.restoreTo && typeof layer.restoreTo === "object" && "current" in layer.restoreTo) alt = layer.restoreTo.current;
-      else if (typeof layer.restoreTo === "function") alt = layer.restoreTo();
-    } catch (e) { /* ignore */ }
-    if (alt && alt.isConnected && typeof alt.focus === "function") {
-      try { alt.focus({ preventScroll: true }); return; } catch (e) { /* fall through */ }
-    }
-    var fb = null;
-    try {
-      if (typeof _fallbackFocus === "function") fb = _fallbackFocus();
-      else if (typeof _fallbackFocus === "string") fb = document.querySelector(_fallbackFocus);
-    } catch (e) { /* ignore */ }
-    if (fb && typeof fb.focus === "function") {
-      try { fb.focus({ preventScroll: true }); } catch (e) { /* give up quietly */ }
-    }
+    return restoreFocus(layer.opener, layer.restoreTo);
   }
 
   function push(opts) {
@@ -147,6 +181,7 @@
       onEscape: (opts && opts.onEscape) || function () { return undefined; },
       rootRef: opts ? opts.rootRef : null,
       getRoot: opts ? opts.getRoot : null,
+      getRoots: opts ? opts.getRoots : null,
       trap: !!(opts && opts.trap),
       passive: !!(opts && opts.passive),
       initialFocus: (opts && opts.initialFocus) || "root",
@@ -203,6 +238,7 @@
     var items = _focusables(root);
     if (!items.length) {
       e.preventDefault();
+      _moveFocusIn({ getRoot: function () { return root; } });
       return;
     }
     var first = items[0];
@@ -211,15 +247,15 @@
     var inside = root.contains(active);
     if (!inside) {
       e.preventDefault();
-      try { (e.shiftKey ? last : first).focus(); } catch (err) { /* ok */ }
+      if (!_tryFocus(e.shiftKey ? last : first)) _moveFocusIn({ getRoot: function () { return root; } });
       return;
     }
     if (!e.shiftKey && active === last) {
       e.preventDefault();
-      try { first.focus(); } catch (err) { /* ok */ }
+      if (!_tryFocus(first)) _moveFocusIn({ getRoot: function () { return root; } });
     } else if (e.shiftKey && active === first) {
       e.preventDefault();
-      try { last.focus(); } catch (err) { /* ok */ }
+      if (!_tryFocus(last)) _moveFocusIn({ getRoot: function () { return root; } });
     }
   }
 
@@ -231,10 +267,17 @@
       // Scoped input guard: yield only to an editable INSIDE the top layer.
       var target = e.target;
       if (_isEditable(target)) {
-        var root = _rootOf(t);
-        if (root && root.contains && root.contains(target)) return;
+        if (_containsTarget(t, target)) return;
         // Editable OUTSIDE the layer (e.g. the chat composer behind a
         // drawer): the layer still owns Escape — fall through.
+      }
+      // A held Escape is one cancellation, even after React exposes the next
+      // operation. Owned editables still receive their native repeat behavior.
+      if (e.repeat) {
+        e.preventDefault();
+        if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+        else if (typeof e.stopPropagation === "function") e.stopPropagation();
+        return;
       }
       var claimed;
       try { claimed = t.onEscape(e) !== false; } catch (err) { claimed = true; }
@@ -261,6 +304,8 @@
     if (!React) throw new Error("useOverlayLayer requires React on window");
     var cbRef = React.useRef(null);
     cbRef.current = opts.onEscape;
+    var rootsRef = React.useRef(null);
+    rootsRef.current = opts.getRoots;
     var active = !!opts.active;
     React.useEffect(function () {
       if (!active) return undefined;
@@ -269,6 +314,7 @@
         onEscape: function (e) { return cbRef.current ? cbRef.current(e) : undefined; },
         rootRef: opts.rootRef,
         getRoot: opts.getRoot,
+        getRoots: function () { return rootsRef.current ? rootsRef.current() : null; },
         trap: opts.trap,
         passive: opts.passive,
         initialFocus: opts.initialFocus,
@@ -316,6 +362,7 @@
       };
     },
     setFallbackFocus: function (fnOrSelector) { _fallbackFocus = fnOrSelector; },
+    restoreFocus: restoreFocus,
     _handleKeydown: _handleKeydown,   // exposed for the Node harness
     _stackSize: function () { return _stack.length; },
   };

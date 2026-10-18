@@ -2450,6 +2450,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const emptyInteriorRef = useRef(null);
   const apartmentSceneControlsEnabledRef = useRef(false);
   const viewRootRef = useRef(null);
+  const escapeTriggerRef = useRef(null);
+  const escapeOpenersRef = useRef({});
+  const escapeOperationsRef = useRef({});
+  const escapeFocusFrameRef = useRef(null);
   const viewOpenRef = useRef(open);
   viewOpenRef.current = open;
   const engineRef = useRef(null);
@@ -5621,40 +5625,89 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   }, [open, editing, spatialScale, selectedSiteInterior, apartmentSceneControlsEnabled,
     semanticDevicesForRoom, stepSemanticDevice]);
 
-  /* Overlay layers: topmost-only Escape + focus trap via HomeOverlay (no
-     per-view window Escape listener). Non-embedded is a genuine modal;
-     embedded registers passively and PASSES the final Escape (returns
-     false) so the base surface keeps its own behavior. */
+  // Remember the actual local UI/canvas trigger before its control can unmount.
+  // React portal events still pass through this view, including column controls.
+  const rememberEscapeTrigger = event => {
+    if (event.key === "Escape") return;
+    escapeTriggerRef.current = event.target?.closest?.('button, a[href], input, select, textarea, [tabindex]') || viewRootRef.current;
+  };
+  React.useLayoutEffect(() => {
+    const next = { aim: aimMode, card: cardId, setup: editing, camera: liveCam,
+      selection: virtualFixtureControlsOpen && (virtualFixtureId || true), desk: !!deskTargetSelection };
+    for (const key of Object.keys(next)) {
+      if (next[key] && next[key] !== escapeOperationsRef.current[key]) {
+        escapeOpenersRef.current[key] = escapeTriggerRef.current || document.activeElement;
+      }
+    }
+    escapeOperationsRef.current = next;
+  }, [aimMode, cardId, editing, liveCam, virtualFixtureControlsOpen, virtualFixtureId, deskTargetSelection]);
+  const restoreApartmentOperationFocus = useCallback(key => {
+    const opener = escapeOpenersRef.current[key] || escapeTriggerRef.current;
+    delete escapeOpenersRef.current[key];
+    if (escapeFocusFrameRef.current !== null) cancelAnimationFrame(escapeFocusFrameRef.current);
+    escapeFocusFrameRef.current = requestAnimationFrame(() => {
+      escapeFocusFrameRef.current = null;
+      const top = window.HomeOverlay.topKey();
+      if (!viewOpenRef.current || top && top !== "apartment" && top !== "apartment-embedded") return;
+      window.HomeOverlay.restoreFocus(opener, viewRootRef);
+    });
+  }, []);
+  useEffect(() => () => {
+    if (escapeFocusFrameRef.current !== null) cancelAnimationFrame(escapeFocusFrameRef.current);
+  }, []);
+  const clearVirtualFixtureSelection = useCallback(() => {
+    setVirtualFixtureControlsOpen(false);
+    engineRef.current?.overlay.setVirtualFixtureSelected?.(null);
+  }, []);
+
+  // One claimed Escape calls one existing cancellation path. Child overlays
+  // and their editable fields have priority through HomeOverlay. No generic
+  // camera/session stop, model reset or speculative proposal discard is added.
+  const handleApartmentEscape = () => {
+    if (deskTargetCaptureRef.current) {
+      cancelDeskTargetSelection(); restoreApartmentOperationFocus("desk"); return true;
+    }
+    if (virtualAimGestureRef.current?.readback().active) {
+      virtualAimGestureRef.current.cancel(); restoreApartmentOperationFocus("drag"); return true;
+    }
+    if (mapRehearsalOpen) { void window.HomeMapRehearsalUI?.close?.(); return true; }
+    if (travellingRef.current || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle") {
+      void cancelSpatialTravel(); return true;
+    }
+    if (aimMode) {
+      setAimMode(false); setAimDestination(null); restoreApartmentOperationFocus("aim"); return true;
+    }
+    // Guard banked calibration pairs before any camera/setup exit can clear
+    // them. Preserve the existing five-second warning and final modal/pass
+    // behavior; any new capture still disarms this guard at its source.
+    if (calibCam && calibPairCountRef.current > 0) {
+      const now = Date.now();
+      if (!calibEscArmRef.current || now - calibEscArmRef.current > 5000) {
+        calibEscArmRef.current = now;
+        showToast(`calibration in progress — Esc again discards ${calibPairCountRef.current} pairs`, { tone: "error" });
+        return true;
+      }
+      calibEscArmRef.current = 0;
+      calibPairCountRef.current = 0;
+      setToast(null);
+      return false;
+    }
+    if (engineRef.current?.rig?.inCameraPose?.()) {
+      exitCameraPose(); restoreApartmentOperationFocus("camera"); return true;
+    }
+    if (editing) { setEditing(false); restoreApartmentOperationFocus("setup"); return true; }
+    if (cardId) { setCardId(null); restoreApartmentOperationFocus("card"); return true; }
+    if (virtualFixtureControlsOpen) {
+      clearVirtualFixtureSelection(); restoreApartmentOperationFocus("selection"); return true;
+    }
+    return false;
+  };
   window.HomeOverlay.useOverlayLayer({
     key: "apartment",
     active: !!(open && !embedded),
-    onEscape: () => {
-      if (deskTargetCaptureRef.current) { cancelDeskTargetSelection(); return; }
-      if (virtualAimGestureRef.current?.readback().active) { virtualAimGestureRef.current.cancel(); return; }
-      if (mapRehearsalOpen) { void window.HomeMapRehearsalUI?.close?.(); return; }
-      if (travellingRef.current || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle") {
-        void cancelSpatialTravel(); return;
-      }
-      if (aimMode) { setAimMode(false); setAimDestination(null); return; }
-      if (cardId) { setCardId(null); return; }
-      if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
-      if (editing) { setEditing(false); return; }
-      // unsaved calibration pairs: first Esc warns + arms, second Esc within
-      // 5s proceeds with the close (any capture disarms — see onPairsChanged)
-      if (calibCam && calibPairCountRef.current > 0) {
-        const now = Date.now();
-        if (!calibEscArmRef.current || now - calibEscArmRef.current > 5000) {
-          calibEscArmRef.current = now;
-          showToast(`calibration in progress — Esc again discards ${calibPairCountRef.current} pairs`, { tone: "error" });
-          return;
-        }
-        calibEscArmRef.current = 0;
-        calibPairCountRef.current = 0;
-        setToast(null);
-      }
-      onClose?.();
-    },
+    onEscape: () => { if (handleApartmentEscape() === false) onClose?.(); },
     rootRef: viewRootRef,
+    getRoots: () => [shellControlsHost, shellCameraHost],
     trap: true,
     initialFocus: "root",
   });
@@ -5663,32 +5716,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     active: !!(open && embedded),
     passive: true,
     initialFocus: "none",
-    onEscape: () => {
-      if (deskTargetCaptureRef.current) { cancelDeskTargetSelection(); return; }
-      if (virtualAimGestureRef.current?.readback().active) { virtualAimGestureRef.current.cancel(); return; }
-      if (mapRehearsalOpen) { void window.HomeMapRehearsalUI?.close?.(); return; }
-      if (travellingRef.current || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle") {
-        void cancelSpatialTravel(); return;
-      }
-      if (aimMode) { setAimMode(false); setAimDestination(null); return; }
-      if (cardId) { setCardId(null); return; }
-      if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
-      if (editing) { setEditing(false); return; }
-      // same discard guard as the modal layer before the Escape is passed on
-      if (calibCam && calibPairCountRef.current > 0) {
-        const now = Date.now();
-        if (!calibEscArmRef.current || now - calibEscArmRef.current > 5000) {
-          calibEscArmRef.current = now;
-          showToast(`calibration in progress — Esc again discards ${calibPairCountRef.current} pairs`, { tone: "error" });
-          return;
-        }
-        calibEscArmRef.current = 0;
-        calibPairCountRef.current = 0;
-        setToast(null);
-      }
-      return false;
-    },
+    onEscape: handleApartmentEscape,
     getRoot: () => viewRootRef.current,
+    getRoots: () => [shellControlsHost, shellCameraHost],
   });
 
   const refitMobileOverview = useCallback((dur = 520) => {
@@ -7729,7 +7759,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       aria-modal={embedded ? undefined : true}
       aria-label="3d apartment"
       tabIndex={-1}
+      onKeyDownCapture={rememberEscapeTrigger}
       onPointerDownCapture={event => {
+        rememberEscapeTrigger(event);
         if (!unifiedShell || !apartmentSceneControlsEnabled || event.button !== 0 || event.isPrimary === false
             || event.target !== engineRef.current?.renderer.domElement) return;
         // End inspector focus before the native canvas gesture starts. Opening
@@ -8865,7 +8897,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               setVirtualFixtureId(id); setVirtualFixtureControlsOpen(true);
               engineRef.current?.overlay.setVirtualFixtureSelected?.(id); onShowShellControls?.();
             }}
-            onBack={() => { setVirtualFixtureControlsOpen(false); engineRef.current?.overlay.setVirtualFixtureSelected?.(null); }}
+            onBack={clearVirtualFixtureSelection}
             onPatch={changeVirtualFixture} onPatchAll={on => {
               for (const fixture of virtualFixtureItems) changeVirtualFixture({ spotlight: { on }, downward: { on },
                 radials: aptUnifiedRadialPowerPatch(fixture.state?.radials || [], on) }, fixture.fixture_id);

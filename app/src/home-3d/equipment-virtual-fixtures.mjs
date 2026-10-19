@@ -32,6 +32,11 @@ const ORB_CORE_RADIUS = .03, ORB_CORE_COLOR = 0x3d3f43;
 const ORB_HALO_RADIUS = .15, ORB_HALO_FALLOFF = 2.5, ORB_HALO_CHANNEL_OPACITY = .3;
 const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = .0005, RADIAL_SETTLED_KELVIN = 2;
 const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
+// SPEC Aim lifecycle: Set aim moves the warm beam to its new target with a
+// 650 ms sweep (ease-out cubic, as in the prototype), instant under reduced
+// motion. Drawing only: state, targets, readback, the descriptor, the pick and
+// the aim handle take the new aim at once.
+export const AIM_SWEEP_MS = 650;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const vector = (value, length = 3) => Array.isArray(value) && value.length === length && value.every(finite);
 const unit = value => vector(value) && Math.abs(Math.hypot(...value) - 1) < 1e-6;
@@ -417,13 +422,17 @@ function buildFixture(item, state, depth, reducedMotion) {
             distance: worldOrigin.distanceTo(new THREE.Vector3(...target.point)), kind: target.kind || 'registered_mesh', index: -1 }
             : receivingPoint(item, worldOrigin, direction);
         const reach = hit ? hit.distance : 3;
-        const active = channel.on && channel.brightness > 0 && reach > .001;
-        view.update(origin, direction, reach, fullAngle, channel);
-        view.disc.visible = active && !!hit;
+        drawBeam(view, channel, origin, direction, fullAngle, reach, hit);
         const aim = { beam_origin_m: worldOrigin.toArray(), direction_unit: direction.toArray(), reach_m: reach,
             endpoint_m: worldOrigin.clone().addScaledVector(direction, reach).toArray(),
             receiver_kind: hit?.kind || 'unavailable', receiver_role: hit ? 'registered_reference_surface' : 'bounded_guide_only' };
         for (const node of [roboticGroup, view.volume, view.glow, view.disc]) Object.assign(node.userData, aim);
+        return { channel, origin, direction, fullAngle, reach, hit, aim };
+    }
+    function drawBeam(view, channel, origin, direction, fullAngle, reach, hit) {
+        const active = channel.on && channel.brightness > 0 && reach > .001;
+        view.update(origin, direction, reach, fullAngle, channel);
+        view.disc.visible = active && !!hit;
         if (!active) return;
         const color = Spotlight.displaySpotlightWhite(channel.color_temp_kelvin), radius = Aiming.beamRadius(reach, fullAngle);
         if (hit) {
@@ -442,6 +451,36 @@ function buildFixture(item, state, depth, reducedMotion) {
             uv.needsUpdate = true;
             view.disc.material.color.copy(color); view.disc.material.opacity = .18 * channel.brightness;
         }
+    }
+    /* The aim sweep: the endpoint drawn last, and while sweeping the from and
+     * to beams. Metadata is re-asserted from the exact beam after every eased
+     * draw, so nothing but pixels ever sees the in-between aim. */
+    let drawnSpot = null, sweep = null;
+    function endpointOf(beamState) {
+        return beamState.hit ? beamState.hit.position.clone()
+            : beamState.origin.clone().add(item.anchor).addScaledVector(beamState.direction, beamState.reach);
+    }
+    function drawSweep(nowMs) {
+        const k = clamp((nowMs - sweep.at) / AIM_SWEEP_MS, 0, 1), eased = 1 - Math.pow(1 - k, 3);
+        const to = sweep.to, worldOrigin = to.origin.clone().add(item.anchor);
+        const point = sweep.from.clone().lerp(endpointOf(to), eased), delta = point.clone().sub(worldOrigin);
+        const reach = delta.length();
+        if (k >= 1 || !(reach > 1e-6)) { finishSweep(); return; }
+        const direction = delta.divideScalar(reach);
+        const normal = to.hit ? sweep.fromNormal.clone().lerp(to.hit.normal, eased) : null;
+        const hit = to.hit ? { ...to.hit, position: point, distance: reach,
+            normal: normal.lengthSq() > 1e-12 ? normal.normalize() : to.hit.normal.clone() } : null;
+        drawBeam(spotBeam, to.channel, to.origin, direction, to.fullAngle, reach, hit);
+        for (const node of [roboticGroup, spotBeam.volume, spotBeam.glow, spotBeam.disc]) Object.assign(node.userData, to.aim);
+        drawnSpot = { point, normal: hit ? hit.normal.clone() : sweep.fromNormal.clone() };
+    }
+    function finishSweep() {
+        if (!sweep) return;
+        const to = sweep.to;
+        sweep = null;
+        drawBeam(spotBeam, to.channel, to.origin, to.direction, to.fullAngle, to.reach, to.hit);
+        for (const node of [roboticGroup, spotBeam.volume, spotBeam.glow, spotBeam.disc]) Object.assign(node.userData, to.aim);
+        drawnSpot = { point: endpointOf(to), normal: to.hit ? to.hit.normal.clone() : new THREE.Vector3(0, 0, 1) };
     }
     const shownLevels = new Float64Array(state.radials.map(zone => zone.on ? zone.brightness : 0));
     const targetLevels = shownLevels.slice();
@@ -462,6 +501,7 @@ function buildFixture(item, state, depth, reducedMotion) {
     }
     function snapPresentation(nowMs) {
         shownLevels.set(targetLevels); shownKelvins.set(targetKelvins); radialMoving = false; radialAt = nowMs; paintRadials();
+        finishSweep();
     }
     function updateRadials(radials) {
         let retarget = false;
@@ -483,6 +523,11 @@ function buildFixture(item, state, depth, reducedMotion) {
         else paintRadials();
     }
     function advancePresentation(nowMs) {
+        if (sweep) {
+            if (reducedMotion?.matches) { snapPresentation(nowMs); return true; }
+            drawSweep(nowMs);
+            if (!radialMoving) return true;
+        }
         if (!radialMoving) return false;
         if (reducedMotion?.matches) { snapPresentation(nowMs); return true; }
         const elapsed = nowMs - radialAt;
@@ -498,7 +543,7 @@ function buildFixture(item, state, depth, reducedMotion) {
         }
         paintRadials(); return true;
     }
-    function update(next, target = null) {
+    function update(next, target = null, { sweep: sweepAim = false } = {}) {
         updateRadials(next.radials);
         downwardEmitter.material.color.copy(next.downward.on && next.downward.brightness > 0 ? displayWhite(next.downward.color_temp_kelvin) : new THREE.Color(0x283039));
         downwardEmitter.material.opacity = next.downward.on && next.downward.brightness > 0 ? .4 + .6 * next.downward.brightness : .65;
@@ -513,7 +558,14 @@ function buildFixture(item, state, depth, reducedMotion) {
         spotEmitter.material.color.copy(next.spotlight.on && next.spotlight.brightness > 0 ? displayWhite(next.spotlight.color_temp_kelvin) : new THREE.Color(0x283039));
         spotEmitter.material.opacity = next.spotlight.on && next.spotlight.brightness > 0 ? .4 + .6 * next.spotlight.brightness : .65;
         roboticGroup.userData.channel = copy(next.spotlight); roboticGroup.userData.pan_deg = next.pan_deg; roboticGroup.userData.tilt_deg = next.tilt_deg;
-        updateBeam(spotBeam, next.spotlight, origin, direction, PROFILE.spot.fwhm_deg, target);
+        const from = sweepAim ? drawnSpot : null;
+        const beamState = updateBeam(spotBeam, next.spotlight, origin, direction, PROFILE.spot.fwhm_deg, target);
+        sweep = null;
+        drawnSpot = { point: endpointOf(beamState), normal: beamState.hit ? beamState.hit.normal.clone() : new THREE.Vector3(0, 0, 1) };
+        if (from && from.point.distanceTo(drawnSpot.point) > 1e-4) {
+            sweep = { at: performance.now(), from: from.point.clone(), fromNormal: from.normal.clone(), to: beamState };
+            drawSweep(sweep.at);
+        }
         const handlePoint = target ? new THREE.Vector3(...target.point).sub(item.anchor)
             : origin.clone().addScaledVector(direction, Math.min(1, roboticGroup.userData.reach_m || 1));
         handle.position.copy(handlePoint); handlePick.position.copy(handlePoint);
@@ -521,7 +573,7 @@ function buildFixture(item, state, depth, reducedMotion) {
     }
     root.traverse(node => { if (node !== root) node.userData = { ...metadata, ...node.userData, fixture_id: item.id, mount_id: item.mountId, origin_role: item.originRole, aim_source: item.aimSource, optical_origin_m: null }; });
     update(state);
-    return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving,
+    return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving || !!sweep,
         pick, handlePick, setSelected(value) { selected = value; handle.visible = value; } };
 }
 
@@ -617,7 +669,10 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             for (const [id, view] of views) view.setSelected(id === selectedId);
             return interactionDescriptor(selectedId);
         },
-        aimAtTarget(fixtureId, target, { expectedGeneration = generation } = {}) {
+        /* `sweep: true` (Set aim) draws the AIM_SWEEP_MS beam sweep; every
+         * other caller, such as a live preview following a target, moves the
+         * beam at once exactly as before. */
+        aimAtTarget(fixtureId, target, { expectedGeneration = generation, sweep = false } = {}) {
             const descriptor = interactionDescriptor(fixtureId);
             if (!descriptor) return { ok: false, reason: disposed ? 'equipment_preview_disposed' : 'equipment_preview_fixture_missing' };
             if (expectedGeneration !== generation) return { ok: false, reason: 'equipment_preview_generation_changed' };
@@ -632,7 +687,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             const state = nextState(states.get(fixtureId), { pan_deg: pan, tilt_deg: tilt });
             const savedTarget = { point: target.point.slice(), normal: target.normal.slice(), surface_id: target.surface_id || null, kind: target.kind || 'registered_mesh' };
             states.set(fixtureId, state); targets.set(fixtureId, savedTarget);
-            const view = views.get(fixtureId); view.update(state, savedTarget); trackPresentation(view);
+            const view = views.get(fixtureId); view.update(state, savedTarget, { sweep: sweep === true }); trackPresentation(view);
             return { ok: true, descriptor: interactionDescriptor(fixtureId), physical_commands: false };
         },
         restoreAim(fixtureId, snapshot) {

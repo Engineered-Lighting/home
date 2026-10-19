@@ -12,6 +12,7 @@
     "dev:simulation": "serve app/src -p 5180 --no-clipboard --no-port-switching",
     "web:dev": "node web-gateway/server.mjs",
     "web:start": "node web-gateway/server.mjs",
+    "build:jsx": "node tools/build-app-jsx.mjs",
     "build:home-agent-panel": "node tools/build-home-agent-panel.js",
     "web:check": "node web-gateway/server.mjs --check",
     "web:mobile-audit": "node tools/mobile-web-screenshot-audit.mjs",

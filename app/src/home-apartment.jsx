@@ -126,6 +126,18 @@ function aptUseSyntheticSpatialQa(simActive, qaEnabled) {
   return simActive === true && qaEnabled === true;
 }
 
+/* SPEC Layout > Fitting: the room toolbar floats over the bottom of the
+ * canvas, so the renderer fits the room above it. Bottom inset in CSS pixels
+ * from the host's bottom edge to just above the toolbar, or 0 without one. */
+function aptRoomToolbarInsets(host) {
+  const toolbar = host?.parentElement?.querySelector?.(".apt-ui-room-toolbar");
+  if (!host || !toolbar) return { top: 0, right: 0, bottom: 0, left: 0 };
+  const box = host.getBoundingClientRect(), bar = toolbar.getBoundingClientRect();
+  const visible = bar.width > 0 && bar.height > 0 && getComputedStyle(toolbar).visibility !== "hidden"
+    && bar.right > box.left && bar.left < box.right && bar.bottom > box.top && bar.top < box.bottom;
+  return { top: 0, right: 0, bottom: visible ? Math.max(0, Math.round(box.bottom - bar.top + 8)) : 0, left: 0 };
+}
+
 function aptZoomTransitionDisabled(phase, targetDirection, requestedDirection) {
   return phase !== "idle" && targetDirection === requestedDirection;
 }
@@ -2254,11 +2266,17 @@ function AptUnifiedIcon({ name }) {
 
 function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
   onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
+  homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about,
   lit = null, onLit = null }) {
+  const Guide = window.HomeApartmentRoomGuide;
   const [popover, setPopover] = useState(null);
+  const [guideDialog, setGuideDialog] = useState(null);
   const popoverRef = useRef(null);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-room-toolbar", active: !!popover, rootRef: popoverRef,
     trap: false, initialFocus: "first", onEscape: () => setPopover(null) });
+  const openGuide = (dialog) => { setPopover(null); setGuideDialog(dialog); };
+  Guide.useHelpShortcut(!guideDialog, () => openGuide("help"));
+  Guide.useFitPopover(popoverRef, popover);
   const photoError = !modeLoading && modeError?.mode === "splat";
   const retryPhotoDisabled = !!(disabled || pointsOnlyReason || modeLockedReason);
   const backToCloudDisabled = !!(disabled || modeLockedReason);
@@ -2284,31 +2302,33 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
       aria-expanded={popover === "layers"} onClick={() => setPopover(popover === "layers" ? null : "layers")}><AptUnifiedIcon name="layers" /><span className="apt-ui-toolbar-word">Layers</span></button>
       {popover === "layers" && <div ref={popoverRef} role="dialog" aria-label="Room layers">
         <h3 className="apt-ui-heading">Room layers</h3>
-        {hasVirtualFixtures ? <label className="apt-ui-row apt-ui-copy"><input type="checkbox" checked={virtualVisible}
-          aria-label="Show virtual spotlights layer" onChange={event => onVirtualVisible(event.target.checked)} />Virtual spotlights</label>
-          : <p className="apt-ui-copy">Mapped lights and room surfaces follow the current scene.</p>}
-        <p className="apt-ui-meta">Body and analyzed-frame layers are controlled in Camera · JEV.</p>
-        <p className="apt-ui-meta">Shadows and body occlusion are planned.</p>
+        <Guide.LayersPanel homeId={homeId} hasPerception={hasPerception} fixtureCount={fixtureCount}
+          seams={hasVirtualFixtures ? { fixtures: { value: virtualVisible, set: onVirtualVisible } } : {}} />
         <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close layers</button>
       </div>}
     </div>
-    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-icon is-small" aria-label="Room help"
-      aria-expanded={popover === "help"} onClick={() => setPopover(popover === "help" ? null : "help")}><AptUnifiedIcon name="help" /></button>
-      {popover === "help" && <div ref={popoverRef} role="dialog" aria-label="Room navigation help"><h3 className="apt-ui-heading">Room navigation</h3>
-        <p className="apt-ui-copy">Drag empty space to orbit. Scroll or pinch to zoom. Select a fixture to open its controls.</p>
-        <p className="apt-ui-meta">Arrow keys change the room view. H returns home. N / P selects a mapped device.</p>
-        {onRehearse && <button type="button" className="apt-ui-button is-small" onClick={() => { setPopover(null); onRehearse(); }}>Rehearse moving book</button>}
-        {nativePacks && <section className="apt-ui-channel"><h3 className="apt-ui-heading">Home pack</h3>
-          <button type="button" className="apt-ui-button" disabled={packBusy} onClick={() => { setPopover(null); onPackChange(); }}>Import home pack</button>
-          {nativePacks.length > 1 && <select className="apt-ui-input" aria-label="Home pack version" value={packVersion} disabled={packBusy}
-            onChange={event => { setPopover(null); onPackChange(event.target.value); }}>{nativePacks.map(pack =>
-              <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>)}</select>}
-        </section>}
-        <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close help</button></div>}
+    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-icon is-small" aria-label="Gestures and keys"
+      title="Gestures and keys (?)" aria-haspopup="dialog" aria-expanded={guideDialog === "help"}
+      onClick={() => openGuide("help")}><AptUnifiedIcon name="help" /></button>
     </div>
+    {guideDialog === "help" && <Guide.HelpDialog homeId={homeId} hasPerception={hasPerception}
+      onClose={() => setGuideDialog(null)} onAbout={about ? () => setGuideDialog("about") : null}>
+      {onRehearse && <button type="button" className="apt-ui-button is-small" onClick={() => { setGuideDialog(null); onRehearse(); }}>Rehearse moving book</button>}
+      {nativePacks && <section className="apt-ui-channel"><h3 className="apt-ui-heading">Home pack</h3>
+        <button type="button" className="apt-ui-button" disabled={packBusy} onClick={() => { setGuideDialog(null); onPackChange(); }}>Import home pack</button>
+        {nativePacks.length > 1 && <select className="apt-ui-input" aria-label="Home pack version" value={packVersion} disabled={packBusy}
+          onChange={event => { setGuideDialog(null); onPackChange(event.target.value); }}>{nativePacks.map(pack =>
+            <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>)}</select>}
+      </section>}
+    </Guide.HelpDialog>}
+    {guideDialog === "about" && about && <Guide.AboutDialog homeName={homeName} facts={Guide.aboutFacts(about)}
+      onClose={() => setGuideDialog(null)} />}
+    <Guide.Legend homeId={homeId} selected={!!fixtureSelected} hasPerception={hasPerception}
+      suppressed={!!(popover || guideDialog || modeLoading || modeError)} />
     {popover === "source" && <div ref={popoverRef} className="apt-ui-toolbar-source-detail" role="dialog" aria-label="Scene source">
       <h3 className="apt-ui-heading">Scene source</h3><p className="apt-ui-copy">{sourceDetail || sourceLabel}</p>{sourceStatus}
       <p className="apt-ui-meta">Cloud, Photo and Mesh use this home's existing scene assets.</p>
+      {about && <button type="button" className="apt-ui-button is-small" onClick={() => openGuide("about")}>What's real here</button>}
       {stats && <details><summary className="apt-ui-meta">Renderer details</summary><p className="apt-ui-meta">
         {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k points · DPR {stats.pixelRatio}
         {stats.calls != null ? ` · ${stats.calls} draw calls` : ""}{stats.tris ? ` · ${(stats.tris / 1e6).toFixed(1)}m triangles` : ""}
@@ -2343,7 +2363,7 @@ const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
-  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView }) {
+  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, commandBinding }) {
   const radialSnapshot = React.useSyncExternalStore(directionalView?.subscribe || aptEmptySubscribe,
     directionalView?.getSnapshot || aptEmptySnapshot, aptEmptySnapshot);
   const [localTab, setLocalTab] = useState("light");
@@ -2448,6 +2468,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
       <div className="apt-ui-actions"><button type="button" className="apt-ui-button" disabled={!canUndo} onClick={onUndo}>Undo aim</button>
         <button type="button" className="apt-ui-button" disabled={!canRedo} onClick={onRedo}>Redo aim</button></div>
       {notice && <p role="status" className="apt-ui-copy">{notice}</p>}<p className="apt-ui-meta">Modeled aim · virtual preview only.</p>
+      {window.AptCommandLadder && <window.AptCommandLadder site="victoria" fixture={fixture} binding={commandBinding} />}
     </section>}
     {tab === "setup" && <section className="apt-ui-section" id="apt-ui-virtual-setup" role="tabpanel" aria-label="Fixture setup">
       <h3 className="apt-ui-heading">Fixture</h3><select className="apt-ui-input" aria-label="Virtual fixture" value={fixture.fixture_id} onChange={event => onSelect(event.target.value)}>
@@ -8192,6 +8213,78 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const unifiedSelectionLabel = virtualFixtureControlsOpen && selectedVirtualFixture
     ? selectedVirtualFixture.label || selectedVirtualFixture.fixture_id
     : (model.devices || []).find(device => device.id === cardId)?.name || null;
+  // Chat bound to the room (APT-C02/C03): the current home's names for chips,
+  // presentation-only hover and select, and one modeled change path. A Victoria
+  // patch goes through changeVirtualFixture like any hand change; nothing here
+  // calls a service. Every call re-checks the home and room key it was given.
+  const chatRoomKey = selectedSiteId === "victoria"
+    ? virtualFixtureDocument ? `victoria:${selectedContentRevision}:${virtualFixtureDocument.revision}:${virtualFixtureDocument.digest}` : ""
+    : selectedSiteId === "echo" && selectedContentRevision ? `echo:${selectedContentRevision}` : "";
+  const chatRoomLights = selectedSiteId === "victoria"
+    ? virtualFixtureItems.map(fixture => ({ id: fixture.fixture_id, label: fixture.label || fixture.fixture_id }))
+    : (model.devices || []).filter(device => device.ha_entity_id?.startsWith("light."))
+      .map(device => ({ id: device.id, label: device.name || device.label || device.id, entityId: device.ha_entity_id }));
+  const chatRoomAims = selectedSiteId === "echo"
+    ? (model.targets || []).filter(target => typeof target.id === "string").map(target => ({ id: target.id, label: target.name || target.label || target.id }))
+    : [];
+  const chatRoomSelection = selectedSiteId === "victoria"
+    ? virtualFixtureControlsOpen && selectedVirtualFixture ? { kind: "light", id: selectedVirtualFixture.fixture_id } : null
+    : cardId && chatRoomLights.some(light => light.id === cardId) ? { kind: "light", id: cardId } : null;
+  const chatRoomSignature = chatRoomKey && JSON.stringify([selectedSiteId, chatRoomKey, chatRoomLights, chatRoomAims, chatRoomSelection]);
+  const chatRoomActionsRef = useRef(null);
+  const chatRoomHoverRef = useRef(null);
+  const chatRoomIsCurrent = ref => !!chatRoomKey && !!ref && ref.siteId === selectedSiteId && ref.key === chatRoomKey;
+  const chatRoomHover = ref => {
+    const engine = engineRef.current;
+    if (!engine) return false;
+    if (ref === null) {
+      const previous = chatRoomHoverRef.current;
+      chatRoomHoverRef.current = null;
+      if (previous?.kind === "light") { engine.overlay.setHover(null); setHoverId(null); }
+      if (previous?.kind === "aim") engine.overlay.setTargetHover?.(null, aimDestination?.kind === "named" ? aimDestination.id : null);
+      return true;
+    }
+    // Victoria's virtual fixtures have no renderer hover seam yet.
+    if (!chatRoomIsCurrent(ref) || selectedSiteId !== "echo" || !getRoomInspectorContext()) return false;
+    if (ref.kind === "light" && chatRoomLights.some(light => light.id === ref.id)) {
+      engine.overlay.setHover(ref.id); setHoverId(ref.id); chatRoomHoverRef.current = ref; return true;
+    }
+    if (ref.kind === "aim" && chatRoomAims.some(aim => aim.id === ref.id) && engine.overlay.setTargetHover) {
+      engine.overlay.setTargetHover(ref.id, aimDestination?.kind === "named" ? aimDestination.id : null);
+      chatRoomHoverRef.current = ref; return true;
+    }
+    return false;
+  };
+  const chatRoomSelect = ref => {
+    if (!chatRoomIsCurrent(ref) || ref.kind !== "light") return false;
+    return selectedSiteId === "victoria" ? selectVirtualFixture(ref.id) : selectRoomDevice(ref.id);
+  };
+  const chatRoomModeledLight = ref => {
+    if (!chatRoomIsCurrent(ref) || selectedSiteId !== "victoria" || ref.kind !== "light"
+        || !virtualFixtureControlsOpen || virtualFixtureId !== ref.id) return null;
+    const fixture = getVirtualFixtureSelectionContext()?.preview.fixtures.find(item => item.fixture_id === ref.id);
+    return fixture ? { state: fixture.state, color_temp_ranges: fixture.color_temp_ranges } : null;
+  };
+  chatRoomActionsRef.current = {
+    hover: chatRoomHover,
+    select: chatRoomSelect,
+    readModeledLight: chatRoomModeledLight,
+    applyModeledPatch: (ref, patch) => {
+      if (!chatRoomModeledLight(ref) || changeVirtualFixture(patch, ref.id) !== true) return null;
+      const after = chatRoomModeledLight(ref);
+      return after ? { ok: true, state: after.state } : null;
+    },
+  };
+  const chatRoomSnapshot = useMemo(() => {
+    if (!chatRoomSignature) return null;
+    const [siteId, key, lights, namedAims, selection] = JSON.parse(chatRoomSignature);
+    const call = (name, fallback) => (...args) => {
+      try { return chatRoomActionsRef.current?.[name]?.(...args) ?? fallback; } catch (_) { return fallback; }
+    };
+    return Object.freeze({ schema: "home-apartment-chat-room-1", siteId, key, lights, namedAims, selection,
+      hover: call("hover", false), select: call("select", false), adjust: call("select", false),
+      readModeledLight: call("readModeledLight", null), applyModeledPatch: call("applyModeledPatch", null) });
+  }, [chatRoomSignature]);
   useEffect(() => {
     if (!unifiedShell || !onShellState) return;
     onShellState({ siteId: selectedSiteId, sites: window.HomeSpatialViewport?.getSites?.() || [], phase,
@@ -8203,17 +8296,40 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
       openSetup: openUnifiedSetup,
-      selectHome: id => travelToSite(id, { presentation: "interior" }) });
+      selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
-    unifiedDockCollapsed, unifiedDockExpanded]);
+    unifiedDockCollapsed, unifiedDockExpanded, chatRoomSnapshot]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);
   React.useLayoutEffect(() => {
     if (unifiedShell && shellControlsHost) shellControlsHost.scrollTop = 0;
   }, [unifiedShell, shellControlsHost, cardId, virtualFixtureId, virtualFixtureControlsOpen, aimMode, editing]);
+  /* Room toolbar inset for the renderer's fit (aptRoomToolbarInsets). */
+  React.useLayoutEffect(() => {
+    const host = hostRef.current, engine = engineRef.current;
+    if (!open || phase !== "ready" || !host?.parentElement || typeof engine?.setViewInsets !== "function") return undefined;
+    let toolbar = null, raf = 0;
+    const resize = new ResizeObserver(() => measure());
+    function measure() {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const next = host.parentElement?.querySelector(".apt-ui-room-toolbar") || null;
+        if (next !== toolbar) { if (toolbar) resize.unobserve(toolbar); toolbar = next; if (toolbar) resize.observe(toolbar); }
+        if (engineRef.current === engine) engine.setViewInsets(aptRoomToolbarInsets(host));
+      });
+    }
+    const children = new MutationObserver(measure);
+    children.observe(host.parentElement, { childList: true });
+    resize.observe(host);
+    measure();
+    return () => {
+      cancelAnimationFrame(raf); children.disconnect(); resize.disconnect();
+      if (engineRef.current === engine) engine.setViewInsets({ top: 0, right: 0, bottom: 0, left: 0 });
+    };
+  }, [open, phase, unifiedShell, selectedSiteId]);
 
   if (!open) return null;
 
@@ -9096,6 +9212,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           packVersion={contentPacks.find(pack => pack.active && pack.manifest.siteId === selectedSiteId)?.manifest.revision || ""}
           packBusy={contentPackBusy} onPackChange={version => { void changeContentPack(version); }}
           hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible}
+          homeId={selectedSiteId} homeName={selectedSiteEntry?.shortName} fixtureCount={virtualFixtureItems.length}
+          fixtureSelected={virtualFixtureControlsOpen && virtualSpotlightsVisible}
+          hasPerception={selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception}
+          about={{ homeId: selectedSiteId, source: sourceMeta, revision: model.revision, liveShadow, simActive, trackerStatus,
+            hasVirtualFixtures: !!virtualFixtureDocument, fixtureCount: virtualFixtureItems.length,
+            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception }}
           lit={litState?.active ? litState : null} onLit={virtualFixtureDocument ? next => { if (apartmentSceneControlsEnabled) void toggleLit(next); } : null} />
       )}
 
@@ -9489,7 +9611,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
             tab={virtualInspectorTab} onTabChange={changeVirtualInspectorTab} onSelect={selectVirtualFixture}
-            onBack={clearVirtualFixtureSelection}
+            onBack={clearVirtualFixtureSelection} commandBinding={virtualFixtureDocument.binding}
             directionalView={directionalDisplay}
             onShowComposer={() => changeFixtureInteractionMode("zones")}
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}

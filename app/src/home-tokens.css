@@ -824,3 +824,15 @@ button.hg-no-press:active {
 .apt-home-shell :is(.apt-home-controls, .apt-home-camera, .apt-ui-chat-feed)::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--hg-border-strong); }
 .apt-home-shell :is(.apt-home-controls, .apt-home-camera, .apt-ui-chat-feed)::-webkit-scrollbar-track { background: transparent; }
 .apt-home-shell :is(.apt-home-controls, .apt-home-camera, .apt-ui-chat-feed)::-webkit-scrollbar-button { display: none; }
+/* Chat bound to the room (APT-C02/C03/C05): header model line, room chips, About chip. */
+.apt-home-shell .apt-ui-chat-model { flex: 1 0 100%; min-width: 0; overflow: hidden; color: var(--apt-muted); font: 400 11.5px/1.5 'Geist', sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+.apt-home-shell .apt-ui-chat-room { display: grid; gap: 4px; min-width: 0; margin-top: 4px; }
+.apt-home-shell .apt-ui-chat-about { margin: 0; color: var(--apt-muted); font: 400 11.5px/1.5 'Geist', sans-serif; text-align: end; }
+.apt-home-shell .apt-ui-chat-refs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.apt-home-shell .apt-ui-chat-chip { display: inline-flex; align-items: center; max-width: 100%; min-height: 26px; padding: 0 9px; overflow: hidden; border: 1px solid var(--apt-border); border-radius: 999px; background: var(--apt-fill); color: var(--apt-text); font: 500 12px/1.4 'Geist', sans-serif; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.apt-home-shell .apt-ui-chat-chip:hover:not([aria-disabled="true"]), .apt-home-shell .apt-ui-chat-chip:focus-visible { border-color: var(--apt-proposed); }
+.apt-home-shell .apt-ui-chat-chip[aria-disabled="true"] { cursor: default; }
+.apt-home-shell .apt-ui-chat-chip[data-available="false"] { border-style: dashed; color: var(--apt-muted); }
+.apt-home-shell .apt-ui-chat-context { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 0 12px 6px; padding: 2px 2px 2px 10px; width: fit-content; max-width: calc(100% - 24px); border: 1px solid var(--apt-border); border-radius: 999px; background: var(--apt-fill); color: var(--apt-text); font: 400 12px/1.5 'Geist', sans-serif; }
+.apt-home-shell .apt-ui-chat-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (pointer: coarse) { .apt-home-shell :is(.apt-ui-chat-chip, .apt-ui-chat-context > button) { min-width: 44px; min-height: 44px; } }

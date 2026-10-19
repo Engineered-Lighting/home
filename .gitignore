@@ -80,6 +80,10 @@ tools/diagnose-report.md
 tools/measurement-history.csv
 ha-config/*.backup-*
 
+# Ahead-of-time JSX output (node tools/build-app-jsx.mjs); built on deploy
+# and before Tauri builds, verified against the sources at runtime.
+app/src/precompiled/
+
 # 3D apartment runtime assets (served via Tauri asset protocol, NOT bundled)
 app/data/
 # spatial-pipeline local artifacts

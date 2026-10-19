@@ -4,6 +4,7 @@
   "version": "0.1.1",
   "identifier": "com.engineeredlighting.home",
   "build": {
+    "beforeBuildCommand": "node ../tools/build-app-jsx.mjs",
     "frontendDist": "../src"
   },
   "app": {

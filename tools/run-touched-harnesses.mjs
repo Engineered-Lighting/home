@@ -115,6 +115,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-directional-presentation\.mjs|tools\/test-apartment-directional-presentation\.mjs)$/, ["test-apartment-directional-presentation.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)|home-3d\/apartment-directional-presentation\.mjs)|tools\/test-apartment-composer-comfort-browser\.mjs)$/, ["test-apartment-composer-comfort-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures\.mjs|markers\.js)|tools\/test-apartment-radial-visual\.mjs)$/, ["test-apartment-radial-visual.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [

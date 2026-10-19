@@ -3,7 +3,8 @@
  * module reads no household data, starts no session and sends no command.
  *
  * Keys: KEY_MAP lists what the room actually binds. The room handler in
- * home-apartment.jsx owns every "room" key, HomeOverlay owns Escape and this
+ * home-apartment.jsx owns every "room" key, its aim key handler owns the
+ * "aim" keys (with A/Z's "z"), HomeOverlay owns Escape and this
  * module owns "?". tools/test-apartment-room-guide.cjs compares KEY_MAP with
  * the bound handler in both directions, so help can only list working keys.
  *
@@ -27,16 +28,23 @@
     { id: "cycle", owner: "room", keys: ["n", "p"], label: "N / P", action: "Select the next or previous light or device" },
     { id: "aim-mode", owner: "room", keys: ["a", "z"], label: "A / Z", homes: ["victoria"],
       action: "Spot aiming or radial zones for the selected light", when: "With a modeled light selected" },
+    { id: "aim-set", owner: "aim", keys: ["Enter"], label: "Enter", homes: ["victoria"],
+      action: "Set the proposed aim", when: "With a proposal waiting and no control focused" },
+    { id: "aim-history", owner: "aim", keys: ["Z"], label: "⌘Z / Ctrl+Z, with Shift to redo", homes: ["victoria"],
+      action: "Undo or redo the selected light's aim, or bring back a discarded proposal", when: "With a modeled light selected" },
     { id: "escape", owner: "overlay", keys: ["Escape"], label: "Esc",
       action: "Cancel the current step, then close the open card or clear the selection" },
     { id: "help", owner: "guide", keys: ["?"], label: "?", action: "Show these gestures and keys" },
   ].map(Object.freeze));
 
   /* Pointer input in home-3d/rig.js and the room's pick and aim handlers.
-   * Pinch and pan are not bound, so they are not listed. */
+   * The rig binds Shift-drag or right-drag pan and two-pointer pinch zoom
+   * (#310), so both are listed. */
   const GESTURES = Object.freeze([
     { id: "drag-orbit", label: "Drag empty space", action: "Orbit the room; one finger on touch" },
     { id: "wheel-zoom", label: "Scroll wheel", action: "Zoom" },
+    { id: "drag-pan", label: "Shift-drag or right-drag", action: "Pan the room" },
+    { id: "pinch-zoom", label: "Pinch", action: "Zoom through the same steps as the wheel; two fingers on touch" },
     { id: "select", label: "Click a light", action: "Select it and open its controls" },
     { id: "aim-handle", label: "Drag the aim handle", homes: ["victoria"],
       action: "Propose where the selected modeled light points; nothing physical moves" },

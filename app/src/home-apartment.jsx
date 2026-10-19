@@ -6022,7 +6022,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || "")) return;
       const actions = aimActionsRef.current;
       if (!actions?.enabled()) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if ((event.metaKey || event.ctrlKey) && (event.key === "z" || event.key === "Z")) {
         if (actions.history(event.shiftKey ? "redo" : "undo")) event.preventDefault();
         return;
       }
@@ -8664,7 +8664,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     select: chatRoomSelect,
     readModeledLight: chatRoomModeledLight,
     applyModeledPatch: (ref, patch) => {
-      if (!chatRoomModeledLight(ref) || changeVirtualFixture(patch, ref.id) !== true) return null;
+      // A Chat-originated write is a hand change too (Den sign-off, 2026-10-19).
+      if (!chatRoomModeledLight(ref) || changeVirtualFixtureByHand(patch, ref.id) !== true) return null;
       const after = chatRoomModeledLight(ref);
       return after ? { ok: true, state: after.state } : null;
     },

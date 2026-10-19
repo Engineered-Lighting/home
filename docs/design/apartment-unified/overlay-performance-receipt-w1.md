@@ -1,8 +1,8 @@
 # APT-F01 overlay label timing — W1 ABBA receipt (authored scenes)
 
-Status: **protocol pre-registered; no measurement yet.** This section was
-committed before any ABBA sample existed. Results are appended below it,
-without editing the protocol.
+Status: **protocol pre-registered in `b702dc08` before any sample existed;
+the protocol text below is unchanged. Two acquisitions are appended under
+"Results".** Acceptance is not decided here (see "Decision needed").
 
 This is authored-scene software evidence only. It does not cover actual Den
 imagery or registration, installed builds, physical output or touch hardware.
@@ -119,3 +119,140 @@ result is display-bound, and makes no sub-frame cost claim.
 
 The protocol has to be re-run on the final top of the W1 stack, as the W1
 plan's step 9 requires.
+
+## Results (appended on October 19, 2026, after measuring)
+
+### Summary
+
+- **Primary metrics.** frame-p95 and median frame time show **no measurable
+  regression** in Cloud, Photo and Mesh, in both runs. Every scene is
+  **display-bound**: headless Chromium paced at 60 Hz, so the A frame-p95
+  medians are 16.70–16.80 ms. The bound result therefore shows that four
+  labels and dots caused no missed frames at 60 Hz. It says nothing about
+  cost below one refresh interval.
+- **Descriptive render-p95** (frame start until `renderer.render` returns, a
+  CPU submission proxy).
+  - The A median is 2.35–3.00 ms.
+  - The A/A spread is 0.30–0.70 ms, which is above 10% of the A median in
+    every scene. By the protocol, render-p95 is therefore **invalid
+    (noisy)**.
+  - The median B−A deltas are +0.025 to +0.175 ms, all inside that A/A
+    noise. Label cost cannot be told apart from zero at this resolution,
+    and no sub-frame cost or clearance is claimed.
+- **Descriptive independent animation-frame p95** agrees with frame-p95.
+- **Dot draws.** Run 2 witnessed 504–512 dot draws per labels-on window,
+  which is one draw per dot per frame. Run 1 checked dot visibility only,
+  because `renderer.info` call counts did not change. Both runs are
+  reported, and neither was selected over the other.
+- **Rerun rule.** Neither run was a rerun under the noise rule: every primary
+  metric was valid in run 1. Run 2 exists only to add the draw witness.
+
+### Decision needed (owner and Repair)
+
+This receipt does **not** close F01. Per the Home UI planning record, the
+owner and Repair decide F01 acceptance from these results together:
+
+- the display-bound primary result: no missed frames at 60 Hz;
+- the descriptive render-p95 figures: noise of 0.30–0.70 ms, with median
+  B−A deltas of +0.025 to +0.175 ms inside that noise.
+
+F01 done item 2 ("Renderer frame time unchanged within noise") and the M1 gate
+"accepted F01 representative timing" both wait for that decision. Two options
+would need a new pre-registered protocol rather than a reinterpretation of
+this one:
+
+- a sub-frame cost bound, for example more blocks or a higher-rate display;
+- moving-label timing.
+
+### Not covered (as declared before measuring)
+
+- Moving labels while orbiting.
+- A higher refresh rate. Headless pacing was 60 Hz; earlier #288 runs used a
+  headed browser at about 240 Hz.
+- Reticle and bar overlays.
+- The composed W1 stack top, where this protocol has to be re-run (W1 step 9).
+- Touch hardware, installed builds, and actual Den imagery or registration.
+- The owner's desktop may not have been idle during the runs; no exclusive-GPU
+  claim is made.
+- The runtime is Playwright 1.61.1 with bundled Chromium 149, not the
+  Edge/1.62.1 runtime used for #288's earlier runs. The two are not
+  comparable.
+
+### Reproduce
+
+From a worktree at the commit under test:
+
+```text
+HOME_APARTMENT_OVERLAY_PROOF_PROFILE=desktop-abba node --test tools/test-apartment-overlay-bridge-browser.mjs
+```
+
+The criterion is implemented in `tools/apartment-overlay-abba.mjs`, with unit
+cases in `tools/test-apartment-performance.mjs`. Receipts are written under
+`.tmp/` and are not committed; their SHA-256 values are listed below.
+
+### Run 1 — `.tmp/apartment-overlay-bridge-browser/run-1792431865337-candidate/receipt.json`
+
+- Receipt sha256 `7050f26f46bc75ab7ee622061acef2ac183bc8ee2d788498f36a574100b5b72b`; result `passed`; commit `225b3ada` (B visibility checked; dot draws not yet witnessed).
+- Chromium 149.0.7827.55 (Playwright 1.61.1, headless), ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11), viewport 1366×768, canvas 1026×716, DPR 1.
+- Served pins: leaf `36aed31f`, engine `397576a4`, picking `ffd23747` (match the protocol).
+- Treatment B: 4 of 4 labels and dots visible in every window. renderer.info call counts were identical for A and B (76/76 Cloud and Photo, 77/77 Mesh), so this run did not prove the dots were drawn; run 2 adds that witness.
+
+| Scene | Metric | Role | A median ms | AA spread ms | Valid (≤10% of A) | Median B−A ms | Outlier blocks | Result |
+|---|---|---|---:|---:|---|---:|---:|---|
+| Cloud | frameP95 | primary | 16.75 | 0.10 | yes | -0.025 | 0 | no-measurable-regression |
+| Cloud | medianFrame | primary | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Cloud | renderP95 | descriptive | 2.40 | 0.60 | no | +0.175 | 0 | invalid-noisy |
+| Cloud | rafP95 | descriptive | 16.75 | 0.10 | yes | -0.025 | 0 | no-measurable-regression |
+| Photo | frameP95 | primary | 16.80 | 0.10 | yes | -0.025 | 0 | no-measurable-regression |
+| Photo | medianFrame | primary | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Photo | renderP95 | descriptive | 2.60 | 0.70 | no | +0.125 | 0 | invalid-noisy |
+| Photo | rafP95 | descriptive | 16.80 | 0.10 | yes | -0.025 | 0 | no-measurable-regression |
+| Mesh | frameP95 | primary | 16.75 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Mesh | medianFrame | primary | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Mesh | renderP95 | descriptive | 2.60 | 0.30 | no | +0.050 | 0 | invalid-noisy |
+| Mesh | rafP95 | descriptive | 16.75 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+
+Display-bound (A frame-p95 within 0.2 ms of a refresh interval): Cloud yes, Photo yes, Mesh yes.
+
+Snapped per-block values, A1 B1 B2 A2:
+
+- Cloud frameP95: 16.7 16.8 16.8 16.7; 16.8 16.7 16.7 16.7; 16.8 16.7 16.8 16.8; 16.8 16.7 16.8 16.7
+- Cloud renderP95: 2.9 3.2 2.5 2.3; 2.0 3.2 2.4 2.4; 2.3 2.6 2.5 2.7; 2.4 2.7 2.6 2.7
+- Photo frameP95: 16.8 16.7 16.7 16.7; 16.7 16.7 16.7 16.8; 16.7 16.8 16.7 16.8; 16.8 16.8 16.8 16.8
+- Photo renderP95: 2.6 2.9 2.6 2.6; 2.4 2.7 2.8 3.1; 2.7 2.7 2.8 2.6; 2.4 2.6 2.8 2.6
+- Mesh frameP95: 16.8 16.8 16.8 16.8; 16.8 16.7 16.8 16.7; 16.7 16.8 16.7 16.7; 16.8 16.7 16.8 16.7
+- Mesh renderP95: 2.6 2.4 2.4 2.6; 2.8 2.8 2.7 2.6; 2.4 2.6 2.5 2.5; 2.3 2.6 2.4 2.6
+
+### Run 2 — `.tmp/apartment-overlay-bridge-browser/run-1792432167567-candidate/receipt.json`
+
+- Receipt sha256 `05464773ce0f4b9052fb8119f0c03f5ba16de8c56eba571b527e24802d4ad20d`; result `passed`; commit `c5467692` (B dot draws witnessed on every window frame).
+- Chromium 149.0.7827.55 (Playwright 1.61.1, headless), ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11), viewport 1366×768, canvas 1026×716, DPR 1.
+- Served pins: leaf `36aed31f`, engine `397576a4`, picking `ffd23747` (match the protocol).
+- Treatment B: 4 of 4 labels and dots visible in every window; 504–512 witnessed dot draws per window.
+
+| Scene | Metric | Role | A median ms | AA spread ms | Valid (≤10% of A) | Median B−A ms | Outlier blocks | Result |
+|---|---|---|---:|---:|---|---:|---:|---|
+| Cloud | frameP95 | primary | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Cloud | medianFrame | primary | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Cloud | renderP95 | descriptive | 2.35 | 0.30 | no | +0.175 | 0 | invalid-noisy |
+| Cloud | rafP95 | descriptive | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Photo | frameP95 | primary | 16.80 | 0.10 | yes | -0.025 | 0 | no-measurable-regression |
+| Photo | medianFrame | primary | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Photo | renderP95 | descriptive | 2.95 | 0.40 | no | +0.050 | 0 | invalid-noisy |
+| Photo | rafP95 | descriptive | 16.80 | 0.10 | yes | -0.025 | 0 | no-measurable-regression |
+| Mesh | frameP95 | primary | 16.75 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Mesh | medianFrame | primary | 16.70 | 0.10 | yes | +0.000 | 0 | no-measurable-regression |
+| Mesh | renderP95 | descriptive | 3.00 | 0.60 | no | +0.025 | 0 | invalid-noisy |
+| Mesh | rafP95 | descriptive | 16.70 | 0.10 | yes | +0.025 | 0 | no-measurable-regression |
+
+Display-bound (A frame-p95 within 0.2 ms of a refresh interval): Cloud yes, Photo yes, Mesh yes.
+
+Snapped per-block values, A1 B1 B2 A2:
+
+- Cloud frameP95: 16.7 16.7 16.7 16.7; 16.7 16.8 16.7 16.8; 16.7 16.7 16.7 16.8; 16.7 16.8 16.7 16.8
+- Cloud renderP95: 2.4 2.6 2.4 2.3; 2.3 2.1 2.2 2.2; 2.2 2.6 2.6 2.5; 2.5 2.6 2.9 2.6
+- Photo frameP95: 16.7 16.7 16.8 16.7; 16.8 16.7 16.7 16.7; 16.8 16.7 16.8 16.8; 16.8 16.8 16.8 16.8
+- Photo renderP95: 3.3 3.4 3.1 3.3; 3.2 3.2 2.9 2.9; 2.9 3.7 3.3 2.9; 3.0 2.8 3.0 2.6
+- Mesh frameP95: 16.7 16.7 16.7 16.7; 16.8 16.7 16.7 16.8; 16.7 16.8 16.8 16.7; 16.8 16.8 16.8 16.8
+- Mesh renderP95: 2.8 2.7 2.9 3.0; 2.7 3.1 2.8 3.0; 2.9 3.2 3.4 3.5; 3.4 3.3 3.2 3.2
+

@@ -306,7 +306,14 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
           const fixtureReadback=p.engine.overlay.virtualFixturesReadback();
           const draw={draws,ancestry,world:world.toArray(),view:view.toArray(),clip:clip.toArray(),cameraLayers:p.engine.camera.layers.mask,frustumCulled:dot.frustumCulled,materialVisible:dot.material.visible,materialOpacity:dot.material.opacity,
             virtualSpotlightsVisible:fixtureReadback.visible,spotlightVolumeDraws:volumeWitnesses.map(witness=>witness.draws),depthPasses:fixtureReadback.depth.passes-depthBefore};
-          const last=p.layer.project(p.point),label=p.label;return {first,last,anchorIdentity,draw,label:{x:parseFloat(label.style.left),y:parseFloat(label.style.top),hidden:label.hidden,text:label.textContent},position:p.layer.group.children[0].position.toArray(),mode:p.engine.modes.mode,hostUnchanged:p.engine.picking.getHost()===p.host,engineUnchanged:window.__APT_ENGINE===p.engine};
+          const last=p.layer.project(p.point),label=p.label,hostRect=p.host.getBoundingClientRect(),labelRect=label.getBoundingClientRect();
+          const scale={x:hostRect.width/p.host.clientWidth,y:hostRect.height/p.host.clientHeight},style=getComputedStyle(label);
+          return {first,last,anchorIdentity,draw,label:{x:labelRect.left+labelRect.width/2,y:labelRect.bottom,
+            width:labelRect.width,height:labelRect.height,scale,
+            expected:{x:hostRect.left+last?.x*scale.x,y:hostRect.top+last?.y*scale.y},
+            layout:{left:style.left,top:style.top},sameNode:label===originalLabel&&p.host.querySelector('.apt-ui-overlay-label')===originalLabel,
+            hidden:label.hidden,text:label.textContent},position:p.layer.group.children[0].position.toArray(),mode:p.engine.modes.mode,
+            hostUnchanged:p.engine.picking.getHost()===p.host,engineUnchanged:window.__APT_ENGINE===p.engine};
         });
         (receipt.overlay_draw_diagnostics ||= []).push({mode,...result.draw});
         assert.ok(result.first&&result.last);assert.ok(Math.hypot(result.last.x-result.first.x,result.last.y-result.first.y)>0);
@@ -314,7 +321,13 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
         assert.equal(result.draw.virtualSpotlightsVisible,true);assert.ok(result.draw.spotlightVolumeDraws.some(draws=>draws>0),'actual spotlight volume rendering must coexist with the bridge dot');assert.ok(result.draw.depthPasses>0);
         assert.equal(result.label.hidden,false);assert.equal(result.label.text,'Authored fixture overlay');assert.deepEqual(result.position,[.6,.9,2.3]);
         assert.equal(result.anchorIdentity,true);
-        assert.ok(Math.abs(result.label.x-result.last.x)<.01&&Math.abs(result.label.y-result.last.y)<.01);assert.equal(result.mode,mode);assert.equal(result.hostUnchanged,true);assert.equal(result.engineUnchanged,true);
+        assert.ok([result.label.x,result.label.y,result.label.width,result.label.height,result.label.scale.x,result.label.scale.y,
+          result.label.expected.x,result.label.expected.y].every(Number.isFinite),'native label geometry must be finite');
+        assert.ok(result.label.width>0&&result.label.height>0&&result.label.scale.x>0&&result.label.scale.y>0,'the actual label has positive native geometry');
+        assert.equal(parseFloat(result.label.layout.left),0);assert.equal(parseFloat(result.label.layout.top),0);assert.equal(result.label.sameNode,true);
+        assert.ok(Math.abs(result.label.x-result.label.expected.x)<.01&&Math.abs(result.label.y-result.label.expected.y)<.01,
+          'native label center-bottom must match the canonical projected host coordinate within .01px');
+        assert.equal(result.mode,mode);assert.equal(result.hostUnchanged,true);assert.equal(result.engineUnchanged,true);
         return result;
       });
       await setFixtureDisplay(false,mode+' bridge timing windows');

@@ -1,0 +1,104 @@
+// Focused contract for this workflow's fixed jobs/steps, not a YAML parser.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const source = fs.readFileSync(new URL('../.github/workflows/llm-response-qa.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const jobSection = source.split('\njobs:\n');
+assert.equal(jobSection.length, 2); assert.doesNotMatch(source, /\t|^\s*continue-on-error:/m);
+const headers = [...jobSection[1].matchAll(/^  (\S+):\n/gm)];
+assert.equal(headers.length, [...jobSection[1].matchAll(/^  \S.*$/gm)].length);
+assert.deepEqual(headers.map(match => match[1]), ['shell_contracts', 'touched_contracts', 'deterministic']);
+const jobs = Object.fromEntries(headers.map((match, index) => [match[1],
+  jobSection[1].slice(match.index + match[0].length, headers[index + 1]?.index)]));
+function field(block, name, indent = 4) {
+  const values = [...block.matchAll(new RegExp('^ {' + indent + '}' + name + ': (.+)$', 'gm'))];
+  assert.equal(values.length, 1, 'one literal field: ' + name); return values[0][1];
+}
+function steps(job) {
+  const parts = job.split('    steps:\n'); assert.equal(parts.length, 2);
+  const entries = [...parts[1].matchAll(/^      - (?:name|uses): .+\n/gm)];
+  assert.equal(entries.length, [...parts[1].matchAll(/^      - /gm)].length);
+  assert.equal(entries[0]?.index, 0);
+  return entries.map((entry, index) => parts[1].slice(entry.index, entries[index + 1]?.index));
+}
+const shell = steps(jobs.shell_contracts), touched = steps(jobs.touched_contracts), aggregate = steps(jobs.deterministic);
+const originalCommands = ['node tools/run-chat-dedupe-tests.js', 'python3 tools/test-workflow-scenarios.py',
+  'node tools/run-chat-ui-regression.js', 'node tools/qa-browser-smoke.js',
+  'node --test tools/test-apartment-home-shell-browser.mjs',
+  'node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}"'];
+const setupCommands = ['npm ci --no-audit --no-fund', 'npx playwright install --with-deps chromium'];
+const runs = entries => entries.filter(entry => /^        run:/m.test(entry)).map(entry => field(entry, 'run', 8));
+
+test('independent workers retain runtime, deadlines, six original commands and unconditional workflow contract', () => {
+  assert.match(source, /^on:\n  pull_request:\n  workflow_dispatch:\n/m);
+  for (const [name, entries] of [['shell_contracts', shell], ['touched_contracts', touched]]) {
+    const prefix = jobs[name].split('    steps:\n')[0];
+    assert.deepEqual([...prefix.matchAll(/^    (\S+):/gm)].map(match => match[1]), ['name', 'runs-on', 'timeout-minutes']);
+    assert.equal(field(prefix, 'runs-on'), 'ubuntu-latest'); assert.equal(field(prefix, 'timeout-minutes'), '10');
+    assert.match(entries[0], /^      - uses: actions\/checkout@v4$/m); assert.equal(field(entries[0], 'fetch-depth', 10), '0');
+    assert.match(entries[1], /^      - uses: actions\/setup-node@v4$/m); assert.equal(field(entries[1], 'node-version', 10), '20');
+    for (const entry of entries.slice(0, -1)) {
+      if (entry.includes(originalCommands[5])) assert.equal(field(entry, 'if', 8), "github.event_name == 'pull_request'");
+      else assert.doesNotMatch(entry, /^        if:/m);
+    }
+  }
+  assert.equal(shell.length, 11); assert.equal(touched.length, 6);
+  const withoutComments = value => value.replace(/^\s*#.*\n/gm, '').trim();
+  assert.deepEqual(shell.slice(0, 4).map(withoutComments), touched.slice(0, 4).map(withoutComments));
+  assert.deepEqual(runs(shell), [...setupCommands, ...originalCommands.slice(0, 4),
+    'node --test tools/test-ui-qa-workflow.mjs', originalCommands[4]]);
+  assert.deepEqual(runs(touched), [...setupCommands, originalCommands[5]]);
+});
+
+test('the original required check always requires both worker results', () => {
+  assert.equal(field(jobs.deterministic, 'name'), 'deterministic chat and ui contracts');
+  assert.equal(field(jobs.deterministic, 'needs'), '[shell_contracts, touched_contracts]');
+  assert.equal(field(jobs.deterministic, 'if'), 'always()'); assert.equal(field(jobs.deterministic, 'timeout-minutes'), '1');
+  assert.equal(aggregate.length, 1);
+  assert.doesNotMatch(aggregate[0], /^        if:/m);
+  assert.equal(field(aggregate[0], 'SHELL_RESULT', 10), '${{ needs.shell_contracts.result }}');
+  assert.equal(field(aggregate[0], 'TOUCHED_RESULT', 10), '${{ needs.touched_contracts.result }}');
+});
+
+test('all original diagnostics upload exactly once under distinct always-run artifact names', () => {
+  const uploads = [shell.at(-1), touched.at(-1)], names = [], paths = [];
+  for (const entry of uploads) {
+    assert.equal(field(entry, 'if', 8), 'always()');
+    assert.equal(field(entry, 'uses', 8), 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a');
+    assert.equal(field(entry, 'path', 10), '|'); names.push(field(entry, 'name', 10));
+    assert.equal(field(entry, 'if-no-files-found', 10), 'ignore'); assert.equal(field(entry, 'include-hidden-files', 10), 'true');
+    assert.equal(field(entry, 'retention-days', 10), '7');
+    paths.push(...[...entry.matchAll(/^            (\S+)$/gm)].map(match => match[1]));
+  }
+  assert.deepEqual(names, ['apartment-shell-authored-browser', 'apartment-touched-authored-browser']);
+  assert.deepEqual(paths.sort(), ['.tmp/apartment-home-shell-browser/run-*/*receipt.json', '.tmp/apartment-home-shell-browser/run-*/*.png',
+    ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json')].sort());
+});
+
+test('the actual aggregate Bash gate rejects every non-success pair and genuinely absent variables', () => {
+  assert.equal(field(aggregate[0], 'run', 8), '|');
+  const lines = aggregate[0].split('        run: |\n'); assert.equal(lines.length, 2);
+  const script = lines[1].trimEnd().split('\n').map(line => {
+    assert.match(line, /^          \S/); return line.slice(10);
+  }).join('\n');
+  assert.equal(script, 'test "$SHELL_RESULT" = success && test "$TOUCHED_RESULT" = success');
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : '/bin/bash';
+  assert.ok(fs.existsSync(bash), 'explicit platform Bash is available');
+  const states = ['success', 'failure', 'cancelled', 'skipped', '', 'pending', 'unknown'];
+  const pairs = states.flatMap(left => states.map(right => [left, right]));
+  pairs.push([undefined, 'success'], ['success', undefined], [undefined, undefined]);
+  for (const [left, right] of pairs) {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (/^(?:SHELL_RESULT|TOUCHED_RESULT|BASH_ENV)$/i.test(key)) delete env[key];
+    if (left !== undefined) env.SHELL_RESULT = left; if (right !== undefined) env.TOUCHED_RESULT = right;
+    const result = spawnSync(bash, ['--noprofile', '--norc', '-c', script],
+      { cwd: root, env, encoding: 'utf8', timeout: 2000, maxBuffer: 65536, windowsHide: true });
+    assert.ifError(result.error); assert.equal(result.signal, null);
+    assert.equal(result.status === 0, left === 'success' && right === 'success',
+      'actual gate: ' + JSON.stringify([left ?? '<MISSING>', right ?? '<MISSING>']));
+  }
+});

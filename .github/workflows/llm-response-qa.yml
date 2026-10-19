@@ -8,15 +8,14 @@ permissions:
   contents: read
 
 jobs:
-  deterministic:
-    name: deterministic chat and ui contracts
+  shell_contracts:
+    name: chat and full-shell contracts
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so the touched-harness job can diff against the base.
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -41,14 +40,13 @@ jobs:
       - name: App-shell smoke
         run: node tools/qa-browser-smoke.js
 
+      - name: UI QA workflow contracts
+        run: node --test tools/test-ui-qa-workflow.mjs
+
       - name: Authored Apartment shell browser acceptance
         run: node --test tools/test-apartment-home-shell-browser.mjs
 
-      - name: Touched-surface harnesses
-        if: github.event_name == 'pull_request'
-        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}"
-
-      - name: Retain authored browser diagnostics
+      - name: Retain authored shell diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -56,9 +54,60 @@ jobs:
           path: |
             .tmp/apartment-home-shell-browser/run-*/*receipt.json
             .tmp/apartment-home-shell-browser/run-*/*.png
-            .tmp/apartment-overlay-bridge-browser/run-*/receipt.json
-            .tmp/apartment-room-selection-browser/run-*/receipt.json
-            .tmp/apartment-room-inspector-browser/run-*/receipt.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
+
+  touched_contracts:
+    name: touched-surface contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the touched-harness job can diff against the base.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for authored Apartment acceptance
+        run: npx playwright install --with-deps chromium
+
+      - name: Touched-surface harnesses
+        if: github.event_name == 'pull_request'
+        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}"
+
+      - name: Retain authored touched-surface diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: apartment-touched-authored-browser
+          path: |
+            .tmp/apartment-overlay-bridge-browser/run-*/receipt.json
+            .tmp/apartment-room-selection-browser/run-*/receipt.json
+            .tmp/apartment-room-inspector-browser/run-*/receipt.json
+            .tmp/apartment-directional-browser/run-*/receipt.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+
+  deterministic:
+    name: deterministic chat and ui contracts
+    needs: [shell_contracts, touched_contracts]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+
+    steps:
+      - name: Require both independent suites
+        env:
+          SHELL_RESULT: ${{ needs.shell_contracts.result }}
+          TOUCHED_RESULT: ${{ needs.touched_contracts.result }}
+        run: |
+          test "$SHELL_RESULT" = success && test "$TOUCHED_RESULT" = success

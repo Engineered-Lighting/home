@@ -1,14 +1,16 @@
 /* Presentation only: canonical room anchors over the resident renderer.
  * The engine owns the viewport, scene binding and AbortSignal lifetime. */
 export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, overlayRoot, host,
-    projectWorld, pickSurface, isCurrent, signal, onDispose = () => {} } = {}) {
+    projectWorld, pickSurface, isCurrent, signal, onDispose = () => {}, onPresentationFrame, onPresentationDispose } = {}) {
     if (!THREE?.Group || !THREE.Vector3 || !THREE.Mesh || !THREE.SphereGeometry || !THREE.MeshBasicMaterial
         || !camera?.matrixWorldInverse || !apartmentRoot?.localToWorld || !overlayRoot?.add
         || !host?.ownerDocument?.createElement || typeof host.appendChild !== 'function'
         || typeof projectWorld !== 'function' || typeof pickSurface !== 'function'
         || typeof isCurrent !== 'function' || typeof signal?.aborted !== 'boolean'
         || typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function'
-        || typeof onDispose !== 'function') throw new TypeError('apartment_ui_overlay_dependencies_required');
+        || typeof onDispose !== 'function' || onPresentationFrame !== undefined && typeof onPresentationFrame !== 'function'
+        || onPresentationDispose !== undefined && typeof onPresentationDispose !== 'function')
+        throw new TypeError('apartment_ui_overlay_dependencies_required');
 
     const group = new THREE.Group();
     group.name = 'apartment-ui-overlay-layer';
@@ -20,7 +22,7 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
     // Private math scratch is consumed before calling projectWorld. Keep the
     // world argument distinct per call so a reentrant consumer cannot mutate it.
     const projectionScratch = new THREE.Vector3();
-    let disposed = false;
+    let disposed = false, notifyingPresentation = false;
     const finitePoint = point => Array.isArray(point) && point.length === 3 && point.every(Number.isFinite);
     const safely = callback => { try { callback(); } catch (_) { /* Other owners still clean up. */ } };
     function detach(node) {
@@ -61,6 +63,9 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
         // Public-group children can be borrowed. Detach them, without walking
         // their geometries/materials/textures or taking resource ownership.
         safely(() => group.clear());
+        // Withdraw the consumer's external DOM/plane in the same retirement
+        // turn, even if either owner notification throws.
+        if (onPresentationDispose) safely(() => onPresentationDispose());
         safely(() => onDispose());
         return true;
     }
@@ -114,8 +119,12 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
         if (!screen || !anchor.validLabel) { hide(anchor); return false; }
         if (anchor.dot.position.x !== anchor.point[0] || anchor.dot.position.y !== anchor.point[1]
             || anchor.dot.position.z !== anchor.point[2]) anchor.dot.position.set(...anchor.point);
-        if (anchor.lastX !== screen.x) { anchor.label.style.left = `${screen.x}px`; anchor.lastX = screen.x; }
-        if (anchor.lastY !== screen.y) { anchor.label.style.top = `${screen.y}px`; anchor.lastY = screen.y; }
+        if (anchor.lastX !== screen.x || anchor.lastY !== screen.y) {
+            // Keep the final viewport/owner check without forcing layout after
+            // each moving label. The percentage offset still uses label size.
+            anchor.label.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -100%)`;
+            anchor.lastX = screen.x; anchor.lastY = screen.y;
+        }
         anchor.dot.visible = true;
         anchor.label.hidden = false;
         return true;
@@ -129,7 +138,7 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
             dot = new THREE.Mesh(geometry, material);
             labelElement = host.ownerDocument.createElement('span');
             labelElement.className = 'apt-ui-overlay-label';
-            Object.assign(labelElement.style, { position: 'absolute', transform: 'translate(-50%, -100%)', pointerEvents: 'none' });
+            Object.assign(labelElement.style, { position: 'absolute', left: '0px', top: '0px', pointerEvents: 'none' });
             labelElement.textContent = label;
             anchor = { geometry, material, dot, label: labelElement, point: point_m.slice(), validLabel: true, disposed: false };
             dot.position.set(...anchor.point);
@@ -178,9 +187,20 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
             return { point: hit.point.slice(), normal: hit.normal.slice(), surfaceName: name || 'Scan surface' };
         } catch (_) { return null; }
     }
-    function update() {
+    function update(frameInfo) {
+        if (notifyingPresentation) return false;
         const bounds = currentViewport();
         if (!bounds) return false;
+        // Only the engine's admitted timing turn opts into presentation work.
+        // Public projection, picking and ordinary update() remain passive.
+        if (onPresentationFrame && Number.isFinite(frameInfo?.nowMs)
+            && Number.isFinite(frameInfo?.deltaSeconds) && frameInfo.deltaSeconds >= 0) {
+            notifyingPresentation = true;
+            try { onPresentationFrame({ nowMs: frameInfo.nowMs, deltaSeconds: frameInfo.deltaSeconds }); }
+            catch (_) { dispose(); return false; }
+            finally { notifyingPresentation = false; }
+            if (!current()) return false;
+        }
         if (!anchors.size) return true;
         try { updateMatrices(); }
         catch (_) {

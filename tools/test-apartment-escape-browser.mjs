@@ -236,12 +236,12 @@ test('mounted production overlay respects editable ownership, one-layer Escape, 
         const proof=window.__parentEscapeProof={calls:[],mounts:0};
         function ParentEscapeProof(){
           const [aimMode,setAimMode]=useState(false), [cardId,setCardId]=useState(null), [editing,setEditing]=useState(false),
-            [virtualFixtureControlsOpen,setVirtualFixtureControlsOpen]=useState(false);
+            [virtualFixtureControlsOpen,setVirtualFixtureControlsOpen]=useState(false),[radialActive,setRadialActive]=useState(false);
           const open=true, embedded=true, unifiedShell=true, apartmentSceneControlsEnabled=true;
           const liveCam=null, virtualFixtureId=null, deskTargetSelection=null, shellControlsHost=null, shellCameraHost=null;
           const viewRootRef=useRef(null), escapeTriggerRef=useRef(null), escapeOpenersRef=useRef({}),
             escapeOperationsRef=useRef({}), escapeFocusFrameRef=useRef(null),viewOpenRef=useRef(true),
-            deskTargetCaptureRef=useRef(null), virtualAimGestureRef=useRef(null), travellingRef=useRef(false),
+            radialGestureOwnerRef=useRef(null),deskTargetCaptureRef=useRef(null), virtualAimGestureRef=useRef(null), travellingRef=useRef(false),
             spatialCoordinatorRef=useRef(null),calibPairCountRef=useRef(0),calibEscArmRef=useRef(0),
             engineRef=useRef({renderer:{domElement:null},rig:{inCameraPose:()=>false},overlay:{setVirtualFixtureSelected:()=>{}}});
           const mapRehearsalOpen=false,calibCam=null;
@@ -254,8 +254,15 @@ test('mounted production overlay respects editable ownership, one-layer Escape, 
           window.HomeOverlay.useOverlayLayer(${layer(apartment, 'apartment-embedded')});
           proof.cancel=()=>ReactDOM.flushSync(()=>handleApartmentEscape());
           proof.openers=escapeOpenersRef;
+          const beginRadial=()=>{
+            setVirtualFixtureControlsOpen(true);setRadialActive(true);
+            radialGestureOwnerRef.current={cancel:()=>{radialGestureOwnerRef.current=null;setRadialActive(false);proof.calls.push('radial-cancel')}};
+          };
           return h('section',{id:'actual-parent',ref:viewRootRef,tabIndex:-1,
               onKeyDownCapture:${apartmentRootCapture('onKeyDownCapture')},onPointerDownCapture:${apartmentRootCapture('onPointerDownCapture')}},
+            h('button',{id:'start-radial',onClick:beginRadial},'Start authored radial owner'),
+            h('output',{id:'radial-state'},radialActive?'painting':'idle'),
+            h('output',{id:'selection-state'},virtualFixtureControlsOpen?'selected':'room'),
             h('button',{id:'start-aim',onClick:()=>setAimMode(true)},'Start authored tap aim'),
             !aimMode&&h('button',{id:'transient-aim',onClick:()=>setAimMode(true)},'Start with transient control'),
             h('output',{id:'tap-state'},aimMode?'aiming':'idle'));
@@ -265,6 +272,20 @@ test('mounted production overlay respects editable ownership, one-layer Escape, 
         proof.unmount=()=>ReactDOM.flushSync(()=>root.unmount());
       })();
     ` });
+    await check('actual parent Escape cancels its authored radial owner first and preserves selection until the next press', async () => {
+      await page.locator('#start-radial').click();
+      assert.equal(await page.locator('#radial-state').textContent(), 'painting');
+      assert.equal(await page.locator('#selection-state').textContent(), 'selected');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.getElementById('radial-state')?.textContent === 'idle' && document.activeElement?.id === 'start-radial');
+      assert.equal(await page.locator('#selection-state').textContent(), 'selected');
+      assert.equal(await page.evaluate(() => window.__parentEscapeProof.calls.filter(call => call === 'radial-cancel').length), 1);
+      assert.equal(await top(), 'apartment-embedded');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.getElementById('selection-state')?.textContent === 'room' && document.activeElement?.id === 'start-radial');
+      assert.equal(await page.evaluate(() => window.__parentEscapeProof.calls.filter(call => call === 'radial-cancel').length), 1);
+      assert.equal(await top(), 'apartment-embedded');
+    });
     await check('actual root capture and operation effect remember a pointer opener, then restore it after cancellation commits', async () => {
       await page.locator('#start-aim').click();
       assert.equal(await page.locator('#tap-state').textContent(), 'aiming');

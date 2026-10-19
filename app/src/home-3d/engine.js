@@ -54,6 +54,11 @@ export async function loadDirectionalPresentation() {
     return sib('apartment-directional-presentation.mjs');
 }
 
+/* Beams and pools (APT-L02) use the same lazy, cache-busted ESM boundary. */
+export async function loadLightPools() {
+    return sib('apartment-light-pools.mjs');
+}
+
 /* Optional display evidence beside the unchanged marker API. All binding
  * checks are synchronous; no pending digest or private document survives reset. */
 export function bindEquipmentCutawayRegistration({ overlay, sceneIdentity, manifest,

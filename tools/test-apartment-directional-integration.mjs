@@ -774,7 +774,7 @@ test('the actual composer attaches native hit paths/readout/pill to the admitted
   const projection = f.refresh(); assert.equal(refs[0].current.hidden, false);
   assert.equal(refs[0].current.querySelectorAll('[data-apt-radial-number]').length, 6);
   assert.equal(refs[0].current.querySelector('[data-apt-radial-hub="hit"]').getAttribute('data-apt-radial-start'), 'hub');
-  assert.match(refs[1].current.style.transform, new RegExp('translate3d\\(' + projection.geometry.hub.x + 'px,' + (projection.geometry.hub.y - 26) + 'px,0\\) translate\\(-50%,-100%\\)'));
+  assert.match(refs[1].current.style.transform, new RegExp('translate3d\\(' + Math.round(projection.geometry.hub.x) + 'px,' + Math.round(projection.geometry.hub.y - 26) + 'px,0\\) translate\\(-50%,-100%\\)'));
   assert.equal(refs[1].current.hidden, false);
   view.pointer({ zone: 2, level: .5, x: 10, y: 10 }, true); f.refresh();
   assert.equal(refs[1].current.hidden, true); assert.equal(refs[2].current.hidden, false); assert.match(refs[2].current.textContent, /Zone 2.*50%/);

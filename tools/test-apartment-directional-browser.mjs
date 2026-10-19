@@ -639,6 +639,7 @@ test('real authored directional controls preserve native input, aim and output b
         const drawing = window.__directionalDrawingState(), pill = node.querySelector('[role="group"][aria-label="Room lighting tool"]');
         return { circles: circles.map(circle => ({ x: circle.getAttribute('cx'), y: circle.getAttribute('cy'), r: +circle.getAttribute('r'), fill: circle.getAttribute('fill') })),
           pill: rect(node.querySelector('[role="group"][aria-label="Room lighting tool"]')), hub: rect(circles.at(-1)),
+          composer: { ...rect(node), width_css: node.clientWidth, height_css: node.clientHeight },
           pill_label: pill.querySelector('.nm')?.textContent, button_heights: [...pill.querySelectorAll('button')].map(button => rect(button)?.height),
           visible_svg_paths: [...node.querySelectorAll('svg path')].filter(path => path.getAttribute('fill') !== 'transparent').length,
           drawing, text: node.innerText, inventory: window.__APT_ENGINE.overlay.virtualFixturesReadback() };
@@ -649,8 +650,12 @@ test('real authored directional controls preserve native input, aim and output b
       assert.deepEqual(circles.map(circle => circle.fill), ['transparent', 'transparent']);
       const { pill, hub } = mounted;
       assert.ok(pill && hub && pill.width > 0 && hub.height > 0);
-      assert.ok(Math.abs(hub.y + hub.height / 2 - (pill.y + pill.height) - 26) < .5,
-        'native pill bottom follows the supplied prototype exact 26px offset above the actual projected hub');
+      const { composer } = mounted, scaleX = composer.width / composer.width_css, scaleY = composer.height / composer.height_css;
+      assert.ok([scaleX, scaleY].every(value => Number.isFinite(value) && value > 0));
+      assert.ok(Math.abs(pill.y + pill.height - (composer.y + Math.round(+circles[0].y - 26) * scaleY)) < .01,
+        'native pill follows the handoff whole-pixel 26px placement above the exact projected hub');
+      assert.ok(Math.abs(pill.x + pill.width / 2 - (composer.x + Math.round(+circles[0].x) * scaleX)) < .01,
+        'native pill center follows the handoff whole-pixel projected placement');
       assert.ok(pill.y + pill.height < hub.y, 'compact pill clears the existing registered fixture center');
       assert.deepEqual(mounted.button_heights, [24, 24]); assert.ok(pill.height <= 34);
       assert.equal(mounted.pill_label, fixture.label); assert.equal(mounted.visible_svg_paths, 0);

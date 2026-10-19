@@ -52,11 +52,11 @@ wedges, permanent guides, oversized pill/ring, selected-zone quick presets and
 instant diffuser-temperature jumps were genuine differences and are corrected.
 
 - 48 pure geometry, pickup and easing cases; 116 actual-source integration
-  cases; 19 presentation/resource cases; 56 engine/bridge cases; 26 actual
+  cases; 20 presentation/resource cases; 56 engine/bridge cases; 26 actual
   equipment drawing cases pass. Equipment timing includes analytical 160 ms and
   stalled-frame checks, remembered targets and current reduced-motion behavior.
-- Native directional browser: all 13 stages pass in 20.6 seconds. Receipt:
-  `.tmp/apartment-directional-browser/run-1792386520871/receipt.json`.
+- Native directional browser: all 13 stages pass in 19.3 seconds. Receipt:
+  `.tmp/apartment-directional-browser/run-1792387027111/receipt.json`.
 - Separate full Home shell browser passes in 47.3 seconds, retaining all ten
   mixed/zero/restoration cases, native focus, exact aim/Undo and saved-byte
   assertions. Receipt:
@@ -80,6 +80,20 @@ instant diffuser-temperature jumps were genuine differences and are corrected.
   checks pass, while representative F01 performance remains inconclusive.
 - Later owner-facing comparison uses the accepted actual room and saved
   registration privately. It does not establish installed or physical behavior.
+
+Hosted run `39203232660` exposed a real source-fidelity detail in the new
+per-frame presentation: fractional pixel changes kept the mode pill moving
+through the native pointer actionability window. The supplied prototype rounds
+its pill coordinates. That exact whole-pixel placement is restored while the
+drawn input plane retains full precision. The native pointer click remains;
+its deadline is unchanged. A fractional-camera regression verifies both stable
+button placement and exact drawn-plane publication, and the browser placement
+oracle checks the rounded reference position at 0.01px.
+The unchanged full shell proof then passed in 54.3 seconds with the installed
+matching Chromium and forced CI software-rendering flags:
+`.tmp/apartment-home-shell-browser/run-1792386936907/receipt.json`.
+Its diagnostic changes only browser launch settings; hosted acceptance remains
+separate.
 
 ## Prior implementation receipts
 

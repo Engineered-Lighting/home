@@ -158,7 +158,7 @@ export function createDirectionalPresentation({ group, host, api, initial, getPr
         for (const circle of elements.root.querySelectorAll('[data-apt-radial-hub]')) { setAttribute(circle, 'cx', geometry.hub.x); setAttribute(circle, 'cy', geometry.hub.y); }
         const hubTarget = elements.root.querySelector('[data-apt-radial-hub="hit"]');
         if (snapshot.mode === 'zones') setAttribute(hubTarget, 'data-apt-radial-start', 'hub'); else hubTarget?.removeAttribute('data-apt-radial-start');
-        elements.pill.style.transform = `translate3d(${geometry.hub.x}px,${geometry.hub.y - 26}px,0) translate(-50%,-100%)`;
+        elements.pill.style.transform = `translate3d(${Math.round(geometry.hub.x)}px,${Math.round(geometry.hub.y - 26)}px,0) translate(-50%,-100%)`;
         writeReadout();
         if (!current()) { dispose(); return false; }
         drawn = { ...projection, geometry }; publishPlane(drawn); return true;

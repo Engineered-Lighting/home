@@ -108,6 +108,21 @@ test('frame publishes only after native DOM hit paths and hub positions match it
   api.attach(f.elements); assert.equal(api.frame({ nowMs: 100 }), true); assert.equal(publications, 1); api.dispose();
 });
 
+test('the handoff pill stays on whole pixels during fractional camera settling while the drawn input plane remains exact', () => {
+  const f = fixture(), project = f.frame.project;
+  let offset = 0;
+  f.frame.project = point => { const p = project(point); return { ...p, x: p.x + offset, y: p.y + offset }; };
+  f.api.frame({ nowMs: 0 }); const position = f.elements.pill.style.transform;
+  for (const value of [.1, .2, .4]) {
+    offset = value; f.api.frame({ nowMs: value * 100 });
+    assert.equal(f.elements.pill.style.transform, position, 'subpixel settling must not keep a native button moving');
+    assert.equal(+f.elements.root.querySelector('[data-apt-radial-hub="hit"]').getAttribute('cx'), 400 + value);
+    assert.equal(f.state.published.at(-1).geometry.hub.x, 400 + value, 'input retains the full-precision drawn plane');
+  }
+  offset = .6; f.api.frame({ nowMs: 100 });
+  assert.match(f.elements.pill.style.transform, /^translate3d\(401px,275px,0\)/); f.api.dispose();
+});
+
 test('pointer readout is immediate while only drawn brightness/opacity ease over 160ms and target channels stay exact', () => {
   const f = fixture(); const before = structuredClone(f.initial.descriptor); deepFreeze(f.initial.descriptor);
   f.api.frame({ nowMs: 0 }); const node = f.scene.getObjectByName('directional-zone-node-1'), priorRadius = node.position.length();

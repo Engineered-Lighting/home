@@ -2,7 +2,7 @@
 
 Authored software evidence only. These captures use the authored test room (two synthetic packs and an authored registration from `tools/fixtures/apartment-home-shell-fixtures.mjs`). They contain no household imagery, live camera, model session, physical command or private registration. Nothing here is actual-room, installed or physical acceptance.
 
-Source: `tools/test-apartment-shell-audit-browser.mjs`, which mounts the actual unified Home shell from this worktree in one Chromium page. It changes viewport and pointer in place (CDP touch emulation turns the pointer coarse).
+Source: `tools/fixtures/apartment-shell-audit.mjs`, which runs as three test files, each with its own page load and 145 s deadline: `test-apartment-shell-audit-echo-browser.mjs` (Echo surfaces), `test-apartment-shell-audit-browser.mjs` (Victoria surfaces, the Phone example and Tab order) and `test-apartment-shell-audit-behaviour-browser.mjs` (motion, status rows, unsaved-work isolation, the sheet handle). Each mounts the actual unified Home shell from this worktree in one Chromium page. It changes viewport and pointer in place (CDP touch emulation turns the pointer coarse).
 
 ## What the audit checks
 

@@ -106,11 +106,11 @@ const MAP = [
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
-  [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs"]],
-  [/^tools\/test-apartment-directional(?:-integration|-browser)?\.mjs$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs"]],
-  [/^tools\/(?:fixtures\/apartment-directional-native-mouse|test-apartment-directional-native-mouse)\.mjs$/, ["test-apartment-directional-native-mouse.mjs", "test-apartment-directional-browser.mjs"]],
-  [/^tools\/(?:fixtures\/apartment-directional-readiness|test-apartment-directional-readiness)\.mjs$/, ["test-apartment-directional-readiness.mjs", "test-apartment-directional-browser.mjs"]],
-  [/^(?:app\/src\/home-3d\/apartment-directional-presentation\.mjs|tools\/test-apartment-directional-presentation\.mjs)$/, ["test-apartment-directional-presentation.mjs", "test-apartment-directional-browser.mjs"]],
+  [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
+  [/^tools\/(?:test-apartment-directional(?:-integration|-browser(?:-part2)?)?\.mjs|fixtures\/apartment-directional-browser-proof\.mjs)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
+  [/^tools\/(?:fixtures\/apartment-directional-native-mouse|test-apartment-directional-native-mouse)\.mjs$/, ["test-apartment-directional-native-mouse.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
+  [/^tools\/(?:fixtures\/apartment-directional-readiness|test-apartment-directional-readiness)\.mjs$/, ["test-apartment-directional-readiness.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
+  [/^(?:app\/src\/home-3d\/apartment-directional-presentation\.mjs|tools\/test-apartment-directional-presentation\.mjs)$/, ["test-apartment-directional-presentation.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)|home-3d\/apartment-directional-presentation\.mjs)|tools\/test-apartment-composer-comfort-browser\.mjs)$/, ["test-apartment-composer-comfort-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures\.mjs|markers\.js)|tools\/test-apartment-radial-visual\.mjs)$/, ["test-apartment-radial-visual.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
@@ -137,11 +137,13 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * Measured on run 39214584656 (#293 touched job, 7m22s of harnesses) and the
  * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
  * rounded up, and the composer-comfort suite's first hosted run 39307352122.
+ * The two directional parts are that run's setup plus their own stages.
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
 const SHARD_WEIGHT_S = {
-  "test-apartment-directional-browser.mjs": 141,
+  "test-apartment-directional-browser.mjs": 80,
+  "test-apartment-directional-browser-part2.mjs": 90,
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
@@ -168,12 +170,18 @@ function shardWeight(name) {
 /* Longest-first greedy partition with total, input-independent tie-breaks
  * (weight, then name; then the lowest-loaded, lowest-index worker). Each
  * worker's items keep the unsharded plan order. */
+// Parts of one split suite run on different workers whenever there are at
+// least as many workers as parts, so no worker carries the whole suite.
+const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]];
 function partitionPlan(plan, count) {
   const loads = Array(count).fill(0), owner = new Map();
   const order = [...plan].sort((a, b) => shardWeight(b) - shardWeight(a) || (a < b ? -1 : a > b ? 1 : 0));
   for (const name of order) {
-    let target = 0;
-    for (let i = 1; i < count; i++) if (loads[i] < loads[target]) target = i;
+    const group = SHARD_APART.find(names => names.includes(name)) || [name];
+    const taken = new Set(group.filter(other => other !== name && owner.has(other)).map(other => owner.get(other)));
+    const open = count > taken.size ? loads.map((_, i) => i).filter(i => !taken.has(i)) : loads.map((_, i) => i);
+    let target = open[0];
+    for (const i of open) if (loads[i] < loads[target]) target = i;
     owner.set(name, target); loads[target] += shardWeight(name);
   }
   return loads.map((_, index) => plan.filter(name => owner.get(name) === index));

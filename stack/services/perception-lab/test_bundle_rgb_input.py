@@ -112,7 +112,7 @@ class BundledRgbFactoryTests(unittest.TestCase):
         # protected-file/kernel clock reads. No actual clock/camera operation.
         name = '_bundled_authored_camera_clock'
         spec = importlib.util.spec_from_file_location(name,
-            ROOT / 'artifacts/den-connected-prototype-20261016/runtime-evidence/installed-oak-capture-20261016.py')
+            ROOT / 'tools/fixtures/installed-oak-capture-20261016.py')
         camera = importlib.util.module_from_spec(spec); sys.modules[name] = camera; spec.loader.exec_module(camera)
         evidence = dict(version=1, semantics='commissioned_camera_host_clock_v1',
             host_boot_id='00000000-0000-0000-0000-000000000001',

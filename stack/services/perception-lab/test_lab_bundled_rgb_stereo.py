@@ -37,7 +37,7 @@ class AuthoredBundledClock:
     def __init__(self, nv12, *, shift=Decimal(0)):
         self.nv12 = nv12
         self.shift_ns = int(shift * 10**9)
-        path = capture.ROOT / 'artifacts/den-connected-prototype-20261016/runtime-evidence/installed-oak-capture-20261016.py'
+        path = capture.ROOT / 'tools/fixtures/installed-oak-capture-20261016.py'
         raw = path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != CAMERA_SHA:
             raise ValueError('authored_camera_clock_source_changed')

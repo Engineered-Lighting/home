@@ -2,7 +2,8 @@
 
 Status: **protocol pre-registered in `b702dc08` before any sample existed;
 the protocol text below is unchanged. Two acquisitions are appended under
-"Results".** Acceptance is not decided here (see "Decision needed").
+"Results".** On October 19, 2026 the owner accepted the display-bound
+result for the M1 timing gate (see "Owner decision"). F01 itself stays open.
 
 This is authored-scene software evidence only. It does not cover actual Den
 imagery or registration, installed builds, physical output or touch hardware.
@@ -163,6 +164,24 @@ this one:
 
 - a sub-frame cost bound, for example more blocks or a higher-rate display;
 - moving-label timing.
+
+### Owner decision (October 19, 2026)
+
+The owner accepted the display-bound F01 result for the M1 timing gate, in
+these words: "no missed frames at 60 Hz, render cost within noise, no
+sub-frame or moving-label claim."
+
+What the decision covers, and what it leaves open:
+
+- **M1 timing gate.** "Accepted F01 representative timing" is satisfied by
+  this receipt, within the limits below.
+- **F01 done item 2** ("Renderer frame time unchanged within noise") stays
+  unticked until this work is integrated on main.
+- **F01 and #288.** F01 stays open, and #288 stays draft.
+- **Not claimed.** No sub-frame cost bound and no moving-label timing are
+  claimed. Either would need a new pre-registered protocol.
+- **Re-run.** W1 step 9 still requires this protocol to be re-run on the
+  composed stack top.
 
 ### Not covered (as declared before measuring)
 

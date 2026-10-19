@@ -3,8 +3,10 @@
 The current authored-scene timing acquisition for #293's leaf `36aed31f`
 and engine `397576a4` is
 [overlay-performance-receipt-w1.md](overlay-performance-receipt-w1.md). Its
-primary result is display-bound at 60 Hz and awaits an owner and Repair
-acceptance decision. The #288 reviews linked below measured earlier leaves.
+primary result is display-bound at 60 Hz. On October 19, 2026 the owner
+accepted it for the M1 timing gate: no missed frames at 60 Hz, render cost
+within noise, and no sub-frame or moving-label claim. F01 stays open. The
+#288 reviews linked below measured earlier leaves.
 
 The [moving-label layout correction](wave6-overlay-transform-review-20261019.md)
 removes the measured repeated-layout defect while retaining overall timing

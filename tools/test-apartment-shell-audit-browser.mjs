@@ -135,13 +135,13 @@ test('unified shell text, targets, surfaces, motion, focus and phone layout meet
     if (site === 'victoria' && (profile.name === 'desktop-1366x768' || profile.name === 'phone-390x844')) {
       const select = page.locator('.apt-home-controls .apt-ui-list-button[aria-label^="Select "]').first();
       await select.scrollIntoViewIfNeeded(); await select.click();
-      await page.getByRole('button', { name: 'Back to room', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'All lights', exact: true }).waitFor();
       const sections = page.getByRole('tablist', { name: 'Light sections', exact: true });
       await sections.getByRole('tab', { name: 'Light', exact: true }).click(); await settle();
       await audit(profile, site, theme, 'light');
       await sections.getByRole('tab', { name: 'Aim', exact: true }).click(); await settle();
       await audit(profile, site, theme, 'aim');
-      await page.getByRole('button', { name: 'Back to room', exact: true }).click(); await settle();
+      await page.getByRole('button', { name: 'All lights', exact: true }).click(); await settle();
     }
     if (profile.name === 'desktop-1366x768' || profile.name === 'phone-390x844') {
       // In-room popovers sit on the dark stage in both themes (Q03).

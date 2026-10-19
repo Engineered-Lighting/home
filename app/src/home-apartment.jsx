@@ -2408,17 +2408,20 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   const selectedRadials = zone == null ? radials : radials.filter(item => item.number === zone);
   const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.brightness ?? 1), 0) / selectedRadials.length : 0;
   const patchRadials = patch => onPatch({ radials: selectedRadials.map(item => ({ number: item.number, ...patch })) });
+  // Profile ranges are assumed until the Den confirms them; a moved slider powers its channel on.
+  const range = (key, fallback) => Array.isArray(fixture.color_temp_ranges?.[key]) ? fixture.color_temp_ranges[key] : fallback;
   const channel = (key, title, desc, brightnessLabel, temperatureLabel, minimum) => {
-    const current = state[key] || {};
+    const current = state[key] || {}, [low, high] = range(key, [minimum, 5000]);
+    const powered = value => !current.on && value > 0 ? { on: true } : {};
     return <section className="apt-ui-channel" aria-label={`${title} channel`}>
       <div className="apt-ui-channel-head"><div className="apt-ui-grow"><div className="apt-ui-channel-name">{title}</div>
         <div className="apt-ui-channel-desc">{desc}</div></div><label className="apt-ui-switch">
         <input type="checkbox" aria-label={`${title} power`} checked={!!current.on}
           onChange={event => onPatch({ [key]: { on: event.target.checked } })} /><span>{current.on ? "On" : "Off"}</span></label></div>
       <AptUnifiedRange label="Brightness" ariaLabel={brightnessLabel} value={(current.brightness ?? 1) * 100}
-        onChange={value => onPatch({ [key]: { brightness: value / 100 } })} />
-      <AptUnifiedRange label="Color temp" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
-        min={minimum} max={5000} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value } })} />
+        onChange={value => onPatch({ [key]: { brightness: value / 100, ...powered(value) } })} />
+      <AptUnifiedRange label="Color temp · assumed range" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
+        min={low} max={high} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value, ...powered(1) } })} />
       {key === "spotlight" && <div className="apt-ui-row"><span className="apt-ui-meta grow">Where it points is set in Aim.</span>
         <button type="button" className="apt-ui-button is-small" onClick={() => setTab("aim")}>Aim</button></div>}
     </section>;
@@ -2439,9 +2442,9 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <button type="button" key={String(on)} className="apt-ui-button is-small" onClick={() => onPatch({
           spotlight: { on }, downward: { on }, radials: aptUnifiedRadialPowerPatch(radials, on) })}>All {on ? "on" : "off"}</button>)}</div>
       {channel("spotlight", "Spot", "Hidden robotic spotlight", "Brightness", "Color temperature", 2700)}
-      {channel("downward", "Down", "Downward LED zone", "Down brightness", "Down color temperature", 2200)}
+      {channel("downward", "Down", "Soft pool below the socket", "Down brightness", "Down color temperature", 2200)}
       <section className="apt-ui-channel" aria-label="Radial channel"><div className="apt-ui-channel-head">
-        <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser</div></div>
+        <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser film</div></div>
         <label className="apt-ui-switch"><input type="checkbox" aria-label="Radial power" checked={radials.some(item => item.on)}
           onChange={event => onPatch({ radials: aptUnifiedRadialPowerPatch(radials, event.target.checked) })} />
           <span>{radials.some(item => item.on) ? "On" : "Off"}</span></label></div>
@@ -2455,7 +2458,8 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <div className="apt-ui-actions"><span className="apt-ui-meta grow">Light only</span>{["Toward walls", "Into the room"].map(label =>
           <button key={label} type="button" className="apt-ui-button is-small" disabled title="Available after radial heading commissioning">{label}</button>)}</div>
         <AptUnifiedRange label="Brightness" ariaLabel="Radial brightness" value={radialLevel * 100} onChange={value => patchRadials({ on: value > 0, brightness: value / 100 })} />
-        <AptUnifiedRange label="Color temp" ariaLabel="Radial color temperature" min={2200} max={5000} step={100} suffix=" K"
+        <AptUnifiedRange label="Color temp · assumed range" ariaLabel="Radial color temperature" min={range("radials", [2200, 5000])[0]}
+          max={range("radials", [2200, 5000])[1]} step={100} suffix=" K"
           value={selectedRadials[0]?.color_temp_kelvin ?? 3000} onChange={value => patchRadials({ color_temp_kelvin: value })} />
       </section>
       <p className="apt-ui-meta">Virtual preview · no hardware command sent.</p>
@@ -2709,6 +2713,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [semanticRoomStatus, setSemanticRoomStatus] = useState("");
   const [semanticStatusDeviceId, setSemanticStatusDeviceId] = useState(null);
   const [hoverId, setHoverId] = useState(null);
+  const [quickBusy, setQuickBusy] = useState(false);
+  const quickBusyRef = useRef(false);
   const [cardId, setCardId] = useState(null);
   const [inCamPose, setInCamPose] = useState(false);
   const [liveCam, setLiveCam] = useState(null);   // camera device while snapped
@@ -5336,6 +5342,81 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     return () => { closed = true; unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(lease); };
   }, [selectionEngine, getDirectionalSnapshot, virtualFixtureId, apartmentSceneControlsEnabled]);
 
+  // APT-L02: restrained beams and the Down pool, drawn on their own UI overlay
+  // layer from published descriptors while a Den light is selected, like the
+  // directional composer. Equipment state and receivers are unchanged.
+  const lightPoolsInputRef = useRef(null), lightPoolsDrawRef = useRef(null);
+  lightPoolsInputRef.current = { selectedId: virtualFixtureControlsOpen ? virtualFixtureId : null,
+    floor: virtualFixtureDocument?.references?.floor || null, beams: "selected", pools: true };
+  useEffect(() => {
+    const engine = selectionEngine, host = hostRef.current;
+    if (!engine || !host || !virtualFixtureDocument || !apartmentSceneControlsEnabled || !virtualFixtureControlsOpen) return undefined;
+    let closed = false, poolLease = null;
+    const admitted = () => !closed && document.visibilityState !== "hidden" && engineRef.current === engine
+      && engine.siteId === "victoria" && host.isConnected;
+    const retire = owned => {
+      if (!owned || owned.retired) return;
+      owned.retired = true;
+      try { owned.view?.dispose(); } finally { owned.controller.abort(); owned.layer?.dispose(); }
+      if (poolLease === owned) poolLease = null;
+      lightPoolsDrawRef.current = null;
+    };
+    // Frames redraw at most 10 Hz: after a React-side change (marked dirty),
+    // or when the selected beam's published metadata (new objects on every
+    // renderer update) changed. Radial painting alone pays no readback.
+    const draw = (owned, nowMs = null) => {
+      if (!owned.view || owned.retired) return;
+      const overlay = engine.overlay;
+      if (nowMs != null) {
+        if (nowMs - (owned.drawnAt || 0) < 100) return;
+        owned.drawnAt = nowMs;
+        const id = lightPoolsInputRef.current?.selectedId;
+        if (owned.beamId !== id || !owned.beamNode?.parent) {
+          owned.beamId = id;
+          owned.beamNode = id ? overlay.virtualFixturesGroup?.getObjectByName("equipment-virtual-fixture:" + id)?.getObjectByName("robotic-spotlight") : null;
+        }
+        const beam = owned.beamNode?.userData;
+        const moved = !!beam && (beam.endpoint_m !== owned.lastEndpoint || beam.channel !== owned.lastChannel);
+        if (!moved && !owned.dirty) return;
+        if (beam) { owned.lastEndpoint = beam.endpoint_m; owned.lastChannel = beam.channel; }
+      }
+      owned.dirty = false;
+      const preview = overlay.virtualFixturesReadback?.();
+      const fixtures = preview?.status === "ready" && preview.visible ? preview.fixtures.map(item => {
+        const spot = overlay.virtualFixturesGroup?.getObjectByName("equipment-virtual-fixture:" + item.fixture_id)
+          ?.getObjectByName("robotic-spotlight")?.userData;
+        return { fixture_id: item.fixture_id, label: item.label, state: item.state,
+          anchor_m: overlay.virtualFixtureInteractionDescriptor?.(item.fixture_id)?.display_anchor_m,
+          beam: spot ? { origin_m: spot.beam_origin_m, endpoint_m: spot.endpoint_m, reach_m: spot.reach_m } : null };
+      }) : [];
+      owned.view.update(owned.module.lightPoolsPlan({ fixtures, ...lightPoolsInputRef.current }));
+    };
+    const start = async () => {
+      if (poolLease || !admitted()) return;
+      const owned = { controller: new AbortController(), layer: null, view: null, module: null, retired: false };
+      poolLease = owned;
+      const current = () => poolLease === owned && !owned.retired && !owned.controller.signal.aborted && admitted();
+      try {
+        const home3d = await window.Home3D.ready;
+        if (!current() || typeof home3d.loadLightPools !== "function") { retire(owned); return; }
+        owned.module = await home3d.loadLightPools();
+        if (!current()) { retire(owned); return; }
+        const layer = await engine.createUiOverlayLayer({ host, signal: owned.controller.signal, isCurrent: current,
+          onPresentationFrame: info => draw(owned, info.nowMs), onPresentationDispose: () => retire(owned) });
+        if (!layer || !current()) { layer?.dispose(); retire(owned); return; }
+        owned.layer = layer; owned.view = owned.module.createLightPools({ layer });
+        lightPoolsDrawRef.current = () => { owned.dirty = true; }; draw(owned);
+      } catch (_) { retire(owned); }
+    };
+    const unsubscribe = engine.on("running", ({ running }) => { if (running) void start(); else retire(poolLease); });
+    const onVisibility = () => { retire(poolLease); if (document.visibilityState !== "hidden") void start(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    void start();
+    return () => { closed = true; unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(poolLease); };
+  }, [selectionEngine, virtualFixtureBindingKey, apartmentSceneControlsEnabled, virtualFixtureControlsOpen]);
+  useEffect(() => { lightPoolsDrawRef.current?.(); },
+    [virtualFixturePreview, virtualFixtureId, virtualFixtureControlsOpen, virtualSpotlightsVisible]);
+
   const directionalDisplay = directionalView && !directionalView.readback().disposed && hostRef.current && window.AptDirectionalComposer
     && window.HomeApartmentDirectional?.identityKey(getDirectionalSnapshot(virtualFixtureId, { drawing: false })?.descriptor)
       === directionalView.readback().identity ? directionalView : null;
@@ -7537,17 +7618,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     spatialTravelIntentRef.current, engineRef.current, apartmentAuthorityKey]);
 
   const callSvc = useCallback(async (domain, service, data) => {
-    if (rehearsalIsolated || window.HomeMapRehearsalOfflineState?.active) return;
+    // Resolves true only when Home Assistant accepted the call; guards are unchanged.
+    if (rehearsalIsolated || window.HomeMapRehearsalOfflineState?.active) return false;
     if (!window.HomeApartmentSiteSession.canControlEcho({
         sceneSiteId: engineRef.current?.siteId,
         selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
         transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready"
           || (window.HomeSpatialViewport?.getSite?.("echo")?.contentRevision || "legacy") !== (engineRef.current?.contentRevision || "legacy") })) {
-      showToast("Home controls are not configured for this interior"); return;
+      showToast("Home controls are not configured for this interior"); return false;
     }
-    if (modelScopeRef.current?.authorityKey !== workspaceAuthorityRef.current.key) return;
+    if (modelScopeRef.current?.authorityKey !== workspaceAuthorityRef.current.key) return false;
     const client = window.__hav_haClient;
-    if (!client || simActive) { showToast("sim mode - controls disabled"); return; }
+    if (!client || simActive) { showToast("sim mode - controls disabled"); return false; }
     const engine = engineRef.current;
     const operation = spatialTravelIntentRef.current;
     const authority = workspaceAuthorityRef.current.key;
@@ -7561,7 +7643,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const dev = entityId ? (model.devices || []).find((d) => d.ha_entity_id === entityId) : null;
     try {
       await window.HomeApartmentData.callService(client, domain, service, data, { siteId: "echo", isCurrent: () => current() && isControlCurrent() });
-      if (!current()) return;
+      if (!current()) return true;
     if (entityId && optimistic) {
       statesRef.current[entityId] = optimistic;
       if (dev) engineRef.current?.overlay.setDeviceState(dev.id, optimistic);
@@ -7573,9 +7655,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           let verified = null;
           for (const delayMs of [350, 900, 1600]) {
             await aptDelay(delayMs);
-            if (!current()) return;
+            if (!current()) return true;
             const states = await window.HomeApartmentData.readStates(client, [entityId], { siteId: "echo" });
-            if (!current()) return;
+            if (!current()) return true;
             verified = states[entityId] || null;
             if (verified) {
               statesRef.current[entityId] = verified;
@@ -7591,9 +7673,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           console.warn("[apartment] service state readback failed", e);
         }
       }
+      return true;
     } catch (e) {
-      if (!current()) return;
+      if (!current()) return false;
       showToast(e?.message?.includes("Travel Mode") ? e.message : `${entityId || domain} didn't respond`, { tone: "error" });
+      return false;
     }
   }, [simActive, showToast, model.devices, isControlCurrent]);
 
@@ -8156,13 +8240,22 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     ? virtualFixtureItems.map(fixture => ({ id: fixture.fixture_id, label: fixture.label || fixture.fixture_id,
       ariaLabel: `Select ${fixture.label || fixture.fixture_id}`,
       room_id: fixture.room_id, selected: virtualFixtureControlsOpen && virtualFixtureId === fixture.fixture_id,
+      summary: window.HomeApartmentQuick?.virtualSummary(fixture.state),
       power: [fixture.state?.spotlight, fixture.state?.downward, ...(fixture.state?.radials || [])].some(channel => channel?.on === true) ? "on"
         : fixture.state?.spotlight?.on === false && fixture.state?.downward?.on === false
           && fixture.state?.radials?.length === 6 && fixture.state.radials.every(channel => channel.on === false) ? "off" : "unknown" }))
     : (model.devices || []).filter(device => device.ha_entity_id?.startsWith("light.")).map(device => ({
       id: device.id, label: device.name || device.label || device.id, room_id: device.room_id, selected: cardId === device.id,
+      summary: window.HomeApartmentQuick?.lightSummary(device.ha_entity_id, statesRef.current[device.ha_entity_id]),
       power: ["on", "off"].includes(statesRef.current[device.ha_entity_id]?.state) ? statesRef.current[device.ha_entity_id].state : "unknown",
     })) }) || [];
+  // List hover highlights the same Echo marker as canvas hover; it never selects.
+  const hoverRoomDevice = id => {
+    const context = getRoomInspectorContext();
+    if (!context || selectedSiteId !== "echo" || virtualFixtureDocument) return;
+    const next = id && (model.devices || []).some(device => device.id === id) ? id : null;
+    setHoverId(next); context.engine.overlay.setHover?.(next);
+  };
   const roomPowerDisabledReason = !apartmentSceneControlsEnabled ? "Room controls unavailable"
     : virtualFixtureDocument ? "" : !apartmentDeviceControlsEnabled || connection !== "online" || simActive
       ? "Home Assistant controls unavailable" : "";
@@ -8172,6 +8265,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const group = roomLightGroups.find(group => group.id === roomId);
     if (!group || group.power === "unknown") return false;
     if (virtualFixtureDocument) {
+      const before = window.HomeApartmentQuick?.virtualSnapshot(context.preview.fixtures
+        .filter(fixture => group.lights.some(light => light.id === fixture.fixture_id))) || null;
       for (const light of group.lights) {
         if (getRoomInspectorContext()?.engine !== context.engine) return false;
         const fixture = context.preview.fixtures.find(fixture => fixture.fixture_id === light.id);
@@ -8182,15 +8277,97 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         if (!actual || actual.spotlight?.on !== on || actual.downward?.on !== on
             || actual.radials?.length !== 6 || actual.radials.some(zone => zone.on !== on)) return false;
       }
+      offerVirtualUndo(`${group.label} ${on ? "on" : "off"}`, before, context);
       return true;
     }
     const entityIds = [...new Set(group.lights.map(light => (model.devices || []).find(device => device.id === light.id)?.ha_entity_id)
       .filter(entityId => typeof entityId === "string" && entityId.startsWith("light.")))];
+    // The existing guarded loop is unchanged; Undo is offered only for calls Home Assistant accepted.
+    const Q = window.HomeApartmentQuick, before = Q ? Q.snapshot(statesRef.current, entityIds) : null;
+    let sent = 0;
     for (const entityId of entityIds) {
       if (getRoomInspectorContext()?.engine !== context.engine || !isControlCurrent()) return false;
-      await callSvc("light", on ? "turn_on" : "turn_off", { entity_id: entityId });
+      if (await callSvc("light", on ? "turn_on" : "turn_off", { entity_id: entityId }) === true) sent++;
     }
-    return getRoomInspectorContext()?.engine === context.engine;
+    const done = getRoomInspectorContext()?.engine === context.engine;
+    if (done && before && sent) offerEchoUndo({ label: `${group.label} ${on ? "on" : "off"}`, note: "" }, before, context);
+    return done;
+  };
+  /* Quick and room switches share one exact-Undo path (APT-R03). Echo calls go
+   * through callSvc, so site, currentness and Travel Mode guards are unchanged. */
+  const quickBlock = window.HomeApartmentQuick?.quickBlock({ connection, sim: simActive })
+    || { all: "Quick controls unavailable", energizing: "Quick controls unavailable" };
+  // Chips come from this home's own HA scenes and scripts (registry snapshot).
+  const quickChips = selectedSiteId === "echo" && !virtualFixtureDocument && !simActive
+    ? window.HomeApartmentQuick?.quickChips(registry.states || {}) || [] : [];
+  const echoQuickCurrent = context => () => getRoomInspectorContext()?.engine === context.engine && isControlCurrent() === true;
+  const undoEchoQuick = async (plan, before, current) => {
+    const Q = window.HomeApartmentQuick;
+    if (!Q || quickBusyRef.current || !current()) return false;
+    quickBusyRef.current = true; setQuickBusy(true);
+    try {
+      const result = await Q.undoQuick(before, { dispatch: callSvc, isCurrent: current });
+      if (!current()) return false;
+      // "Undone" means Home Assistant's readback matches the exact snapshot.
+      const confirmed = before.filter(entry => ["on", "off"].includes(entry.state))
+        .every(entry => Q.matchesSnapshot(entry, statesRef.current[entry.entity_id]));
+      if (result.ok) showToast(!result.exact
+        ? `${plan.label} undone; ${result.skipped.length} unavailable light${result.skipped.length === 1 ? " was" : "s were"} not restored`
+        : confirmed ? `${plan.label} undone` : `${plan.label} undo sent; Home Assistant hasn't confirmed every light yet`);
+      else if (result.sent) showToast(`${plan.label} was only partly undone`, { tone: "error" });
+      return result.ok;
+    } finally { quickBusyRef.current = false; setQuickBusy(false); }
+  };
+  const runEchoQuick = async (action, context = getRoomInspectorContext()) => {
+    const Q = window.HomeApartmentQuick;
+    if (!Q || !context || selectedSiteId !== "echo" || virtualFixtureDocument || quickBusyRef.current) return false;
+    const plan = Q.planQuick(action, { devices: model.devices || [], states: { ...registry.states, ...statesRef.current } });
+    if (!plan) return false;
+    const reason = quickBlock.all || (plan.energizing ? quickBlock.energizing : "");
+    if (reason) { showToast(reason, { tone: "error" }); return false; }
+    const current = echoQuickCurrent(context);
+    quickBusyRef.current = true; setQuickBusy(true);
+    let result;
+    try {
+      // Undo needs the live state of every light a scene touches, mapped or not.
+      let states = statesRef.current;
+      const unmapped = plan.targets.filter(id => !states[id]);
+      if (unmapped.length && window.__hav_haClient && typeof window.HomeApartmentData.readStates === "function") {
+        try { states = { ...states, ...await window.HomeApartmentData.readStates(window.__hav_haClient, unmapped, { siteId: "echo" }) }; }
+        catch (_) { /* Unread lights are reported as not restorable. */ }
+        if (!current()) return false;
+      }
+      result = await Q.applyQuick(plan, { states, dispatch: callSvc, isCurrent: current });
+    } finally { quickBusyRef.current = false; setQuickBusy(false); }
+    if (!result.sent || !current()) return false;
+    offerEchoUndo({ ...plan, label: `${plan.label}${result.ok ? "" : " · partly applied"}` }, result.before, context);
+    return result.ok;
+  };
+  const offerEchoUndo = (plan, before, context) => {
+    const current = echoQuickCurrent(context);
+    showToast(`${plan.label}${plan.note ? `. ${plan.note}` : ""}`, { actionLabel: "Undo", timeoutMs: 6000, isCurrent: current,
+      action: () => { void undoEchoQuick(plan, before, current); } });
+  };
+  // The Den's modeled batches restore their exact channel snapshot; nothing is sent.
+  const offerVirtualUndo = (label, before, context) => {
+    const Q = window.HomeApartmentQuick;
+    if (!Q || !before?.length) return;
+    const current = () => getRoomInspectorContext()?.engine === context.engine;
+    showToast(`${label} · modeled`, { actionLabel: "Undo", timeoutMs: 6000, isCurrent: current, action: () => {
+      for (const entry of before) changeVirtualFixture(Q.virtualRestorePatch(entry), entry.fixture_id);
+      const fixtures = getRoomInspectorContext()?.preview.fixtures || [];
+      const exact = before.every(entry => Q.virtualMatches(entry, fixtures.find(fixture => fixture.fixture_id === entry.fixture_id)?.state));
+      showToast(exact ? `${label} undone` : `${label} could not be undone exactly`, exact ? undefined : { tone: "error" });
+    } });
+  };
+  const setVirtualQuickPower = on => {
+    const context = getRoomInspectorContext();
+    if (!context || !virtualFixtureDocument) return false;
+    const before = window.HomeApartmentQuick?.virtualSnapshot(context.preview.fixtures) || null;
+    for (const fixture of virtualFixtureItems) changeVirtualFixture({ spotlight: { on }, downward: { on },
+      radials: aptUnifiedRadialPowerPatch(fixture.state?.radials || [], on) }, fixture.fixture_id);
+    offerVirtualUndo(`All ${on ? "on" : "off"}`, before, context);
+    return true;
   };
   const openNamedAimEditor = useCallback(id => {
     const context = getRoomInspectorContext();
@@ -9512,7 +9689,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             <window.AptPersonLabel track={track} screen={anchors.__person} />
           )}
           {track && !track.pos && <window.AptRoomChip track={track} />}
-          {cardDevice && !aimMode && (
+          {cardDevice && !aimMode && unifiedShell && window.AptEchoLightInspector && window.HomeApartmentQuick?.isEchoLightDevice(cardDevice) && (
+            <AptHomePanelSlot enabled={true} target={shellControlsHost}><window.AptEchoLightInspector
+              homeName={selectedSiteName} device={cardDevice} state={cardState} connection={connection} sim={simActive}
+              roomName={(model.zones || []).find(zone => zone.id === cardDevice.room_id)?.name}
+              engineered={cardDevice.fixture_kind === "engineered_gimbal_v1"}
+              onService={callSvc} onBack={() => setCardId(null)}
+              aimDisabledReason={apartmentDeviceControlsEnabled ? "" : "Aiming is unavailable for this room."}
+              onAim={() => { if (!apartmentDeviceControlsEnabled) return; setAimFixtureId(cardDevice.id); setCardId(null); setAimMode(true); onShowShellControls?.(); }}
+              onSetup={openUnifiedSetup} canSetup={apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)}
+            /></AptHomePanelSlot>
+          )}
+          {cardDevice && !aimMode && !(unifiedShell && window.AptEchoLightInspector && window.HomeApartmentQuick?.isEchoLightDevice(cardDevice)) && (
             <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost} className="apt-home-card"><window.AptControlCard
               device={cardDevice}
               state={cardState}
@@ -9584,12 +9772,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             <h2 className="apt-ui-title">{selectedSiteName}</h2><div className="apt-ui-sub">{(model.devices || []).filter(device => device.ha_entity_id).length} mapped devices</div>
             <div className="apt-ui-actions"><span className="apt-ui-badge" data-state={connection === "online" && apartmentDeviceControlsEnabled ? "current" : "unavailable"}>
               Home Assistant {connection === "online" && apartmentDeviceControlsEnabled ? "connected" : "unavailable"}</span></div>
-          </header><section className="apt-ui-section"><h3 className="apt-ui-heading">Quick</h3>
+          </header>{window.AptQuickControls ? <window.AptQuickControls chips={quickChips} block={quickBlock} busy={quickBusy}
+            onAll={on => { void runEchoQuick({ kind: "all", on }); }} onChip={entityId => { void runEchoQuick({ kind: "chip", entity_id: entityId }); }}>
             <button type="button" className="apt-ui-button" disabled={!apartmentDeviceControlsEnabled}
               onClick={() => { if (!apartmentDeviceControlsEnabled) return; setCardId(null); setAimMode(true); onShowShellControls?.(); }}>Aim a light</button>
-          </section>
+          </window.AptQuickControls> : <section className="apt-ui-section"><h3 className="apt-ui-heading">Quick</h3>
+            <button type="button" className="apt-ui-button" disabled={!apartmentDeviceControlsEnabled}
+              onClick={() => { if (!apartmentDeviceControlsEnabled) return; setCardId(null); setAimMode(true); onShowShellControls?.(); }}>Aim a light</button>
+          </section>}
           {window.AptRoomLightGroups && <window.AptRoomLightGroups groups={roomLightGroups} onSelect={selectRoomDevice}
-            onPower={setRoomLightsPower} disabledReason={roomPowerDisabledReason} />}
+            onPower={setRoomLightsPower} disabledReason={roomPowerDisabledReason} onHover={hoverRoomDevice} />}
           {namedAims}
           <section className="apt-ui-section"><h3 className="apt-ui-heading">Other devices</h3>
             <ul className="apt-ui-list">{(model.devices || []).filter(device => device.ha_entity_id && !device.ha_entity_id.startsWith("light.")).map(device => {
@@ -9615,10 +9807,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             directionalView={directionalDisplay}
             onShowComposer={() => changeFixtureInteractionMode("zones")}
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}
-            onPatch={changeVirtualFixture} onPatchAll={on => {
-              for (const fixture of virtualFixtureItems) changeVirtualFixture({ spotlight: { on }, downward: { on },
-                radials: aptUnifiedRadialPowerPatch(fixture.state?.radials || [], on) }, fixture.fixture_id);
-            }} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
+            onPatch={changeVirtualFixture} onPatchAll={setVirtualQuickPower} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
             canUndo={!!virtualAimHistoryRef.current.undo.length} canRedo={!!virtualAimHistoryRef.current.redo.length}
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
             canSetup={apartmentPlacementControlsEnabled}

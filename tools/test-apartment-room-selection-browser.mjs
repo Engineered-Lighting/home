@@ -299,24 +299,10 @@ test('real authored room selection keeps native input ownership and never dispat
       return rect && rect.width > 0 ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
     });
     const barShown = () => page.evaluate(() => document.querySelector('[data-apt-aim-bar]')?.hidden === false);
-    const rigPose = () => page.evaluate(() => { const pose = window.__APT_ENGINE.rig.snapshotPose();
-      return { az: pose.az, el: pose.el, zoom: pose.zoom, previewAz: pose.previewAz, previewEl: pose.previewEl }; });
     await showReticle();
     const beforeAim = await descriptor(fixtures[0].fixture_id);
-    await check('a native fixture-body drag selects that fixture but neither aims, proposes nor orbits', async () => {
-      const other = fixtures[1], otherBefore = await descriptor(other.fixture_id), poseBefore = await rigPose();
-      const start = await canvasPoint('fixture', other.fixture_id), end = await canvasPoint('surface', null, start); assert.ok(start && end);
-      await page.mouse.move(start.x, start.y); await page.mouse.down(); await expectSelected(other);
-      await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up(); await expectSelected(other);
-      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      assert.deepEqual(await descriptor(other.fixture_id), otherBefore, 'the dragged fixture keeps its exact aim');
-      assert.deepEqual(await descriptor(fixtures[0].fixture_id), beforeAim, 'no other fixture moves');
-      assert.deepEqual(await rigPose(), poseBefore, 'the body drag did not orbit');
-      assert.equal(await barShown(), false, 'the body drag proposes nothing');
-      await blur(); await page.keyboard.press('p'); await expectSelected(fixtures[0]);
-      assert.equal(await fixtureInspector().getByRole('tab', { name: 'Aim', exact: true }).getAttribute('aria-selected'), 'true');
-      return { fixture_id: other.fixture_id, pose: poseBefore, aim_unchanged: true, orbit: false };
-    });
+    // The native fixture-body drag (selects; no aim, orbit or proposal) runs in
+    // test-apartment-aim-wiring-browser.mjs, so this proof keeps its 145 s budget.
     await check('Escape cancels an actual active aim before the next Escape clears selection', async () => {
       const start = await reticlePoint(), end = await canvasPoint('surface', null, start); assert.ok(start && end);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 });

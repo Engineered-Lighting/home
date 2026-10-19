@@ -800,7 +800,9 @@ test('unified shell keeps the real room, private controls and one chat controlle
       return rect && rect.width > 0 ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
     });
     async function dragAndUndo(focusCase, expectedFocus) {
-      await bodyPressSelects();
+      // A press on the body selects the dragged fixture when it isn't already selected.
+      if (await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).count()
+          && await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue() !== directId) await bodyPressSelects();
       // A canvas press deliberately ends inspector focus. Give it back to the
       // focus case's control, so the reticle drag below starts from it as the
       // original drag did.

@@ -2340,6 +2340,15 @@ function aptShellInsets(host) {
   if (cover.left <= view.left + 1 && cover.right >= view.right - 1) return { bottom: view.bottom - cover.top };
   return cover.left > view.left + view.width / 2 ? { right: view.right - cover.left } : { left: cover.right - view.left };
 }
+// The presentation asks every frame; measure the shell at most every 250 ms.
+function aptShellInsetsReader(host) {
+  let measuredAt = -Infinity, value = null;
+  return () => {
+    const now = performance.now();
+    if (now - measuredAt > 250) { measuredAt = now; value = aptShellInsets(host); }
+    return value;
+  };
+}
 
 // Distance and tilt from the registered optical origin, or from the socket
 // display point when none is registered, as the room chip measures them.
@@ -5837,7 +5846,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         if (!layer || !current()) { layer?.dispose(); retire(owned); return; }
         owned.layer = layer;
         owned.presentation = api.createAimPresentation({ layer, host, isCurrent: current,
-          getInsets: () => aptShellInsets(host), onRetire: () => retire(owned),
+          getInsets: aptShellInsetsReader(host), onRetire: () => retire(owned),
           // Repair's canonical beam trace, once the engine has one; until then nothing is called blocked.
           traceBeam: typeof engine.traceBeam === "function" ? (origin, point) => engine.traceBeam(origin, point) : undefined });
         if (!current()) { retire(owned); return; }
@@ -5872,6 +5881,25 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   [aimPresentation, virtualFixtureControlsOpen, virtualFixtureId, virtualFixturePreview]);
   const aimSelectedScope = aimSelectedDescriptor && aimProposals ? aimProposals.scopeFromDescriptor("victoria", aimSelectedDescriptor) : null;
   const aimSelectedProposal = aimSelectedScope ? aimProposals.current(aimSelectedScope) : null;
+  // One stable overlay element: the host re-renders often, and each overlay
+  // render re-syncs and re-places every label. Callbacks reach the current
+  // handlers through aimActionsRef, so they never need to change.
+  const aimOverlayCallbacks = useMemo(() => ({
+    onSelect: id => aimActionsRef.current.select(id), onHover: id => setHoverFixtureId(id),
+    onAimStart: info => aimActionsRef.current.start(info), onPropose: request => aimActionsRef.current.propose(request),
+    onSet: request => aimActionsRef.current.setProposal(request), onDiscard: request => aimActionsRef.current.discard(request),
+  }), []);
+  const aimOverlaySelectedId = virtualFixtureControlsOpen ? virtualFixtureId : null;
+  const aimOverlayPillId = directionalDisplay ? virtualFixtureId : null;
+  const aimOverlayLimits = selectedVirtualFixture?.limits || null;
+  const aimOverlayAim = useMemo(() => aimSelectedDescriptor && fixtureInteractionMode === "spot"
+    ? { descriptor: aimSelectedDescriptor, limits: aimOverlayLimits, namedAims: [] } : null,
+  [aimSelectedDescriptor, fixtureInteractionMode, aimOverlayLimits]);
+  const aimOverlayElement = useMemo(() => aimPresentation && window.AptRoomOverlay
+    ? <window.AptRoomOverlay presentation={aimPresentation} store={aimProposals} siteId="victoria" fixtures={aimOverlayFixtures}
+      selectedId={aimOverlaySelectedId} hoverId={hoverFixtureId} pillFixtureId={aimOverlayPillId} aim={aimOverlayAim} {...aimOverlayCallbacks} />
+    : null,
+  [aimPresentation, aimProposals, aimOverlayFixtures, aimOverlaySelectedId, hoverFixtureId, aimOverlayPillId, aimOverlayAim, aimOverlayCallbacks]);
 
   // Proposals clear on an authority change and retire with the scope their
   // fence names. They are never persisted.
@@ -5953,7 +5981,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // proposal when focus is on no control; Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z
   // step the selected light's aim history. Text fields, Setup's editor and
   // any overlay above the Apartment keep their own keys.
-  aimActionsRef.current = { propose: proposeAim, start: startAimFromRoom,
+  aimActionsRef.current = { propose: proposeAim, start: startAimFromRoom, select: id => selectVirtualFixture(id),
+    setProposal: setAimProposal, discard: discardAimProposal,
     enabled: () => !!(open && selectedSiteId === "victoria" && virtualFixtureControlsOpen && apartmentSceneControlsEnabled
       && !editing && !radialGestureOwnerRef.current && !virtualAimGestureRef.current?.readback().active
       && !aimPresentationRef.current?.readback().dragging),
@@ -8965,14 +8994,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           spotName={window.AptSpotPendingDot && aimSelectedProposal && fixtureInteractionMode !== "spot" ? "Spot (aim pending)" : null} />,
         hostRef.current)}
 
-      {aimPresentation && hostRef.current && window.AptRoomOverlay && ReactDOM.createPortal(
-        <window.AptRoomOverlay presentation={aimPresentation} store={aimProposals} siteId="victoria"
-          fixtures={aimOverlayFixtures} selectedId={virtualFixtureControlsOpen ? virtualFixtureId : null} hoverId={hoverFixtureId}
-          pillFixtureId={directionalDisplay ? virtualFixtureId : null}
-          aim={aimSelectedDescriptor && fixtureInteractionMode === "spot"
-            ? { descriptor: aimSelectedDescriptor, limits: selectedVirtualFixture?.limits || null, namedAims: [] } : null}
-          onSelect={id => selectVirtualFixture(id)} onHover={setHoverFixtureId} onAimStart={startAimFromRoom}
-          onPropose={proposeAim} onSet={setAimProposal} onDiscard={discardAimProposal} />, hostRef.current)}
+      {aimOverlayElement && hostRef.current && ReactDOM.createPortal(aimOverlayElement, hostRef.current)}
       {tapAim && aimPresentation && hostRef.current && ReactDOM.createPortal(
         <div role="status" data-apt-tap-aim-hint="" style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
           zIndex: 7, display: "flex", alignItems: "center", gap: 8, padding: "5px 6px 5px 12px", borderRadius: 10,

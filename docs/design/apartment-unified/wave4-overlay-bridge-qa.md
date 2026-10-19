@@ -26,14 +26,24 @@ results do not clear the desktop frame-cost qualification above. The measured
 SwiftShader diagnosis, limits and explicit profile commands are documented in
 `overlay-bridge-review.md`; hosted verification remains pending.
 
-The functional profile additionally uses unpaced real RAFs and a GPU completion
-barrier after each 120-RAF warm-up, including context checks and an explicit
-post-barrier elapsed check against the unchanged 25-second limit. Desktop
-benchmark pacing and its warm-up barrier behavior remain unchanged. Local
-flag-only timing showed no material gain; this is a controlled Linux pacing
-test whose hosted benefit is unproven. Live Node phase/warm-up/window snapshots
-now survive global browser closure. These diagnostics do not clear the retained
-desktop performance qualification or establish composited pixel quality.
+The unpaced-RAF trial also failed the hosted global deadline, so that flag is
+removed. The current functional profile keeps the three original sustained
+120-RAF dot/label/orbit checks with virtual spotlight volumes on, adding real
+volume-draw and depth-pass witnesses. Only its other nine warm-ups and its
+before/active/after bridge timing windows use the existing native spotlight
+display checkbox off. Exact fixture descriptors, channels, targets, bindings
+and the registration hash are checked across every toggle; visibility is
+recorded and asserted in every warm-up and sample. This hidden state does not
+verify R01 or Den interactions. Desktop benchmarks remain full-scene, DPR 1,
+display on and browser-default paced throughout.
+
+Functional GPU completion barriers retain context checks and an explicit
+post-barrier elapsed check against the unchanged 25-second limit. Live Node
+phase/warm-up/window snapshots survive global browser closure. The source and
+timing history in `overlay-bridge-review.md` includes the rejected pacing trial
+and the single-variable display-off probe. Focused bridge timings do not clear
+the retained failed full-scene performance qualification or establish composited
+pixel quality; F01 remains partial and the PR remains in draft.
 
 ## Sources and receipts
 

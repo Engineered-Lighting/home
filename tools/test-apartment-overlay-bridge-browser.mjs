@@ -56,7 +56,6 @@ function browserOptions(){
   const args=['--disable-background-networking','--renderer-process-limit=2','--js-flags=--max-old-space-size=512'];
   if(process.platform==='win32')args.unshift('--use-angle=d3d11');
   else if(process.platform==='linux')args.unshift('--use-gl=angle','--use-angle=swiftshader-webgl','--enable-unsafe-swiftshader');
-  if(profile==='functional')args.push('--disable-frame-rate-limit');
   return {headless:true,args,...(process.platform==='linux'?{channel:'chromium'}:!installed?{channel:'msedge'}:{})};
 }
 const median=values=>{const sorted=[...values].sort((a,b)=>a-b);return sorted.length%2?sorted[(sorted.length-1)/2]:(sorted[sorted.length/2-1]+sorted[sorted.length/2])/2;};
@@ -76,10 +75,12 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
   initRegistration(privateRoot,authoredDocument(readActiveBinding(packs),Core),{contentPacksDir:packs});
   const protectedFiles=[echo,victoria].flatMap(item=>Object.keys(item.files).map(name=>path.join(packs,item.site,item.revision,name)));
   protectedFiles.push(path.join(packs,'echo/ACTIVE'),path.join(packs,'victoria/ACTIVE'),path.join(packs,'index.json'));
+  protectedFiles.push(path.join(privateRoot,'registration.json'));
   const protectedHashes=Object.fromEntries(protectedFiles.map(file=>[file,hash(fs.readFileSync(file))]));
   const sources=publicSources(SRC),receipt={schema:'home-apartment-overlay-bridge-authored-browser-1',authored_room:true,real_renderer:true,
     household_data:false,physical_commands:0,camera_sessions:0,model_sessions:0,survey_writes:0,screenshots:false,
-    source_phase:phase,proof_profile:profile,proof_pacing:profile==='functional'?'unthrottled-real-raf':'browser-default',configured_viewport:viewport,configured_device_scale_factor:deviceScaleFactor,
+    source_phase:phase,proof_profile:profile,proof_pacing:'browser-default',configured_viewport:viewport,configured_device_scale_factor:deviceScaleFactor,
+    fixture_display_scope:profile==='functional'?'on-for-sustained-orbit-off-for-bridge-sampling':'on-throughout',
     performance_scope:profile==='functional'?'functional-viewport-capacity-only':'desktop-benchmark-requires-paired-review',
     engine_source:baselineEngine?{mode:'public-baseline-engine-only',commit:baselineCommit,sha256:hash(baselineEngine),other_sources:'current-worktree'}
       :{mode:'candidate-worktree',sha256:hash(fs.readFileSync(path.join(SRC,'home-3d/engine.js')))},
@@ -148,6 +149,34 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     await page.getByRole('group',{name:'Home',exact:true}).getByRole('button',{name:'Victoria',exact:true}).click();
     await page.waitForFunction(()=>window.__HOME_APARTMENT_SITE_API?.readback().phase==='ready'&&window.__APT_ENGINE?.siteId==='victoria');
     markStartup('victoria-ready');
+    await page.waitForFunction(()=>window.__APT_ENGINE?.overlay?.virtualFixturesReadback?.().fixture_count>0);
+    const fixtureSnapshot=()=>page.evaluate(()=>{
+      const overlay=window.__APT_ENGINE.overlay,r=overlay.virtualFixturesReadback();
+      return {revision:r.revision,digest:r.digest,fixture_count:r.fixture_count,fixtures:r.fixtures,
+        descriptors:r.fixtures.map(item=>overlay.virtualFixtureInteractionDescriptor(item.fixture_id))};
+    });
+    const fixtureBefore=await fixtureSnapshot();
+    assert.equal(fixtureBefore.fixture_count,4);
+    const registrationFile=path.join(privateRoot,'registration.json');
+    const assertFixtureState=async()=>{
+      assert.deepEqual(await fixtureSnapshot(),fixtureBefore,'display visibility must preserve exact fixtures, channels, targets and bindings');
+      assert.equal(hash(fs.readFileSync(registrationFile)),protectedHashes[registrationFile],'display visibility must preserve the authoritative authored registration');
+    };
+    receipt.fixture_display={initial_snapshot_sha256:hash(Buffer.from(JSON.stringify(fixtureBefore))),fixture_count:fixtureBefore.fixture_count,toggles:[]};
+    const setFixtureDisplay=async(visible,reason)=>{
+      if(profile!=='functional'){assert.equal(await page.evaluate(()=>window.__APT_ENGINE.overlay.virtualFixturesReadback().visible),true);return;}
+      checkpoint('fixture display '+(visible?'on':'off')+' '+reason);
+      const before=await page.evaluate(()=>window.__APT_ENGINE.overlay.virtualFixturesReadback().visible);
+      if(before!==visible){
+        await page.getByRole('button',{name:'Layers',exact:true}).click();
+        await page.getByRole('checkbox',{name:'Show virtual spotlights layer',exact:true}).setChecked(visible);
+        await page.waitForFunction(value=>window.__APT_ENGINE.overlay.virtualFixturesReadback().visible===value,visible);
+        await page.getByRole('button',{name:'Close layers',exact:true}).click();
+      }
+      await assertFixtureState();
+      receipt.fixture_display.toggles.push({visible,reason,changed:before!==visible,fixture_document_channels_and_bindings_unchanged:true});
+    };
+    await setFixtureDisplay(false,'initial bridge sampling');
     receipt.graphics=await page.evaluate(()=>{const engine=window.__APT_ENGINE,renderer=engine.renderer,gl=renderer.getContext(),debug=gl.getExtension('WEBGL_debug_renderer_info');return {gpu:engine.gpu,webglVendor:gl.getParameter(gl.VENDOR),webglRenderer:gl.getParameter(gl.RENDERER),unmaskedVendor:debug?gl.getParameter(debug.UNMASKED_VENDOR_WEBGL):null,pixelRatio:renderer.getPixelRatio(),devicePixelRatio,canvas:[renderer.domElement.width,renderer.domElement.height],cssCanvas:[renderer.domElement.clientWidth,renderer.domElement.clientHeight],contextLost:gl.isContextLost(),viewport:[innerWidth,innerHeight]}});
     assert.equal(receipt.graphics.contextLost,false);
     assert.deepEqual(receipt.graphics.viewport,[viewport.width,viewport.height]);
@@ -216,7 +245,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
           if(settled)return;settled=true;clearTimeout(timeout);cancelAnimationFrame(raf);off();
           const warmup={id,stage,result,target_rafs:120,observed_rafs:ticks,renderer_frames:p.engine.renderer.info.render.frame-firstFrame,
             elapsed_ms:performance.now()-started,max_raf_gap_ms:maxGap,visibility:document.visibilityState,mode:p.engine.modes.mode,
-            canvas:[p.engine.renderer.domElement.width,p.engine.renderer.domElement.height],performance:p.engine.performanceDiagnostics(),gpu_completion:gpuCompletion,recent_stats:stats};
+            canvas:[p.engine.renderer.domElement.width,p.engine.renderer.domElement.height],performance:p.engine.performanceDiagnostics(),virtual_spotlights_visible:p.engine.overlay.virtualFixturesReadback().visible,gpu_completion:gpuCompletion,recent_stats:stats};
           p.warmups.push(warmup);report('complete',{warmup});
           if(result==='passed')resolve();else reject(Error(result==='context-lost'?'GPU context lost during warmup':'120-frame warmup deadline'));
         };
@@ -238,7 +267,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
         report('start');
         raf=requestAnimationFrame(step);
       });
-      p.stats=()=>new Promise((resolve,reject)=>{const rows=[],timeout=setTimeout(()=>{off();reject(Error('production stats deadline'))},10000);const off=p.engine.on('stats',value=>{rows.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,pixelRatio:value.pixelRatio,calls:value.calls,tris:value.tris,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,...(p.expectActive?{dotDraws:p.timedDraws,labelHidden:p.label.hidden,dotVisible:p.layer.group.children[0]?.visible,layerAttached:!!p.layer.group.parent,projection:p.layer.project(p.point)}:{})});if(rows.length===4){clearTimeout(timeout);off();resolve(rows)}})});
+      p.stats=()=>new Promise((resolve,reject)=>{const rows=[],timeout=setTimeout(()=>{off();reject(Error('production stats deadline'))},10000);const off=p.engine.on('stats',value=>{rows.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,pixelRatio:value.pixelRatio,calls:value.calls,tris:value.tris,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,virtual_spotlights_visible:p.engine.overlay.virtualFixturesReadback().visible,...(p.expectActive?{dotDraws:p.timedDraws,labelHidden:p.label.hidden,dotVisible:p.layer.group.children[0]?.visible,layerAttached:!!p.layer.group.parent,projection:p.layer.project(p.point)}:{})});if(rows.length===4){clearTimeout(timeout);off();resolve(rows)}})});
     },profile==='functional');
     for(const mode of ['points','splat','mesh']){
       checkpoint(mode+' mode and empty warm start');
@@ -251,10 +280,11 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       checkpoint(mode+' before stats start');
       const before=await page.evaluate(()=>window.__overlayBridgeProof.stats());recordWindow(mode,'before',before);
       if(phase!=='candidate'){
-        for(const row of before){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);}
+        for(const row of before){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);assert.equal(row.virtual_spotlights_visible,true);}
         receipt.performance.push({mode,orbit:'snapHome(0)',quality:'maxFidelity',warmup_renderer_ticks:120,empty:before});
         continue;
       }
+      await setFixtureDisplay(true,mode+' sustained orbit');
       await check(mode+' dot and label follow canonical fixture while orbiting',async()=>{
         const result=await page.evaluate(async()=>{
           const p=window.__overlayBridgeProof,controller=new AbortController();p.controller=controller;
@@ -262,20 +292,32 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
           p.anchor=p.layer.addAnchor({point_m:p.point,label:'Authored fixture overlay'});p.label=p.host.querySelector('.apt-ui-overlay-label');
           const originalLabel=p.label;p.anchor.update({label:'Updated authored label'});const anchorIdentity=originalLabel===p.host.querySelector('.apt-ui-overlay-label')&&originalLabel.textContent==='Updated authored label';p.anchor.update({label:'Authored fixture overlay'});
           const dot=p.layer.group.children[0],originalBeforeRender=dot.onBeforeRender;let draws=0;dot.onBeforeRender=function(...args){draws++;originalBeforeRender?.apply(this,args)};
-          const first=p.layer.project(p.point);p.engine.rig.stepAzimuth(1);await p.warm('orbit');dot.onBeforeRender=originalBeforeRender;
+          const volumeWitnesses=[];
+          p.engine.overlay.virtualFixturesGroup.traverseVisible(node=>{
+            if(node.name!=='modeled-aim-volume')return;
+            const witness={node,original:node.onBeforeRender,draws:0};volumeWitnesses.push(witness);
+            node.onBeforeRender=function(...args){witness.draws++;witness.original?.apply(this,args)};
+          });
+          const depthBefore=p.engine.overlay.virtualFixturesReadback().depth.passes;
+          const first=p.layer.project(p.point);p.engine.rig.stepAzimuth(1);
+          try{await p.warm('orbit')}finally{dot.onBeforeRender=originalBeforeRender;for(const witness of volumeWitnesses)witness.node.onBeforeRender=witness.original;}
           const ancestry=[];for(let parent=dot;parent;parent=parent.parent)ancestry.push({type:parent.type,name:parent.name,visible:parent.visible,layers:parent.layers.mask});
           const world=dot.getWorldPosition(dot.position.clone()),view=world.clone().applyMatrix4(p.engine.camera.matrixWorldInverse),clip=world.clone().project(p.engine.camera);
-          const draw={draws,ancestry,world:world.toArray(),view:view.toArray(),clip:clip.toArray(),cameraLayers:p.engine.camera.layers.mask,frustumCulled:dot.frustumCulled,materialVisible:dot.material.visible,materialOpacity:dot.material.opacity};
+          const fixtureReadback=p.engine.overlay.virtualFixturesReadback();
+          const draw={draws,ancestry,world:world.toArray(),view:view.toArray(),clip:clip.toArray(),cameraLayers:p.engine.camera.layers.mask,frustumCulled:dot.frustumCulled,materialVisible:dot.material.visible,materialOpacity:dot.material.opacity,
+            virtualSpotlightsVisible:fixtureReadback.visible,spotlightVolumeDraws:volumeWitnesses.map(witness=>witness.draws),depthPasses:fixtureReadback.depth.passes-depthBefore};
           const last=p.layer.project(p.point),label=p.label;return {first,last,anchorIdentity,draw,label:{x:parseFloat(label.style.left),y:parseFloat(label.style.top),hidden:label.hidden,text:label.textContent},position:p.layer.group.children[0].position.toArray(),mode:p.engine.modes.mode,hostUnchanged:p.engine.picking.getHost()===p.host,engineUnchanged:window.__APT_ENGINE===p.engine};
         });
         (receipt.overlay_draw_diagnostics ||= []).push({mode,...result.draw});
         assert.ok(result.first&&result.last);assert.ok(Math.hypot(result.last.x-result.first.x,result.last.y-result.first.y)>0);
         assert.ok(result.draw.draws>0,'the actual canonical dot must reach the real renderer, not only its DOM label');
+        assert.equal(result.draw.virtualSpotlightsVisible,true);assert.ok(result.draw.spotlightVolumeDraws.some(draws=>draws>0),'actual spotlight volume rendering must coexist with the bridge dot');assert.ok(result.draw.depthPasses>0);
         assert.equal(result.label.hidden,false);assert.equal(result.label.text,'Authored fixture overlay');assert.deepEqual(result.position,[.6,.9,2.3]);
         assert.equal(result.anchorIdentity,true);
         assert.ok(Math.abs(result.label.x-result.last.x)<.01&&Math.abs(result.label.y-result.last.y)<.01);assert.equal(result.mode,mode);assert.equal(result.hostUnchanged,true);assert.equal(result.engineUnchanged,true);
         return result;
       });
+      await setFixtureDisplay(false,mode+' bridge timing windows');
       // Return to the exact same orbit used by the baseline before collecting
       // active samples. Warmup RAFs finish before production stats sampling.
       await page.evaluate(async()=>{const p=window.__overlayBridgeProof;p.engine.rig.snapHome(0);await p.warm('active')});
@@ -288,17 +330,19 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       await page.evaluate(async()=>{const p=window.__overlayBridgeProof;p.controller.abort();await p.warm('after')});
       checkpoint(mode+' after stats start');
       const after=await page.evaluate(()=>window.__overlayBridgeProof.stats());recordWindow(mode,'after',after);
-      for(const rows of [before,active,after])for(const row of rows){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);}
+      for(const rows of [before,active,after])for(const row of rows){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);assert.equal(row.virtual_spotlights_visible,profile!=='functional');}
       receipt.performance.push({mode,orbit:'snapHome(0)',quality:'maxFidelity',warmup_renderer_ticks:120,before,active,after,
         comparisons:['p95','renderP95'].map(key=>noiseComparison(before,active,after,key))});
     }
     if(phase!=='candidate'){
+      await assertFixtureState();
       await page.evaluate(()=>window.__overlayBridgeProof.engine.dispose());
       assert.deepEqual(receipt.forbidden,[]);assert.deepEqual(receipt.missing_code,[]);assert.deepEqual(receipt.errors,[]);
       assert.equal(receipt.served['home-3d/engine.js'].sha256,hash(baselineEngine));
       receipt.functional_result='not-run-baseline-engine-source';receipt.performance_result='baseline-samples-recorded';
       return;
     }
+    await setFixtureDisplay(true,'canonical pick and lifetime checks');
     await check('canonical scan pick returns exact point, normal and native surface name',async()=>{
       const result=await page.evaluate(async()=>{
         const p=window.__overlayBridgeProof;await p.engine.modes.preload(['collision']);const controller=new AbortController();
@@ -320,6 +364,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       const result=await page.evaluate(async()=>{const p=window.__overlayBridgeProof,controller=new AbortController();let fail=false;const layer=await p.engine.createUiOverlayLayer({host:p.host,signal:controller.signal,isCurrent:()=>{if(fail)throw Error('Authored owner error');return true}});layer.addAnchor({point_m:p.point,label:'Owner failure'});fail=true;const projected=layer.project(p.point),frame=p.engine.renderer.info.render.frame;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));return {projected,retired:layer.group.parent===null,rendererAdvanced:p.engine.renderer.info.render.frame>frame}});
       assert.deepEqual(result,{projected:null,retired:true,rendererAdvanced:true});return result;
     });
+    await assertFixtureState();
     await check('engine lifetime disposal clears layers first and leaves borrowed resources with their owner',async()=>{
       const result=await page.evaluate(async()=>{const p=window.__overlayBridgeProof,THREE=await import('/vendor/three-0.180.0/three.module.js'),controller=new AbortController();let geometryDisposals=0,materialDisposals=0;
         const layer=await p.engine.createUiOverlayLayer({host:p.host,signal:controller.signal,isCurrent:()=>true}),geometry=new THREE.BoxGeometry(.1,.1,.1),material=new THREE.MeshBasicMaterial();geometry.addEventListener('dispose',()=>geometryDisposals++);material.addEventListener('dispose',()=>materialDisposals++);layer.group.add(new THREE.Mesh(geometry,material));layer.addAnchor({point_m:p.point,label:'Engine lifetime'});
@@ -330,7 +375,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     assert.deepEqual(receipt.forbidden,[]);assert.deepEqual(receipt.missing_code,[]);assert.deepEqual(receipt.errors,[]);
     const warmups=await page.evaluate(()=>window.__overlayBridgeProof.warmups);
     assert.equal(receipt.checks.length,9);assert.equal(warmups.length,12);
-    for(const warmup of warmups){assert.equal(warmup.result,'passed');assert.equal(warmup.observed_rafs,120);assert.ok(warmup.renderer_frames>=120);assert.equal(warmup.performance.mode,'maxFidelity');assert.equal(warmup.performance.qualityLevel,'maximum');if(profile==='functional'){assert.equal(warmup.gpu_completion.method,'finish');assert.equal(warmup.gpu_completion.context_lost_before,false);assert.equal(warmup.gpu_completion.context_lost_after,false);assert.ok(warmup.elapsed_ms<25000);}}
+    for(const warmup of warmups){assert.equal(warmup.result,'passed');assert.equal(warmup.observed_rafs,120);assert.ok(warmup.renderer_frames>=120);assert.equal(warmup.performance.mode,'maxFidelity');assert.equal(warmup.performance.qualityLevel,'maximum');assert.equal(warmup.virtual_spotlights_visible,profile!=='functional'||warmup.stage==='orbit');if(profile==='functional'){assert.equal(warmup.gpu_completion.method,'finish');assert.equal(warmup.gpu_completion.context_lost_before,false);assert.equal(warmup.gpu_completion.context_lost_after,false);assert.ok(warmup.elapsed_ms<25000);}}
     receipt.functional_result='passed';receipt.performance_result=receipt.performance.every(row=>row.comparisons.every(item=>item.interpretation==='within-observed-baseline-variability'))?'within-observed-baseline-variability':'requires-review';
   }
   try{await Promise.race([proof(),deadline]);receipt.result='passed';}

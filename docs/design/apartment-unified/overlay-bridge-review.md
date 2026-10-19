@@ -158,7 +158,7 @@ rounded to 0 ms at the browser's timing precision. Receipts:
 - `.tmp/apartment-overlay-bridge-diagnosis/run-1792367750485-candidate/receipt.json`
 - `.tmp/apartment-overlay-bridge-diagnosis/run-1792367857492-candidate/receipt.json`
 
-The functional profile now selects this unpaced real-RAF execution explicitly.
+The controlled pacing profile selected unpaced real-RAF execution explicitly.
 [Chromium's switch definition](https://chromium.googlesource.com/chromium/src/+/HEAD/components/viz/common/switches.cc)
 states that `--disable-frame-rate-limit` removes scheduler begin-frame limits
 and implies disabled GPU vsync. After each functional 120-RAF warm-up,
@@ -169,11 +169,11 @@ false pass. This establishes completion, not composited pixel quality. The
 desktop benchmark retains its browser-default pacing and omits this barrier.
 No profile dimension, quality, count or deadline is reduced further.
 
-Node now retains named warm-up start/progress/completion checkpoints and each
+Node retains named warm-up start/progress/completion checkpoints and each
 completed timing window immediately. A global browser close preserves those
 records, including the latest 30-RAF progress checkpoint, instead of erasing
-the only warm-up diagnostics. This is a controlled final Linux pacing test;
-hosted benefit remains unproven, and performance acceptance remains
+the only warm-up diagnostics. This was a controlled Linux pacing test;
+performance acceptance remained
 `requires-review` with F01 partial and the PR in draft.
 
 The exact updated official harness passed all nine stages in 26.44 seconds on
@@ -189,6 +189,72 @@ longer erases progress:
 That expected diagnostic failure is not functional acceptance. Both browsers
 and servers were closed, and the throwaway harnesses were removed. These local
 results leave the next hosted pacing result unproven.
+
+## Focused bridge coverage after the pacing trial
+
+Hosted run `39178931830` at `e65b81a8` rejected the pacing hypothesis as a CI
+solution. It again reached the global 145-second deadline after ten complete
+warm-ups; Mesh's eleventh, active warm-up had reached 60 of 120 RAFs. Completed
+warm-ups took 9.78 to 12.23 seconds, and GPU completion barriers took 0 to
+0.1 ms. Seven timing windows and all three sustained dot/orbit checks completed.
+The live receipt preserved that precise progress. This full-scene failure
+remains evidence of outstanding performance qualification.
+
+The existing native **Show virtual spotlights layer** checkbox controls
+presentation only. Its existing renderer setter changes the equipment group's
+visibility. It preserves the fixture document, descriptors, target bindings and
+channel states; it does not turn off a lighting channel or issue a command.
+The ordinary UI also withdraws fixture picking/aim gestures and clears related
+selection while hidden. Tests start idle and do not claim that this hidden
+state verifies R01 or Den interaction behavior.
+
+A single-variable authored SwiftShader probe unchecked that native control
+while preserving all nine stages and twelve 120-RAF warm-ups. It passed in
+28.11 seconds, receipt
+`.tmp/apartment-overlay-bridge-display-probe/run-1792368574368-candidate/receipt.json`.
+The exact four fixtures, document revision/digest, channels and authoritative
+registration file stayed unchanged. Cloud/Mesh draw calls fell from 76 to
+21/22; the extra equipment depth render disappeared. This isolates substantial
+independent volumetric display work. It does not clear the failed full-scene
+performance result, and its all-hidden orbit coverage is superseded below.
+
+The current functional profile retains each original sustained 120-RAF
+dot/label/orbit check with virtual spotlights **on**, once in Cloud, Photo and
+Mesh. Temporary observers chain the actual spotlight-volume callbacks and
+prove volume draws plus depth passes alongside the canonical bridge dot;
+functional GPU completion checks remain required. Only the other nine
+warm-ups and the functional before/active/after bridge timing windows use the
+native display control off. Thus all original assertions, nine stages, twelve
+120-RAF warm-ups, modes, quality, resolution and deadlines remain present.
+
+Every native visibility toggle checks the exact fixture descriptors, all
+channel states, targets, binding identities and registration-file hash against
+the initial snapshot. Every warm-up and timing sample records and asserts its
+expected visibility. The control is restored on before canonical picking and
+lifetime tests. Desktop source-paired benchmarks remain DPR 1 with the full
+fixture display on throughout; their scene is not simplified.
+
+The ineffective unpaced flag is removed. Browser-default pacing, the existing
+DPR 0.5 functional profile, GPU completion barriers and durable diagnostics are
+retained. This is focused bridge functional coverage with sustained full-scene
+coexistence, not a successful full-scene performance benchmark. F01 stays
+partial, performance stays open and the PR stays in draft.
+
+The exact updated official harness passed all nine stages in 48.55 seconds on
+Windows D3D11, receipt
+`.tmp/apartment-overlay-bridge-browser/run-1792368749937-candidate/receipt.json`.
+A controlled substitution of the documented SwiftShader fallback passed the
+same stronger harness in 52.99 seconds, receipt
+`.tmp/apartment-overlay-bridge-display-proof/run-1792368825978-candidate/receipt.json`.
+Each run recorded the three on-display orbit warm-ups and nine off-display
+warm-ups, all at 120 RAFs, plus eight native visibility toggles with exact
+fixture state preserved. In every mode, the bridge dot and each of the four
+spotlight volumes drew 120 times, with 120 equipment depth passes. All nine
+timing windows recorded the display off; maximum fidelity, GPU completion and
+the unchanged resource profile remained asserted. No forbidden request,
+missing code or page error occurred. The browsers/servers were closed and the
+throwaway harnesses were removed. These controlled workstation results do not
+establish hosted headroom or resolve the retained full-scene performance gap.
 
 Run the default functional check with no source-phase override:
 

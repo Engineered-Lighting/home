@@ -133,7 +133,7 @@ function destinationKey(destination) {
 function HomeApartmentAim({
   model, registry, states, sim, connection, engine, fixtureId, onFixtureId,
   destination, onDestination, onModel, onDirty, onStateReadback, onClose, mobile,
-  onSave, saveStatus, saving, isControlCurrent,
+  onSave, saveStatus, saving, isControlCurrent, aimRows = null,
 }) {
   const A = window.HomeApartmentAiming;
   const fixtures = useMemo(() => (model.devices || []).filter((d) => window.HomeApartmentData.isCeilingLight(d)), [model]);
@@ -713,6 +713,9 @@ function HomeApartmentAim({
       </section>}
 
       {fixture?.fixture_kind === A.ENGINEERED_KIND && tab === "aim" && <>
+        {/* The shared aim path and named aims (home-apartment-named-aim.jsx);
+            the destination panel below stays until APT-L01 retires it. */}
+        {aimRows}
         {profileResolution.show_current && <section data-apt-current-profile="1" style={{ border: "1px solid var(--hg-border)", borderRadius: 13,
           padding: 12, display: "grid", gap: 11, background: "var(--hg-bg-2)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

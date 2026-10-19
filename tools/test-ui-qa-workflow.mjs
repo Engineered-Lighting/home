@@ -107,7 +107,7 @@ test('all original diagnostics and every worker receipt upload exactly once unde
     'apartment-touched-authored-browser-${{ matrix.shard }}-of-' + SHARDS]);
   assert.deepEqual([...touched.at(-2).matchAll(/^            (\S.*)$/gm)].map(match => match[1]), [receiptPath]);
   assert.deepEqual(paths.sort(), ['.tmp/apartment-home-shell-browser/run-*/*receipt.json', '.tmp/apartment-home-shell-browser/run-*/*.png',
-    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme', 'aim-wiring'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
+    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme', 'aim-wiring', 'named-aims-shell'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
     '.tmp/apartment-aim-theme-browser/run-*/*.png'].sort());
 });
 

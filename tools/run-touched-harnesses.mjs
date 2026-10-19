@@ -117,6 +117,9 @@ const MAP = [
     ["test-apartment-aim-wiring-browser.mjs", "test-apartment-aim-wiring-drag-browser.mjs", "test-apartment-aim-wiring-keys-browser.mjs",
       "test-apartment-aim-wiring-room-browser.mjs", "test-apartment-aim-wiring-phone-browser.mjs", "test-apartment-manual-intent-contract.mjs",
       "run-apartment-aim-presentation-tests.mjs", "run-apartment-aim-lifecycle-browser.mjs", "run-apartment-aim-proposals-tests.mjs"]],
+  // Named aims and Echo's engineered aim on the shared proposal path.
+  [/^(?:app\/src\/(?:home-apartment(?:-named-aims|-echo-aim|-aim-proposals)\.js|home-apartment(?:-named-aim|-room-overlay|-aim)?\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-named-aims(?:-browser|-shell-browser)?\.mjs)$/,
+    ["test-apartment-named-aims.mjs", "test-apartment-named-aims-browser.mjs", "test-apartment-named-aims-shell-browser.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
@@ -149,6 +152,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
   "test-apartment-aim-theme-browser.mjs": 8,
+  "test-apartment-named-aims-browser.mjs": 10,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,
   "test-apartment-chat-header-browser.mjs": 5,

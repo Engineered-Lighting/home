@@ -45,6 +45,57 @@ function authoredEchoModel(seed) {
     ] };
 }
 
+/** An authored GLB with one mesh per named node (untextured). Node names
+ * are what the named-aim mapper reads as the surface name. */
+function namedNodesGlb(nodes) {
+  const floats = [], accessors = [], views = [], meshes = [];
+  for (const node of nodes) {
+    const start = floats.length * 4;
+    floats.push(...node.triangles);
+    const count = node.triangles.length / 3, xs = [0, 1, 2].map(axis => node.triangles.filter((_, i) => i % 3 === axis));
+    views.push({ buffer: 0, byteOffset: start, byteLength: node.triangles.length * 4, target: 34962 });
+    accessors.push({ bufferView: views.length - 1, componentType: 5126, count, type: 'VEC3',
+      min: xs.map(values => Math.min(...values)), max: xs.map(values => Math.max(...values)) });
+    meshes.push({ name: node.name, primitives: [{ attributes: { POSITION: accessors.length - 1 }, material: 0 }] });
+  }
+  const binary = Buffer.alloc(floats.length * 4); floats.forEach((value, i) => binary.writeFloatLE(value, i * 4));
+  const document = { asset: { version: '2.0', generator: 'authored-setup-named-aims' }, scene: 0,
+    scenes: [{ nodes: nodes.map((_, i) => i) }], nodes: nodes.map((node, i) => ({ name: node.name, mesh: i })), meshes,
+    materials: [{ doubleSided: true, pbrMetallicRoughness: { baseColorFactor: [.62, .55, .46, 1], metallicFactor: 0, roughnessFactor: 1 } }],
+    accessors, bufferViews: views, buffers: [{ byteLength: binary.length }] };
+  const json = Buffer.from(JSON.stringify(document)), padded = Buffer.concat([json, Buffer.alloc((4 - json.length % 4) % 4, 32)]);
+  const head = Buffer.alloc(20), binHead = Buffer.alloc(8);
+  head.writeUInt32LE(0x46546c67, 0); head.writeUInt32LE(2, 4); head.writeUInt32LE(28 + padded.length + binary.length, 8);
+  head.writeUInt32LE(padded.length, 12); head.writeUInt32LE(0x4e4f534a, 16);
+  binHead.writeUInt32LE(binary.length, 0); binHead.writeUInt32LE(0x004e4942, 4);
+  return Buffer.concat([head, padded, binHead, binary]);
+}
+const quad = (a, b, c, d) => [...a, ...b, ...c, ...a, ...c, ...d];
+/** The authored study with a 1.70 × 0.60 m desk, top at 0.74 m, as its own
+ * "Desk" node, against the back wall. */
+const DESK = Object.freeze({ x0: 1.2, y0: 3.2, w: 1.7, d: 0.6, h: 0.74 });
+function deskRoomGlb() {
+  const { x0, y0, w, d, h } = DESK, x1 = x0 + w, y1 = y0 + d;
+  return namedNodesGlb([
+    { name: 'Room', triangles: [...quad([0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]), ...quad([0, 4, 0], [4, 4, 0], [4, 4, 2.5], [0, 4, 2.5]),
+      ...quad([0, 0, 0], [0, 4, 0], [0, 4, 2.5], [0, 0, 2.5])] },
+    { name: 'Desk', triangles: [...quad([x0, y0, h], [x1, y0, h], [x1, y1, h], [x0, y1, h]),
+      ...quad([x0, y0, 0], [x1, y0, 0], [x1, y0, h], [x0, y0, h]), ...quad([x0, y0, 0], [x0, y1, 0], [x0, y1, h], [x0, y0, h]),
+      ...quad([x1, y0, 0], [x1, y1, 0], [x1, y1, h], [x1, y0, h])] },
+  ]);
+}
+/** Echo with two engineered gimbal fixtures: A can reach the desk, B's
+ * authored tilt limit keeps it out of reach. The lamp cannot aim. */
+function deskEchoModel(seed) {
+  const model = authoredEchoModel(seed);
+  model.devices = model.devices.map(device => device.id === 'authored-ceiling-a'
+    ? { ...device, fixture_kind: 'engineered_gimbal_v1' }
+    : device.id === 'authored-ceiling-b'
+      ? { ...device, fixture_kind: 'engineered_gimbal_v1', gimbal: { limits: { pan_min_deg: -180, pan_max_deg: 180, tilt_min_deg: 70, tilt_max_deg: 90, tilt_positive: 'down' } } }
+      : device);
+  return model;
+}
+
 function writePack(packs, pack, overrides = {}) {
   for (const [name, value] of Object.entries(overrides)) {
     pack.files[name] = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value));
@@ -274,4 +325,4 @@ function homeShell(page, origin) {
   };
 }
 
-export { authoredEchoModel, resetRegistration, installSetupRooms, startSetupServer, openSetupContext, mockHomeAssistant, browserOptions, homeShell, STAMP, hash };
+export { authoredEchoModel, deskEchoModel, deskRoomGlb, DESK, resetRegistration, installSetupRooms, startSetupServer, openSetupContext, mockHomeAssistant, browserOptions, homeShell, STAMP, hash };

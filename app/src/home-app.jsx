@@ -7670,8 +7670,6 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   // New precedence: attrs.targets[] (array) > attrs.entity_id (str|arr)
   //   > target "area.X" > target "entity.X".
   const undoAction = useCallback(async ({ id, originalService, inverseService, target, attrs }) => {
-    const client = haClientRef.current;
-    if (!client) throw new Error("HA not connected");
     const [domain, service] = inverseService.split(".");
     const serviceData = {};
     const callTarget = {};
@@ -7692,20 +7690,19 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       addEvent({ kind: "system", text: msg, tone: "error" });
       throw new Error("no resolvable target");
     }
-    console.log("[undo]", originalService, "→", inverseService, "target", callTarget);
     try {
-      await client.call({
+      // A saved action has no qualified home/originating-connection binding.
+      // This refusal does not infer authority from today's client or viewport.
+      await window.HomeApartmentData?.refuseChatServiceEnvelope?.({
         type: "call_service",
         domain,
         service,
         service_data: serviceData,
         target: callTarget,
       });
-      addEvent({
-        kind: "system",
-        text: `↺ undone — fired ${inverseService}`,
-        tone: "info",
-      });
+      // A missing or unexpectedly returning guard never becomes a raw fallback
+      // or a successful Undo claim. Admitting an origin needs separate work.
+      throw new Error("Chat action controls are unavailable because this card's originating connection is unverified; no command was sent");
     } catch (e) {
       addEvent({
         kind: "system",
@@ -7717,8 +7714,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   }, [addEvent, sim.active]);
 
   /* ── Inline control cards (light / media) ─────────────────────────────
-   * onControlAction is the thin HA executor the cards call to fire a
-   * service. STABLE useCallback (render-stability discipline — the cards
+   * onControlAction is the physical request boundary for Chat cards.
+   * STABLE useCallback (render-stability discipline — the cards
    * key effects off it; an unstable ref would churn their debounce/reconcile
    * timers, the class of bug that hung the boot sequence). `target` is the
    * explicit HA target object the card built for THIS control — a group
@@ -7726,17 +7723,16 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
    * Onkyo routing. In sim mode the card routes to SimControlStore itself
    * and never calls this. */
   const onControlAction = useCallback(async ({ domain, service, service_data, target }) => {
-    const client = haClientRef.current;
-    if (!client) throw new Error("HA not connected");
     if (!target || (!target.entity_id && !target.area_id && !target.device_id)) {
       throw new Error("no resolvable target");
     }
-    await client.call({
+    await window.HomeApartmentData?.refuseChatServiceEnvelope?.({
       type: "call_service",
       domain, service,
       service_data: service_data || {},
       target,
     });
+    throw new Error("Chat action controls are unavailable because this card's originating connection is unverified; no command was sent");
   }, []);
 
   /* Drives time-based control-card expiry. Only ticks while a controllable

@@ -1309,6 +1309,20 @@
     } finally { gate?.dispose(); }
   }
 
+  // Chat action cards carry no qualified command-home authority or originating
+  // connection binding. This is refusal only: no client, helper read, authority
+  // option or transport admission can be supplied to activate a physical call.
+  // Existing qualified Apartment and simulation controls use their own paths.
+  async function refuseChatServiceEnvelope(envelope) {
+    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)
+        || envelope.type !== "call_service" || typeof envelope.domain !== "string"
+        || typeof envelope.service !== "string") throw new Error("Chat service command is invalid");
+    if (serviceMayEnergizeLights(envelope.domain, envelope.service)) {
+      throw new Error("Chat lighting controls are unavailable because their home authority cannot be verified; no command was sent");
+    }
+    throw new Error("Chat action controls are unavailable because this card's originating connection is unverified; no command was sent");
+  }
+
   /* ---------------- tracker WS ---------------- */
 
   function openTracks({ sim, replay, onTracks, onStatus, siteId = "echo", isCurrent = () => true, signal } = {}) {
@@ -1365,7 +1379,7 @@
   window.HomeApartmentData = {
     getModel, getAuthoritativeModel, compareApartmentModels,
     saveModel, getSeedModel, getRegistry, buildPalette,
-    readStates, bindStates, callService, openTracks, EMPTY_MODEL,
+    readStates, bindStates, callService, refuseChatServiceEnvelope, openTracks, EMPTY_MODEL,
     ensureModelShape, isCeilingLight, fixtureCalibrationStatus,
     adoptEngineeredFixture, validateEngineeredMappings, validateEngineeredFixtureModel,
     reconcileFixturePosition, zoneBounds, parseTapeMeasurement, formatTapeMeasurement,

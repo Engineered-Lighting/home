@@ -107,7 +107,8 @@ test('all original diagnostics and every worker receipt upload exactly once unde
     'apartment-touched-authored-browser-${{ matrix.shard }}-of-' + SHARDS]);
   assert.deepEqual([...touched.at(-2).matchAll(/^            (\S.*)$/gm)].map(match => match[1]), [receiptPath]);
   assert.deepEqual(paths.sort(), ['.tmp/apartment-home-shell-browser/run-*/*receipt.json', '.tmp/apartment-home-shell-browser/run-*/*.png',
-    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json')].sort());
+    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
+    '.tmp/apartment-aim-theme-browser/run-*/*.png'].sort());
 });
 
 test('the actual aggregate Bash gate rejects every non-success pair and genuinely absent variables', () => {

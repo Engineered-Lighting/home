@@ -40,6 +40,12 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^app\/src\/(?:home-app\.jsx|home-apartment-data\.js)$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs", "run-control-card-tests.js", "run-simulation-control-tests.js"]],
+  [/^tools\/test-chat-(?:output-refusal|service-envelope)\.cjs$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs"]],
+  [/^app\/src\/(?:home-apartment-aim\.jsx|home-tokens\.css)$/, ["test-apartment-aim-theme-browser.mjs"]],
+  [/^tools\/test-apartment-aim-theme-browser\.mjs$/, ["test-apartment-aim-theme-browser.mjs"]],
+  [/^app\/src\/(?:home-apartment\.jsx|home-tokens\.css)$/, ["test-apartment-photo-recovery.cjs", "test-apartment-photo-recovery-browser.mjs"]],
+  [/^tools\/test-apartment-photo-recovery(?:-browser\.mjs|\.cjs)$/, ["test-apartment-photo-recovery.cjs", "test-apartment-photo-recovery-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
@@ -126,8 +132,8 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
 
 /* Hosted-CI seconds per plan item, used only to balance --shard partitions.
  * Measured on run 39214584656 (#293 touched job, 7m22s of harnesses) and the
- * #287 sibling run 39174968832, rounded up. An unmeasured browser suite
- * counts as its 145 s deadline and
+ * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
+ * rounded up. An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
 const SHARD_WEIGHT_S = {
@@ -135,6 +141,8 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
+  "test-apartment-aim-theme-browser.mjs": 8,
+  "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,
   "test-apartment-chat-header-browser.mjs": 5,
   "test-apartment-unread-integration.mjs": 5,

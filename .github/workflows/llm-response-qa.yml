@@ -112,6 +112,8 @@ jobs:
             .tmp/apartment-room-selection-browser/run-*/receipt.json
             .tmp/apartment-room-inspector-browser/run-*/receipt.json
             .tmp/apartment-directional-browser/run-*/receipt.json
+            .tmp/apartment-aim-theme-browser/run-*/receipt.json
+            .tmp/apartment-aim-theme-browser/run-*/*.png
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7

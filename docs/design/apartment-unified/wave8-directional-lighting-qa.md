@@ -353,6 +353,33 @@ gate covers 49 result pairs and three genuinely absent-variable cases; only two
 successful workers produce success. Independent review also checks the actual
 workflow and release fragment. These checks require no new test dependencies.
 
+The first split run, `39212927080`, passed all thirty mapped harnesses, JSX and
+both ESM checks. Directional verification again passed thirteen stages and
+renderer snapshots with exactly 91 native events in 140 seconds. The full-shell
+worker instead reached its original 145-second cap after 26 of 28 checkpoints,
+all ten radial cases and both canonical aim/Undo cases. Its final unified URL
+reload was still running. The original required gate correctly failed when
+that worker failed. Both authored artifacts are retained under
+`.tmp/radial-ci-23b8-artifacts/`, with `.tmp/radial-ci-23b8.log`.
+
+The bounded correction reuses the already-qualified native mouse transport only
+inside each of the full shell's two existing canonical drag sequences. Both
+original hover moves, down, twelve held movement samples and up remain in order;
+each drag must prove five operations and sixteen expected, dispatched and
+trusted browser events, with no HTML drag start. The scope closes and the
+released-button ledger is checked before Playwright locator input resumes.
+Focus, viewport readiness, actual pointer-up frame/collision evidence, the
+three-centimeter tolerance, exact Undo, all screenshots and final URL reloads
+remain. No production source, helper, runtime or deadline changes.
+
+Independent method and specification reviews clear the frozen scoped transport.
+Fresh full-shell workstation runs pass all 28 checkpoints, ten radial cases
+and both qualified sixteen-event ledgers: 40.2 seconds native and 65.7 seconds
+with the retained software flags. Receipts:
+`.tmp/apartment-home-shell-browser/run-1792393780622/receipt.json` and
+`.tmp/apartment-home-shell-browser/run-1792393831034/receipt.json`.
+These runs qualify input conservation and behavior, not hosted timing savings.
+
 ## Ticket coverage and retained limits
 
 | Ticket | Covered in this slice | Still open |

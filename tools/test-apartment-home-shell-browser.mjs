@@ -13,6 +13,7 @@ import Core from '../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
 import { waitForDirectionalReadiness } from './fixtures/apartment-directional-readiness.mjs';
+import { createDirectionalNativeMouse, assertDirectionalNativeMouseLedger } from './fixtures/apartment-directional-native-mouse.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -271,6 +272,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await context.routeWebSocket('**/*', socket => socket.close());
     page = await context.newPage(); page.setDefaultTimeout(15000);
     page.on('pageerror', error => errors.push(error.message));
+    receipt.native_drag_mouse = [];
 
     async function capture(name) {
       if (!screenshotsEnabled) {
@@ -769,76 +771,122 @@ test('unified shell keeps the real room, private controls and one chat controlle
       keyboard_selected_fixture: await fixtureSelect.inputValue() });
     const directId = fixtureIds[2];
     async function dragAndUndo(focusCase, expectedFocus) {
-      const focusBefore = await page.evaluate(() => ({ tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') }));
-      assert.equal(focusBefore.label, expectedFocus, 'the real inspector control retains focus before the drag');
-      let cylinder = await fixturePoint(directId);
-      await page.mouse.move(cylinder.x, cylinder.y);
-      await waitAimViewport('fixture_hover_viewport_ready_before_drag');
-      cylinder = await fixturePoint(directId);
-      await page.mouse.move(cylinder.x, cylinder.y);
-      await waitAimViewport('final_fixture_hover_viewport_ready_before_drag');
-      assert.equal(await page.evaluate(({ x, y }) => {
-        const engine = window.__APT_ENGINE;
-        return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
-      }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
-      const target = await targetPoint([2.4,2.1,0]);
-      assert.ok(target.hit, 'direct aim target comes from the actual registered authored collision mesh');
-      assert.ok(target.display_hit && Math.hypot(...target.display_hit.point.map((value, axis) => value - target.hit.point[axis])) < 1e-6,
-        'the expected collision hit is also a visible canonical display surface');
-      const drag = { fixture_id: directId, focus_case: focusCase, focus_before: focusBefore, cylinder, expected: target };
-      receipt[focusCase === 'setup_keyboard' ? 'drag' : 'focused_spot_drag'] = drag;
-      // Observe the actual input frame before the element's production capture
-      // handler. Ambient camera motion is legitimate; the committed target must
-      // bind the qualified visible collision ray at pointer-up in that same turn.
-      await page.evaluate(() => {
-        const engine = window.__APT_ENGINE;
-        window.__shellDragPointerUp = null;
-        window.__shellDragFocusCleanup?.();
-        window.__shellDragFocusEvents = [];
-        const observeFocus = event => {
-          window.__shellDragFocusEvents.push({ type: event.type, target: event.target?.tagName || (event.target === window ? 'window' : null),
-            target_label: event.target?.getAttribute?.('aria-label'), active: document.activeElement?.tagName,
-            active_label: document.activeElement?.getAttribute?.('aria-label'), frame: engine.renderer.info.render.frame });
-        };
-        const focusEventTypes = ['pointerdown', 'blur', 'pointercancel', 'lostpointercapture'];
-        for (const type of focusEventTypes) window.addEventListener(type, observeFocus, { capture: true });
-        window.__shellDragFocusCleanup = () => {
-          for (const type of focusEventTypes) window.removeEventListener(type, observeFocus, { capture: true });
-          window.__shellDragFocusCleanup = null;
-        };
-        window.addEventListener('pointerup', event => {
-          const raw = engine.picking.surfaceHit(engine.apartmentRoot, [engine.modes.getCollision()], event.clientX, event.clientY);
-          const visible = engine.displaySurfaceHit(event.clientX, event.clientY);
-          // Setup's native picker legitimately unmounts when a real drag reveals
-          // Aim. Bind identity to the visible selected inspector in this input
-          // frame; labels must resolve uniquely to actual registered fixtures.
-          const selectedLabel = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
-          const selectedMatches = engine.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === selectedLabel);
-          window.__shellDragPointerUp = { x: event.clientX, y: event.clientY, frame: engine.renderer.info.render.frame,
-            current_engine: window.__APT_ENGINE === engine, site: engine.siteId, scene_identity: engine.sceneIdentity,
-            selected_fixture_id: selectedMatches.length === 1 ? selectedMatches[0].fixture_id : null,
-            selected_fixture_label: selectedLabel, selected_fixture_matches: selectedMatches.length,
-            visible_hit: visible && { point: [...visible.point], normal: [...visible.normal] },
-            raw_hit: raw && { point: [...raw.point], normal: [...raw.normal] },
-            rect: engine.renderer.domElement.getBoundingClientRect().toJSON(),
-            host: engine.renderer.domElement.parentElement.getBoundingClientRect().toJSON(),
-            camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements],
-            root: [...engine.apartmentRoot.matrixWorld.elements] };
-        }, { capture: true, once: true });
-      });
-      await page.mouse.down();
-      const selectedAfterDown = await waitForDirectionalReadiness(page, id => {
-        const label = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
-        const matches = window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === label);
-        return matches.length === 1 && matches[0].fixture_id === id ? id : false;
-      }, directId);
-      drag.selected_after_down = selectedAfterDown;
-      assert.equal(drag.selected_after_down, directId, 'pointer-down selected the fixture being dragged');
-      await page.mouse.move(target.x, target.y, { steps: 12 }); await page.mouse.up();
-      const released = await page.evaluate(() => {
-        const value = { pointer_up: window.__shellDragPointerUp, focus_events: window.__shellDragFocusEvents };
-        window.__shellDragFocusCleanup?.(); return value;
-      });
+      const scope = { id: receipt.native_drag_mouse.length + 1, focus_case: focusCase, native_witness_status: 'pending', observed: [], dragstarts: [] };
+      receipt.native_drag_mouse.push(scope);
+      const session = await context.newCDPSession(page), mouse = createDirectionalNativeMouse({
+        send: (method, packet) => session.send(method, packet), onRecord: () => { scope.ledger = mouse.readback(); save(); } });
+      let drag, released, scopeError, observerClosed = false;
+      try {
+        const focusBefore = await page.evaluate(() => {
+          if (window.__shellNativeMouseScope) throw Error('overlapping authored native drag scope');
+          const observed = [], dragstarts = [], types = ['pointermove', 'pointerdown', 'pointerup', 'dragstart'];
+          const witness = event => {
+            if (event.type !== 'dragstart' && event.pointerType !== 'mouse') return;
+            const kind = event.type === 'dragstart' ? 'dragstarts' : 'observed', events = kind === 'dragstarts' ? dragstarts : observed;
+            const row = { sequence: events.length + 1, type: event.type, isTrusted: event.isTrusted,
+              x: event.clientX, y: event.clientY, pointerType: event.pointerType, pointerId: event.pointerId,
+              button: event.button, buttons: event.buttons, pressure: event.pressure,
+              modifiers: { alt: event.altKey, control: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey } };
+            events.push(row);
+          };
+          for (const type of types) window.addEventListener(type, witness, { capture: true });
+          window.__shellNativeMouseScope = { observed, dragstarts, cleanup: () => {
+            for (const type of types) window.removeEventListener(type, witness, { capture: true });
+            window.__shellNativeMouseScope = null;
+          } };
+          return { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') };
+        });
+        assert.equal(focusBefore.label, expectedFocus, 'the real inspector control retains focus before the drag');
+        let cylinder = await fixturePoint(directId);
+        await mouse.move(cylinder.x, cylinder.y);
+        await waitAimViewport('fixture_hover_viewport_ready_before_drag');
+        cylinder = await fixturePoint(directId);
+        await mouse.move(cylinder.x, cylinder.y);
+        await waitAimViewport('final_fixture_hover_viewport_ready_before_drag');
+        assert.equal(await page.evaluate(({ x, y }) => {
+          const engine = window.__APT_ENGINE;
+          return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
+        }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
+        const target = await targetPoint([2.4,2.1,0]);
+        assert.ok(target.hit, 'direct aim target comes from the actual registered authored collision mesh');
+        assert.ok(target.display_hit && Math.hypot(...target.display_hit.point.map((value, axis) => value - target.hit.point[axis])) < 1e-6,
+          'the expected collision hit is also a visible canonical display surface');
+        drag = { fixture_id: directId, focus_case: focusCase, focus_before: focusBefore, cylinder, expected: target };
+        receipt[focusCase === 'setup_keyboard' ? 'drag' : 'focused_spot_drag'] = drag;
+        // Observe the actual input frame before the element's production capture
+        // handler. Ambient camera motion is legitimate; the committed target must
+        // bind the qualified visible collision ray at pointer-up in that same turn.
+        await page.evaluate(() => {
+          const engine = window.__APT_ENGINE;
+          window.__shellDragPointerUp = null;
+          window.__shellDragFocusCleanup?.();
+          window.__shellDragFocusEvents = [];
+          const observeFocus = event => {
+            window.__shellDragFocusEvents.push({ type: event.type, target: event.target?.tagName || (event.target === window ? 'window' : null),
+              target_label: event.target?.getAttribute?.('aria-label'), active: document.activeElement?.tagName,
+              active_label: document.activeElement?.getAttribute?.('aria-label'), frame: engine.renderer.info.render.frame });
+          };
+          const focusEventTypes = ['pointerdown', 'blur', 'pointercancel', 'lostpointercapture'];
+          for (const type of focusEventTypes) window.addEventListener(type, observeFocus, { capture: true });
+          window.__shellDragFocusCleanup = () => {
+            for (const type of focusEventTypes) window.removeEventListener(type, observeFocus, { capture: true });
+            window.__shellDragFocusCleanup = null;
+          };
+          window.addEventListener('pointerup', event => {
+            const raw = engine.picking.surfaceHit(engine.apartmentRoot, [engine.modes.getCollision()], event.clientX, event.clientY);
+            const visible = engine.displaySurfaceHit(event.clientX, event.clientY);
+            // Setup's native picker legitimately unmounts when a real drag reveals
+            // Aim. Bind identity to the visible selected inspector in this input
+            // frame; labels must resolve uniquely to actual registered fixtures.
+            const selectedLabel = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
+            const selectedMatches = engine.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === selectedLabel);
+            window.__shellDragPointerUp = { x: event.clientX, y: event.clientY, frame: engine.renderer.info.render.frame,
+              current_engine: window.__APT_ENGINE === engine, site: engine.siteId, scene_identity: engine.sceneIdentity,
+              selected_fixture_id: selectedMatches.length === 1 ? selectedMatches[0].fixture_id : null,
+              selected_fixture_label: selectedLabel, selected_fixture_matches: selectedMatches.length,
+              visible_hit: visible && { point: [...visible.point], normal: [...visible.normal] },
+              raw_hit: raw && { point: [...raw.point], normal: [...raw.normal] },
+              rect: engine.renderer.domElement.getBoundingClientRect().toJSON(),
+              host: engine.renderer.domElement.parentElement.getBoundingClientRect().toJSON(),
+              camera: [...engine.camera.matrixWorld.elements], projection: [...engine.camera.projectionMatrix.elements],
+              root: [...engine.apartmentRoot.matrixWorld.elements] };
+          }, { capture: true, once: true });
+        });
+        await mouse.down();
+        const selectedAfterDown = await waitForDirectionalReadiness(page, id => {
+          const label = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
+          const matches = window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === label);
+          return matches.length === 1 && matches[0].fixture_id === id ? id : false;
+        }, directId);
+        drag.selected_after_down = selectedAfterDown;
+        assert.equal(drag.selected_after_down, directId, 'pointer-down selected the fixture being dragged');
+        await mouse.move(target.x, target.y, { steps: 12 }); await mouse.up();
+        released = await page.evaluate(() => {
+          const native = window.__shellNativeMouseScope;
+          if (!native) throw Error('missing authored native drag scope');
+          const value = { pointer_up: window.__shellDragPointerUp, focus_events: window.__shellDragFocusEvents,
+            observed: native.observed, dragstarts: native.dragstarts };
+          native.cleanup(); window.__shellDragFocusCleanup?.(); return value;
+        });
+        observerClosed = true; scope.observed = released.observed; scope.dragstarts = released.dragstarts; scope.ledger = mouse.readback();
+        scope.native_witness_status = 'captured';
+        assert.deepEqual(scope.ledger.operations.map(row => row.type), ['move', 'move', 'down', 'move', 'up']);
+        assert.equal(scope.ledger.expected.filter(row => row.type === 'move').length, 14);
+        assert.equal(scope.ledger.expected.length, 16);
+        scope.proof = assertDirectionalNativeMouseLedger({ ledger: scope.ledger, observed: scope.observed, dragstarts: scope.dragstarts });
+        scope.native_witness_status = 'qualified';
+      } catch (error) { scopeError = error; scope.failure = error.message; throw error; }
+      finally {
+        let cleanupError;
+        if (!observerClosed && !page.isClosed()) try {
+          const witness = await page.evaluate(() => { const native = window.__shellNativeMouseScope;
+            if (!native) return null; const value = { observed: native.observed, dragstarts: native.dragstarts }; native.cleanup(); return value; });
+          if (witness) { Object.assign(scope, witness); scope.native_witness_status = 'captured'; }
+        } catch (error) { cleanupError = error; }
+        try { await session.detach(); } catch (error) { cleanupError ||= error; }
+        scope.ledger = mouse.readback(); if (cleanupError) scope.cleanup_error = cleanupError.message; save();
+        if (cleanupError && !scopeError) throw cleanupError;
+      }
       drag.pointer_up = released.pointer_up; drag.focus_events = released.focus_events;
       assert.equal(drag.pointer_up?.current_engine, true, 'pointer-up belongs to the same actual engine');
       assert.equal(drag.pointer_up.selected_fixture_matches, 1, 'the rendered selected inspector identifies exactly one registered fixture');
@@ -876,6 +924,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     assert.equal(await spotTool.getAttribute('aria-pressed'), 'true');
     await page.getByRole('slider', { name: 'Pan', exact: true }).focus();
     await timedPhase('canonical_drag_spot', () => dragAndUndo('spot_pan_slider', 'Pan'));
+    assert.deepEqual(receipt.native_drag_mouse.map(scope => scope.proof.samples), [16, 16]);
 
     await capture('unified-fixture-controls-1366x768');
 

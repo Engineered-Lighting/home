@@ -145,6 +145,20 @@ async function openApp(browser, served) {
   await context.addInitScript(() => {
     window.HG_DISABLE_SERVICE_WORKER = true;
     try { localStorage.setItem("home.perf.backgroundWarmup", "off"); } catch (_) {}
+    /* snapshot().bootFiles is only the last 160 entries, and the Apartment's
+     * lazy feature files can push the earliest boot JSX out of it before the
+     * test looks. Keep every recorded entry instead. */
+    const recorded = window.__testBootFiles = [];
+    let perf;
+    Object.defineProperty(window, "__homePerf", {
+      configurable: true,
+      get: () => perf,
+      set(value) {
+        const record = value.recordBootFile;
+        value.recordBootFile = (file, phase, ...rest) => { recorded.push({ file, phase }); return record(file, phase, ...rest); };
+        perf = value;
+      },
+    });
   });
   await context.route("**/*", (route) => {
     const url = new URL(route.request().url());
@@ -176,7 +190,7 @@ async function loadEveryFeature(page) {
 }
 
 function transformedFiles(page) {
-  return page.evaluate(() => (window.__homePerf.snapshot().bootFiles || [])
+  return page.evaluate(() => window.__testBootFiles
     .filter((entry) => /transform/.test(entry.phase)).map((entry) => entry.file));
 }
 

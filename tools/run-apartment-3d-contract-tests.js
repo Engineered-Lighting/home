@@ -115,11 +115,12 @@ assert("choosing a stable room filters the device selector without dropping unpo
   && APT.includes("devices={semanticDevicesForRoom}")
   && APT.includes("devices not positioned in the scan remain available"));
 const semanticKeyboardBlock = APT.slice(
-  APT.indexOf('else if ((e.key === "n" || e.key === "p")'),
+  APT.indexOf('else if (cycleKey && !editing && apartmentOwnsViewport)'),
   APT.indexOf('window.addEventListener("keydown", onKey)'),
 );
 assert("n and p cycle every semantic device including devices without markers",
-  semanticKeyboardBlock.includes("semanticDevicesForRoom")
+  APT.includes('const cycleKey = (e.key === "n" || e.key === "p")')
+  && semanticKeyboardBlock.includes("semanticDevicesForRoom")
   && semanticKeyboardBlock.includes("stepSemanticDevice")
   && !semanticKeyboardBlock.includes("Array.isArray(d.pos)"));
 assert("semantic selection has one bounded polite atomic live region",

@@ -122,20 +122,15 @@ test('"?" is bound by the guide and wired from the toolbar', () => {
   assert.match(apartment.source, /Guide\.useHelpShortcut\(!guideDialog, \(\) => openGuide\("help"\)\)/);
 });
 
-test('gestures list exactly the bound pointer input', () => {
+test('gestures list only bound pointer input; no pinch or pan is promised', () => {
   const rig = read('home-3d/rig.js');
   const attach = rig.slice(rig.indexOf('export function attachInput'));
   assert.match(attach, /addEventListener\('pointerdown', onDown\)/);
   assert.match(attach, /addEventListener\('wheel', onWheel/);
-  assert.match(attach, /if \(e\.button !== 0\) return;/, 'only the primary button orbits');
-  assert.doesNotMatch(rig, /touchstart|gesturestart/i, 'touch arrives as pointer events only');
-  const bound = {
-    pan: /e\.button === 2 \|\| \(e\.button === 0 && e\.shiftKey\)/.test(attach) && /rig\.panStart\?\.\(\)/.test(attach),
-    pinch: /pointers\.size >= 2/.test(attach) && /PINCH_STEP/.test(attach),
-  };
+  assert.match(attach, /if \(e\.button !== 0\) return;/, 'only the primary button orbits; right-drag pan is not bound');
+  assert.doesNotMatch(rig, /touchstart|gesturestart|pinch/i);
   const words = [...Guide.GESTURES, ...Guide.KEY_MAP].map(row => `${row.label} ${row.action} ${row.when || ''}`).join(' ');
-  assert.equal(/\bpan\b/i.test(words) && /shift-drag/i.test(words) && /right-drag/i.test(words), bound.pan, 'help lists Shift/right-drag pan exactly when attachInput binds it');
-  assert.equal(/pinch/i.test(words), bound.pinch, 'help lists pinch exactly when attachInput binds two-pointer zoom');
+  assert.doesNotMatch(words, /pinch|\bpan\b|shift-drag|right-drag/i);
   assert.match(read('home-3d/equipment-virtual-fixtures.mjs'), /interaction_role: 'aim_handle'/, 'the aim handle exists');
 });
 

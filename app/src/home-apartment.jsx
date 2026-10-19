@@ -2266,7 +2266,8 @@ function AptUnifiedIcon({ name }) {
 
 function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
   onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
-  homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about }) {
+  homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about,
+  lit = null, onLit = null }) {
   const Guide = window.HomeApartmentRoomGuide;
   const [popover, setPopover] = useState(null);
   const [guideDialog, setGuideDialog] = useState(null);
@@ -2283,10 +2284,14 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-seg" role="group" aria-label="Scene mode">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
-      <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key}
+      <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key && !lit}
         title={key !== "points" && pointsOnlyReason ? pointsOnlyReason : undefined}
-        disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)} onClick={() => onMode(key)}>{label}</button>)}
-      <button type="button" disabled title="Lit mode is planned; current scan modes remain available">Lit</button>
+        disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)}
+        onClick={() => (key === "mesh" && lit ? onLit?.(false) : onMode(key))}>{label}</button>)}
+      <button type="button" aria-label="Lit view" aria-pressed={!!lit}
+        title={!onLit ? "Lit needs modeled fixtures in this home" : modeLockedReason || pointsOnlyReason || "Simulated light on the mesh · not photometric"}
+        disabled={disabled || !onLit || !!modeLockedReason || !!pointsOnlyReason || modeLoading === "mesh"}
+        onClick={() => onLit?.(!lit)}>Lit</button>
     </div><span className="apt-ui-toolbar-separator apt-ui-orbit" />
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
     <span className="apt-home-toolbar-detent apt-ui-value apt-ui-orbit" aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
@@ -2332,6 +2337,8 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
           {` · visible ${String(stats.modeDebug.splatVisible)} · parent ${stats.modeDebug.srParent}`}</>}
       </p></details>}
       <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close source</button></div>}
+    {lit && !modeLoading && !modeError && <p className="apt-ui-toolbar-notice" role="note" data-apt-lit-disclosure={lit.quality}
+      title={lit.disclosureDetail}>{lit.disclosure}{lit.quality === "reduced" ? " · reduced quality for speed" : ""}</p>}
     {(modeLoading || modeError) && <div className="apt-ui-toolbar-notice">
       <span role="status">{modeLoading ? `Loading ${modeLoading === "splat" ? "Photo" : modeLoading}` : modeError.message}</span>
       {photoError && <div className="apt-ui-toolbar-recovery" role="group" aria-label="Photo recovery">
@@ -2542,6 +2549,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [stats, setStats] = useState(null);
   const [mode, setMode] = useState("points");
   const [modeLoading, setModeLoading] = useState(null);
+  const [litState, setLitState] = useState(null);
   const [modeError, setModeError] = useState(null);
   const modeRequestRef = useRef(null);
   /* The loaded interior's disclosed placeholder (engine.scenePlaceholder), or
@@ -6359,6 +6367,21 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (modeRequestRef.current === request) modeRequestRef.current = null;
     }
   }, [showToast, refitMobileOverview, liveCam, calibCam, selectedSiteInterior]);
+  /* Tier-0 Lit (engine.setLit): Mesh first, then the relit mesh. Session
+   * only and never restored, so Lit is off by default on every device. */
+  const toggleLit = useCallback(async (next) => {
+    const engine = engineRef.current;
+    if (!engine?.setLit) return;
+    if (next && engine.modes.mode !== "mesh") await pickMode("mesh");
+    if (engineRef.current !== engine) return;
+    const state = await engine.setLit(!!next && engine.modes.mode === "mesh");
+    if (engineRef.current === engine) setLitState(state);
+  }, [pickMode]);
+  useEffect(() => {
+    const engine = engineRef.current;
+    setLitState(engine?.litState?.() || null);
+    return engine?.on?.("lit", (state) => { if (engineRef.current === engine) setLitState(state); });
+  }, [phase, selectedSiteId]);
 
   /*
    * The +/- controls stay mounted through a handoff, but the already-targeted
@@ -9371,7 +9394,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           hasPerception={selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception}
           about={{ homeId: selectedSiteId, source: sourceMeta, revision: model.revision, liveShadow, simActive, trackerStatus,
             hasVirtualFixtures: !!virtualFixtureDocument, fixtureCount: virtualFixtureItems.length,
-            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception }} />
+            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception }}
+          lit={litState?.active ? litState : null} onLit={virtualFixtureDocument ? next => { if (apartmentSceneControlsEnabled) void toggleLit(next); } : null} />
       )}
 
       {/* Established HUD stays intact for Classic and the wider world view. */}

@@ -194,7 +194,10 @@
     // large response into the HTTP cache can discard it at browser entry-size
     // limits, causing a simultaneous or subsequent Photo load to download it
     // again. Metadata and older engine bridges retain the existing read path.
-    if (/\.(?:ply|spz|glb)(?:$|[?#])/i.test(url) && engineModule?.warmApartmentAssetBytes) {
+    // points.ply is read by the engine's point loader through the HTTP cache,
+    // so it stays on the plain fetch path below rather than the byte cache.
+    if (label !== CLOUD_ASSETS[0].label
+        && /\.(?:ply|spz|glb)(?:$|[?#])/i.test(url) && engineModule?.warmApartmentAssetBytes) {
       const result = await engineModule.warmApartmentAssetBytes({ url, ...scope, signal });
       return { label, url, bytes: result.bytes, cacheHit: result.cacheHit,
         ms: Math.round(performance.now() - started) };
@@ -210,7 +213,21 @@
     };
   }
 
+  // The resident engine reads points.ply through its own loader, never the
+  // shared byte cache. Once it owns the same scope's cloud, warming it again is
+  // a duplicate download (and an unread byte-cache copy).
+  function residentCloudLoaded(scope) {
+    const engine = window.__APT_ENGINE;
+    return !!engine?.pointsPromise && engine.sceneIdentity?.siteId === scope.siteId
+      && (engine.sceneIdentity?.contentRevision ?? null) === (scope.contentRevision ?? null);
+  }
+
   async function warmOneOf(group, signal, scope, engineModule, isCurrent) {
+    if (group === CLOUD_ASSETS[0] && residentCloudLoaded(scope)) {
+      const skipped = { label: group.label, skipped: "resident engine owns the point cloud" };
+      if (isCurrent()) state.warmed.push(skipped);
+      return skipped;
+    }
     const errors = [];
     for (const name of group.names) {
       if (!isCurrent()) return null;

@@ -226,6 +226,20 @@ test('renderer fits the visible canvas at 1920, 1366 and 1024, pans, and keeps t
     assert.ok(sameVec(offset.target, rightPanned.target) && offset.zoom === rightPanned.zoom, 'an inset change after owner navigation keeps the pose');
     check('view_offset_shifts_without_rescaling', offset);
 
+    // A camera pose owns the whole canvas: the offset is suspended while it is
+    // held and restored when the room view returns.
+    const pose = await page.evaluate(() => {
+      const engine = window.__APT_ENGINE, camera = engine.camera, insets = engine.viewInsets();
+      engine.rig.flyToPose({ position: camera.position.clone(), quaternion: camera.quaternion.clone(), fov: camera.fov, dur: 1 });
+      const held = { insets: engine.viewInsets(), view: !!camera.view?.enabled, zoom: camera.zoom };
+      engine.rig.returnToOverview(1);
+      return { before: insets, held, after: engine.viewInsets(), view: !!camera.view?.enabled };
+    });
+    assert.deepEqual(pose.held, { insets: { top: 0, right: 0, bottom: 0, left: 0 }, view: false, zoom: 1 }, 'a camera pose suspends the view offset');
+    assert.deepEqual(pose.after, pose.before, 'returning to the room restores the toolbar inset'); assert.equal(pose.view, true);
+    await settle();
+    check('camera_pose_suspends_view_offset', pose);
+
     // An explicit fit returns to the overview and re-arms layout refits.
     await page.evaluate(() => window.__APT_ENGINE.refit({ dur: 0 })); await settle();
     const refit = await layout();

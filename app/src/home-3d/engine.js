@@ -390,6 +390,17 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         return { top, right, bottom, left };
     }
 
+    // Every camera-pose transition is one of these synchronous rig calls, so
+    // the offset is suspended or restored before the next frame renders.
+    for (const name of ['flyToPose', 'returnToOverview', 'resetPose', 'restorePose', 'goEditPose']) {
+        const transition = rig[name];
+        rig[name] = (...args) => {
+            const result = transition(...args);
+            syncViewOffset();
+            return result;
+        };
+    }
+
     function effectiveInsets() {
         return rig.inCameraPose?.() ? NO_INSETS : normalizedInsets(viewInsets, viewSize.width, viewSize.height);
     }
@@ -659,7 +670,6 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         last = now;
 
         pointsMaterial.uniforms.uTime.value = now / 1000;
-        syncViewOffset();
         rig.update(dt);
         const inCamPose = rig.inCameraPose && rig.inCameraPose();
         apartmentRoot.updateWorldMatrix(true, false);
@@ -1135,7 +1145,6 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                     2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(fov) / 2) * fovScale));
             }
             rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur, projection });
-            syncViewOffset();
         },
         dispose() {
             if (disposed || disposing) return false;

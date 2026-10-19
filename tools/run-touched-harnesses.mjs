@@ -46,6 +46,8 @@ const MAP = [
   [/^tools\/test-apartment-aim-theme-browser\.mjs$/, ["test-apartment-aim-theme-browser.mjs"]],
   [/^app\/src\/(?:home-apartment\.jsx|home-tokens\.css)$/, ["test-apartment-photo-recovery.cjs", "test-apartment-photo-recovery-browser.mjs"]],
   [/^tools\/test-apartment-photo-recovery(?:-browser\.mjs|\.cjs)$/, ["test-apartment-photo-recovery.cjs", "test-apartment-photo-recovery-browser.mjs"]],
+  [/^app\/src\/(?:home-tokens\.css|home-app\.jsx|home-apartment(?:-ui|-cards|-edit)?\.jsx|home-chat-header-actions\.jsx)$/, ["test-apartment-shell-audit-browser.mjs"]],
+  [/^tools\/(?:test-apartment-shell-audit-browser|fixtures\/apartment-shell-audit-(?:server|probes))\.mjs$/, ["test-apartment-shell-audit-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],

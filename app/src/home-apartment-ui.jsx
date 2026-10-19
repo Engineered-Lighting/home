@@ -11,6 +11,9 @@
     recorded: ["Recorded", "ring", "neutral"], replay: ["Replay", "ring", "neutral"],
     authored: ["Authored", "diamond", "neutral"], simulated: ["Simulated", "diamond", "neutral"],
     held: ["Held", "diamond", "attn"], stale: ["Stale", "diamond", "attn"],
+    // Owner decision 2026-10-19: the approximate virtual preview may hold its
+    // last aim for a producer-measured bound. Only the producer reports it.
+    holding: ["Holding", "hold", "attn"],
     unsaved: ["Unsaved", "diamond", "attn"], changed: ["Changed", "diamond", "attn"],
     disconnected: ["Disconnected", "diamond", "attn"], blocked: ["Blocked", "bar", "blocked"],
     conflict: ["Conflict", "bar", "blocked"], invalid: ["Invalid", "bar", "blocked"],
@@ -25,6 +28,14 @@
       <span className="apt-ui-badge-marker" data-shape={shape} aria-hidden="true" />
       <span>{children == null ? label : children}</span>
     </span>;
+  }
+
+  /* Formats the producer's own last-seen age for the Holding badge. It never
+   * reads a clock: a missing or invalid age shows "Holding" alone, and the
+   * caller re-renders only when the producer reports again. */
+  function holdingLabel(lastSeenSeconds) {
+    const age = Number(lastSeenSeconds);
+    return Number.isFinite(age) && age >= 0 ? `Holding · last seen ${Math.round(age)}s ago` : "Holding";
   }
 
   /* Consume before calling user code, including throwing or asynchronous code.
@@ -126,5 +137,5 @@
     </div>;
   }
 
-  window.HomeApartmentUI = Object.freeze({ Badge, Toast, createToastAction });
+  window.HomeApartmentUI = Object.freeze({ Badge, Toast, createToastAction, holdingLabel });
 })();

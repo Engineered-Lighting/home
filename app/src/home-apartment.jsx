@@ -8169,6 +8169,78 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const unifiedSelectionLabel = virtualFixtureControlsOpen && selectedVirtualFixture
     ? selectedVirtualFixture.label || selectedVirtualFixture.fixture_id
     : (model.devices || []).find(device => device.id === cardId)?.name || null;
+  // Chat bound to the room (APT-C02/C03): the current home's names for chips,
+  // presentation-only hover and select, and one modeled change path. A Victoria
+  // patch goes through changeVirtualFixture like any hand change; nothing here
+  // calls a service. Every call re-checks the home and room key it was given.
+  const chatRoomKey = selectedSiteId === "victoria"
+    ? virtualFixtureDocument ? `victoria:${selectedContentRevision}:${virtualFixtureDocument.revision}:${virtualFixtureDocument.digest}` : ""
+    : selectedSiteId === "echo" && selectedContentRevision ? `echo:${selectedContentRevision}` : "";
+  const chatRoomLights = selectedSiteId === "victoria"
+    ? virtualFixtureItems.map(fixture => ({ id: fixture.fixture_id, label: fixture.label || fixture.fixture_id }))
+    : (model.devices || []).filter(device => device.ha_entity_id?.startsWith("light."))
+      .map(device => ({ id: device.id, label: device.name || device.label || device.id, entityId: device.ha_entity_id }));
+  const chatRoomAims = selectedSiteId === "echo"
+    ? (model.targets || []).filter(target => typeof target.id === "string").map(target => ({ id: target.id, label: target.name || target.label || target.id }))
+    : [];
+  const chatRoomSelection = selectedSiteId === "victoria"
+    ? virtualFixtureControlsOpen && selectedVirtualFixture ? { kind: "light", id: selectedVirtualFixture.fixture_id } : null
+    : cardId && chatRoomLights.some(light => light.id === cardId) ? { kind: "light", id: cardId } : null;
+  const chatRoomSignature = chatRoomKey && JSON.stringify([selectedSiteId, chatRoomKey, chatRoomLights, chatRoomAims, chatRoomSelection]);
+  const chatRoomActionsRef = useRef(null);
+  const chatRoomHoverRef = useRef(null);
+  const chatRoomIsCurrent = ref => !!chatRoomKey && !!ref && ref.siteId === selectedSiteId && ref.key === chatRoomKey;
+  const chatRoomHover = ref => {
+    const engine = engineRef.current;
+    if (!engine) return false;
+    if (ref === null) {
+      const previous = chatRoomHoverRef.current;
+      chatRoomHoverRef.current = null;
+      if (previous?.kind === "light") { engine.overlay.setHover(null); setHoverId(null); }
+      if (previous?.kind === "aim") engine.overlay.setTargetHover?.(null, aimDestination?.kind === "named" ? aimDestination.id : null);
+      return true;
+    }
+    // Victoria's virtual fixtures have no renderer hover seam yet.
+    if (!chatRoomIsCurrent(ref) || selectedSiteId !== "echo" || !getRoomInspectorContext()) return false;
+    if (ref.kind === "light" && chatRoomLights.some(light => light.id === ref.id)) {
+      engine.overlay.setHover(ref.id); setHoverId(ref.id); chatRoomHoverRef.current = ref; return true;
+    }
+    if (ref.kind === "aim" && chatRoomAims.some(aim => aim.id === ref.id) && engine.overlay.setTargetHover) {
+      engine.overlay.setTargetHover(ref.id, aimDestination?.kind === "named" ? aimDestination.id : null);
+      chatRoomHoverRef.current = ref; return true;
+    }
+    return false;
+  };
+  const chatRoomSelect = ref => {
+    if (!chatRoomIsCurrent(ref) || ref.kind !== "light") return false;
+    return selectedSiteId === "victoria" ? selectVirtualFixture(ref.id) : selectRoomDevice(ref.id);
+  };
+  const chatRoomModeledLight = ref => {
+    if (!chatRoomIsCurrent(ref) || selectedSiteId !== "victoria" || ref.kind !== "light"
+        || !virtualFixtureControlsOpen || virtualFixtureId !== ref.id) return null;
+    const fixture = getVirtualFixtureSelectionContext()?.preview.fixtures.find(item => item.fixture_id === ref.id);
+    return fixture ? { state: fixture.state, color_temp_ranges: fixture.color_temp_ranges } : null;
+  };
+  chatRoomActionsRef.current = {
+    hover: chatRoomHover,
+    select: chatRoomSelect,
+    readModeledLight: chatRoomModeledLight,
+    applyModeledPatch: (ref, patch) => {
+      if (!chatRoomModeledLight(ref) || changeVirtualFixture(patch, ref.id) !== true) return null;
+      const after = chatRoomModeledLight(ref);
+      return after ? { ok: true, state: after.state } : null;
+    },
+  };
+  const chatRoomSnapshot = useMemo(() => {
+    if (!chatRoomSignature) return null;
+    const [siteId, key, lights, namedAims, selection] = JSON.parse(chatRoomSignature);
+    const call = (name, fallback) => (...args) => {
+      try { return chatRoomActionsRef.current?.[name]?.(...args) ?? fallback; } catch (_) { return fallback; }
+    };
+    return Object.freeze({ schema: "home-apartment-chat-room-1", siteId, key, lights, namedAims, selection,
+      hover: call("hover", false), select: call("select", false), adjust: call("select", false),
+      readModeledLight: call("readModeledLight", null), applyModeledPatch: call("applyModeledPatch", null) });
+  }, [chatRoomSignature]);
   useEffect(() => {
     if (!unifiedShell || !onShellState) return;
     onShellState({ siteId: selectedSiteId, sites: window.HomeSpatialViewport?.getSites?.() || [], phase,
@@ -8180,11 +8252,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
       openSetup: openUnifiedSetup,
-      selectHome: id => travelToSite(id, { presentation: "interior" }) });
+      selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
-    unifiedDockCollapsed, unifiedDockExpanded]);
+    unifiedDockCollapsed, unifiedDockExpanded, chatRoomSnapshot]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);

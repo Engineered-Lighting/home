@@ -121,6 +121,9 @@ function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId
     return !!intent;
   };
 
+  // Capture-phase handlers: the host's orbit listener sits on the viewport
+  // below this overlay, so a press that stopped only in the bubble phase
+  // would already have started an orbit there.
   const reticleDown = event => {
     if (!aimable || !scope || event.button !== 0 || event.isPrimary === false) return;
     event.preventDefault(); event.stopPropagation();
@@ -132,11 +135,13 @@ function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId
   };
   const reticleMove = event => {
     if (!view.dragging) return;
+    event.stopPropagation();
     // A second finger is a pinch, not part of the aim.
     if (event.isPrimary === false) { presentation.cancelDrag(); return; }
     presentation.moveDrag({ pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY });
   };
   const reticleUp = event => {
+    if (view.dragging) event.stopPropagation();
     const model = presentation?.endDrag({ pointerId: event.pointerId });
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch (_) { /* released */ }
     propose(model);
@@ -175,7 +180,8 @@ function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId
         <span className="apt-room-at apt-room-ring" data-apt-fixture-ring={id} data-state="idle" aria-hidden="true" hidden />
         <button type="button" tabIndex={-1} hidden className="apt-room-at apt-room-label hg-focusable"
           data-apt-fixture-label={id} data-state="idle" data-on={fixture.on ? "true" : "false"} data-aim-ignore="true"
-          aria-current={id === selectedId ? "true" : undefined}
+          aria-label={fixture.label || id} aria-current={id === selectedId ? "true" : undefined}
+          onPointerDownCapture={event => event.stopPropagation()}
           onClick={event => { event.stopPropagation(); onSelect?.(id); }}
           onPointerEnter={() => onHover?.(id)} onPointerLeave={() => onHover?.(null)}>
           <span className="dot" aria-hidden="true" />
@@ -188,7 +194,7 @@ function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId
     <span className="apt-room-at apt-room-blocker" data-apt-aim-blocker="" aria-hidden="true" hidden />
     <button ref={reticleRef} type="button" hidden className="apt-room-at apt-room-reticle hg-focusable"
       data-apt-aim-reticle="" data-state="current" data-aim-ignore="true" aria-label={words?.reticle}
-      onPointerDown={reticleDown} onPointerMove={reticleMove} onPointerUp={reticleUp}
+      onPointerDownCapture={reticleDown} onPointerMoveCapture={reticleMove} onPointerUpCapture={reticleUp}
       onPointerCancel={reticleCancel} onLostPointerCapture={reticleCancel} onKeyDown={reticleKey}
       onClick={event => event.stopPropagation()}>
       <span className="ring" aria-hidden="true" /><span className="pip" aria-hidden="true" />
@@ -208,7 +214,7 @@ function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId
     </div>
     <div className="apt-room-at apt-room-bar" data-apt-aim-bar="" role="group" aria-label={words?.bar} hidden
       data-state={bar?.state || "valid"} data-aim-ignore="true" onKeyDown={barKey}
-      onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
+      onPointerDownCapture={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
       {bar && <>
         <span data-apt-aim-bar-target="">{bar.title}</span>
         {bar.actions.includes("set") && <button type="button" className="hg-focusable" data-apt-aim-action="set" onClick={set}>{words?.set}</button>}

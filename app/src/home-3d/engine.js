@@ -53,6 +53,9 @@ export async function warmApartmentAssetBytes(options) {
 export async function loadDirectionalPresentation() {
     return sib('apartment-directional-presentation.mjs');
 }
+export async function loadAimPresentation() {
+    return sib('apartment-aim-presentation.mjs');
+}
 
 /* Optional display evidence beside the unchanged marker API. All binding
  * checks are synchronous; no pending digest or private document survives reset. */

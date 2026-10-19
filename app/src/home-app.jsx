@@ -5613,6 +5613,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const unifiedHome = homeLayout === "unified";
   const spatialLayout = homeLayout !== "classic";
   const [shellTab, setShellTab] = useState("controls");
+  const shellTabRef = useRef(shellTab);
+  shellTabRef.current = shellTab;
   const [shellDetent, setShellDetent] = useState("half");
   const [shellState, setShellState] = useState(null);
   const [shellControlsHost, setShellControlsHost] = useState(null);
@@ -5638,6 +5640,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     setShellDetent(value => value === "peek" ? "half" : value);
   }, []);
   const showShellControls = useCallback(() => showShellTab("controls"), [showShellTab]);
+  // Aiming from the room keeps Chat open if it was open (APT-A02); the room
+  // bar carries Set aim there. A phone sheet still rises from peek to half.
+  const showShellAim = useCallback(() => showShellTab(shellTabRef.current === "chat" ? "chat" : "controls"), [showShellTab]);
   useEffect(() => {
     if (!unifiedHome) return;
     const resize = () => { if (window.innerWidth >= 600) setShellTab(tab => tab === "camera" ? "controls" : tab); };
@@ -11753,6 +11758,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
             shellCameraHost={shellCameraHost}
             onShellState={setShellState}
             onShowShellControls={showShellControls}
+            onShowShellAim={showShellAim}
           />
           {!unifiedHome && <SpatialModeRail
             active={spatialActiveSurface}

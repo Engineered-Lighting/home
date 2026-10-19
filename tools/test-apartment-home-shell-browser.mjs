@@ -770,7 +770,105 @@ test('unified shell keeps the real room, private controls and one chat controlle
     checks.push({ stage: 'same_fixture_click_from_chat_and_native_keyboard_selection_reveal_controls',
       keyboard_selected_fixture: await fixtureSelect.inputValue() });
     const directId = fixtureIds[2];
+    const rigPose = () => page.evaluate(() => { const pose = window.__APT_ENGINE.rig.snapshotPose();
+      return { az: pose.az, el: pose.el, zoom: pose.zoom, previewAz: pose.previewAz, previewEl: pose.previewEl, overshoot: pose.overshoot }; });
+    // Native witness for one authored mouse scope; the drag below and this
+    // body-press case install the same one.
+    const installNativeWitness = () => page.evaluate(() => {
+      if (window.__shellNativeMouseScope) throw Error('overlapping authored native drag scope');
+      const observed = [], dragstarts = [], types = ['pointermove', 'pointerdown', 'pointerup', 'dragstart'];
+      const witness = event => {
+        if (event.type !== 'dragstart' && event.pointerType !== 'mouse') return;
+        const kind = event.type === 'dragstart' ? 'dragstarts' : 'observed', events = kind === 'dragstarts' ? dragstarts : observed;
+        events.push({ sequence: events.length + 1, type: event.type, isTrusted: event.isTrusted,
+          x: event.clientX, y: event.clientY, pointerType: event.pointerType, pointerId: event.pointerId,
+          button: event.button, buttons: event.buttons, pressure: event.pressure,
+          modifiers: { alt: event.altKey, control: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey } });
+      };
+      for (const type of types) window.addEventListener(type, witness, { capture: true });
+      window.__shellNativeMouseScope = { observed, dragstarts, cleanup: () => {
+        for (const type of types) window.removeEventListener(type, witness, { capture: true });
+        window.__shellNativeMouseScope = null;
+      } };
+      return { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') };
+    });
+    // APT-R01/A01: only the reticle starts an aim. A native drag from the
+    // fixture body selects that fixture, but neither moves its aim, proposes
+    // nor starts an orbit.
+    receipt.native_body_drag_mouse = [];
+    async function bodyDragSelectsOnly(focusCase, expectedFocus) {
+      const scope = { id: receipt.native_body_drag_mouse.length + 1, focus_case: focusCase, native_witness_status: 'pending', observed: [], dragstarts: [] };
+      receipt.native_body_drag_mouse.push(scope);
+      const session = await context.newCDPSession(page), mouse = createDirectionalNativeMouse({
+        send: (method, packet) => session.send(method, packet), onRecord: () => { scope.ledger = mouse.readback(); save(); } });
+      let released, scopeError, observerClosed = false;
+      try {
+        const focusBefore = await installNativeWitness();
+        assert.equal(focusBefore.label, expectedFocus, 'the real inspector control has focus before the body drag');
+        const proposalBar = () => page.evaluate(() => { const bar = document.querySelector('[data-apt-aim-bar]');
+          return bar && !bar.hidden ? { state: bar.getAttribute('data-state'), text: bar.innerText } : null; });
+        const aimBefore = await aimDescriptor(directId), poseBefore = await rigPose(), barBefore = await proposalBar();
+        let cylinder = await fixturePoint(directId);
+        await mouse.move(cylinder.x, cylinder.y);
+        await waitAimViewport('body_hover_viewport_ready_before_drag');
+        cylinder = await fixturePoint(directId);
+        await mouse.move(cylinder.x, cylinder.y);
+        await waitAimViewport('final_body_hover_viewport_ready_before_drag');
+        assert.equal(await page.evaluate(({ x, y }) => {
+          const engine = window.__APT_ENGINE;
+          return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
+        }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
+        const target = await targetPoint([2.4,2.1,0]);
+        assert.ok(target.hit, 'the body drag ends over the actual registered authored collision mesh');
+        await mouse.down();
+        const selectedAfterDown = await waitForDirectionalReadiness(page, id => {
+          const label = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
+          const matches = window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === label);
+          return matches.length === 1 && matches[0].fixture_id === id ? id : false;
+        }, directId);
+        assert.equal(selectedAfterDown, directId, 'pointer-down selected the fixture being dragged');
+        await mouse.move(target.x, target.y, { steps: 12 }); await mouse.up();
+        released = await page.evaluate(() => {
+          const native = window.__shellNativeMouseScope;
+          if (!native) throw Error('missing authored native drag scope');
+          const value = { observed: native.observed, dragstarts: native.dragstarts }; native.cleanup(); return value;
+        });
+        observerClosed = true; scope.observed = released.observed; scope.dragstarts = released.dragstarts; scope.ledger = mouse.readback();
+        scope.native_witness_status = 'captured';
+        assert.deepEqual(scope.ledger.operations.map(row => row.type), ['move', 'move', 'down', 'move', 'up']);
+        assert.equal(scope.ledger.expected.filter(row => row.type === 'move').length, 14);
+        assert.equal(scope.ledger.expected.length, 16);
+        scope.proof = assertDirectionalNativeMouseLedger({ ledger: scope.ledger, observed: scope.observed, dragstarts: scope.dragstarts });
+        scope.native_witness_status = 'qualified';
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.deepEqual(await aimDescriptor(directId), aimBefore, 'a body drag selects but never moves the aim');
+        assert.deepEqual(await rigPose(), poseBefore, 'a body drag never starts an orbit');
+        assert.deepEqual(await proposalBar(), barBefore, 'a body drag proposes nothing and leaves any pending proposal as it was');
+        scope.result = { selected_after_down: selectedAfterDown, pose: poseBefore };
+      } catch (error) { scopeError = error; scope.failure = error.message; throw error; }
+      finally {
+        let cleanupError;
+        if (!observerClosed && !page.isClosed()) try {
+          const witness = await page.evaluate(() => { const native = window.__shellNativeMouseScope;
+            if (!native) return null; const value = { observed: native.observed, dragstarts: native.dragstarts }; native.cleanup(); return value; });
+          if (witness) { Object.assign(scope, witness); scope.native_witness_status = 'captured'; }
+        } catch (error) { cleanupError = error; }
+        try { await session.detach(); } catch (error) { cleanupError ||= error; }
+        scope.ledger = mouse.readback(); if (cleanupError) scope.cleanup_error = cleanupError.message; save();
+        if (cleanupError && !scopeError) throw cleanupError;
+      }
+    }
+    // The reticle's projected centre, from the overlay's actual DOM.
+    const reticlePoint = () => page.evaluate(() => {
+      const node = document.querySelector('[data-apt-aim-reticle]'), rect = node && !node.hidden ? node.getBoundingClientRect() : null;
+      return rect && rect.width > 0 ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+    });
     async function dragAndUndo(focusCase, expectedFocus) {
+      await bodyDragSelectsOnly(focusCase, expectedFocus);
+      // A canvas press deliberately ends inspector focus. Give it back to the
+      // focus case's control, so the reticle drag below starts from it as the
+      // original drag did.
+      await page.locator(`[aria-label="${expectedFocus}"]`).focus();
       const scope = { id: receipt.native_drag_mouse.length + 1, focus_case: focusCase, native_witness_status: 'pending', observed: [], dragstarts: [] };
       receipt.native_drag_mouse.push(scope);
       const session = await context.newCDPSession(page), mouse = createDirectionalNativeMouse({
@@ -797,21 +895,22 @@ test('unified shell keeps the real room, private controls and one chat controlle
           return { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') };
         });
         assert.equal(focusBefore.label, expectedFocus, 'the real inspector control retains focus before the drag');
-        let cylinder = await fixturePoint(directId);
-        await mouse.move(cylinder.x, cylinder.y);
+        // The reticle is the only aim start (APT-A01). The body-press case
+        // above keeps the fixture-pick readiness assertion for this fixture.
+        let reticle = await reticlePoint();
+        assert.ok(reticle, 'the selected fixture shows its reticle on the Spot tool');
+        await mouse.move(reticle.x, reticle.y);
         await waitAimViewport('fixture_hover_viewport_ready_before_drag');
-        cylinder = await fixturePoint(directId);
-        await mouse.move(cylinder.x, cylinder.y);
+        reticle = await reticlePoint();
+        await mouse.move(reticle.x, reticle.y);
         await waitAimViewport('final_fixture_hover_viewport_ready_before_drag');
-        assert.equal(await page.evaluate(({ x, y }) => {
-          const engine = window.__APT_ENGINE;
-          return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
-        }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
+        assert.equal(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-apt-aim-reticle]') ? 'reticle' : null,
+          reticle), 'reticle', 'the settled pointer is over the selected fixture reticle before the actual drag');
         const target = await targetPoint([2.4,2.1,0]);
         assert.ok(target.hit, 'direct aim target comes from the actual registered authored collision mesh');
         assert.ok(target.display_hit && Math.hypot(...target.display_hit.point.map((value, axis) => value - target.hit.point[axis])) < 1e-6,
           'the expected collision hit is also a visible canonical display surface');
-        drag = { fixture_id: directId, focus_case: focusCase, focus_before: focusBefore, cylinder, expected: target };
+        drag = { fixture_id: directId, focus_case: focusCase, focus_before: focusBefore, reticle, aim_before: await aimDescriptor(directId), expected: target };
         receipt[focusCase === 'setup_keyboard' ? 'drag' : 'focused_spot_drag'] = drag;
         // Observe the actual input frame before the element's production capture
         // handler. Ambient camera motion is legitimate; the committed target must
@@ -891,6 +990,14 @@ test('unified shell keeps the real room, private controls and one chat controlle
       assert.equal(drag.pointer_up?.current_engine, true, 'pointer-up belongs to the same actual engine');
       assert.equal(drag.pointer_up.selected_fixture_matches, 1, 'the rendered selected inspector identifies exactly one registered fixture');
       assert.equal(drag.pointer_up.selected_fixture_id, directId, 'pointer-up retains the fixture being dragged');
+      // The drop only proposes (APT-A01, A04); the aim moves at an explicit
+      // Set. Enter on the reticle, which kept focus from its press, is that Set.
+      drag.proposed = await waitForDirectionalReadiness(page, () => document.querySelector('[data-apt-aim-bar]')?.hidden === false
+        && document.querySelector('[data-apt-aim-bar]').getAttribute('data-state'));
+      assert.equal(drag.proposed, 'valid', 'the drop leaves a valid proposal with Set aim');
+      assert.deepEqual(await aimDescriptor(directId), drag.aim_before, 'the current aim stays exactly in place until Set aim');
+      assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-apt-aim-reticle')), true, 'the reticle keeps focus after the drop');
+      await page.keyboard.press('Enter');
       await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Setup', exact: true }).click();
       assert.equal(await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue(), directId);
       await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Aim', exact: true }).click();
@@ -925,6 +1032,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.getByRole('slider', { name: 'Pan', exact: true }).focus();
     await timedPhase('canonical_drag_spot', () => dragAndUndo('spot_pan_slider', 'Pan'));
     assert.deepEqual(receipt.native_drag_mouse.map(scope => scope.proof.samples), [16, 16]);
+    assert.deepEqual(receipt.native_body_drag_mouse.map(scope => scope.proof.samples), [16, 16]);
 
     await capture('unified-fixture-controls-1366x768');
 

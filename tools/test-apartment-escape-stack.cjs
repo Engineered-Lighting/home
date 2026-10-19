@@ -312,6 +312,16 @@ function apartmentOperation(flags = {}) {
     exitCameraPose: () => calls.push('camera'), setEditing: value => { assert.equal(value, false); calls.push('setup'); },
     setCardId: value => { assert.equal(value, null); calls.push('card'); }, clearVirtualFixtureSelection: () => calls.push('selection'),
     restoreApartmentOperationFocus: key => focus.push(key),
+    // W2 owners: the room reticle's drag (step 1), design tap to aim (step 2)
+    // and the selected light's pending proposal (step 4).
+    aimPresentationRef: { current: { readback: () => ({ dragging: !!flags.reticle }), cancelDrag: () => { calls.push('reticle'); flags.reticle = false; } } },
+    tapAim: flags.designTap ? 'authored-light' : null, setTapAim: value => { assert.equal(value, null); calls.push('design-tap'); },
+    virtualFixtureId: 'authored-light',
+    aimScopeFor: id => { assert.equal(id, 'authored-light'); return { proposal: flags.proposal ? { id: 'authored-proposal' } : null }; },
+    discardAimProposal: ({ fixture_id, proposal }) => {
+      assert.equal(fixture_id, 'authored-light'); assert.equal(proposal.id, 'authored-proposal');
+      calls.push('proposal'); flags.proposal = false; return true;
+    },
   };
   const handle = evaluate(apartment, local(apartment, 'handleApartmentEscape'), bindings);
   return { handle, calls, focus, refs, current, bindings };
@@ -332,6 +342,12 @@ for (const row of [
   { name: 'setup exit', flags: { setup: true, card: true, selection: true }, expected: 'setup', focus: 'setup' },
   { name: 'control card', flags: { card: true, selection: true }, expected: 'card', focus: 'card' },
   { name: 'virtual fixture selection', flags: { selection: true }, expected: 'selection', focus: 'selection' },
+  // Rows for the W2 owners (APT-F04 done[0]); every existing row is unchanged.
+  { name: 'room reticle drag cancels before every lower operation', flags: { reticle: true, designTap: true, proposal: true, ...allLowerOperations, drag: false }, expected: 'reticle' },
+  { name: 'design tap to aim', flags: { designTap: true, calibration: true, pairs: 3, camera: true, setup: true, card: true, selection: true, proposal: true }, expected: 'design-tap' },
+  { name: 'camera view before a pending proposal', flags: { camera: true, proposal: true, selection: true }, expected: 'camera', focus: 'camera' },
+  { name: 'control card before a pending proposal', flags: { card: true, proposal: true, selection: true }, expected: 'card', focus: 'card' },
+  { name: 'pending proposal discard before selection', flags: { proposal: true, selection: true }, expected: 'proposal' },
 ]) {
   test('actual Apartment operation table: ' + row.name + ' invokes exactly its existing owner', () => {
     const f = apartmentOperation(row.flags);
@@ -341,6 +357,17 @@ for (const row of [
     // lifecycle, geometry or persistence effects are outside this VM seam.
   });
 }
+
+test('actual ZIP Escape order: reticle drag, then proposal, then selection, then nothing', () => {
+  const f = apartmentOperation({ reticle: true, proposal: true, selection: true });
+  assert.equal(f.handle(), true); assert.deepEqual(f.calls, ['reticle'], 'a drag cancels alone; the proposal is kept');
+  assert.equal(f.handle(), true); assert.deepEqual(f.calls, ['reticle', 'proposal'], 'next, the proposal is discarded');
+  assert.equal(f.handle(), true); assert.deepEqual(f.calls, ['reticle', 'proposal', 'selection']);
+  assert.deepEqual(f.focus, ['selection']);
+  f.bindings.virtualFixtureControlsOpen = false;
+  const idle = evaluate(apartment, local(apartment, 'handleApartmentEscape'), f.bindings);
+  assert.equal(idle(), false, 'then nothing happens'); assert.deepEqual(f.calls, ['reticle', 'proposal', 'selection']);
+});
 
 test('actual radial Escape cancels only painting and retains the selected fixture for a later Escape', () => {
   const f = apartmentOperation({ radial: true, selection: true });

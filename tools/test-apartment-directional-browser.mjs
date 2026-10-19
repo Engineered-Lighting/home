@@ -728,8 +728,13 @@ test('real authored directional controls preserve native input, aim and output b
     const fixtures = initialInventory.fixtures, fixture = fixtures[0];
     await activateStatic(button('.apt-home-shell[data-home-layout="unified"]', 'Select ' + fixture.label)); await expectSelected(fixture);
     const originalAim = await descriptor(fixture.fixture_id);
-    await check('selected fixture defaults to Spot and Aim with the literal compact native pill above the reticle and no fabricated pending-aim dot', async () => {
+    await check('a first selection opens Light and Zones; Aim then shows Spot with the literal compact native pill above the reticle and no fabricated pending-aim dot', async () => {
+      // APT-R01: selecting from nothing opens Light, whose room tool is Zones.
+      await expectMode('zones', button(INSPECTOR, 'Light', 'tab'));
+      await activateStatic(button(INSPECTOR, 'Aim', 'tab'));
       await expectMode('spot');
+      // Leaving Zones fades its ambient drawing out; read the Spot state once it has.
+      await page.waitForFunction(() => window.__directionalDrawingState().visible === false);
       const mounted = await page.evaluate(({ scope, tab }) => {
         const node = window.__directionalDOM.scope(scope); if (!node) throw Error('missing actual composer');
         const selectedTab = window.__directionalDOM.query(tab); if (!selectedTab) throw Error('missing authored control: ' + tab.name);
@@ -762,12 +767,25 @@ test('real authored directional controls preserve native input, aim and output b
       assert.deepEqual(mounted.button_heights, [24, 24]); assert.ok(pill.height <= 34);
       assert.equal(mounted.pill_label, fixture.label); assert.equal(mounted.visible_svg_paths, 0);
       assert.equal(mounted.drawing.visible, false, 'Spot mode leaves the borrowed ambient drawing hidden');
-      assert.equal(mounted.inventory.fixture_count, 4); return { default: 'spot', actual_hub_only: true, fixtures: 4 };
+      assert.equal(mounted.inventory.fixture_count, 4);
+      assert.equal(await page.evaluate(scope => !!window.__directionalDOM.scope(scope)?.querySelector('[data-apt-aim-pending]'), COMPOSER), false,
+        'no pending dot without a proposal');
+      return { default: 'zones', aim_tab: 'spot', actual_hub_only: true, fixtures: 4 };
     });
     await check('existing native Spot drag still creates an aim and enables its existing Undo', async () => {
-      const start = await canvasPoint('fixture', fixture.fixture_id), end = await canvasPoint('surface', null, start); assert.ok(start && end);
+      // The reticle is the only aim start (APT-A01); its drop proposes and an explicit Set aims.
+      const start = await page.evaluate(() => {
+        const node = document.querySelector('[data-apt-aim-reticle]'), rect = node && !node.hidden ? node.getBoundingClientRect() : null;
+        return rect && rect.width > 0 ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+      }), end = await canvasPoint('surface', null, start); assert.ok(start && end);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up();
-      await expectSelected(fixture); await page.waitForFunction(spec => window.__directionalDOM.visible(window.__directionalDOM.query(spec)), button(INSPECTOR, 'Undo aim'));
+      await expectSelected(fixture);
+      await page.waitForFunction(() => document.querySelector('[data-apt-aim-bar]')?.hidden === false);
+      assert.deepEqual(await descriptor(fixture.fixture_id), originalAim, 'the drop leaves the current aim until Set aim');
+      assert.equal(await page.evaluate(scope => !!window.__directionalDOM.scope(scope)?.querySelector('[data-apt-aim-pending]'), COMPOSER), false,
+        'Spot is the tool, so the room bar shows instead of the pending dot');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(spec => window.__directionalDOM.visible(window.__directionalDOM.query(spec)), button(INSPECTOR, 'Undo aim'));
       const observed = await page.evaluate(({ spec, id }) => {
         const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing authored control: ' + spec.name);
         return { disabled: node.disabled, descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id) };

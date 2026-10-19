@@ -112,6 +112,10 @@ const MAP = [
   [/^tools\/(?:fixtures\/apartment-directional-readiness|test-apartment-directional-readiness)\.mjs$/, ["test-apartment-directional-readiness.mjs", "test-apartment-directional-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-directional-presentation\.mjs|tools\/test-apartment-directional-presentation\.mjs)$/, ["test-apartment-directional-presentation.mjs", "test-apartment-directional-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures\.mjs|markers\.js)|tools\/test-apartment-radial-visual\.mjs)$/, ["test-apartment-radial-visual.mjs"]],
+  // W2 aim wiring: the mounted overlay, its store and presentation, and the hand-change switch point.
+  [/^(?:app\/src\/(?:home-apartment(?:-room-overlay|-cards)?\.jsx|home-apartment-aim-proposals\.js|home-app\.jsx|home-3d\/(?:apartment-aim-presentation\.mjs|engine\.js))|tools\/test-apartment-(?:aim-wiring-browser|manual-intent-contract)\.mjs)$/,
+    ["test-apartment-aim-wiring-browser.mjs", "test-apartment-manual-intent-contract.mjs",
+      "run-apartment-aim-presentation-tests.mjs", "run-apartment-aim-lifecycle-browser.mjs", "run-apartment-aim-proposals-tests.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [

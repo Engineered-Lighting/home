@@ -2325,6 +2325,64 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
   </div>;
 }
 
+const APT_AIM_HISTORY_STEPS = 30;
+const aptUndoShortcut = () => /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘Z" : "Ctrl+Z";
+const aptVirtualFixtureLit = item => !!(item.state?.spotlight?.on || item.state?.downward?.on || item.state?.radials?.some(radial => radial.on));
+
+// The part of the room view the Home column or phone sheet covers, so the
+// aim bar stays reachable beside it.
+function aptShellInsets(host) {
+  const panel = host?.ownerDocument?.querySelector(".apt-home-shell .apt-home-panel");
+  if (!panel) return null;
+  const view = host.getBoundingClientRect(), cover = panel.getBoundingClientRect();
+  if (!(cover.width > 0 && cover.height > 0) || cover.right <= view.left || cover.left >= view.right
+      || cover.bottom <= view.top || cover.top >= view.bottom) return null;
+  if (cover.left <= view.left + 1 && cover.right >= view.right - 1) return { bottom: view.bottom - cover.top };
+  return cover.left > view.left + view.width / 2 ? { right: view.right - cover.left } : { left: cover.right - view.left };
+}
+
+// Distance and tilt from the registered optical origin, or from the socket
+// display point when none is registered, as the room chip measures them.
+function aptAimMeasure(descriptor, point) {
+  const origin = Array.isArray(descriptor?.optical_origin_m) ? descriptor.optical_origin_m : descriptor?.display_origin_m;
+  if (!Array.isArray(origin) || !Array.isArray(point)) return null;
+  const ray = point.map((value, axis) => value - origin[axis]), length = Math.hypot(...ray);
+  if (!(length > 0)) return null;
+  return `${length.toFixed(2)} m · ${Math.round(Math.acos(Math.max(-1, Math.min(1, -ray[2] / length))) * 180 / Math.PI)}° tilt`;
+}
+const APT_AIM_REASON = { blocked: "Blocked", out_of_reach: "Out of reach", no_surface: "No surface here", not_aimable: "Can’t aim here" };
+
+/* The Aim tab's rows (APT-A05): where the light points now (warm), what is
+ * proposed (cyan) or why that spot can't be used, Set aim and Discard, and
+ * Tap to aim (APT-A08). */
+function AptAimProposalRows({ descriptor, limits, proposal, tapAim, onSet, onDiscard, onTapAim }) {
+  const now = descriptor.target?.point, target = proposal?.target;
+  const disclosures = [!Array.isArray(descriptor.optical_origin_m) && "Modeled from the socket display point · optical pivot not registered",
+    limits?.physical_travel !== "commissioned" && "travel limits not commissioned"].filter(Boolean);
+  const swatch = color => <span aria-hidden="true" style={{ flex: "none", width: 9, height: 9, marginTop: 4, borderRadius: "50%",
+    border: `2px solid ${color}` }} />;
+  return <div data-apt-aim-rows="">
+    <div className="apt-ui-row" data-apt-aim-row="current" style={{ alignItems: "flex-start", gap: 8 }}>{swatch("#ffddb0")}
+      <span className="apt-ui-grow"><span className="apt-ui-channel-name">Now</span>
+        <span className="apt-ui-meta" style={{ display: "block" }}>{now
+          ? `${descriptor.target.surface_id || "Room surface"} · ${aptAimMeasure(descriptor, now) || ""}` : "Not aimed at a room surface yet"}</span></span></div>
+    {target ? <div className="apt-ui-row" data-apt-aim-row="proposed" data-state={target.valid ? "valid" : "invalid"}
+      style={{ alignItems: "flex-start", gap: 8 }}>{swatch(target.valid ? "#45dfff" : "#ff625f")}
+      <span className="apt-ui-grow"><span className="apt-ui-channel-name">Proposed</span>
+        <span className="apt-ui-meta" style={{ display: "block" }}>{target.valid
+          ? `${target.surface || "This spot"} · ${aptAimMeasure(descriptor, target.point_m) || ""}`
+          : `${APT_AIM_REASON[target.reason] || APT_AIM_REASON.not_aimable} · only Discard is available`}</span></span></div>
+      : <p className="apt-ui-copy" data-apt-aim-empty="">{tapAim ? "Tap a surface in the room." : "Drag the reticle onto a surface."}</p>}
+    <div className="apt-ui-actions" role="group" aria-label="Aim proposal">
+      {target?.valid && <button type="button" className="apt-ui-button" data-apt-aim-tab-action="set" onClick={onSet}
+        style={{ background: "#45dfff", borderColor: "#45dfff", color: "#04161b" }}>Set aim</button>}
+      {target && <button type="button" className="apt-ui-button" data-apt-aim-tab-action="discard" onClick={onDiscard}>Discard</button>}
+      <button type="button" className="apt-ui-button" aria-pressed={!!tapAim} onClick={onTapAim}>{tapAim ? "Tap a surface…" : "Tap to aim"}</button>
+    </div>
+    {disclosures.length > 0 && <p className="apt-ui-meta" data-apt-aim-tab-disclosure="">{disclosures.join(" · ")}</p>}
+  </div>;
+}
+
 // Bulk radial power preserves saved levels unless every zone is fully dark.
 function aptUnifiedRadialPowerPatch(radials, on) {
   const restoreLevel = on && radials.length > 0 && radials.every(zone => zone.brightness === 0);
@@ -2336,7 +2394,7 @@ const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
-  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView }) {
+  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, aimControls }) {
   const radialSnapshot = React.useSyncExternalStore(directionalView?.subscribe || aptEmptySubscribe,
     directionalView?.getSnapshot || aptEmptySnapshot, aptEmptySnapshot);
   const [localTab, setLocalTab] = useState("light");
@@ -2389,7 +2447,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <input type="checkbox" aria-label={`${title} power`} checked={!!current.on}
           onChange={event => onPatch({ [key]: { on: event.target.checked } })} /><span>{current.on ? "On" : "Off"}</span></label></div>
       <AptUnifiedRange label="Brightness" ariaLabel={brightnessLabel} value={(current.brightness ?? 1) * 100}
-        onChange={value => onPatch({ [key]: { brightness: value / 100 } })} />
+        onChange={value => onPatch({ [key]: { brightness: value / 100, ...(value > 0 && !current.on ? { on: true } : {}) } })} />
       <AptUnifiedRange label="Color temp" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
         min={minimum} max={5000} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value } })} />
       {key === "spotlight" && <div className="apt-ui-row"><span className="apt-ui-meta grow">Where it points is set in Aim.</span>
@@ -2434,7 +2492,8 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
       <p className="apt-ui-meta">Virtual preview · no hardware command sent.</p>
     </section>}
     {tab === "aim" && <section className="apt-ui-section" id="apt-ui-virtual-aim" role="tabpanel" aria-label="Fixture aim">
-      <h3 className="apt-ui-heading">Spotlight aim</h3><p className="apt-ui-copy">Drag the fixture or its aim handle onto a visible room surface. Its socket stays fixed.</p>
+      <h3 className="apt-ui-heading">Spotlight aim</h3>
+      {aimControls || <p className="apt-ui-copy">Drag the aim handle onto a visible room surface. Its socket stays fixed.</p>}
       {['pan', 'tilt'].map(axis => <AptUnifiedRange key={axis} label={axis === 'pan' ? 'Pan' : 'Tilt'} ariaLabel={axis === 'pan' ? 'Pan' : 'Tilt'} suffix="°"
         min={fixture.limits?.[`${axis}_min_deg`] ?? (axis === 'pan' ? -175 : -5)} max={fixture.limits?.[`${axis}_max_deg`] ?? (axis === 'pan' ? 175 : 88)}
         value={state[`${axis}_deg`] || 0} onChange={value => onPatch({ [`${axis}_deg`]: value })} />)}
@@ -2455,7 +2514,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   </aside>;
 }
 
-function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "", unifiedShell = false, shellControlsHost = null, shellCameraHost = null, onShellState, onShowShellControls }) {
+function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "", unifiedShell = false, shellControlsHost = null, shellCameraHost = null, onShellState, onShowShellControls, onShowShellAim }) {
   const controlConnectionRef = useRef({ connection, endpoint, token, generation: 0 });
   if (controlConnectionRef.current.connection !== connection || controlConnectionRef.current.endpoint !== endpoint
       || controlConnectionRef.current.token !== token) {
@@ -2742,6 +2801,21 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [virtualAimHistoryVersion, setVirtualAimHistoryVersion] = useState(0);
   const virtualAimHistoryRef = useRef({ undo: [], redo: [] });
   const virtualAimGestureRef = useRef(null);
+  const virtualFixtureControlsOpenRef = useRef(false);
+  virtualFixtureControlsOpenRef.current = virtualFixtureControlsOpen;
+  // In-memory aim proposals (home-apartment-aim-proposals.js) and the room
+  // overlay that shows and edits them (home-apartment-room-overlay.jsx).
+  const aimProposalStoreRef = useRef(null);
+  if (!aimProposalStoreRef.current && window.HomeApartmentAimProposals?.createAimProposalStore)
+    aimProposalStoreRef.current = window.HomeApartmentAimProposals.createAimProposalStore();
+  const aimProposals = aimProposalStoreRef.current;
+  React.useSyncExternalStore(aimProposals?.subscribe || aptEmptySubscribe,
+    aimProposals?.getSnapshot || aptEmptySnapshot, aimProposals?.getSnapshot || aptEmptySnapshot);
+  const [aimPresentation, setAimPresentation] = useState(null);
+  const aimPresentationRef = useRef(null);
+  const aimActionsRef = useRef(null);
+  const [hoverFixtureId, setHoverFixtureId] = useState(null);
+  const [tapAim, setTapAim] = useState(null);
   const [deskTargetSelection, setDeskTargetSelection] = useState(null);
   const deskTargetCaptureRef = useRef(null);
   const virtualFixtureStatesRef = useRef({ key: null, states: new Map(), targets: new Map() });
@@ -5113,9 +5187,21 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     directionalViewRef.current?.sync(engine.overlay.virtualFixtureInteractionDescriptor?.(fixtureId));
     return true;
   };
-  const changeVirtualChannel = (patch) => changeVirtualFixture(virtualFixtureChannel.startsWith("radial-")
+  /* The one hand-change switch point (Den coordination agreement, 2026-10-19).
+   * Every fixture change a person makes in the UI calls it synchronously
+   * first: channel edits and sliders, aim Set, undo and redo. On the UI line it
+   * does nothing. Den binds this one function to manualTakeover(), and later
+   * to aimPreview.releaseForManual(fixtureId, { reason }), when it composes the
+   * desk preview. It never throws and never starts aiming. Proposals change no
+   * fixture, so proposing, discarding and restoring a proposal do not call it. */
+  const releaseFixtureForHandChange = (fixtureId, { reason } = {}) => ({ released: false, restored: false, excluded: false });
+  const changeVirtualFixtureByHand = (patch, fixtureId = selectedVirtualFixture?.fixture_id, options) => {
+    releaseFixtureForHandChange(fixtureId, { reason: "change" });
+    return changeVirtualFixture(patch, fixtureId, options);
+  };
+  const changeVirtualChannel = (patch) => changeVirtualFixtureByHand(virtualFixtureChannel.startsWith("radial-")
     ? { radials: [{ number: Number(virtualFixtureChannel.slice(7)), ...patch }] }
-    : { [virtualFixtureChannel]: patch });
+    : { [virtualFixtureChannel]: { ...patch, ...(patch.brightness > 0 && !selectedVirtualChannel?.on ? { on: true } : {}) } });
 
   // Selection is presentation only. Capture the installed viewport lifetime,
   // rather than a travel intent that may be canceled without replacing it.
@@ -5170,6 +5256,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       const selected = engine.overlay.setVirtualFixtureSelected?.(id);
       if (selected?.fixture_id !== id || getVirtualFixtureSelectionContext()?.engine !== engine) return false;
       if (reveal) {
+        // Selecting from nothing opens Light (SPEC › Selection precedence 2);
+        // a later selection keeps the tab it finds.
+        if (!virtualFixtureControlsOpenRef.current) {
+          fixtureInteractionModeRef.current = "zones"; setFixtureInteractionMode("zones"); setVirtualInspectorTab("light");
+        }
         setVirtualFixtureId(id); setVirtualFixtureControlsOpen(true);
         if (unifiedShell) onShowShellControls?.();
       }
@@ -5393,7 +5484,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (result?.patch?.radials?.length) {
         const key = JSON.stringify(result.patch);
         if (key !== owner.lastPatch) {
-          if (!changeVirtualFixture(result.patch, owner.fixtureId, { deferPreview: true })) { cancel("write-refused"); return; }
+          if (!changeVirtualFixtureByHand(result.patch, owner.fixtureId, { deferPreview: true })) { cancel("write-refused"); return; }
           owner.lastPatch = key;
         }
       }
@@ -5534,16 +5625,122 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     virtualFixtureDocument?.revision, virtualFixtureDocument?.digest,
     editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale]);
 
-  const restoreVirtualAimHistory = (direction) => {
+  // A light's pending proposal, read through the store's own fence. The
+  // store only remembers; every fixture change below stays in this host.
+  const aimScopeFor = id => {
+    const context = getVirtualFixtureSelectionContext();
+    const descriptor = context && typeof id === "string" ? context.engine.overlay.virtualFixtureInteractionDescriptor?.(id) : null;
+    const scope = descriptor && aimProposals ? aimProposals.scopeFromDescriptor("victoria", descriptor) : null;
+    return scope ? { context, descriptor, scope, proposal: aimProposals.current(scope) } : null;
+  };
+  // Undo and redo are per light: each entry keeps one light's {current aim,
+  // proposal} before and after one change, at most 30 steps per light
+  // (SPEC › Aim lifecycle). The binding reset above still clears every light.
+  const recordAimHistory = (id, before, after, coalesce = null) => {
+    const history = virtualAimHistoryRef.current, now = Date.now();
+    const last = history.undo.findLast(entry => entry.fixture_id === id);
+    // One slider sweep is one step.
+    if (coalesce && last?.coalesce === coalesce && last.binding === virtualFixtureBindingKey && now - last.at < 1000) {
+      last.after = after; last.at = now;
+    } else {
+      history.undo.push({ fixture_id: id, binding: virtualFixtureBindingKey, before, after, coalesce, at: now });
+      const mine = history.undo.filter(entry => entry.fixture_id === id);
+      if (mine.length > APT_AIM_HISTORY_STEPS) history.undo.splice(history.undo.indexOf(mine[0]), 1);
+    }
+    history.redo = history.redo.filter(entry => entry.fixture_id !== id);
+    setVirtualAimHistoryVersion(value => value + 1);
+  };
+  // History restores only where the light points. Its channels keep their
+  // current values, and a snapshot from another preview generation refuses.
+  const applyAimHistoryState = (id, state, reason) => {
+    const held = aimScopeFor(id), aim = state?.aim;
+    if (!held || !aim || aim.fixture_id !== id || aim.generation !== held.descriptor.generation) return false;
+    if (aim.state.pan_deg !== held.descriptor.state.pan_deg || aim.state.tilt_deg !== held.descriptor.state.tilt_deg
+        || JSON.stringify(aim.target) !== JSON.stringify(held.descriptor.target)) {
+      releaseFixtureForHandChange(id, { reason });
+      const result = held.context.engine.overlay.restoreVirtualFixtureAim?.(id, { ...aim,
+        state: { ...held.descriptor.state, pan_deg: aim.state.pan_deg, tilt_deg: aim.state.tilt_deg } });
+      if (!result?.ok) return false;
+    }
+    const live = aimScopeFor(id);
+    if (!live) return false;
+    if (live.proposal && live.proposal.id !== state.proposal?.id) aimProposals.take(live.scope, live.proposal.id);
+    if (state.proposal && live.proposal?.id !== state.proposal.id && !aimProposals.restore(live.scope, state.proposal).ok)
+      aimProposals.propose(live.scope, { origin: state.proposal.origin, target: state.proposal.target });
+    return true;
+  };
+  const restoreVirtualAimHistory = (direction, fixtureId = selectedVirtualFixture?.fixture_id) => {
     const history = virtualAimHistoryRef.current, source = direction === "undo" ? history.undo : history.redo;
-    const entry = source.at(-1), engine = engineRef.current;
-    if (!entry || entry.binding !== virtualFixtureBindingKey || workspaceAuthorityRef.current.key !== apartmentAuthorityKey) return;
-    const result = engine?.overlay.restoreVirtualFixtureAim?.(entry.fixture_id, direction === "undo" ? entry.before : entry.after);
-    if (!result?.ok) { setVirtualAimNotice("This aim belongs to an earlier scene. Select a new room surface."); return; }
-    source.pop(); (direction === "undo" ? history.redo : history.undo).push(entry);
+    const index = source.findLastIndex(entry => entry.fixture_id === fixtureId), entry = source[index], engine = engineRef.current;
+    if (!entry || entry.binding !== virtualFixtureBindingKey || workspaceAuthorityRef.current.key !== apartmentAuthorityKey) return false;
+    if (!applyAimHistoryState(entry.fixture_id, direction === "undo" ? entry.before : entry.after, direction)) {
+      setVirtualAimNotice("This aim belongs to an earlier scene. Select a new room surface."); return false;
+    }
+    source.splice(index, 1); (direction === "undo" ? history.redo : history.undo).push(entry);
     engine.overlay.setVirtualFixtureSelected?.(entry.fixture_id); setVirtualFixtureId(entry.fixture_id);
     syncVirtualFixturePreview(engine); setVirtualAimHistoryVersion(value => value + 1);
     setVirtualAimNotice(direction === "undo" ? "Aim undone." : "Aim restored.");
+    return true;
+  };
+  const aimHistoryLength = (direction, fixtureId = selectedVirtualFixture?.fixture_id) =>
+    virtualAimHistoryRef.current[direction].filter(entry => entry.fixture_id === fixtureId).length;
+  // Pan and Tilt stay as the accessible fine-tune (APT-A05, A08); their edits
+  // enter the same per-light history.
+  const patchVirtualFixtureFromInspector = (patch, fixtureId = selectedVirtualFixture?.fixture_id) => {
+    const axes = ["pan_deg", "tilt_deg"].filter(key => Object.hasOwn(patch || {}, key));
+    const held = axes.length ? aimScopeFor(fixtureId) : null;
+    const changed = changeVirtualFixtureByHand(patch, fixtureId);
+    const after = changed && held ? aimScopeFor(fixtureId) : null;
+    if (after) recordAimHistory(fixtureId, { aim: held.descriptor, proposal: held.proposal },
+      { aim: after.descriptor, proposal: after.proposal }, "slider:" + axes.join());
+    return changed;
+  };
+
+  // A drop, tap or arrow key only proposes; the current aim does not move.
+  const proposeAim = ({ fixture_id: id, origin = "manual", target } = {}) => {
+    const held = aimScopeFor(id);
+    const result = held ? aimProposals.propose(held.scope, { origin, target }) : null;
+    if (!result?.ok) return null;
+    recordAimHistory(id, { aim: held.descriptor, proposal: held.proposal }, { aim: held.descriptor, proposal: result.proposal });
+    setVirtualAimNotice(result.proposal.target.valid ? "Proposed aim. Set aim moves the light; Discard keeps the current aim."
+      : "This spot can’t be aimed at. Discard it or drag again.");
+    return result.proposal;
+  };
+  // Set goes through the existing fenced write, at the preview generation
+  // the proposal was made in. A moved scope refuses and nothing changes.
+  const setAimProposal = ({ fixture_id: id, proposal } = {}) => {
+    const held = aimScopeFor(id), target = proposal?.target;
+    if (!held?.proposal || held.proposal.id !== proposal?.id || target?.valid !== true || !Array.isArray(target.normal_m)) {
+      setVirtualAimNotice("That proposal belongs to an earlier scene. Drag the aim handle again."); return false;
+    }
+    const before = { aim: held.descriptor, proposal: held.proposal };
+    if (!aimProposals.take(held.scope, proposal.id).ok) return false;
+    releaseFixtureForHandChange(id, { reason: "aim" });
+    const result = held.context.engine.overlay.aimVirtualFixtureAtTarget(id, { point: target.point_m.slice(),
+      normal: target.normal_m.slice(), kind: "registered_mesh" }, { expectedGeneration: held.descriptor.generation });
+    if (!result?.ok) {
+      aimProposals.propose(held.scope, { origin: proposal.origin, target });
+      setVirtualAimNotice("That aim is unavailable. Choose another room surface."); return false;
+    }
+    recordAimHistory(id, before, { aim: result.descriptor, proposal: null });
+    syncVirtualFixturePreview(held.context.engine);
+    setVirtualAimNotice("Aim set in the modeled preview. No hardware command sent.");
+    showToast("Aim set · modeled preview, no hardware command sent");
+    return true;
+  };
+  const discardAimProposal = ({ fixture_id: id, proposal } = {}) => {
+    const held = aimScopeFor(id);
+    if (!held?.proposal || held.proposal.id !== proposal?.id || !aimProposals.discard(held.scope, proposal.id).ok) return false;
+    recordAimHistory(id, { aim: held.descriptor, proposal: held.proposal }, { aim: held.descriptor, proposal: null });
+    setVirtualAimNotice(`Proposal discarded. ${aptUndoShortcut()} brings it back.`);
+    return true;
+  };
+  // Aiming from the room brings Aim forward without moving the gesture,
+  // keeps Chat open and raises a phone sheet to half (APT-A02).
+  const startAimFromRoom = ({ fixture_id: id } = {}) => {
+    if (id !== virtualFixtureId || !virtualFixtureControlsOpen) return;
+    setVirtualInspectorTab("aim");
+    if (unifiedShell) (onShowShellAim || onShowShellControls)?.();
   };
 
   // Victoria presentation gestures are separate from Echo's physical-device
@@ -5569,28 +5766,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         return hit ? { point: hit.point, normal: hit.normal, kind: "registered_mesh" } : null;
       },
       captureSnapshot: id => overlay.virtualFixtureInteractionDescriptor(id),
-      previewTarget: (id, target, before) => overlay.aimVirtualFixtureAtTarget(id, target, { expectedGeneration: before.generation }),
-      restoreSnapshot: (id, before) => overlay.restoreVirtualFixtureAim(id, before),
+      // Only the reticle starts an aim (APT-A01, R01). A press on a fixture
+      // body still selects it and keeps the pointer from orbiting, but this
+      // controller may never preview, so it has nothing to restore or commit.
+      previewTarget: () => ({ ok: false, reason: "reticle_only" }),
+      restoreSnapshot: () => ({ ok: true }),
       onSelect: id => {
         if (!selectVirtualFixture(id, { fromGesture: true })) return;
         setVirtualFixtureChannel("spotlight");
-        setVirtualAimNotice("Drag a fixture or its aim handle onto a room surface.");
       },
       onPreview: info => {
-        if (!current()) return;
-        syncVirtualFixturePreview(engine);
-        setVirtualAimNotice(info.status === "surface_unavailable" ? "No visible room surface here. Move onto a wall, furniture or floor."
-          : info.status === "preview_unavailable" ? "That aim is unavailable. Choose another room surface."
-          : info.status === "canceled" ? "Aim canceled."
-          : info.status === "draft" ? "Aim updated in this virtual preview."
-          : info.status === "preview" ? "Aiming at the selected room surface…" : "");
-      },
-      onCommit: entry => {
-        if (!current()) return;
-        const history = virtualAimHistoryRef.current;
-        history.undo.push({ ...entry, binding: virtualFixtureBindingKey });
-        if (history.undo.length > 50) history.undo.shift();
-        history.redo = []; setVirtualAimHistoryVersion(value => value + 1); syncVirtualFixturePreview(engine);
+        if (!current() || info.status === "canceled" || info.status === "stale_scene") return;
+        setVirtualAimNotice("Drag the round aim handle to aim this light.");
       },
     });
     virtualAimGestureRef.current = gesture;
@@ -5602,6 +5789,191 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   }, [open, phase, virtualFixtureBindingKey, virtualFixtureDocument, apartmentAuthorityKey,
     editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale, rehearsalIsolated, unifiedShell,
     onShowShellControls, selectVirtualFixture]);
+
+  // The in-room aim overlay borrows the resident engine's admitted frame, as
+  // the directional composer does. It needs no selection: labels show for
+  // every light.
+  const aimOverlayWanted = open && phase === "ready" && !!virtualFixtureDocument && virtualSpotlightsVisible
+    && apartmentSceneControlsEnabled && !editing && !calibCam && !liveOn && spatialScale === "apartment" && !rehearsalIsolated;
+  useEffect(() => {
+    const engine = selectionEngine, host = hostRef.current, binding = virtualFixtureDocument?.binding;
+    if (!aimOverlayWanted || !engine || !host || !binding || typeof engine.createUiOverlayLayer !== "function") return undefined;
+    const capturedAuthority = apartmentAuthorityKey;
+    let lease = null, closed = false;
+    const admitted = () => !closed && document.visibilityState !== "hidden" && host.isConnected
+      && engineRef.current === engine && engine.siteId === "victoria" && viewOpenRef.current
+      && apartmentSceneControlsEnabledRef.current && workspaceAuthorityRef.current.key === capturedAuthority
+      && engine.sceneIdentity?.contentRevision === binding.content_revision
+      && engine.sceneIdentity?.registrationVersion === binding.registration_version
+      && engine.sceneIdentity?.frameDigest === binding.frame_digest;
+    const retire = owned => {
+      if (!owned || owned.retired) return;
+      owned.retired = true;
+      if (aimPresentationRef.current === owned.presentation) aimPresentationRef.current = null;
+      try { owned.presentation?.dispose(); } finally {
+        owned.controller.abort(); owned.layer?.dispose();
+        setAimPresentation(previous => previous === owned.presentation ? null : previous);
+      }
+      if (lease === owned) lease = null;
+    };
+    const start = async () => {
+      if (lease || !admitted()) return;
+      const owned = { controller: new AbortController(), layer: null, presentation: null, retired: false };
+      lease = owned;
+      const current = () => lease === owned && !owned.retired && !owned.controller.signal.aborted && admitted();
+      try {
+        const module = await window.Home3D.ready;
+        if (!current() || typeof module.loadAimPresentation !== "function") { retire(owned); return; }
+        const api = await module.loadAimPresentation();
+        if (!current()) { retire(owned); return; }
+        const layer = await engine.createUiOverlayLayer({ host, signal: owned.controller.signal, isCurrent: current,
+          onPresentationFrame: () => owned.presentation?.frame(), onPresentationDispose: () => retire(owned) });
+        if (!layer || !current()) { layer?.dispose(); retire(owned); return; }
+        owned.layer = layer;
+        owned.presentation = api.createAimPresentation({ layer, host, isCurrent: current,
+          getInsets: () => aptShellInsets(host), onRetire: () => retire(owned) });
+        if (!current()) { retire(owned); return; }
+        aimPresentationRef.current = owned.presentation;
+        setAimPresentation(owned.presentation);
+      } catch (_) { retire(owned); }
+    };
+    const onRunning = ({ running }) => { if (running) void start(); else retire(lease); };
+    const unsubscribe = engine.on("running", onRunning);
+    const onVisibility = () => { retire(lease); if (document.visibilityState !== "hidden") void start(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    // A resize can briefly leave the viewport unmeasurable, which retires the
+    // layer. Labels and the reticle come back once it is admitted again.
+    const revive = setInterval(() => { if (!lease) void start(); }, 300);
+    void start();
+    return () => {
+      closed = true; clearInterval(revive); unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(lease);
+    };
+  }, [selectionEngine, aimOverlayWanted, virtualFixtureDocument, apartmentAuthorityKey]);
+
+  const aimOverlayFixtures = useMemo(() => {
+    const engine = engineRef.current;
+    if (!aimPresentation || !engine) return [];
+    return (virtualFixturePreview?.fixtures || []).map(item => {
+      const descriptor = engine.overlay.virtualFixtureInteractionDescriptor?.(item.fixture_id);
+      return descriptor && { fixture_id: item.fixture_id, label: item.label || item.fixture_id,
+        on: aptVirtualFixtureLit(item), display_anchor_m: descriptor.display_anchor_m };
+    }).filter(Boolean);
+  }, [aimPresentation, virtualFixturePreview]);
+  const aimSelectedDescriptor = useMemo(() => aimPresentation && virtualFixtureControlsOpen && virtualFixtureId
+    ? engineRef.current?.overlay.virtualFixtureInteractionDescriptor?.(virtualFixtureId) || null : null,
+  [aimPresentation, virtualFixtureControlsOpen, virtualFixtureId, virtualFixturePreview]);
+  const aimSelectedScope = aimSelectedDescriptor && aimProposals ? aimProposals.scopeFromDescriptor("victoria", aimSelectedDescriptor) : null;
+  const aimSelectedProposal = aimSelectedScope ? aimProposals.current(aimSelectedScope) : null;
+
+  // Proposals clear on an authority change and retire with the scope their
+  // fence names. They are never persisted.
+  useEffect(() => { aimProposals?.clearAll(); }, [aimProposals, apartmentAuthorityKey]);
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!aimProposals || !engine || !virtualFixturePreview?.fixtures) return;
+    aimProposals.retainScopes("victoria", virtualFixturePreview.fixtures.map(item =>
+      aimProposals.scopeFromDescriptor("victoria", engine.overlay.virtualFixtureInteractionDescriptor?.(item.fixture_id))).filter(Boolean));
+  }, [aimProposals, virtualFixturePreview]);
+
+  // Canvas hover shows a light's name and a soft ring. It never changes the inspector.
+  useEffect(() => {
+    const engine = selectionEngine, host = hostRef.current, canvas = engine?.renderer?.domElement;
+    if (!aimPresentation || !host || !canvas) { setHoverFixtureId(null); return undefined; }
+    let frame = null, last = null;
+    const pick = () => {
+      frame = null;
+      if (!last) return;
+      let id = null;
+      try { id = engine.picking.pick(engine.overlay.virtualFixturePickObjects(), last.x, last.y)[0]?.object.userData.fixture_id || null; }
+      catch (_) { id = null; }
+      setHoverFixtureId(previous => previous === id ? previous : id);
+    };
+    const move = event => {
+      if (event.buttons || event.target !== canvas || event.pointerType === "touch") return;
+      last = { x: event.clientX, y: event.clientY };
+      if (frame == null) frame = requestAnimationFrame(pick);
+    };
+    const leave = () => { last = null; setHoverFixtureId(null); };
+    host.addEventListener("pointermove", move, { passive: true }); canvas.addEventListener("pointerleave", leave);
+    return () => {
+      if (frame != null) cancelAnimationFrame(frame);
+      host.removeEventListener("pointermove", move); canvas.removeEventListener("pointerleave", leave);
+      setHoverFixtureId(null);
+    };
+  }, [aimPresentation, selectionEngine]);
+
+  // Tap to aim (APT-A08): one tap on a surface proposes, as a drop would.
+  // While it is on, the tap belongs to it, so it neither orbits nor deselects.
+  useEffect(() => {
+    if (tapAim && (tapAim !== virtualFixtureId || !virtualFixtureControlsOpen || fixtureInteractionMode !== "spot" || !aimPresentation))
+      setTapAim(null);
+  }, [tapAim, virtualFixtureId, virtualFixtureControlsOpen, fixtureInteractionMode, aimPresentation]);
+  useEffect(() => {
+    const presentation = aimPresentation, canvas = selectionEngine?.renderer?.domElement;
+    if (!tapAim || !presentation || !canvas) return undefined;
+    let press = null;
+    const consume = event => { event.preventDefault(); event.stopImmediatePropagation(); };
+    const down = event => {
+      if (event.target !== canvas) return;
+      consume(event);
+      press = event.button === 0 && event.isPrimary !== false ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null;
+    };
+    const up = event => {
+      if (event.target !== canvas && press?.id !== event.pointerId) return;
+      consume(event);
+      const tap = press; press = null;
+      if (!tap || tap.id !== event.pointerId || Math.hypot(event.clientX - tap.x, event.clientY - tap.y) >= 8) return;
+      const model = presentation.describeAt(event.clientX, event.clientY), target = model && presentation.proposalTarget(model);
+      if (!target) { setVirtualAimNotice("No surface here. Tap a wall, furniture or floor."); return; }
+      if (aimActionsRef.current.propose({ fixture_id: tapAim, target })) {
+        setTapAim(null); aimActionsRef.current.start({ fixture_id: tapAim, source: "tap" });
+      }
+    };
+    const click = event => { if (event.target === canvas) consume(event); };
+    const cancel = () => { press = null; };
+    const previousCursor = canvas.style.cursor;
+    canvas.style.cursor = "crosshair";
+    const listeners = [["pointerdown", down], ["pointerup", up], ["click", click], ["pointercancel", cancel]];
+    for (const [name, listener] of listeners) window.addEventListener(name, listener, true);
+    return () => {
+      canvas.style.cursor = previousCursor;
+      for (const [name, listener] of listeners) window.removeEventListener(name, listener, true);
+    };
+  }, [tapAim, aimPresentation, selectionEngine]);
+
+  // Aim keys beyond the overlay's own reticle and bar. Enter sets a valid
+  // proposal when focus is on no control; Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z
+  // step the selected light's aim history. Text fields, Setup's editor and
+  // any overlay above the Apartment keep their own keys.
+  aimActionsRef.current = { propose: proposeAim, start: startAimFromRoom,
+    enabled: () => !!(open && selectedSiteId === "victoria" && virtualFixtureControlsOpen && apartmentSceneControlsEnabled
+      && !editing && !radialGestureOwnerRef.current && !virtualAimGestureRef.current?.readback().active
+      && !aimPresentationRef.current?.readback().dragging),
+    history: direction => restoreVirtualAimHistory(direction),
+    set: () => {
+      const held = aimScopeFor(virtualFixtureId);
+      return held?.proposal?.target.valid === true && setAimProposal({ fixture_id: virtualFixtureId, proposal: held.proposal });
+    } };
+  useEffect(() => {
+    if (!open) return undefined;
+    const onAimKey = event => {
+      if (event.defaultPrevented || event.altKey || event.isComposing) return;
+      const top = window.HomeOverlay?.topKey?.(), target = event.target;
+      if (top && top !== "apartment" && top !== "apartment-embedded") return;
+      if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || "")) return;
+      const actions = aimActionsRef.current;
+      if (!actions?.enabled()) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        if (actions.history(event.shiftKey ? "redo" : "undo")) event.preventDefault();
+        return;
+      }
+      if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.shiftKey
+          && !target?.closest?.('button, a[href], summary, [role="button"], [role="tab"], [role="switch"], [role="slider"], [role="option"]')
+          && actions.set()) event.preventDefault();
+    };
+    window.addEventListener("keydown", onAimKey);
+    return () => window.removeEventListener("keydown", onAimKey);
+  }, [open]);
 
   /*
    * The engine owns the ESM/classic-script boundary. Rebuild the small frozen
@@ -6123,6 +6495,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (virtualAimGestureRef.current?.readback().active) {
       virtualAimGestureRef.current.cancel(); restoreApartmentOperationFocus("drag"); return true;
     }
+    // Step 1: a reticle drag cancels and leaves any proposal unchanged.
+    if (aimPresentationRef.current?.readback().dragging) { aimPresentationRef.current.cancelDrag(); return true; }
     if (mapRehearsalOpen) { void window.HomeMapRehearsalUI?.close?.(); return true; }
     if (travellingRef.current || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle") {
       void cancelSpatialTravel(); return true;
@@ -6130,6 +6504,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (aimMode) {
       setAimMode(false); setAimDestination(null); restoreApartmentOperationFocus("aim"); return true;
     }
+    // Step 2: leave tap to aim.
+    if (tapAim) { setTapAim(null); return true; }
     // Guard banked calibration pairs before any camera/setup exit can clear
     // them. Preserve the existing five-second warning and final modal/pass
     // behavior; any new capture still disarms this guard at its source.
@@ -6150,6 +6526,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     }
     if (editing) { setEditing(false); restoreApartmentOperationFocus("setup"); return true; }
     if (cardId) { setCardId(null); restoreApartmentOperationFocus("card"); return true; }
+    // Step 4: discard the selected light's proposal; Cmd/Ctrl+Z restores it.
+    const pendingAim = virtualFixtureControlsOpen ? aimScopeFor(virtualFixtureId)?.proposal : null;
+    if (pendingAim && discardAimProposal({ fixture_id: virtualFixtureId, proposal: pendingAim })) return true;
     if (virtualFixtureControlsOpen) {
       clearVirtualFixtureSelection(); restoreApartmentOperationFocus("selection"); return true;
     }
@@ -8132,7 +8511,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         if (getRoomInspectorContext()?.engine !== context.engine) return false;
         const fixture = context.preview.fixtures.find(fixture => fixture.fixture_id === light.id);
         if (!fixture) return false;
-        changeVirtualFixture({ spotlight: { on }, downward: { on },
+        changeVirtualFixtureByHand({ spotlight: { on }, downward: { on },
           radials: aptUnifiedRadialPowerPatch(fixture.state.radials, on) }, light.id);
         const actual = getRoomInspectorContext()?.preview.fixtures.find(fixture => fixture.fixture_id === light.id)?.state;
         if (!actual || actual.spotlight?.on !== on || actual.downward?.on !== on
@@ -8572,7 +8951,29 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       />
 
       {directionalDisplay && ReactDOM.createPortal(
-        <window.AptDirectionalComposer view={directionalDisplay} onMode={changeFixtureInteractionMode} />, hostRef.current)}
+        <window.AptDirectionalComposer view={directionalDisplay} onMode={changeFixtureInteractionMode}
+          spotBadge={window.AptSpotPendingDot && <window.AptSpotPendingDot store={aimProposals} siteId="victoria"
+            descriptor={aimSelectedDescriptor} tool={fixtureInteractionMode} />}
+          spotName={window.AptSpotPendingDot && aimSelectedProposal && fixtureInteractionMode !== "spot" ? "Spot (aim pending)" : null} />,
+        hostRef.current)}
+
+      {aimPresentation && hostRef.current && window.AptRoomOverlay && ReactDOM.createPortal(
+        <window.AptRoomOverlay presentation={aimPresentation} store={aimProposals} siteId="victoria"
+          fixtures={aimOverlayFixtures} selectedId={virtualFixtureControlsOpen ? virtualFixtureId : null} hoverId={hoverFixtureId}
+          pillFixtureId={directionalDisplay ? virtualFixtureId : null}
+          aim={aimSelectedDescriptor && fixtureInteractionMode === "spot"
+            ? { descriptor: aimSelectedDescriptor, limits: selectedVirtualFixture?.limits || null, namedAims: [] } : null}
+          onSelect={id => selectVirtualFixture(id)} onHover={setHoverFixtureId} onAimStart={startAimFromRoom}
+          onPropose={proposeAim} onSet={setAimProposal} onDiscard={discardAimProposal} />, hostRef.current)}
+      {tapAim && aimPresentation && hostRef.current && ReactDOM.createPortal(
+        <div role="status" data-apt-tap-aim-hint="" style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
+          zIndex: 7, display: "flex", alignItems: "center", gap: 8, padding: "5px 6px 5px 12px", borderRadius: 10,
+          background: "rgba(8,9,11,.9)", border: "1px solid rgba(69,223,255,.55)", color: "#EDEDED", fontSize: 12.5, whiteSpace: "nowrap" }}>
+          Tap a surface to aim {selectedVirtualFixture?.label || "this light"}
+          <button type="button" className="hg-focusable" onClick={() => setTapAim(null)} style={{ height: 26, padding: "0 9px",
+            borderRadius: 7, border: "1px solid rgba(255,255,255,.16)", background: "transparent", color: "inherit", font: "inherit" }}>
+            Cancel <span className="hg-esc-hint">esc</span></button>
+        </div>, hostRef.current)}
 
       {/* Renderer-only outer scale layer. It occupies the same viewport while
           every Apartment control and information surface remains a sibling
@@ -9469,11 +9870,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             directionalView={directionalDisplay}
             onShowComposer={() => changeFixtureInteractionMode("zones")}
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}
-            onPatch={changeVirtualFixture} onPatchAll={on => {
-              for (const fixture of virtualFixtureItems) changeVirtualFixture({ spotlight: { on }, downward: { on },
+            onPatch={patchVirtualFixtureFromInspector} onPatchAll={on => {
+              for (const fixture of virtualFixtureItems) changeVirtualFixtureByHand({ spotlight: { on }, downward: { on },
                 radials: aptUnifiedRadialPowerPatch(fixture.state?.radials || [], on) }, fixture.fixture_id);
             }} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
-            canUndo={!!virtualAimHistoryRef.current.undo.length} canRedo={!!virtualAimHistoryRef.current.redo.length}
+            canUndo={aimHistoryLength("undo") > 0} canRedo={aimHistoryLength("redo") > 0}
+            aimControls={aimPresentation && aimSelectedDescriptor ? <AptAimProposalRows descriptor={aimSelectedDescriptor}
+              limits={selectedVirtualFixture?.limits} proposal={aimSelectedProposal} tapAim={!!tapAim}
+              onSet={() => setAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
+              onDiscard={() => discardAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
+              onTapAim={() => setTapAim(value => value ? null : virtualFixtureId)} /> : null}
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
             canSetup={apartmentPlacementControlsEnabled}
             deskControls={<section aria-label="Desk target" className="apt-ui-channel">
@@ -9573,7 +9979,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 4, marginTop: 5 }}>
                 {(selectedVirtualFixture.state?.radials || []).map((zone) => (
                   <button key={zone.number} type="button" aria-label={`Radial zone ${zone.number}`} aria-pressed={zone.on}
-                    onClick={() => changeVirtualFixture({ radials: [{ number: zone.number, on: !zone.on }] })}
+                    onClick={() => changeVirtualFixtureByHand({ radials: [{ number: zone.number, on: !zone.on }] })}
                     style={{ minHeight: 32, color: zone.on ? "#ffe3ae" : "#88939d", background: zone.on ? "#382f22" : "#111820",
                       border: "1px solid #5a5141" }}>{zone.number}</button>
                 ))}
@@ -9581,7 +9987,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               <div style={{ display: "flex", gap: 5, marginTop: 7 }}>
                 {[['downward', 'Downward zone'], ['spotlight', 'Robotic spotlight']].map(([key, label]) => (
                   <button key={key} type="button" aria-label={label} aria-pressed={selectedVirtualFixture.state?.[key]?.on}
-                    onClick={() => changeVirtualFixture({ [key]: { on: !selectedVirtualFixture.state?.[key]?.on } })}
+                    onClick={() => changeVirtualFixtureByHand({ [key]: { on: !selectedVirtualFixture.state?.[key]?.on } })}
                     style={{ flex: 1, minHeight: 32, fontSize: 10, color: selectedVirtualFixture.state?.[key]?.on ? "#ffe3ae" : "#88939d",
                       background: selectedVirtualFixture.state?.[key]?.on ? "#382f22" : "#111820", border: "1px solid #5a5141" }}>{label}</button>
                 ))}
@@ -9610,14 +10016,14 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                     min={selectedVirtualFixture.limits?.[`${axis}_min_deg`] ?? (axis === 'pan' ? -175 : -5)}
                     max={selectedVirtualFixture.limits?.[`${axis}_max_deg`] ?? (axis === 'pan' ? 175 : 88)}
                     value={selectedVirtualFixture.state?.[`${axis}_deg`] || 0} style={{ width: "100%" }}
-                    onChange={(event) => changeVirtualFixture({ [`${axis}_deg`]: Number(event.target.value) })} />
+                    onChange={(event) => changeVirtualFixtureByHand({ [`${axis}_deg`]: Number(event.target.value) })} />
                 </label>
               ))}
-              <p style={{ margin: "10px 0 6px", fontSize: 11, lineHeight: 1.45 }}>Drag a fixture or its aim handle onto a room surface.</p>
+              <p style={{ margin: "10px 0 6px", fontSize: 11, lineHeight: 1.45 }}>Select Spot, then drag the round aim handle onto a room surface.</p>
               <div style={{ display: "flex", gap: 6 }} data-aim-history={virtualAimHistoryVersion}>
-                <button type="button" disabled={!virtualAimHistoryRef.current.undo.length} onClick={() => restoreVirtualAimHistory("undo")}
+                <button type="button" disabled={!aimHistoryLength("undo")} onClick={() => restoreVirtualAimHistory("undo")}
                   style={{ minHeight: 34, flex: 1 }}>Undo aim</button>
-                <button type="button" disabled={!virtualAimHistoryRef.current.redo.length} onClick={() => restoreVirtualAimHistory("redo")}
+                <button type="button" disabled={!aimHistoryLength("redo")} onClick={() => restoreVirtualAimHistory("redo")}
                   style={{ minHeight: 34, flex: 1 }}>Redo aim</button>
               </div>
               {virtualAimNotice && <div role="status" style={{ marginTop: 7, fontSize: 11 }}>{virtualAimNotice}</div>}

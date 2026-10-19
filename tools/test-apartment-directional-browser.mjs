@@ -73,7 +73,7 @@ test('real authored directional controls preserve native input, aim and output b
     checks: [], stage_timings: [], action_timings: [], native_progress: [], modeled_progress: [], keyboard_targets: [],
     native_mouse: { expected: [], dispatched: [], operations: [], observed: [], dragstarts: [], failure: null },
     requests: [], forbidden: [], blocked_read_subscriptions: [], missing_code: [], errors: [], served: {}, browser: browserOptions() };
-  let server, handler, origin, browser, context, page, rawPage, nativeMouse, nativeMouseSurface, mouseSession, timer;
+  let server, handler, origin, browser, context, page, rawPage, nativeMouse, nativeMouseSurface, mouseSession, timer, activeStage, pendingStage;
   const started = performance.now(), elapsed = () => performance.now() - started;
   const save = () => { receipt.elapsed_ms = elapsed(); fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n'); };
   const progress = value => fs.appendFileSync(path.join(run, 'progress.jsonl'), JSON.stringify({ elapsed_ms: elapsed(), ...value }) + '\n');
@@ -110,12 +110,34 @@ test('real authored directional controls preserve native input, aim and output b
       if (locatorFactories.has(key)) return (...args) => observe(member.apply(object, args), 'locator');
       if (!observedMethods.has(key)) return member.bind(object);
       return (...args) => measure(kind + '.' + String(key), () => {
+        if (kind === 'mouse' || kind === 'keyboard' || kind === 'cdp' && key === 'send' && args[0]?.startsWith('Input.'))
+          assert.ok(!activeStage || activeStage.renderer && !pendingStage, 'stage renderer evidence must precede native input');
         if (kind === 'keyboard') {
           assert.equal(args.length, 1, 'keyboard options/held modifiers require a separately qualified input path');
           return nativeMouse.guardKeyboardPress(args[0], () => member.apply(object, args));
         }
         if (kind === 'page' && key === 'waitForFunction') {
           assert.ok(args.length <= 3); return waitForDirectionalReadiness(rawPage, args[0], args[1], args[2]);
+        }
+        if (kind === 'page' && key === 'evaluate' && pendingStage) {
+          const stage = pendingStage; pendingStage = null;
+          assert.ok(args.length <= 2 && typeof args[0] === 'function' && args[0].constructor.name === 'Function');
+          return member.call(object, ({ source, arg }) => {
+            const engine = window.__APT_ENGINE, host = engine?.picking.getHost(), canvas = engine?.renderer.domElement;
+            if (!engine || !host || !canvas) throw Error('stage renderer is unavailable before its first observation');
+            const renderer = { at: performance.now(), site: engine.siteId, mode: engine.modes.mode,
+              renderer_frame: engine.renderer.info.render.frame, draw_calls: engine.renderer.info.render.calls,
+              pixel_ratio: engine.renderer.getPixelRatio(), backing: [canvas.width, canvas.height], host: [host.clientWidth, host.clientHeight],
+              quality: engine.performanceBudget(), fixtures: engine.overlay.virtualFixturesReadback().fixture_count,
+              fixture_display_on: engine.overlay.virtualFixturesReadback().visible };
+            // Compile only this existing harness observation. Snapshot the
+            // renderer before its callback can focus a native control.
+            const value = globalThis.eval('(' + source + ')')(arg);
+            if (value && typeof value.then === 'function') throw Error('unsupported async first-stage observation');
+            return { renderer, value };
+          }, { source: Function.prototype.toString.call(args[0]), arg: args[1] }).then(result => {
+            stage.renderer = result.renderer; stage.renderer_folded_into_first_read = true; return result.value;
+          });
         }
         return member.apply(object, args);
       }, {
@@ -132,7 +154,8 @@ test('real authored directional controls preserve native input, aim and output b
   }, 145000); });
   const check = async (name, operation) => {
     receipt.current_stage = name; const stage = { name, started_ms: elapsed() }; receipt.stage_timings.push(stage); progress({ event: 'stage-start', stage }); save();
-    if (rawPage && !rawPage.isClosed()) {
+    activeStage = stage;
+    if (receipt.stage_timings.length === 1 && rawPage && !rawPage.isClosed()) {
       stage.renderer = await measure('stage.renderer-snapshot', () => rawPage.evaluate(() => {
         const engine = window.__APT_ENGINE, host = engine?.picking.getHost(), canvas = engine?.renderer.domElement;
         return engine && { at: performance.now(), site: engine.siteId, mode: engine.modes.mode,
@@ -141,10 +164,11 @@ test('real authored directional controls preserve native input, aim and output b
           quality: engine.performanceBudget(), fixtures: engine.overlay.virtualFixturesReadback().fixture_count,
           fixture_display_on: engine.overlay.virtualFixturesReadback().visible };
       }));
-    }
-    try { const detail = await operation(); receipt.checks.push({ name, ...detail }); stage.result = 'passed'; }
+    } else pendingStage = stage;
+    try { const detail = await operation(); assert.ok(stage.renderer && !pendingStage, 'every stage retains its renderer snapshot');
+      receipt.checks.push({ name, ...detail }); stage.result = 'passed'; }
     catch (error) { stage.result = 'failed'; throw error; }
-    finally { stage.elapsed_ms = elapsed() - stage.started_ms; progress({ event: 'stage-end', stage }); save(); }
+    finally { stage.elapsed_ms = elapsed() - stage.started_ms; activeStage = null; pendingStage = null; progress({ event: 'stage-end', stage }); save(); }
   };
   async function proof() {
     server = http.createServer((req, res) => {
@@ -404,6 +428,9 @@ test('real authored directional controls preserve native input, aim and output b
           const power = dom.query(readBefore.power.spec); if (!power) throw Error('missing radial power checkbox');
           observations.power = { checked: power.checked, descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(readBefore.power.id) };
         }
+        if (readBefore?.history) observations.history = readBefore.history.map(spec => {
+          const node = dom.query(spec); if (!node) throw Error('missing actual aim history control'); return node.disabled;
+        });
         node.focus(); node.focus();
         const current = node.isConnected && dom.query(spec) === node && dom.scope(spec.scope) === root;
         window.__directionalExpectedKey = { id, key, node, scope: root, spec };
@@ -420,35 +447,37 @@ test('real authored directional controls preserve native input, aim and output b
     const blur = () => page.evaluate(() => document.activeElement?.blur());
     const descriptor = id => page.evaluate(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), id);
     const inventory = () => page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback());
-    const expectSelected = async fixture => {
-      await page.waitForFunction(({ fixture, scope }) => {
+    const expectSelected = async (fixture, mode = null, controls = false) => {
+      await page.waitForFunction(({ fixture, scope, mode, modeSpec, controls }) => {
         const dom = window.__directionalDOM, heading = dom.query({ scope, selector: 'h2', name: fixture.label, tag: 'h2', role: 'heading' });
         const ids = []; window.__APT_ENGINE.overlay.virtualFixturesGroup.traverse(node => {
           if (node.name === 'virtual-fixture-aim-handle' && node.visible) ids.push(node.userData.fixture_id);
         });
-        return dom.visible(heading) && ids.length === 1 && ids[0] === fixture.fixture_id;
-      }, { fixture, scope: INSPECTOR });
+        const node = mode && dom.query(modeSpec);
+        return dom.visible(heading) && ids.length === 1 && ids[0] === fixture.fixture_id
+          && (!mode || dom.visible(node) && node.getAttribute('data-apt-directional-mode') === mode && node.getAttribute('aria-pressed') === 'true')
+          && (!controls || document.querySelector('#apt-home-tab-controls')?.getAttribute('aria-selected') === 'true');
+      }, { fixture, scope: INSPECTOR, mode, modeSpec: mode && button(COMPOSER, mode === 'zones' ? 'Zones' : 'Spot'), controls });
     };
-    const expectMode = async mode => {
-      await page.waitForFunction(({ mode, spec }) => {
+    const expectMode = async (mode, tab = null) => {
+      const result = await page.waitForFunction(({ mode, spec, tab }) => {
         const dom = window.__directionalDOM, node = dom.query(spec);
-        return dom.visible(node) && node.getAttribute('data-apt-directional-mode') === mode && node.getAttribute('aria-pressed') === 'true';
-      }, { mode, spec: button(COMPOSER, mode === 'zones' ? 'Zones' : 'Spot') });
+        if (!(dom.visible(node) && node.getAttribute('data-apt-directional-mode') === mode && node.getAttribute('aria-pressed') === 'true')) return false;
+        if (!tab) return true;
+        const tabNode = dom.query(tab); if (!tabNode) throw Error('missing authored control: ' + tab.name);
+        // Capture the original immediate assertion at the first mode success;
+        // a false/missing tab state must fail, rather than gain retry grace.
+        return 'mode-ready-tab:' + tabNode.getAttribute('aria-selected');
+      }, { mode, spec: button(COMPOSER, mode === 'zones' ? 'Zones' : 'Spot'), tab });
+      if (tab) assert.equal(result, 'mode-ready-tab:true');
     };
     const waitDOM = (selector, detached = false) => page.waitForFunction(({ selector, detached }) => {
       const node = window.__directionalDOM.scope(selector); return detached ? !node : window.__directionalDOM.visible(node);
     }, { selector, detached });
-    const attribute = (spec, name) => page.evaluate(({ spec, name }) => {
-      const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing authored control: ' + spec.name);
-      return node.getAttribute(name);
-    }, { spec, name });
-    const disabled = spec => page.evaluate(spec => {
-      const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing authored control: ' + spec.name); return node.disabled;
-    }, spec);
     const navigationFrom = pose => ({ az: pose.az, el: pose.el, zoom: pose.zoom, curAz: pose.curAz, curEl: pose.curEl, curRadius: pose.curRadius,
       previewAz: pose.previewAz, previewEl: pose.previewEl, overshoot: pose.overshoot, target: pose.target });
     const navigationPose = async () => navigationFrom(await page.evaluate(() => window.__APT_ENGINE.rig.snapshotPose()));
-    const setMode = async mode => {
+    const setMode = async (mode, tab = null) => {
       const observation = await page.evaluate(spec => { const dom = window.__directionalDOM, node = dom.query(spec);
         if (!node) throw Error('missing native mode pill: ' + spec.name); const rect = node.getBoundingClientRect();
         return { box: dom.visible(node) ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
@@ -458,18 +487,22 @@ test('real authored directional controls preserve native input, aim and output b
       assert.equal(await captureActive(), false, 'the native pill press must not leak pointer capture to the orbit rig');
       await page.mouse.move(box.x + box.width / 2 + 2, box.y + box.height / 2);
       assert.deepEqual(await navigationPose(), before, 'a pressed native pill does not start a camera drag preview');
-      await page.mouse.up(); await expectMode(mode);
+      await page.mouse.up(); await expectMode(mode, tab);
     };
     const waitHUD = () => page.waitForTimeout(180); // More than two existing 80ms HUD opportunities; no new clock or polling loop.
     const writes = () => page.evaluate(() => window.__directionalCalls || []);
     const paintWrites = rows => rows.filter(row => row.method === 'setVirtualFixtureState' && Object.keys(row.patch || {}).length === 1 && Array.isArray(row.patch.radials));
-    const nativeMarker = async (type, control) => {
-      const event = await page.evaluate(({ type, control }) => [...window.__directionalNative].reverse()
-        .find(row => row.type === type && (control == null || row.control === control)), { type, control });
-      assert.ok(event?.isTrusted, 'retirement begins with the actual trusted browser event'); return event;
+    const retirementRead = async (type, control = null, key = null, pointerType = null) => {
+      const result = await page.evaluate(({ type, control, key, pointerType }) => {
+        const events = window.__directionalNative, down = [...events].reverse().find(row => row.type === 'pointerdown' && row.pointerType === 'mouse');
+        return { marker: [...events].reverse().find(row => row.type === type && (control == null || row.control === control)
+          && (key == null || row.key === key) && (pointerType == null || row.pointerType === pointerType)),
+          captured: !!down && window.__APT_ENGINE.picking.getHost().hasPointerCapture(down.pointerId), calls: window.__directionalCalls || [] };
+      }, { type, control, key, pointerType });
+      assert.ok(result.marker?.isTrusted, 'retirement begins with the actual trusted browser event'); return result;
     };
     const withoutRadials = value => { const result = structuredClone(value); delete result.state.radials; return result; };
-    const canvasPoint = (kind, id, avoid = null) => page.evaluate(({ kind, id, avoid }) => {
+    const canvasPoint = (kind, id, avoid = null, navigation = false) => page.evaluate(({ kind, id, avoid, navigation }) => {
       const engine = window.__APT_ENGINE, canvas = engine.renderer.domElement, host = engine.picking.getHost(), rect = host.getBoundingClientRect();
       const targets = engine.overlay.virtualFixturePickObjects(), candidates = [];
       if (kind === 'fixture') for (const object of targets.filter(node => node.userData.fixture_id === id && node.userData.interaction_role === 'fixture')) {
@@ -480,12 +513,13 @@ test('real authored directional controls preserve native input, aim and output b
       for (const point of candidates) {
         if (document.elementFromPoint(point.x, point.y) !== canvas || avoid && Math.hypot(point.x - avoid.x, point.y - avoid.y) < 30) continue;
         const hits = engine.picking.pick(targets, point.x, point.y);
-        if (kind === 'fixture' && hits[0]?.object.userData.fixture_id === id) return point;
-        if (kind !== 'fixture' && !hits.length && (kind !== 'surface' || engine.displaySurfaceHit(point.x, point.y))) return point;
+        const selected = kind === 'fixture' ? hits[0]?.object.userData.fixture_id === id
+          : !hits.length && (kind !== 'surface' || engine.displaySurfaceHit(point.x, point.y));
+        if (selected) return { ...point, ...(navigation ? { navigation: { matrix: engine.camera.matrixWorld.toArray(), azimuth: engine.rig.azimuthIndex() } } : {}) };
       }
       return null;
-    }, { kind, id, avoid });
-    const planePoint = async (id, number, radius) => {
+    }, { kind, id, avoid, navigation });
+    const planePoint = async (id, number, radius, checkCapture = false) => {
       const result = await page.evaluate(({ id, number, radius }) => {
         const engine = window.__APT_ENGINE, host = engine.picking.getHost(), rect = host.getBoundingClientRect();
         const snapshot = engine.overlay.virtualFixtureInteractionDescriptor(id), radial = snapshot.state.radials.find(zone => zone.number === number);
@@ -504,7 +538,9 @@ test('real authored directional controls preserve native input, aim and output b
         if (!screen?.visible || !hub?.visible || !actualHub || !actualTick) return { screen, hub, tick, actualHub, actualTick };
         const client = { x: rect.left + screen.x * rect.width / host.clientWidth, y: rect.top + screen.y * rect.height / host.clientHeight };
         const hit = document.elementFromPoint(client.x, client.y);
+        const down = [...window.__directionalNative].reverse().find(row => row.type === 'pointerdown' && row.pointerType === 'mouse');
         return { screen, hub, tick, actualHub, actualTick, independent, point, client,
+          captured: !!down && engine.picking.getHost().hasPointerCapture(down.pointerId),
           target: hit?.closest?.('[data-apt-radial-start]')?.getAttribute('data-apt-radial-start'), azimuth_deg: radial.azimuth_deg };
       }, { id, number, radius });
       assert.ok(result.client, 'requested authored fixture-height point is visible and its SVG hub and actual Three tick are mounted');
@@ -513,6 +549,7 @@ test('real authored directional controls preserve native input, aim and output b
       assert.ok(Math.hypot(result.hub.x - result.actualHub.x, result.hub.y - result.actualHub.y) < .5, 'actual SVG hub follows the current renderer');
       assert.ok(result.actualTick.visible && Math.hypot(result.tick.x - result.actualTick.x, result.tick.y - result.actualTick.y) < .5,
         'actual borrowed Three tick follows the actual canonical azimuth plane');
+      if (checkCapture) assert.equal(result.captured, true);
       return result;
     };
     const expectedWarmColor = kelvin => {
@@ -580,7 +617,7 @@ test('real authored directional controls preserve native input, aim and output b
       const host = window.__APT_ENGINE.picking.getHost(), down = [...window.__directionalNative].reverse().find(row => row.type === 'pointerdown' && row.pointerType === 'mouse');
       return !!down && host.hasPointerCapture(down.pointerId);
     });
-    const startHub = async id => { const hub = await hubPoint(id); await page.mouse.move(hub.x, hub.y); await page.mouse.down(); assert.equal(await captureActive(), true); return hub; };
+    const startHub = async (id, deferCapture = false) => { const hub = await hubPoint(id); await page.mouse.move(hub.x, hub.y); await page.mouse.down(); if (!deferCapture) assert.equal(await captureActive(), true); return hub; };
     const immediatePaint = async (number, level, point) => {
       const row = await page.evaluate(() => [...window.__directionalCalls].reverse().find(call => call.immediate));
       assert.ok(row?.immediate && row.native_move?.isTrusted, 'paint is observed in the actual trusted native move task');
@@ -593,9 +630,10 @@ test('real authored directional controls preserve native input, aim and output b
       return { number, target: level, same_input_task: true, before_next_renderer_frame: true,
         at_ms: row.immediate.at, native_at_ms: row.native_move.at };
     };
-    const unchangedAfterRetirement = async (marker, allowReconciliation = false) => {
-      const before = await writes(); await waitHUD(); await page.mouse.up(); await waitHUD();
-      const after = await writes(); assert.equal(marker.isTrusted, true); assert.ok(Number.isInteger(marker.call_count));
+    const unchangedAfterRetirement = async (marker, allowReconciliation = false, beforeRead = null) => {
+      const before = beforeRead ?? await writes(); await waitHUD(); await page.mouse.up(); await waitHUD();
+      const observed = await page.evaluate(() => ({ calls: window.__directionalCalls || [], reconciliations: window.__directionalReconciliations }));
+      const after = observed.calls; assert.equal(marker.isTrusted, true); assert.ok(Number.isInteger(marker.call_count));
       const late = after.slice(marker.call_count);
       if (!allowReconciliation) {
         assert.deepEqual(late, [], 'no modeled set, aim or restore call occurs after owner retirement');
@@ -618,7 +656,7 @@ test('real authored directional controls preserve native input, aim and output b
       assert.deepEqual(late.map(({ method, fixture_id }) => ({ method, fixture_id })), expectedOrder,
         'exactly four state replays and the known non-null target replays are allowed, with no other modeled calls');
       const tokens = [...new Set(late.map(row => row.reconciliation))]; assert.equal(tokens.length, 1); assert.ok(Number.isInteger(tokens[0]));
-      const transaction = await page.evaluate(id => window.__directionalReconciliations.find(item => item.id === id), tokens[0]);
+      const transaction = observed.reconciliations.find(item => item.id === tokens[0]);
       assert.equal(transaction?.completed, true); assert.ok(transaction.at >= marker.at);
       assert.deepEqual(transaction.document, { binding: original[0].binding, revision: original[0].equipment_revision, digest: original[0].equipment_digest });
       assert.deepEqual(transaction.before, original, 'the actual reconciliation starts with the exact pre-click producer descriptors');
@@ -650,10 +688,9 @@ test('real authored directional controls preserve native input, aim and output b
     await waitSite('echo'); await selectHome('victoria');
     await page.waitForFunction(() => window.HomeApartmentDirectional && window.__APT_ENGINE?.overlay.virtualFixturesReadback().fixture_count === 4);
     await page.evaluate(async () => { const engine = window.__APT_ENGINE; engine.rig.snapHome(0); await engine.modes.preload(['collision']); });
-    const initialInventory = await inventory(); assert.equal(initialInventory.visible, true); assert.equal(initialInventory.status, 'ready');
-    const fixtures = initialInventory.fixtures, fixture = fixtures[0];
-    await page.evaluate(() => {
+    const initialInventory = await page.evaluate(() => {
       const overlay = window.__APT_ENGINE.overlay; window.__directionalCalls = []; window.__directionalReconciliations = [];
+      const inventory = overlay.virtualFixturesReadback();
       let sequence = 0, activeReconciliation = null;
       const descriptors = () => overlay.virtualFixturesReadback().fixtures.map(item => overlay.virtualFixtureInteractionDescriptor(item.fixture_id));
       const setDocument = overlay.setVirtualFixtures;
@@ -685,26 +722,30 @@ test('real authored directional controls preserve native input, aim and output b
           window.__directionalDiagnostic?.({ kind: 'modeled', value: structuredClone(call) }).catch(() => {}); return result;
         };
       }
+      return inventory;
     });
+    assert.equal(initialInventory.visible, true); assert.equal(initialInventory.status, 'ready');
+    const fixtures = initialInventory.fixtures, fixture = fixtures[0];
     await activateStatic(button('.apt-home-shell[data-home-layout="unified"]', 'Select ' + fixture.label)); await expectSelected(fixture);
     const originalAim = await descriptor(fixture.fixture_id);
     await check('selected fixture defaults to Spot and Aim with the literal compact native pill above the reticle and no fabricated pending-aim dot', async () => {
       await expectMode('spot');
-      assert.equal(await attribute(button(INSPECTOR, 'Aim', 'tab'), 'aria-selected'), 'true');
-      const mounted = await page.evaluate(scope => {
+      const mounted = await page.evaluate(({ scope, tab }) => {
         const node = window.__directionalDOM.scope(scope); if (!node) throw Error('missing actual composer');
+        const selectedTab = window.__directionalDOM.query(tab); if (!selectedTab) throw Error('missing authored control: ' + tab.name);
         const circles = [...node.querySelectorAll('svg circle')], rect = element => {
           if (!element?.getClientRects().length) return null;
           const value = element.getBoundingClientRect(); return { x: value.x, y: value.y, width: value.width, height: value.height };
         };
         const drawing = window.__directionalDrawingState(), pill = node.querySelector('[role="group"][aria-label="Room lighting tool"]');
-        return { circles: circles.map(circle => ({ x: circle.getAttribute('cx'), y: circle.getAttribute('cy'), r: +circle.getAttribute('r'), fill: circle.getAttribute('fill') })),
+        return { selected_tab: selectedTab.getAttribute('aria-selected'), circles: circles.map(circle => ({ x: circle.getAttribute('cx'), y: circle.getAttribute('cy'), r: +circle.getAttribute('r'), fill: circle.getAttribute('fill') })),
           pill: rect(node.querySelector('[role="group"][aria-label="Room lighting tool"]')), hub: rect(circles.at(-1)),
           composer: { ...rect(node), width_css: node.clientWidth, height_css: node.clientHeight },
           pill_label: pill.querySelector('.nm')?.textContent, button_heights: [...pill.querySelectorAll('button')].map(button => rect(button)?.height),
           visible_svg_paths: [...node.querySelectorAll('svg path')].filter(path => path.getAttribute('fill') !== 'transparent').length,
           drawing, text: node.innerText, inventory: window.__APT_ENGINE.overlay.virtualFixturesReadback() };
-      }, COMPOSER);
+      }, { scope: COMPOSER, tab: button(INSPECTOR, 'Aim', 'tab') });
+      assert.equal(mounted.selected_tab, 'true');
       const circles = mounted.circles;
       assert.deepEqual(circles.map(circle => circle.r), [22, 7]);
       assert.equal(circles[0].x, circles[1].x); assert.equal(circles[0].y, circles[1].y);
@@ -727,8 +768,12 @@ test('real authored directional controls preserve native input, aim and output b
       const start = await canvasPoint('fixture', fixture.fixture_id), end = await canvasPoint('surface', null, start); assert.ok(start && end);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up();
       await expectSelected(fixture); await page.waitForFunction(spec => window.__directionalDOM.visible(window.__directionalDOM.query(spec)), button(INSPECTOR, 'Undo aim'));
-      assert.equal(await disabled(button(INSPECTOR, 'Undo aim')), false);
-      const actual = await descriptor(fixture.fixture_id); assert.ok(actual.target); assert.notDeepEqual(actual.target, originalAim.target);
+      const observed = await page.evaluate(({ spec, id }) => {
+        const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing authored control: ' + spec.name);
+        return { disabled: node.disabled, descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id) };
+      }, { spec: button(INSPECTOR, 'Undo aim'), id: fixture.fixture_id });
+      assert.equal(observed.disabled, false);
+      const actual = observed.descriptor; assert.ok(actual.target); assert.notDeepEqual(actual.target, originalAim.target);
       return { native_drag: true, target_present: true, undo_enabled: true };
     });
     await check('all six modeled ring zones support native keyboard selection and isolated brightness/temperature controls', async () => {
@@ -787,19 +832,21 @@ test('real authored directional controls preserve native input, aim and output b
       await activateStatic(button(INSPECTOR, 'Show in room')); await expectMode('zones');
       const geometry = await planePoint(fixture.fixture_id, 1, .7);
       const fade = await verifyContinuousDrawing();
-      await setMode('spot'); assert.equal(await attribute(button(INSPECTOR, 'Aim', 'tab'), 'aria-selected'), 'true');
-      await setMode('zones'); assert.equal(await attribute(button(INSPECTOR, 'Light', 'tab'), 'aria-selected'), 'true');
+      await setMode('spot', button(INSPECTOR, 'Aim', 'tab'));
+      await setMode('zones', button(INSPECTOR, 'Light', 'tab'));
       await blur(); await page.keyboard.press('a'); await expectMode('spot'); await page.keyboard.press('z'); await expectMode('zones');
       return { native_tab_modes: ['Aim:spot', 'Light:zones'], svg_hub: geometry.actualHub, actual_three_tick: geometry.actualTick, renderer_projection_agrees: true, fade, shortcuts: ['a', 'z'] };
     });
     await check('a native current-fixture hub click returns from Chat to Controls without a modeled write or aim change', async () => {
       await activateStatic(button(SHELL_TABS, 'Chat', 'tab'));
-      assert.equal(await attribute(button(SHELL_TABS, 'Chat', 'tab'), 'aria-selected'), 'true');
-      const entry = await page.evaluate(id => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
-        callCount: window.__directionalCalls.length }), fixture.fixture_id);
+      const entry = await page.evaluate(({ id, spec }) => {
+        const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing authored control: ' + spec.name);
+        return { selected: node.getAttribute('aria-selected'), descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+          callCount: window.__directionalCalls.length };
+      }, { id: fixture.fixture_id, spec: button(SHELL_TABS, 'Chat', 'tab') });
+      assert.equal(entry.selected, 'true');
       const hub = await hubPoint(fixture.fixture_id); await page.mouse.click(hub.x, hub.y);
-      await page.waitForFunction(() => document.querySelector('#apt-home-tab-controls')?.getAttribute('aria-selected') === 'true');
-      await expectSelected(fixture); await expectMode('zones'); await waitHUD();
+      await expectSelected(fixture, 'zones', true); await waitHUD();
       const returned = await page.evaluate(id => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
         calls: window.__directionalCalls }), fixture.fixture_id);
       assert.deepEqual(returned.descriptor, entry.descriptor, 'revealing the current selection preserves its state, aim target and canonical binding');
@@ -855,19 +902,18 @@ test('real authored directional controls preserve native input, aim and output b
       for (const row of calls) { assert.equal(row.method, 'setVirtualFixtureState'); assert.deepEqual(Object.keys(row.patch), ['radials']);
         for (const zone of row.patch.radials) assert.deepEqual(Object.keys(zone).sort(), ['brightness', 'number', 'on']); }
       await activateStatic(button(INSPECTOR, 'Aim', 'tab'));
-      const history = await page.evaluate(specs => specs.map(spec => {
-        const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing actual aim history control'); return node.disabled;
-      }), [button(INSPECTOR, 'Undo aim'), button(INSPECTOR, 'Redo aim')]);
-      assert.equal(history[0], false); assert.equal(history[1], true);
-      await activateStatic(button(INSPECTOR, 'Light', 'tab'));
+      await activateStatic(button(INSPECTOR, 'Light', 'tab'), 'Enter', {
+        readBefore: { history: [button(INSPECTOR, 'Undo aim'), button(INSPECTOR, 'Redo aim')] },
+        checkBefore: ({ history }) => { assert.equal(history[0], false); assert.equal(history[1], true); }
+      });
       assert.deepEqual((await inventory()).fixtures.filter(item => item.fixture_id !== fixture.fixture_id), initialInventory.fixtures.filter(item => item.fixture_id !== fixture.fixture_id));
       return { pickup_exact: true, ambient_camera_movement_observed: true, mode_pill_hidden_during_owned_drag: true,
         immediate_native_updates: [outwardImmediate, inwardImmediate, crossImmediate], outward: .9, inward: .35,
         cross_zone: 2, cross_level: .8, only_radials_written: true, aim_target_and_history_controls_preserved: true };
     });
     await check('native empty-space orbit and another fixture selection retain their existing behavior in Zones', async () => {
-      const empty = await canvasPoint('empty'); assert.ok(empty);
-      const before = await page.evaluate(() => ({ matrix: window.__APT_ENGINE.camera.matrixWorld.toArray(), azimuth: window.__APT_ENGINE.rig.azimuthIndex() }));
+      const empty = await canvasPoint('empty', undefined, null, true); assert.ok(empty);
+      const before = empty.navigation;
       await page.mouse.move(empty.x, empty.y); await page.mouse.down(); await page.mouse.move(empty.x + 35, empty.y + 8, { steps: 8 }); await page.mouse.up();
       await page.waitForFunction(before => window.__APT_ENGINE.rig.azimuthIndex() !== before.azimuth
         && window.__APT_ENGINE.camera.matrixWorld.toArray().some((value, index) => value !== before.matrix[index]), before);
@@ -876,32 +922,32 @@ test('real authored directional controls preserve native input, aim and output b
       const other = await canvasPoint('fixture', fixtures[1].fixture_id); assert.ok(other);
       await page.mouse.click(other.x, other.y); await expectSelected(fixtures[1]);
       const original = await canvasPoint('fixture', fixture.fixture_id); assert.ok(original);
-      await page.mouse.click(original.x, original.y); await expectSelected(fixture); await expectMode('zones');
+      await page.mouse.click(original.x, original.y); await expectSelected(fixture, 'zones');
       return { empty_space_orbits: true, native_fixture_selection: fixtures[1].fixture_id };
     });
     // Native input/IPC may span the existing 80ms flush. These cases prove
     // active-gesture retirement; deterministic pending-drop proof is in the
     // actual-source integration suite, not inferred from this event sequence.
     const activeMotion = async () => {
-      await startHub(fixture.fixture_id); const point = await planePoint(fixture.fixture_id, 1, 1.5);
+      await startHub(fixture.fixture_id, true); const point = await planePoint(fixture.fixture_id, 1, 1.5, true);
       await page.mouse.move(point.client.x, point.client.y); return point;
     };
     await check('Escape and a second native pointer retire active painting without later modeled calls', async () => {
-      await activeMotion(); await page.keyboard.press('Escape'); assert.equal(await captureActive(), false);
-      const escape = await page.evaluate(() => [...window.__directionalNative].reverse().find(event => event.type === 'keydown' && event.key === 'Escape'));
-      assert.ok(escape?.isTrusted); await unchangedAfterRetirement(escape); await expectSelected(fixture);
+      await activeMotion(); await page.keyboard.press('Escape'); const escaped = await retirementRead('keydown', null, 'Escape');
+      assert.equal(escaped.captured, false); const escape = escaped.marker;
+      assert.ok(escape?.isTrusted); await unchangedAfterRetirement(escape, false, escaped.calls); await expectSelected(fixture);
       await activeMotion(); const cdp = observe(await context.newCDPSession(rawPage), 'cdp'), second = await hubPoint(fixture.fixture_id);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: second.x, y: second.y, id: 7 }] });
-      assert.equal(await captureActive(), false);
-      const touch = await page.evaluate(() => [...window.__directionalNative].reverse().find(event => event.type === 'pointerdown' && event.pointerType === 'touch'));
+      const touched = await retirementRead('pointerdown', null, null, 'touch'); assert.equal(touched.captured, false);
+      const touch = touched.marker;
       assert.ok(touch?.isTrusted); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await cdp.detach();
       await unchangedAfterRetirement(touch); await expectSelected(fixture);
       return { trusted_escape: true, trusted_second_pointer: true, late_modeled_calls: 0, unflushed_queue_not_inferred: true };
     });
     await check('native wheel cancels painting while retaining the existing zoom action', async () => {
       const before = await page.evaluate(() => window.__APT_ENGINE.rig.zoomIndex()); await activeMotion();
-      await page.mouse.wheel(0, -180); const marker = await nativeMarker('wheel');
-      assert.equal(await captureActive(), false); await unchangedAfterRetirement(marker);
+      await page.mouse.wheel(0, -180); const wheeled = await retirementRead('wheel'), marker = wheeled.marker;
+      assert.equal(wheeled.captured, false); await unchangedAfterRetirement(marker, false, wheeled.calls);
       await page.waitForFunction(before => window.__APT_ENGINE.rig.zoomIndex() !== before, before);
       await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0)); await waitHUD();
       return { paint_canceled: true, zoom_preserved: true };
@@ -910,19 +956,21 @@ test('real authored directional controls preserve native input, aim and output b
       await activeMotion(); await activateStatic(button('.apt-home-shell[data-home-layout="unified"]', 'Layers'), 'Space');
       const checkbox = input(LAYERS, 'Show virtual spotlights layer', 'checkbox');
       await activateStatic(checkbox, 'Space'); await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible === false);
-      const marker = await nativeMarker('click', 'Show virtual spotlights layer'); await waitDOM(COMPOSER, true); const reconciliation = await unchangedAfterRetirement(marker, true);
+      await waitDOM(COMPOSER, true); const retired = await retirementRead('click', 'Show virtual spotlights layer');
+      const reconciliation = await unchangedAfterRetirement(retired.marker, true, retired.calls);
       await activateStatic(checkbox, 'Space'); await activateStatic(button(LAYERS, 'Close layers'));
       await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible === true); await expectMode('zones');
       return { hidden_retired: true, ...reconciliation, restored_display_on: true };
     });
     await check('Setup retires active painting with only the exact saved-state reconciliation and no save', async () => {
       await activeMotion(); await activateStatic(button('.apt-home-topbar', 'Setup'), 'Space');
-      await waitDOM(TOOLBAR); const marker = await nativeMarker('click', 'Setup');
-      await waitDOM(COMPOSER, true); const reconciliation = await unchangedAfterRetirement(marker, true);
+      await waitDOM(TOOLBAR);
+      await waitDOM(COMPOSER, true); const retired = await retirementRead('click', 'Setup');
+      const reconciliation = await unchangedAfterRetirement(retired.marker, true, retired.calls);
       await activateStatic(button(TOOLBAR, 'done'));
       // Returning from Setup must retain the chosen Zones tool; an old aim
       // notice replayed on inspector remount is not a new mode-selection event.
-      await expectSelected(fixture); await expectMode('zones'); return { setup_retired: true, ...reconciliation, saves: 0 };
+      await expectSelected(fixture, 'zones'); return { setup_retired: true, ...reconciliation, saves: 0 };
     });
     await check('the existing Spot Undo still restores its original aim after radial editing', async () => {
       await setMode('spot'); await activateStatic(button(INSPECTOR, 'Undo aim'));
@@ -931,9 +979,9 @@ test('real authored directional controls preserve native input, aim and output b
       await setMode('zones'); return { original_pan_tilt_target_restored: true };
     });
     await check('a native home change retires active painting and preserves the exact authored saves', async () => {
-      await activeMotion(); await activateStatic(button(HOME, 'Echo Park'), 'Space'); await waitSite('echo'); const marker = await nativeMarker('click', 'Echo Park');
-      await waitDOM(COMPOSER, true); await unchangedAfterRetirement(marker);
-      assert.equal(await page.evaluate(scope => document.querySelectorAll(scope).length, INSPECTOR), 0); await selectHome('victoria'); await expectSelected(fixture); await expectMode('zones');
+      await activeMotion(); await activateStatic(button(HOME, 'Echo Park'), 'Space'); await waitSite('echo');
+      await waitDOM(COMPOSER, true); const retired = await retirementRead('click', 'Echo Park'); await unchangedAfterRetirement(retired.marker, false, retired.calls);
+      assert.equal(await page.evaluate(scope => document.querySelectorAll(scope).length, INSPECTOR), 0); await selectHome('victoria'); await expectSelected(fixture, 'zones');
       const restored = await inventory(); assert.equal(restored.visible, true); assert.equal(restored.fixture_count, 4);
       return { home_retired: true, late_modeled_calls: 0, fixture_display_on: true, fixtures: 4 };
     });

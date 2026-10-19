@@ -293,11 +293,41 @@ planes fail before the fix and pass after it; all 118 integration cases pass.
 The failed hosted receipt remains at
 `.tmp/radial-ci-670f-artifacts/apartment-directional-browser/run-1792389310882/receipt.json`.
 
+Hosted run `39208222193` then passed the stationary-click stage and twelve of
+thirteen directional stages. It reached the unchanged 145-second directional
+deadline at the final home-change gesture. The full shell passed in 134 seconds;
+the overall job reached its original ten-minute limit. The failed receipt is
+retained at
+`.tmp/radial-ci-19c5-artifacts/apartment-directional-browser/run-1792390305764/receipt.json`.
+
+The follow-up changes only harness observations: renderer snapshots and adjacent
+read-only state travel together at the same input fences, and sixteen full-shell
+readiness checks use the already-qualified by-value helper at their original
+fifteen-second limits. Three proof-page five-second waits and the explicit
+ten-second renderer wait remain unchanged. All thirteen renderer snapshots,
+native events, movement samples, retirement observation windows, original
+assertions, full scenes, normal motion and deadlines remain. Tab synchronization
+is asserted at the first successful mode observation, without extra retry time.
+Production sources remain at the stationary-click correction; new local and
+hosted evidence must qualify this test-only revision.
+
+Independent method review cleared the frozen directional and full-shell harness
+changes. Fresh workstation runs pass: directional 21.0 seconds native and
+43.5 seconds with retained software flags, each with all thirteen stages and
+renderer snapshots plus exactly 91 expected, dispatched and trusted observed
+pointer/wheel events, and no HTML drag starts. Full shell passes in 41.5 and
+62.7 seconds respectively with all checks retained. Receipts:
+`.tmp/apartment-directional-browser/run-1792391593537/receipt.json`,
+`.tmp/apartment-directional-browser/run-1792391635775/receipt.json`,
+`.tmp/apartment-home-shell-browser/run-1792391405235/receipt.json`, and
+`.tmp/apartment-home-shell-browser/run-1792391498369/receipt.json`.
+These Windows runs remain distinct from fresh hosted qualification.
+
 ## Ticket coverage and retained limits
 
 | Ticket | Covered in this slice | Still open |
 | --- | --- | --- |
-| APT-Z01 / #247 | Admitted cylinders retained; fixture-height lobes, ticks, nodes and outward fade | Broader visual/responsive acceptance |
+| APT-Z01 / #247 | Admitted cylinders retained; fixture-height lobes, ticks, nodes and outward fade | Owner-requested small-orb appearance and broader visual/responsive acceptance |
 | APT-Z02 / #248 | Immediate target/readout, pickup, radial paint, interpolated sweep and guarded cancellation | Broader touch/keyboard journey acceptance |
 | APT-A03 / #249 | Pill, synchronized tabs, A/Z, above-fixture placement and gesture withdrawal | Pending dot requires a real proposal lifecycle |
 | APT-L03 / #252 | Six native zone selectors, all-zone selection, power, brightness, warmth and Show in room | Commissioned facing and wall shortcuts depend on Z04 |
@@ -308,6 +338,12 @@ An existing direct-aim target is not a pending proposal, so no cyan pending dot
 is fabricated. Numeric radial azimuths do not establish commissioned physical
 facing. F05/F06 remain contract preparation only. No ticket is closed by this
 bounded slice.
+
+The original issue reconciliation explicitly retained cylinders despite the
+prototype's small-orb wording. The latest owner feedback requests the orb
+appearance. That cosmetic revision is still unfinished and is separate from
+this radial-control correction; saved registration and channel/optical/picking
+bindings must remain intact.
 
 Public browser evidence uses generated rooms and registration on the real Home
 renderer. Actual-room browser verification, imagery, coordinates and saved

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import Core from '../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { waitForDirectionalReadiness } from './fixtures/apartment-directional-readiness.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -277,7 +278,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
         // the real renderer-advancement assertion without producing a still.
         const frame = await page.evaluate(() => document.querySelector('.apt-home-shell[data-home-layout="unified"]')
           ? window.__APT_ENGINE?.renderer.info.render.frame : null);
-        if (frame != null) await page.waitForFunction(previous => window.__APT_ENGINE?.renderer.info.render.frame > previous, frame);
+        if (frame != null) await waitForDirectionalReadiness(page, previous => window.__APT_ENGINE?.renderer.info.render.frame > previous, frame);
         (receipt.captures ||= []).push({ name, screenshot: false, renderer_advancing: frame != null });
         return;
       }
@@ -364,7 +365,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
       } finally { clearTimeout(observationTimer); observation.duration_ms = Date.now() - observation.started_at; save(); }
     }
     async function selectedTab(key) {
-      await page.waitForFunction(key => document.activeElement?.id === 'apt-home-tab-' + key
+      await waitForDirectionalReadiness(page, key => document.activeElement?.id === 'apt-home-tab-' + key
         && document.getElementById('apt-home-tab-' + key)?.getAttribute('aria-selected') === 'true', key);
     }
     async function keyboardTabs(narrow) {
@@ -412,7 +413,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
       checks.push({ stage: 'phone_chat_composer_send_and_mic_inside_viewport', viewport, bounds });
     }
     async function waitSite(site) {
-      await page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
+      await waitForDirectionalReadiness(page, site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
         && window.__APT_ENGINE?.siteId === site, site);
     }
     async function selectHome(site) {
@@ -474,15 +475,15 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await waitSite('echo');
     await echoCardBounds();
     await selectHome('victoria');
-    await page.waitForFunction(() => window.__APT_ENGINE?.overlay.virtualFixturesGroup?.children.length === 4);
+    await waitForDirectionalReadiness(page, () => window.__APT_ENGINE?.overlay.virtualFixturesGroup?.children.length === 4);
     const overviewFixtures = await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures);
     assert.equal(overviewFixtures.length, 4);
     await page.getByRole('button', { name: 'All off', exact: true }).click();
-    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item =>
+    await waitForDirectionalReadiness(page, () => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item =>
       item.state.spotlight.on === false && item.state.downward.on === false && item.state.radials.length === 6
         && item.state.radials.every(zone => zone.on === false)));
     await page.getByRole('button', { name: 'All on', exact: true }).click();
-    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item =>
+    await waitForDirectionalReadiness(page, () => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item =>
       item.state.spotlight.on === true && item.state.downward.on === true && item.state.radials.every(zone => zone.on === true)));
     assert.deepEqual(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures), overviewFixtures,
       'modeled batch on/off restores the exact four authored fixtures without changing their channels or registration');
@@ -498,7 +499,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await tab('Controls');
     for (const [width, height] of [[1366,768], [820,1180], [390,844]]) {
       await page.setViewportSize({ width, height });
-      await page.waitForFunction(() => window.__APT_ENGINE?.renderer.domElement.width > 0);
+      await waitForDirectionalReadiness(page, () => window.__APT_ENGINE?.renderer.domElement.width > 0);
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await identityCheck('viewport_' + width + 'x' + height);
       await capture('unified-controls-' + width + 'x' + height);
@@ -609,13 +610,13 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.getByRole('tab', { name: 'Light', exact: true }).click();
     const spotBrightness = page.getByRole('slider', { name: 'Brightness', exact: true });
     await spotBrightness.focus(); await spotBrightness.press('Home');
-    await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === 0, channelId);
+    await waitForDirectionalReadiness(page, id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === 0, channelId);
     const channelsChanged = await aimDescriptor(channelId);
     assert.deepEqual(channelsChanged.state.downward, channelsBefore.state.downward, 'Spot brightness leaves Down independent');
     assert.deepEqual(channelsChanged.state.radials, channelsBefore.state.radials, 'Spot brightness leaves all six radial zones independent');
     assert.deepEqual(channelsChanged.state.spotlight, { ...channelsBefore.state.spotlight, brightness: 0 });
     await spotBrightness.press('End');
-    await page.waitForFunction(({ id, brightness }) => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === brightness,
+    await waitForDirectionalReadiness(page, ({ id, brightness }) => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === brightness,
       { id: channelId, brightness: channelsBefore.state.spotlight.brightness });
     assert.deepEqual(await aimDescriptor(channelId), channelsBefore, 'native Spot control restores the exact original virtual descriptor');
     assert.equal(requests.some(row => !['GET', 'HEAD'].includes(row.method)), false, 'channel controls send no output command');
@@ -646,10 +647,10 @@ test('unified shell keeps the real room, private controls and one chat controlle
       throw Error('15s actual radial drawing visibility readiness');
     }, { id, expected });
     await radialPanel.getByRole('button', { name: 'Off', exact: true }).click();
-    await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials
+    await waitForDirectionalReadiness(page, id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials
       .every(zone => !zone.on && zone.brightness === 0), channelId);
     await page.getByRole('checkbox', { name: 'Radial power', exact: true }).check();
-    await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials.every(zone => zone.on), channelId);
+    await waitForDirectionalReadiness(page, id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials.every(zone => zone.on), channelId);
     const masterObservation = await radialOutput(channelId), radialMasterOn = masterObservation.descriptor;
     receipt.radial_power = { fixture_id: channelId, original: channelsBefore.state.radials,
       master_on_after_off: radialMasterOn.state.radials, modeled_output: masterObservation.output };
@@ -657,7 +658,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
       'Radial Off then master On starts all six zero-brightness zones at 50%');
     const radialCases = receipt.radial_power.cases = [];
     async function assertRadials(stage, id, expected) {
-      await page.waitForFunction(({ id, expected }) => JSON.stringify(window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials)
+      await waitForDirectionalReadiness(page, ({ id, expected }) => JSON.stringify(window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials)
         === JSON.stringify(expected), { id, expected });
       // Logical channels are immediate; the specified drawing fade settles
       // separately. Keep exact visible-output checks after that native frame.
@@ -751,7 +752,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await tab('Chat');
     const selectedCylinder = await fixturePoint(fixtureIds.at(-1));
     await page.mouse.click(selectedCylinder.x, selectedCylinder.y);
-    await page.waitForFunction(() => document.getElementById('apt-home-tab-controls')?.getAttribute('aria-selected') === 'true'
+    await waitForDirectionalReadiness(page, () => document.getElementById('apt-home-tab-controls')?.getAttribute('aria-selected') === 'true'
       && document.getElementById('apt-home-panel-controls')?.hidden === false);
     // Light now owns Zones. Select the native Spot tool before testing an
     // aim drag with Setup's fixture selector retaining keyboard focus.
@@ -826,12 +827,12 @@ test('unified shell keeps the real room, private controls and one chat controlle
         }, { capture: true, once: true });
       });
       await page.mouse.down();
-      const selectedAfterDown = await page.waitForFunction(id => {
+      const selectedAfterDown = await waitForDirectionalReadiness(page, id => {
         const label = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
         const matches = window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === label);
         return matches.length === 1 && matches[0].fixture_id === id ? id : false;
       }, directId);
-      drag.selected_after_down = await selectedAfterDown.jsonValue();
+      drag.selected_after_down = selectedAfterDown;
       assert.equal(drag.selected_after_down, directId, 'pointer-down selected the fixture being dragged');
       await page.mouse.move(target.x, target.y, { steps: 12 }); await page.mouse.up();
       const released = await page.evaluate(() => {
@@ -846,7 +847,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
       assert.equal(await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue(), directId);
       await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Aim', exact: true }).click();
       assert.ok(drag.pointer_up.visible_hit, 'actual pointer-up has a qualified visible canonical collision hit');
-      await page.waitForFunction(id => !!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.target, directId);
+      await waitForDirectionalReadiness(page, id => !!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.target, directId);
       const aimed = await aimDescriptor(directId);
       drag.aimed = aimed;
       drag.after = await targetPoint([2.4,2.1,0]);
@@ -907,7 +908,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
       await page.getByRole('button', { name: 'Home menu', exact: true }).click();
     }
     await previousHome.click();
-    await page.waitForFunction(() => !document.querySelector('.apt-home-shell[data-home-layout="unified"]'));
+    await waitForDirectionalReadiness(page, () => !document.querySelector('.apt-home-shell[data-home-layout="unified"]'));
     assert.equal(await page.getByRole('combobox', { name: 'Command input', exact: true }).inputValue(), 'Authored unsent shell draft');
     checks.push({ stage: 'classic_ui_escape_hatch_keeps_chat_draft' });
     await capture('previous-home-classic-390x844');

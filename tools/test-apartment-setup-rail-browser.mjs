@@ -2,6 +2,8 @@
 // Opens every tool in both homes, the pressed toggle, Escape, the dock
 // across Setup, calibration from Cameras and sensors, phone and light theme.
 // No household data, no saves, no session starts and no light commands.
+// One page load for everything: each Home boot compiles the app in the
+// browser, which dominates hosted-CI time.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -22,8 +24,13 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
     saves: 0, physical_commands: 0, checks: [], browser: browserOptions() };
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   let server, browser, timer;
-  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('170s Setup rail browser deadline')); }, 170000); });
-  const check = async (name, operation) => { receipt.current_stage = name; save(); receipt.checks.push({ name, ...(await operation()) }); save(); };
+  const started = Date.now();
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('170s Setup rail browser deadline at: '
+    + receipt.current_stage + ' · ' + JSON.stringify(receipt.checks.map(item => item.seconds)))); }, 170000); });
+  const check = async (name, operation) => {
+    receipt.current_stage = name; save(); const begun = Date.now();
+    receipt.checks.push({ name, ...(await operation()), seconds: Math.round((Date.now() - begun) / 100) / 10 }); save();
+  };
   async function proof() {
     server = await startSetupServer(rooms);
     browser = await chromium.launch(receipt.browser);
@@ -104,6 +111,7 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
     });
 
     await shell.selectHome('victoria');
+    receipt.boot_and_echo_seconds = Math.round((Date.now() - started) / 100) / 10;
     await check('Victoria lists every tool, opens its registration editors and states why four are unavailable', async () => {
       await shell.openSetup();
       const reasons = {};
@@ -148,11 +156,15 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
       return { states };
     });
 
-    const { page: phone } = await openSetupContext(browser, server.origin, server.log, { viewport: { width: 390, height: 844 }, theme: 'light', mobile: true });
-    const phoneShell = homeShell(phone, server.origin);
-    await phoneShell.boot('1', 'echo');
+    // Same page: a phone viewport with a coarse pointer, then the light theme.
+    const phone = page, phoneShell = shell;
     await check('phone and light theme: a narrow rail over the room, the inspector in the sheet, 44 px targets, readable text', async () => {
-      assert.equal(await phone.evaluate(() => document.querySelector('.apt-home-shell').closest('[data-theme]').dataset.theme), 'light');
+      await page.getByRole('button', { name: 'Home menu', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Light theme', exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('.apt-home-shell').dataset.theme === 'light');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await (await page.context().newCDPSession(page)).send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+      assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
       await phoneShell.openSetup();
       const layout = await phone.evaluate(() => {
         const rail = document.querySelector('.apt-setup-rail').getBoundingClientRect(), stage = document.querySelector('.apt-home-stage').getBoundingClientRect();
@@ -165,13 +177,15 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
         for (let node = title; node; node = node.parentElement) { const color = getComputedStyle(node).backgroundColor; if (!/rgba\(.*, 0\)$|transparent/.test(color)) { background = color; break; } }
         return { railWidth: rail.width, railShare: rail.height / stage.height, minTarget: Math.min(...buttons),
           inSheet: !!document.querySelector('.apt-home-panel [data-apt-setup-inspector]'), overflowX: document.documentElement.scrollWidth - innerWidth,
-          titleContrast: contrast(getComputedStyle(title).color, background), railText: getComputedStyle(document.querySelector('.apt-setup-rail button[aria-pressed="false"]')).color };
+          titleContrast: contrast(getComputedStyle(title).color, background),
+          // The rail sits on the room's dark glass in both themes.
+          railContrast: Math.min(...[...document.querySelectorAll('.apt-setup-rail button')].map(node => contrast(getComputedStyle(node).color, 'rgb(8, 9, 11)'))) };
       });
       assert.ok(layout.railWidth <= 181 && layout.railShare <= .465, JSON.stringify(layout));
       assert.ok(layout.minTarget >= 44, 'coarse targets are at least 44 px: ' + layout.minTarget);
       assert.equal(layout.inSheet, true); assert.ok(layout.overflowX <= 0, 'no horizontal page scroll');
       assert.ok(layout.titleContrast >= 4.5, 'header text contrast ' + layout.titleContrast);
-      assert.equal(layout.railText, 'rgb(237, 237, 237)', 'rail text stays light on the dark room glass in light theme');
+      assert.ok(layout.railContrast >= 4.5, 'rail text stays readable on the dark room glass in light theme: ' + layout.railContrast);
       await phoneShell.tool('position'); await phone.waitForFunction(() => document.querySelector('[data-apt-setup-inspector] .apt-ui-title')?.textContent === 'Fixture position');
       return layout;
     });

@@ -73,6 +73,13 @@ function installSetupRooms(run, { echoOverrides = {}, echoModel = authoredEchoMo
     packHashes: () => Object.fromEntries(packFiles.map(file => [file, hash(fs.readFileSync(file))])) };
 }
 
+/** Back to the freshly authored registration (revision 0), for a second
+ * pass over the same server. */
+function resetRegistration(rooms) {
+  fs.rmSync(rooms.privateRoot, { recursive: true, force: true });
+  initRegistration(rooms.privateRoot, authoredDocument(readActiveBinding(rooms.packs), Core), { contentPacksDir: rooms.packs });
+}
+
 function publicSources(root) {
   const result = new Map(), excluded = new Set(['node_modules', 'data', 'artifacts', 'private', 'recordings', 'logs']);
   function visit(directory, depth = 0) {
@@ -215,4 +222,4 @@ function homeShell(page, origin) {
   };
 }
 
-export { authoredEchoModel, installSetupRooms, startSetupServer, openSetupContext, browserOptions, homeShell, STAMP, hash };
+export { authoredEchoModel, resetRegistration, installSetupRooms, startSetupServer, openSetupContext, browserOptions, homeShell, STAMP, hash };

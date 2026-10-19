@@ -9,11 +9,13 @@ import { fileURLToPath } from "node:url";
 import { classifyAgentOrigin, parseAgentOriginBoundary } from "./agent-origin.mjs";
 import { CLIENT_ADDRESS, homeLocatorFromEnv, proxyProtocolListener } from "./home-location.mjs";
 import { safeFile } from "./path-security.mjs";
+import { createPrecompiledManifestVerifier } from "./precompiled-jsx.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const APP_DIR = path.join(ROOT, "app", "src");
 const FALLBACK_APARTMENT_DIR = path.join(APP_DIR, "assets", "apartment");
+const precompiledJsx = createPrecompiledManifestVerifier(APP_DIR);
 
 const HOST = process.env.HOME_WEB_HOST || "127.0.0.1";
 const PORT = Number(process.env.HOME_WEB_PORT || 5181);
@@ -126,6 +128,7 @@ const MIME = new Map([
   [".jsx", "text/plain; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
+  [".map", "application/json; charset=utf-8"],
   [".webmanifest", "application/manifest+json; charset=utf-8"],
   [".svg", "image/svg+xml"],
   [".png", "image/png"],
@@ -1206,6 +1209,23 @@ function sendLegacyHomeQuarantine(req, res) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
+// Re-verified against the sources on every request, so it is never cached.
+function sendPrecompiledManifest(req, res) {
+  const manifest = precompiledJsx.verifiedManifest();
+  if (!manifest) {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+    res.end("not found");
+    return;
+  }
+  const body = Buffer.from(JSON.stringify(manifest), "utf8");
+  res.writeHead(200, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+  });
+  res.end(req.method === "HEAD" ? undefined : body);
+}
+
 function isApartmentMetadata(pathname) {
   return /\.(?:json|webmanifest)$/i.test(pathname);
 }
@@ -1370,6 +1390,10 @@ function serveStatic(req, res) {
       return;
     }
     sendIndex(req, res, filePath);
+    return;
+  }
+  if (pathname === "/precompiled/manifest.json") {
+    sendPrecompiledManifest(req, res);
     return;
   }
   serveFile(req, res, filePath, { cache: appStaticCache(pathname, parsed) });
@@ -1865,4 +1889,5 @@ server.on("upgrade", (req, socket, head) => {
 proxyProtocolListener(server).listen(PORT, HOST, () => {
   console.log(`Home web gateway listening on http://${HOST}:${PORT}`);
   console.log("Use Tailscale Serve to expose this privately to your tailnet.");
+  try { console.log(`App shell: ${precompiledJsx.describe()}.`); } catch (err) { console.warn(`App shell: precompiled JSX check failed - ${err.message}`); }
 });

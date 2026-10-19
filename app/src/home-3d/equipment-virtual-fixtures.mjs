@@ -1,6 +1,6 @@
 /* Ordinary Apartment presentation of saved equipment proposals.
  * A socket anchor can display a symbolic fixture before its optical offset is
- * measured. The housing and aim preview are display models, never registered
+ * measured. The orb and aim preview are display models, never registered
  * fixture geometry, live execution, photometry or a physical command. */
 import * as THREE from 'three';
 const [Spotlight] = await Promise.all([
@@ -23,8 +23,13 @@ const MAX_SPAN = 100;
 const VIRTUAL_LIMITS = Object.freeze({ pan_min_deg: -180, pan_max_deg: 180,
     tilt_min_deg: -90, tilt_max_deg: 90, limit_role: 'virtual_preview', physical_travel: 'unknown' });
 // Illustrative exterior proportions, not surveyed or manufactured dimensions.
+// The tube is no longer drawn; sources, picks and receivers keep these values.
 const TUBE_RADIUS = .04, TUBE_HEIGHT = .16;
 const DISPLAY_PIVOT_Z = -.14;
+// Orb cosmetics only (SPEC: a small orb with a glow tinted by the channels
+// that are on). None of these moves a source, pick, handle or receiver.
+const ORB_CORE_RADIUS = .03, ORB_CORE_COLOR = 0x3d3f43;
+const ORB_HALO_RADIUS = .15, ORB_HALO_FALLOFF = 2.5, ORB_HALO_CHANNEL_OPACITY = .3;
 const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = .0005, RADIAL_SETTLED_KELVIN = 2;
 const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
 const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -259,6 +264,17 @@ function featherMap() {
     return texture;
 }
 
+// One soft, view-facing falloff shared by every halo layer: brightest toward
+// the camera and fading to the silhouette, so the orb reads as one glow from
+// any orbit angle. The shell sits in front of the core, so it lights it.
+function orbHaloShader(shader) {
+    const varyings = '#include <common>\nvarying vec3 vOrbHaloNormal;\nvarying vec3 vOrbHaloView;';
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', varyings).replace('#include <project_vertex>',
+        '#include <project_vertex>\nvOrbHaloNormal = normalize( normalMatrix * normal );\nvOrbHaloView = - mvPosition.xyz;');
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', varyings).replace('#include <opaque_fragment>',
+        `diffuseColor.a *= pow( clamp( dot( normalize( vOrbHaloNormal ), normalize( vOrbHaloView ) ), 0.0, 1.0 ), ${ORB_HALO_FALLOFF.toFixed(2)} );\n#include <opaque_fragment>`);
+}
+
 function buildFixture(item, state, depth, reducedMotion) {
     const root = new THREE.Group();
     root.name = 'equipment-virtual-fixture:' + item.id;
@@ -278,19 +294,23 @@ function buildFixture(item, state, depth, reducedMotion) {
     const buffer = capacity => new THREE.BufferGeometry().setAttribute('position',
         new THREE.BufferAttribute(new Float32Array(capacity * 3), 3));
     const assembly = new THREE.Group(); assembly.name = 'symbolic-engineered-fixture-assembly'; root.add(assembly);
-    const housing = new THREE.Group(); housing.name = 'symbolic-fixture-housing'; assembly.add(housing);
-    const diffuser = mesh(housing, 'tubular-diffuser',
-        new THREE.CylinderGeometry(TUBE_RADIUS, TUBE_RADIUS, TUBE_HEIGHT, 48, 1, true), 0xf5f5f3);
-    diffuser.rotation.x = Math.PI / 2; diffuser.position.z = -TUBE_HEIGHT / 2;
-    diffuser.material.opacity = 1; diffuser.material.transparent = false; diffuser.material.depthWrite = true;
-    diffuser.userData = { enclosure: 'tubular_diffuser_film', visual_dimensions_only: true };
-    for (const [name, geometry, z] of [
-        ['diffuser-top', new THREE.CircleGeometry(TUBE_RADIUS, 48), -.001],
-        ['diffuser-base', new THREE.RingGeometry(.012, TUBE_RADIUS, 48), -TUBE_HEIGHT],
-    ]) {
-        const cap = mesh(housing, name, geometry, 0xf5f5f3);
-        cap.position.z = z; cap.material.opacity = 1; cap.material.transparent = false; cap.material.depthWrite = true;
-    }
+    // An abstract light point: no housing or strips are drawn. The opaque,
+    // depth-writing core sits on the radial source centreline, the pick centre.
+    const orb = new THREE.Group(); orb.name = 'fixture-orb'; orb.position.z = -TUBE_HEIGHT / 2; assembly.add(orb);
+    const core = mesh(orb, 'fixture-orb-core', new THREE.SphereGeometry(ORB_CORE_RADIUS, 24, 16), ORB_CORE_COLOR);
+    core.material.opacity = 1; core.material.transparent = false; core.material.depthWrite = true;
+    core.userData = { orb_part: 'core', visual_dimensions_only: true };
+    // Every channel adds one layer of the same halo, tinted by its display
+    // white and scaled by its level, so the layers sum to one channel-blended
+    // glow. Display-only layers are never hit targets.
+    const haloGeometry = new THREE.SphereGeometry(ORB_HALO_RADIUS, 32, 16);
+    const halo = (parent, name, opacity) => {
+        const layer = mesh(parent, name, haloGeometry, 0xffdfab, opacity, true);
+        layer.material.side = THREE.FrontSide; layer.material.onBeforeCompile = orbHaloShader;
+        layer.material.customProgramCacheKey = () => 'equipment-orb-halo-1';
+        layer.position.z = -TUBE_HEIGHT / 2; layer.raycast = () => {};
+        return layer;
+    };
 
     const radialViews = state.radials.map(zone => {
         const group = new THREE.Group(); group.name = 'radial-zone-' + zone.number; root.add(group);
@@ -301,11 +321,10 @@ function buildFixture(item, state, depth, reducedMotion) {
             new THREE.Vector3(-direction.y, direction.x, 0), new THREE.Vector3(0, 0, 1), direction));
         port.visible = false;
         port.userData = { enclosed: true, source_kind: 'led_strip' };
-        const sector = mesh(group, 'radial-diffuser-sector-' + zone.number,
-            new THREE.CylinderGeometry(TUBE_RADIUS + .0001, TUBE_RADIUS + .0001, .13, 12, 1, true,
-                angle + Math.PI / 2 - Math.PI / 6, Math.PI / 3), 0xffdfab, .10);
-        sector.rotation.x = Math.PI / 2; sector.position.z = -TUBE_HEIGHT / 2;
-        sector.userData = { enclosure: 'tubular_diffuser_film', channel_number: zone.number };
+        // The zone's faint tint carrier is its layer of the orb halo. Name,
+        // channel number, visibility and the .1 x level opacity are unchanged.
+        const sector = halo(group, 'radial-diffuser-sector-' + zone.number, .10);
+        sector.userData = { orb_halo_layer: 'radial', channel_number: zone.number };
         const start = new THREE.Vector3(0, 0, -TUBE_HEIGHT / 2), worldStart = start.clone().add(item.anchor);
         const centerHit = receivingPoint(item, worldStart, direction);
         const patchPoints = [], samples = [];
@@ -382,6 +401,14 @@ function buildFixture(item, state, depth, reducedMotion) {
     const handlePick = new THREE.Mesh(new THREE.SphereGeometry(.14, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
     handlePick.name = 'virtual-fixture-aim-pick'; root.add(handlePick);
     handlePick.userData = { interaction_role: 'aim_handle', fixture_id: item.id, mount_id: item.mountId };
+    const downwardHalo = halo(downwardGroup, 'orb-halo-downward', ORB_HALO_CHANNEL_OPACITY);
+    downwardHalo.userData = { orb_halo_layer: 'downward' };
+    const spotlightHalo = halo(roboticGroup, 'orb-halo-spotlight', ORB_HALO_CHANNEL_OPACITY);
+    spotlightHalo.userData = { orb_halo_layer: 'spotlight' };
+    const paintHalo = (layer, channel) => {
+        layer.visible = channel.on && channel.brightness > 0;
+        layer.material.color.copy(displayWhite(channel.color_temp_kelvin)); layer.material.opacity = ORB_HALO_CHANNEL_OPACITY * channel.brightness;
+    };
     let selected = false;
 
     function updateBeam(view, channel, origin, direction, fullAngle, target) {
@@ -478,6 +505,7 @@ function buildFixture(item, state, depth, reducedMotion) {
         downwardGroup.userData.channel = copy(next.downward);
         downGlow.visible = next.downward.on && next.downward.brightness > 0;
         downGlow.material.color.copy(displayWhite(next.downward.color_temp_kelvin)); downGlow.material.opacity = .035 * next.downward.brightness;
+        paintHalo(downwardHalo, next.downward); paintHalo(spotlightHalo, next.spotlight);
         const direction = new THREE.Vector3(...Aiming.directionFromAim(next.pan_deg, next.tilt_deg, { horizontal_world_reference: item.reference.toArray() }));
         head.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), direction);
         panStage.rotation.z = Math.atan2(item.reference.y, item.reference.x) - next.pan_deg * DEG;

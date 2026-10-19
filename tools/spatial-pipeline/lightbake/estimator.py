@@ -37,7 +37,7 @@ DEFAULT_EPS_REL = 0.02
 DEFAULT_RHO_MAX = 0.95
 
 
-def recover_albedo(R_cap, E_cap, eps_rel=DEFAULT_EPS_REL, rho_max=DEFAULT_RHO_MAX, clipped=None):
+def recover_albedo(R_cap, E_cap, eps_rel=DEFAULT_EPS_REL, rho_max=DEFAULT_RHO_MAX, clipped=None, floor=None):
     """Per-channel clamped albedo and flags.
 
     R_cap, E_cap: (N,3) linear, same (arbitrary) radiometric unit up to pi.
@@ -48,7 +48,7 @@ def recover_albedo(R_cap, E_cap, eps_rel=DEFAULT_EPS_REL, rho_max=DEFAULT_RHO_MA
     E = np.clip(np.asarray(E_cap, np.float64), 0, None)
     yE = lum(E)
     med = float(np.median(yE[yE > 0])) if np.any(yE > 0) else 0.0
-    floor = max(eps_rel * med, 1e-12)
+    floor = max(eps_rel * med, 1e-12) if floor is None else float(floor)  # shared floor across sets
     rho = np.pi * R / np.maximum(E, floor)
     high = (rho > rho_max).any(1)
     rho = np.clip(rho, 0, rho_max)

@@ -28,12 +28,11 @@ class PipelineSynthetic(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         site, cls.pack, eq = synthetic_pack.make(cls.tmp, spp=128)
         cls.before = binding.snapshot(cls.pack)
-        common = ["--site-dir", str(site), "--equipment", str(eq), "--oidn-dir", str(cls.tmp / "no-oidn")]
-        delight.run(cli.parse(90, common + ["--capture-spp", "128", "--capture-spp-mesh", "32",
-                                           "--mesh-albedo-size", "128",
+        common = ["--site-dir", str(site), "--equipment", str(eq)]
+        delight.run(cli.parse(90, common + ["--capture-spp", "128",
                                            "--wall-bearings", "wall-d=0,wall-a=270,wall-b=90,wall-c=180",
                                            "--sun", "probe=0/30"]))
-        cls.m = bake.run(cli.parse(91, common + ["--spp", "32", "--mesh-spp", "32", "--lightmap-size", "64"]))
+        cls.m = bake.run(cli.parse(91, common + ["--spp", "32", "--mesh-spp", "32"]))
         cls.layer = binding.default_layer_dir(cls.pack)
 
     @classmethod
@@ -55,7 +54,8 @@ class PipelineSynthetic(unittest.TestCase):
         b = self.m["budget"]
         self.assertTrue(b["ok"])
         self.assertTrue(all(v == 40 for v in b["receiver_bytes"].values()))
-        self.assertLessEqual(b["lightmap_bytes"], 64 * 1024 * 1024)
+        self.assertLessEqual(b["mesh_bytes"], 64 * 1024 * 1024)
+        self.assertEqual(b["mesh_bytes_per_vertex"], 43)
         self.assertEqual(self.m["provenance"]["status"], "modeled")
         self.assertFalse(self.m["provenance"]["measured"])
         self.assertEqual(len(self.m["columns"]), 29)
@@ -109,9 +109,9 @@ class PipelineSynthetic(unittest.TestCase):
             binding.verify_layer(alt, self.pack)
 
     def test_files_decode(self):
-        from lightbake import ktx2
-        a, info = ktx2.read(self.layer / "mesh-basis-u8.ktx2")
-        self.assertEqual(info["layers"], 29)
+        nv = self.m["mesh"]["vertices"]
+        self.assertEqual(np.fromfile(self.layer / "mesh-basis-u8.bin", np.uint8).size, nv * 29)
+        self.assertEqual(np.fromfile(self.layer / "mesh-capture-irradiance.bin", "<f2").size, nv * 3)
         n = self.m["receivers"]["splat"]["count"]
         u8 = np.fromfile(self.layer / "splat-basis-u8.bin", np.uint8)
         self.assertEqual(u8.size, n * 29)

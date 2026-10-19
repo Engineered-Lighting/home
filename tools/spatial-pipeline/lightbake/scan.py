@@ -18,12 +18,17 @@ _NC = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
 
 
 def read_glb(path):
-    """mesh.glb -> dict(positions (V,3) f32, uv (V,2) f32, faces (F,3) i32, texture (H,W,3) u8).
+    """mesh.glb -> dict(positions, uv, faces, texture, trace_positions, trace_uv, trace_faces, trace_source).
 
-    Uses the primitive the scene renders (meshes[0].primitives[0]); orphaned
-    accessors from earlier cleanups are ignored.
+    `positions/uv/faces` are the primitive the scene renders (meshes[0].primitives[0]).
+    Display cleanup can cut that primitive (the Den's dollhouse view drops parts of the
+    room), while trimesh keeps the uncut scan as unreferenced accessors sharing the
+    same atlas. If such an index/POSITION/TEXCOORD triple exists and contains every
+    rendered vertex, it is returned as the `trace_*` geometry for ray tracing;
+    otherwise the rendered primitive is used. Nothing is written.
     """
     from PIL import Image
+    from scipy.spatial import cKDTree
 
     with open(path, "rb") as f:
         data = f.read()
@@ -47,20 +52,39 @@ def read_glb(path):
     def accessor(i):
         a = gltf["accessors"][i]
         nc = _NC[a["type"]]
-        raw = view(a["bufferView"])
-        arr = np.frombuffer(raw, dtype=_CT[a["componentType"]], count=a["count"] * nc, offset=a.get("byteOffset", 0))
+        arr = np.frombuffer(view(a["bufferView"]), dtype=_CT[a["componentType"]], count=a["count"] * nc,
+                            offset=a.get("byteOffset", 0))
         return arr.reshape(a["count"], nc) if nc > 1 else arr
 
     prim = gltf["meshes"][0]["primitives"][0]
-    pos = accessor(prim["attributes"]["POSITION"]).astype(np.float32)
-    uv = accessor(prim["attributes"]["TEXCOORD_0"]).astype(np.float32)
-    faces = accessor(prim["indices"]).astype(np.int64).reshape(-1, 3).astype(np.int32)
+    ip, iu, ii = prim["attributes"]["POSITION"], prim["attributes"]["TEXCOORD_0"], prim["indices"]
+    pos = accessor(ip).astype(np.float32)
+    uv = accessor(iu).astype(np.float32)
+    faces = accessor(ii).astype(np.int64).reshape(-1, 3).astype(np.int32)
     mat = gltf["materials"][prim["material"]]
     tex = gltf["textures"][mat["pbrMetallicRoughness"]["baseColorTexture"]["index"]]
     img = gltf["images"][tex["source"]]
     Image.MAX_IMAGE_PIXELS = None
     texture = np.asarray(Image.open(io.BytesIO(view(img["bufferView"]))).convert("RGB"))
-    return {"positions": pos, "uv": uv, "faces": faces, "texture": texture}
+    out = {"positions": pos, "uv": uv, "faces": faces, "texture": texture,
+           "trace_positions": pos, "trace_uv": uv, "trace_faces": faces,
+           "trace_source": {"primitive": "rendered", "accessors": [ii, ip, iu]}}
+    A = gltf["accessors"]
+    best = None
+    for i in range(len(A) - 2):
+        if i in (ip, iu, ii):
+            continue
+        a, b, c = A[i], A[i + 1], A[i + 2]
+        if (a["type"], b["type"], c["type"]) == ("SCALAR", "VEC3", "VEC2") and b["count"] == c["count"]                 and a["count"] % 3 == 0 and a.get("max", [b["count"]])[0] < b["count"]                 and a["count"] > len(faces) * 3 and (best is None or a["count"] > A[best]["count"]):
+            best = i
+    if best is not None:
+        tp = accessor(best + 1).astype(np.float32)
+        d, _ = cKDTree(tp).query(pos)
+        if float(d.max()) < 1e-3:
+            out.update(trace_positions=tp, trace_uv=accessor(best + 2).astype(np.float32),
+                       trace_faces=accessor(best).astype(np.int64).reshape(-1, 3).astype(np.int32),
+                       trace_source={"primitive": "uncut scan accessors", "accessors": [best, best + 1, best + 2]})
+    return out
 
 
 def _ply(path):

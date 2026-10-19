@@ -4,27 +4,7 @@ import unittest
 
 import numpy as np
 
-from lightbake import binding, ktx2
-
-
-class Ktx2(unittest.TestCase):
-    def test_round_trip_formats(self):
-        rng = np.random.default_rng(0)
-        cases = {"r8": rng.integers(0, 256, (3, 16, 8, 1), dtype=np.uint8),
-                 "rgba8_srgb": rng.integers(0, 256, (16, 8, 4), dtype=np.uint8),
-                 "r16f": rng.random((16, 8, 1)).astype(np.float16)}
-        with tempfile.TemporaryDirectory() as d:
-            for fmt, a in cases.items():
-                p = os.path.join(d, fmt + ".ktx2")
-                n = ktx2.write(p, a, fmt)
-                self.assertEqual(n, os.path.getsize(p))
-                b, info = ktx2.read(p)
-                np.testing.assert_array_equal(b, a)
-                self.assertEqual(info["levels"], 1)
-                self.assertEqual(info["supercompression"], 0)
-                raw = open(p, "rb").read()
-                off = int.from_bytes(raw[80:88], "little")
-                self.assertEqual(off % 4, 0)
+from lightbake import binding
 
 
 class CanonicalJson(unittest.TestCase):

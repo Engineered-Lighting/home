@@ -61,9 +61,10 @@ class TracerAnalytic(unittest.TestCase):
     def test_uniform_radiance_gather_is_pi_L(self):
         P = np.array([[2.0, 1.5, 0.0], [1.0, 1.0, 2.5], [0.0, 1.5, 1.0]], np.float32)
         N = np.array([[0, 0, 1], [0, 0, -1], [1, 0, 0]], np.float32)
-        Eb, Ew, esc = self.scene.gather_capture(P, N, spp=4096, batch=512)
+        Eb, Ew, esc, back = self.scene.gather_capture(P, N, spp=4096, batch=512)
         np.testing.assert_allclose(Eb[:, 1], np.pi * self.L, rtol=0.03)
         self.assertTrue(np.all(esc == 0))
+        self.assertTrue(np.all(back == 0))
 
     def test_point_emitter_inverse_square(self):
         from lightbake.scan import lobe_peak_per_lumen
@@ -72,30 +73,39 @@ class TracerAnalytic(unittest.TestCase):
         self.scene.set_fixtures([col])
         P = np.array([[2.0, 1.5, 0.0]], np.float32)
         N = np.array([[0, 0, 1.0]], np.float32)
-        black = np.zeros((8, 8, 3), np.uint8)  # no bounce: albedo 0
-        B = self.scene.basis(P, N, black, spp=8, bounces=2, batch=8)
+        self.scene.set_albedo_constant([0, 0, 0])  # no bounce
+        B = self.scene.basis(P, N, spp=8, bounces=2, batch=8)
         h = 2.0 - self.scene.eps
         np.testing.assert_allclose(B[0, 0, 0], col["peak_cd_per_lm"] / h ** 2, rtol=1e-3)
         self.scene.set_fixtures([])
 
+    def test_albedo_ratio_model_closed_form(self):
+        # rho = pi * L / E_vertex: uniform L in a closed box with E = pi*L/(1-rho) at steady state;
+        # here we only check the ratio and clamp: E_vertex = pi*L/0.5 -> rho 0.5, E tiny -> rho_max.
+        nv = len(self.pos)
+        self.scene.set_albedo_ratio(np.full((nv, 3), np.pi * self.L / 0.5, np.float32), 1e-6, 0.9)
+        col = {"position": np.array([2.0, 1.5, 2.0]), "axis": np.array([0, 0, -1.0]), "hwhm_deg": 60.0,
+               "max_theta_deg": 180.0, "peak_cd_per_lm": 1.0}
+        self.scene.set_fixtures([col])
+        P = np.array([[2.0, 1.5, 0.0]], np.float32)
+        N = np.array([[0, 0, 1.0]], np.float32)
+        B1 = self.scene.basis(P, N, spp=2048, bounces=1, batch=256)[0, 0, 0]
+        B0 = self.scene.basis(P, N, spp=8, bounces=0, batch=8)[0, 0, 0]
+        self.scene.set_albedo_constant([0.5, 0.5, 0.5])
+        Bc = self.scene.basis(P, N, spp=2048, bounces=1, batch=256)[0, 0, 0]
+        self.assertGreater(B1, B0)
+        np.testing.assert_allclose(B1 - B0, Bc - B0, rtol=0.08)
+        self.scene.set_fixtures([])
+
     def test_closest_point_and_barycentric_convention(self):
         P = np.array([[1.3, 0.7, 0.05], [3.9, 2.2, 1.0]], np.float32)
-        face, dist, nrm, uvo = self.scene.closest(P)
+        face, dist, nrm, uvo, cp = self.scene.closest(P)
         np.testing.assert_allclose(dist, [0.05, 0.1], atol=1e-4)
+        np.testing.assert_allclose(cp, [[1.3, 0.7, 0.0], [4.0, 2.2, 1.0]], atol=1e-4)
         np.testing.assert_allclose(nrm[0], [0, 0, 1], atol=1e-4)
         np.testing.assert_allclose(nrm[1], [-1, 0, 0], atol=1e-4)
         # floor chart: u follows y, v follows x (pins Warp's barycentric order for UV lookups)
         np.testing.assert_allclose(uvo[0], [0.7 / 3.0 * 0.98 / 3, 1.3 / 4.0 * 0.98 / 2], atol=1e-5)
-
-    def test_raster_covers_charts(self):
-        tface, tpos, tnrm = self.scene.raster(self.pos, 96)
-        cov = (tface >= 0).mean()
-        self.assertGreater(cov, 0.85)
-        ok = tface >= 0
-        # every rasterised texel lies on the box surface
-        p = tpos[ok]
-        on = np.min(np.abs(np.concatenate([p, p - [4.0, 3.0, 2.5]], 1)), 1)
-        self.assertLess(on.max(), 1e-4)
 
 
 if __name__ == "__main__":

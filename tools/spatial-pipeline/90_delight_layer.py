@@ -11,7 +11,12 @@ Output: <pack>.lighting/_work (consumed by 91_bake_light_basis.py).
 
 Private Den data: never commit, upload or paste the output.
 """
-from lightbake import cli, delight
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # also under python -I
+
+from lightbake import cli, delight  # noqa: E402
 
 if __name__ == "__main__":
     delight.run(cli.parse(90))

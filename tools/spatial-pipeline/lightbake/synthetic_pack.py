@@ -20,10 +20,13 @@ X, Y, Z = 4.0, 3.0, 2.5
 HOLE = (1.5, 2.5, 1.0, 2.0)  # x0, x1, z0, z1 on the y = Y wall
 
 
+_WALLS = [([0, 0, 0], [X, 0, 0], [0, Y, 0]), ([0, 0, Z], [0, Y, 0], [X, 0, 0]),
+          ([0, 0, 0], [0, 0, Z], [X, 0, 0]), ([0, Y, 0], [X, 0, 0], [0, 0, Z]),
+          ([0, 0, 0], [0, Y, 0], [0, 0, Z]), ([X, 0, 0], [0, 0, Z], [0, Y, 0])]
+
+
 def _room(n=16):
-    walls = [([0, 0, 0], [X, 0, 0], [0, Y, 0]), ([0, 0, Z], [0, Y, 0], [X, 0, 0]),
-             ([0, 0, 0], [0, 0, Z], [X, 0, 0]), ([0, Y, 0], [X, 0, 0], [0, 0, Z]),
-             ([0, 0, 0], [0, Y, 0], [0, 0, Z]), ([X, 0, 0], [0, 0, Z], [0, Y, 0])]
+    walls = _WALLS
     pos, uv, faces = [], [], []
     for w, (o, u, v) in enumerate(walls):
         o, u, v = map(np.array, (o, u, v))
@@ -107,6 +110,30 @@ ALBEDO = np.array([0.55, 0.45, 0.35])
 WINDOW_ENC = np.array([0.9, 0.93, 0.97])
 
 
+def _chart_texels(size):
+    """Texel centres of the procedural atlas -> (valid mask, position, inward normal)."""
+    walls = _WALLS
+    pos = np.zeros((size, size, 3))
+    nrm = np.zeros((size, size, 3))
+    ok = np.zeros((size, size), bool)
+    c = (np.arange(size) + 0.5) / size
+    U, V = np.meshgrid(c, c)
+    for w, (o, u, v) in enumerate(walls):
+        o, u, v = map(np.array, (o, u, v))
+        a = (U * 3 - w % 3 - 0.01) / 0.98
+        b = (V * 2 - w // 3 - 0.01) / 0.98
+        m = (a >= 0) & (a <= 1) & (b >= 0) & (b <= 1)
+        p = o + u * a[..., None] + v * b[..., None]
+        nn = np.cross(u, v)
+        nn = nn / np.linalg.norm(nn)
+        if (np.array([X / 2, Y / 2, Z / 2]) - (o + 0.5 * (u + v))) @ nn < 0:
+            nn = -nn
+        if w == 3:
+            m &= ~((p[..., 0] > HOLE[0]) & (p[..., 0] < HOLE[1]) & (p[..., 2] > HOLE[2]) & (p[..., 2] < HOLE[3]))
+        pos[m], nrm[m], ok[m] = p[m], nn, True
+    return ok, pos, nrm
+
+
 def _capture(pos, uv, faces, P_splat, tex_size, spp, device):
     """Render the capture state (daylight through the opening only) with the tool's own tracer."""
     from . import encode as ENC
@@ -121,15 +148,15 @@ def _capture(pos, uv, faces, P_splat, tex_size, spp, device):
            "n": np.array([[0, -1.0, 0]] * 2), "L": np.array([L, L])}
     sc = tracer.Scene(device, pos, faces, uv, vn, fn, np.zeros(len(faces), np.int32), np.zeros((4, 4, 3), np.uint8),
                       window=win)
-    alb = np.tile(np.round(ENC.srgb_oetf(ALBEDO) * 255).astype(np.uint8), (8, 8, 1))
-    tface, tpos, tnrm = sc.raster(pos, tex_size)
-    ok = tface >= 0
+    sc.set_albedo_constant(ALBEDO)
+    ok, tpos, tnrm = _chart_texels(tex_size)
     rad = np.zeros((tex_size, tex_size, 3))
-    rad[ok] = ALBEDO / np.pi * sc.basis(tpos[ok], tnrm[ok], alb, spp=spp, bounces=4)[:, -1, :]
-    from .delight import dilate
-    rad, _ = dilate(rad, ok, 4)
-    face, dist, nrm, _ = sc.closest(P_splat)
-    rs = ALBEDO / np.pi * sc.basis(P_splat, nrm, alb, spp=spp, bounces=4)[:, -1, :]
+    rad[ok] = ALBEDO / np.pi * sc.basis(tpos[ok], tnrm[ok], spp=spp, bounces=4)[:, -1, :]
+    from scipy import ndimage
+    idx = ndimage.distance_transform_edt(~ok, return_distances=False, return_indices=True)
+    rad = rad[idx[0], idx[1]]  # pad chart borders so edge lookups never read black
+    face, dist, nrm, _, _ = sc.closest(P_splat)
+    rs = ALBEDO / np.pi * sc.basis(P_splat, nrm, spp=spp, bounces=4)[:, -1, :]
     return rad, rs
 
 

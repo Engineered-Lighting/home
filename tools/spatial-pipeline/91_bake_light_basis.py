@@ -2,15 +2,20 @@
 """91_bake_light_basis.py - L3 step 2: path-trace the 29 unit bases and write the layer.
 
 4 downlights + 24 radials + 1 window/ambient column, traced over the scan BVH
-with the de-lit albedo (NVIDIA Warp on the RTX 4090), OIDN-denoised mesh
-lightmaps, the 40 B/receiver encoding for splats and points, and
+with the de-lit albedo (NVIDIA Warp on the RTX 4090), the 40 B/receiver
+encoding for splats and points, a per-vertex mesh layer, and
 lighting-manifest.json bound by SHA-256 to the accepted pack.
 
   python 91_bake_light_basis.py --equipment <equipment-registration.json>
 
 Private Den data: never commit, upload or paste the output.
 """
-from lightbake import bake, cli
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # also under python -I
+
+from lightbake import bake, cli  # noqa: E402
 
 if __name__ == "__main__":
     bake.run(cli.parse(91))

@@ -11,5 +11,4 @@ pillow>=10.0
 pygltflib>=1.16
 # L3 lighting layer (90_delight_layer.py, 91_bake_light_basis.py): BVH path
 # tracing on the workstation RTX 4090 (CPU backend for the synthetic tests).
-# Lightmap denoising uses an existing OpenImageDenoise 2.x library (OIDN_DIR).
 warp-lang>=1.18

@@ -22,11 +22,8 @@ def parser(step):
                    help="equipment registration JSON bound to the same pack (fixture mounts, walls)")
     p.add_argument("--device", default=None, help="warp device (default cuda:0, else cpu)")
     p.add_argument("--ray-eps", type=float, default=0.01, help="ray origin offset along the normal (m)")
-    p.add_argument("--oidn-dir", default=None, help="folder holding an OpenImageDenoise 2.x library")
     if step == 90:
         p.add_argument("--capture-spp", type=int, default=256)
-        p.add_argument("--capture-spp-mesh", type=int, default=128)
-        p.add_argument("--mesh-albedo-size", type=int, default=2048)
         p.add_argument("--eps-rel", type=float, default=0.02, help="E_cap floor as a fraction of the median")
         p.add_argument("--rho-max", type=float, default=0.95, help="albedo clamp")
         p.add_argument("--surface-tol", type=float, default=0.05, help="receiver-to-mesh distance for on-surface (m)")
@@ -42,12 +39,16 @@ def parser(step):
                        help="sensitivity only: 'wall-id=true-north outward bearing,...'; the first is the reference")
         p.add_argument("--sun", default=None,
                        help="sensitivity only: 'label=azimuth/elevation,...' in degrees (needs --wall-bearings)")
-        p.add_argument("--window-gain", type=float, default=1.0, help="multiplier on exterior-splat window radiance")
+        p.add_argument("--window-gain", default="auto",
+                       help="multiplier on exterior-splat window radiance, or 'auto' (white-patch fit, >= 1)")
+        p.add_argument("--white-patch-albedo", type=float, default=0.85, help="auto gain: albedo of the bright patch")
+        p.add_argument("--white-patch-percentile", type=float, default=95.0, help="auto gain: which percentile")
+        p.add_argument("--ceiling-albedo", type=float, default=0.8,
+                       help="assumed albedo of ceiling regions no splat observed (modeled radiance)")
     else:
         p.add_argument("--spp", type=int, default=64, help="paths per splat/point receiver")
-        p.add_argument("--mesh-spp", type=int, default=128, help="paths per lightmap texel")
+        p.add_argument("--mesh-spp", type=int, default=128, help="paths per mesh vertex")
         p.add_argument("--bounces", type=int, default=5)
-        p.add_argument("--lightmap-size", type=int, default=1024)
         p.add_argument("--emitter-drop", type=float, default=0.14, help="emitter below the mount anchor (m, assumed)")
         p.add_argument("--keep-work", action="store_true", help="keep <layer>/_work intermediates")
     return p

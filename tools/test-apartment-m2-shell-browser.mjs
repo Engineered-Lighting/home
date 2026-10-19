@@ -17,16 +17,17 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
       try { await page.screenshot({ path: receipt.run + '/' + name + '.png' }); }
       finally { await page.evaluate(() => window.__APT_ENGINE?.setRunning?.(true)); }
     };
+    // Every Photo candidate stalls from the first page load, so the first one the
+    // device's asset plan asks for (desktop or mobile tier) shows a real partial
+    // percentage and nothing reaches the in-memory asset cache beforehand.
+    const splatNames = ['apartment.mobile.ply', 'apartment.ply', 'apartment.spz'];
+    for (const name of splatNames) faults.set(assetPath(echo, name), 'stall');
     await openShell(); await waitSite('echo');
     assert.equal(await selectedHome(), 'Echo Park');
 
     // HANDOFF › Acceptance examples › "Photo missing": loading with its
     // percentage, then "Photo isn't available here" with Retry and Back to
     // Cloud, still Echo Park.
-    // Every Photo candidate stalls, so the first one the device's asset plan
-    // asks for (desktop or mobile tier) shows a real partial percentage.
-    const splatNames = ['apartment.mobile.ply', 'apartment.ply', 'apartment.spz'];
-    for (const name of splatNames) faults.set(assetPath(echo, name), 'stall');
     await modeButton('Photo').click();
     await notice().getByRole('heading', { name: /^Loading Photo · \d+%$/ }).waitFor().catch(async error => {
       // The touched-harness runner keeps only the last lines, which hold the stack.

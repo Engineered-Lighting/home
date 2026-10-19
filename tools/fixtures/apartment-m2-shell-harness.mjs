@@ -157,6 +157,9 @@ export async function runM2Shell(name, steps) {
         localStorage.setItem('apartment3d.site', 'echo'); sessionStorage.setItem('authored-m2-seeded', '1');
       }
       localStorage.setItem('home.perf.backgroundWarmup', 'off');
+      // No post-boot asset prewarm: a fault test must see the asset load it starts,
+      // not bytes an earlier warm-up already cached in memory.
+      localStorage.setItem('apartment3d.prewarm', 'off');
       window.HG_DISABLE_SERVICE_WORKER = true;
       window.__benchOpened = [];
       window.open = (url) => { window.__benchOpened.push(String(url)); return null; };

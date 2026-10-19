@@ -17,6 +17,10 @@
 //   HOME_WEBGPU_PROOF_FRAME_GATE=1  also gate frame time against WebGL.
 //   HOME_WEBGPU_PROOF_HOLD=1    only serve the fixture shell, for debugging
 //                               by hand; nothing is asserted.
+//   HOME_WEBGPU_PROOF_PACKS     LOCAL ONLY: a real content-pack directory to
+//                               serve read-only instead of the generated
+//                               packs (the authored registration still goes
+//                               to a temporary folder). Never set in CI.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -210,8 +214,27 @@ async function proofInPage() {
 
 test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { timeout: 600000 }, async () => {
   const run = fs.mkdtempSync(path.join(os.tmpdir(), 'home-webgpu-proof-'));
-  const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private'), echo = installPack(packs, 'echo'), victoria = installPack(packs, 'victoria');
-  fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1, packs: [echo, victoria].map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
+  const privateRoot = path.join(run, 'private');
+  let packs, echo, victoria;
+  if (process.env.HOME_WEBGPU_PROOF_PACKS) {
+    // Real packs, served read-only: only files their manifests list.
+    packs = path.resolve(process.env.HOME_WEBGPU_PROOF_PACKS);
+    const index = JSON.parse(fs.readFileSync(path.join(packs, 'index.json'), 'utf8'));
+    const real = site => {
+      const entry = index.packs.find(item => item.active && item.manifest.siteId === site);
+      const directory = path.join(packs, site, entry.manifest.revision);
+      const files = new Proxy({}, { get: (_, name) => {
+        const asset = Object.values(entry.manifest.assets).find(item => item.path === name) || (name === 'content-pack.json' ? { path: name } : null);
+        return asset ? fs.readFileSync(path.join(directory, ...asset.path.split('/'))) : undefined;
+      } });
+      const seedFile = path.join(directory, 'seed-model.json');
+      return { site, base: entry.baseUrl, files, seed: fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, 'utf8')) : {} };
+    };
+    echo = real('echo'); victoria = real('victoria');
+  } else {
+    packs = path.join(run, 'packs'); echo = installPack(packs, 'echo'); victoria = installPack(packs, 'victoria');
+    fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1, packs: [echo, victoria].map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
+  }
   initRegistration(privateRoot, authoredDocument(readActiveBinding(packs), Core), { contentPacksDir: packs });
   const sources = publicSources(SRC), forbidden = [], missing = [];
   let handler;

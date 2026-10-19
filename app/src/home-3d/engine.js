@@ -788,6 +788,22 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 acceptPoint: point => cutawayM.dollhouseKeep(point, policy) > .05,
             });
         },
+        /* The aim chip's ray from a light to an aim point (picking.beamPath),
+         * against the same collision proxy as displaySurfaceHit. Cut-away
+         * walls still block here: the dollhouse cutaway is a camera
+         * presentation and never changes world occlusion. Apartment-local
+         * Z-up metres in and out; null without a collision proxy. */
+        beamPath(originValue, pointValue, { toleranceM } = {}) {
+            const collision = modes.getCollision?.();
+            if (!collision) return null;
+            try { return picking.beamPath(apartmentRoot, [collision], originValue, pointValue, { toleranceM }); }
+            catch (_) { return null; }
+        },
+        /* `traceBeam` for the W2 aim presentation: { point_m, name, ... } of
+         * the first blocker, or null when the way is clear. */
+        traceBeam(originValue, pointValue) {
+            return pickingM.aimChipBlocker(engine.beamPath(originValue, pointValue));
+        },
         async createUiOverlayLayer(options = {}) {
             const { host, isCurrent, signal: layerSignal, onPresentationFrame, onPresentationDispose } = options || {};
             if (typeof isCurrent !== 'function' || typeof layerSignal?.aborted !== 'boolean'

@@ -5353,12 +5353,27 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (poolLease === owned) poolLease = null;
       lightPoolsDrawRef.current = null;
     };
-    // Readback copies are not free, so live aim is followed at 10 Hz and
-    // React-side changes redraw at once.
+    // Frames redraw at most 10 Hz: after a React-side change (marked dirty),
+    // or when the selected beam's published metadata (new objects on every
+    // renderer update) changed. Radial painting alone pays no readback.
     const draw = (owned, nowMs = null) => {
       if (!owned.view || owned.retired) return;
-      if (nowMs != null) { if (nowMs - (owned.drawnAt || 0) < 100) return; owned.drawnAt = nowMs; }
-      const overlay = engine.overlay, preview = overlay.virtualFixturesReadback?.();
+      const overlay = engine.overlay;
+      if (nowMs != null) {
+        if (nowMs - (owned.drawnAt || 0) < 100) return;
+        owned.drawnAt = nowMs;
+        const id = lightPoolsInputRef.current?.selectedId;
+        if (owned.beamId !== id || !owned.beamNode?.parent) {
+          owned.beamId = id;
+          owned.beamNode = id ? overlay.virtualFixturesGroup?.getObjectByName("equipment-virtual-fixture:" + id)?.getObjectByName("robotic-spotlight") : null;
+        }
+        const beam = owned.beamNode?.userData;
+        const moved = !!beam && (beam.endpoint_m !== owned.lastEndpoint || beam.channel !== owned.lastChannel);
+        if (!moved && !owned.dirty) return;
+        if (beam) { owned.lastEndpoint = beam.endpoint_m; owned.lastChannel = beam.channel; }
+      }
+      owned.dirty = false;
+      const preview = overlay.virtualFixturesReadback?.();
       const fixtures = preview?.status === "ready" && preview.visible ? preview.fixtures.map(item => {
         const spot = overlay.virtualFixturesGroup?.getObjectByName("equipment-virtual-fixture:" + item.fixture_id)
           ?.getObjectByName("robotic-spotlight")?.userData;
@@ -5382,7 +5397,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           onPresentationFrame: info => draw(owned, info.nowMs), onPresentationDispose: () => retire(owned) });
         if (!layer || !current()) { layer?.dispose(); retire(owned); return; }
         owned.layer = layer; owned.view = owned.module.createLightPools({ layer });
-        lightPoolsDrawRef.current = () => draw(owned); draw(owned);
+        lightPoolsDrawRef.current = () => { owned.dirty = true; }; draw(owned);
       } catch (_) { retire(owned); }
     };
     const unsubscribe = engine.on("running", ({ running }) => { if (running) void start(); else retire(poolLease); });

@@ -1,0 +1,18 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "producer-ingress-1",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "payload_versions": {
+    "home-live-fact-1": 1,
+    "home-live-geometry-1": 1
+  },
+  "publication_families": [
+    "home-live-fact-1",
+    "home-live-geometry-1"
+  ],
+  "schemas": {
+    "home-live-fact-1.schema.json": "0b023dfd9085d0e3dccd1b01f42b08be4fe0c94f90441183c830db82bfd15c63",
+    "home-live-geometry-1.schema.json": "6c1950cc867ff1ff77bd68de34b45ed162f71fa1f91afd3faf51d2006e264b23"
+  }
+}

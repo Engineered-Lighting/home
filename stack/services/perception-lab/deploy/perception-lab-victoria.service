@@ -1,0 +1,30 @@
+[Unit]
+Description=Home Perception Lab Victoria controller
+After=network-online.target mediamtx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=engineeredlightingllm
+Group=engineeredlightingllm
+WorkingDirectory=/home/engineeredlightingllm/perception-lab/releases/RELEASE_ID/service
+Environment=PERCEPTION_LAB_CAPTURE_CONFIG=/home/engineeredlightingllm/perception-lab/private/home-capture.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PERCEPTION_LAB_DISPLAY_RTSP=1
+Environment=PERCEPTION_LAB_SHARED_CAPTION_FILE=/home/engineeredlightingllm/perception-lab/private/shared-caption.json
+Environment=PERCEPTION_LAB_CAMERA_ENV=/home/engineeredlightingllm/victoria-camera/private/camera.env
+ExecStart=/home/engineeredlightingllm/perception-lab/venv/bin/python -m uvicorn capture_app:create_capture_app --factory --host 192.168.1.168 --port 8789 --workers 1 --no-access-log --ssl-keyfile /home/engineeredlightingllm/perception-lab/private/review/server.key --ssl-certfile /home/engineeredlightingllm/perception-lab/private/review/server.pem
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/engineeredlightingllm/perception-lab/data
+MemoryMax=768M
+CPUQuota=100%
+TasksMax=64
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+{
+  "profile": {
+    "runtime_version": "8.4.0",
+    "task": "detect",
+    "checkpoint": "yolo26s",
+    "precision": "fp32",
+    "sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+    "license": "AGPL-3.0",
+    "device_id": "echo-la-rtx-pro-6000",
+    "engine_epoch": "REQUIRES_COORDINATED_EPOCH",
+    "profile_id": "yolo26s-fp32-paired-v1",
+    "model_version": "ultralytics-assets-v8.4.0",
+    "device": "cuda:0",
+    "format": "pt",
+    "runtime_revision": "la-live-0c41bff61ca9bb8e9c7348e7fcfc699d5b4519b89feb92a8895d7699afbce8fc",
+    "preprocessing": {
+      "imgsz": [
+        640,
+        640
+      ],
+      "confidence": 0.25,
+      "iou": 0.7,
+      "max_det": 128,
+      "retina_masks": false
+    },
+    "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b"
+  },
+  "origin": "https://192.168.0.100:9443",
+  "token_file": "/home/engineeredlightingllm/perception-lab/private/la-detector-token",
+  "ca_file": "/home/engineeredlightingllm/perception-lab/private/la-detector-ca.pem"
+}

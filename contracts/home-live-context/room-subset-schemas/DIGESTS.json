@@ -1,0 +1,39 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "assessed-room-subset-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "worker_interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "scene_interface_digest": "b1e5df3bc1c9a17c40a4c27c997e96e2748f1cc559e66dcf72a3fd74313ab674",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "62fb151365f55131a7d579c9e16e1c4b0a3d070d83daba11e91d77398a9d6dfb",
+  "payload_versions": {
+    "home-live-shadow-decision-12": 12,
+    "home-live-worker-checkpoint-12": 12,
+    "home-live-worker-commit-12": 12,
+    "home-live-input-cut-12": 12,
+    "home-live-room-policy-2": 2,
+    "home-live-pc-support-policy-1": 1,
+    "home-live-room-output-1": 1,
+    "home-live-room-snapshot-1": 1,
+    "home-live-person-lifecycle-1": 1,
+    "home-live-intent-event-2": 2
+  },
+  "publication_families": [
+    "home-live-shadow-decision-12"
+  ],
+  "schemas": {
+    "home-live-shadow-decision-12.schema.json": "4f2063875a20dd693fe0fd3445966b853c45f92559f8d5a1ab59188160c652d1",
+    "home-live-worker-checkpoint-12.schema.json": "bec3b2f07669e50ca76b660cf0ca2035746849b20816112e07e243c3df8dcc93",
+    "home-live-worker-commit-12.schema.json": "482721057cb5205107aba6cce3d4bfb1446b0a6159f7221ac8818763c1d76a60",
+    "home-live-input-cut-12.schema.json": "6f8c76b88bcb581432f51487b351f08c7d77c3d40362a326dd77ad286e144bd5",
+    "home-live-room-policy-2.schema.json": "d3c72bfb7729bdf6538ea113c8123a033d9d0301eac6787dcab10d7bab77114f",
+    "home-live-pc-support-policy-1.schema.json": "e973ac5415367ab877d46e91806bbd18db410e96c03f1f20ee2f529c570b8632",
+    "home-live-room-output-1.schema.json": "93e0fde40ec0daebb0eeffc14c2478c52351b05eb5327af443ae54f8fdf56ba0",
+    "home-live-room-snapshot-1.schema.json": "fd2d0bc803b49c8e8930f4b749f6e917f52ed956d8f6d086425aa1cdf50831c5",
+    "home-live-person-lifecycle-1.schema.json": "213f3782c206c28e995ab14f9a256b85581511f481cb50b2857f743335df1bfe",
+    "home-live-intent-event-2.schema.json": "50f697caf8a915b7e0e918a3dda9bd511ea780c6282c8a8499a89fc9fe24ee0a"
+  },
+  "conservative_delivery_interface_digest": "23c8d39e42b9c2ad8a22c7af87f7c8628913e3557455744321011987709d8b98",
+  "room_interface_digest": "a0178ab12c6315b7972cc2a23454daebd732f09c3122666dec86c4d79982bbf7",
+  "pc_support_interface_digest": "f24165f2f5d8becc0ae698e460e52db478496391f26fd63ebddf321e0552663c"
+}

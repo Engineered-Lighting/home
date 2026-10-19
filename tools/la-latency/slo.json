@@ -1,0 +1,165 @@
+{
+  "schema": "la-latency-slo-1",
+  "plan": "docs/LA-INFERENCE-SPEED-PLAN-2026-10-08.md",
+  "percentile": "nearest-rank",
+  "min_samples_per_statistic": 20,
+  "pipelines": [
+    {
+      "id": "camera_chat_question_to_answer",
+      "label": "Camera chat, question to answer on screen",
+      "pipeline": "camera_chat_browser", "metric": "question_to_answer", "kind": "seconds",
+      "today": "about 4 s before the 09-29 fix; post-fix unmeasured",
+      "targets": [{"stage": "after Stage 1", "p50_s": 1.8, "p95_s": 2.6}]
+    },
+    {
+      "id": "camera_chat_frame_to_caption",
+      "label": "Camera chat, frame observed to caption published (Jetson clock)",
+      "pipeline": "camera_chat_jetson", "metric": "frame_to_caption", "kind": "seconds",
+      "today": "3.04-3.17 s, n=5, pre-fix",
+      "targets": [{"stage": "plan", "p50_s": 1.0, "p95_s": 1.4}]
+    },
+    {
+      "id": "qwen_live_request_to_fact",
+      "label": "Qwen live, request sent to fact recorded",
+      "pipeline": "qwen_live_victoria", "metric": "request_to_fact", "kind": "seconds",
+      "today": "1.52 s, n=1",
+      "missing": "no source before S1.3: the Lab ledger has no send time; only la-fact-log-1 has sent_at",
+      "targets": [
+        {"stage": "after S0.4", "p50_s": 1.15},
+        {"stage": "after Stage 1", "p50_s": 1.05, "p95_s": 1.4},
+        {"stage": "with S1.9 and S3.1", "p50_s": 0.75}
+      ]
+    },
+    {
+      "id": "qwen_live_scene_change_to_fact",
+      "label": "Qwen live, scene change to fact on Victoria (newest frame observed to fact; excludes up to 0.25 s preview quantisation)",
+      "pipeline": "qwen_live_victoria", "metric": "newest_frame_to_fact", "kind": "seconds",
+      "today": "about 4.2 s (inferred)",
+      "targets": [
+        {"stage": "after S1.4", "p50_s": 2.1, "p95_s": 2.9},
+        {"stage": "with S1.9", "p50_s": 1.7}
+      ]
+    },
+    {
+      "id": "occupancy_edge_to_first_send",
+      "label": "Occupancy edge to first Qwen send",
+      "pipeline": "occupancy_gate", "metric": "edge_to_first_send", "kind": "seconds",
+      "today": "about 3.3 s average, up to about 6 s (inferred)",
+      "targets": [{"stage": "after S1.2", "p50_s": 0.5, "p95_s": 0.9}]
+    },
+    {
+      "id": "occupancy_edge_to_first_fact",
+      "label": "Occupancy edge to first Qwen fact",
+      "pipeline": "occupancy_gate", "metric": "edge_to_first_fact", "kind": "seconds",
+      "today": "unmeasured",
+      "targets": [{"stage": "after S1.2", "p50_s": 1.6}]
+    },
+    {
+      "id": "ha_occupancy_read",
+      "label": "Victoria HA occupancy read",
+      "pipeline": "ha_occupancy", "metric": "read", "kind": "seconds",
+      "today": "0.83 s per snapshot at 1 Hz",
+      "targets": [{"stage": "after S1.2", "p95_s": 0.030}]
+    },
+    {
+      "id": "vjepa_edge_to_first_clip",
+      "label": "V-JEPA, occupancy edge to first clip",
+      "pipeline": "vjepa_live", "metric": "edge_to_first_clip", "kind": "seconds",
+      "today": "unmeasured; bound 120 s",
+      "targets": []
+    },
+    {
+      "id": "vjepa_transport_overhead",
+      "label": "V-JEPA, clip sent to fact, transport share",
+      "pipeline": "vjepa_live", "metric": "transport_overhead", "kind": "seconds",
+      "today": "unmeasured; transport inferred 0.32-0.36 s",
+      "targets": [{"stage": "plan (percentile unstated; p50 used)", "p50_s": 0.15}]
+    },
+    {
+      "id": "la_detector_arm",
+      "label": "LA detector arm, capture to fact (only if D3 keeps it)",
+      "pipeline": "la_detector", "metric": "capture_to_fact", "kind": "seconds",
+      "today": "628-862 ms p50",
+      "targets": [],
+      "relative_target": "p50 at or below the Jetson arm (jetson_detector capture_to_fact p50)"
+    },
+    {
+      "id": "guard_voice_ttft",
+      "label": "Guard: voice TTFT (synthetic voice probe)",
+      "pipeline": "voice_probe", "metric": "ttft", "kind": "seconds",
+      "today": "no current distribution",
+      "missing": "no samples: run tools/la-latency/voice_probe.py on LA (S1.4; cadence_ab.py runs it for the A/B)",
+      "targets": [],
+      "guard_ratio_max": 1.10
+    },
+    {
+      "id": "guard_camera_chat_backend",
+      "label": "Guard: camera-chat LA backend",
+      "pipeline": "camera_chat_la", "metric": "backend", "kind": "seconds",
+      "today": "no current distribution",
+      "targets": [],
+      "guard_ratio_max": 1.10
+    },
+    {
+      "id": "la_facts_supplied",
+      "label": "LA facts in home-context-1, supplied share of occupied ticks",
+      "pipeline": "home_context", "metric": "la_supplied_flag", "kind": "rate",
+      "today": "only inside Lab recordings",
+      "targets": [{"stage": "plan", "rate_min": 0.95}]
+    },
+    {
+      "id": "link_rtt_idle",
+      "label": "Link RTT, idle",
+      "pipeline": "link", "metric": "rtt_idle", "kind": "seconds",
+      "today": "43.2/44.8/46.6 ms, 5 pings",
+      "targets": [{"stage": "plan", "p99_s": 0.060}]
+    },
+    {
+      "id": "link_rtt_loaded_rise",
+      "label": "Link RTT rise during a saturating upload",
+      "pipeline": "link", "metric": "rtt_loaded_rise", "kind": "seconds",
+      "today": "unmeasured",
+      "targets": [{"stage": "plan (15-30 ms)", "p95_s": 0.030}]
+    }
+  ],
+  "supporting": [
+    {"id": "qwen_la_backend", "label": "LA live-scene backend (completed)", "pipeline": "qwen_live_la", "metric": "backend", "kind": "seconds"},
+    {"id": "qwen_la_health", "label": "LA live-scene model_health", "pipeline": "qwen_live_la", "metric": "health", "kind": "seconds"},
+    {"id": "qwen_la_exec", "label": "LA live-scene docker exec and model", "pipeline": "qwen_live_la", "metric": "exec", "kind": "seconds"},
+    {"id": "qwen_la_total", "label": "LA live-scene total", "pipeline": "qwen_live_la", "metric": "total", "kind": "seconds"},
+    {"id": "camera_la_health", "label": "LA camera-chat model_health", "pipeline": "camera_chat_la", "metric": "health", "kind": "seconds"},
+    {"id": "camera_la_exec", "label": "LA camera-chat docker exec and model", "pipeline": "camera_chat_la", "metric": "exec", "kind": "seconds"},
+    {"id": "camera_la_total", "label": "LA camera-chat total", "pipeline": "camera_chat_la", "metric": "total", "kind": "seconds"},
+    {"id": "qwen_frame_age_at_send", "label": "Qwen live, newest frame age at send", "pipeline": "qwen_live_victoria", "metric": "frame_age_at_send", "kind": "seconds"},
+    {"id": "voice_probe_e2e", "label": "Synthetic voice probe, send to end of stream (max_tokens 1)", "pipeline": "voice_probe", "metric": "e2e", "kind": "seconds"},
+    {"id": "la_gpu_temp", "label": "LA GPU temperature, °C (sidecar, per probe slot)", "pipeline": "la_gpu", "metric": "gpu_temp_c", "kind": "count"},
+    {"id": "la_cpu_tctl", "label": "LA CPU Tctl, °C (k10temp, per probe slot)", "pipeline": "la_cpu", "metric": "tctl_c", "kind": "count"},
+    {"id": "vllm_ttft", "label": "vLLM TTFT, all clients (bucket upper bounds; not the voice guard)", "pipeline": "vllm", "metric": "ttft", "kind": "seconds"},
+    {"id": "vllm_e2e", "label": "vLLM end-to-end request latency", "pipeline": "vllm", "metric": "e2e", "kind": "seconds"},
+    {"id": "vllm_queue", "label": "vLLM queue time", "pipeline": "vllm", "metric": "queue_time", "kind": "seconds"},
+    {"id": "vllm_running", "label": "vLLM requests running", "pipeline": "vllm", "metric": "num_requests_running", "kind": "count"},
+    {"id": "vllm_waiting", "label": "vLLM requests waiting", "pipeline": "vllm", "metric": "num_requests_waiting", "kind": "count"},
+    {"id": "vjepa_frame_to_fact", "label": "V-JEPA, newest frame observed to fact", "pipeline": "vjepa_live", "metric": "newest_frame_to_fact", "kind": "seconds"},
+    {"id": "vjepa_worker_total", "label": "V-JEPA worker timings_ms total", "pipeline": "vjepa_live", "metric": "worker_total", "kind": "seconds"},
+    {"id": "vjepa_overhead_bound", "label": "V-JEPA overhead upper bound (includes frame age at send)", "pipeline": "vjepa_live", "metric": "overhead_upper_bound", "kind": "seconds"},
+    {"id": "vjepa_lease_ready", "label": "V-JEPA lease, requesting to ready", "pipeline": "vjepa_lease", "metric": "requesting_to_ready", "kind": "seconds"},
+    {"id": "jetson_detector", "label": "Jetson detector arm, capture to fact", "pipeline": "jetson_detector", "metric": "capture_to_fact", "kind": "seconds"},
+    {"id": "la_detector_transport", "label": "LA detector arm, transport", "pipeline": "la_detector", "metric": "transport", "kind": "seconds"},
+    {"id": "la_detector_stale", "label": "LA detector arm, stale share", "pipeline": "la_detector", "metric": "stale_flag", "kind": "rate"}
+  ],
+  "decision": {
+    "window": {"min_days": 7, "min_occupied_qwen_requests": 500,
+               "pipeline": "qwen_live_victoria", "metric": "request_to_fact"},
+    "pairing_tolerance_s": 0.25,
+    "D1": {
+      "stay": {"qwen_overhead_p50_max_s": 0.120, "qwen_overhead_p95_max_s": 0.250,
+               "vjepa_overhead_p50_max_s": 0.100, "gate_to_send_p95_max_s": 0.5,
+               "la_supplied_min_rate": 0.95},
+      "build": {"qwen_overhead_p50_over_s": 0.150, "qwen_overhead_p95_over_s": 0.400,
+                "upload_share_over": 0.30, "upstream_share_over": 0.25, "vjepa_resend_share_over": 0.40},
+      "approved_cadence_hz": 1.0
+    },
+    "D2": {"guard_ratio_max": 1.10, "gpu_temp_p95_max_c": 70, "queue_busy_share_max": 0.30},
+    "D3": {"stale_rate_max": 0.02}
+  }
+}

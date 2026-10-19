@@ -1,7 +1,9 @@
 ---
-area: perception-lab
-target: controller
+title: Perception Lab (deploy)
+target: backend
+type: changed
 ---
+
 Perception Lab (deploy): live JEV no longer asks about an arm's camera in the instant between its old frame
 expiring and its own newer frame landing, a 1 Hz arm's frames stay current until its next sample is due,
 and the 2 Hz preview is captured on a steady grid.

@@ -1,6 +1,6 @@
 ---
 title: Add scoped remote specialist HTTP transport
-target: stack
+target: backend
 type: added
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Add pinned RTMW3D pose reference adapter
-target: stack
+target: backend
 type: added
 ---
 

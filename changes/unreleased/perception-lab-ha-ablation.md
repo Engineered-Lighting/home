@@ -1,6 +1,6 @@
 ---
 title: Honor per-arm HA evidence settings in Lab reasoning
-target: stack
+target: backend
 type: fixed
 ---
 

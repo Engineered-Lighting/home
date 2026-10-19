@@ -1,6 +1,6 @@
 ---
 title: Preserve shared pose crops across local and remote execution
-target: stack
+target: backend
 type: added
 ---
 

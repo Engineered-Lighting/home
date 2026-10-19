@@ -1,6 +1,6 @@
 ---
 title: Add the inspected incumbent person-detector adapter
-target: stack
+target: backend
 type: added
 ---
 

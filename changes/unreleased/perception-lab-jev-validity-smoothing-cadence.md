@@ -1,7 +1,9 @@
 ---
-area: perception-lab
-target: controller
+title: Live JEV (v6 facts wire)
+target: backend
+type: changed
 ---
+
 Live JEV (v6 facts wire): answers now stay valid while the arm's facts are unchanged (up to 12 s), a
 code-owned smoothed activity timeline runs live, and JEV is asked only when the facts change or a 10 s
 keepalive is due while the room is occupied; an empty room is answered locally with no request.

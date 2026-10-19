@@ -1,6 +1,6 @@
 ---
 title: Record allowlisted HA context for Lab comparisons
-target: stack
+target: backend
 type: added
 ---
 

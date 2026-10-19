@@ -1,6 +1,6 @@
 ---
 title: Share one detector stage between pose comparison arms
-target: stack
+target: backend
 type: added
 ---
 

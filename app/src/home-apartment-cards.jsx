@@ -164,7 +164,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           {device.name}
         </span>
         <span style={{ marginLeft: "auto", fontFamily: CARD_FONT_MONO, fontSize: 9,
-                       color: on ? "var(--hg-ice)" : "var(--hg-fg-5)" }}>
+                       color: on ? "var(--hg-ice)" : "var(--hg-fg-3)" }}>
           {state?.state || "unknown"}
         </span>
         <button type="button"
@@ -255,7 +255,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           <div style={row}>
             {btn("fly to view", () => { onFlyTo && onFlyTo(device); onClose(); }, true)}
           </div>
-          <div style={{ marginTop: 6, fontFamily: CARD_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)" }}>
+          <div style={{ marginTop: 6, fontFamily: CARD_FONT_MONO, fontSize: 11.5, color: "var(--hg-fg-3)" }}>
             {device.camera?.extrinsics ? "calibrated pose" : "not calibrated — approximate pose"}
             {" · live feed needs go2rtc :1984 exposed"}
           </div>
@@ -265,4 +265,171 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
   );
 }
 
-Object.assign(window, { AptDeviceLabel, AptPersonLabel, AptRoomChip, AptControlCard });
+// Room membership comes from the admitted model, never from display positions.
+function aptRoomLightGroups({ rooms = [], lights = [] } = {}) {
+  const roomById = new Map(rooms.filter(room => typeof room?.id === "string" && room.id)
+    .map(room => [room.id, room]));
+  const groups = new Map(), seen = new Set();
+  for (const light of lights) {
+    if (typeof light?.id !== "string" || !light.id || seen.has(light.id)) continue;
+    seen.add(light.id);
+    const room = roomById.get(light.room_id), id = room ? room.id : null;
+    if (!groups.has(id)) groups.set(id, { id, label: room?.name || room?.label || room?.id || "Unassigned", lights: [] });
+    groups.get(id).lights.push(light);
+  }
+  return [...groups.values()].map(group => {
+    const states = group.lights.map(light => light.power);
+    const power = states.some(state => state !== "on" && state !== "off") ? "unknown"
+      : states.every(state => state === "on") ? "on" : states.every(state => state === "off") ? "off" : "mixed";
+    return { ...group, power };
+  });
+}
+
+function AptRoomLightGroups({ groups = [], onSelect, onPower, disabledReason = "" }) {
+  return <>{groups.map(group => {
+    const reason = disabledReason || (group.power === "unknown" ? "Light state unavailable" : "");
+    return <section className="apt-ui-section" key={group.id ?? "unassigned"} aria-label={`${group.label} lights`}>
+      <div className="apt-ui-row"><h3 className="apt-ui-heading grow">{group.label}</h3>
+        <label className="apt-ui-switch"><input type="checkbox" aria-label={`${group.label} room power`}
+          checked={group.power === "on"} disabled={!!reason}
+          ref={node => { if (node) node.indeterminate = group.power === "mixed" || group.power === "unknown"; }}
+          onChange={event => onPower(group.id, event.target.checked)} />
+          <span>{({ on: "On", off: "Off", mixed: "Mixed", unknown: "Unknown" })[group.power]}</span></label>
+      </div>
+      {reason && <p className="apt-ui-meta">{reason}</p>}
+      <ul className="apt-ui-list">{group.lights.map(light => <li key={light.id}>
+        <button type="button" className="apt-ui-list-button" aria-label={light.ariaLabel}
+          aria-current={light.selected ? "true" : undefined} onClick={() => onSelect(light.id)}>
+          <span className={`apt-ui-lamp${light.power === "on" ? " is-on" : ""}`} aria-hidden="true" />
+          <span className="nm">{light.label || light.id}</span><span className="vl">{light.power === "on" ? "On" : light.power === "off" ? "Off" : "Unavailable"}</span>
+        </button></li>)}</ul>
+    </section>;
+  })}</>;
+}
+
+function AptNamedAimList({ targets = [], onEdit, disabledReason = "" }) {
+  return <section className="apt-ui-section" aria-label="Named aims"><h3 className="apt-ui-heading">Named aims</h3>
+    {targets.length ? <ul className="apt-ui-list">{targets.map(target => <li key={target.id} className="apt-ui-row">
+      <span className="grow">{target.name || target.label || target.id}</span>
+      <button type="button" className="apt-ui-button is-small" aria-label={`Edit ${target.name || target.label || target.id}`}
+        disabled={!!disabledReason} onClick={() => onEdit(target.id)}>Edit</button>
+    </li>)}</ul> : <p className="apt-ui-meta">No named aims saved for this home.</p>}
+    {disabledReason && targets.length > 0 && <p className="apt-ui-meta">{disabledReason}</p>}
+  </section>;
+}
+
+// Temperature is a display cue, not a prediction of the room's measured color.
+function aptDirectionalTone(kelvin) {
+  const t = Math.max(1000, Math.min(12000, Number.isFinite(kelvin) ? kelvin : 2700)) / 100;
+  const r = t <= 66 ? 255 : 329.7 * Math.pow(t - 60, -.1332);
+  const g = t <= 66 ? 99.47 * Math.log(t) - 161.12 : 288.12 * Math.pow(t - 60, -.0755);
+  const b = t <= 19 ? 0 : t <= 66 ? 138.52 * Math.log(t - 10) - 305.04 : 255;
+  return `rgb(${[r, g, b].map(value => Math.round(Math.max(0, Math.min(255, value)))).join(",")})`;
+}
+
+function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, power }) {
+  const planRef = useRef(null);
+  const zones = [...radials].sort((a, b) => a.number - b.number);
+  const available = zones.length === 6 && zones.every((item, index) => item.number === index + 1 && Number.isFinite(item.azimuth_deg));
+  React.useLayoutEffect(() => {
+    if (view && planRef.current) return view.attachPlan(planRef.current);
+  }, [view, available]);
+  const selected = zone == null ? zones : zones.filter(item => item.number === zone);
+  const level = selected.length ? selected.reduce((sum, item) => sum + item.brightness, 0) / selected.length : 0;
+  const sector = azimuth => {
+    const start = (-azimuth - 28) * Math.PI / 180, end = (-azimuth + 28) * Math.PI / 180;
+    const point = (radius, angle) => `${59 + radius * Math.cos(angle)} ${59 + radius * Math.sin(angle)}`;
+    return `M${point(55, start)} A55 55 0 0 1 ${point(55, end)} L${point(32, end)} A32 32 0 0 0 ${point(32, start)} Z`;
+  };
+  const activate = number => onZone?.(number === zone ? null : number);
+  const keyActivate = (event, number) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault(); if (!event.repeat) activate(number);
+    }
+  };
+  return <div className="apt-directional-ring" data-aim-ignore="true" style={{ display: "grid", gridTemplateColumns: "118px minmax(0,1fr)", gap: 14, alignItems: "center", fontFamily: CARD_FONT_SANS }}>
+    <style>{`.apt-directional-ring .radial-sector:focus-visible{outline:none;stroke:var(--hg-blue);stroke-width:2}`}</style>
+    {available ? <svg ref={planRef} viewBox="0 0 118 118" role="group" aria-label="Radial zones" style={{ display: "block", width: 118, height: 118 }}>
+      {zones.map(item => <path key={`base-${item.number}`} d={sector(item.azimuth_deg)} fill="var(--apt-fill-2)" pointerEvents="none" />)}
+      {zones.map(item => <path key={item.number} role="button" tabIndex={0} className="radial-sector"
+          aria-label={`Radial zone ${item.number}`} aria-pressed={zone === item.number}
+          data-apt-radial-plan-zone={item.number} d={sector(item.azimuth_deg)}
+          fill={view ? "var(--apt-warm)" : item.on && item.brightness > 0 ? aptDirectionalTone(item.color_temp_kelvin) : "var(--apt-fill-2)"}
+          fillOpacity={view ? 0 : item.on && item.brightness > 0 ? .25 + item.brightness / 1.3 : 1}
+          stroke={zone === item.number ? "var(--hg-ice)" : "var(--hg-bg-1)"} strokeWidth="2"
+          onClick={() => activate(item.number)} onKeyDown={event => keyActivate(event, item.number)} style={{ cursor: "pointer" }} />)}
+      <g role="button" tabIndex={0} className="hg-focusable" aria-label="All radial zones" aria-pressed={zone == null}
+        onClick={() => onZone?.(null)} onKeyDown={event => {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (!event.repeat) onZone?.(null); }
+        }} style={{ cursor: "pointer" }}>
+        <circle cx="59" cy="59" r="31" fill="transparent" />
+        <text x="59" y="56" textAnchor="middle" fill="var(--hg-fg-0)" style={{ fontFamily: CARD_FONT_SANS, fontSize: 13, fontWeight: 560 }} pointerEvents="none">
+          {Math.round(level * 100)}%</text>
+        <text x="59" y="71" textAnchor="middle" fill="var(--hg-fg-3)" style={{ fontFamily: CARD_FONT_SANS, fontSize: 10.5, fontWeight: 500 }} pointerEvents="none">
+          {zone == null ? "all zones" : `zone ${zone}`}</text>
+      </g>
+    </svg> : <p className="apt-ui-meta">Facing unavailable</p>}
+    <div style={{ display: "grid", gap: 4, minWidth: 0, justifyItems: "start" }}>
+      <div style={{ fontSize: 13, fontWeight: 540 }}>{zone == null ? "All zones" : `Zone ${zone}`}</div>
+      {power}
+      <p className="apt-ui-meta" title="Directions are modeled; facing is unavailable until radial heading commissioning."
+        style={{ margin: 0, lineHeight: 1.5 }}>Facing unverified. Drag outward to brighten, inward to dim.</p>
+      <button type="button" className="apt-ui-button is-small" disabled={!available || typeof onShow !== "function"}
+        onClick={() => onShow?.()} style={{ minHeight: 44, flexShrink: 0 }}>Show in room</button>
+    </div>
+  </div>;
+}
+
+const aptDirectionalEmptySnapshot = Object.freeze({ descriptor: null, mode: "spot", active: false, readout: null });
+const aptDirectionalEmptySubscribe = () => () => {};
+
+function AptDirectionalComposer({ view, onMode }) {
+  const rootRef = useRef(null), pillRef = useRef(null), readoutRef = useRef(null);
+  const snapshot = React.useSyncExternalStore(view?.subscribe || aptDirectionalEmptySubscribe,
+    view?.getSnapshot || (() => aptDirectionalEmptySnapshot), view?.getSnapshot || (() => aptDirectionalEmptySnapshot));
+  React.useLayoutEffect(() => {
+    if (view && rootRef.current && pillRef.current && readoutRef.current)
+      return view.attach({ root: rootRef.current, pill: pillRef.current, readout: readoutRef.current });
+  }, [view]);
+  const descriptor = snapshot.descriptor;
+  if (!descriptor) return null;
+  const pillButton = (value, label, key) => <button type="button" className="hg-focusable"
+    data-apt-directional-mode={value} aria-keyshortcuts={key} aria-pressed={snapshot.mode === value}
+    title={value === "zones" ? "Drag around the light to set its radial zones (Z)" : "Drag the reticle to aim the spot (A)"}
+    onClick={() => onMode?.(value)}>{label}</button>;
+  return <div ref={rootRef} hidden data-apt-directional-composer="1"
+    style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 4 }}>
+    <style>{`
+      .apt-directional-hits [data-apt-radial-number],.apt-directional-hits [data-apt-radial-hub="hit"]{pointer-events:none}
+      .apt-directional-hits [data-apt-radial-number][data-apt-radial-start]{pointer-events:fill;cursor:crosshair}
+      .apt-directional-hits [data-apt-radial-hub="hit"][data-apt-radial-start]{pointer-events:all;cursor:crosshair}
+      .apt-directional-toolpill{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:rgba(8,9,11,.84);border:1px solid rgba(255,255,255,.16);font-size:12px;white-space:nowrap;z-index:5}
+      .apt-directional-toolpill[hidden]{display:none}
+      .apt-directional-toolpill .nm{padding:0 6px 0 8px;color:#A1A1A1;font-weight:560;font-size:11.5px;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+      .apt-directional-toolpill button{position:relative;height:24px;padding:0 11px;border-radius:999px;border:0;background:transparent;color:#C9C9C9;font:inherit;font-weight:520;cursor:pointer}
+      .apt-directional-toolpill button::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+      .apt-directional-toolpill button:hover{color:#fff}
+      .apt-directional-toolpill button[aria-pressed="true"]{background:rgba(255,255,255,.15);color:#fff}
+      @media(pointer:coarse){.apt-directional-toolpill button{height:36px}}
+    `}</style>
+    <svg className="apt-directional-hits" aria-hidden="true" width="100%" height="100%"
+      style={{ display: "block", overflow: "hidden", pointerEvents: "none" }}>
+      {[1, 2, 3, 4, 5, 6].map(number => <path key={number} data-apt-radial-number={number} fill="transparent" />)}
+      <circle data-apt-radial-hub="hit" r="22" fill="transparent" />
+      <circle data-apt-radial-hub="dot" r="7" fill="transparent" pointerEvents="none" />
+    </svg>
+    <div ref={pillRef} hidden className="apt-directional-toolpill" role="group" aria-label="Room lighting tool" data-aim-ignore="true"
+      onPointerDownCapture={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
+      style={{ fontFamily: CARD_FONT_SANS }}>
+      <span className="nm">{descriptor.label || descriptor.fixture_id}</span>
+      {pillButton("zones", "Zones", "Z")}{pillButton("spot", "Spot", "A")}
+    </div>
+    <div ref={readoutRef} hidden role="status" aria-live="off" data-aim-ignore="true"
+      style={{ position: "absolute", left: 0, top: 0, padding: "6px 9px", borderRadius: 6,
+        background: "rgba(8,9,11,.84)", border: "1px solid rgba(255,255,255,.16)", color: "#fff",
+        fontFamily: CARD_FONT_MONO, fontSize: 11, whiteSpace: "nowrap" }} />
+  </div>;
+}
+
+Object.assign(window, { AptDeviceLabel, AptPersonLabel, AptRoomChip, AptControlCard,
+  aptRoomLightGroups, AptRoomLightGroups, AptNamedAimList, AptDirectionalRing, AptDirectionalComposer });

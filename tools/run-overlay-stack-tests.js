@@ -40,7 +40,7 @@ function stubEl(name) {
     isContentEditable: false,
     focusedCount: 0,
     children: [],
-    focus() { this.focusedCount += 1; ctx.window.__lastFocused = this; },
+    focus() { this.focusedCount += 1; ctx.window.__lastFocused = this; ctx.document.activeElement = this; },
     contains(x) {
       if (x === this) return true;
       return this.children.indexOf(x) >= 0;

@@ -633,6 +633,66 @@ function coalesceAssistantTurnEvents(events) {
   return coalesced;
 }
 
+// Presentation-only unread state. Retain only current-feed identities, never
+// message bodies or credentials. History replacement/prepending is not arrival.
+function createApartmentChatUnreadTracker() {
+  let initialized = false, previousScope, previousConversation = null;
+  let previousIds = new Set(), notifiedIds = new Set(), unreadIds = new Set();
+  return {
+    sync({ events, scope, conversationId = null, visible = false }) {
+      const rows = Array.isArray(events) ? events : [];
+      const keyOf = event => typeof event?.id === "string" && event.id ? event.id : null;
+      const qualifies = event => (event?.kind === "home" || event?.kind === "external"
+        || event?.kind === "proactive" || event?.kind === "assistant")
+        && !event.backgroundPerception && !event.onboarding
+        && typeof event.text === "string" && event.text.trim().length > 0
+        && (!event.convId || !conversationId || event.convId === conversationId);
+      const ids = new Set(rows.map(keyOf).filter(Boolean));
+      let lastRetained = -1;
+      rows.forEach((event, index) => { if (previousIds.has(keyOf(event))) lastRetained = index; });
+      // The initial server conversation id adopts the current turn; resetting
+      // it would swallow the first reply arriving in that same React update.
+      const adoption = previousConversation === null && conversationId !== null;
+      const reset = !initialized || previousScope !== scope
+        || (previousConversation !== conversationId && !adoption)
+        || (previousIds.size > 0 && ids.size > 0 && lastRetained < 0);
+      const nextNotified = new Set([...notifiedIds].filter(id => ids.has(id)));
+      const eligibleIds = new Set(rows.filter(qualifies).map(keyOf).filter(Boolean));
+      const nextUnread = new Set([...unreadIds].filter(id => eligibleIds.has(id)));
+      rows.forEach((event, index) => {
+        const id = keyOf(event);
+        if (!id || !qualifies(event)) return;
+        if (!reset && !notifiedIds.has(id) && (previousIds.has(id) || index > lastRetained)) nextUnread.add(id);
+        nextNotified.add(id);
+      });
+      unreadIds = reset || visible ? new Set() : nextUnread;
+      initialized = true; previousScope = scope; previousConversation = conversationId;
+      previousIds = ids; notifiedIds = nextNotified;
+      return unreadIds.size > 0;
+    },
+  };
+}
+
+function useApartmentChatUnread({ events, endpoint, token, conversationId, visible }) {
+  const tracker = useRef(null);
+  if (!tracker.current) tracker.current = createApartmentChatUnreadTracker();
+  // Opaque identity avoids copying credentials into derived unread state.
+  const scope = useMemo(() => ({}), [endpoint, token]);
+  const [pageVisible, setPageVisible] = useState(() => typeof document === "undefined" || !document.hidden);
+  const [state, setState] = useState({ scope, conversationId, unread: false });
+  useEffect(() => {
+    const update = () => setPageVisible(!document.hidden);
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  useEffect(() => {
+    const unread = tracker.current.sync({ events, scope, conversationId, visible: visible && pageVisible });
+    setState(previous => previous.scope === scope && previous.conversationId === conversationId && previous.unread === unread
+      ? previous : { scope, conversationId, unread });
+  }, [events, scope, conversationId, visible, pageVisible]);
+  return !(visible && pageVisible) && state.scope === scope && state.conversationId === conversationId && state.unread;
+}
+
 function readViewportProfile() {
   if (typeof window === "undefined") {
     return { width: 1024, height: 768, mobile: false, phone: false };
@@ -676,7 +736,8 @@ function HomeHeader({
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
   onOpenVideoLabeler, onOpenApartment, onOpenPerceptionLab, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
-  serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false,
+  serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false, unified = false,
+  onExplainLastAnswer, onCopyTranscript, onNewConversation, conversationCopyState, conversationCopyDisabledReason,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   // Phase 5: the header dropdown is an overlay layer — topmost-only Escape
@@ -901,6 +962,21 @@ function HomeHeader({
       }}>{statusText}</span>
     </span>
   );
+  if (unified) return <header className="apt-ui-chat-header">
+    <span className="apt-ui-chat-source" title={sim?.active ? "Authored simulation; no hardware output" : warnText || `Home Assistant ${statusText}`}>
+      {sim?.active ? "Simulation" : "Home Assistant"} <span className="apt-ui-badge" data-state={sim?.active ? "modeled" : statusText}>{sim?.active ? "authored" : statusText}</span>
+    </span>
+    {showWarn && <span className="apt-ui-chat-warning" role="status">{warnText}</span>}
+    {muteState?.muted && <button type="button" className="apt-ui-button is-small" onClick={onUnmuteClick}>Muted · clear</button>}
+    <span className="apt-ui-chat-header-actions">
+      {onOpenRemoteProfile && <button type="button" className="apt-ui-button is-small" onClick={onOpenRemoteProfile}>Connection</button>}
+      {onOpenBench && <button type="button" className="apt-ui-button is-small" onClick={onOpenBench}>Bench</button>}
+      {actionMenu}
+    </span>
+    <window.HomeChatHeaderActions onExplain={onExplainLastAnswer} onCopy={onCopyTranscript}
+      onNewConversation={onNewConversation} copyDisabledReason={conversationCopyDisabledReason} />
+    {conversationCopyState && <span className="apt-ui-chat-copy-status" role="status">{conversationCopyState}</span>}
+  </header>;
   return (
     <header
       data-tauri-drag-region
@@ -4001,7 +4077,7 @@ function BootBanner({ metrics }) {
  *  - "settling" — full art + a faint pulsing "connecting…" line; no onComplete
  *                 (HomeApp's settling effect owns the exit)
  */
-function BootSequence({ mode, onComplete }) {
+function BootSequence({ mode, onComplete, className }) {
   // Boot timing — deliberately slow + relaxed. It plays every launch and it's
   // skippable (any key/click), so there's no rush. Tunable here.
   const STEP_CHARS = 2;          // chars revealed per tick
@@ -4080,7 +4156,7 @@ function BootSequence({ mode, onComplete }) {
   });
 
   return (
-    <div style={{
+    <div className={className} style={{
       flex: 1,
       display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center",
@@ -4341,7 +4417,7 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, m
   );
 }
 
-function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false, theme = "dark" }) {
+function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false, theme = "dark", unified = false }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
   // HomeApp bumps `focusToken` to pull focus here (e.g. when the chat feed
@@ -4387,7 +4463,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   };
 
   return (
-    <div style={{ position: "relative", flexShrink: 0 }}>
+    <div className={unified ? "apt-ui-composer" : undefined} style={{ position: "relative", flexShrink: 0 }}>
       {showMenu && (
         <div role="listbox" id="hg-slash-listbox" aria-label="Slash commands" style={{
           position: "absolute", bottom: "100%", left: mobile ? 8 : spatialMode ? 10 : 12, right: mobile ? 8 : spatialMode ? 10 : 12,
@@ -4465,7 +4541,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
           ))}
         </div>
       )}
-      <div style={{
+      <div className={unified ? "apt-ui-composer-box" : undefined} style={{
           padding: mobile
             ? "6px 9px calc(7px + env(safe-area-inset-bottom, 0px))"
             : spatialMode ? "9px 12px 11px" : "10px 12px 12px",
@@ -4484,7 +4560,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             aria-controls="hg-slash-listbox"
             aria-activedescendant={showMenu ? "hg-slash-opt-" + sel : undefined}
             aria-autocomplete="list"
-            placeholder={isSlash ? "" : "type or /command"}
+            placeholder={isSlash ? "" : unified ? "Ask your home, or type /" : "type or /command"}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={handleKey}
@@ -5154,6 +5230,20 @@ function HomeChatSurface({ children, unified, active, style }) {
     data-home-chat-surface="1" style={unified ? undefined : style}>{children}</div>;
 }
 
+function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelAction, onUndoAction, onControlAction, controlLifecycles, onWhy }) {
+  const ChatEvent = window.EventContent;
+  // Keep the same component and event path across layout switches. Remounting
+  // an action or private review would discard its local lifecycle state.
+  return <div className={unified ? "hg-fade apt-ui-chat-turn" : "hg-fade"} data-speaker={group.speaker}>
+    <TurnHeader speaker={group.speaker} time={group.time} tone={group.speaker === "system" ? "system" : group.speaker} />
+    <TurnBody density={density}>{group.events.map(event =>
+      <div key={event.id} className={unified ? "apt-ui-chat-event" : undefined} data-kind={event.kind}>
+        <ChatEvent e={event} onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction}
+          onControlAction={onControlAction} lifecycle={controlLifecycles ? controlLifecycles.get(event.id) : undefined} onWhy={onWhy} />
+      </div>)}</TurnBody>
+  </div>;
+}
+
 function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -5162,18 +5252,23 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) 
   const run = action => { setMenuOpen(false); action?.(); };
   return <header className="apt-home-topbar">
     <span className="apt-home-wordmark">Home</span>
-    <label className="apt-home-switcher"><span className="sr-only">Home</span>
-      <select aria-label="Home" value={state?.siteId || ""} disabled={!state?.selectHome}
-        onChange={event => state?.selectHome?.(event.target.value)}>
-        {!state?.sites?.length && <option value="">Loading home…</option>}
-        {(state?.sites || []).map(site => <option key={site.id} value={site.id}>
-          {site.shortName}{site.sceneAvailable ? "" : " · unavailable"}</option>)}
-      </select>
-    </label>
+    <div className="apt-home-switcher" role="group" aria-label="Home">
+      {!state?.sites?.length && <span className="apt-home-loading">Loading home…</span>}
+      {(state?.sites || []).map(site => {
+        const active = state?.siteId === site.id;
+        const unsaved = active && ["dirty", "saving", "conflict", "error"].includes(state?.saveState);
+        return <button type="button" key={site.id} aria-pressed={active}
+          disabled={!state?.selectHome} title={site.sceneAvailable ? site.shortName : `${site.shortName} · scene unavailable`}
+          onClick={() => state?.selectHome?.(site.id)}>
+          <span className="apt-home-site-dot" data-state={unsaved ? "unsaved" : site.sceneAvailable ? "available" : "unavailable"} />
+          {site.shortName}
+        </button>;
+      })}
+    </div>
     <details className="apt-home-status"><summary aria-label="Home status">
       <span className="apt-home-status-dot" data-state={state?.phase || "loading"} />
-      <span className="apt-home-status-summary">{state?.sourceLabel || "Loading room"}
-        {state?.saveState ? ` · ${state.saveState}` : ""}</span>
+      <span className="apt-home-status-summary">{state?.sourceLabel || "Loading room"}</span>
+      {state?.saveState && <span className="apt-home-status-save">{state.saveState}</span>}
     </summary><div role="status">
       <p>Room: {state?.phase || "loading"}</p>
       <p>{state?.sourceLabel || "Source unavailable"}</p>
@@ -5181,6 +5276,9 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) 
       <p>{state?.physicalControls ? "Home Assistant connected · output guards apply" : "Physical controls unavailable for this home"}</p>
       <p>Video, analyzed frames, pose and inference have separate states in Camera · JEV. Missing pose does not mean vacant.</p>
     </div></details>
+    <div className="apt-home-top-actions">
+    {state?.openSetup && <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
+      onClick={state.openSetup}>Setup</button>}
     <button type="button" className="apt-home-travel" onClick={() => onFeature("lights")}>Lights / Travel Mode</button>
     <div className="apt-home-menu" ref={menuRef}>
       <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"
@@ -5202,7 +5300,7 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) 
           <button type="button" role="menuitem" onClick={() => run(onTheme)}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
           <button type="button" role="menuitem" onClick={() => run(onPreviousHome)}>Previous Home</button>
         </div></>}
-    </div>
+    </div></div>
   </header>;
 }
 
@@ -5515,7 +5613,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const unifiedHome = homeLayout === "unified";
   const spatialLayout = homeLayout !== "classic";
   const [shellTab, setShellTab] = useState("controls");
-  const [shellDetent, setShellDetent] = useState("peek");
+  const [shellDetent, setShellDetent] = useState("half");
   const [shellState, setShellState] = useState(null);
   const [shellControlsHost, setShellControlsHost] = useState(null);
   const [shellCameraHost, setShellCameraHost] = useState(null);
@@ -5568,6 +5666,11 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   // Pushed inside the same /metrics polling effect that updates `metrics`.
   const [metricsHistory, setMetricsHistory] = useState(emptyMetricsHistory);
   const [conversationId, setConversationId] = useState(initialConvId);
+  const shellChatUnread = useApartmentChatUnread({ events, endpoint, token, conversationId,
+    visible: !(perceptionLabOpen || videoLabelerOpen || peopleOpen || intelligenceOpen || shellMetricsOpen
+      || remotePanelOpen || externalKeyModalOpen || simulationControlsOpen || worldStateDrawerOpen
+      || lightsOpen || spatialDrawerOpen || lookDrawerOpen || (apartmentOpen && !unifiedHome))
+      && (!unifiedHome || (shellTab === "chat" && !(viewport.width < 900 && shellDetent === "peek"))) });
   // Live Frigate-derived detection labels per camera, e.g.
   //   { kitchen: ["person"], driveway: ["car", "person"] }
   // Sourced from binary_sensor.{camera}_{label}_occupancy state_changed events.
@@ -11388,6 +11491,39 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     };
   }, [metricsBase, endpoint, apartmentNetworkPriority]);
 
+  const [conversationCopyState, setConversationCopyState] = useState("");
+  const conversationCopyBusyRef = useRef(false);
+  const conversationCopyAttemptRef = useRef(0);
+  // Invalidate during the commit, before an old clipboard promise can publish
+  // feedback into the replacement conversation or leave its pending status.
+  React.useLayoutEffect(() => {
+    conversationCopyAttemptRef.current += 1;
+    conversationCopyBusyRef.current = false;
+    setConversationCopyState("");
+    return () => { conversationCopyAttemptRef.current += 1; };
+  }, [conversationId, endpoint, token]);
+  const conversationVoiceBusy = !!voice.state && !["inactive", "ready", "idle", "error", "no-mic"].includes(voice.state);
+  const copyConversationTranscript = useCallback(async () => {
+    if (conversationCopyBusyRef.current || conversationVoiceBusy) return;
+    const attempt = ++conversationCopyAttemptRef.current;
+    conversationCopyBusyRef.current = true;
+    setConversationCopyState("Copying conversation text…");
+    const result = await window.HomeChatTranscript.copy({
+      events, excludedIds: [s2sPlaceholderRef.current],
+      writeText: typeof navigator.clipboard?.writeText === "function"
+        ? text => navigator.clipboard.writeText(text) : null,
+    });
+    if (attempt !== conversationCopyAttemptRef.current) return;
+    conversationCopyBusyRef.current = false;
+    setConversationCopyState(result.ok ? "Conversation text copied."
+      : result.reason === "empty" ? "No completed conversation text to copy."
+      : "Could not copy conversation text. Clipboard access is unavailable or was denied.");
+  }, [events, conversationVoiceBusy]);
+  const conversationCopyDisabledReason = conversationVoiceBusy ? "Finish the active voice turn before copying."
+    : conversationCopyBusyRef.current ? "Copying conversation text."
+    : !window.HomeChatTranscript.buildText(events, { excludedIds: [s2sPlaceholderRef.current] }) ? "No completed conversation text to copy."
+    : typeof navigator.clipboard?.writeText !== "function" ? "Clipboard access is unavailable in this browser." : undefined;
+
   const isSpatialWide = unifiedHome || spatialLayout && wideMode;
   const spatialRailWidth = wideMode ? SPATIAL_CHAT_RAIL_WIDTH : "100%";
   const spatialStageRight = wideMode ? spatialRailWidth : 0;
@@ -11537,7 +11673,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
 
   return (
     <div ref={rootRef} data-theme={theme} className={unifiedHome ? "apt-home-shell" : undefined}
-      data-home-layout={homeLayout} data-panel={shellTab} data-has-perception={shellState?.hasPerception ? "1" : "0"} style={{
+      data-home-layout={homeLayout} data-panel={shellTab} data-sheet={shellDetent} data-dock={shellState?.dockState || "default"}
+      data-has-perception={shellState?.hasPerception ? "1" : "0"} style={{
       "--apt-sheet-height": shellDetent === "full" ? "calc(100% - 52px)" : shellDetent === "half" ? "50%" : "150px",
       "--hg-row-py": density === "condensed" ? `${8}px` : `${14}px`,
       position: "relative",
@@ -11561,11 +11698,16 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
             openSurface(key, "home-menu");
           }} />
         <aside className="apt-home-panel" aria-label="Home workspace">
+          <button type="button" className="apt-home-sheet-grip" aria-label="Resize Home sheet"
+            onClick={() => setShellDetent(value => value === "peek" ? "half" : value === "half" ? "full" : "peek")}>
+            <span />
+          </button>
           <nav className="apt-home-tabs" aria-label="Home workspace tabs">
             <div role="tablist" aria-label="Home panels">
               {[["controls", "Controls"], ["camera", "Camera · JEV"], ["chat", "Chat"]].map(([key, label]) =>
                 <button type="button" role="tab" key={key} id={`apt-home-tab-${key}`}
                   aria-selected={shellTab === key} aria-controls={`apt-home-panel-${key}`}
+                  aria-label={key === "chat" && shellChatUnread ? "Chat, unread replies" : undefined}
                   tabIndex={shellTab === key ? 0 : -1}
                   onKeyDown={event => {
                     if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
@@ -11575,10 +11717,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
                     const next = event.key === "Home" ? keys[0] : event.key === "End" ? keys[keys.length - 1]
                       : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length];
                     showShellTab(next); document.getElementById(`apt-home-tab-${next}`)?.focus();
-                  }} onClick={() => showShellTab(key)}>{label}</button>)}
+                  }} onClick={() => showShellTab(key)}>{label}{key === "chat" && shellChatUnread
+                    && <span className="apt-home-unread" data-apartment-chat-unread="1" aria-hidden="true" />}</button>)}
             </div>
-            <button type="button" className="apt-home-sheet-toggle" aria-label="Resize Home sheet"
-              onClick={() => setShellDetent(value => value === "peek" ? "half" : value === "half" ? "full" : "peek")}>↕</button>
           </nav>
           <div className="apt-home-controls" id="apt-home-panel-controls" role="tabpanel" aria-labelledby="apt-home-tab-controls"
             hidden={shellTab !== "controls"} ref={setShellControlsHost} />
@@ -11986,6 +12127,12 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         aria-labelledby={unifiedHome ? "apt-home-tab-chat" : undefined} style={{display:"contents"}}>
       {!unifiedHome && <button type="button" className="apt-home-enable" onClick={() => chooseHomeLayout("unified")}>Open redesigned Home</button>}
       <HomeHeader
+        unified={unifiedHome}
+        onExplainLastAnswer={() => handleCommand("/why")}
+        onCopyTranscript={copyConversationTranscript}
+        onNewConversation={requestClearConfirm}
+        conversationCopyState={conversationCopyState}
+        conversationCopyDisabledReason={conversationCopyDisabledReason}
         theme={theme}
         onToggleTheme={isSpatialWide ? null : () => setTheme((t) => t === "dark" ? "light" : "dark")}
         voice={voice}
@@ -12023,6 +12170,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           boot logo settling into place. */}
       {bootPhase !== "ready" ? (
         <BootSequence
+          className={unifiedHome ? "apt-ui-chat-boot" : undefined}
           mode={bootPhase === "settling" ? "settling" : bootMode}
           onComplete={handleBootComplete}
         />
@@ -12052,7 +12200,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       )}
       <div
         ref={feedRef}
-        className="hg-scroll"
+        className={unifiedHome ? "hg-scroll apt-ui-chat-feed" : "hg-scroll"}
         tabIndex={0}
         onScroll={onFeedScroll}
         style={{
@@ -12123,7 +12271,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
                 key={`${g.speaker}:${g.events[0]?.turnKey ?? g.events[0]?.id ?? i}`}
                 style={{ contentVisibility: "auto", containIntrinsicSize: "auto 90px" }}
               >
-                <TurnBlock group={g} density={isSpatialWide ? "compact" : density}
+                <ApartmentChatTurn group={g} unified={unifiedHome} density={isSpatialWide ? "compact" : density}
                   onConfirmAction={confirmAction} onCancelAction={cancelAction}
                   onUndoAction={undoAction}
                   onControlAction={onControlAction} controlLifecycles={controlLifecycles}
@@ -12155,6 +12303,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         </div>
       )}
       <InputRow
+        unified={unifiedHome}
         value={input}
         onChange={setInput}
         onSend={sendInput}

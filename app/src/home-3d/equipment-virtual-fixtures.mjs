@@ -25,6 +25,8 @@ const VIRTUAL_LIMITS = Object.freeze({ pan_min_deg: -180, pan_max_deg: 180,
 // Illustrative exterior proportions, not surveyed or manufactured dimensions.
 const TUBE_RADIUS = .04, TUBE_HEIGHT = .16;
 const DISPLAY_PIVOT_Z = -.14;
+const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = .0005, RADIAL_SETTLED_KELVIN = 2;
+const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const vector = (value, length = 3) => Array.isArray(value) && value.length === length && value.every(finite);
 const unit = value => vector(value) && Math.abs(Math.hypot(...value) - 1) < 1e-6;
@@ -257,7 +259,7 @@ function featherMap() {
     return texture;
 }
 
-function buildFixture(item, state, depth) {
+function buildFixture(item, state, depth, reducedMotion) {
     const root = new THREE.Group();
     root.name = 'equipment-virtual-fixture:' + item.id;
     root.position.copy(item.anchor);
@@ -341,7 +343,7 @@ function buildFixture(item, state, depth) {
             beam_origin_m: worldStart.toArray(), endpoint_m: centerHit?.position.toArray() || null,
             reach_m: centerHit?.distance || null, receiver_kind: centerHit?.kind || 'unavailable' };
         patch.userData = { ...patch.userData, ...illumination, presentation: 'feathered_outward_wash' };
-        return { port, sector, patch, group };
+        return { port, sector, patch, group, tone: displayWhite(zone.color_temp_kelvin), colorTemp: zone.color_temp_kelvin };
     });
 
     function beam(parent) {
@@ -414,18 +416,63 @@ function buildFixture(item, state, depth) {
             view.disc.material.color.copy(color); view.disc.material.opacity = .18 * channel.brightness;
         }
     }
-    function update(next, target = null) {
-        for (const zone of next.radials) {
-            const view = radialViews[zone.number - 1], active = zone.on && zone.brightness > 0;
-            view.port.material.color.copy(active ? displayWhite(zone.color_temp_kelvin) : new THREE.Color(0x283039));
-            view.port.material.opacity = active ? .4 + zone.brightness * .6 : .65;
-            view.sector.visible = active; view.sector.material.color.copy(displayWhite(zone.color_temp_kelvin));
-            view.sector.material.opacity = .10 * zone.brightness;
-            for (const [node, opacity] of [[view.patch, .06]]) {
-                node.visible = active; node.material.color.copy(displayWhite(zone.color_temp_kelvin)); node.material.opacity = opacity * zone.brightness;
+    const shownLevels = new Float64Array(state.radials.map(zone => zone.on ? zone.brightness : 0));
+    const targetLevels = shownLevels.slice();
+    const shownKelvins = new Float64Array(state.radials.map(zone => zone.color_temp_kelvin));
+    const targetKelvins = shownKelvins.slice();
+    let radialMoving = false, radialAt = performance.now();
+    function paintRadials() {
+        for (let i = 0; i < radialViews.length; i++) {
+            const view = radialViews[i], level = shownLevels[i], active = level > 0;
+            if (view.colorTemp !== shownKelvins[i]) {
+                view.tone.copy(displayWhite(shownKelvins[i])); view.colorTemp = shownKelvins[i];
             }
+            view.port.material.color.copy(active ? view.tone : RADIAL_OFF_COLOR);
+            view.port.material.opacity = active ? .4 + level * .6 : .65;
+            view.sector.visible = active; view.sector.material.color.copy(view.tone); view.sector.material.opacity = .10 * level;
+            view.patch.visible = active; view.patch.material.color.copy(view.tone); view.patch.material.opacity = .06 * level;
+        }
+    }
+    function snapPresentation(nowMs) {
+        shownLevels.set(targetLevels); shownKelvins.set(targetKelvins); radialMoving = false; radialAt = nowMs; paintRadials();
+    }
+    function updateRadials(radials) {
+        let retarget = false;
+        for (const zone of radials) {
+            const index = zone.number - 1, view = radialViews[index], level = zone.on ? zone.brightness : 0;
+            if (targetLevels[index] !== level) { targetLevels[index] = level; retarget = true; }
+            if (targetKelvins[index] !== zone.color_temp_kelvin) { targetKelvins[index] = zone.color_temp_kelvin; retarget = true; }
+            // Metadata describes the exact target, never the eased drawing.
             view.group.userData.channel = copy(zone);
         }
+        if (retarget) {
+            // Pointer updates can outnumber rendered frames. Keep the last
+            // drawn clock while moving so retargeting cannot starve the fade.
+            if (!radialMoving) radialAt = performance.now();
+            radialMoving = false;
+            for (let i = 0; i < shownLevels.length; i++) if (shownLevels[i] !== targetLevels[i] || shownKelvins[i] !== targetKelvins[i]) radialMoving = true;
+        }
+        if (reducedMotion?.matches) snapPresentation(performance.now());
+        else paintRadials();
+    }
+    function advancePresentation(nowMs) {
+        if (!radialMoving) return false;
+        if (reducedMotion?.matches) { snapPresentation(nowMs); return true; }
+        const elapsed = nowMs - radialAt;
+        if (!(elapsed > 0)) return false;
+        const alpha = -Math.expm1(-elapsed / RADIAL_FADE_MS);
+        radialAt = nowMs; radialMoving = false;
+        for (let i = 0; i < shownLevels.length; i++) {
+            const next = shownLevels[i] + (targetLevels[i] - shownLevels[i]) * alpha;
+            shownLevels[i] = Math.abs(targetLevels[i] - next) <= RADIAL_SETTLED_LEVEL ? targetLevels[i] : next;
+            const kelvin = shownKelvins[i] + (targetKelvins[i] - shownKelvins[i]) * alpha;
+            shownKelvins[i] = Math.abs(targetKelvins[i] - kelvin) <= RADIAL_SETTLED_KELVIN ? targetKelvins[i] : kelvin;
+            if (shownLevels[i] !== targetLevels[i] || shownKelvins[i] !== targetKelvins[i]) radialMoving = true;
+        }
+        paintRadials(); return true;
+    }
+    function update(next, target = null) {
+        updateRadials(next.radials);
         downwardEmitter.material.color.copy(next.downward.on && next.downward.brightness > 0 ? displayWhite(next.downward.color_temp_kelvin) : new THREE.Color(0x283039));
         downwardEmitter.material.opacity = next.downward.on && next.downward.brightness > 0 ? .4 + .6 * next.downward.brightness : .65;
         downwardGroup.userData.channel = copy(next.downward);
@@ -446,7 +493,8 @@ function buildFixture(item, state, depth) {
     }
     root.traverse(node => { if (node !== root) node.userData = { ...metadata, ...node.userData, fixture_id: item.id, mount_id: item.mountId, origin_role: item.originRole, aim_source: item.aimSource, optical_origin_m: null }; });
     update(state);
-    return { root, update, pick, handlePick, setSelected(value) { selected = value; handle.visible = value; } };
+    return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving,
+        pick, handlePick, setSelected(value) { selected = value; handle.visible = value; } };
 }
 
 export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) {
@@ -456,8 +504,21 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
     root.name = 'equipment-virtual-fixtures'; root.userData = { ...metadata };
     parent.add(root);
     const depth = Spotlight.createEquipmentSpotlightDepth(root);
+    const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const visibilityDocument = globalThis.document;
     let disposed = false, signature = null, scopeIdentity = null, status = 'empty', reason = null, omitted = [], revision = null, digest = null;
     let fixtures = [], views = new Map(), states = new Map(), targets = new Map(), generation = 0, selectedId = null;
+    let presentationActive = false;
+    const snapPresentation = nowMs => {
+        for (const view of views.values()) view.snapPresentation(nowMs);
+        presentationActive = false;
+    };
+    const trackPresentation = view => {
+        if (!root.visible || visibilityDocument?.hidden || reducedMotion?.matches) view.snapPresentation(performance.now());
+        if (view.presentationActive()) presentationActive = true;
+    };
+    const visibilityChanged = () => { if (!disposed) snapPresentation(performance.now()); };
+    visibilityDocument?.addEventListener?.('visibilitychange', visibilityChanged);
     const readback = () => ({ status, reason, visible: root.visible && !disposed, disposed, fixture_count: root.children.length,
         visual_implementation: 'equipment-spotlight-scattering-1', scattering_steps: 32, depth: depth.readback(),
         revision, digest, fixtures: fixtures.map(item => ({ fixture_id: item.id, mount_id: item.mountId, label: item.label, display_only: item.displayOnly,
@@ -467,7 +528,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             color_temp_ranges: { radials: [...PROFILE.radials.cct_range_k], downward: [...PROFILE.downlight_ring.cct_range_k], spotlight: [...PROFILE.spot.cct_range_k] },
             profile_status: 'display_model', geometry_status: 'symbolic', optical_origin_m: null,
         })), omitted: omitted.map(item => ({ ...item })), physical_commands: false });
-    const clear = () => { disposeChildren(root); depth.reset(); views.clear(); fixtures = []; signature = null; revision = null; digest = null; omitted = []; generation++; };
+    const clear = () => { presentationActive = false; disposeChildren(root); depth.reset(); views.clear(); fixtures = []; signature = null; revision = null; digest = null; omitted = []; generation++; };
     const interactionDescriptor = fixtureId => {
         const item = fixtures.find(candidate => candidate.id === fixtureId);
         if (disposed || !item) return null;
@@ -496,7 +557,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
                     .map(item => [item.id, targets.get(item.id)]));
                 const nextViews = new Map();
                 try { for (const item of next.fixtures) {
-                    const view = buildFixture(item, nextStates.get(item.id), depth);
+                    const view = buildFixture(item, nextStates.get(item.id), depth, reducedMotion);
                     view.update(nextStates.get(item.id), nextTargets.get(item.id)); view.setSelected(item.id === selectedId); nextViews.set(item.id, view);
                 } }
                 catch (error) { for (const view of nextViews.values()) disposeChildren(view.root); throw error; }
@@ -511,6 +572,17 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
         return readback();
     };
     return { root, setDocument, readback, interactionDescriptor,
+        advancePresentation(nowMs) {
+            // The settled RAF path creates no arrays, iterators or snapshots.
+            if (disposed || !presentationActive || !finite(nowMs)) return false;
+            if (!root.visible || visibilityDocument?.hidden) { snapPresentation(nowMs); return false; }
+            let changed = false; presentationActive = false;
+            for (const view of views.values()) {
+                if (view.advancePresentation(nowMs)) changed = true;
+                if (view.presentationActive()) presentationActive = true;
+            }
+            return changed;
+        },
         pickObjects() { return disposed || !root.visible ? [] : [...views].flatMap(([id, view]) => id === selectedId ? [view.pick, view.handlePick] : [view.pick]); },
         setSelected(fixtureId) {
             selectedId = views.has(fixtureId) ? fixtureId : null;
@@ -531,7 +603,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             const tilt = Math.atan2(-direction.z, Math.hypot(direction.x, direction.y)) / DEG;
             const state = nextState(states.get(fixtureId), { pan_deg: pan, tilt_deg: tilt });
             const savedTarget = { point: target.point.slice(), normal: target.normal.slice(), surface_id: target.surface_id || null, kind: target.kind || 'registered_mesh' };
-            states.set(fixtureId, state); targets.set(fixtureId, savedTarget); views.get(fixtureId).update(state, savedTarget);
+            states.set(fixtureId, state); targets.set(fixtureId, savedTarget);
+            const view = views.get(fixtureId); view.update(state, savedTarget); trackPresentation(view);
             return { ok: true, descriptor: interactionDescriptor(fixtureId), physical_commands: false };
         },
         restoreAim(fixtureId, snapshot) {
@@ -541,7 +614,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
                     radials: snapshot.state.radials.map(({ number, on, brightness, color_temp_kelvin }) => ({ number, on, brightness, color_temp_kelvin })) });
                 states.set(fixtureId, state);
                 if (snapshot.target) targets.set(fixtureId, copy(snapshot.target)); else targets.delete(fixtureId);
-                views.get(fixtureId).update(state, targets.get(fixtureId));
+                const view = views.get(fixtureId); view.update(state, targets.get(fixtureId)); trackPresentation(view);
                 return { ok: true, descriptor: interactionDescriptor(fixtureId), physical_commands: false };
             } catch (error) { return { ok: false, reason: error.message }; }
         },
@@ -551,12 +624,23 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             try {
                 const state = nextState(states.get(fixtureId), patch);
                 if ('pan_deg' in patch || 'tilt_deg' in patch) targets.delete(fixtureId);
-                views.get(fixtureId).update(state, targets.get(fixtureId)); states.set(fixtureId, state);
+                // Property presence preserves inherited/mixed-patch semantics:
+                // even an unchanged pan retires its old target and must take
+                // the full aim/downward/receiver update path.
+                const radialOnly = Object.hasOwn(patch, 'radials') && Object.keys(patch).length === 1
+                    && !('downward' in patch || 'spotlight' in patch || 'pan_deg' in patch || 'tilt_deg' in patch);
+                const view = views.get(fixtureId);
+                if (radialOnly) view.updateRadials(state.radials);
+                else view.update(state, targets.get(fixtureId));
+                trackPresentation(view);
+                states.set(fixtureId, state);
                 return { ...readback(), ok: true };
             } catch (error) { return { ...readback(), ok: false, reason: error.message }; }
         },
-        setVisible(visible) { if (disposed) return; if (typeof visible !== 'boolean') throw TypeError('equipment_preview_visibility_boolean'); root.visible = visible; },
-        dispose() { if (disposed) return; clear(); depth.dispose(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; root.removeFromParent(); disposed = true; status = 'disposed'; reason = null; },
+        setVisible(visible) { if (disposed) return; if (typeof visible !== 'boolean') throw TypeError('equipment_preview_visibility_boolean');
+            snapPresentation(performance.now()); root.visible = visible; },
+        dispose() { if (disposed) return; visibilityDocument?.removeEventListener?.('visibilitychange', visibilityChanged);
+            clear(); depth.dispose(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; root.removeFromParent(); disposed = true; status = 'disposed'; reason = null; },
     };
 }
 

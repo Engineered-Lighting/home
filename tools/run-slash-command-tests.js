@@ -36,6 +36,17 @@ function assert(name, cond, detail) {
   }
 }
 
+function inputControlProps(block) {
+  const babel = require(path.join(REPO, "app/src/vendor/babel-7.29.0/babel.min.js"));
+  const ast = babel.transform(block, { parserOpts: { plugins: ["jsx"] }, ast: true, code: false }).ast;
+  const component = ast.program.body.find(node => node.type === "FunctionDeclaration" && node.id.name === "InputRow");
+  const members = component?.params[0]?.type === "ObjectPattern" ? component.params[0].properties : [];
+  const props = new Map(members.filter(node => node.type === "ObjectProperty").map(node => [node.key.name, node.value]));
+  return ["value", "onChange", "onSend", "voice", "onMicToggle", "isStreaming", "onStop", "focusToken"].every(name => props.has(name))
+    && props.get("mobile")?.type === "AssignmentPattern" && props.get("mobile").right.value === false
+    && props.get("theme")?.type === "AssignmentPattern" && props.get("theme").right.value === "dark";
+}
+
 function extractCatalog() {
   const start = source.indexOf("const SLASH_CMD_CATEGORIES");
   const end = source.indexOf("function FeatureLoadingSurface", start);
@@ -176,8 +187,10 @@ function completionValue(cmd, commands) {
   const renderEnd = source.indexOf("</div>", renderStart);
   const renderBlock = renderStart >= 0 && renderEnd >= 0 ? source.slice(renderStart, renderEnd) : "";
   assert("InputRow accepts the S80 control props",
-    /function InputRow\(\{\s*value,\s*onChange,\s*onSend,\s*voice,\s*onMicToggle,\s*isStreaming,\s*onStop,\s*focusToken,\s*mobile\s*=\s*false,\s*theme\s*=\s*"dark"\s*\}\)/.test(inputBlock),
+    inputControlProps(inputBlock),
     inputBlock.slice(0, 300));
+  assert("InputRow control contract rejects a lost Stop callback", !inputControlProps(inputBlock.replace(/\bonStop\b/, "missingStop")));
+  assert("InputRow control contract rejects changed mobile defaults", !inputControlProps(inputBlock.replace(/mobile\s*=\s*false/, "mobile = true")));
   assert("InputRow focus guard does not steal initial FirstRun focus",
     /useEffect\(\(\) => \{ if \(focusToken\) inputRef\.current\?\.focus\(\); \}, \[focusToken\]\)/.test(inputBlock),
     inputBlock.slice(0, 600));

@@ -702,6 +702,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 litView ||= litM.createLitView({ scene, renderer,
                     getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
                     getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
+                    getCollision: () => modes.getCollision?.() || null,
                     spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
             }
             if (modes.mode !== 'mesh' || litView.state().active) return litView.state();

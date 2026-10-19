@@ -18,6 +18,13 @@
  * keep their exact unlit look. Shadow maps come from the default depth
  * material, so the camera's dollhouse cutaway never changes world shadowing.
  * The scene is static, so shadow maps re-render only when a light changes.
+ *
+ * One bounce (APT-V02; SPEC Lit view; prototype scene.js VPL block): the
+ * eight strongest lit patches (each spot's target, each Down pool, each lit
+ * zone's wall) become hemispherical bounce lights carrying the reflected
+ * flux, flux x level x 0.8 (zones 0.7) x an assumed albedo, placed 0.25 m off
+ * the patch with a 4.5 m range. Bounce lights cast no shadows, so bounce can
+ * leak up to 4.5 m through a wall; the view states this limit.
  */
 import * as THREE from 'three';
 
@@ -26,7 +33,18 @@ export const LIT_ASSUMED_LUMENS = Object.freeze({ spot: 450, down: 350, zone: 12
 export const LIT_ASSUMPTION_SOURCE = 'SPEC Lit view assumed lumen ratings';
 export const LIT_DISCLOSURE = 'Simulated · not photometric · assumed output';
 export const LIT_DISCLOSURE_DETAIL = 'Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm. '
-    + 'Fixed night exposure. Materials are assumed from the scan colours. Bounce light is not modeled.';
+    + 'Fixed night exposure. Materials are assumed from the scan colours. One bounce from the eight strongest lit patches, '
+    + 'with assumed albedos.';
+// SPEC Lit view: stated with the view, not only in a tooltip.
+export const LIT_BOUNCE_LIMIT = 'One bounce · casts no shadows · can leak up to 4.5 m through walls';
+export const LIT_BOUNCE_COUNT = 8;
+export const LIT_BOUNCE_RANGE_M = 4.5;
+// Prototype VPL albedos (assumed): spot target flat 0.35 or vertical 0.6,
+// Down pool 0.35, zone wall 0.65, any other zone patch 0.4. A zone facing an
+// opening finds no surface in range, so it adds nothing; the opening and
+// 'Toward walls' classes wait on APT-Z04 facing kinds.
+export const LIT_BOUNCE_ALBEDO = Object.freeze({ spotFlat: 0.35, spotVertical: 0.6, down: 0.35, zoneWall: 0.65, zoneOther: 0.4 });
+const BOUNCE_TINT = new THREE.Color(1, 0.96, 0.9);
 // Prototype scene.js _litApply: ACES at a fixed exposure of 0.038.
 export const LIT_EXPOSURE = 0.038;
 export const LIT_SHADOW_MAP_SIZE = 1024;
@@ -126,7 +144,29 @@ export function fixtureLightSources(fixtureRoot, { spotFwhmDeg = 20 } = {}) {
     return sources;
 }
 
-export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotFwhmDeg = 20 } = {}) {
+/* The bounce patches for a set of light sources, strongest first, at most
+ * LIT_BOUNCE_COUNT. `castRay(origin, direction)` returns the first surface
+ * as { point, normal } in world space (normal facing the light) or null. */
+export function bouncePatches(sources, castRay, { up = new THREE.Vector3(0, 1, 0) } = {}) {
+    const patches = [];
+    for (const source of sources || []) {
+        if (!(source.level > 0)) continue;
+        const hit = castRay(source.origin, source.direction);
+        if (!hit) continue;
+        const vertical = Math.abs(hit.normal.dot(up)) <= 0.35, flat = Math.abs(hit.normal.dot(up)) > 0.8;
+        let flux, albedo;
+        if (source.kind === 'spot') { flux = LIT_ASSUMED_LUMENS.spot * source.level * 0.8; albedo = flat ? LIT_BOUNCE_ALBEDO.spotFlat : LIT_BOUNCE_ALBEDO.spotVertical; }
+        else if (source.kind === 'down') { flux = LIT_ASSUMED_LUMENS.down * source.level * 0.8; albedo = LIT_BOUNCE_ALBEDO.down; }
+        else { flux = LIT_ASSUMED_LUMENS.zone * source.level * 0.7; albedo = vertical ? LIT_BOUNCE_ALBEDO.zoneWall : LIT_BOUNCE_ALBEDO.zoneOther; }
+        const reflected = flux * albedo;
+        if (!(reflected > 1)) continue;
+        patches.push({ kind: source.kind, number: source.number || null, fixtureId: source.fixtureId ?? null,
+            point: hit.point.clone(), normal: hit.normal.clone().normalize(), reflected, albedo, kelvin: source.kelvin });
+    }
+    return patches.sort((a, b) => b.reflected - a.reflected).slice(0, LIT_BOUNCE_COUNT);
+}
+
+export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCollision = () => null, spotFwhmDeg = 20 } = {}) {
     if (!scene?.isScene || !renderer?.shadowMap || typeof getMesh !== 'function' || typeof getFixtureRoots !== 'function')
         throw new TypeError('lit_view_dependencies_required');
     const group = new THREE.Group();
@@ -137,6 +177,36 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     group.add(fill);
     const exposure = { value: LIT_EXPOSURE };
     let active = false, quality = 'full', slow = 0, swapped = [], lights = [], signature = '', saved = null, mesh = null;
+    // Bounce lights: a fixed set of eight, so a change never recompiles.
+    const bounce = Array.from({ length: LIT_BOUNCE_COUNT }, (_, index) => {
+        const light = new THREE.SpotLight(0xffffff, 0, LIT_BOUNCE_RANGE_M, 1.45, 1, 2);
+        light.name = 'lit-bounce-' + (index + 1);
+        light.userData = { lit_source: 'bounce', measured: false, casts_shadow: false };
+        group.add(light, light.target);
+        return light;
+    });
+    let bounceSources = 0;
+    const raycaster = new THREE.Raycaster(), rayHits = new Map();
+    // Rays against the decimated collision proxy, cached per ray: level and
+    // colour changes reuse them, only a moved light casts again.
+    function castRay(origin, direction) {
+        const collision = getCollision();
+        const target = collision || mesh;
+        if (!target) return null;
+        const key = [...origin.toArray(), ...direction.toArray()].map(value => value.toFixed(4)).join(',') + '|' + target.uuid;
+        if (rayHits.has(key)) return rayHits.get(key);
+        raycaster.set(origin, direction.clone().normalize()); raycaster.near = 0.02; raycaster.far = 30;
+        const first = raycaster.intersectObject(target, true).find(hit => hit.point && hit.face);
+        let hit = null;
+        if (first) {
+            const normal = first.face.normal.clone().transformDirection(first.object.matrixWorld);
+            if (normal.dot(direction) > 0) normal.negate();
+            hit = { point: first.point.clone(), normal };
+        }
+        if (rayHits.size > 256) rayHits.clear();
+        rayHits.set(key, hit);
+        return hit;
+    }
 
     function litMaterialFor(original) {
         const source = Array.isArray(original) ? original.find(Boolean) : original;
@@ -199,6 +269,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         return light;
     }
     function rebuild(sources) {
+        rayHits.clear();
         for (const light of lights) { light.shadow?.map?.dispose?.(); group.remove(light, light.target); light.dispose?.(); }
         lights = sources.map(makeLight);
     }
@@ -237,6 +308,18 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             light.userData.candela = source.candela;
             light.userData.fixture_id = source.fixtureId;
         });
+        const patches = bouncePatches(sources, castRay);
+        bounceSources = patches.length;
+        bounce.forEach((light, index) => {
+            const patch = patches[index];
+            if (!patch) { light.intensity = 0; light.userData.patch = null; return; }
+            light.position.copy(patch.point).addScaledVector(patch.normal, 0.25);
+            light.target.position.copy(light.position).add(patch.normal);
+            light.target.updateMatrixWorld(true);
+            kelvinColor(patch.kelvin, light.color).multiply(BOUNCE_TINT);
+            light.intensity = (patch.reflected / Math.PI) * 0.9;
+            light.userData.patch = { kind: patch.kind, reflected_lm: patch.reflected, albedo: patch.albedo, assumed: true };
+        });
         renderer.shadowMap.needsUpdate = true;
         return true;
     }
@@ -265,7 +348,8 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         restoreMaterials();
         for (const light of lights) { light.shadow?.map?.dispose?.(); light.dispose?.(); }
         group.remove(...lights.flatMap(light => [light, light.target]));
-        lights = []; signature = '';
+        lights = []; signature = ''; rayHits.clear(); bounceSources = 0;
+        for (const light of bounce) light.intensity = 0;
         scene.remove(group);
         renderer.shadowMap.enabled = saved.enabled;
         renderer.shadowMap.type = saved.type;
@@ -284,6 +368,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     }
     function state() {
         return Object.freeze({ active, quality, lights: lights.length,
+            bounceLights: bounce.length, bounceSources, bounceRangeM: LIT_BOUNCE_RANGE_M, bounceLimit: LIT_BOUNCE_LIMIT,
             shadowLights: lights.filter(light => light.castShadow).length,
             meshSwapped: swapped.length, exposure: LIT_EXPOSURE,
             assumedLumens: LIT_ASSUMED_LUMENS, assumptionSource: LIT_ASSUMPTION_SOURCE, measured: false,

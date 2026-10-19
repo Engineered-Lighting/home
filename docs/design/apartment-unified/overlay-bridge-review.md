@@ -136,6 +136,60 @@ all twelve warm-ups recorded 120 RAFs and maximum quality. Its receipt is
 Forbidden requests, missing code and page errors were zero. This verifies the
 final local harness bytes and does not substitute for the next hosted run.
 
+Hosted run `39177996939` at `c2e4e902` subsequently exhausted the unchanged
+145-second global deadline. Victoria was ready at 16.116 seconds. Both initial
+stages and all three actual mode/orbit/dot stages passed; Cloud and Photo also
+completed their paired timing windows. Mesh reached its orbit check, with at
+least ten of twelve warm-ups complete. Cloud ran near 12 FPS and Photo near
+10 FPS; CPU-render p95 was about 18 to 20 ms while frame p95 was about 83 to
+116 ms. There were no page errors, missing code or forbidden requests. Exact
+warm-up durations were unavailable because closing the browser at the global
+deadline happened before the old final-only diagnostic read.
+
+The final controlled pacing comparison retained the same SwiftShader backend,
+DPR 0.5, viewport, real RAFs, renderer frames and assertions. Adding only
+`--disable-frame-rate-limit` passed all nine stages in 48.82 seconds, versus
+48.24 seconds in the preceding paced run. That is no material workstation
+gain. Adding the GPU completion barrier then passed in 49.57 seconds, with
+twelve 120-RAF warm-ups, 240 to 274 renderer frame increments, no context loss
+and no forbidden requests, missing code or page errors. Barrier durations
+rounded to 0 ms at the browser's timing precision. Receipts:
+
+- `.tmp/apartment-overlay-bridge-diagnosis/run-1792367750485-candidate/receipt.json`
+- `.tmp/apartment-overlay-bridge-diagnosis/run-1792367857492-candidate/receipt.json`
+
+The functional profile now selects this unpaced real-RAF execution explicitly.
+[Chromium's switch definition](https://chromium.googlesource.com/chromium/src/+/HEAD/components/viz/common/switches.cc)
+states that `--disable-frame-rate-limit` removes scheduler begin-frame limits
+and implies disabled GPU vsync. After each functional 120-RAF warm-up,
+`gl.finish()` completes queued GPU work, with context-loss checks before and
+after. Its duration remains inside the existing 25-second budget: elapsed time
+is checked again after the blocking call, so a delayed timer cannot produce a
+false pass. This establishes completion, not composited pixel quality. The
+desktop benchmark retains its browser-default pacing and omits this barrier.
+No profile dimension, quality, count or deadline is reduced further.
+
+Node now retains named warm-up start/progress/completion checkpoints and each
+completed timing window immediately. A global browser close preserves those
+records, including the latest 30-RAF progress checkpoint, instead of erasing
+the only warm-up diagnostics. This is a controlled final Linux pacing test;
+hosted benefit remains unproven, and performance acceptance remains
+`requires-review` with F01 partial and the PR in draft.
+
+The exact updated official harness passed all nine stages in 26.44 seconds on
+the retained Windows D3D11 backend, receipt
+`.tmp/apartment-overlay-bridge-browser/run-1792368012233-candidate/receipt.json`.
+It retained twelve 120-RAF warm-ups, twelve successful GPU completion checks,
+maximum quality, nine timing windows and 111 live checkpoints. A separate
+throwaway diagnostic deliberately closed the browser after its first warm-up
+and then failed as intended. Its Node receipt still contained that completed
+120-RAF/GPU warm-up and eleven checkpoints, demonstrating that closure no
+longer erases progress:
+`.tmp/apartment-overlay-bridge-checkpoint-close/run-1792368055207-candidate/receipt.json`.
+That expected diagnostic failure is not functional acceptance. Both browsers
+and servers were closed, and the throwaway harnesses were removed. These local
+results leave the next hosted pacing result unproven.
+
 Run the default functional check with no source-phase override:
 
 ```powershell

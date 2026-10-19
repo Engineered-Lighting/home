@@ -26,6 +26,15 @@ results do not clear the desktop frame-cost qualification above. The measured
 SwiftShader diagnosis, limits and explicit profile commands are documented in
 `overlay-bridge-review.md`; hosted verification remains pending.
 
+The functional profile additionally uses unpaced real RAFs and a GPU completion
+barrier after each 120-RAF warm-up, including context checks and an explicit
+post-barrier elapsed check against the unchanged 25-second limit. Desktop
+benchmark pacing and its warm-up barrier behavior remain unchanged. Local
+flag-only timing showed no material gain; this is a controlled Linux pacing
+test whose hosted benefit is unproven. Live Node phase/warm-up/window snapshots
+now survive global browser closure. These diagnostics do not clear the retained
+desktop performance qualification or establish composited pixel quality.
+
 ## Sources and receipts
 
 The final candidate's exact source SHA-256 values are:

@@ -56,6 +56,7 @@ function browserOptions(){
   const args=['--disable-background-networking','--renderer-process-limit=2','--js-flags=--max-old-space-size=512'];
   if(process.platform==='win32')args.unshift('--use-angle=d3d11');
   else if(process.platform==='linux')args.unshift('--use-gl=angle','--use-angle=swiftshader-webgl','--enable-unsafe-swiftshader');
+  if(profile==='functional')args.push('--disable-frame-rate-limit');
   return {headless:true,args,...(process.platform==='linux'?{channel:'chromium'}:!installed?{channel:'msedge'}:{})};
 }
 const median=values=>{const sorted=[...values].sort((a,b)=>a-b);return sorted.length%2?sorted[(sorted.length-1)/2]:(sorted[sorted.length/2-1]+sorted[sorted.length/2])/2;};
@@ -78,12 +79,14 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
   const protectedHashes=Object.fromEntries(protectedFiles.map(file=>[file,hash(fs.readFileSync(file))]));
   const sources=publicSources(SRC),receipt={schema:'home-apartment-overlay-bridge-authored-browser-1',authored_room:true,real_renderer:true,
     household_data:false,physical_commands:0,camera_sessions:0,model_sessions:0,survey_writes:0,screenshots:false,
-    source_phase:phase,proof_profile:profile,configured_viewport:viewport,configured_device_scale_factor:deviceScaleFactor,
+    source_phase:phase,proof_profile:profile,proof_pacing:profile==='functional'?'unthrottled-real-raf':'browser-default',configured_viewport:viewport,configured_device_scale_factor:deviceScaleFactor,
     performance_scope:profile==='functional'?'functional-viewport-capacity-only':'desktop-benchmark-requires-paired-review',
     engine_source:baselineEngine?{mode:'public-baseline-engine-only',commit:baselineCommit,sha256:hash(baselineEngine),other_sources:'current-worktree'}
       :{mode:'candidate-worktree',sha256:hash(fs.readFileSync(path.join(SRC,'home-3d/engine.js')))},
-    checks:[],performance:[],requests:[],forbidden:[],missing_code:[],errors:[],served:{},browser:browserOptions(),startup:{checkpoints:[],responses:[]}};
+    checks:[],performance:[],warmups:[],checkpoints:[],timing_windows:[],requests:[],forbidden:[],missing_code:[],errors:[],served:{},browser:browserOptions(),startup:{checkpoints:[],responses:[]}};
   const proofStarted=Date.now(),markStartup=name=>receipt.startup.checkpoints.push({name,elapsed_ms:Date.now()-proofStarted});
+  const checkpoint=(name,detail={})=>{receipt.current_phase=name;receipt.checkpoints.push({name,elapsed_ms:Date.now()-proofStarted,...detail});};
+  const recordWindow=(mode,condition,rows)=>{receipt.timing_windows.push({mode,condition,elapsed_ms:Date.now()-proofStarted,rows});checkpoint(mode+' '+condition+' stats complete');};
   let server,browser,context,page,origin,handler,timer,releaseLeafRequest;
   const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{browser?.close().catch(()=>{});server?.closeAllConnections();reject(Error('145s overlay bridge browser deadline'));},145000)});
   async function proof(){
@@ -127,6 +130,11 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     });
     await context.routeWebSocket('**/*',socket=>socket.close());
     page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>receipt.errors.push(error.message));
+    if(profile==='functional')await page.exposeFunction('__recordOverlayWarmup',event=>{
+      checkpoint(event.mode+' '+event.stage+' '+event.kind,{id:event.id,observed_rafs:event.observed_rafs,renderer_frames:event.renderer_frames});
+      receipt.warmup_progress=event;
+      if(event.kind==='complete')receipt.warmups.push(event.warmup);
+    });
     page.on('response',response=>{const pathname=new URL(response.url()).pathname;if(['/home-app.jsx','/home-mount.jsx','/home-apartment.jsx','/auth/status','/content-packs/index.json'].includes(pathname))receipt.startup.responses.push({path:pathname,status:response.status(),elapsed_ms:Date.now()-proofStarted});});
     markStartup('navigation-start');
     await page.goto(origin+'/?apartmentRedesign=1&worldZoom=off',{waitUntil:'domcontentloaded'});
@@ -148,7 +156,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     assert.deepEqual(receipt.graphics.canvas,receipt.graphics.cssCanvas.map(value=>Math.floor(value*deviceScaleFactor)));
     receipt.browser_version=browser.version();
     if(phase==='candidate')assert.equal(await page.evaluate(()=>typeof window.__APT_ENGINE.createUiOverlayLayer),'function');
-    const check=async(name,operation)=>{const result=await operation();receipt.checks.push({name,...result});return result;};
+    const check=async(name,operation)=>{checkpoint(name+' start');const result=await operation();receipt.checks.push({name,...result});checkpoint(name+' complete');return result;};
     await page.evaluate(()=>{
       const engine=window.__APT_ENGINE;window.__overlayBridgeProof={engine,identity:engine.sceneIdentity,host:engine.picking.getHost(),point:[.6,.9,2.3]};
       if(!engine.createUiOverlayLayer)return;
@@ -195,34 +203,53 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
         });for(const [key,value]of Object.entries(result))assert.equal(value,true,key+' refuses admission');return result;
       });
     }
-    await page.evaluate(()=>{
+    await page.evaluate(functional=>{
       const p=window.__overlayBridgeProof;
       p.warmups=[];
-      p.warm=()=>new Promise((resolve,reject)=>{
+      p.warm=(stage='warm')=>new Promise((resolve,reject)=>{
         const started=performance.now(),firstFrame=p.engine.renderer.info.render.frame,stats=[];
-        let ticks=0,last=started,maxGap=0,raf,settled=false;
+        const id=p.warmups.length+1,mode=p.engine.modes.mode;
+        let ticks=0,last=started,maxGap=0,raf,settled=false,gpuCompletion=null;
+        const report=(kind,detail={})=>{if(functional)window.__recordOverlayWarmup({kind,id,mode,stage,observed_rafs:ticks,renderer_frames:p.engine.renderer.info.render.frame-firstFrame,...detail}).catch(()=>{});};
         const off=p.engine.on('stats',value=>{stats.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,calls:value.calls,tris:value.tris});if(stats.length>4)stats.shift()});
         const finish=result=>{
           if(settled)return;settled=true;clearTimeout(timeout);cancelAnimationFrame(raf);off();
-          p.warmups.push({result,target_rafs:120,observed_rafs:ticks,renderer_frames:p.engine.renderer.info.render.frame-firstFrame,
+          const warmup={id,stage,result,target_rafs:120,observed_rafs:ticks,renderer_frames:p.engine.renderer.info.render.frame-firstFrame,
             elapsed_ms:performance.now()-started,max_raf_gap_ms:maxGap,visibility:document.visibilityState,mode:p.engine.modes.mode,
-            canvas:[p.engine.renderer.domElement.width,p.engine.renderer.domElement.height],performance:p.engine.performanceDiagnostics(),recent_stats:stats});
-          if(result==='passed')resolve();else reject(Error('120-frame warmup deadline'));
+            canvas:[p.engine.renderer.domElement.width,p.engine.renderer.domElement.height],performance:p.engine.performanceDiagnostics(),gpu_completion:gpuCompletion,recent_stats:stats};
+          p.warmups.push(warmup);report('complete',{warmup});
+          if(result==='passed')resolve();else reject(Error(result==='context-lost'?'GPU context lost during warmup':'120-frame warmup deadline'));
         };
         const timeout=setTimeout(()=>finish('deadline'),25000);
-        const step=()=>{const now=performance.now();maxGap=Math.max(maxGap,now-last);last=now;if(++ticks>=120)finish('passed');else raf=requestAnimationFrame(step)};
+        const step=()=>{
+          const now=performance.now();maxGap=Math.max(maxGap,now-last);last=now;++ticks;
+          if(ticks%30===0)report('progress');
+          if(ticks>=120){
+            if(functional){
+              const gl=p.engine.renderer.getContext(),barrierStarted=performance.now(),lostBefore=gl.isContextLost();
+              if(!lostBefore)gl.finish();
+              gpuCompletion={method:'finish',barrier_ms:performance.now()-barrierStarted,context_lost_before:lostBefore,context_lost_after:gl.isContextLost()};
+              if(lostBefore||gpuCompletion.context_lost_after){finish('context-lost');return;}
+              if(performance.now()-started>=25000){finish('deadline');return;}
+            }
+            finish('passed');
+          }else raf=requestAnimationFrame(step);
+        };
+        report('start');
         raf=requestAnimationFrame(step);
       });
       p.stats=()=>new Promise((resolve,reject)=>{const rows=[],timeout=setTimeout(()=>{off();reject(Error('production stats deadline'))},10000);const off=p.engine.on('stats',value=>{rows.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,pixelRatio:value.pixelRatio,calls:value.calls,tris:value.tris,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,...(p.expectActive?{dotDraws:p.timedDraws,labelHidden:p.label.hidden,dotVisible:p.layer.group.children[0]?.visible,layerAttached:!!p.layer.group.parent,projection:p.layer.project(p.point)}:{})});if(rows.length===4){clearTimeout(timeout);off();resolve(rows)}})});
-    });
+    },profile==='functional');
     for(const mode of ['points','splat','mesh']){
-      await page.evaluate(async mode=>{const p=window.__overlayBridgeProof;p.engine.setPerformanceMode('maxFidelity');p.engine.rig.snapHome(0);await p.engine.modes.setMode(mode);await p.warm()},mode);
+      checkpoint(mode+' mode and empty warm start');
+      await page.evaluate(async mode=>{const p=window.__overlayBridgeProof;p.engine.setPerformanceMode('maxFidelity');p.engine.rig.snapHome(0);await p.engine.modes.setMode(mode);await p.warm('empty')},mode);
       const readiness=await page.evaluate(async()=>{const p=window.__overlayBridgeProof,points=await p.engine.pointsPromise;return {mode:p.engine.modes.mode,debug:p.engine.modes.debugInfo(),points:{count:points.geometry.attributes.position.count,visible:points.visible}}});
       (receipt.mode_readiness ||= []).push(readiness);
       if(mode==='points'){assert.ok(readiness.points.count>0);assert.equal(readiness.points.visible,true);}
       if(mode==='splat'){assert.equal(readiness.debug.loadStatus.splat,'loaded');assert.equal(readiness.debug.splat,true);assert.equal(readiness.debug.splatVisible,true);assert.equal(readiness.debug.sparkVisible,true);assert.ok(readiness.debug.splatSource);assert.ok(readiness.debug.numSplats>0);}
       if(mode==='mesh'){assert.equal(readiness.debug.loadStatus.mesh,'loaded');assert.equal(readiness.debug.meshFallback,false);assert.ok(readiness.debug.meshSource?.endsWith('mesh.glb'));}
-      const before=await page.evaluate(()=>window.__overlayBridgeProof.stats());
+      checkpoint(mode+' before stats start');
+      const before=await page.evaluate(()=>window.__overlayBridgeProof.stats());recordWindow(mode,'before',before);
       if(phase!=='candidate'){
         for(const row of before){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);}
         receipt.performance.push({mode,orbit:'snapHome(0)',quality:'maxFidelity',warmup_renderer_ticks:120,empty:before});
@@ -235,7 +262,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
           p.anchor=p.layer.addAnchor({point_m:p.point,label:'Authored fixture overlay'});p.label=p.host.querySelector('.apt-ui-overlay-label');
           const originalLabel=p.label;p.anchor.update({label:'Updated authored label'});const anchorIdentity=originalLabel===p.host.querySelector('.apt-ui-overlay-label')&&originalLabel.textContent==='Updated authored label';p.anchor.update({label:'Authored fixture overlay'});
           const dot=p.layer.group.children[0],originalBeforeRender=dot.onBeforeRender;let draws=0;dot.onBeforeRender=function(...args){draws++;originalBeforeRender?.apply(this,args)};
-          const first=p.layer.project(p.point);p.engine.rig.stepAzimuth(1);await p.warm();dot.onBeforeRender=originalBeforeRender;
+          const first=p.layer.project(p.point);p.engine.rig.stepAzimuth(1);await p.warm('orbit');dot.onBeforeRender=originalBeforeRender;
           const ancestry=[];for(let parent=dot;parent;parent=parent.parent)ancestry.push({type:parent.type,name:parent.name,visible:parent.visible,layers:parent.layers.mask});
           const world=dot.getWorldPosition(dot.position.clone()),view=world.clone().applyMatrix4(p.engine.camera.matrixWorldInverse),clip=world.clone().project(p.engine.camera);
           const draw={draws,ancestry,world:world.toArray(),view:view.toArray(),clip:clip.toArray(),cameraLayers:p.engine.camera.layers.mask,frustumCulled:dot.frustumCulled,materialVisible:dot.material.visible,materialOpacity:dot.material.opacity};
@@ -251,14 +278,16 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       });
       // Return to the exact same orbit used by the baseline before collecting
       // active samples. Warmup RAFs finish before production stats sampling.
-      await page.evaluate(async()=>{const p=window.__overlayBridgeProof;p.engine.rig.snapHome(0);await p.warm()});
+      await page.evaluate(async()=>{const p=window.__overlayBridgeProof;p.engine.rig.snapHome(0);await p.warm('active')});
       await page.evaluate(()=>{const p=window.__overlayBridgeProof,dot=p.layer.group.children[0];p.timedDraws=0;p.expectActive=true;p.timedDrawOriginal=dot.onBeforeRender;dot.onBeforeRender=function(...args){p.timedDraws++;p.timedDrawOriginal?.apply(this,args)}});
-      const active=await page.evaluate(()=>window.__overlayBridgeProof.stats());
+      checkpoint(mode+' active stats start');
+      const active=await page.evaluate(()=>window.__overlayBridgeProof.stats());recordWindow(mode,'active',active);
       (receipt.timed_draw_diagnostics ||= []).push({mode,active});
       assert.ok(active.every(row=>row.dotDraws>0&&row.dotVisible===true&&row.labelHidden===false&&row.layerAttached===true&&row.projection),'active timing must include the real dot and label');
       await page.evaluate(()=>{const p=window.__overlayBridgeProof;p.layer.group.children[0].onBeforeRender=p.timedDrawOriginal;p.expectActive=false});
-      await page.evaluate(async()=>{const p=window.__overlayBridgeProof;p.controller.abort();await p.warm()});
-      const after=await page.evaluate(()=>window.__overlayBridgeProof.stats());
+      await page.evaluate(async()=>{const p=window.__overlayBridgeProof;p.controller.abort();await p.warm('after')});
+      checkpoint(mode+' after stats start');
+      const after=await page.evaluate(()=>window.__overlayBridgeProof.stats());recordWindow(mode,'after',after);
       for(const rows of [before,active,after])for(const row of rows){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);}
       receipt.performance.push({mode,orbit:'snapHome(0)',quality:'maxFidelity',warmup_renderer_ticks:120,before,active,after,
         comparisons:['p95','renderP95'].map(key=>noiseComparison(before,active,after,key))});
@@ -301,10 +330,10 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     assert.deepEqual(receipt.forbidden,[]);assert.deepEqual(receipt.missing_code,[]);assert.deepEqual(receipt.errors,[]);
     const warmups=await page.evaluate(()=>window.__overlayBridgeProof.warmups);
     assert.equal(receipt.checks.length,9);assert.equal(warmups.length,12);
-    for(const warmup of warmups){assert.equal(warmup.result,'passed');assert.equal(warmup.observed_rafs,120);assert.ok(warmup.renderer_frames>=120);assert.equal(warmup.performance.mode,'maxFidelity');assert.equal(warmup.performance.qualityLevel,'maximum');}
+    for(const warmup of warmups){assert.equal(warmup.result,'passed');assert.equal(warmup.observed_rafs,120);assert.ok(warmup.renderer_frames>=120);assert.equal(warmup.performance.mode,'maxFidelity');assert.equal(warmup.performance.qualityLevel,'maximum');if(profile==='functional'){assert.equal(warmup.gpu_completion.method,'finish');assert.equal(warmup.gpu_completion.context_lost_before,false);assert.equal(warmup.gpu_completion.context_lost_after,false);assert.ok(warmup.elapsed_ms<25000);}}
     receipt.functional_result='passed';receipt.performance_result=receipt.performance.every(row=>row.comparisons.every(item=>item.interpretation==='within-observed-baseline-variability'))?'within-observed-baseline-variability':'requires-review';
   }
   try{await Promise.race([proof(),deadline]);receipt.result='passed';}
   catch(error){receipt.result='failed';receipt.failure=error.stack||String(error);if(page&&!page.isClosed())receipt.startup.failure_state=await page.evaluate(()=>({document_ready:document.readyState,unified_shell_count:document.querySelectorAll('.apt-home-shell[data-home-layout="unified"]').length,registry_present:!!window.HomeSpatialViewport,selected_site:window.HomeSpatialViewport?.getSelectedSiteId?.()||null,site_phase:window.__HOME_APARTMENT_SITE_API?.readback().phase||null,engine_site:window.__APT_ENGINE?.siteId||null})).catch(()=>null);throw error;}
-  finally{clearTimeout(timer);releaseLeafRequest?.();if(page&&!page.isClosed())receipt.warmups=await page.evaluate(()=>window.__overlayBridgeProof?.warmups||[]).catch(()=>[]);await context?.close();await browser?.close();server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(run,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');console.log(JSON.stringify({receipt:path.join(run,'receipt.json'),result:receipt.result,functional:receipt.functional_result,performance:receipt.performance_result,checks:receipt.checks.length}));}
+  finally{clearTimeout(timer);releaseLeafRequest?.();if(page&&!page.isClosed()){const saved=await page.evaluate(()=>window.__overlayBridgeProof?.warmups||null).catch(()=>null);if(saved)receipt.warmups=saved;}await context?.close();await browser?.close();server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));fs.writeFileSync(path.join(run,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');console.log(JSON.stringify({receipt:path.join(run,'receipt.json'),result:receipt.result,functional:receipt.functional_result,performance:receipt.performance_result,checks:receipt.checks.length}));}
 });

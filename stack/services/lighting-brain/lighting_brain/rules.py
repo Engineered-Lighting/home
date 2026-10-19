@@ -66,7 +66,11 @@ class Facts:
     now: float
     room_present: bool
     vacant_since: float | None
-    vacant_for: float  # 0 while present, inf if never occupied
+    vacant_for: float  # 0 while present (or unknown), inf if never occupied
+    room_off_due: bool
+    occupancy_unknown: bool
+    last_evidence_at: float | None
+    zone_states: dict  # "present" | "absent" | "unknown"
     zones_present: dict
     zones_lit: dict
     people: int | None
@@ -165,47 +169,6 @@ def _off_spot(settings: Settings, fade_s: float) -> Spot:
 
 
 def derive_facts(inputs: Inputs, geometry: Geometry, settings: Settings, now: float) -> Facts:
-    occ = inputs.occupancy
-    zones_present = {
-        name: bool(obs and obs.fresh(now) and obs.data["present"]) for name, obs in
-        ((z, inputs.zones.get(z)) for z in ("desk", "sofa"))
-    }
-    room_present = bool(occ and occ.fresh(now) and occ.data["present"]) or any(zones_present.values())
-    candidates = [inputs.occupancy_last_present_at, *inputs.zone_last_present_at.values()]
-    known = [t for t in candidates if t is not None]
-    vacant_since = None if room_present else (max(known) if known else None)
-    if room_present:
-        vacant_for = 0.0
-    elif vacant_since is None:
-        vacant_for = math.inf
-    else:
-        vacant_for = max(0.0, now - vacant_since)
-
-    # A zone stays lit for zone_hold_s after it was last occupied, measured
-    # against "now" while the room is occupied and frozen at the moment the
-    # room emptied otherwise, so room_off (not the zone timer) ends the scene.
-    reference = now if room_present else vacant_since
-    zones_lit = {}
-    for name in ("desk", "sofa"):
-        last = inputs.zone_last_present_at.get(name)
-        zones_lit[name] = zones_present[name] or (
-            last is not None and reference is not None and reference - last < settings.zone_hold_s)
-
-    counts = []
-    if occ and occ.fresh(now):
-        counts.append(occ.data.get("people_count"))
-    for obs in inputs.zones.values():
-        if obs.fresh(now) and obs.data["present"]:
-            counts.append(obs.data.get("people_count"))
-    act = inputs.activity if inputs.activity and inputs.activity.fresh(now) else None
-    if act:
-        counts.append(act.data.get("person_count"))
-    pose = inputs.pose if inputs.pose and inputs.pose.fresh(now) else None
-    if pose:
-        counts.append(pose.data.get("person_count"))
-    counts = [c for c in counts if c is not None]
-    people = max(counts) if counts else None
-
     health = {}
     for component in ("jev", "deep_stack", "frigate", "camera"):
         obs = inputs.health.get(component)
@@ -215,6 +178,75 @@ def derive_facts(inputs: Inputs, geometry: Geometry, settings: Settings, now: fl
         degraded_why = "JEV offline" if inputs.health.get("jev") else "JEV not reporting"
     elif not health["deep_stack"]:
         degraded_why = "Deep stack offline" if inputs.health.get("deep_stack") else "Deep stack not reporting"
+    # Frigate reported, and is not (freshly) ok: an expired occupancy or zone
+    # input then means "unknown", not "absent" (CONTRACT "Producer notes").
+    frigate_down = inputs.health.get("frigate") is not None and not health["frigate"]
+
+    act = inputs.activity if inputs.activity and inputs.activity.fresh(now) else None
+    hint = act.data.get("zone_hint") if act else None
+    occ = inputs.occupancy
+    zone_states = {}
+    for name in ("desk", "sofa"):
+        obs = inputs.zones.get(name)
+        if obs is None:
+            zone_states[name] = "unknown"  # never reported (not drawn yet, cold start)
+        elif obs.fresh(now):
+            zone_states[name] = "present" if obs.data["present"] else "absent"
+        else:
+            zone_states[name] = "unknown" if frigate_down else "absent"
+    zones_present = {name: state == "present" for name, state in zone_states.items()}
+    # An unknown zone counts as present when JEV places the person there.
+    zones_hinted = {name: zone_states[name] == "unknown" and hint == name for name in zone_states}
+
+    occ_fresh = occ is not None and occ.fresh(now)
+    occupancy_unknown = frigate_down and not occ_fresh and not any(
+        obs.fresh(now) for obs in inputs.zones.values())
+    candidates = [inputs.occupancy_last_present_at, *inputs.zone_last_present_at.values()]
+    known = [t for t in candidates if t is not None]
+    evidence = known + ([inputs.last_person_evidence_at] if inputs.last_person_evidence_at is not None else [])
+    last_evidence_at = max(evidence) if evidence else None
+
+    if occupancy_unknown:
+        # Hold: zones stay as they were when the sensor's last word expired;
+        # room_off waits for unknown_occupancy_off_s without any person evidence.
+        room_present = False
+        vacant_since, vacant_for = None, 0.0
+        expiries = [o.expires_at for o in (occ, *inputs.zones.values()) if o is not None]
+        reference = min(now, max(expiries)) if expiries else None
+        room_off_due = last_evidence_at is None or now - last_evidence_at >= settings.unknown_occupancy_off_s
+    else:
+        room_present = bool(occ_fresh and occ.data["present"]) or any(zones_present.values())
+        vacant_since = None if room_present else (max(known) if known else None)
+        if room_present:
+            vacant_for = 0.0
+        elif vacant_since is None:
+            vacant_for = math.inf
+        else:
+            vacant_for = max(0.0, now - vacant_since)
+        # A zone stays lit for zone_hold_s after it was last occupied, measured
+        # against "now" while the room is occupied and frozen at the moment the
+        # room emptied otherwise, so room_off (not the zone timer) ends the scene.
+        reference = now if room_present else vacant_since
+        room_off_due = vacant_for >= settings.room_off_after_s
+    zones_lit = {}
+    for name in ("desk", "sofa"):
+        last = inputs.zone_last_present_at.get(name)
+        zones_lit[name] = zones_present[name] or (zones_hinted[name] and (room_present or occupancy_unknown)) or (
+            last is not None and reference is not None and reference - last < settings.zone_hold_s)
+
+    counts = []
+    if occ and occ.fresh(now):
+        counts.append(occ.data.get("people_count"))
+    for obs in inputs.zones.values():
+        if obs.fresh(now) and obs.data["present"]:
+            counts.append(obs.data.get("people_count"))
+    if act:
+        counts.append(act.data.get("person_count"))
+    pose = inputs.pose if inputs.pose and inputs.pose.fresh(now) else None
+    if pose:
+        counts.append(pose.data.get("person_count"))
+    counts = [c for c in counts if c is not None]
+    people = max(counts) if counts else None
 
     run = inputs.reading
     reading_now = bool(act and act.data["label"] == "reading" and run and run.ended_at is None)
@@ -236,9 +268,11 @@ def derive_facts(inputs: Inputs, geometry: Geometry, settings: Settings, now: fl
     if pose is None:
         reader_why = "Pose stale"
     else:
+        # The people-count rule uses person_count; this only needs one placed
+        # person to aim at (AL-3 projects at most one today).
         people_posed = pose.data["people"]
         if len(people_posed) != 1:
-            reader_why = "Pose needs exactly one person"
+            reader_why = "Pose has no placed person" if not people_posed else "Pose needs exactly one person"
         else:
             person = people_posed[0]
             reader, problem = place_reader(person["shoulders_m"].get("left"), person["shoulders_m"].get("right"),
@@ -257,7 +291,8 @@ def derive_facts(inputs: Inputs, geometry: Geometry, settings: Settings, now: fl
     usd = [c[2] for c in window if c[2] is not None]
     return Facts(
         now=now, room_present=room_present, vacant_since=vacant_since, vacant_for=vacant_for,
-        zones_present=zones_present, zones_lit=zones_lit, people=people, night=settings.is_night(now),
+        room_off_due=room_off_due, occupancy_unknown=occupancy_unknown, last_evidence_at=last_evidence_at,
+        zone_states=zone_states, zones_present=zones_present, zones_lit=zones_lit, people=people, night=settings.is_night(now),
         health=health, degraded_why=degraded_why,
         activity_label=act.data["label"] if act else None,
         activity_confidence=act.data.get("confidence") if act else None,
@@ -276,14 +311,18 @@ def derive_facts(inputs: Inputs, geometry: Geometry, settings: Settings, now: fl
 
 def rule_room_off(facts: Facts, work: Work, ctx: Context) -> None:
     s = ctx.settings
-    if facts.vacant_for < s.room_off_after_s:
+    if not facts.room_off_due:
         return
     for fid in work.ambient:
         work.ambient[fid] = _off_ambient(s.room_off_fade_s, s.ambient_cct_k)
         work.spot[fid] = _off_spot(s, s.room_off_fade_s)
         work.ambient_rule[fid] = work.spot_rule[fid] = "room_off"
-    why = (f"Room empty for {_duration(s.room_off_after_s)} · all off"
-           if math.isfinite(facts.vacant_for) else "Room empty · all off")
+    if facts.occupancy_unknown and facts.last_evidence_at is not None:
+        why = f"No one seen for {_duration(s.unknown_occupancy_off_s)} · all off"
+    elif math.isfinite(facts.vacant_for) and not facts.occupancy_unknown:
+        why = f"Room empty for {_duration(s.room_off_after_s)} · all off"
+    else:
+        why = "Room empty · all off"
     work.mode, work.mode_rule, work.why, work.halted = "off", "room_off", why, True
     work.rule_whys["room_off"] = why
 
@@ -315,20 +354,40 @@ def rule_zone_ambient(facts: Facts, work: Work, ctx: Context) -> None:
     work.rule_whys["zone_ambient"] = why
 
 
+SENSOR_HOLD_WHY = "Occupancy sensor offline · holding"
+
+
 def rule_degraded_ambient(facts: Facts, work: Work, ctx: Context) -> None:
-    if work.halted or facts.degraded_why is None:
+    if work.halted:
         return
-    why = f"{facts.degraded_why} · ambient only"
-    work.spot_block = ("degraded_ambient", why)
-    work.rule_whys["degraded_ambient"] = why
-    if work.mode != "off":
-        work.mode, work.mode_rule, work.why = "degraded_ambient", "degraded_ambient", why
+    if facts.degraded_why is not None:
+        why = f"{facts.degraded_why} · ambient only"
+        work.spot_block = ("degraded_ambient", why)
+        work.rule_whys["degraded_ambient"] = why
+        if work.mode != "off":
+            work.mode, work.mode_rule, work.why = "degraded_ambient", "degraded_ambient", why
+    if facts.occupancy_unknown:
+        # Hold what was lit; a spot already on may stay (while its reading
+        # preconditions hold) but no new spot starts without the sensor.
+        work.rule_whys["degraded_ambient"] = SENSOR_HOLD_WHY
+        work.mode, work.mode_rule, work.why = "degraded_ambient", "degraded_ambient", SENSOR_HOLD_WHY
+        previous = ctx.previous.spot_fixture if ctx.previous else None
+        if previous is None and work.spot_block is None:
+            work.spot_block = ("degraded_ambient", SENSOR_HOLD_WHY)
 
 
 def _spot_precondition(facts: Facts, ctx: Context) -> str | None:
     """First reading_spot_on precondition that fails, as a short why."""
-    if not facts.zones_present.get("sofa"):
+    sofa = facts.zone_states.get("sofa")
+    if sofa == "absent":
         return "No one at sofa"
+    if sofa == "unknown":
+        # Unknown, not absent: JEV's zone hint, or (with no hint) the pose
+        # seat check below, has to place the reader on the sofa.
+        seat = ctx.geometry.zones.get("sofa")
+        if facts.activity_zone_hint not in ("sofa", None) or (
+                facts.activity_zone_hint is None and (seat is None or seat.seat_m is None)):
+            return "Sofa zone unknown"
     if facts.people is None:
         return "People count unknown"
     if facts.people >= 2:
@@ -367,10 +426,12 @@ def rule_reading_spot_on(facts: Facts, work: Work, ctx: Context) -> None:
     target = tuple(round(v, 3) for v in target)
     work.spot[plan.fixture_id] = Spot(True, s.spot_level, s.spot_cct_k, target, s.spot_fade_s)
     work.spot_rule[plan.fixture_id] = "reading_spot_on"
+    work.rule_whys["reading_spot_on"] = f"Reading at sofa · spotlight on from {short_name(plan.fixture_id)}"
+    if facts.occupancy_unknown:
+        return  # keep the sensor-offline mode and why
     holding = facts.activity_label != "reading"
     why = "Reading at sofa · spotlight holding" if holding else "Reading at sofa · spotlight on"
     work.mode, work.mode_rule, work.why = "reading", "reading_spot_on", why
-    work.rule_whys["reading_spot_on"] = f"Reading at sofa · spotlight on from {short_name(plan.fixture_id)}"
 
 
 def rule_reading_spot_off(facts: Facts, work: Work, ctx: Context) -> None:
@@ -406,9 +467,11 @@ def rule_manual_pause(facts: Facts, work: Work, ctx: Context) -> None:
 
 
 RULES: tuple[Rule, ...] = (
-    Rule("room_off", "no occupancy for room_off_after_s", rule_room_off),
+    Rule("room_off", "no occupancy for room_off_after_s (unknown occupancy: no person evidence for "
+                     "unknown_occupancy_off_s)", rule_room_off),
     Rule("zone_ambient", "zone present (held zone_hold_s); night window lowers level/CCT", rule_zone_ambient),
-    Rule("degraded_ambient", "JEV or deep stack unhealthy or stale: ambient only", rule_degraded_ambient),
+    Rule("degraded_ambient", "JEV or deep stack unhealthy or stale: ambient only; occupancy unknown "
+                             "(Frigate down): hold", rule_degraded_ambient),
     Rule("reading_spot_on", "reading held >= reading_hold_on_s, sofa, one person, healthy, fresh pose", rule_reading_spot_on),
     Rule("reading_spot_off", "no reading for reading_off_after_s, or any precondition lost", rule_reading_spot_off),
     Rule("manual_pause", "override: fixture untouched until the room empties or pause_max_s", rule_manual_pause),

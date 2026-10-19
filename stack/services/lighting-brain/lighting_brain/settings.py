@@ -26,6 +26,10 @@ class Settings:
     # room_off
     room_off_after_s: float = 120.0
     room_off_fade_s: float = 3.0
+    # Occupancy is unknown (not absent) when it expires while Frigate reports
+    # unhealthy: hold, and turn off only after this long with no person
+    # evidence from any source.
+    unknown_occupancy_off_s: float = 1800.0
 
     # zone_ambient
     ambient_level: float = 0.30

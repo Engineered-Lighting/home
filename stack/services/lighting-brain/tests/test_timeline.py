@@ -24,6 +24,8 @@ class World:
     jev_ok: bool = True
     deep_ok: bool = True
     bridge_up: bool = True
+    frigate_ok: bool = True  # AL-2: when False, only health frigate ok:false is sent
+    jev_detail: str | None = None
     jetson_up: bool = True
     events_delay_s: float = 0.0  # network/producer lag: observed_at = now - delay
 
@@ -49,7 +51,10 @@ class Replay:
         w, t = self.world, self.clock()
         obs = t - w.events_delay_s
         events = []
-        if w.bridge_up:
+        if w.bridge_up and not w.frigate_ok:
+            if self._due("health:frigate", 60, False):
+                events.append(health(obs, "frigate", ok=False, detail="frigate_unreachable"))
+        elif w.bridge_up:
             people = w.people if w.present else 0
             if self._due("occupancy", 30, (w.present, people)):
                 events.append(occupancy(obs, w.present, people))
@@ -62,7 +67,8 @@ class Replay:
         if w.jetson_up:
             for comp, ok in (("jev", w.jev_ok), ("deep_stack", w.deep_ok), ("camera", True)):
                 if self._due(f"health:{comp}", 60, ok):
-                    events.append(health(obs, comp, ok))
+                    detail = w.jev_detail if comp == "jev" and not ok else None
+                    events.append(health(obs, comp, ok, detail=detail))
             if w.present and w.deep_ok:
                 if w.jev_ok and w.label and self._due("activity", 3, w.label):
                     events.append(activity(obs, w.label, persons=w.people, zone_hint=w.zone))

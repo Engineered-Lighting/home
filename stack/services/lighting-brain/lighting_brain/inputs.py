@@ -189,6 +189,9 @@ class Inputs:
     health: dict[str, Obs] = field(default_factory=dict)
     cost: list[tuple[float, int, float | None]] = field(default_factory=list)
     latest: dict[str, float] = field(default_factory=dict)
+    # Newest activity/pose answer that saw at least one person (AL-3 evidence,
+    # independent of the Frigate bridge).
+    last_person_evidence_at: float | None = None
 
     def apply(self, event: dict, now: float, settings: Settings) -> str | None:
         """Apply one validated event. Returns why it was ignored, or None."""
@@ -212,6 +215,9 @@ class Inputs:
             return "stale"
         self.latest[key] = observed
         obs = Obs(observed, ttl, event)
+        if kind in ("activity", "person_pose") and (event.get("person_count") or 0) >= 1:
+            last = self.last_person_evidence_at
+            self.last_person_evidence_at = observed if last is None else max(last, observed)
         if kind == "occupancy":
             self.occupancy_last_present_at = _last_present(self.occupancy, obs, self.occupancy_last_present_at)
             self.occupancy = obs

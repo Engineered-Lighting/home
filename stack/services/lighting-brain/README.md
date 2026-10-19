@@ -186,9 +186,9 @@ outputs and its "why".
 
 | Rule | Condition | Output | Settings |
 |---|---|---|---|
-| `room_off` | No occupancy (room or zone) for 120 s; also at startup | All off, 3 s fade | `room_off_after_s`, `room_off_fade_s` |
+| `room_off` | No occupancy (room or zone) for 120 s; also at startup. While occupancy is unknown, it needs 30 min with no person evidence instead. | All off, 3 s fade | `room_off_after_s`, `room_off_fade_s`, `unknown_occupancy_off_s` |
 | `zone_ambient` | Zone present. It holds for `zone_hold_s` after the zone empties while the room is occupied, and freezes when the room empties so `room_off` ends the scene. | Nearby fixtures' radial and down at 0.30 / 2700 K, 2 s fade. Night (23:00–06:00 local) is 0.10 / 2200 K. | `ambient_*`, `night_*`, `zone_hold_s`, `timezone` |
-| `degraded_ambient` | The `jev` or `deep_stack` health event is not ok, has expired, or has not been received yet | Ambient only, never a spot | (health ttl) |
+| `degraded_ambient` | The `jev` or `deep_stack` health event is not ok (including `jev_egress_blocked_indeterminate`), has expired, or has not been received yet. Also: occupancy is unknown (see below). | Ambient only, never a new spot. For unknown occupancy: hold, with the why "Occupancy sensor offline · holding". | (health ttl) |
 | `reading_spot_on` | All of the conditions listed below this table | Spot at 0.8 / 3500 K, 1.5 s fade, on the hand point, from the best fixture behind and above the reader with no beam through the head | `reading_hold_on_s`, `spot_*`, `hand_*`, `head_*`, `min_behind_cos`, `max_beam_m`, `pose_seat_max_m` |
 | `reading_spot_off` | No `reading` for 10 s, or any precondition lost (which turns the spot off at once) | The spot fades out over 1.5 s | `reading_off_after_s`, `spot_fade_s` |
 | `manual_pause` | An override for a fixture | The fixture holds its last output (`paused_until` and `pause_reason` set) until the room has been empty for `room_off_after_s` or `pause_max_s` (30 min) has passed. The spot moves to the next best fixture. | `pause_max_s` |
@@ -196,12 +196,33 @@ outputs and its "why".
 `reading_spot_on` needs all of these:
 
 - JEV has said `reading` for at least 3 s, measured on `observed_at`.
-- The sofa zone is present.
+- The sofa zone is present. If the sofa zone is unknown, JEV's `zone_hint`
+  must be `sofa`, or, with no hint, the pose must pass the seat check.
 - The best known people count is exactly 1. It is the largest count across
   occupancy, zone, activity and pose.
 - The activity's `zone_hint` is not `desk`.
 - JEV and the deep stack are healthy.
 - A fresh pose has both shoulders.
+
+**Unknown, not absent** (CONTRACT "Producer notes"):
+
+- **Zone states:** a zone is `present`, `absent` or `unknown`. It is unknown
+  when it has never been reported (not drawn yet, cold start), or when its
+  event expired while Frigate is unhealthy.
+- **Unknown zones:** an unknown zone is lit when JEV's `zone_hint` names it.
+- **Unknown occupancy:** occupancy is unknown when Frigate reported
+  unhealthy (`health` `frigate` not ok or no longer fresh) and no occupancy or
+  zone event is fresh. Then the brain:
+  - holds the zone lighting as it was when the bridge's last word expired;
+  - reports `degraded_ambient` with "Occupancy sensor offline · holding";
+  - keeps a spot that was already on while its reading preconditions hold,
+    but starts no new spot;
+  - turns the room off only after `unknown_occupancy_off_s` (30 min) with no
+    person evidence. Evidence is an occupancy or zone `present`, or a fresh
+    `activity` or `person_pose` with `person_count` ≥ 1.
+- **JEV auto-release:** after `jev` `ok:false` (for example
+  `jev_egress_blocked_indeterminate`), `ok:true` lets the spot return once a
+  fresh 3 s reading hold passes.
 
 **Hand point.** The planner works from the shoulder midpoint:
 
@@ -347,5 +368,7 @@ ignored as `future`.
   The client's `at` is recorded but doesn't move the deadline.
 - **A pause set while the room is already empty** lasts the full 30 min.
   Only a vacancy that starts after the override ends it early.
+- **Unknown occupancy in the state:** `occupancy.present` is `false` and
+  `people_count` is `null`, and the why line says the sensor is offline.
 - **Room with no zone:** an occupied room with no zone lit stays off
   (`zone_ambient`: "Room occupied · no zone yet").

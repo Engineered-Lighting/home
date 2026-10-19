@@ -79,7 +79,7 @@ def event(kind, t, ttl=None, **fields):
 
 
 def occupancy(t, present=True, people=1, **kw):
-    return event("occupancy", t, present=present, people_count=people if present else 0, **kw)
+    return event("occupancy", t, present=present, people_count=people if present or people is None else 0, **kw)
 
 
 def zone(t, name="sofa", present=True, people=1, **kw):
@@ -101,8 +101,8 @@ def pose(t, people=None, count=None, **kw):
     return event("person_pose", t, people=people, person_count=len(people) if count is None else count, **kw)
 
 
-def health(t, component, ok=True, **kw):
-    return event("health", t, component=component, ok=ok, detail=None, **kw)
+def health(t, component, ok=True, detail=None, **kw):
+    return event("health", t, component=component, ok=ok, detail=detail, **kw)
 
 
 def cost(t, calls, usd=None, **kw):

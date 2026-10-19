@@ -17,6 +17,9 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
     element.setAttribute('aria-hidden', 'true');
     Object.assign(element.style, { position: 'absolute', inset: '0', overflow: 'hidden', pointerEvents: 'none' });
     const anchors = new Set();
+    // Private math scratch is consumed before calling projectWorld. Keep the
+    // world argument distinct per call so a reentrant consumer cannot mutate it.
+    const projectionScratch = new THREE.Vector3();
     let disposed = false;
     const finitePoint = point => Array.isArray(point) && point.length === 3 && point.every(Number.isFinite);
     const safely = callback => { try { callback(); } catch (_) { /* Other owners still clean up. */ } };
@@ -80,12 +83,12 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
         if (!finitePoint(point_m)) return null;
         try {
             const world = apartmentRoot.localToWorld(new THREE.Vector3(...point_m));
-            const view = world.clone().applyMatrix4(camera.matrixWorldInverse);
+            const view = projectionScratch.copy(world).applyMatrix4(camera.matrixWorldInverse);
             const depth = -view.z;
             if (![world.x, world.y, world.z, depth, camera.near, camera.far].every(Number.isFinite)
                 || camera.near < 0 || camera.far <= camera.near || depth <= 0
                 || depth < camera.near || depth > camera.far) return null;
-            const clip = world.clone().project(camera);
+            const clip = projectionScratch.copy(world).project(camera);
             if (![clip.x, clip.y, clip.z].every(Number.isFinite)
                 || Math.abs(clip.x) > 1 || Math.abs(clip.y) > 1 || clip.z < -1 || clip.z > 1) return null;
             const screen = projectWorld(world);

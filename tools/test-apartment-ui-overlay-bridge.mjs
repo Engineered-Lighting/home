@@ -214,3 +214,117 @@ test('one failed anchor update hides only that anchor while sibling presentation
   assert.equal(failed.hidden, true); assert.equal(current.hidden, false); assert.equal(current.style.left, '440px');
   assert.equal(f.state.disposed, 0); f.layer.dispose();
 });
+
+function projectionWorkFixture() {
+  const work = { allocations: 0, clones: 0, viewports: 0, ownerChecks: 0, projections: 0 };
+  class ObservedVector3 extends THREE.Vector3 {
+    constructor(...args) { super(...args); work.allocations++; }
+    clone() { work.clones++; return super.clone(); }
+  }
+  let f;
+  f = fixture({
+    THREE: { ...THREE, Vector3: ObservedVector3 },
+    isCurrent: () => { work.ownerChecks++; return f ? f.state.current : true; },
+    projectWorld: world => {
+      work.projections++;
+      // Observer math uses the original Three class: it does not contribute
+      // to the leaf's constructor/clone counts or mutate the callback input.
+      const point = new THREE.Vector3().copy(world).project(f.camera);
+      return { x: (point.x * .5 + .5) * f.host.clientWidth,
+        y: (-point.y * .5 + .5) * f.host.clientHeight, visible: true };
+    },
+  });
+  const bounds = f.host.getBoundingClientRect.bind(f.host);
+  f.host.getBoundingClientRect = () => { work.viewports++; return bounds(); };
+  return { ...f, work, resetWork() { for (const key of Object.keys(work)) work[key] = 0; } };
+}
+
+for (const count of [0, 1, 4]) {
+  test(`steady ${count}-anchor update keeps lifetime admissions and allocates only callback-owned world vectors`, t => {
+    const f = projectionWorkFixture();
+    for (let index = 0; index < count; index++) {
+      assert.ok(f.layer.addAnchor({ point_m: [index * .1, 0, 0], label: `Authored ${index}` }));
+    }
+    f.resetWork();
+    assert.equal(f.layer.update(), true);
+    const measured = { ...f.work };
+    t.diagnostic(JSON.stringify({ anchors: count, ...measured }));
+    // Empty layers still check authority/visibility; occupied layers retain
+    // their before-projection, after-callback and after-write admissions.
+    assert.equal(measured.viewports, count ? 3 : 1);
+    assert.equal(measured.ownerChecks, count ? 3 : 1);
+    assert.equal(measured.projections, count);
+    assert.equal(measured.allocations, count, 'depth and clip math must reuse private scratch, while each callback receives its own world vector');
+    assert.equal(measured.clones, 0, 'projection math must not create transient depth/clip vector clones');
+    f.layer.dispose();
+  });
+}
+
+test('nested projection keeps outer math and each callback world vector independent and stable', () => {
+  let f, nest = false, nested;
+  const received = [];
+  f = fixture({ projectWorld: world => {
+    received.push({ world, expected: world.toArray() });
+    if (nest) { nest = false; nested = f.layer.project([1, .5, 0]); }
+    const point = new THREE.Vector3().copy(world).project(f.camera);
+    return { x: (point.x * .5 + .5) * f.host.clientWidth,
+      y: (-point.y * .5 + .5) * f.host.clientHeight, visible: true };
+  } });
+  nest = true;
+  const outer = f.layer.project([0, 0, 0]);
+  assert.deepEqual(outer, { x: 400, y: 300, visible: true });
+  const expected = new THREE.Vector3(1, .5, 0).project(f.camera);
+  close(nested.x, (expected.x * .5 + .5) * 800);
+  close(nested.y, (-expected.y * .5 + .5) * 600);
+  assert.equal(received.length, 2);
+  assert.notEqual(received[0].world, received[1].world);
+  for (const item of received) assert.deepEqual(item.world.toArray(), item.expected);
+  // A later call must not reuse and overwrite an earlier callback argument.
+  f.layer.project([-.5, -.5, 0]);
+  for (const item of received) assert.deepEqual(item.world.toArray(), item.expected);
+  f.layer.dispose();
+});
+
+for (const [name, mutate] of [
+  ['hidden host', f => { f.host.hidden = true; }],
+  ['inert host', f => { f.host.inert = true; }],
+  ['disconnected host', f => { f.host.remove(); }],
+  ['zero-width host', f => { f.host.clientWidth = 0; }],
+  ['zero-height host', f => { f.host.clientHeight = 0; }],
+  ['host without layout boxes', f => { f.host.getClientRects = () => []; }],
+  ['retired owner', f => { f.state.current = false; }],
+]) {
+  test(`projection callback ${name} change retires before any anchor can be revived`, () => {
+    let f, armed = false;
+    f = fixture({ projectWorld: world => {
+      const point = new THREE.Vector3().copy(world).project(f.camera);
+      if (armed) mutate(f);
+      return { x: (point.x * .5 + .5) * 800, y: (-point.y * .5 + .5) * 600, visible: true };
+    } });
+    const anchor = f.layer.addAnchor({ point_m: [0, 0, 0], label: 'Before callback mutation' });
+    assert.ok(anchor);
+    armed = true;
+    assert.equal(f.layer.update(), false);
+    assert.equal(f.host.children.length, 0);
+    assert.equal(f.layer.group.parent, null);
+    assert.equal(f.state.disposed, 1);
+    assert.equal(anchor.update({ label: 'Late update' }), false);
+    assert.equal(f.layer.project([0, 0, 0]), null);
+    assert.equal(f.layer.dispose(), false);
+  });
+}
+
+test('positive host resize during projection stays live and the next call uses current dimensions', () => {
+  let f, resize = false;
+  f = fixture({ projectWorld: world => {
+    if (resize) { resize = false; f.host.clientWidth = 640; f.host.clientHeight = 480; }
+    const point = new THREE.Vector3().copy(world).project(f.camera);
+    return { x: (point.x * .5 + .5) * f.host.clientWidth,
+      y: (-point.y * .5 + .5) * f.host.clientHeight, visible: true };
+  } });
+  resize = true;
+  assert.deepEqual(f.layer.project([0, 0, 0]), { x: 320, y: 240, visible: true });
+  assert.equal(f.state.disposed, 0);
+  assert.deepEqual(f.layer.project([0, 0, 0]), { x: 320, y: 240, visible: true });
+  f.layer.dispose();
+});

@@ -45,9 +45,33 @@ and the single-variable display-off probe. Focused bridge timings do not clear
 the retained failed full-scene performance qualification or establish composited
 pixel quality; F01 remains partial and the PR remains in draft.
 
-## Sources and receipts
+## Allocation correction and measurement follow-up
 
-The final candidate's exact source SHA-256 values are:
+The follow-up leaf correction reuses one private `Vector3` for depth and clip
+math. A distinct world vector still reaches every projection callback, including
+nested calls. The exact per-update bridge allocations for zero, one and four
+anchors change from 0/3/12 to 0/1/4, plus one scratch vector per layer. This does
+not claim zero allocations or isolate whole-renderer CPU/GPU cost.
+
+All viewport/currentness checks retain their placement. The original 24 focused
+tests remain, with 12 additional checks for allocation count, nested callback
+arguments, callback-triggered host/owner retirement and resize. The unchanged
+leaf failed the two allocation targets; the corrected leaf passes all 36.
+Engine and picking bytes remain unchanged. Corrected leaf SHA-256:
+`f56bdc8d346923dd92a29892d71615ae0e429f6ffaf1e13c7aa9042c1f4d3c7e`.
+
+The historical timing comparison below has two observation limitations: only
+active anchors carried draw observers and an extra projection at stats time,
+and adjacent 500 ms stats events could share the same 120-frame ring. A separate
+matched desktop diagnostic therefore uses identical observers in every
+condition, disjoint production-stat rings and one/four-anchor cases. Its draw
+and projection witnesses sit outside timing. All raw source-paired results,
+including failures, must remain available; allocation tests alone do not clear
+the outstanding full-scene frame-cost acceptance.
+
+## Historical sources and receipts
+
+The historical candidate's exact source SHA-256 values were:
 
 | Source | SHA-256 |
 | --- | --- |

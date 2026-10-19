@@ -63,7 +63,7 @@ async function mounted({owned=false,emitOnStart=true}={}){
   vm.runInContext(Babel.transform(fs.readFileSync(path.join(SRC,'home-apartment-den-perception.jsx'),'utf8'),{presets:['react']}).code,dom.getInternalVMContext());
   const {createRoot}=require('react-dom/client'),root=createRoot(w.document.getElementById('root'));
   // The fixed-desk preview is retired in Home (AL-4); this suite keeps its opt-in path covered.
-  const props={engine,source,loadLayer:async()=>({attachApartmentPerceptionLayer:()=>layer}),
+  const props={engine,source,legacyDeskAimPreview:true,loadLayer:async()=>({attachApartmentPerceptionLayer:()=>layer}),
     onAimPreviewController:(c,mounted)=>registration.push({controller:c,mounted}),onAimPreviewChange:(e,state)=>changes.push({engine:e,state:copy(state)})};
   let unmounted=false;
   const render=async active=>{await React.act(async()=>{root.render(React.createElement(w.HomeApartmentDenPerception,{...props,active}));await pause();});};
@@ -147,7 +147,7 @@ test('actual parent manual controls/history/gesture/desk selection take over bef
     const ref={current:{manualTakeover(reason){log.push('takeover:'+reason);return c.manualTakeover(reason);}}};
     const ctx={engineRef:{current:engine},denDeskAimPreviewRef:ref,virtualFixtureDocument:{binding,revision:2,digest:hash('e')},
       selectedVirtualFixture:{fixture_id:'fixture-0'},virtualFixtureItems:[{fixture_id:'fixture-0'}],directionalViewRef:{current:null},phase:'ready',workspaceAuthorityRef:{current:{key:'authority'}},apartmentAuthorityKey:'authority',
-      syncVirtualFixturePreview:()=>log.push('sync'),setVirtualAimNotice:()=>{},setVirtualFixtureId:()=>{},setVirtualAimHistoryVersion:()=>{},
+      syncVirtualFixturePreview:()=>log.push('sync'),setVirtualAimNotice:()=>{},releaseFixtureForHandChange:(id,{reason})=>log.push('release:'+reason),setVirtualFixtureId:()=>{},setVirtualAimHistoryVersion:()=>{},
       virtualFixtureBindingKey:'fixture-binding',virtualAimHistoryRef:{current:{undo:[{binding:'fixture-binding',fixture_id:'fixture-0',before:copy(f.before[0]),after:copy(f.before[0])}],redo:[]}}};
     try{
       if(kind==='control'){

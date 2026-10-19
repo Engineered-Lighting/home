@@ -60,7 +60,7 @@
   }
 
   function HomeApartmentDenPerception({engine,active=true,mobile=false,source:injectedSource,
-    loadLayer=defaultLayer,onReturnToHome,onAimPreviewController,onAimPreviewChange}){
+    loadLayer=defaultLayer,onReturnToHome,onAimPreviewController,onAimPreviewChange,legacyDeskAimPreview=false}){
     const source=injectedSource||global.HomeApartmentPerceptionSource;
     const [expanded,setExpanded]=useState(false),[sessions,setSessions]=useState([]),[sessionId,setSessionId]=useState(''),
       [arm,setArm]=useState('B'),[notice,setNotice]=useState(''),[discovering,setDiscovering]=useState(false),
@@ -163,7 +163,8 @@
         const scopedSource={subscribe:args=>source.subscribe({...args,arm:selectedArm,previewArmed:()=>aimArmedRef.current===true}),sampleClock:()=>source.sampleClock(),
           readFrame:(frame,options)=>source.readFrame(frame,options)};
         const collisionDigest=global.HomeContentPacks?.get?.(identity.siteId,identity.contentRevision)?.manifest?.assets?.['collision.glb']?.sha256||null;
-        if(global.HomeApartmentDeskAimPreview?.create&&global.HomeApartmentAiming?.solveAim&&engine.overlay){
+        // Retired by the lighting brain (AL-4): the fixed-desk preview runs only when explicitly opted in.
+        if(legacyDeskAimPreview&&global.HomeApartmentDeskAimPreview?.create&&global.HomeApartmentAiming?.solveAim&&engine.overlay){
           try{
             const current=()=>token===generationRef.current&&engineRef.current===engine;
             const committed=()=>(engine.apartmentRoot?.children||[]).some(group=>group.visible!==false&&
@@ -280,7 +281,9 @@
         <div role="status" aria-live="polite" style={{...note,marginTop:8}}>{words(state?.connection||'disconnected')}{state?.reason?` · ${words(state.reason)}`:''}</div>
         {state?.mediaReason && state.mediaReason !== state.reason && <div role="status" style={note}>{words(state.mediaReason)} · waiting for the next analyzed frame</div>}
         {notice&&<p role="status" style={note}>{notice}</p>}
-        <section aria-label="Virtual desk aim preview" data-desk-aim-preview="1" style={{marginTop:10,paddingTop:8,borderTop:'1px solid #35404a'}}>
+        {!legacyDeskAimPreview&&<p data-desk-aim-preview-retired="1" style={{...note,marginTop:10,paddingTop:8,borderTop:'1px solid #35404a'}}>
+          The den's virtual fixtures follow the lighting brain. See Virtual spotlights for why each light changed.</p>}
+        {legacyDeskAimPreview&&<section aria-label="Virtual desk aim preview" data-desk-aim-preview="1" style={{marginTop:10,paddingTop:8,borderTop:'1px solid #35404a'}}>
           <strong>Virtual desk aim preview</strong>
           <p style={note}>One visible person and your configured desk. Approximate placement; virtual controls only.</p>
           <button type="button" style={button} aria-pressed={aimPreview.enabled===true}
@@ -294,7 +297,7 @@
           </div>
           {aimPreview.enabled===true&&aimPreview.policy==='development'&&<div data-desk-preview-development="1" style={note}>
             Development timing · strict limits deferred · {aimPreview.warningsRecorded||0} warnings recorded</div>}
-        </section>
+        </section>}
         {!sessions.length&&onReturnToHome&&<button type="button" style={button} onClick={()=>{close();onReturnToHome();}}>Back to Home / Perception Lab</button>}
         <div style={{position:'relative',marginTop:10,background:'#05090c',aspectRatio:frame?`${frame.width} / ${frame.height}`:'16 / 9'}}>
           {state?.imageUrl&&frame?<><img src={state.imageUrl} alt={`Analyzed Den camera frame ${frame.frame_id}`} style={{display:'block',width:'100%',height:'100%',objectFit:'contain'}}/>

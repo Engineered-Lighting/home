@@ -17,6 +17,12 @@ import { installPack, authoredDocument } from './fixtures/apartment-home-shell-f
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), SRC = path.join(ROOT, 'app/src');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+// Software GL compiles the 32-light lit shader slowly; these waits cover that.
+const LIT_WAIT_MS = 45000;
+// The touched-harness runner keeps only the last lines of output, so a
+// failure is repeated after the test summary.
+let failureSummary = null;
+process.on('exit', () => { if (failureSummary) console.log('Lit browser failure: ' + failureSummary); });
 
 function publicSources(root) {
   const result = new Map(), excluded = new Set(['node_modules', 'data', 'artifacts', 'private', 'recordings', 'logs']);
@@ -159,7 +165,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
 
     // Mesh unlit: the baseline.
     await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
-    await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'mesh' && !!window.__APT_ENGINE.modes.getMesh());
+    await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'mesh' && !!window.__APT_ENGINE.modes.getMesh(), null, { timeout: LIT_WAIT_MS });
     await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0)); await frames(6);
     const before = await page.evaluate(() => {
       const engine = window.__APT_ENGINE, rows = [];
@@ -171,7 +177,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
 
     // Lit on.
     await litButton.click();
-    await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true);
+    await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: LIT_WAIT_MS });
     await frames(6);
     assert.equal(await litButton.getAttribute('aria-pressed'), 'true');
     assert.equal(await page.getByRole('button', { name: 'Mesh view', exact: true }).getAttribute('aria-pressed'), 'false', 'Lit, not Mesh, reads as the current view');
@@ -201,14 +207,14 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     // Light follows the channels: all spots, downs and zones off darkens the room.
     const ids = await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.map(item => item.fixture_id));
     await page.getByRole('button', { name: 'All off', exact: true }).click().catch(() => {});
-    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item => !item.state.spotlight.on && !item.state.downward.on));
+    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item => !item.state.spotlight.on && !item.state.downward.on), null, { timeout: LIT_WAIT_MS });
     await frames(6);
     const darkLuma = await meanLuma();
     const darkLights = await page.evaluate(() => { let sum = 0; window.__APT_ENGINE.scene.traverse(node => { if (node.isSpotLight && node.userData.lit_source) sum += node.intensity; }); return sum; });
     assert.equal(darkLights, 0, 'every simulated light follows its channel off');
     assert.ok(darkLuma < litLuma - 1, 'turning the fixtures off darkens the Lit room: ' + litLuma + ' -> ' + darkLuma);
     await page.getByRole('button', { name: 'All on', exact: true }).click().catch(() => {});
-    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item => item.state.spotlight.on));
+    await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item => item.state.spotlight.on), null, { timeout: LIT_WAIT_MS });
     await frames(6);
     const litTiming = await timing();
     // Opt-in stills for visual review; never part of the pass criteria.
@@ -217,7 +223,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
       await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
       await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false); await frames(6);
       await page.screenshot({ path: path.join(run, 'mesh-1366.png') });
-      await litButton.click(); await page.waitForFunction(() => window.__APT_ENGINE.litState().active === true); await frames(6);
+      await litButton.click(); await page.waitForFunction(() => window.__APT_ENGINE.litState().active === true, null, { timeout: LIT_WAIT_MS }); await frames(6);
     }
     check('lit_on_relights_mesh', { lights: lit.state.lights, shadow_lights: lit.state.shadowLights, luma: { unlit: unlitLuma, lit: litLuma, all_off: darkLuma }, fixtures: ids.length });
     receipt.performance = { note: 'descriptive only; headless browser on this machine is not the owner laptop', unlit_mesh: unlitTiming, lit: litTiming,
@@ -228,7 +234,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false);
     assert.equal(await page.evaluate(() => window.__APT_ENGINE.modes.mode), 'mesh');
     assert.equal(await note.count(), 0, 'the disclosure leaves with Lit');
-    await litButton.click(); await page.waitForFunction(() => window.__APT_ENGINE.litState().active === true);
+    await litButton.click(); await page.waitForFunction(() => window.__APT_ENGINE.litState().active === true, null, { timeout: LIT_WAIT_MS });
     await page.getByRole('button', { name: 'Cloud view', exact: true }).click();
     await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'points' && window.__APT_ENGINE.litState().active === false);
     const after = await page.evaluate(() => {
@@ -251,6 +257,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
   }
   try { await Promise.race([proof(), deadline]); }
   catch (error) {
+    failureSummary = String(error.message).split(String.fromCharCode(10)).slice(0, 3).join(' | ').slice(0, 600);
     receipt.failure = error.message;
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nLit failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });

@@ -838,7 +838,12 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     .catch((e) => ({ mode: 'splat', ok: false, error: String(e?.message || e) })));
             }
             if (list.includes('mesh') && !state.mesh) {
-                jobs.push(loadMesh()
+                // A background mesh preload yields to an in-flight Photo splat
+                // so the two large downloads never share the link; Photo then
+                // requests its own floor mesh, which this joins.
+                const afterSplat = splatLoading ? splatLoading.then(() => {}, () => {}) : Promise.resolve();
+                jobs.push(afterSplat
+                    .then(() => { assertLive(); return state.mesh || loadMesh(); })
                     .then(() => ({ mode: 'mesh', ok: true }))
                     .catch((e) => ({ mode: 'mesh', ok: false, error: String(e?.message || e) })));
             }

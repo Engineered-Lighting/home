@@ -244,6 +244,20 @@
     });
   }
 
+  // A resident engine loading the Photo splat owns the link; the mesh warm
+  // waits for that load to settle instead of competing with it.
+  function waitForSplatIdle(signal, timeoutMs = 120000) {
+    const loading = () => window.__APT_ENGINE?.modes?.debugInfo?.()?.loadStatus?.splat === "loading";
+    if (!loading()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (signal?.aborted) { clearInterval(timer); reject(signal.reason || new DOMException("aborted", "AbortError")); return; }
+        if (!loading() || Date.now() - started >= timeoutMs) { clearInterval(timer); resolve(); }
+      }, 500);
+    });
+  }
+
   async function warmOneOf(group, signal, scope, engineModule, isCurrent) {
     if (group === CLOUD_ASSETS[0] && residentCloudLoaded(scope)) {
       const skipped = { label: group.label, skipped: "resident engine owns the point cloud" };
@@ -373,6 +387,10 @@
             await deferLargeGroup(ownController.signal);
             if (!isCurrent()) return;
           }
+          if (group.label === "mesh") {
+            await waitForSplatIdle(ownController.signal);
+            if (!isCurrent()) return;
+          }
           await warmOneOf(group, ownController.signal, scope, engineModule, isCurrent);
         }
         if (!isCurrent()) return;
@@ -433,7 +451,12 @@
         setTimeout(waitForBoot, 500);
         return;
       }
-      idle(() => start({ mode: "full", reason: "post-boot" }), window.HG_WEB_MODE ? 1800 : 5000);
+      // Honour a saved prewarm preference; "full" stays the default.
+      let saved = null;
+      try { saved = localStorage.getItem(MODE_KEY); } catch (_) { /* optional preference storage */ }
+      const mode = VALID_MODES.has(saved) ? saved : "full";
+      if (mode === "off") return;
+      idle(() => start({ mode, reason: "post-boot" }), window.HG_WEB_MODE ? 1800 : 5000);
     };
     setTimeout(waitForBoot, window.HG_WEB_MODE ? 350 : 2500);
   }

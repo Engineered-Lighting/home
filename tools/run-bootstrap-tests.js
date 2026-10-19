@@ -16,6 +16,7 @@ const AUDIT = path.join(REPO, "tools", "qa-registry-audit.py");
 const indexSource = fs.readFileSync(INDEX, "utf8");
 const runtimeSource = fs.readFileSync(path.join(SRC_DIR, "home-web-runtime.js"), "utf8");
 const featureLoaderSource = fs.readFileSync(path.join(SRC_DIR, "home-feature-loader.js"), "utf8");
+const precompiledJsxSource = fs.readFileSync(path.join(SRC_DIR, "home-precompiled-jsx.js"), "utf8");
 const serviceWorkerSource = fs.readFileSync(path.join(SRC_DIR, "home-service-worker.js"), "utf8");
 const mountSource = fs.readFileSync(MOUNT, "utf8");
 const appSource = fs.readFileSync(HOME_APP, "utf8");
@@ -155,9 +156,20 @@ assert("web runtime and service resolver load before ordered boot chain",
 assert("React and Babel runtime libraries are served locally for travel startup",
   indexSource.includes("./vendor/react-18.3.1/react.production.min.js") &&
     indexSource.includes("./vendor/react-18.3.1/react-dom.production.min.js") &&
-    indexSource.includes("./vendor/babel-7.29.0/babel.min.js") &&
+    precompiledJsxSource.includes('BABEL_SRC = "./vendor/babel-7.29.0/babel.min.js"') &&
     !indexSource.includes("https://unpkg.com/react@") &&
-    !indexSource.includes("https://unpkg.com/@babel/standalone@"),
+    !indexSource.includes("https://unpkg.com/@babel/standalone@") &&
+    !precompiledJsxSource.includes("https://"),
+  staticScripts);
+assert("Babel is loaded on demand, only for JSX that is not precompiled",
+  !staticScripts.some((src) => src.includes("babel")) &&
+    staticScripts.includes("home-precompiled-jsx.js") &&
+    indexSource.indexOf("./home-precompiled-jsx.js") < indexSource.indexOf("var files =") &&
+    indexSource.includes("precompiledJsx.fetchJsx(name,") &&
+    indexSource.includes("precompiledJsx.ensureBabel()") &&
+    featureLoaderSource.includes("precompiledJsx.fetchJsx(name,") &&
+    featureLoaderSource.includes("await precompiledJsx.ensureBabel()") &&
+    !/Babel\.transform\(/.test(indexSource) && !/Babel\.transform\(/.test(featureLoaderSource),
   staticScripts);
 assert("all JSX boot entries run through Babel",
   entries.filter((entry) => entry.name.endsWith(".jsx")).every((entry) => entry.babel),

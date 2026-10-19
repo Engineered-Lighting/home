@@ -106,7 +106,9 @@
   </style>
   <script src="./vendor/react-18.3.1/react.production.min.js"></script>
   <script src="./vendor/react-18.3.1/react-dom.production.min.js"></script>
-  <script src="./vendor/babel-7.29.0/babel.min.js"></script>
+  <!-- Runs JSX precompiled by tools/build-app-jsx.mjs; loads Babel only for
+       files that still need compiling in the browser. -->
+  <script src="./home-precompiled-jsx.js"></script>
   <!-- 3D apartment engine: real ESM (vendored three.js + Spark via importmap;
        the Babel/window-global world stays untouched). The importmap MUST
        precede the first module script. -->
@@ -167,7 +169,7 @@
       .then((m) => window.__home3dResolve(m))
       .catch((e) => { console.error('[home-3d] engine load failed', e); window.Home3D.error = e; window.__home3dResolve(null); });
   </script>
-  <!-- Boot loader. Explicit sequential fetch -> Babel.transform -> execute,
+  <!-- Boot loader. Explicit sequential fetch -> (Babel.transform) -> execute,
        replacing Babel-standalone's automatic <script type="text/babel">
        runner. Two reasons, both observed intermittent boot failures:
 
@@ -192,10 +194,11 @@
        %LOCALAPPDATA%\com.engineeredlighting.home\EBWebView\Default\Cache
        is wiped manually.
 
-       Babel options below mirror @babel/standalone's script-tag defaults
-       exactly (presets react+env, the 3 legacy plugins, inline source
-       maps), so the executed code is identical to what the old runner
-       produced. -->
+       JSX arrives precompiled when tools/build-app-jsx.mjs has run and the
+       file is unchanged since (home-precompiled-jsx.js decides, per file);
+       anything else is compiled here with runtime Babel. Both use
+       @babel/standalone's script-tag defaults (presets react+env, the 3
+       legacy plugins), so the executed code is identical either way. -->
   <script>
     (function () {
       var cb = window.HG_WEB_MODE && window.__HOME_ASSET_VERSION
@@ -224,6 +227,7 @@
         ['home-personal-memory.js', false],
         ['home-lighting-intent.js', false],
         ['home-lighting-control.js', false],
+        ['home-apartment-chat-context.js', false],
         ['home-perception-lab-data.js', false],
         ['home-ha.jsx', true],
         ['home-icons.jsx', true],
@@ -271,8 +275,11 @@
         ['home-apartment-ui.jsx', true],
         ['home-apartment-directional.js', false],
         ['home-apartment-aim-proposals.js', false],
+        ['home-apartment-room-overlay.jsx', true],
         ['home-apartment-cards.jsx', true],
+        ['home-apartment-command-ladder.jsx', true],
         ['home-apartment-aim.jsx', true],
+        ['home-apartment-room-guide.jsx', true],
         ['home-apartment-calibrate.jsx', true],
         ['home-apartment-edit.jsx', true],
         ['home-apartment-setup.jsx', true],
@@ -302,8 +309,11 @@
         'home-apartment-ui.jsx': true,
         'home-apartment-directional.js': true,
         'home-apartment-aim-proposals.js': true,
+        'home-apartment-room-overlay.jsx': true,
         'home-apartment-cards.jsx': true,
+        'home-apartment-command-ladder.jsx': true,
         'home-apartment-aim.jsx': true,
+        'home-apartment-room-guide.jsx': true,
         'home-apartment-calibrate.jsx': true,
         'home-apartment-edit.jsx': true,
         'home-apartment-setup.jsx': true,
@@ -358,11 +368,10 @@
         'home-tauri.jsx': true,
       };
 
-      var BABEL_PLUGINS = [
-        'transform-class-properties',
-        'transform-object-rest-spread',
-        'transform-flow-strip-types',
-      ];
+      var precompiledJsx = window.HomePrecompiledJsx;
+      // Ask for the precompiled manifest once, up front and without the boot
+      // retries: a 404 only means nothing is precompiled (plain dev checkout).
+      precompiledJsx.loadManifest(function (url) { return fetchText(url + cb, 20000); });
 
       var boot = window.__bootState = {
         loaded: 0, total: files.length, current: null, failed: null, done: false,
@@ -376,6 +385,7 @@
         lazyFeaturesEnabled: lazyFeaturesEnabled,
       });
       var fetches = [];
+      var precompiled = [];
       var babelFailures = {};
       function bootProgressPct() {
         if (!boot || !boot.total) return 3;
@@ -596,8 +606,11 @@
         if (index < 0 || index >= files.length) return null;
         if (!fetches[index]) {
           var name = files[index][0];
-          fetches[index] = fetchWithRetry(name + cb, 3).then(function (text) {
-            return { ok: true, text: text };
+          var load = files[index][1]
+            ? precompiledJsx.fetchJsx(name, function (url) { return fetchWithRetry(url + cb, 3); })
+            : fetchWithRetry(name + cb, 3).then(function (text) { return { text: text }; });
+          fetches[index] = load.then(function (loaded) {
+            return { ok: true, text: loaded.text, precompiled: !!loaded.precompiled };
           }, function (err) {
             return { ok: false, err: err };
           });
@@ -614,6 +627,7 @@
         primeWindow(index);
         return primeFetch(index).then(function (result) {
           if (!result.ok) throw result.err;
+          precompiled[index] = result.precompiled;
           return result.text;
         });
       }
@@ -663,38 +677,34 @@
           if (window.__homePerf) {
             window.__homePerf.recordBootFile(name, 'fetch',
               (performance.now ? performance.now() : Date.now()) - fetchStart);
+            if (precompiled[i]) window.__homePerf.recordBootFile(name, 'precompiled', 0);
           }
-          var code = text;
-          if (isBabel) {
-            try {
-              updateBootShell('transforming', name);
-              var transformStart = performance.now ? performance.now() : Date.now();
-              code = Babel.transform(text, {
-                filename: name,
-                presets: ['react', 'env'],
-                plugins: BABEL_PLUGINS,
-                sourceMaps: 'inline',
-                sourceFileName: name,
-              }).code;
-              if (window.__homePerf) {
-                window.__homePerf.recordBootFile(name, 'transform',
-                  (performance.now ? performance.now() : Date.now()) - transformStart);
-              }
-            } catch (err) {
-              if (skipOptionalWebFile(name, err, i)) return;
-              // A transform error is usually a real syntax fault — but a
-              // truncated fetch (flaky Tailscale) is indistinguishable. Re-fetch
-              // a few times before declaring the chain dead.
-              babelFailures[name] = (babelFailures[name] || 0) + 1;
-              if (babelFailures[name] <= 3) { scheduleBootRetry(i, err); return; }
-              boot.reconnecting = false;
-              boot.failed = name;
-              overlay('Babel transform failed in ' + name +
-                ' — boot chain stopped (downstream files depend on it)',
-                String((err && err.message) || err));
-              return;
+          if (!isBabel || precompiled[i]) return text;
+          updateBootShell('transforming', name);
+          return precompiledJsx.ensureBabel().then(function () {
+            var transformStart = performance.now ? performance.now() : Date.now();
+            var compiled = precompiledJsx.transform(name, text);
+            if (window.__homePerf) {
+              window.__homePerf.recordBootFile(name, 'transform',
+                (performance.now ? performance.now() : Date.now()) - transformStart);
             }
-          }
+            return compiled;
+          }).catch(function (err) {
+            if (skipOptionalWebFile(name, err, i)) return null;
+            // A transform error is usually a real syntax fault — but a
+            // truncated fetch (flaky Tailscale) is indistinguishable. Re-fetch
+            // a few times before declaring the chain dead.
+            babelFailures[name] = (babelFailures[name] || 0) + 1;
+            if (babelFailures[name] <= 3) { scheduleBootRetry(i, err); return null; }
+            boot.reconnecting = false;
+            boot.failed = name;
+            overlay('Babel transform failed in ' + name +
+              ' — boot chain stopped (downstream files depend on it)',
+              String((err && err.message) || err));
+            return null;
+          });
+        }).then(function (code) {
+          if (code === null) return; // skipped, retrying or stopped above
           if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
           updateBootShell('executing', name);
           var executeStart = performance.now ? performance.now() : Date.now();

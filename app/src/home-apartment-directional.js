@@ -67,10 +67,12 @@
   }
   // Fixed-size tessellation is shared by the plan panel and selected SVG.
   // A caller clips off-viewport samples; invalid depth retires the drawing.
-  function radialSectorPaths({radials,frame,innerRadius=.14,outerRadius=1.3}={}) {
+  // hitMargin widens only each zone's hit path past its lit edge (plane m);
+  // the drawn contour, rings, nodes and ticks never move.
+  function radialSectorPaths({radials,frame,innerRadius=.14,outerRadius=1.3,hitMargin=0}={}) {
     const zones=zonesFrom(radials);
     if (!zones || typeof frame?.project!=='function' || !finite(innerRadius)||innerRadius<0
-        || !finite(outerRadius)||outerRadius<=innerRadius) return null;
+        || !finite(outerRadius)||outerRadius<=innerRadius||!finite(hitMargin)||hitMargin<0) return null;
     const ordered=[...zones].sort((a,b)=>a.azimuth_deg-b.azimuth_deg), span=outerRadius-innerRadius;
     const radiusAt=azimuth=>{
       const a=angle(azimuth);
@@ -94,7 +96,7 @@
     const result=ordered.map((zone,i)=>{
       const previous=ordered[(i+5)%6].azimuth_deg-(i===0?360:0),next=ordered[(i+1)%6].azimuth_deg+(i===5?360:0);
       const start=(previous+zone.azimuth_deg)/2,end=(zone.azimuth_deg+next)/2;
-      const edge=Array.from({length:13},(_,j)=>{const a=start+(end-start)*j/12;return at(radiusAt(a),a);});
+      const edge=Array.from({length:13},(_,j)=>{const a=start+(end-start)*j/12;return at(radiusAt(a)+hitMargin,a);});
       const inside=Array.from({length:13},(_,j)=>at(innerRadius,end-(end-start)*j/12));
       return {number:zone.number,azimuth_deg:zone.azimuth_deg,level:zone.level,path:path([...edge,...inside]),
         node:zone.level>0?at(innerRadius+span*zone.level,zone.azimuth_deg):null,tick:at(outerRadius,zone.azimuth_deg)};

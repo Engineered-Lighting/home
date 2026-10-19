@@ -252,3 +252,28 @@ test('qualitative temperature colors remain finite and distinguish warm from coo
   const warm = radialDisplayColor(2200), cool = radialDisplayColor(5000);
   assert.ok([...warm.toArray(), ...cool.toArray()].every(value => Number.isFinite(value) && value >= 0 && value <= 1)); assert.ok(warm.b < cool.b);
 });
+
+test('the cursor readout says Off at zero and whole percents otherwise', () => {
+  const f = fixture(); f.api.frame({ nowMs: 0 });
+  for (const [level, text] of [[0, 'Zone 3 · Off'], [.004, 'Zone 3 · Off'], [.01, 'Zone 3 · 1%'], [.5, 'Zone 3 · 50%'], [1, 'Zone 3 · 100%']]) {
+    assert.equal(f.api.pointer({ zone: 3, level, x: 12, y: 34 }, true), true);
+    assert.equal(f.elements.readout.hidden, false); assert.equal(f.elements.readout.textContent, text);
+  }
+  f.api.dispose();
+});
+
+test('composer hit paths admit a lit lobe 0.12 m past its drawn edge while the drawn shape stays exact', () => {
+  const f = fixture(); f.initial.descriptor.state.radials[1].on = false; f.state.reduced = true;
+  assert.equal(f.api.frame({ nowMs: 0 }), true);
+  const published = f.state.published.at(-1).geometry, radials = f.initial.descriptor.state.radials;
+  const drawn = D.radialSectorPaths({ radials, frame: f.frame }), wide = D.radialSectorPaths({ radials, frame: f.frame, hitMargin: .12 });
+  assert.deepEqual(published.zones.map(zone => zone.path), wide.zones.map(zone => zone.path));
+  for (const zone of published.zones) assert.equal(f.paths[zone.number - 1].getAttribute('d'), zone.path, 'native hit paths equal the published plane');
+  assert.equal(published.contour, drawn.contour); assert.deepEqual(published.hub, drawn.hub);
+  assert.notEqual(wide.zones[0].path, drawn.zones[0].path);
+  assert.equal(f.paths[0].getAttribute('data-apt-radial-start'), 'zone:1'); assert.equal(f.paths[1].getAttribute('data-apt-radial-start'), null,
+    'the margin never admits an unlit zone');
+  const position = f.scene.getObjectByName('directional-polar-fill').geometry.attributes.position;
+  close(Math.hypot(position.getX(1), position.getY(1)), .14 + .5 * 1.16, 1e-6);
+  f.api.dispose();
+});

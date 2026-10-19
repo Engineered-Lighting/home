@@ -31,6 +31,9 @@ let litSource = replaceOne(fs.readFileSync(sourceFile('lit-view.mjs'), 'utf8'), 
 litSource = replaceOne(litSource, 'import(`./lit-model.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-model.mjs')).href) + ')');
 const Lit = await import(dataModule(litSource));
 const EXPOSURE = .038;
+// Every sync lands 10 s after the last, so the 160 ms ease has settled; the
+// easing itself is proved below and in test-lit-model.mjs on a controlled clock.
+const settledClock = () => { let t = 0; return () => (t += 10000); };
 const SPEC_LUMENS = { spot: 450, down: 350, zone: 120 };
 const binding = { content_revision: 'authored-victoria-lit-r1', registration_version: 1,
   manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
@@ -45,7 +48,7 @@ function world(t) {
   const mesh = new THREE.Group(), face = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), display); mesh.add(face); root.add(mesh);
   const renderer = { shadowMap: { enabled: false, type: THREE.BasicShadowMap, autoUpdate: true, needsUpdate: false }, toneMapping: THREE.NoToneMapping };
   let current = mesh;
-  const lit = Lit.createLitView({ scene, renderer, getMesh: () => current, getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20 });
+  const lit = Lit.createLitView({ scene, renderer, getMesh: () => current, getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20, now: settledClock() });
   t.after(() => { lit.disable(); fixtures.dispose(); });
   return { scene, root, fixtures, mesh, face, display, hook, renderer, lit, setMesh: next => { current = next; } };
 }
@@ -64,7 +67,7 @@ test('the light model is renderer-independent and pure', () => {
   assert.deepEqual(lights.map(light => light.kind), ['spot', 'down', 'zone', 'zone', 'zone', 'zone', 'zone', 'zone']);
   assert.ok(lights.every(light => Math.abs(light.intensity - light.candela * Model.LIT_EXPOSURE) < 1e-12));
   assert.deepEqual(lights.map(light => light.shadow), ['crisp', 'soft', null, null, null, null, null, null]);
-  assert.ok(Math.abs(lights[1].candela - Model.candelaFromLumens(350, 1) * .5) < 1e-12);
+  assert.ok(Math.abs(lights[1].candela - Model.candelaFromLumens(350, 1) * Model.litDimmingFraction(.5)) < 1e-12);
 });
 
 test('candela comes from the assumed lumens spread over the beam angle', () => {
@@ -98,12 +101,12 @@ test('enable relights the mesh from the four fixtures with crisp spot, soft down
     assert.equal(light.shadow.mapSize.x, 1024); assert.equal(light.decay, 2);
   }
   for (const light of downs) {
-    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(350, 1) * .75 * EXPOSURE) < 1e-9);
+    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(350, 1) * Model.litDimmingFraction(.75) * EXPOSURE) < 1e-9);
     assert.equal(light.castShadow, true); assert.equal(light.shadow.radius, 6, 'soft');
   }
   for (const light of zones) {
     assert.equal(light.castShadow, false, 'each radial zone is its own unshadowed lobe');
-    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(120, .95) * .75 * EXPOSURE) < 1e-9);
+    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(120, .95) * Model.litDimmingFraction(.75) * EXPOSURE) < 1e-9);
   }
   assert.ok(all.every(light => light.userData.measured === false));
   assert.equal(w.renderer.shadowMap.enabled, true); assert.equal(w.renderer.shadowMap.type, THREE.PCFShadowMap);
@@ -127,7 +130,7 @@ test('the spot light follows the fixture exact aim, and its colour follows Kelvi
   assert.equal(w.renderer.shadowMap.needsUpdate, false);
   w.fixtures.setFixtureState(id, { spotlight: { color_temp_kelvin: 2700, brightness: .5 } }).ok || assert.fail('patch accepted'); w.lit.sync();
   const warm = Lit.kelvinColor(2700);
-  assert.ok(spot.color.equals(warm)); assert.ok(Math.abs(spot.intensity - Lit.candelaFromLumens(450, 20 * .8 * Math.PI / 180) * .5 * EXPOSURE) < 1e-9);
+  assert.ok(spot.color.equals(warm)); assert.ok(Math.abs(spot.intensity - Lit.candelaFromLumens(450, 20 * .8 * Math.PI / 180) * Model.litDimmingFraction(.5) * EXPOSURE) < 1e-9);
   w.fixtures.setFixtureState(id, { spotlight: { on: false } }); w.lit.sync();
   assert.equal(spot.intensity, 0, 'an off channel adds no light');
 });
@@ -204,7 +207,7 @@ test('one bounce: the eight strongest lit patches become hemispherical bounce li
   w.root.add(room); w.root.updateMatrixWorld(true);
   w.lit.disable();
   const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
-    getCollision: () => room, spotFwhmDeg: 20 });
+    getCollision: () => room, spotFwhmDeg: 20, now: settledClock() });
   t.after(() => lit.disable());
   const state = lit.enable();
   assert.equal(state.bounceLights, 8, 'a fixed set of eight bounce lights');
@@ -235,7 +238,7 @@ test('bounce follows the channels and drops a patch whose light is off', t => {
   const room = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
   w.root.add(room); w.root.updateMatrixWorld(true); w.lit.disable();
   const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
-    getCollision: () => room, spotFwhmDeg: 20 });
+    getCollision: () => room, spotFwhmDeg: 20, now: settledClock() });
   t.after(() => lit.disable());
   lit.enable();
   const before = lit.state().bounceSources;
@@ -261,4 +264,69 @@ test('bouncePatches (pure model) uses the assumed albedos and ignores rays that 
   assert.deepEqual(strongest.position, strongest.point.map((v, i) => v + strongest.normal[i] * .25), '0.25 m off the patch');
   assert.ok(Math.abs(strongest.intensity - strongest.reflected / Math.PI * .9 * Model.LIT_EXPOSURE) < 1e-12);
   assert.deepEqual({ ...Model.LIT_BOUNCE_ALBEDO }, { spotFlat: .35, spotVertical: .6, down: .35, zoneWall: .65, zoneOther: .4 });
+});
+
+test('Lit lights ease toward a new level on the 160 ms clock; the set level and the aim move at once', t => {
+  const w = world(t);
+  let clock = 0;
+  w.lit.disable();
+  const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
+    spotFwhmDeg: 20, now: () => clock });
+  t.after(() => lit.disable());
+  lit.enable();
+  const id = w.fixtures.readback().fixtures[0].fixture_id;
+  const spot = lit.group.children.find(light => light.isSpotLight && light.userData.lit_source === 'spot' && light.userData.fixture_id === id);
+  const peak = Lit.candelaFromLumens(450, 20 * .8 * Math.PI / 180) * EXPOSURE;
+  assert.ok(Math.abs(spot.intensity - peak) < 1e-9, 'enable shows the set level at once');
+  assert.equal(lit.state().easing, false);
+  w.fixtures.setFixtureState(id, { spotlight: { brightness: .2, color_temp_kelvin: 2700 } });
+  w.renderer.shadowMap.needsUpdate = false;
+  clock += 16; assert.equal(lit.sync(), true);
+  const target = peak * Model.litDimmingFraction(.2);
+  assert.ok(spot.intensity < peak && spot.intensity > target, 'one frame in, the light is between its old and new output');
+  assert.equal(lit.state().easing, true);
+  assert.equal(w.renderer.shadowMap.needsUpdate, false, 'an eased level re-renders the lights, never the shadow maps');
+  assert.equal(w.fixtures.readback().fixtures[0].state.spotlight.brightness, .2, 'the set level updates at once');
+  clock += 144; lit.sync();
+  const level = 1 + (.2 - 1) * (1 - Math.exp(-1));
+  assert.ok(Math.abs(spot.intensity - peak * Model.litDimmingFraction(level)) < 1e-9, 'one 160 ms time constant covers 63 % of the level change');
+  for (let i = 0; i < 120 && lit.state().easing; i++) { clock += 16; lit.sync(); }
+  assert.equal(lit.state().easing, false, 'settled');
+  assert.ok(clock <= 160 + 16 * 80, 'settled within about 1.4 s for a 0.8 level step');
+  assert.ok(Math.abs(spot.intensity - target) < 1e-9, 'and exactly on the dimmed set level');
+  assert.ok(spot.color.equals(Lit.kelvinColor(2700)), 'Kelvin eases to the same constant-luminance colour');
+  assert.equal(lit.sync(), false, 'nothing moving, nothing changes');
+  assert.equal(w.fixtures.aimAtTarget(id, { point: [1.5, 2.5, 0], normal: [0, 0, 1], kind: 'authored_floor' }).ok, true);
+  w.renderer.shadowMap.needsUpdate = false; clock += 16; lit.sync();
+  const aim = spot.target.position.clone().sub(spot.position).normalize();
+  const toTarget = w.root.localToWorld(new THREE.Vector3(1.5, 2.5, 0)).sub(spot.position).normalize();
+  assert.ok(toTarget.dot(aim) > .99999, 'the aim follows the exact metadata, not an eased drawing');
+  assert.equal(w.renderer.shadowMap.needsUpdate, true, 'a moved light re-renders the shadow maps');
+});
+
+test('reduced motion snaps Lit lights to their set level', t => {
+  const w = world(t);
+  w.lit.disable();
+  const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
+    spotFwhmDeg: 20, now: () => 0, reducedMotion: { matches: true } });
+  t.after(() => lit.disable());
+  lit.enable();
+  const id = w.fixtures.readback().fixtures[0].fixture_id;
+  w.fixtures.setFixtureState(id, { spotlight: { brightness: .3 } }); lit.sync();
+  const spot = lit.group.children.find(light => light.isSpotLight && light.userData.lit_source === 'spot' && light.userData.fixture_id === id);
+  assert.ok(Math.abs(spot.intensity - Lit.candelaFromLumens(450, 20 * .8 * Math.PI / 180) * Model.litDimmingFraction(.3) * EXPOSURE) < 1e-9);
+  assert.equal(lit.state().easing, false);
+});
+
+test('litState records the assumed lumen set with its source, under the unchanged disclosure', t => {
+  const w = world(t), state = w.lit.enable();
+  assert.deepEqual({ ...state.assumedLumens }, SPEC_LUMENS);
+  assert.equal(state.assumedLumens.source.reference, 'docs/design/apartment-unified/SPEC.md › Lit view');
+  assert.equal(state.assumedLumens.source.status, 'assumed'); assert.equal(state.assumedLumens.source.measured, false);
+  assert.match(state.assumedLumens.source.supersedes, /max_flux_lm/);
+  assert.equal(state.assumptionSource, 'SPEC Lit view assumed lumen ratings');
+  assert.equal(state.measured, false); assert.equal(state.disclosure, 'Simulated · not photometric · assumed output');
+  assert.equal(state.easeTauMs, 160); assert.equal(state.dimmingCurve, 'cie-lightness-inverse');
+  const color = Lit.kelvinColor(2700);
+  assert.deepEqual([color.r, color.g, color.b], Model.cctToLinearRgb(2700), 'Lit light colour is the constant-luminance CCT in the linear working space');
 });

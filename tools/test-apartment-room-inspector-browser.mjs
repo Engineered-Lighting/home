@@ -215,7 +215,7 @@ test('real authored room inspector preserves named aims and modeled channel bind
       assert.equal(await editorInspector().locator('input:not([type])').inputValue(), echo.seed.targets[0].name);
       for (const [index, axis] of ['x', 'y', 'z'].entries()) assert.equal(
         Number(await editorInspector().getByRole('spinbutton', { name: 'target ' + axis, exact: true }).inputValue()), echo.seed.targets[0].pos[index]);
-      assert.match(await page.locator('[data-apt-edit-ui="targets-and-palette"]').innerText(), /ADD TARGET · STEP 1 OF 2/);
+      assert.match(await page.locator('[data-apt-edit-ui="targets-and-palette"]').innerText(), /add target · step 1 of 2/i);
       assert.equal(await page.locator('[data-apt-edit-ui="targets-and-palette"]')
         .getByRole('button', { name: '· ' + echo.seed.targets[0].name, exact: true }).count(), 1);
       await expectCleanEditor();

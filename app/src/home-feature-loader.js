@@ -78,6 +78,7 @@
         ["home-apartment-aim.jsx", true],
         ["home-apartment-calibrate.jsx", true],
         ["home-apartment-edit.jsx", true],
+        ["home-apartment-setup.jsx", true],
         ["home-apartment.jsx", true],
       ],
       ready: () => !!window.HomeApartmentView,

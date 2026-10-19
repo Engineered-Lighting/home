@@ -130,6 +130,8 @@ const MAP = [
   [/^tools\/test-apartment-travel-guard\.cjs$/, ["test-apartment-travel-guard.cjs"]],
   [/^(?:app\/src\/(?:home-apartment-setup-links|home-apartment-data)\.js|tools\/test-apartment-setup-links\.cjs)$/, ["test-apartment-setup-links.cjs"]],
   [/^(?:app\/src\/home-apartment-(?:named-aims\.(?:js|jsx)|aiming\.js)|tools\/test-apartment-named-aims\.cjs)$/, ["test-apartment-named-aims.cjs"]],
+  [/^(?:app\/src\/home-apartment-setup-devices\.js|tools\/test-apartment-setup-devices\.cjs)$/, ["test-apartment-setup-devices.cjs"]],
+  [/^(?:app\/src\/home-apartment-(?:setup-devices\.(?:js|jsx)|setup\.jsx|edit\.jsx)|tools\/(?:test-apartment-setup-proposal-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-proposal-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment-named-aims\.(?:js|jsx)|home-apartment-(?:setup|edit)\.jsx|home-3d\/(?:picking\.js|apartment-ui-overlay-bridge\.mjs|markers\.js))|tools\/(?:test-apartment-named-aims-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-named-aims-browser.mjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
@@ -156,6 +158,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-setup-saves-browser.mjs": 110,
   "test-apartment-setup-rail-browser.mjs": 70,
   "test-apartment-named-aims-browser.mjs": 45,
+  "test-apartment-setup-proposal-browser.mjs": 80,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,

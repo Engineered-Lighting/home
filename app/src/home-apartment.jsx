@@ -2821,6 +2821,14 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [deskTargetSelection, setDeskTargetSelection] = useState(null);
   const deskTargetCaptureRef = useRef(null);
   const virtualFixtureStatesRef = useRef({ key: null, states: new Map(), targets: new Map() });
+  const denDeskAimPreviewRef = useRef(null);
+  const registerDenDeskAimPreview = useCallback((controller, mounted) => {
+    if (mounted) denDeskAimPreviewRef.current = controller;
+    else if (denDeskAimPreviewRef.current === controller) denDeskAimPreviewRef.current = null;
+  }, []);
+  const refreshDenDeskAimPreview = useCallback((engine) => {
+    if (engineRef.current === engine) setVirtualFixturePreview(engine?.overlay.virtualFixturesReadback?.() || null);
+  }, []);
   const virtualFixtureDocument = selectedSiteId === "victoria" && apartmentPlacementDisplayEnabled
     && !rehearsalIsolated && model._equipment_registration?.scope?.site_id === "victoria"
     && model._equipment_registration?.binding?.content_revision === selectedContentRevision
@@ -5137,6 +5145,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (editing) engine.overlay.setZonesVisible(0.7);
   }, [model, phase, editing, selectedSiteId, mapRehearsalOpen, apartmentPlacementDisplayEnabled]);
 
+  // The leased desk preview owns its fixture's aim; remembered manual state
+  // never overwrites that aim while the preview is active.
+  const reapplyVirtualFixtureMemory = (overlay, ownedId) => {
+    for (const [id, state] of virtualFixtureStatesRef.current.states) if (id !== ownedId) overlay.setVirtualFixtureState?.(id, state);
+    for (const [id, target] of virtualFixtureStatesRef.current.targets) if (id !== ownedId) overlay.aimVirtualFixtureAtTarget?.(id, target);
+  };
   // This ordinary-view preview reads the admitted survey without supplying
   // missing optical origins or entering the committed-execution workflow.
   useEffect(() => {
@@ -5159,8 +5173,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         setVirtualInspectorTab("aim");
         setFixtureInteractionMode("spot");
       }
-      for (const [id, state] of virtualFixtureStatesRef.current.states) overlay.setVirtualFixtureState?.(id, state);
-      for (const [id, target] of virtualFixtureStatesRef.current.targets) overlay.aimVirtualFixtureAtTarget?.(id, target);
+      const preview = denDeskAimPreviewRef.current?.readback?.();
+      reapplyVirtualFixtureMemory(overlay, preview?.active ? preview.fixtureId : null);
     }
     overlay.setVirtualFixturesVisible(virtualSpotlightsVisible && !editing && !calibCam
       && !liveOn && spatialScale === "apartment");
@@ -5171,7 +5185,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const syncVirtualFixturePreview = (engine, suppliedResult, publish = true) => {
     const result = suppliedResult || engine?.overlay.virtualFixturesReadback?.();
     if (!result) return;
+    // The active desk preview's aim is temporary and never becomes remembered state.
+    const preview = denDeskAimPreviewRef.current?.readback?.(), ownedId = preview?.active ? preview.fixtureId : null;
     for (const fixture of result.fixtures || []) {
+      if (fixture.fixture_id === ownedId) continue;
       const state = fixture.state;
       virtualFixtureStatesRef.current.states.set(fixture.fixture_id, {
         radials: state.radials.map(({ number, on, brightness, color_temp_kelvin }) => ({ number, on, brightness, color_temp_kelvin })),
@@ -5190,6 +5207,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       || identity?.siteId !== "victoria"
       || identity.contentRevision !== binding.content_revision || identity.registrationVersion !== binding.registration_version
       || identity.frameDigest !== binding.frame_digest) return;
+    denDeskAimPreviewRef.current?.manualTakeover('manual_fixture_control');
     const result = engine.overlay.setVirtualFixtureState?.(fixtureId, patch);
     if (!result?.ok) return;
     // Targets, remembered state and the selected readout publish synchronously.
@@ -5601,6 +5619,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       && document?.revision === capture.equipment_ref.revision && document?.digest === capture.equipment_ref.digest
       && JSON.stringify(document.binding) === JSON.stringify(capture.binding);
   };
+  const deskTargetSourceCurrent = (capture) => {
+    if (!capture?.surface_ref) return true;
+    try {
+      return JSON.stringify(capture.engine.deskTargetSurfaceReference(capture.binding))
+        === JSON.stringify(capture.surface_ref);
+    } catch (_) { return false; }
+  };
   const showDeskTargetCorners = (capture, corners) => {
     if (!deskTargetContextCurrent(capture)) return;
     capture.engine.overlay.setTargets?.(corners.map((corner, index) => ({
@@ -5615,7 +5640,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (deskTargetContextCurrent(capture)) capture.engine.overlay.setTargets?.(model.targets || []);
     deskTargetCaptureRef.current = null; setDeskTargetSelection(null);
   };
-  const startDeskTargetSelection = () => {
+  const startDeskTargetSelection = async () => {
     cancelDeskTargetSelection();
     const engine = engineRef.current, document = virtualFixtureDocument;
     if (!document || !engine?.overlay.createDeskTargetCapture) return;
@@ -5624,15 +5649,40 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       equipment_ref: { revision: document.revision, digest: document.digest },
       corners: [], active: true };
     if (!deskTargetContextCurrent(capture)) return;
+    denDeskAimPreviewRef.current?.manualTakeover('desk_selection_started');
     virtualAimGestureRef.current?.cancel();
     deskTargetCaptureRef.current = capture;
-    setDeskTargetSelection({ status: "selecting", corners: [], confirmed: false });
+    if (engine.prepareDeskTargetSurface) {
+      setDeskTargetSelection({ status: "preparing", corners: [], confirmed: false });
+      try {
+        const reference = await engine.prepareDeskTargetSurface(capture.binding);
+        if (deskTargetCaptureRef.current !== capture || !deskTargetContextCurrent(capture)) return;
+        capture.surface_ref = JSON.parse(JSON.stringify(reference));
+        if (!deskTargetSourceCurrent(capture)) throw Error("registered_desk_surface_source_changed");
+      } catch (error) {
+        if (deskTargetCaptureRef.current !== capture || !deskTargetContextCurrent(capture)) return;
+        capture.active = false;
+        setDeskTargetSelection({ status: "unavailable", reason: error.message,
+          corners: [], confirmed: false });
+        return;
+      }
+    }
+    setDeskTargetSelection({ status: "selecting", corners: [], confirmed: false,
+      surface_ref: capture.surface_ref || null });
     capture.controller = engine.overlay.createDeskTargetCapture({
       element: engine.renderer.domElement, windowTarget: window,
       getIdentity: () => [workspaceAuthorityRef.current.key, engine.sceneIdentity,
-        virtualFixtureDocument.revision, virtualFixtureDocument.digest],
+        virtualFixtureDocument.revision, virtualFixtureDocument.digest,
+        capture.surface_ref ? engine.deskTargetSurfaceReference(capture.binding) : null],
       isEnabled: () => deskTargetCaptureRef.current === capture && deskTargetContextCurrent(capture),
       surfaceHit: (x, y) => {
+        if (capture.surface_ref) {
+          const hit = engine.deskTargetSurfaceHit(x, y, capture.binding);
+          if (!hit) throw Error("registered_surface_no_hit");
+          if (JSON.stringify(hit.surface_ref) !== JSON.stringify(capture.surface_ref))
+            throw Error("registered_desk_surface_source_changed");
+          return hit;
+        }
         const hit = engine.displaySurfaceHit?.(x, y);
         if (hit) return hit;
         // Explain a refused pick without replacing it with unfiltered geometry.
@@ -5648,13 +5698,14 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         if (deskTargetCaptureRef.current !== capture) return;
         capture.corners = value.corners;
         if (value.status === "retired") capture.active = false;
-        setDeskTargetSelection({ ...value, confirmed: false });
+        setDeskTargetSelection({ ...value, confirmed: false, surface_ref: capture.surface_ref || null });
         showDeskTargetCorners(capture, value.corners);
       },
       onComplete: corners => {
         if (deskTargetCaptureRef.current !== capture || !deskTargetContextCurrent(capture)) return;
         capture.corners = corners; capture.active = false;
-        setDeskTargetSelection({ status: "complete", corners, confirmed: false });
+        setDeskTargetSelection({ status: "complete", corners, confirmed: false,
+          surface_ref: capture.surface_ref || null });
         showDeskTargetCorners(capture, corners);
       },
     });
@@ -5663,11 +5714,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const capture = deskTargetCaptureRef.current;
     if (deskTargetSelection?.status !== "complete" || !deskTargetSelection.confirmed
         || !deskTargetContextCurrent(capture)) return;
+    if (!deskTargetSourceCurrent(capture)) {
+      cancelDeskTargetSelection();
+      setVirtualAimNotice("The scan source changed. Select the desktop again.");
+      return;
+    }
     try {
-      const record = capture.engine.overlay.sealRegisteredDeskTarget({
+      const input = {
         binding: capture.binding, equipment_ref: capture.equipment_ref,
         corners: capture.corners, confirmed: true,
-      }, window.HomeEquipmentRegistration.digest);
+        ...(capture.surface_ref ? { surface_ref: capture.surface_ref } : {}),
+      };
+      const record = capture.engine.overlay.sealRegisteredDeskTarget(input, window.HomeEquipmentRegistration.digest);
       const blob = new Blob([JSON.stringify(record, null, 2) + "\n"], { type: "application/json" });
       const url = URL.createObjectURL(blob), link = document.createElement("a");
       link.href = url; link.download = "victoria-den-desk-target.json"; link.click();
@@ -5698,6 +5756,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const history = virtualAimHistoryRef.current, source = direction === "undo" ? history.undo : history.redo;
     const entry = source.at(-1), engine = engineRef.current;
     if (!entry || entry.binding !== virtualFixtureBindingKey || workspaceAuthorityRef.current.key !== apartmentAuthorityKey) return;
+    denDeskAimPreviewRef.current?.manualTakeover('manual_aim_history');
     const result = engine?.overlay.restoreVirtualFixtureAim?.(entry.fixture_id, direction === "undo" ? entry.before : entry.after);
     if (!result?.ok) { setVirtualAimNotice("This aim belongs to an earlier scene. Select a new room surface."); return; }
     source.pop(); (direction === "undo" ? history.redo : history.undo).push(entry);
@@ -5728,7 +5787,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         const hit = engine.displaySurfaceHit?.(x, y);
         return hit ? { point: hit.point, normal: hit.normal, kind: "registered_mesh" } : null;
       },
-      captureSnapshot: id => overlay.virtualFixtureInteractionDescriptor(id),
+      captureSnapshot: id => {
+        denDeskAimPreviewRef.current?.manualTakeover('manual_aim_gesture');
+        return overlay.virtualFixtureInteractionDescriptor(id);
+      },
       previewTarget: (id, target, before) => overlay.aimVirtualFixtureAtTarget(id, target, { expectedGeneration: before.generation }),
       restoreSnapshot: (id, before) => overlay.restoreVirtualFixtureAim(id, before),
       onSelect: id => {
@@ -9849,6 +9911,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           active={open && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn}
           mobile={mobile}
           onReturnToHome={onClose}
+          onAimPreviewController={registerDenDeskAimPreview}
+          onAimPreviewChange={refreshDenDeskAimPreview}
         /></AptHomePanelSlot>
       )}
 
@@ -9906,6 +9970,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                     registered_collision_unavailable: "Registered scan geometry is not available yet.",
                     registered_surface_no_hit: "No registered scan triangle at that point.",
                     registered_surface_raw_hit_unselected: "Scan geometry is under this point, but the displayed surface could not be selected.",
+                    registered_desk_surface_binding_changed: "The scan registration changed. Clear this selection and start again.",
+                    registered_desk_surface_source_changed: "The scan source changed. Clear this selection and start again.",
                     drag_is_not_a_corner: "Drag ignored. Click without moving.",
                     registered_desk_surface_corner_required: "This surface cannot be used as a desktop corner.",
                     distinct_registered_desk_corners_required: "That corner is already selected. Choose a different corner.",
@@ -9913,6 +9979,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                     registered_desk_span_exceeded: "The selected corners are too far apart for one desktop.",
                     convex_cyclic_registered_desk_corners_required: "Choose the remaining corner in order around the desktop edge.",
                   }[deskTargetSelection.reason] || "That point was not added. Your selected corners are still kept.") : ""}`
+                  : deskTargetSelection.status === "preparing" ? "Loading the detailed registered scan mesh for desk selection. Clear selection cancels."
+                  : deskTargetSelection.status === "unavailable" ? "Desk selection is unavailable: the detailed mesh or its registered identity could not be verified."
                   : deskTargetSelection.status === "complete" ? "Four corners selected. Check the numbered markers cover your whole desktop."
                   : deskTargetSelection.status === "saved" ? "Desk target download prepared. Keep the file private; it enables no automatic light yet."
                   : "Selection canceled. Start again to choose the desktop."}</p>
@@ -9948,11 +10016,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               {deskTargetSelection && <>
                 <p role="status" style={{ fontSize: 11, lineHeight: 1.45 }}>
                   {deskTargetSelection.status === "selecting"
-                    ? `Click the four desktop corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
+                    ? `${deskTargetSelection.surface_ref ? "Detailed registered scan mesh. " : ""}Click the four desktop corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
                         registered_surface_unavailable: "No registered scan surface at that point.",
                         registered_collision_unavailable: "Registered scan geometry is not available yet.",
                         registered_surface_no_hit: "No registered scan triangle at that point.",
                         registered_surface_raw_hit_unselected: "Scan geometry is under this point, but the displayed surface could not be selected.",
+                        registered_desk_surface_binding_changed: "The scan registration changed. Clear this selection and start again.",
+                        registered_desk_surface_source_changed: "The scan source changed. Clear this selection and start again.",
                         drag_is_not_a_corner: "Drag ignored. Click without moving.",
                         registered_desk_surface_corner_required: "This surface cannot be used as a desktop corner.",
                         distinct_registered_desk_corners_required: "That corner is already selected. Choose a different corner.",
@@ -9960,6 +10030,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                         registered_desk_span_exceeded: "The selected corners are too far apart for one desktop.",
                         convex_cyclic_registered_desk_corners_required: "Choose the remaining corner in order around the desktop edge.",
                       }[deskTargetSelection.reason] || "That point was not added. Your selected corners are still kept.") : ""}`
+                    : deskTargetSelection.status === "preparing" ? "Loading the detailed registered scan mesh for desk selection. Clear selection cancels."
+                    : deskTargetSelection.status === "unavailable" ? "Desk selection is unavailable: the detailed mesh or its registered identity could not be verified."
                     : deskTargetSelection.status === "complete" ? "Four corners selected. Check the numbered markers cover your whole desktop."
                     : deskTargetSelection.status === "saved" ? "Desk target download prepared. Keep the file private; it enables no automatic light yet."
                     : "Selection canceled. Start again to choose the desktop."}

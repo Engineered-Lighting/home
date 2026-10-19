@@ -1,0 +1,2475 @@
+{
+  "chosen_descriptor": {
+    "content_type": "image/jpeg",
+    "created_at": 1800000000.2,
+    "generation": 0,
+    "id": "view_fe3f13dfc9f1482897c8722668fbf183",
+    "media_id": "view_fe3f13dfc9f1482897c8722668fbf183",
+    "metadata": {
+      "available_at": 1800000000.2,
+      "beam_authority": false,
+      "camera_id": "den",
+      "capture_epoch": "synthetic-camera-epoch",
+      "clock_mapping_id": "synthetic-camera-clock-validation",
+      "clock_mapping_status": "verified",
+      "format": "jpeg",
+      "frame_id": "synthetic-camera-epoch-0-1",
+      "geometric_validity": "unvalidated",
+      "geometry_authority": false,
+      "height": 360,
+      "observed_at": 1800000000.0,
+      "operational_geometry": null,
+      "original_family": "home-apartment-viewing-jpeg-1",
+      "physical_permission": false,
+      "receiver_clock_validation_id": "synthetic-host-clock-validation",
+      "sequence": 1,
+      "session_time_s": 0.5,
+      "site_id": "victoria",
+      "source_clock": "depthai_device_monotonic",
+      "source_timestamp_seconds": 50.2,
+      "source_timing_receipt": {
+        "challenge_device_ns": 50000000000,
+        "challenge_nonce": "00000000000000000000000000000000",
+        "exposure_duration_seconds": 0.01,
+        "frame_device_ns": 50200000000,
+        "height": 360,
+        "host_boot_id": "00000000-0000-0000-0000-000000000001",
+        "host_clock_uncertainty_seconds": 0.002,
+        "host_clock_validation_id": "synthetic-host-clock-validation",
+        "host_receive_monotonic_ns": 10020000000,
+        "host_send_monotonic_ns": 10000000000,
+        "jpeg_sha256": "9618590a22ea38dc2b97682ca696fa499c30e15ea6887d4afb31634be5bcfc02",
+        "monotonic_clock_scope": "python_monotonic_on_camera_host",
+        "observed_at_unix_ns": 1800000000000000000,
+        "observed_monotonic_seconds": 10.01,
+        "preview_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "quality": 85,
+        "schema": 3,
+        "sequence": 1,
+        "session": "synthetic-camera-epoch",
+        "source_clock": "depthai_device_monotonic",
+        "timestamp_quantization_ns": 1000,
+        "timestamp_semantics": "causal_exact_frame_exposure_end",
+        "timing_generation": 0,
+        "uncertainty_seconds": 0.022001,
+        "validation_id": "synthetic-camera-clock-validation",
+        "width": 640
+      },
+      "stream": "rgb",
+      "timestamp_semantics": "causal_exact_frame_exposure_end",
+      "timing_generation": 0,
+      "uncertainty_seconds": 0.024001,
+      "valid_until": 1800000002.975999,
+      "viewing_only": true,
+      "width": 640
+    },
+    "mime_type": "image/jpeg",
+    "session_id": "70c29a78c9fd45ba880a2b0399d919b1",
+    "sha256": "9618590a22ea38dc2b97682ca696fa499c30e15ea6887d4afb31634be5bcfc02",
+    "site_id": "victoria",
+    "size": 4309,
+    "size_bytes": 4309,
+    "url": "/api/perception-lab/v1/sessions/70c29a78c9fd45ba880a2b0399d919b1/media/view_fe3f13dfc9f1482897c8722668fbf183?generation=0",
+    "viewing_only": true
+  },
+  "chosen_live": {
+    "acquisition": {
+      "attempts": 0,
+      "failures": {},
+      "last_fetch_ms": null,
+      "ok": 0,
+      "retries": 0,
+      "skipped_slots": 0
+    },
+    "apartment_viewing": {
+      "accepted_frames": 1,
+      "encoded_recording": false,
+      "expiry_stop_error": null,
+      "expiry_stop_pending": false,
+      "max_frames": 8,
+      "max_retained_bytes": 8388608,
+      "media_storage": "bounded_ram",
+      "metric_depth": "unavailable",
+      "physical_permission": false,
+      "reason": null,
+      "resident_bytes": 6195,
+      "resident_frames": 1,
+      "session_seconds": 300,
+      "state": "active",
+      "viewing_only": true
+    },
+    "arms": {
+      "A": {
+        "active_request": null,
+        "boxes": [],
+        "delivery": {
+          "completed_30s": 1,
+          "fresh_10s": 1,
+          "fresh_30s": 1,
+          "last_completed_at": 1800000000.2,
+          "last_dispatched_at": 1800000000.2,
+          "last_offered_at": 1800000000.2,
+          "max_gap_s": null,
+          "output_age_s": 0.0,
+          "source_age_s": 0.20000004768371582
+        },
+        "frame": {
+          "captured_at": 1800000000.0,
+          "generation": 0,
+          "height": 360,
+          "id": "synthetic-camera-epoch-0-1",
+          "media_id": "view_fe3f13dfc9f1482897c8722668fbf183",
+          "session_time_s": 0.5,
+          "site_id": "victoria",
+          "viewing_only": true,
+          "width": 640
+        },
+        "frame_id": "synthetic-camera-epoch-0-1",
+        "id": "A",
+        "keypoints": [
+          {
+            "confidence": 0.9,
+            "x": 100,
+            "y": 100
+          }
+        ],
+        "layers": {
+          "boxes": {
+            "available": true
+          },
+          "labels": {
+            "available": true
+          },
+          "skeleton": {
+            "available": true
+          }
+        },
+        "observation": {
+          "arm": "a",
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "available_at": 1800000000.2,
+          "camera_id": "den",
+          "capture_epoch": "synthetic-camera-epoch",
+          "engine_epoch": "trial-a",
+          "frame_id": "synthetic-camera-epoch-0-1",
+          "generation": 1,
+          "media_ids": [
+            "view_fe3f13dfc9f1482897c8722668fbf183"
+          ],
+          "model_version": "detector-pose-v1",
+          "observed_at": 1800000000.0,
+          "request_id": "b279c6e420378a79bcb5e45af80c6ab04f49094768ece3b9bdf0ce15acbfbce4",
+          "run_id": "yolo26s-rtmpose-cpu-v1",
+          "schema": "home-lab-arm-observation-1",
+          "session_id": "70c29a78c9fd45ba880a2b0399d919b1",
+          "site_id": "victoria",
+          "valid_until": 1800000003.0
+        },
+        "observations": [],
+        "pending_request": null,
+        "profile": {
+          "id": "yolo26s-rtmpose-cpu-v1",
+          "name": "detector-pose-v1",
+          "runs_on": "victoria-den-jetson"
+        },
+        "reasoning_status": {
+          "available_at": null,
+          "current": false,
+          "state": "off"
+        },
+        "relations": [],
+        "skeleton_edges": [],
+        "status": "running",
+        "timing": {
+          "source_clock_uncertainty_ms": 24.001,
+          "source_to_controller_ms": 200.00004768371582,
+          "stages_ms": {}
+        },
+        "validation": []
+      },
+      "B": {
+        "active_request": null,
+        "boxes": [],
+        "delivery": {
+          "completed_30s": 1,
+          "fresh_10s": 1,
+          "fresh_30s": 1,
+          "last_completed_at": 1800000000.2,
+          "last_dispatched_at": 1800000000.2,
+          "last_offered_at": 1800000000.2,
+          "max_gap_s": null,
+          "output_age_s": 0.0,
+          "source_age_s": 0.20000004768371582
+        },
+        "frame": {
+          "captured_at": 1800000000.0,
+          "generation": 0,
+          "height": 360,
+          "id": "synthetic-camera-epoch-0-1",
+          "media_id": "view_fe3f13dfc9f1482897c8722668fbf183",
+          "session_time_s": 0.5,
+          "site_id": "victoria",
+          "viewing_only": true,
+          "width": 640
+        },
+        "frame_id": "synthetic-camera-epoch-0-1",
+        "id": "B",
+        "keypoints": [
+          {
+            "confidence": 0.9,
+            "x": 100,
+            "y": 100
+          }
+        ],
+        "layers": {
+          "boxes": {
+            "available": true
+          },
+          "labels": {
+            "available": true
+          },
+          "skeleton": {
+            "available": true
+          }
+        },
+        "observation": {
+          "arm": "b",
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "available_at": 1800000000.2,
+          "camera_id": "den",
+          "capture_epoch": "synthetic-camera-epoch",
+          "engine_epoch": "trial-b",
+          "frame_id": "synthetic-camera-epoch-0-1",
+          "generation": 1,
+          "media_ids": [
+            "view_fe3f13dfc9f1482897c8722668fbf183"
+          ],
+          "model_version": "detector-pose-v1",
+          "observed_at": 1800000000.0,
+          "request_id": "a4a1f28ec0dcbf9022ec822d4c60822c1f3c5f4b595aba0cc9a9ec598f633640",
+          "run_id": "yolo26s-rtmpose-cpu-v1",
+          "schema": "home-lab-arm-observation-1",
+          "session_id": "70c29a78c9fd45ba880a2b0399d919b1",
+          "site_id": "victoria",
+          "valid_until": 1800000003.0
+        },
+        "observations": [],
+        "pending_request": null,
+        "profile": {
+          "id": "yolo26s-rtmpose-cpu-v1",
+          "name": "detector-pose-v1",
+          "runs_on": "la-ai"
+        },
+        "reasoning_status": {
+          "available_at": null,
+          "current": false,
+          "state": "off"
+        },
+        "relations": [],
+        "skeleton_edges": [],
+        "status": "running",
+        "timing": {
+          "source_clock_uncertainty_ms": 24.001,
+          "source_to_controller_ms": 200.00004768371582,
+          "stages_ms": {}
+        },
+        "validation": []
+      }
+    },
+    "caption_poll_state": null,
+    "caption_status": "not_provisioned",
+    "controller_load": null,
+    "experiment_generation": 1,
+    "ha_status": "not_provisioned",
+    "numerical_status": "not_provisioned",
+    "preview_status": "idle",
+    "qwen_live_status": {
+      "status": "not_provisioned"
+    },
+    "reasoning_ingestion_error": null,
+    "reasoning_scheduler": null,
+    "revision": 4,
+    "room": null,
+    "server_time": 1800000000.2,
+    "session": {
+      "camera_id": "den",
+      "created_at": 1799999999.5,
+      "ended_at": null,
+      "experiment_id": "apartment-viewing",
+      "fixture": false,
+      "generation": 0,
+      "id": "70c29a78c9fd45ba880a2b0399d919b1",
+      "name": "Authored viewing",
+      "reason": null,
+      "reasoning_enabled": false,
+      "reasoning_revision": 1,
+      "recording_state": "recording",
+      "request_id": "viewing-start",
+      "revision": 4,
+      "site_id": "victoria",
+      "started_at": 1799999999.5,
+      "state": "recording"
+    },
+    "session_id": "70c29a78c9fd45ba880a2b0399d919b1",
+    "site_id": "victoria",
+    "spatial_status": {
+      "state": "not_requested"
+    },
+    "state": "ready",
+    "vjepa_live_status": {
+      "status": "not_provisioned"
+    }
+  },
+  "external_camera_and_model": "authored",
+  "later_graph": {
+    "arms": {
+      "a": {
+        "arm": "a",
+        "chain": [
+          {
+            "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+            "available_at": 1800000001.3,
+            "available_at_s": 1.7999999523162842,
+            "consumed_by_latest_request": null,
+            "counts": {
+              "masks": null,
+              "objects": 0,
+              "pose_instances": null,
+              "tracks": null
+            },
+            "engine_epoch": "trial-a",
+            "event_id": 20,
+            "failure": null,
+            "frame": {
+              "captured_at": 1800000001.1,
+              "height": 360,
+              "id": "synthetic-camera-epoch-0-2",
+              "media_id": "view_30e6b03bd0784ce5a55279ea7e0fc784",
+              "session_time_s": 1.5999999046325684,
+              "width": 640
+            },
+            "frame_id": "synthetic-camera-epoch-0-2",
+            "generation": 1,
+            "model_version": "detector-pose-v1",
+            "observed_at": 1800000001.1,
+            "reason": null,
+            "request_id": "74a9cb42196384aff65bf624d54cf1b9d98485b0c2b7e8262ca2fad02f5048f1",
+            "source_end_s": 1.5999999046325684,
+            "source_id": "specialist_a",
+            "stage": "specialist_output",
+            "stale_reason": null,
+            "status": "fresh",
+            "timings": {
+              "arm_snapshot": {
+                "source_clock_uncertainty_ms": 24.001,
+                "source_to_controller_ms": 200.00004768371582
+              },
+              "dispatch_to_available_ms": 0.0
+            },
+            "valid_until": 1800000004.1,
+            "validation": []
+          },
+          {
+            "note": "prepared evidence is persisted only inside admitted JEV requests",
+            "reason": "reasoning_off",
+            "stage": "prepared_evidence",
+            "status": "not_saved"
+          },
+          {
+            "stage": "consumed_request",
+            "status": "none"
+          },
+          {
+            "in_flight": null,
+            "latest_lifecycle": null,
+            "stage": "result",
+            "status": "none"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "contextual_beliefs",
+            "status": "inactive"
+          },
+          {
+            "note": "the result's policy_result is a non-actuating suggestion; no decision policy runs",
+            "reason": "actuation_deferred",
+            "stage": "policy",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "proposed_action",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "authorization",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "execution",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "verification",
+            "status": "inactive"
+          },
+          {
+            "note": "interval labels are review data, never model inputs",
+            "reason": "actuation_deferred",
+            "stage": "human_review",
+            "status": "inactive"
+          }
+        ],
+        "generation": 1,
+        "preparation": {
+          "basis": "admitted_request",
+          "reason": "reasoning_off",
+          "status": "not_saved"
+        },
+        "profile": {
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "engine_epoch": "trial-a",
+          "model_version": "detector-pose-v1",
+          "profile_id": "yolo26s-rtmpose-cpu-v1"
+        },
+        "setup": {
+          "ambient_evidence": "granted",
+          "caption_evidence": false,
+          "detector": "yolo26s",
+          "device": "jetson",
+          "ha_evidence": true,
+          "history": 10,
+          "input": "rgb-640",
+          "localization": "none",
+          "masks": false,
+          "pose": "rtmpose-m-body7-cpu",
+          "precision": "fp32",
+          "qwen_scene_evidence": "granted",
+          "reasoner": null,
+          "room_map": false,
+          "sampling_hz": 1,
+          "temporal_encoder_evidence": "not_in_baseline"
+        },
+        "setup_basis": {
+          "ambient_evidence": "recorded_activation",
+          "caption_evidence": "recorded_activation",
+          "detector": "current_catalog",
+          "device": "current_catalog",
+          "ha_evidence": "recorded_activation",
+          "history": "recorded_activation",
+          "input": "current_catalog",
+          "localization": "recorded_activation",
+          "masks": "current_catalog",
+          "pose": "current_catalog",
+          "precision": "current_catalog",
+          "qwen_scene_evidence": "recorded_activation",
+          "reasoner": "current_catalog",
+          "room_map": "recorded_activation",
+          "sampling_hz": "recorded_activation",
+          "temporal_encoder_evidence": "recorded_activation"
+        }
+      },
+      "b": {
+        "arm": "b",
+        "chain": [
+          {
+            "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+            "available_at": 1800000001.3,
+            "available_at_s": 1.7999999523162842,
+            "consumed_by_latest_request": null,
+            "counts": {
+              "masks": null,
+              "objects": 0,
+              "pose_instances": null,
+              "tracks": null
+            },
+            "engine_epoch": "trial-b",
+            "event_id": 22,
+            "failure": null,
+            "frame": {
+              "captured_at": 1800000001.1,
+              "height": 360,
+              "id": "synthetic-camera-epoch-0-2",
+              "media_id": "view_30e6b03bd0784ce5a55279ea7e0fc784",
+              "session_time_s": 1.5999999046325684,
+              "width": 640
+            },
+            "frame_id": "synthetic-camera-epoch-0-2",
+            "generation": 1,
+            "model_version": "detector-pose-v1",
+            "observed_at": 1800000001.1,
+            "reason": null,
+            "request_id": "f6a1c60112b794d8733222a1efcac62870cbb616da698082f7780a6f523f2688",
+            "source_end_s": 1.5999999046325684,
+            "source_id": "specialist_b",
+            "stage": "specialist_output",
+            "stale_reason": null,
+            "status": "fresh",
+            "timings": {
+              "arm_snapshot": {
+                "source_clock_uncertainty_ms": 24.001,
+                "source_to_controller_ms": 200.00004768371582
+              },
+              "dispatch_to_available_ms": 0.0
+            },
+            "valid_until": 1800000004.1,
+            "validation": []
+          },
+          {
+            "note": "prepared evidence is persisted only inside admitted JEV requests",
+            "reason": "reasoning_off",
+            "stage": "prepared_evidence",
+            "status": "not_saved"
+          },
+          {
+            "stage": "consumed_request",
+            "status": "none"
+          },
+          {
+            "in_flight": null,
+            "latest_lifecycle": null,
+            "stage": "result",
+            "status": "none"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "contextual_beliefs",
+            "status": "inactive"
+          },
+          {
+            "note": "the result's policy_result is a non-actuating suggestion; no decision policy runs",
+            "reason": "actuation_deferred",
+            "stage": "policy",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "proposed_action",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "authorization",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "execution",
+            "status": "inactive"
+          },
+          {
+            "reason": "actuation_deferred",
+            "stage": "verification",
+            "status": "inactive"
+          },
+          {
+            "note": "interval labels are review data, never model inputs",
+            "reason": "actuation_deferred",
+            "stage": "human_review",
+            "status": "inactive"
+          }
+        ],
+        "generation": 1,
+        "preparation": {
+          "basis": "admitted_request",
+          "reason": "reasoning_off",
+          "status": "not_saved"
+        },
+        "profile": {
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "engine_epoch": "trial-b",
+          "model_version": "detector-pose-v1",
+          "profile_id": "yolo26s-rtmpose-cpu-v1"
+        },
+        "setup": {
+          "ambient_evidence": "granted",
+          "caption_evidence": false,
+          "detector": "yolo26s",
+          "device": "la",
+          "ha_evidence": true,
+          "history": 10,
+          "input": "rgb-640",
+          "localization": "none",
+          "masks": false,
+          "pose": "rtmpose-m-body7-cpu",
+          "precision": "fp32",
+          "qwen_scene_evidence": "granted",
+          "reasoner": null,
+          "room_map": false,
+          "sampling_hz": 1,
+          "temporal_encoder_evidence": "not_in_baseline"
+        },
+        "setup_basis": {
+          "ambient_evidence": "recorded_activation",
+          "caption_evidence": "recorded_activation",
+          "detector": "current_catalog",
+          "device": "current_catalog",
+          "ha_evidence": "recorded_activation",
+          "history": "recorded_activation",
+          "input": "current_catalog",
+          "localization": "recorded_activation",
+          "masks": "current_catalog",
+          "pose": "current_catalog",
+          "precision": "current_catalog",
+          "qwen_scene_evidence": "recorded_activation",
+          "reasoner": "current_catalog",
+          "room_map": "recorded_activation",
+          "sampling_hz": "recorded_activation",
+          "temporal_encoder_evidence": "recorded_activation"
+        }
+      }
+    },
+    "bounds": {
+      "horizon_slack_s": 5,
+      "producing_window_s": 10,
+      "response_bytes": 1048576,
+      "scan_rows": 256,
+      "snippet_bytes": 2048
+    },
+    "contract": "perception-lab-graph-1",
+    "contract_revision": 3,
+    "cursor": {
+      "at_ms": null,
+      "clamped_to_now": false,
+      "cutoff": 1800000001.3,
+      "mode": "live",
+      "server_time": 1800000001.3,
+      "session_time_s": 1.8
+    },
+    "experiment": {
+      "baseline_sha256": "bf76c076856bf2b9101828e6d18fb47a76d01ad5ce13bab50a7d19c57cc1b7f2",
+      "caption_evidence": {
+        "a": false,
+        "b": false
+      },
+      "effective_at": 1799999999.5,
+      "event_id": 10,
+      "experiment_id": "apartment-viewing",
+      "generation": 1,
+      "ha_evidence": {
+        "a": true,
+        "b": true
+      },
+      "lever": {
+        "coupled": "placement",
+        "note": "Detector+pose placement with each host's validated runtime profile: Jetson local (A) vs LA central (B).",
+        "paths": [
+          "device",
+          "runtime_profile"
+        ]
+      },
+      "profiles": {
+        "a": {
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "engine_epoch": "trial-a",
+          "model_version": "detector-pose-v1",
+          "profile_id": "yolo26s-rtmpose-cpu-v1"
+        },
+        "b": {
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "engine_epoch": "trial-b",
+          "model_version": "detector-pose-v1",
+          "profile_id": "yolo26s-rtmpose-cpu-v1"
+        }
+      },
+      "reasoning_windows": {
+        "a": 10,
+        "b": 10
+      },
+      "sampling_hz": {
+        "a": 1,
+        "b": 1
+      },
+      "source_policy": {
+        "ambient": {
+          "a": "granted",
+          "b": "granted"
+        },
+        "caption": {
+          "a": "not_in_baseline",
+          "b": "not_in_baseline"
+        },
+        "ha": {
+          "a": "granted",
+          "b": "granted"
+        },
+        "qwen_scene": {
+          "a": "granted",
+          "b": "granted"
+        },
+        "spatial": {
+          "a": "not_provisioned",
+          "b": "not_provisioned"
+        },
+        "temporal_encoder": {
+          "a": "not_in_baseline",
+          "b": "not_in_baseline"
+        }
+      },
+      "spatial_policy": {
+        "bytes": 103,
+        "json": {
+          "a": {
+            "localization": "none",
+            "room_relations": false
+          },
+          "b": {
+            "localization": "none",
+            "room_relations": false
+          }
+        },
+        "redacted": 0,
+        "truncated": false
+      }
+    },
+    "families": [
+      {
+        "catalog_status": "C",
+        "group": "visual",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "rgb_camera"
+        ],
+        "note": null,
+        "number": 1,
+        "title": "RGB cameras"
+      },
+      {
+        "catalog_status": "C",
+        "group": "spatial_temporal",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "depth_bundle"
+        ],
+        "note": null,
+        "number": 2,
+        "title": "Stereo depth"
+      },
+      {
+        "catalog_status": "C",
+        "group": "visual",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "depth_bundle"
+        ],
+        "note": null,
+        "number": 3,
+        "title": "Rectified left/right and RGB bundle planes"
+      },
+      {
+        "catalog_status": "C",
+        "group": "visual",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "specialist_a",
+          "specialist_b",
+          "shared_detector"
+        ],
+        "note": null,
+        "number": 4,
+        "title": "Object detection"
+      },
+      {
+        "catalog_status": "C",
+        "group": "visual",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "specialist_a",
+          "specialist_b"
+        ],
+        "note": null,
+        "number": 5,
+        "title": "Body pose"
+      },
+      {
+        "catalog_status": "P",
+        "group": "visual",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_06"
+        ],
+        "note": "no Lab adapter or evidence projection for hand landmarks",
+        "number": 6,
+        "title": "Hands / fine gestures"
+      },
+      {
+        "catalog_status": "P",
+        "group": "visual",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_07"
+        ],
+        "note": "no Lab adapter; not verified attention or gaze",
+        "number": 7,
+        "title": "Head orientation / gaze proxy"
+      },
+      {
+        "catalog_status": "C",
+        "group": "visual",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "specialist_a",
+          "specialist_b"
+        ],
+        "note": "masks appear only when an admitted specialist returns them",
+        "number": 8,
+        "title": "Instance/semantic segmentation"
+      },
+      {
+        "catalog_status": "C",
+        "group": "home_device",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "ha_snapshot"
+        ],
+        "note": "HA occupancy entities only; no Lab Frigate event adapter; same camera origin stays correlated",
+        "number": 9,
+        "title": "Frigate events and occupancy"
+      },
+      {
+        "catalog_status": "H",
+        "group": "personal",
+        "lab_status": "excluded_by_policy",
+        "nodes": [
+          "family_10"
+        ],
+        "note": "excluded by the current JEV projection; recognition never grants authority",
+        "number": 10,
+        "title": "Facial recognition"
+      },
+      {
+        "catalog_status": "C",
+        "group": "spatial_temporal",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "specialist_a",
+          "specialist_b",
+          "room_observation"
+        ],
+        "note": "track ids are not identities",
+        "number": 11,
+        "title": "Within-camera tracking"
+      },
+      {
+        "catalog_status": "P",
+        "group": "spatial_temporal",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_12"
+        ],
+        "note": "no Lab adapter; never automatic identity",
+        "number": 12,
+        "title": "Cross-camera continuity"
+      },
+      {
+        "catalog_status": "C",
+        "group": "spatial_temporal",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "room_observation"
+        ],
+        "note": "stereo-surface path requires validated depth, calibration and registration",
+        "number": 13,
+        "title": "Metric localization"
+      },
+      {
+        "catalog_status": "C",
+        "group": "spatial_temporal",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "room_observation"
+        ],
+        "note": "versioned zones through the room publisher only",
+        "number": 14,
+        "title": "Room geometry and furniture"
+      },
+      {
+        "catalog_status": "C",
+        "group": "spatial_temporal",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "specialist_a",
+          "specialist_b",
+          "room_observation"
+        ],
+        "note": "image-plane facts are computed in prepared evidence (state.semantic); near is not touching",
+        "number": 15,
+        "title": "Person/object relationships"
+      },
+      {
+        "catalog_status": "H",
+        "group": "spatial_temporal",
+        "lab_status": "not_provisioned",
+        "nodes": [
+          "family_16"
+        ],
+        "note": "uncalibrated V-JEPA posture buckets are the vjepa_scene node (family 17); no transition source",
+        "number": 16,
+        "title": "Posture and transitions"
+      },
+      {
+        "catalog_status": "C",
+        "group": "spatial_temporal",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "vjepa_scene"
+        ],
+        "note": "frozen V-JEPA 2.1 probes on LA over stored den preview clips (vjepa-den-1): uncalibrated posture, reading, zero-shot, motion and scene-change buckets; correlated with the camera",
+        "number": 17,
+        "title": "V-JEPA temporal representation"
+      },
+      {
+        "catalog_status": "H",
+        "group": "spatial_temporal",
+        "lab_status": "not_provisioned",
+        "nodes": [
+          "family_18"
+        ],
+        "note": "V-JEPA scene-change buckets are in the vjepa_scene node (family 17); no object persistence source",
+        "number": 18,
+        "title": "Scene change / object persistence"
+      },
+      {
+        "catalog_status": "C",
+        "group": "visual",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "caption_receipt",
+          "qwen_scene"
+        ],
+        "note": "stored caption receipts, and the continuous perceiver's closed-vocabulary scene facts (lab-live-scene-1); both correlated with the camera",
+        "number": 19,
+        "title": "Qwen scene interpretation"
+      },
+      {
+        "catalog_status": "C",
+        "group": "home_device",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "ha_snapshot"
+        ],
+        "note": "only allowlisted entities of the provisioned HA snapshot",
+        "number": 20,
+        "title": "HA media state"
+      },
+      {
+        "catalog_status": "C",
+        "group": "home_device",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "ha_snapshot"
+        ],
+        "note": "computer_active binding exists; its source is not verified",
+        "number": 21,
+        "title": "Computer activity"
+      },
+      {
+        "catalog_status": "C",
+        "group": "home_device",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "ha_snapshot"
+        ],
+        "note": "native HA state only when allowlisted; no semantic binding",
+        "number": 22,
+        "title": "HA lights, covers, climate, fans"
+      },
+      {
+        "catalog_status": "P",
+        "group": "home_device",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_23"
+        ],
+        "note": "no installed sensor is assumed",
+        "number": 23,
+        "title": "Appliance/power signals"
+      },
+      {
+        "catalog_status": "P",
+        "group": "home_device",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_24"
+        ],
+        "note": "no Lab adapter",
+        "number": 24,
+        "title": "Independent presence/contact sensors"
+      },
+      {
+        "catalog_status": "P",
+        "group": "environment_time",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_25"
+        ],
+        "note": "no Lab adapter",
+        "number": 25,
+        "title": "Environmental sensors"
+      },
+      {
+        "catalog_status": "C",
+        "group": "environment_time",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "ambient_context"
+        ],
+        "note": "bucketed part of day, day type and local hour plus HA sun daylight, per offer; no calendar",
+        "number": 26,
+        "title": "Clock, calendar and sun position"
+      },
+      {
+        "catalog_status": "C",
+        "group": "environment_time",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "ambient_context"
+        ],
+        "note": "HA weather condition enum only, when bound; a prior, not an observation",
+        "number": 27,
+        "title": "Weather/daylight forecast"
+      },
+      {
+        "catalog_status": "H",
+        "group": "environment_time",
+        "lab_status": "not_provisioned",
+        "nodes": [
+          "family_28"
+        ],
+        "note": "no audio is recorded by the Lab",
+        "number": 28,
+        "title": "Audio activity/events"
+      },
+      {
+        "catalog_status": "H",
+        "group": "personal",
+        "lab_status": "not_provisioned",
+        "nodes": [
+          "family_29"
+        ],
+        "note": "speech systems exist outside the Lab; no permitted Lab adapter",
+        "number": 29,
+        "title": "Speech/transcript/diarization"
+      },
+      {
+        "catalog_status": "P",
+        "group": "personal",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_30"
+        ],
+        "note": "no authenticated intent adapter",
+        "number": 30,
+        "title": "Explicit human intent / selected mode"
+      },
+      {
+        "catalog_status": "H",
+        "group": "personal",
+        "lab_status": "not_provisioned",
+        "nodes": [
+          "family_31"
+        ],
+        "note": "no governed retrieval into the Lab",
+        "number": 31,
+        "title": "Household/room knowledge"
+      },
+      {
+        "catalog_status": "P",
+        "group": "personal",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_32"
+        ],
+        "note": "decision-policy input; the Lab policy stage is inactive",
+        "number": 32,
+        "title": "Personal preferences"
+      },
+      {
+        "catalog_status": "P",
+        "group": "personal",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_33"
+        ],
+        "note": "episode memory is not a Lab source; the per-arm JEV evidence window is recorded in each request",
+        "number": 33,
+        "title": "Recent activity/episode history"
+      },
+      {
+        "catalog_status": "P",
+        "group": "personal",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_34"
+        ],
+        "note": "no permitted presence projection",
+        "number": 34,
+        "title": "Mobile/home-presence context"
+      },
+      {
+        "catalog_status": "C",
+        "group": "operational",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "processing_health"
+        ],
+        "note": null,
+        "number": 35,
+        "title": "Source and processing health"
+      },
+      {
+        "catalog_status": "P",
+        "group": "operational",
+        "lab_status": "proposed",
+        "nodes": [
+          "family_36"
+        ],
+        "note": "Lab actuation is deferred; execution and verification stages are inactive",
+        "number": 36,
+        "title": "Prior actions / observed outcomes"
+      },
+      {
+        "catalog_status": "C",
+        "group": "operational",
+        "lab_status": "recorded_source",
+        "nodes": [
+          "human_labels"
+        ],
+        "note": "review data only; never model inputs",
+        "number": 37,
+        "title": "Human labels, ratings and corrections"
+      }
+    ],
+    "frame_age": {
+      "arms": {
+        "a": {
+          "available_age_s": 0.0,
+          "available_at": 1800000001.3,
+          "behind_camera_s": null,
+          "comparison_reason": "no_camera_frame",
+          "event_id": 20,
+          "frame_id": "synthetic-camera-epoch-0-2",
+          "generation": 1,
+          "observed_age_s": 0.2,
+          "observed_at": 1800000001.1,
+          "status": "recorded"
+        },
+        "b": {
+          "available_age_s": 0.0,
+          "available_at": 1800000001.3,
+          "behind_camera_s": null,
+          "comparison_reason": "no_camera_frame",
+          "event_id": 22,
+          "frame_id": "synthetic-camera-epoch-0-2",
+          "generation": 1,
+          "observed_age_s": 0.2,
+          "observed_at": 1800000001.1,
+          "status": "recorded"
+        }
+      },
+      "basis": "controller_clock",
+      "camera": null,
+      "note": "behind_camera_s is the newest recorded camera frame's observation time minus the arm's newest analyzed frame's; live pump counters stay on /live",
+      "server_time": 1800000001.3
+    },
+    "horizon_event_id": 22,
+    "inference": "none",
+    "reasoning": {
+      "enabled": false,
+      "revision": 1
+    },
+    "session": {
+      "camera_id": "den",
+      "ended_at": null,
+      "experiment_id": "apartment-viewing",
+      "generation": 0,
+      "id": "70c29a78c9fd45ba880a2b0399d919b1",
+      "name": "Authored viewing",
+      "reason": null,
+      "reasoning_enabled": false,
+      "reasoning_revision": 1,
+      "revision": 4,
+      "site_id": "victoria",
+      "started_at": 1799999999.5,
+      "state": "recording"
+    },
+    "session_id": "70c29a78c9fd45ba880a2b0399d919b1",
+    "site_id": "victoria",
+    "sources": [
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "not_a_jev_input",
+          "b": "not_a_jev_input"
+        },
+        "counts": {
+          "images": 0,
+          "rgb_images": 0,
+          "video_objects": 0
+        },
+        "declared_basis": {
+          "a": "every_setup",
+          "b": "every_setup"
+        },
+        "declared_by_setup": {
+          "a": true,
+          "b": true
+        },
+        "failure": null,
+        "families": [
+          1
+        ],
+        "freshness": "none",
+        "group": "visual",
+        "id": "rgb_camera",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "RGB camera acquisition",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "not_a_jev_input",
+          "b": "not_a_jev_input"
+        },
+        "counts": {
+          "bundles": 0
+        },
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": false,
+          "b": false
+        },
+        "failure": null,
+        "families": [
+          2,
+          3
+        ],
+        "freshness": "none",
+        "group": "spatial_temporal",
+        "id": "depth_bundle",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "Stereo depth bundle",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": 0.0,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "no_request",
+          "b": "other_arm"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": true,
+          "b": false
+        },
+        "failure": null,
+        "families": [
+          4,
+          5,
+          8,
+          11,
+          15
+        ],
+        "freshness": "fresh",
+        "group": "visual",
+        "id": "specialist_a",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": 1800000001.3,
+        "last_observed_at": 1800000001.1,
+        "native": {
+          "event_id": 20,
+          "kind": "perception.output",
+          "snippet": {
+            "bytes": 188,
+            "json": {
+              "boxes": [],
+              "coordinate_space": "source_pixels",
+              "frame_id": "synthetic-camera-epoch-0-2",
+              "keypoints": [
+                {
+                  "confidence": 0.9,
+                  "x": 100,
+                  "y": 100
+                }
+              ],
+              "objects": [],
+              "schema_version": 1,
+              "skeleton_edges": []
+            },
+            "redacted": 0,
+            "truncated": false
+          }
+        },
+        "producing": true,
+        "provisioned": true,
+        "provisioned_basis": "experiment_activated",
+        "reason": null,
+        "status": "producing",
+        "title": "Specialist A native output",
+        "valid_until": 1800000004.1,
+        "validated": null,
+        "version": {
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "engine_epoch": "trial-a",
+          "model_version": "detector-pose-v1",
+          "profile": {
+            "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+            "engine_epoch": "trial-a",
+            "model_version": "detector-pose-v1",
+            "profile_id": "yolo26s-rtmpose-cpu-v1"
+          }
+        }
+      },
+      {
+        "age_s": 0.0,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "other_arm",
+          "b": "no_request"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": false,
+          "b": true
+        },
+        "failure": null,
+        "families": [
+          4,
+          5,
+          8,
+          11,
+          15
+        ],
+        "freshness": "fresh",
+        "group": "visual",
+        "id": "specialist_b",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": 1800000001.3,
+        "last_observed_at": 1800000001.1,
+        "native": {
+          "event_id": 22,
+          "kind": "perception.output",
+          "snippet": {
+            "bytes": 188,
+            "json": {
+              "boxes": [],
+              "coordinate_space": "source_pixels",
+              "frame_id": "synthetic-camera-epoch-0-2",
+              "keypoints": [
+                {
+                  "confidence": 0.9,
+                  "x": 100,
+                  "y": 100
+                }
+              ],
+              "objects": [],
+              "schema_version": 1,
+              "skeleton_edges": []
+            },
+            "redacted": 0,
+            "truncated": false
+          }
+        },
+        "producing": true,
+        "provisioned": true,
+        "provisioned_basis": "experiment_activated",
+        "reason": null,
+        "status": "producing",
+        "title": "Specialist B native output",
+        "valid_until": 1800000004.1,
+        "validated": null,
+        "version": {
+          "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+          "engine_epoch": "trial-b",
+          "model_version": "detector-pose-v1",
+          "profile": {
+            "artifact_sha256": "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b",
+            "engine_epoch": "trial-b",
+            "model_version": "detector-pose-v1",
+            "profile_id": "yolo26s-rtmpose-cpu-v1"
+          }
+        }
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "not_a_jev_input",
+          "b": "not_a_jev_input"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          4
+        ],
+        "freshness": "none",
+        "group": "visual",
+        "id": "shared_detector",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "Shared detector crops",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "no_request",
+          "b": "no_request"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": true,
+          "b": true
+        },
+        "failure": null,
+        "families": [
+          9,
+          20,
+          21,
+          22
+        ],
+        "freshness": "none",
+        "group": "home_device",
+        "id": "ha_snapshot",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "Home Assistant snapshot",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "withheld_by_setup",
+          "b": "withheld_by_setup"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": false,
+          "b": false
+        },
+        "failure": null,
+        "families": [
+          19
+        ],
+        "freshness": "none",
+        "group": "visual",
+        "id": "caption_receipt",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "Historical caption receipt",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "no_request",
+          "b": "no_request"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": true,
+          "b": true
+        },
+        "failure": null,
+        "families": [
+          26,
+          27
+        ],
+        "freshness": "not_applicable",
+        "group": "environment_time",
+        "id": "ambient_context",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "Ambient context (clock, daylight, weather)",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "no_request",
+          "b": "no_request"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": true,
+          "b": true
+        },
+        "failure": null,
+        "families": [
+          19
+        ],
+        "freshness": "none",
+        "group": "visual",
+        "id": "qwen_scene",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "Qwen live scene (structured)",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "no_request",
+          "b": "no_request"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": false,
+          "b": false
+        },
+        "failure": null,
+        "families": [
+          17
+        ],
+        "freshness": "none",
+        "group": "spatial_temporal",
+        "id": "vjepa_scene",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "V-JEPA 2.1 den buckets (structured)",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "no_request",
+          "b": "no_request"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": "recorded_activation",
+          "b": "recorded_activation"
+        },
+        "declared_by_setup": {
+          "a": false,
+          "b": false
+        },
+        "failure": null,
+        "families": [
+          11,
+          13,
+          14,
+          15
+        ],
+        "freshness": "none",
+        "group": "spatial_temporal",
+        "id": "room_observation",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": null,
+        "provisioned_basis": "not_recorded",
+        "reason": null,
+        "status": "no_records",
+        "title": "Room / spatial observation",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": 0.0,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "not_a_jev_input",
+          "b": "not_a_jev_input"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          35
+        ],
+        "freshness": "not_applicable",
+        "group": "operational",
+        "id": "processing_health",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": 1800000001.3,
+        "last_observed_at": null,
+        "native": {
+          "kind": "perception.delivery",
+          "snippet": {
+            "bytes": 731,
+            "json": {
+              "a": {
+                "arm": "a",
+                "completed_at": 1800000001.3,
+                "current": true,
+                "dispatched_at": 1800000001.3,
+                "frame_id": "synthetic-camera-epoch-0-2",
+                "generation": 1,
+                "model_version": "detector-pose-v1",
+                "observed_at": 1800000001.1,
+                "request_id": "74a9cb42196384aff65bf624d54cf1b9d98485b0c2b7e8262ca2fad02f5048f1",
+                "state": "completed",
+                "valid_until": 1800000004.1,
+                "validity_rule": "arm-sampling-1"
+              },
+              "b": {
+                "arm": "b",
+                "completed_at": 1800000001.3,
+                "current": true,
+                "dispatched_at": 1800000001.3,
+                "frame_id": "synthetic-camera-epoch-0-2",
+                "generation": 1,
+                "model_version": "detector-pose-v1",
+                "observed_at": 1800000001.1,
+                "request_id": "f6a1c60112b794d8733222a1efcac62870cbb616da698082f7780a6f523f2688",
+                "state": "completed",
+                "valid_until": 1800000004.1,
+                "validity_rule": "arm-sampling-1"
+              }
+            },
+            "redacted": 0,
+            "truncated": false
+          }
+        },
+        "producing": true,
+        "provisioned": true,
+        "provisioned_basis": "recorded_events",
+        "reason": null,
+        "status": "producing",
+        "title": "Delivery and processing health",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "C",
+        "consumed_by": {
+          "a": "excluded_by_policy",
+          "b": "excluded_by_policy"
+        },
+        "counts": {
+          "labels": 0,
+          "reviewed": 0
+        },
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          37
+        ],
+        "freshness": "not_applicable",
+        "group": "operational",
+        "id": "human_labels",
+        "implemented": true,
+        "kind": "ledger",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": true,
+        "provisioned_basis": "annotation_store",
+        "reason": "review data only; never model inputs",
+        "status": "review_only",
+        "title": "Human labels",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          6
+        ],
+        "freshness": "not_applicable",
+        "group": "visual",
+        "id": "family_06",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no Lab adapter or evidence projection for hand landmarks",
+        "status": "proposed",
+        "title": "Hands / fine gestures",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          7
+        ],
+        "freshness": "not_applicable",
+        "group": "visual",
+        "id": "family_07",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no Lab adapter; not verified attention or gaze",
+        "status": "proposed",
+        "title": "Head orientation / gaze proxy",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "H",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          10
+        ],
+        "freshness": "not_applicable",
+        "group": "personal",
+        "id": "family_10",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "excluded by the current JEV projection; recognition never grants authority",
+        "status": "excluded_by_policy",
+        "title": "Facial recognition",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          12
+        ],
+        "freshness": "not_applicable",
+        "group": "spatial_temporal",
+        "id": "family_12",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no Lab adapter; never automatic identity",
+        "status": "proposed",
+        "title": "Cross-camera continuity",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "H",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          16
+        ],
+        "freshness": "not_applicable",
+        "group": "spatial_temporal",
+        "id": "family_16",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "uncalibrated V-JEPA posture buckets are the vjepa_scene node (family 17); no transition source",
+        "status": "not_provisioned",
+        "title": "Posture and transitions",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "H",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          18
+        ],
+        "freshness": "not_applicable",
+        "group": "spatial_temporal",
+        "id": "family_18",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "V-JEPA scene-change buckets are in the vjepa_scene node (family 17); no object persistence source",
+        "status": "not_provisioned",
+        "title": "Scene change / object persistence",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          23
+        ],
+        "freshness": "not_applicable",
+        "group": "home_device",
+        "id": "family_23",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no installed sensor is assumed",
+        "status": "proposed",
+        "title": "Appliance/power signals",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          24
+        ],
+        "freshness": "not_applicable",
+        "group": "home_device",
+        "id": "family_24",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no Lab adapter",
+        "status": "proposed",
+        "title": "Independent presence/contact sensors",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          25
+        ],
+        "freshness": "not_applicable",
+        "group": "environment_time",
+        "id": "family_25",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no Lab adapter",
+        "status": "proposed",
+        "title": "Environmental sensors",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "H",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          28
+        ],
+        "freshness": "not_applicable",
+        "group": "environment_time",
+        "id": "family_28",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no audio is recorded by the Lab",
+        "status": "not_provisioned",
+        "title": "Audio activity/events",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "H",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          29
+        ],
+        "freshness": "not_applicable",
+        "group": "personal",
+        "id": "family_29",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "speech systems exist outside the Lab; no permitted Lab adapter",
+        "status": "not_provisioned",
+        "title": "Speech/transcript/diarization",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          30
+        ],
+        "freshness": "not_applicable",
+        "group": "personal",
+        "id": "family_30",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no authenticated intent adapter",
+        "status": "proposed",
+        "title": "Explicit human intent / selected mode",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "H",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          31
+        ],
+        "freshness": "not_applicable",
+        "group": "personal",
+        "id": "family_31",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no governed retrieval into the Lab",
+        "status": "not_provisioned",
+        "title": "Household/room knowledge",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          32
+        ],
+        "freshness": "not_applicable",
+        "group": "personal",
+        "id": "family_32",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "decision-policy input; the Lab policy stage is inactive",
+        "status": "proposed",
+        "title": "Personal preferences",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          33
+        ],
+        "freshness": "not_applicable",
+        "group": "personal",
+        "id": "family_33",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "episode memory is not a Lab source; the per-arm JEV evidence window is recorded in each request",
+        "status": "proposed",
+        "title": "Recent activity/episode history",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          34
+        ],
+        "freshness": "not_applicable",
+        "group": "personal",
+        "id": "family_34",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "no permitted presence projection",
+        "status": "proposed",
+        "title": "Mobile/home-presence context",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      },
+      {
+        "age_s": null,
+        "catalog_status": "P",
+        "consumed_by": {
+          "a": "not_implemented",
+          "b": "not_implemented"
+        },
+        "counts": null,
+        "declared_basis": {
+          "a": null,
+          "b": null
+        },
+        "declared_by_setup": {
+          "a": null,
+          "b": null
+        },
+        "failure": null,
+        "families": [
+          36
+        ],
+        "freshness": "not_applicable",
+        "group": "operational",
+        "id": "family_36",
+        "implemented": false,
+        "kind": "proposed",
+        "last_available_at": null,
+        "last_observed_at": null,
+        "native": null,
+        "producing": false,
+        "provisioned": false,
+        "provisioned_basis": "no_lab_adapter",
+        "reason": "Lab actuation is deferred; execution and verification stages are inactive",
+        "status": "proposed",
+        "title": "Prior actions / observed outcomes",
+        "valid_until": null,
+        "validated": null,
+        "version": null
+      }
+    ],
+    "version": 1
+  },
+  "pixel_bytes_included": false,
+  "schema": "home-authored-live-graph-race-fixture-1"
+}

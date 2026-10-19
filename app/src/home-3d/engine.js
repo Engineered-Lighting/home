@@ -307,6 +307,11 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     const overlay = markersM.createOverlay(apartmentRoot);
     let litView = null, litUnsubscribe = () => {};
     const picking = pickingM.createPicking(camera, hostEl);
+    const deskSurfacePicking = pickingM.createRegisteredDeskSurfacePicker({
+        apartmentRoot, modes, picking, sceneIdentity,
+        getManifest: () => window.HomeContentPacks?.get?.(siteId, contentRevision)?.manifest,
+        digest: value => window.HomeEquipmentRegistration?.digest?.(value),
+    });
     let disposed = false, disposing = false;
     const uiLayers = new Set();
     const presentationUiLayers = new Set();
@@ -786,6 +791,14 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         contentRevision,
         sceneIdentity,
         getEquipmentCutawayRegistrationStatus: () => equipmentCutaway.status(),
+        async prepareDeskTargetSurface(binding) {
+            await modes.preload(['mesh']);
+            return deskSurfacePicking.reference(binding);
+        },
+        deskTargetSurfaceReference(binding) { return deskSurfacePicking.reference(binding); },
+        deskTargetSurfaceHit(clientX, clientY, binding) {
+            return deskSurfacePicking.surfaceHit(clientX, clientY, binding);
+        },
         displaySurfaceHit(clientX, clientY) {
             const collision = modes.getCollision?.();
             if (!collision) return null;

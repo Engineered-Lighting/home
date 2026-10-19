@@ -89,9 +89,11 @@ export function validateSceneFrame(frame, { siteId = null } = {}) {
 /** Own network cancellation; Spark's decoder itself has no AbortSignal API. */
 export async function loadSplatAsset({ url, signal, siteId = null, contentRevision = null, onProgress = null }) {
     assertLiveSignal(signal);
-    const { SplatMesh } = await import('@sparkjsdev/spark');
-    assertLiveSignal(signal);
-    const fileBytes = await fetchApartmentAssetBytes({ url, siteId, contentRevision, signal, onProgress });
+    // The download starts with the decoder import, so its progress shows at once.
+    const [{ SplatMesh }, fileBytes] = await Promise.all([
+        import('@sparkjsdev/spark'),
+        fetchApartmentAssetBytes({ url, siteId, contentRevision, signal, onProgress }),
+    ]);
     assertLiveSignal(signal);
     const splat = new SplatMesh({ fileBytes, fileName: new URL(url, window.location.href).pathname });
     try {

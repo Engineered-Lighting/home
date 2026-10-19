@@ -29,9 +29,11 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
     for (const name of splatNames) faults.set(assetPath(echo, name), 'stall');
     await modeButton('Photo').click();
     await notice().getByRole('heading', { name: /^Loading Photo · \d+%$/ }).waitFor().catch(async error => {
-      error.message += ' ' + JSON.stringify({ notice: await notice().allInnerTexts().catch(() => null),
+      // The touched-harness runner keeps only the last lines, which hold the stack.
+      const diagnostics = JSON.stringify({ notice: await notice().allInnerTexts().catch(() => null),
         requests: requests.filter(row => /\/apartment\./.test(row.path)).map(row => row.path),
-        plan: await page.evaluate(() => window.__APT_ENGINE?.modes?.debugInfo?.()?.loadStatus).catch(() => null) });
+        modes: await page.evaluate(() => { const d = window.__APT_ENGINE?.modes?.debugInfo?.(); return d && { status: d.status, loadStatus: d.loadStatus, last: d.lastLoadError }; }).catch(() => null) });
+      error.message += ' ' + diagnostics; error.stack = 'Photo loading diagnostics: ' + diagnostics + String.fromCharCode(10) + error.stack;
       throw error;
     });
     const loading = await notice().evaluate(node => ({ title: node.querySelector('h3').textContent,

@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import Core from '../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { createDirectionalNativeMouse, assertDirectionalNativeMouseLedger } from './fixtures/apartment-directional-native-mouse.mjs';
+import { waitForDirectionalReadiness } from './fixtures/apartment-directional-readiness.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), SRC = path.join(ROOT, 'app/src');
@@ -69,8 +71,9 @@ test('real authored directional controls preserve native input, aim and output b
       'home-3d/picking.js', 'home-3d/direct-aim-gesture.mjs'].map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
     physical_commands: 0, saves: 0, camera_sessions: 0, model_sessions: 0,
     checks: [], stage_timings: [], action_timings: [], native_progress: [], modeled_progress: [], keyboard_targets: [],
+    native_mouse: { expected: [], dispatched: [], operations: [], observed: [], dragstarts: [], failure: null },
     requests: [], forbidden: [], blocked_read_subscriptions: [], missing_code: [], errors: [], served: {}, browser: browserOptions() };
-  let server, handler, origin, browser, context, page, rawPage, timer;
+  let server, handler, origin, browser, context, page, rawPage, nativeMouse, nativeMouseSurface, mouseSession, timer;
   const started = performance.now(), elapsed = () => performance.now() - started;
   const save = () => { receipt.elapsed_ms = elapsed(); fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n'); };
   const progress = value => fs.appendFileSync(path.join(run, 'progress.jsonl'), JSON.stringify({ elapsed_ms: elapsed(), ...value }) + '\n');
@@ -95,11 +98,27 @@ test('real authored directional controls preserve native input, aim and output b
     if (observed.has(target)) return observed.get(target);
     const proxy = new Proxy(target, { get(object, key) {
       const member = Reflect.get(object, key, object);
-      if (kind === 'page' && (key === 'mouse' || key === 'keyboard')) return observe(member, key);
+      if (kind === 'page' && key === 'mouse') { assert.ok(nativeMouseSurface, 'native mouse owns every pointer primitive'); return observe(nativeMouseSurface, 'mouse'); }
+      if (kind === 'page' && key === 'keyboard') return observe(member, key);
       if (typeof member !== 'function') return member;
+      if (kind === 'locator' && ['click', 'dblclick', 'hover', 'tap', 'dragTo'].includes(key)) return () => {
+        nativeMouse?.retire('mixed_playwright_locator_mouse'); throw Error('locator mouse input cannot bypass the owned native mouse state');
+      };
+      if (kind === 'keyboard' && key !== 'press') return () => {
+        nativeMouse?.retire('unsupported_keyboard_state'); throw Error('only completed simple native keyboard.press is supported');
+      };
       if (locatorFactories.has(key)) return (...args) => observe(member.apply(object, args), 'locator');
       if (!observedMethods.has(key)) return member.bind(object);
-      return (...args) => measure(kind + '.' + String(key), () => member.apply(object, args), {
+      return (...args) => measure(kind + '.' + String(key), () => {
+        if (kind === 'keyboard') {
+          assert.equal(args.length, 1, 'keyboard options/held modifiers require a separately qualified input path');
+          return nativeMouse.guardKeyboardPress(args[0], () => member.apply(object, args));
+        }
+        if (kind === 'page' && key === 'waitForFunction') {
+          assert.ok(args.length <= 3); return waitForDirectionalReadiness(rawPage, args[0], args[1], args[2]);
+        }
+        return member.apply(object, args);
+      }, {
         ...(kind === 'locator' ? { selector: String(object) } : {}),
         ...(['mouse', 'keyboard', 'cdp'].includes(kind) ? { arguments: args } : {}),
       });
@@ -220,6 +239,21 @@ test('real authored directional controls preserve native input, aim and output b
       window.__directionalDOM = { visible, scope, query };
       window.__directionalKeyTargets = [];
       window.__directionalNative = [];
+      window.__directionalMouseObserved = []; window.__directionalHtmlDragstarts = [];
+      for (const type of ['pointermove', 'pointerdown', 'pointerup', 'wheel']) window.addEventListener(type, event => {
+        if (type !== 'wheel' && event.pointerType !== 'mouse') return;
+        const row = { sequence: window.__directionalMouseObserved.length + 1, type, isTrusted: event.isTrusted,
+          at: event.timeStamp, x: event.clientX, y: event.clientY, pointerType: event.pointerType, pointerId: event.pointerId,
+          button: event.button, buttons: event.buttons, pressure: event.pressure, deltaX: event.deltaX, deltaY: event.deltaY,
+          modifiers: { alt: event.altKey, control: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey } };
+        window.__directionalMouseObserved.push(row);
+        window.__directionalDiagnostic?.({ kind: 'mouse-native', value: row }).catch(() => {});
+      }, true);
+      window.addEventListener('dragstart', event => {
+        const row = { at: event.timeStamp, isTrusted: event.isTrusted };
+        window.__directionalHtmlDragstarts.push(row);
+        window.__directionalDiagnostic?.({ kind: 'html-dragstart', value: row }).catch(() => {});
+      }, true); // Observe a failure; never intercept or prevent HTML drag-and-drop.
       // Observe the trusted input only. The actual producer wrapper below
       // records its synchronous state/readout result before another frame.
       window.addEventListener('pointermove', event => {
@@ -317,10 +351,25 @@ test('real authored directional controls preserve native input, aim and output b
       socket.close();
     });
     rawPage = await measure('setup.page', () => context.newPage());
+    mouseSession = await context.newCDPSession(rawPage);
+    nativeMouse = createDirectionalNativeMouse({ send: (method, packet) => mouseSession.send(method, packet), onRecord: row => {
+      const target = receipt.native_mouse;
+      if (row.kind === 'expected' || row.kind === 'dispatched') target[row.kind].push(row.value);
+      else if (row.kind === 'operation-start') target.operations.push(row.value);
+      else if (row.kind === 'operation-end') Object.assign(target.operations.find(value => value.id === row.value.id), row.value);
+      else if (row.kind === 'failure') target.failure = row.value.reason;
+      progress({ event: 'mouse-' + row.kind, value: row.value }); save();
+    } });
+    // A mutable observation facade keeps the proxy compatible with the
+    // helper's frozen API; the helper remains the sole owner of input state.
+    nativeMouseSurface = Object.fromEntries(['move', 'down', 'up', 'click', 'wheel'].map(method =>
+      [method, (...args) => nativeMouse[method](...args)]));
     await rawPage.exposeBinding('__directionalDiagnostic', (_source, event) => {
       if (event.kind === 'native') receipt.native_progress.push(event.value);
       else if (event.kind === 'modeled') receipt.modeled_progress.push(event.value);
       else if (event.kind === 'keyboard-target') receipt.keyboard_targets.push(event.value);
+      else if (event.kind === 'mouse-native') receipt.native_mouse.observed.push(event.value);
+      else if (event.kind === 'html-dragstart') { receipt.native_mouse.dragstarts.push(event.value); nativeMouse.retire('native_html_dragstart'); }
       progress({ event: 'browser-' + event.kind, value: event.value });
     });
     page = observe(rawPage, 'page'); page.setDefaultTimeout(15000); page.on('pageerror', error => receipt.errors.push(error.message));
@@ -339,19 +388,31 @@ test('real authored directional controls preserve native input, aim and output b
     // admit the exact current control in one browser turn, then send the same
     // real keyboard input outside evaluate. A trusted keydown independently
     // witnesses that the admitted scope/node actually received that key.
-    const activateStatic = async (spec, key = 'Enter') => {
+    const activateStatic = async (spec, key = 'Enter', { readBefore, checkBefore } = {}) => {
       const id = expectedKeys.length + 1, eventKey = key === 'Space' ? ' ' : key;
-      const admission = await page.evaluate(({ spec, id, key }) => {
+      const admission = await page.evaluate(({ spec, id, key, readBefore }) => {
         const dom = window.__directionalDOM, node = dom.query(spec), root = dom.scope(spec.scope);
         if (!node) throw Error('missing authored control: ' + spec.name);
+        // Only observations at the existing pre-input fence are combined.
+        // Capture them before even moving keyboard focus to the next control.
+        const observations = {};
+        if (readBefore?.pressed) {
+          const prior = dom.query(readBefore.pressed); if (!prior) throw Error('missing prior radial zone');
+          observations.pressed = prior.getAttribute('aria-pressed');
+        }
+        if (readBefore?.power) {
+          const power = dom.query(readBefore.power.spec); if (!power) throw Error('missing radial power checkbox');
+          observations.power = { checked: power.checked, descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(readBefore.power.id) };
+        }
         node.focus(); node.focus();
         const current = node.isConnected && dom.query(spec) === node && dom.scope(spec.scope) === root;
         window.__directionalExpectedKey = { id, key, node, scope: root, spec };
         return { exact_identity: current, focused: document.activeElement === node, visible: dom.visible(node),
-          enabled: !node.matches(':disabled') && !node.closest('[aria-disabled="true"]'), inert: !!node.closest('[inert]'), site: window.__APT_ENGINE?.siteId };
-      }, { spec, id, key: eventKey });
-      const { site, ...conditions } = admission;
+          enabled: !node.matches(':disabled') && !node.closest('[aria-disabled="true"]'), inert: !!node.closest('[inert]'), site: window.__APT_ENGINE?.siteId, observations };
+      }, { spec, id, key: eventKey, readBefore });
+      const { site, observations, ...conditions } = admission;
       assert.deepEqual(conditions, { exact_identity: true, focused: true, visible: true, enabled: true, inert: false });
+      checkBefore?.(observations);
       expectedKeys.push({ id, key: eventKey, site });
       await page.keyboard.press(key);
     };
@@ -672,32 +733,42 @@ test('real authored directional controls preserve native input, aim and output b
     });
     await check('all six modeled ring zones support native keyboard selection and isolated brightness/temperature controls', async () => {
       await activateStatic(button(INSPECTOR, 'Light', 'tab')); await expectMode('zones');
+      let previousZone = null;
       for (let number = 1; number <= 6; number++) {
-        await activateStatic(zoneButton(number), number % 2 ? 'Enter' : 'Space');
-        assert.equal(await attribute(zoneButton(number), 'aria-pressed'), 'true');
+        await activateStatic(zoneButton(number), number % 2 ? 'Enter' : 'Space', { readBefore: { pressed: previousZone },
+          checkBefore: observations => { if (previousZone) assert.equal(observations.pressed, 'true'); } });
+        previousZone = zoneButton(number);
       }
-      await activateStatic(zoneButton(1));
+      await activateStatic(zoneButton(1), 'Enter', { readBefore: { pressed: previousZone },
+        checkBefore: observations => assert.equal(observations.pressed, 'true') });
       const power = input(CHANNEL, 'Radial zone 1 power', 'checkbox');
-      const powerObservation = () => page.evaluate(({ spec, id }) => {
-        const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing radial power checkbox');
-        return { checked: node.checked, descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id) };
-      }, { spec: power, id: fixture.fixture_id });
-      const originalPower = await powerObservation(), before = originalPower.descriptor;
-      assert.ok(before.state.radials[0].brightness > 0, 'power memory is tested from an actual nonzero saved level');
-      assert.equal(originalPower.checked, true); await activateStatic(power, 'Space');
-      const offPower = await powerObservation(); let after = offPower.descriptor; assert.equal(after.state.radials[0].on, false);
-      assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power Off remembers the saved nonzero level');
-      assert.equal(offPower.checked, false); await activateStatic(power, 'Space');
-      const onPower = await powerObservation(); after = onPower.descriptor; assert.equal(after.state.radials[0].on, true);
-      assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power On restores the same saved level');
-      assert.deepEqual(after.state.radials.slice(1), before.state.radials.slice(1));
-      assert.deepEqual(withoutRadials(after), withoutRadials(before));
-      assert.equal(onPower.checked, true); await activateStatic(button(CHANNEL, 'Off'));
-      const allOff = await descriptor(fixture.fixture_id);
+      const readPower = { power: { spec: power, id: fixture.fixture_id } }; let originalPower, after;
+      await activateStatic(power, 'Space', { readBefore: readPower, checkBefore: observations => {
+        originalPower = observations.power;
+        assert.ok(originalPower.descriptor.state.radials[0].brightness > 0, 'power memory is tested from an actual nonzero saved level');
+        assert.equal(originalPower.checked, true);
+      } });
+      const before = originalPower.descriptor;
+      await activateStatic(power, 'Space', { readBefore: readPower, checkBefore: observations => {
+        const offPower = observations.power; after = offPower.descriptor; assert.equal(after.state.radials[0].on, false);
+        assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power Off remembers the saved nonzero level');
+        assert.equal(offPower.checked, false);
+      } });
+      await activateStatic(button(CHANNEL, 'Off'), 'Enter', { readBefore: readPower, checkBefore: observations => {
+        const onPower = observations.power; after = onPower.descriptor; assert.equal(after.state.radials[0].on, true);
+        assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power On restores the same saved level');
+        assert.deepEqual(after.state.radials.slice(1), before.state.radials.slice(1));
+        assert.deepEqual(withoutRadials(after), withoutRadials(before)); assert.equal(onPower.checked, true);
+      } });
+      const allOffObservation = await page.evaluate(({ spec, id }) => {
+        const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing all-zones control');
+        return { descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), selected: node.getAttribute('aria-pressed') };
+      }, { spec: { scope: RING, selector: 'g[role="button"]', name: 'All radial zones', tag: 'g', role: 'button' }, id: fixture.fixture_id });
+      const allOff = allOffObservation.descriptor;
       assert.ok(allOff.state.radials.every(zone => zone.on === false && zone.brightness === 0), 'the literal quick Off preset affects all six zones');
       assert.deepEqual(allOff.state.radials.map(zone => zone.color_temp_kelvin), before.state.radials.map(zone => zone.color_temp_kelvin));
       assert.deepEqual(withoutRadials(allOff), withoutRadials(before));
-      assert.equal(await attribute({ scope: RING, selector: 'g[role="button"]', name: 'All radial zones', tag: 'g', role: 'button' }, 'aria-pressed'), 'true',
+      assert.equal(allOffObservation.selected, 'true',
         'quick levels clear the individual zone selection');
       await activateStatic(zoneButton(1));
       await activateStatic(input(INSPECTOR, 'Radial brightness', 'range'), 'ArrowRight');
@@ -867,9 +938,16 @@ test('real authored directional controls preserve native input, aim and output b
       return { home_retired: true, late_modeled_calls: 0, fixture_display_on: true, fixtures: 4 };
     });
     const finalEvents = await page.evaluate(() => ({ native: window.__directionalNative, calls: window.__directionalCalls,
-      reconciliations: window.__directionalReconciliations, keyboardTargets: window.__directionalKeyTargets }));
+      reconciliations: window.__directionalReconciliations, keyboardTargets: window.__directionalKeyTargets,
+      mouse: window.__directionalMouseObserved, dragstarts: window.__directionalHtmlDragstarts }));
     receipt.native_events = finalEvents.native; receipt.modeled_calls = finalEvents.calls; receipt.reconciliations = finalEvents.reconciliations;
     receipt.keyboard_targets = finalEvents.keyboardTargets;
+    receipt.native_mouse.observed = finalEvents.mouse; receipt.native_mouse.dragstarts = finalEvents.dragstarts;
+    const mouseLedger = nativeMouse.readback(), mouseCalls = {};
+    for (const row of mouseLedger.operations) if (row.type !== 'keyboard') mouseCalls[row.type] = (mouseCalls[row.type] || 0) + 1;
+    assert.deepEqual(mouseCalls, { move: 28, down: 13, up: 13, click: 3, wheel: 1 }, 'all original native mouse call counts remain exact');
+    assert.equal(mouseLedger.expected.filter(row => row.type === 'move').length, 55, 'all original interpolation samples remain exact');
+    receipt.native_mouse.proof = assertDirectionalNativeMouseLedger({ ledger: mouseLedger, observed: finalEvents.mouse, dragstarts: finalEvents.dragstarts });
     assert.deepEqual(receipt.keyboard_targets.map(({ id, key, site }) => ({ id, key, site })), expectedKeys,
       'every scheduled native key reaches its freshly admitted home/control in exact order');
     for (const event of receipt.keyboard_targets) { assert.equal(event.isTrusted, true); assert.equal(event.exact_target, true); }
@@ -901,7 +979,7 @@ test('real authored directional controls preserve native input, aim and output b
   }
   finally {
     clearTimeout(timer); save();
-    for (const [name, close] of [['context', () => context?.close()], ['browser', () => browser?.close()],
+    for (const [name, close] of [['mouse-session', () => mouseSession?.detach()], ['context', () => context?.close()], ['browser', () => browser?.close()],
       ['server', async () => { server?.closeAllConnections(); if (server) await new Promise(resolve => server.close(resolve)); }]]) {
       try { await close(); } catch (error) { (receipt.cleanup_errors ||= []).push({ name, message: error.message }); }
     }

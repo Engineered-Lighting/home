@@ -210,6 +210,70 @@ The receipt remains at
 These findings motivate reducing protocol round trips while preserving native
 input, exact DOM identity/admission, every assertion and the full scene.
 
+### Hosted timing follow-up
+
+Hosted run `39203853884` passed the full Home shell in 139.6 seconds but again
+reached the directional browser's unchanged 145-second deadline. Seven of its
+13 stages completed; the pending operation was an observation after the second
+native touch had already released mouse capture. The workflow later reached
+its unchanged ten-minute limit. These results are failures, not acceptance.
+
+The retained action receipt shows cumulative browser protocol cost: the same
+first 194 operations took 145.0 seconds hosted, 39.2 seconds on workstation
+software WebGL and 14.9 seconds on native rendering. Hosted observations cost
+about 346 ms each, unchanged from the earlier revision. Playwright's HTML-drag
+interception adds several protocol operations to every held mouse sample even
+though these canvas gestures never begin HTML drag-and-drop.
+
+The follow-up is limited to test protocol efficiency. Coherent observations
+are batched only within the same input/readiness fence. Native input samples,
+their ordering, every behavioral assertion, the full scenes, normal motion,
+screenshots, pause/resume, canonical aim tolerance and all deadlines remain.
+Production sources and the private preview are unchanged by this follow-up.
+Fresh local and hosted results must qualify the resulting test revision.
+
+The directional driver sends the pinned Chromium mouse packets directly,
+awaiting each original interpolation sample in order. It owns all mouse state
+and permits only the existing modifier-free native key presses. The receipt
+compares expected and dispatched packets with trusted browser pointer/wheel
+events, including coordinates, buttons, pressure, identity and ordering;
+missing, duplicated or extra samples and any HTML drag start fail the proof.
+Application handlers receive browser input, with no DOM input dispatch or
+direct model setter used to prepare the gestures.
+
+Directional readiness keeps each original synchronous read-only predicate,
+argument and input fence. A by-value browser loop checks immediately and on
+real animation frames, with both browser and Node fifteen-second caps. This
+removes poller/handle protocol turns without extending the original waits.
+The thirteen explicit renderer snapshots remain at their original fences.
+
+The 37 native-driver and 13 readiness contract checks pass. Independent review
+cleared their input conservation and bounded polling methods. The revised full
+Home shell passes in 36.1 seconds with native rendering and 54.8 seconds with
+the retained software-rendering flags. Room selection passes all eight stages
+in 11.5 and 33.2 seconds respectively. These workstation runs use Node 24.14.1;
+the hosted runner uses Node 20.20.2. Both use Playwright 1.61.1 / Chromium 149,
+and Windows software rendering remains diagnostic rather than hosted acceptance.
+
+The first full directional rerun passed all thirteen behavior stages but failed
+the new final conservation oracle on WheelEvent coordinates. Chromium floors
+these inherited MouseEvent coordinates; PointerEvent preserves subpixels. The
+oracle now requires exact floored coordinates only for wheel events, retaining
+the strict pointer-coordinate check and every sent packet. A small isolated
+pinned Playwright/direct-CDP comparison confirms the same trusted wheel events;
+negative-fraction and wrong-coordinate unit cases pin the conversion. The
+original failed receipt is retained at
+`.tmp/apartment-directional-browser/run-1792388826488/receipt.json`.
+
+After that correction, the full directional proof passes all thirteen stages
+and the exact 91-event conservation ledger in 21.8 seconds with native rendering
+and 44.6 seconds with the retained software flags. All 55 original movement
+samples, 13 press/release pairs, three clicks and wheel input remain; no HTML
+drag starts occur. Receipts:
+`.tmp/apartment-directional-browser/run-1792388990095/receipt.json` and
+`.tmp/apartment-directional-browser/run-1792389024486/receipt.json`.
+The workstation passes do not substitute for fresh hosted checks.
+
 ## Ticket coverage and retained limits
 
 | Ticket | Covered in this slice | Still open |

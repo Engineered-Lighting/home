@@ -70,9 +70,27 @@ test('real authored room selection keeps native input ownership and never dispat
   let server, handler, origin, browser, context, page, timer;
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
+    receipt.deadline_at = Date.now(); save();
     browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s room selection browser deadline'));
   }, 145000); });
-  const check = async (name, operation) => { receipt.current_stage = name; save(); const detail = await operation(); receipt.checks.push({ name, ...detail }); save(); };
+  const check = async (name, operation) => {
+    receipt.current_stage = name;
+    const phase = { name, started_at: Date.now(), completed: false };
+    (receipt.phases ||= []).push(phase); save();
+    try { const detail = await operation(); receipt.checks.push({ name, ...detail }); phase.completed = true; }
+    finally { phase.duration_ms = Date.now() - phase.started_at; save(); }
+  };
+  const observeWithin15s = async (name, operation, argument) => {
+    const observation = { name, started_at: Date.now(), completed: false };
+    (receipt.observations ||= []).push(observation); save();
+    let observationTimer;
+    try {
+      const value = await Promise.race([page.evaluate(operation, argument), new Promise((_, reject) => {
+        observationTimer = setTimeout(() => reject(Error('15s browser observation deadline: ' + name)), 15000);
+      })]);
+      observation.completed = true; return value;
+    } finally { clearTimeout(observationTimer); observation.duration_ms = Date.now() - observation.started_at; save(); }
+  };
   async function proof() {
     server = http.createServer((req, res) => {
       try {
@@ -142,14 +160,49 @@ test('real authored room selection keeps native input ownership and never dispat
       .getByRole('button', { name: site === 'victoria' ? 'Victoria' : 'Echo Park', exact: true }).click(); await waitSite(site); };
     const blur = () => page.evaluate(() => document.activeElement?.blur());
     const fixtureInspector = () => page.locator('[data-victoria-virtual-fixtures="1"][aria-label="Fixture lighting inspector"]');
-    const selected = () => page.evaluate(() => {
-      const ids = []; window.__APT_ENGINE.overlay.virtualFixturesGroup.traverse(node => {
-        if (node.name === 'virtual-fixture-aim-handle' && node.visible) ids.push(node.userData.fixture_id);
-      }); return ids;
-    });
+    // Wait for the same exact visible inspector/heading, then observe the
+    // renderer selection in that browser turn. A wrong highlight fails once
+    // its matching heading is ready; there is no extra selection grace period.
+    const observeInspector = (fixture = null) => observeWithin15s('inspector:' + (fixture?.fixture_id || 'room'), async fixture => {
+      const started = performance.now(), label = fixture ? 'Fixture lighting inspector' : 'Room lighting inspector';
+      const visible = node => {
+        if (!node?.isConnected || getComputedStyle(node).visibility !== 'visible') return false;
+        for (let current = node; current; current = current.parentElement)
+          if (current.getAttribute('aria-hidden')?.toLowerCase() === 'true') return false;
+        return [...node.getClientRects()].some(rect => Number.isFinite(rect.width) && Number.isFinite(rect.height) && rect.width > 0 && rect.height > 0);
+      };
+      while (performance.now() - started < 15000) {
+        const scopes = [...document.querySelectorAll('[data-victoria-virtual-fixtures="1"]')]
+          .filter(node => visible(node) && node.getAttribute('aria-label') === label);
+        if (scopes.length > 1) throw Error('ambiguous actual room inspector');
+        const scope = scopes[0];
+        if (scope && (scope.localName !== 'aside' || scope.getAttribute('role') && scope.getAttribute('role') !== 'complementary'
+            || scope.hasAttribute('aria-labelledby'))) throw Error('unsupported room inspector role or name');
+        let heading = null;
+        if (scope && fixture) {
+          const headings = [...scope.querySelectorAll('h2.apt-ui-title')].filter(visible).filter(node => {
+            if (node.hasAttribute('aria-labelledby') || node.getAttribute('role') && node.getAttribute('role') !== 'heading'
+                || [...node.querySelectorAll('*')].some(child => child.hasAttribute('aria-label') || child.hasAttribute('aria-labelledby')
+                  || child.textContent.trim() && !visible(child))) throw Error('unsupported authored heading name or role');
+            return (node.getAttribute('aria-label') ?? node.textContent).trim().replace(/\s+/g, ' ')
+              === fixture.label.trim().replace(/\s+/g, ' ');
+          });
+          if (headings.length > 1) throw Error('ambiguous actual selected heading');
+          heading = headings[0];
+        }
+        if (scope && (!fixture || heading)) {
+          const selected = [];
+          window.__APT_ENGINE.overlay.virtualFixturesGroup.traverse(node => {
+            if (node.name === 'virtual-fixture-aim-handle' && node.visible) selected.push(node.userData.fixture_id);
+          });
+          return { selected, inspector: scope.getAttribute('aria-label'), native_events: window.__roomSelectionNativeEvents?.slice(-16) };
+        }
+        await new Promise(resolve => requestAnimationFrame(resolve));
+      }
+      throw Error('15s exact visible room inspector readiness: ' + (fixture?.label || label));
+    }, fixture);
     const expectSelected = async fixture => {
-      await fixtureInspector().getByRole('heading', { name: fixture.label, exact: true }).waitFor();
-      assert.deepEqual(await selected(), [fixture.fixture_id]);
+      assert.deepEqual((await observeInspector(fixture)).selected, [fixture.fixture_id]);
     };
     const descriptor = id => page.evaluate(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), id);
     const canvasPoint = (kind, id, avoid = null) => page.evaluate(({ kind, id, avoid }) => {
@@ -227,10 +280,9 @@ test('real authored room selection keeps native input ownership and never dispat
       // before choosing the separate empty-click target, excluding inertia.
       await page.evaluate(async () => { window.__APT_ENGINE.rig.snapHome(0); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
       const empty = await canvasPoint('empty'); assert.ok(empty); await page.mouse.click(empty.x, empty.y);
-      receipt.empty_click_diagnostic = { point: empty, selected: await selected(),
-        native_events: await page.evaluate(() => window.__roomSelectionNativeEvents.slice(-16)),
-        inspector: await page.locator('[data-victoria-virtual-fixtures="1"]').getAttribute('aria-label') }; save();
-      await page.getByRole('complementary', { name: 'Room lighting inspector', exact: true }).waitFor(); assert.deepEqual(await selected(), []);
+      const cleared = await observeInspector();
+      receipt.empty_click_diagnostic = { point: empty, ...cleared }; save();
+      assert.deepEqual(cleared.selected, []);
       await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
       return { camera_changed: true, orbit_preserved: true, click_cleared: true };
     });
@@ -242,7 +294,7 @@ test('real authored room selection keeps native input ownership and never dispat
       await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).target !== null, fixtures[0].fixture_id);
       await page.keyboard.press('Escape'); assert.deepEqual(await descriptor(fixtures[0].fixture_id), beforeAim); await expectSelected(fixtures[0]);
       await page.mouse.up(); await expectSelected(fixtures[0]); await blur(); await page.keyboard.press('Escape');
-      await page.getByRole('complementary', { name: 'Room lighting inspector', exact: true }).waitFor(); assert.deepEqual(await selected(), []);
+      assert.deepEqual((await observeInspector()).selected, []);
       return { canceled_snapshot_exact: true, first_escape_preserved_selection: true, second_escape_cleared: true };
     });
     await check('a real browser click after aim release preserves selection and Undo restores the exact preview', async () => {
@@ -250,8 +302,9 @@ test('real authored room selection keeps native input ownership and never dispat
       const clickCount = await page.evaluate(() => window.__roomSelectionNativeClicks.length);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up();
       await expectSelected(fixtures[0]); await fixtureInspector().getByRole('button', { name: 'Undo aim', exact: true }).waitFor();
-      const after = await descriptor(fixtures[0].fixture_id); assert.notDeepEqual(after.target, beforeAim.target);
-      const clicks = await page.evaluate(offset => window.__roomSelectionNativeClicks.slice(offset), clickCount);
+      const released = await page.evaluate(({ id, offset }) => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+        clicks: window.__roomSelectionNativeClicks.slice(offset) }), { id: fixtures[0].fixture_id, offset: clickCount });
+      const after = released.descriptor, clicks = released.clicks; assert.notDeepEqual(after.target, beforeAim.target);
       assert.ok(clicks.some(event => event.isTrusted && Math.hypot(event.x - end.x, event.y - end.y) <= 2),
         'actual browser compatibility click at the aim release, not a synthetic dispatch, was observed');
       await fixtureInspector().getByRole('button', { name: 'Undo aim', exact: true }).click();
@@ -262,8 +315,9 @@ test('real authored room selection keeps native input ownership and never dispat
       const point = await canvasPoint('fixture', fixtures[0].fixture_id); assert.ok(point); await page.mouse.dblclick(point.x, point.y);
       assert.deepEqual(receipt.forbidden, []); return { fixture_id: fixtures[0].fixture_id };
     });
-    assert.deepEqual(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures), inventory.fixtures);
-    assert.equal(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible), true);
+    const restoredInventory = await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback());
+    assert.deepEqual(restoredInventory.fixtures, inventory.fixtures);
+    assert.equal(restoredInventory.visible, true);
     await selectHome('echo'); await page.getByRole('button', { name: 'Authored Echo light Unavailable', exact: true }).click();
     await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
     await check('native Echo list uses the same semantic device after a home change', async () => {

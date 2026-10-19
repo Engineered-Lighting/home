@@ -357,6 +357,77 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     let lastFitBox = null;
     let lastFitLocalBox = null;
 
+    /* The visible canvas (SPEC Layout > Fitting). The host already sits left
+     * of the column and above the phone/tablet sheet; what still covers the
+     * room is chrome inside the canvas, such as the room toolbar. The host
+     * reports those as insets in CSS pixels. Fit frames the room in the rest,
+     * and the projection centre moves to the middle of that rest with
+     * setViewOffset. camera.zoom keeps one pixel spanning the same angle, so
+     * an inset change shifts the room without rescaling it. With no insets
+     * (the default) the projection is exactly the plain camera's. A camera
+     * pose (snap or flight) owns the full canvas, so the offset is suspended
+     * while one is held. */
+    const NO_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 });
+    let viewInsets = NO_INSETS;
+    let viewSize = { width: 1, height: 1 };
+    let appliedViewKey = '';
+
+    function normalizedInsets(value, width, height) {
+        const side = key => {
+            const n = Number(value?.[key]);
+            return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+        };
+        let { top, right, bottom, left } = { top: side('top'), right: side('right'), bottom: side('bottom'), left: side('left') };
+        // Never let chrome claim more than 60% of either axis.
+        const fitAxis = (a, b, span) => {
+            const max = Math.floor(span * 0.6);
+            if (a + b <= max) return [a, b];
+            const k = max / Math.max(1, a + b);
+            return [Math.floor(a * k), Math.floor(b * k)];
+        };
+        [left, right] = fitAxis(left, right, width);
+        [top, bottom] = fitAxis(top, bottom, height);
+        return { top, right, bottom, left };
+    }
+
+    function effectiveInsets() {
+        return rig.inCameraPose?.() ? NO_INSETS : normalizedInsets(viewInsets, viewSize.width, viewSize.height);
+    }
+
+    function syncViewOffset(force = false) {
+        const { width, height } = viewSize;
+        const insets = effectiveInsets();
+        const key = [width, height, insets.top, insets.right, insets.bottom, insets.left].join(',');
+        if (!force && key === appliedViewKey) return;
+        appliedViewKey = key;
+        const dx = (insets.left - insets.right) / 2;
+        const dy = (insets.top - insets.bottom) / 2;
+        if (dx === 0 && dy === 0) {
+            if (camera.view?.enabled) camera.clearViewOffset();
+            camera.zoom = 1;
+            camera.aspect = width / Math.max(1, height);
+            camera.updateProjectionMatrix();
+            return;
+        }
+        const fullWidth = width + 2 * Math.abs(dx);
+        const fullHeight = height + 2 * Math.abs(dy);
+        camera.aspect = fullWidth / fullHeight;
+        camera.zoom = height / fullHeight;
+        camera.setViewOffset(fullWidth, fullHeight, Math.abs(dx) - dx, Math.abs(dy) - dy, width, height);
+    }
+
+    /* The fit frame for the visible rect, or null when it is the whole canvas
+     * (which keeps the established fit arithmetic bit for bit). */
+    function visibleFitFrame() {
+        const { width, height } = viewSize;
+        const insets = effectiveInsets();
+        if (!insets.top && !insets.right && !insets.bottom && !insets.left) return null;
+        const visibleWidth = Math.max(1, width - insets.left - insets.right);
+        const visibleHeight = Math.max(1, height - insets.top - insets.bottom);
+        const halfV = Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * visibleHeight / Math.max(1, height));
+        return { fovV: 2 * halfV, aspect: visibleWidth / visibleHeight };
+    }
+
     function fitNow(options = {}) {
         if (!points) return;
         points.geometry.computeBoundingBox();
@@ -364,7 +435,15 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         lastFitLocalBox = { min: box.min.toArray(), max: box.max.toArray() };
         box.applyMatrix4(apartmentRoot.matrixWorld);
         lastFitBox = box.clone();
-        rig.fitBounds(box, options);
+        rig.fitBounds(box, { ...options, frame: visibleFitFrame() });
+    }
+
+    /* A layout change (resize, sheet, dock, toolbar inset). Before the owner
+     * orbits, tilts, zooms or pans, it refits; after, it keeps the owner's
+     * pose and only refreshes the fit the next zoom step uses. */
+    function layoutChanged() {
+        if (!points || rig.inCameraPose?.()) return;
+        fitNow({ dur: 0, keepPose: rig.ownerPose?.() === true });
     }
 
     function projectedFitBounds() {
@@ -403,7 +482,17 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 bottom: canvasHeight - Math.min(130, Math.round(canvasHeight * 0.16)),
             }
             : { left: 4, right: canvasWidth - 4, top: 4, bottom: canvasHeight - 4 };
+        const insets = effectiveInsets();
+        const visible = {
+            left: insets.left, top: insets.top,
+            right: canvasWidth - insets.right, bottom: canvasHeight - insets.bottom,
+        };
         return {
+            insets,
+            visible,
+            visibleOk: !outOfDepth && minX >= visible.left - 1 && maxX <= visible.right + 1
+                && minY >= visible.top - 1 && maxY <= visible.bottom + 1,
+            ownerPose: rig.ownerPose?.() === true,
             viewport: { width: canvasWidth, height: canvasHeight, aspect: camera.aspect },
             bounds: {
                 minX: Math.round(minX),
@@ -570,6 +659,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         last = now;
 
         pointsMaterial.uniforms.uTime.value = now / 1000;
+        syncViewOffset();
         rig.update(dt);
         const inCamPose = rig.inCameraPose && rig.inCameraPose();
         apartmentRoot.updateWorldMatrix(true, false);
@@ -854,11 +944,23 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         },
         setSize(w, h) {
             renderer.setSize(w, h, false);
-            camera.aspect = w / Math.max(1, h);
-            camera.updateProjectionMatrix();
+            viewSize = { width: Math.max(1, Number(w) || 1), height: Math.max(1, Number(h) || 1) };
+            syncViewOffset(true);
             pointsMaterial.uniforms.uPixelRatio.value = renderer.getPixelRatio();
-            if (points && !rig.inCameraPose?.()) fitNow({ dur: 0 });
+            layoutChanged();
         },
+        /* Chrome over the canvas, in CSS pixels from each edge (see
+         * syncViewOffset). Returns the insets in effect. */
+        setViewInsets(insets = NO_INSETS) {
+            const next = normalizedInsets(insets, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+            if (next.top === viewInsets.top && next.right === viewInsets.right
+                && next.bottom === viewInsets.bottom && next.left === viewInsets.left) return effectiveInsets();
+            viewInsets = Object.freeze(next);
+            syncViewOffset(true);
+            layoutChanged();
+            return effectiveInsets();
+        },
+        viewInsets() { return effectiveInsets(); },
         attachInput(el, options = {}) { return rigM.attachInput(el, rig, options); },
         async createApartmentBoundaryMomentum(options = {}) {
             const module = await sib('apartment-boundary-momentum.mjs');
@@ -1033,6 +1135,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                     2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(fov) / 2) * fovScale));
             }
             rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur, projection });
+            syncViewOffset();
         },
         dispose() {
             if (disposed || disposing) return false;

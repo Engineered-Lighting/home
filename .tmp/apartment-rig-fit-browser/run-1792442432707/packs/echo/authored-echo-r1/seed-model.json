@@ -1,0 +1,1 @@
+{"schema_version":1,"revision":7,"exists":true,"site":"echo","zones":[],"devices":[{"id":"authored-echo-light","type":"light","name":"Authored Echo light","ha_entity_id":"light.authored_echo","pos":null}],"targets":[],"meta":{"frame":"z_up_metric_floor0","site_id":"echo","authored_test":true}}

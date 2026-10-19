@@ -3,6 +3,7 @@
  * in at P2 when device markers exist.
  */
 import * as THREE from 'three';
+const { dollhouseKeep } = await import(`./dollhouse-cutaway.mjs${new URL(import.meta.url).search}`);
 
 /* The aim chip's grazing note ("the pool will be long and dim") starts here,
  * matching the W2 aim presentation's threshold. */
@@ -66,7 +67,7 @@ export function createPicking(camera, hostEl) {
                 visible: v.z < 1 && Math.abs(v.x) <= 1.05 && Math.abs(v.y) <= 1.05,
             };
         },
-        pick(objects, clientX, clientY) {
+        pick(objects, clientX, clientY, { doubleSided = false } = {}) {
             const rect = host.getBoundingClientRect();
             const ndc = new THREE.Vector2(
                 ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -79,15 +80,28 @@ export function createPicking(camera, hostEl) {
             raycaster.near = 0;
             raycaster.far = Infinity;
             raycaster.setFromCamera(ndc, camera);
-            return raycaster.intersectObjects(objects, true);
+            // A scan may contain mixed triangle winding. This opt-in affects
+            // only the synchronous query, never the material's rendered side.
+            const sides = new Map();
+            try {
+                if (doubleSided === true) for (const object of objects) object.traverse(node => {
+                    if (!node.isMesh) return;
+                    for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+                        if (material && !sides.has(material)) {
+                            sides.set(material, material.side); material.side = THREE.DoubleSide;
+                        }
+                    }
+                });
+                return raycaster.intersectObjects(objects, true);
+            } finally { for (const [material, side] of sides) material.side = side; }
         },
 
         /* Screen point -> exact apartment-frame mesh hit. The point and face
          * normal are both converted back into the shared Z-up apartment
          * frame, so edit tools can place horizontal work surfaces and
          * vertical art/custom aim planes directly on the runtime mesh. */
-        surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null } = {}) {
-            const hits = this.pick(objects || [], clientX, clientY);
+        surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false } = {}) {
+            const hits = this.pick(objects || [], clientX, clientY, { doubleSided });
             apartmentRoot.updateMatrixWorld(true);
             // Presentation filtering chooses a visible deeper face without
             // modifying the collision mesh used for independent world queries.
@@ -273,6 +287,63 @@ export function createPicking(camera, hostEl) {
             if (!raycaster.ray.intersectPlane(plane, hit)) return null;
             const local = apartmentRoot.worldToLocal(hit.clone());
             return [local.x, local.y];
+        },
+    };
+}
+
+/* Owner target selection against one independently pinned detailed display
+ * mesh. This never supplies collision or perception/fixture authority. */
+export function createRegisteredDeskSurfacePicker({ apartmentRoot, modes, picking,
+    getManifest, sceneIdentity, digest } = {}) {
+    const need = (condition, reason) => { if (!condition) throw TypeError(reason); };
+    const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+    const keys = ['content_revision', 'registration_version', 'manifest_digest', 'frame_digest', 'canonical_collision_digest'];
+    need(apartmentRoot?.isObject3D && typeof modes?.getMesh === 'function'
+        && typeof modes?.debugInfo === 'function' && typeof picking?.surfaceHit === 'function'
+        && typeof getManifest === 'function' && typeof digest === 'function', 'registered_desk_surface_unavailable');
+    function selection(binding) {
+        need(binding && Object.keys(binding).length === keys.length && keys.every(key => Object.hasOwn(binding, key))
+            && typeof binding.content_revision === 'string' && binding.content_revision.length > 0
+            && Number.isSafeInteger(binding.registration_version) && binding.registration_version >= 0
+            && keys.slice(2).every(key => sha(binding[key])), 'registered_desk_surface_binding_changed');
+        const manifest = getManifest();
+        need(sceneIdentity?.siteId === 'victoria' && manifest?.siteId === sceneIdentity.siteId
+            && manifest.revision === sceneIdentity.contentRevision && manifest.revision === binding.content_revision
+            && manifest.registrationVersion === sceneIdentity.registrationVersion
+            && manifest.registrationVersion === binding.registration_version
+            && manifest.assets?.['frame.json']?.sha256 === sceneIdentity.frameDigest
+            && sceneIdentity.frameDigest === binding.frame_digest
+            && manifest.assets?.['collision.glb']?.sha256 === binding.canonical_collision_digest
+            && digest(manifest) === binding.manifest_digest, 'registered_desk_surface_binding_changed');
+        const debug = modes.debugInfo(), mesh = modes.getMesh();
+        // The aggregate status includes unrelated splat/collision work. A
+        // loaded pinned mesh stays usable while those assets warm up.
+        need(mesh?.isObject3D || !(debug?.status === 'loading' || debug?.loadStatus?.mesh === 'loading'),
+            'registered_desk_surface_loading');
+        need(['ready', 'loading'].includes(debug?.status) && debug.disposed !== true
+            && debug.frameStatus !== 'failed' && !['failed', 'aborted', 'timed-out'].includes(debug.loadStatus?.mesh)
+            && mesh?.isObject3D
+            && debug.meshFallback === false && ['mesh.glb', 'mesh.mobile.glb'].includes(debug.meshSource)
+            && sha(manifest.assets?.[debug.meshSource]?.sha256), 'registered_desk_surface_unavailable');
+        let ancestor = mesh;
+        while (ancestor && ancestor !== apartmentRoot) ancestor = ancestor.parent;
+        need(ancestor === apartmentRoot, 'registered_desk_surface_unavailable');
+        return { mesh, policy: debug.dollhouseCutaway,
+            ref: { asset_name: debug.meshSource, asset_sha256: manifest.assets[debug.meshSource].sha256,
+                manifest_digest: binding.manifest_digest } };
+    }
+    return {
+        reference(binding) { return selection(binding).ref; },
+        surfaceHit(clientX, clientY, binding) {
+            const before = selection(binding);
+            const hit = picking.surfaceHit(apartmentRoot, [before.mesh], clientX, clientY, {
+                doubleSided: true, acceptPoint: point => dollhouseKeep(point, before.policy) > .05,
+            });
+            const after = selection(binding);
+            need(after.mesh === before.mesh && after.ref.asset_name === before.ref.asset_name
+                && after.ref.asset_sha256 === before.ref.asset_sha256,
+            'registered_desk_surface_source_changed');
+            return hit ? { ...hit, surface_ref: before.ref } : null;
         },
     };
 }

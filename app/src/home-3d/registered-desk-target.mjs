@@ -63,29 +63,59 @@ function equal(a, b) {
     return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && equal(a[key], b[key]));
 }
 
-export function sealRegisteredDeskTarget({ binding, equipment_ref, corners, confirmed } = {}, digestFn) {
+function displaySurface(surface_ref, binding) {
+    need(exact(surface_ref, ['asset_name', 'asset_sha256', 'manifest_digest'])
+        && ['mesh.glb', 'mesh.mobile.glb'].includes(surface_ref.asset_name)
+        && sha(surface_ref.asset_sha256) && surface_ref.manifest_digest === binding.manifest_digest,
+    'registered_desk_display_surface_required');
+    return clone(surface_ref);
+}
+
+function displayManifest(manifest, surface_ref, binding, digestFn) {
+    need(manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest)
+        && typeof digestFn === 'function', 'registered_desk_display_manifest_required');
+    const manifestDigest = digestFn(clone(manifest));
+    need(sha(manifestDigest) && manifestDigest === binding.manifest_digest
+        && manifest.siteId === SCOPE.site_id && manifest.revision === binding.content_revision
+        && manifest.registrationVersion === binding.registration_version
+        && manifest.assets?.['frame.json']?.sha256 === binding.frame_digest
+        && manifest.assets?.['collision.glb']?.sha256 === binding.canonical_collision_digest,
+    'registered_desk_display_manifest_binding_changed');
+    need(manifest.assets?.[surface_ref.asset_name]?.sha256 === surface_ref.asset_sha256,
+        'registered_desk_display_surface_asset_changed');
+}
+
+export function sealRegisteredDeskTarget({ binding, equipment_ref, corners, confirmed, surface_ref } = {}, digestFn) {
     pins(binding, equipment_ref);
     need(confirmed === true, 'explicit_whole_desktop_confirmation_required');
     need(typeof digestFn === 'function', 'registered_desk_digest_required');
-    const checked = geometry(corners);
-    const body = { schema: 'home-registered-desk-target-1', version: 1, scope: { ...SCOPE },
+    const checked = geometry(corners), display = surface_ref !== undefined;
+    const selection = display
+        ? { method: 'owner_selected_display_mesh', surface_ref: displaySurface(surface_ref, binding), raw_corners: checked.corners }
+        : { method: 'owner_selected_collision_surface', raw_corners: checked.corners, asset_sha256: binding.canonical_collision_digest };
+    const body = { schema: display ? 'home-registered-desk-target-2' : 'home-registered-desk-target-1', version: display ? 2 : 1, scope: { ...SCOPE },
         frame: 'z_up_metric_floor0', unit: 'm', binding: clone(binding), equipment_ref: clone(equipment_ref),
-        target: checked.target, selection: { method: 'owner_selected_collision_surface', raw_corners: checked.corners,
-            asset_sha256: binding.canonical_collision_digest }, confirmed: true,
+        target: checked.target, selection, confirmed: true,
         truth_role: 'owner_selected_scan_target', qualification: null, physical_commands: false };
     const digest = digestFn(clone(body));
     need(sha(digest), 'registered_desk_digest_required');
     return { ...body, digest };
 }
 
-export function validateRegisteredDeskTarget(record, { binding, equipment_ref } = {}, digestFn) {
+export function validateRegisteredDeskTarget(record, { binding, equipment_ref, manifest } = {}, digestFn) {
     need(exact(record, ['schema','version','scope','frame','unit','binding','equipment_ref','target','selection',
         'confirmed','truth_role','qualification','physical_commands','digest']), 'closed_registered_desk_target_required');
     pins(binding, equipment_ref);
     need(equal(record.binding, binding) && equal(record.equipment_ref, equipment_ref), 'registered_desk_target_binding_changed');
-    need(exact(record.selection, ['method','raw_corners','asset_sha256']), 'closed_registered_desk_selection_required');
+    const display = record.schema === 'home-registered-desk-target-2' && record.version === 2;
+    need(exact(record.selection, display ? ['method','raw_corners','surface_ref'] : ['method','raw_corners','asset_sha256']),
+        'closed_registered_desk_selection_required');
+    if (display) {
+        displaySurface(record.selection.surface_ref, binding);
+        displayManifest(manifest, record.selection.surface_ref, binding, digestFn);
+    }
     const expected = sealRegisteredDeskTarget({ binding, equipment_ref, corners: record.selection.raw_corners,
-        confirmed: record.confirmed }, digestFn);
+        confirmed: record.confirmed, ...(display ? { surface_ref: record.selection.surface_ref } : {}) }, digestFn);
     need(equal(record, expected), 'registered_desk_target_changed');
     return clone(record);
 }

@@ -220,6 +220,9 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     const ids = await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.map(item => item.fixture_id));
     await page.getByRole('button', { name: 'All off', exact: true }).click().catch(() => {});
     await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.every(item => !item.state.spotlight.on && !item.state.downward.on), null, { timeout: LIT_WAIT_MS });
+    // Lit lights ease out on the 160 ms clock: let a frame pick up the change, then the fade settle.
+    await frames(2);
+    await page.waitForFunction(() => window.__APT_ENGINE.litState().easing === false, null, { timeout: LIT_WAIT_MS });
     await frames(6);
     const darkLuma = await meanLuma();
     const darkLights = await page.evaluate(() => { let sum = 0; window.__APT_ENGINE.scene.traverse(node => { if (node.isSpotLight && node.userData.lit_source) sum += node.intensity; }); return sum; });

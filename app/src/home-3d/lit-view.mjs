@@ -4,8 +4,10 @@
  * fixtures, using built-in three.js parts only: SpotLights, built-in PCF
  * shadow maps and MeshStandardMaterial, with no custom shader, so the view
  * ports to WebGPURenderer unchanged. The light model (assumed lumens to
- * candela by beam angle, zone directions, colours, the fixed night exposure)
- * lives in the renderer-independent lit-model.mjs.
+ * candela by beam angle, the assumed dimming curve, constant-luminance
+ * colour, zone directions, the 160 ms ease, the fixed night exposure) lives
+ * in the renderer-independent lit-model.mjs. Lights ease toward each set
+ * level on the fixtures' 160 ms clock; the aim follows the exact metadata.
  *
  * Spot shadows are crisp and Down shadows soft (1024 PCF); each radial zone
  * is its own unshadowed lobe. Light intensity is candela x the fixed night
@@ -29,7 +31,7 @@ import * as THREE from 'three';
 
 const Model = await import(`./lit-model.mjs${new URL(import.meta.url).search}`);
 export const { LIT_ASSUMED_LUMENS, LIT_ASSUMPTION_SOURCE, LIT_DISCLOSURE, LIT_DISCLOSURE_DETAIL, LIT_EXPOSURE, LIT_TARGET_FPS,
-    LIT_BOUNCE_LIMIT, LIT_BOUNCE_COUNT, LIT_BOUNCE_RANGE_M, LIT_BOUNCE_ALBEDO, candelaFromLumens, bouncePatches } = Model;
+    LIT_BOUNCE_LIMIT, LIT_BOUNCE_COUNT, LIT_BOUNCE_RANGE_M, LIT_BOUNCE_ALBEDO, candelaFromLumens, bouncePatches, litDimmingFraction } = Model;
 export const LIT_SHADOW_MAP_SIZE = 1024;
 // Below LIT_TARGET_FPS for this many consecutive 500 ms stats, Lit declares
 // a reduced quality instead of silently dropping frames.
@@ -39,9 +41,12 @@ const ASSUMED_ALBEDO_SCALE = 0.8;
 // A faint night fill so the unlit room stays navigable. Not a light source.
 const NIGHT_FILL = 0.35;
 
+/* Light colour for a Kelvin setting at constant luminance (Kim et al. ->
+ * XYZ at Y = 1 -> linear sRGB), so brightness alone sets luminance. The orbs
+ * and beams keep their own display colour. */
 export function kelvinColor(kelvin, target = new THREE.Color()) {
-    const [r, g, b] = Model.kelvinRgb(kelvin);
-    return target.setRGB(r, g, b, THREE.SRGBColorSpace);
+    const [r, g, b] = Model.cctToLinearRgb(kelvin);
+    return target.setRGB(r, g, b, THREE.LinearSRGBColorSpace);
 }
 
 /* The model's input for one virtual fixture, read from the fixture's own
@@ -81,7 +86,8 @@ export function fixtureWorldLights(fixtureRoot, { spotFwhmDeg = 20 } = {}) {
     }));
 }
 
-export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCollision = () => null, spotFwhmDeg = 20 } = {}) {
+export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCollision = () => null, spotFwhmDeg = 20,
+    now = () => performance.now(), reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)') } = {}) {
     if (!scene?.isScene || !renderer?.shadowMap || typeof getMesh !== 'function' || typeof getFixtureRoots !== 'function')
         throw new TypeError('lit_view_dependencies_required');
     const group = new THREE.Group();
@@ -91,6 +97,8 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCo
     fill.name = 'lit-night-fill';
     group.add(fill);
     let active = false, quality = 'full', slow = 0, swapped = [], lights = [], signature = '', saved = null, mesh = null;
+    // The 160 ms ease: what each light shows, and the clock of the last step.
+    let placementSignature = '', shown = [], easedAt = null, easing = false;
     // Bounce lights: a fixed set, so a change never recompiles.
     const bounce = Array.from({ length: LIT_BOUNCE_COUNT }, (_, index) => {
         const light = new THREE.SpotLight(0xffffff, 0, LIT_BOUNCE_RANGE_M, Model.LIT_BOUNCE_CONE, 1, 2);
@@ -177,6 +185,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCo
         rayHits.clear();
         for (const light of lights) { light.shadow?.map?.dispose?.(); group.remove(light, light.target); light.dispose?.(); }
         lights = sources.map(makeLight);
+        shown = [];
     }
     function applyQuality() {
         const size = quality === 'reduced' ? LIT_SHADOW_MAP_SIZE / 2 : LIT_SHADOW_MAP_SIZE;
@@ -192,13 +201,23 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCo
         if (!active) return false;
         const currentMesh = getMesh();
         if (currentMesh !== mesh) { swapMaterials(currentMesh); renderer.shadowMap.needsUpdate = true; }
-        const sources = (getFixtureRoots() || []).flatMap(root => fixtureWorldLights(root, { spotFwhmDeg }));
-        const shape = sources.map(source => source.kind + (source.number || '')).join(',');
-        if (shape !== lights.map(light => light.userData.shape).join(',')) { rebuild(sources); applyQuality(); }
-        const key = sources.map(source => [...source.origin.toArray(), ...source.direction.toArray(), source.candela, source.kelvin]
-            .map(value => (typeof value === 'number' ? value.toFixed(5) : String(value))).join(':')).join('|') + '|' + quality;
+        const exact = (getFixtureRoots() || []).flatMap(root => fixtureWorldLights(root, { spotFwhmDeg }));
+        const shape = exact.map(source => source.kind + (source.number || '')).join(',');
+        if (shape !== lights.map(light => light.userData.shape).join(',')) { rebuild(exact); applyQuality(); }
+        // SPEC: ease each set level and Kelvin on the 160 ms clock. The first
+        // sync after enable, a rebuilt light set and reduced motion snap.
+        const at = now(), elapsed = easedAt === null ? Infinity : at - easedAt;
+        const step = Model.easeLights(exact, shown, elapsed, { snap: elapsed === Infinity || !!reducedMotion?.matches });
+        const sources = step.lights;
+        easedAt = at; shown = step.shown; easing = step.easing;
+        const format = values => values.map(value => (typeof value === 'number' ? value.toFixed(5) : String(value))).join(':');
+        // Shadow maps depend on where lights are, never on how bright: an
+        // eased level re-renders the lights only.
+        const placement = sources.map(source => format([...source.origin.toArray(), ...source.direction.toArray()])).join('|') + '|' + quality;
+        const key = placement + '#' + sources.map(source => format([source.candela, source.kelvin])).join('|');
         if (key === signature) return false;
-        signature = key;
+        const moved = placement !== placementSignature;
+        signature = key; placementSignature = placement;
         sources.forEach((source, index) => {
             const light = lights[index];
             light.position.copy(source.origin);
@@ -222,7 +241,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCo
             light.intensity = patch.intensity;
             light.userData.patch = { kind: patch.kind, reflected_lm: patch.reflected, albedo: patch.albedo, assumed: true };
         });
-        renderer.shadowMap.needsUpdate = true;
+        if (moved) renderer.shadowMap.needsUpdate = true;
         return true;
     }
 
@@ -234,7 +253,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCo
         renderer.shadowMap.type = THREE.PCFShadowMap;
         renderer.shadowMap.autoUpdate = false;
         scene.add(group);
-        active = true; quality = 'full'; slow = 0; signature = '';
+        active = true; quality = 'full'; slow = 0; signature = ''; placementSignature = ''; shown = []; easedAt = null;
         const previous = saved.onBeforeRender;
         // Sync on the render that uses it, without touching the engine loop.
         scene.onBeforeRender = function litBeforeRender(...args) {
@@ -250,7 +269,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCo
         restoreMaterials();
         for (const light of lights) { light.shadow?.map?.dispose?.(); light.dispose?.(); }
         group.remove(...lights.flatMap(light => [light, light.target]));
-        lights = []; signature = ''; rayHits.clear(); bounceSources = 0;
+        lights = []; signature = ''; placementSignature = ''; shown = []; easedAt = null; easing = false; rayHits.clear(); bounceSources = 0;
         for (const light of bounce) light.intensity = 0;
         scene.remove(group);
         renderer.shadowMap.enabled = saved.enabled;
@@ -272,6 +291,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, getCo
         return Object.freeze({ active, quality, lights: lights.length,
             shadowLights: lights.filter(light => light.castShadow).length,
             meshSwapped: swapped.length, exposure: LIT_EXPOSURE,
+            easing, easeTauMs: Model.LIT_EASE_TAU_MS, dimmingCurve: Model.LIT_DIMMING_CURVE.name,
             bounceLights: bounce.length, bounceSources, bounceRangeM: LIT_BOUNCE_RANGE_M, bounceLimit: LIT_BOUNCE_LIMIT,
             assumedAlbedos: LIT_BOUNCE_ALBEDO,
             assumedLumens: LIT_ASSUMED_LUMENS, assumptionSource: LIT_ASSUMPTION_SOURCE, measured: false,

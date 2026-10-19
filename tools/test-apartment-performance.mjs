@@ -8,6 +8,7 @@ import {
   PERFORMANCE_TARGETS,
   selectClientPerformanceTarget,
 } from '../app/src/home-3d/adaptive-performance.mjs';
+import { ABBA_CRITERION, analyzeAbba, displayBound, onTimerGrid } from './apartment-overlay-abba.mjs';
 
 test('client target remains stable when desktop and phone viewport widths change', () => {
   const desktop = { userAgentData: { mobile: false }, hardwareConcurrency: 8, deviceMemory: 8 };
@@ -84,4 +85,69 @@ test('a measured slow-frame window lowers one budget rung and publishes the deci
   assert.equal(seen[0].previousLevel, 'high');
   assert.equal(seen[0].level, 'balanced');
   assert.equal(seen[0].reason, 'long-frame-burst');
+});
+
+// APT-F01 pre-registered ABBA criterion (docs/design/apartment-unified/
+// overlay-performance-receipt-w1.md). Pure arithmetic; no browser.
+const abbaBlocks = rows => rows.map(([A1, B1, B2, A2]) => ({ A1, B1, B2, A2 }));
+
+test('ABBA criterion: identical vsync-pinned frames are quiet with the spread floored at one timer quantum', () => {
+  const result = analyzeAbba(abbaBlocks(Array(4).fill([16.7, 16.7, 16.7, 16.7])), { metric: 'frameP95' });
+  assert.equal(result.role, 'primary');
+  assert.equal(result.snapped_to_timer_grid, true);
+  assert.equal(result.measured_aa_spread, 0);
+  assert.equal(result.aa_spread, ABBA_CRITERION.quantumMs);
+  assert.equal(result.valid, true);
+  assert.equal(result.result, 'no-measurable-regression');
+  assert.equal(displayBound(result.a_median), true);
+});
+
+test('ABBA criterion: float residue on the 0.1 ms grid cannot flip a rule', () => {
+  const result = analyzeAbba(abbaBlocks([
+    [4.299999999999272, 4.300000000001091, 4.300000000001091, 4.299999999999272],
+    [4.299999999999272, 4.299999999999272, 4.299999999999272, 4.299999999999272],
+    [4.30000000000291, 4.30000000000291, 4.299999999995634, 4.30000000000291],
+    [4.299999999995634, 4.30000000000291, 4.30000000000291, 4.299999999995634],
+  ]), { metric: 'frameP95' });
+  assert.equal(result.snapped_to_timer_grid, true);
+  assert.equal(result.median_delta, 0);
+  assert.equal(result.result, 'no-measurable-regression');
+});
+
+test('ABBA criterion: a consistent B cost beyond the AA spread is a measured cost, an improvement keeps its sign', () => {
+  const cost = analyzeAbba(abbaBlocks(Array(4).fill([2.0, 2.4, 2.4, 2.1])), { metric: 'renderP95' });
+  assert.equal(cost.role, 'descriptive');
+  assert.equal(cost.valid, true);
+  assert.ok(Math.abs(cost.median_delta - .35) < 1e-9);
+  assert.equal(cost.result, 'measured-difference-cost');
+  const better = analyzeAbba(abbaBlocks(Array(4).fill([2.4, 2.0, 2.0, 2.4])), { metric: 'renderP95' });
+  assert.equal(better.result, 'measured-difference-improvement');
+});
+
+test('ABBA criterion: an A/A spread above 10% of the A median is invalid, not a pass', () => {
+  const result = analyzeAbba(abbaBlocks([[2.0, 2.0, 2.0, 2.6], [2.0, 2.0, 2.0, 2.0], [2.0, 2.0, 2.0, 2.0], [2.0, 2.0, 2.0, 2.0]]), { metric: 'renderP95' });
+  assert.equal(result.valid, false);
+  assert.equal(result.result, 'invalid-noisy');
+});
+
+test('ABBA criterion: one outlier block is tolerated, two are a measured difference', () => {
+  const one = analyzeAbba(abbaBlocks([[16.7, 17.3, 17.3, 16.7], [16.7, 16.7, 16.7, 16.7], [16.7, 16.7, 16.7, 16.7], [16.7, 16.7, 16.7, 16.7]]), { metric: 'frameP95' });
+  assert.equal(one.outlier_blocks, 1);
+  assert.equal(one.result, 'no-measurable-regression');
+  const two = analyzeAbba(abbaBlocks([[16.7, 17.3, 17.3, 16.7], [16.7, 17.3, 17.3, 16.7], [16.7, 16.7, 16.7, 16.7], [16.7, 16.7, 16.7, 16.7]]), { metric: 'frameP95' });
+  assert.equal(two.outlier_blocks, 2);
+  assert.equal(two.result, 'measured-difference-cost');
+});
+
+test('ABBA criterion: off-grid values are analysed raw, without snapping or a floor', () => {
+  assert.equal(onTimerGrid([16.7, 2.05]), false);
+  const result = analyzeAbba(abbaBlocks(Array(4).fill([2.03, 2.05, 2.05, 2.04])), { metric: 'rafP95' });
+  assert.equal(result.snapped_to_timer_grid, false);
+  assert.ok(Math.abs(result.aa_spread - .01) < 1e-9);
+  assert.equal(result.result, 'measured-difference-cost');
+});
+
+test('ABBA criterion: refuses short or non-finite designs', () => {
+  assert.throws(() => analyzeAbba(abbaBlocks(Array(3).fill([1, 1, 1, 1]))), /abba_minimum_blocks/);
+  assert.throws(() => analyzeAbba(abbaBlocks([[1, 1, NaN, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]])), /abba_slot_not_finite/);
 });

@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import Core from '../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { ABBA_CRITERION, analyzeAbba, displayBound } from './apartment-overlay-abba.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), SRC = path.join(ROOT, 'app/src');
@@ -19,7 +20,10 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const phase=process.env.HOME_APARTMENT_OVERLAY_PROOF_PHASE||'candidate';
 assert.ok(['candidate','baseline-before','baseline-after'].includes(phase),'only explicit baseline or candidate benchmark phases are allowed');
 const profile=process.env.HOME_APARTMENT_OVERLAY_PROOF_PROFILE||'functional';
-assert.ok(['functional','desktop-benchmark'].includes(profile),'only functional or desktop-benchmark resource profiles are allowed');
+assert.ok(['functional','desktop-benchmark','desktop-abba'].includes(profile),'only functional, desktop-benchmark or desktop-abba resource profiles are allowed');
+assert.ok(profile!=='desktop-abba'||phase==='candidate','the pre-registered ABBA profile measures the current worktree only');
+// The functional proof keeps its 145s deadline; the separate ABBA profile has its own fixed deadline.
+const PROOF_DEADLINE_MS=profile==='desktop-abba'?420000:145000;
 assert.ok(phase==='candidate'||profile==='desktop-benchmark','source-paired baseline phases require the explicit desktop-benchmark profile');
 const viewport=profile==='functional'?{width:390,height:844}:{width:1366,height:768};
 const deviceScaleFactor=profile==='functional'?0.5:1;
@@ -67,7 +71,7 @@ function noiseComparison(before,active,after,key){
     interpretation:overlay.every(value=>value>=min&&value<=max)?'within-observed-baseline-variability':'requires-review'};
 }
 
-test('real renderer overlay bridge stays canonical across modes, lifetime races and paired performance windows',{timeout:180000},async()=>{
+test('real renderer overlay bridge stays canonical across modes, lifetime races and paired performance windows',{timeout:profile==='desktop-abba'?450000:180000},async()=>{
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT,'this proof uses only current worktree source');
   const run=path.join(ROOT,'.tmp/apartment-overlay-bridge-browser','run-'+Date.now()+'-'+phase);fs.mkdirSync(run,{recursive:true});
   const packs=path.join(run,'packs'),privateRoot=path.join(run,'private'),echo=installPack(packs,'echo'),victoria=installPack(packs,'victoria');
@@ -81,7 +85,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     household_data:false,physical_commands:0,camera_sessions:0,model_sessions:0,survey_writes:0,screenshots:false,
     source_phase:phase,proof_profile:profile,proof_pacing:'browser-default',configured_viewport:viewport,configured_device_scale_factor:deviceScaleFactor,
     fixture_display_scope:profile==='functional'?'on-for-sustained-orbit-off-for-bridge-sampling':'on-throughout',
-    performance_scope:profile==='functional'?'functional-viewport-capacity-only':'desktop-benchmark-requires-paired-review',
+    performance_scope:profile==='functional'?'functional-viewport-capacity-only':profile==='desktop-abba'?'desktop-abba-preregistered-authored-scenes':'desktop-benchmark-requires-paired-review',
     engine_source:baselineEngine?{mode:'public-baseline-engine-only',commit:baselineCommit,sha256:hash(baselineEngine),other_sources:'current-worktree'}
       :{mode:'candidate-worktree',sha256:hash(fs.readFileSync(path.join(SRC,'home-3d/engine.js')))},
     checks:[],performance:[],warmups:[],checkpoints:[],timing_windows:[],requests:[],forbidden:[],missing_code:[],errors:[],served:{},browser:browserOptions(),startup:{checkpoints:[],responses:[]}};
@@ -89,7 +93,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
   const checkpoint=(name,detail={})=>{receipt.current_phase=name;receipt.checkpoints.push({name,elapsed_ms:Date.now()-proofStarted,...detail});};
   const recordWindow=(mode,condition,rows)=>{receipt.timing_windows.push({mode,condition,elapsed_ms:Date.now()-proofStarted,rows});checkpoint(mode+' '+condition+' stats complete');};
   let server,browser,context,page,origin,handler,timer,releaseLeafRequest;
-  const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{browser?.close().catch(()=>{});server?.closeAllConnections();reject(Error('145s overlay bridge browser deadline'));},145000)});
+  const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{browser?.close().catch(()=>{});server?.closeAllConnections();reject(Error((PROOF_DEADLINE_MS/1000)+'s overlay bridge browser deadline'));},PROOF_DEADLINE_MS)});
   async function proof(){
     server=http.createServer((req,res)=>{
       try{
@@ -269,6 +273,56 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       });
       p.stats=()=>new Promise((resolve,reject)=>{const rows=[],timeout=setTimeout(()=>{off();reject(Error('production stats deadline'))},10000);const off=p.engine.on('stats',value=>{rows.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,pixelRatio:value.pixelRatio,calls:value.calls,tris:value.tris,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,virtual_spotlights_visible:p.engine.overlay.virtualFixturesReadback().visible,...(p.expectActive?{dotDraws:p.timedDraws,labelHidden:p.label.hidden,dotVisible:p.layer.group.children[0]?.visible,layerAttached:!!p.layer.group.parent,projection:p.layer.project(p.point)}:{})});if(rows.length===4){clearTimeout(timeout);off();resolve(rows)}})});
     },profile==='functional');
+    if(profile==='desktop-abba')await page.evaluate(()=>{
+      const p=window.__overlayBridgeProof,p95=values=>{const sorted=[...values].sort((a,b)=>a-b);return sorted[Math.floor(sorted.length*.95)]||0;};
+      // Treatment A: no overlay layer. Treatment B: one layer, one dot and
+      // label per fixture display anchor. Switching never touches fixtures.
+      p.abbaSet=async(treatment,descriptors)=>{
+        if(treatment==='A'){p.abbaController?.abort();p.abbaController=null;p.abbaLayer=null;return;}
+        if(p.abbaLayer)return;
+        const controller=new AbortController();p.abbaController=controller;
+        p.abbaLayer=await p.engine.createUiOverlayLayer({host:p.host,signal:controller.signal,isCurrent:()=>window.__APT_ENGINE===p.engine&&p.engine.sceneIdentity===p.identity});
+        if(!p.abbaLayer)throw Error('ABBA overlay layer refused');
+        for(const item of descriptors)p.abbaLayer.addAnchor({point_m:item.point,label:item.label});
+      };
+      // 120 warm-up frames, then the first production stats emission whose
+      // 120-frame ring lies entirely after the warm-up.
+      p.abbaWindow=()=>new Promise((resolve,reject)=>{
+        let rafs=0,last=null,raf,settled=false;const intervals=[];
+        const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timeout);cancelAnimationFrame(raf);off();if(error)reject(error);else resolve(value);};
+        const timeout=setTimeout(()=>finish(Error('ABBA window deadline')),20000);
+        const off=p.engine.on('stats',value=>{
+          if(rafs<240)return;
+          const labels=[...p.host.querySelectorAll('.apt-ui-overlay-label')];
+          finish(null,{frameP95:value.p95,medianFrame:1000/value.fps,renderP95:value.renderP95,rafP95:p95(intervals.slice(-120)),
+            fps:value.fps,raf_intervals:intervals.length,warmup_rafs:120,observed_rafs:rafs,calls:value.calls,tris:value.tris,
+            pixelRatio:value.pixelRatio,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,
+            spotlightsVisible:p.engine.overlay.virtualFixturesReadback().visible,visibility:document.visibilityState,
+            layers:p.host.querySelectorAll('.apt-ui-overlay-layer').length,labels:labels.length,visibleLabels:labels.filter(label=>!label.hidden).length,
+            visibleDots:p.abbaLayer?p.abbaLayer.group.children.filter(child=>child.visible).length:0});
+        });
+        const step=time=>{rafs++;if(rafs>120&&last!==null)intervals.push(time-last);last=time;raf=requestAnimationFrame(step);};
+        raf=requestAnimationFrame(step);
+      });
+    });
+    const runAbba=async mode=>{
+      const descriptors=await page.evaluate(()=>{const overlay=window.__APT_ENGINE.overlay;return overlay.virtualFixturesReadback().fixtures.map(item=>({id:item.fixture_id,label:item.label,point:overlay.virtualFixtureInteractionDescriptor(item.fixture_id).display_anchor_m}));});
+      assert.equal(descriptors.length,4);
+      const slots=[];
+      for(let block=1;block<=ABBA_CRITERION.minimumBlocks;block++)for(const slot of ABBA_CRITERION.order){
+        const treatment=slot[0];checkpoint(mode+' abba block '+block+' '+slot+' start');
+        const row=await page.evaluate(async({treatment,descriptors})=>{const p=window.__overlayBridgeProof;await p.abbaSet(treatment,descriptors);return p.abbaWindow();},{treatment,descriptors});
+        assert.ok([row.frameP95,row.medianFrame,row.renderP95,row.rafP95].every(value=>Number.isFinite(value)&&value>=0));
+        assert.ok(row.raf_intervals>=120);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');
+        assert.equal(row.pixelRatio,deviceScaleFactor);assert.equal(row.spotlightsVisible,true);assert.equal(row.visibility,'visible');
+        if(treatment==='A')assert.deepEqual([row.layers,row.labels],[0,0],'treatment A has no overlay layer');
+        else{assert.deepEqual([row.layers,row.labels],[1,4],'treatment B labels all four fixtures');assert.ok(row.visibleLabels>0&&row.visibleDots>0,'treatment B draws actual labels and dots');}
+        slots.push({block,slot,treatment,...row});
+      }
+      await page.evaluate(()=>window.__overlayBridgeProof.abbaSet('A'));
+      (receipt.abba.scenes ||= []).push({mode,anchors:descriptors.map(item=>({fixture_id:item.id,point_m:item.point})),slots});
+    };
+    if(profile==='desktop-abba')receipt.abba={criterion:ABBA_CRITERION,camera:'snapHome(0) static',treatments:{A:'no overlay layer',B:'one layer, four fixture anchors with dot and label'}};
     for(const mode of ['points','splat','mesh']){
       checkpoint(mode+' mode and empty warm start');
       await page.evaluate(async mode=>{const p=window.__overlayBridgeProof;p.engine.setPerformanceMode('maxFidelity');p.engine.rig.snapHome(0);await p.engine.modes.setMode(mode);await p.warm('empty')},mode);
@@ -277,6 +331,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       if(mode==='points'){assert.ok(readiness.points.count>0);assert.equal(readiness.points.visible,true);}
       if(mode==='splat'){assert.equal(readiness.debug.loadStatus.splat,'loaded');assert.equal(readiness.debug.splat,true);assert.equal(readiness.debug.splatVisible,true);assert.equal(readiness.debug.sparkVisible,true);assert.ok(readiness.debug.splatSource);assert.ok(readiness.debug.numSplats>0);}
       if(mode==='mesh'){assert.equal(readiness.debug.loadStatus.mesh,'loaded');assert.equal(readiness.debug.meshFallback,false);assert.ok(readiness.debug.meshSource?.endsWith('mesh.glb'));}
+      if(profile==='desktop-abba'){await runAbba(mode);continue;}
       checkpoint(mode+' before stats start');
       const before=await page.evaluate(()=>window.__overlayBridgeProof.stats());recordWindow(mode,'before',before);
       if(phase!=='candidate'){
@@ -442,6 +497,22 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       for(const rows of [before,active,after])for(const row of rows){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);assert.equal(row.virtual_spotlights_visible,profile!=='functional');}
       receipt.performance.push({mode,orbit:'snapHome(0)',quality:'maxFidelity',warmup_renderer_ticks:120,before,active,after,
         comparisons:['p95','renderP95'].map(key=>noiseComparison(before,active,after,key))});
+    }
+    if(profile==='desktop-abba'){
+      await assertFixtureState();
+      for(const [file,expected] of Object.entries(protectedHashes))assert.equal(hash(fs.readFileSync(file)),expected,'authored pack remains unchanged');
+      assert.deepEqual(receipt.forbidden,[]);assert.deepEqual(receipt.missing_code,[]);assert.deepEqual(receipt.errors,[]);
+      receipt.abba.source_pins=Object.fromEntries(['home-3d/apartment-ui-overlay-bridge.mjs','home-3d/engine.js','home-3d/picking.js'].map(file=>[file,receipt.served[file]?.sha256||null]));
+      const metrics=[...ABBA_CRITERION.primaryMetrics,...ABBA_CRITERION.descriptiveMetrics];
+      receipt.abba.analysis=receipt.abba.scenes.map(scene=>{
+        const blocks=metric=>Array.from({length:ABBA_CRITERION.minimumBlocks},(_,index)=>Object.fromEntries(ABBA_CRITERION.order.map(slot=>[slot,scene.slots.find(row=>row.block===index+1&&row.slot===slot)[metric]])));
+        const results=Object.fromEntries(metrics.map(metric=>[metric,analyzeAbba(blocks(metric),{metric})]));
+        return {mode:scene.mode,display_bound:displayBound(results.frameP95.a_median),results};
+      });
+      receipt.functional_result='not-run-abba-profile';
+      receipt.performance_result=receipt.abba.analysis.map(scene=>scene.mode+':'+ABBA_CRITERION.primaryMetrics.map(metric=>scene.results[metric].result).join('/')+(scene.display_bound?':display-bound':'')).join(' ');
+      await page.evaluate(()=>window.__overlayBridgeProof.engine.dispose());
+      return;
     }
     if(phase!=='candidate'){
       await assertFixtureState();

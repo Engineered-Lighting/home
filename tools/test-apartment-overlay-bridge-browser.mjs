@@ -284,11 +284,14 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
         p.abbaLayer=await p.engine.createUiOverlayLayer({host:p.host,signal:controller.signal,isCurrent:()=>window.__APT_ENGINE===p.engine&&p.engine.sceneIdentity===p.identity});
         if(!p.abbaLayer)throw Error('ABBA overlay layer refused');
         for(const item of descriptors)p.abbaLayer.addAnchor({point_m:item.point,label:item.label});
+        // Draw witness: renderer.info call counts do not include these dots,
+        // so count actual onBeforeRender calls, as the functional proof does.
+        for(const dot of p.abbaLayer.group.children){const original=dot.onBeforeRender;dot.onBeforeRender=function(...args){p.abbaDotDraws=(p.abbaDotDraws||0)+1;original?.apply(this,args)};}
       };
       // 120 warm-up frames, then the first production stats emission whose
       // 120-frame ring lies entirely after the warm-up.
       p.abbaWindow=()=>new Promise((resolve,reject)=>{
-        let rafs=0,last=null,raf,settled=false;const intervals=[];
+        let rafs=0,last=null,raf,settled=false,drawsAtWindow=null;const intervals=[];
         const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timeout);cancelAnimationFrame(raf);off();if(error)reject(error);else resolve(value);};
         const timeout=setTimeout(()=>finish(Error('ABBA window deadline')),20000);
         const off=p.engine.on('stats',value=>{
@@ -299,9 +302,10 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
             pixelRatio:value.pixelRatio,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,
             spotlightsVisible:p.engine.overlay.virtualFixturesReadback().visible,visibility:document.visibilityState,
             layers:p.host.querySelectorAll('.apt-ui-overlay-layer').length,labels:labels.length,visibleLabels:labels.filter(label=>!label.hidden).length,
-            visibleDots:p.abbaLayer?p.abbaLayer.group.children.filter(child=>child.visible).length:0});
+            visibleDots:p.abbaLayer?p.abbaLayer.group.children.filter(child=>child.visible).length:0,
+            windowDotDraws:(p.abbaDotDraws||0)-(drawsAtWindow??(p.abbaDotDraws||0))});
         });
-        const step=time=>{rafs++;if(rafs>120&&last!==null)intervals.push(time-last);last=time;raf=requestAnimationFrame(step);};
+        const step=time=>{rafs++;if(rafs===120)drawsAtWindow=p.abbaDotDraws||0;if(rafs>120&&last!==null)intervals.push(time-last);last=time;raf=requestAnimationFrame(step);};
         raf=requestAnimationFrame(step);
       });
     });
@@ -316,7 +320,8 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
         assert.ok(row.raf_intervals>=120);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');
         assert.equal(row.pixelRatio,deviceScaleFactor);assert.equal(row.spotlightsVisible,true);assert.equal(row.visibility,'visible');
         if(treatment==='A')assert.deepEqual([row.layers,row.labels],[0,0],'treatment A has no overlay layer');
-        else{assert.deepEqual([row.layers,row.labels],[1,4],'treatment B labels all four fixtures');assert.ok(row.visibleLabels>0&&row.visibleDots>0,'treatment B draws actual labels and dots');}
+        else{assert.deepEqual([row.layers,row.labels],[1,4],'treatment B labels all four fixtures');assert.ok(row.visibleLabels>0&&row.visibleDots>0,'treatment B draws actual labels and dots');
+          assert.ok(row.windowDotDraws>=row.visibleDots*120,'treatment B witnesses actual dot draws on every window frame');}
         slots.push({block,slot,treatment,...row});
       }
       await page.evaluate(()=>window.__overlayBridgeProof.abbaSet('A'));

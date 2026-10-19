@@ -143,12 +143,12 @@ Escape walks one step at a time, topmost first, and never skips a level.
 3. Camera view → **Return to room**.
 4. A proposal on the selected light → discard it ("⌘Z restores it").
 5. A selection → clear it, and focus returns to the canvas or the list row.
-6. Nothing active → **Close Apartment**. If any home has unsaved work, a confirm dialog explains that it is kept as a local draft.
+6. Nothing active → nothing happens. Apartment is the main view and has no Close. Unsaved work in any home is kept as a local draft.
 
-Popovers, modals and the naming field claim Escape first. The `esc` hint on Close is dimmed while any layer is open. Three phrases never overlap in meaning:
+Popovers, modals and the naming field claim Escape first. Three phrases never overlap in meaning:
 - **Return to room** leaves a camera view.
 - **Return to Auto** hands a manually changed light back to adaptive lighting.
-- **Close** leaves Apartment for Home.
+- **Back** leaves a secondary screen (Lab, metrics) for Apartment.
 
 ## Status semantics
 - "Connected" always names the system: "Home Assistant connected". Victoria shows "No light entities for Den fixtures" and never inherits Echo's status.

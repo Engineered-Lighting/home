@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-/* ============================================================================
- * run-touched-harnesses.mjs — run the test harnesses that guard the files
+/* ===================================================================== * run-touched-harnesses.mjs — run the test harnesses that guard the files
  * touched by a diff.
  *
  * The tools/run-*.js harnesses and explicitly mapped Node test suites guard
@@ -74,6 +73,7 @@ const MAP = [
   [/^tools\/(?:run-apartment-ui-tests\.js|test-apartment-ui-browser\.mjs)$/, ["run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["run-apartment-3d-contract-tests"]],
   [/^(?:app\/src\/(?:home-3d\/(?:lit-(?:view|model)\.mjs|engine\.js)|home-apartment\.jsx)|tools\/test-apartment-lit-(?:view|browser)\.mjs)$/, ["test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
   [/^app\/src\/home-ai-stack\.jsx$/, ["run-ai-stack-card-tests"]],
@@ -130,6 +130,7 @@ const MAP = [
   [/^(?:app\/src\/home-apartment-room-guide\.jsx|tools\/test-apartment-room-guide(?:\.cjs|-browser\.mjs))$/, ["test-apartment-room-guide.cjs", "test-apartment-room-guide-browser.mjs"]],
   [/^app\/src\/(?:home-apartment\.jsx|index\.html|home-feature-loader\.js|home-3d\/(?:rig\.js|markers\.js|equipment-virtual-fixtures\.mjs|apartment-perception-layer\.mjs|registered-desk-target\.mjs))$/, ["test-apartment-room-guide.cjs"]],
   [/^app\/src\/home-apartment(?:-ui)?\.jsx$/, ["test-apartment-room-guide-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-ui|-room-guide)?\.jsx|home-app\.jsx|home-perception-lab\.jsx|home-tokens\.css|home-3d\/(?:modes\.js|asset-byte-cache\.mjs|rig\.js))|tools\/(?:test-apartment-m2-(?:shell|links)-browser|fixtures\/apartment-m2-shell-harness|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["test-apartment-m2-shell-browser.mjs", "test-apartment-m2-links-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",
@@ -166,6 +167,8 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
+// The two M2 shell suites are unmeasured on hosted CI: local runs of 54 s
+// (links) and 38 s (shell), doubled for the software renderer.
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
@@ -174,6 +177,8 @@ const SHARD_WEIGHT_S = {
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-beam-path-browser.mjs": 40,
   "test-apartment-room-inspector-browser.mjs": 62,
+  "test-apartment-m2-links-browser.mjs": 110,
+  "test-apartment-m2-shell-browser.mjs": 80,
   "test-apartment-lit-browser.mjs": 90,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-rig-fit-browser.mjs": 45,

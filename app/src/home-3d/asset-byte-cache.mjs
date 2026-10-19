@@ -83,6 +83,7 @@ export function createAssetByteCache({ fetchImpl = (...args) => fetch(...args),
                 if (++chunks > 65536 || !(value instanceof Uint8Array) || !Number.isSafeInteger(size + value.byteLength)
                     || size + value.byteLength > limit) throw Error('asset_body_bound_exceeded');
                 job.chunks.push(value); size += value.byteLength;
+                progress(job, size, length ?? job.expectedBytes);
             }
             if (size === 0 || length !== null && size !== length || job.expectedBytes != null && size !== job.expectedBytes) {
                 throw Error('asset_body_length_mismatch');
@@ -96,6 +97,14 @@ export function createAssetByteCache({ fetchImpl = (...args) => fetch(...args),
             job.controller.signal.removeEventListener('abort', cancel);
             if (!complete) cancel();
             try { reader.releaseLock(); } catch (_) {}
+        }
+    }
+    // Presentation only: waiters may observe byte progress; it never changes the read.
+    function progress(job, loaded, total) {
+        job.loaded = loaded; job.total = Number.isSafeInteger(total) ? total : null;
+        for (const waiter of job.waiters) {
+            if (typeof waiter.onProgress !== 'function') continue;
+            try { waiter.onProgress({ loaded, total: Number.isSafeInteger(total) ? total : null }); } catch (_) {}
         }
     }
     function finish(job, error, bytes) {
@@ -157,12 +166,17 @@ export function createAssetByteCache({ fetchImpl = (...args) => fetch(...args),
         } else counts.coalesced++;
         const result = new Promise((resolve, reject) => {
             const signal = args.signal;
-            const waiter = { resolve, reject, warm, expectedBytes, cleanup: () => signal?.removeEventListener('abort', abort) };
+            const waiter = { resolve, reject, warm, expectedBytes, onProgress: args.onProgress,
+                cleanup: () => signal?.removeEventListener('abort', abort) };
             const abort = () => {
                 if (!job.waiters.delete(waiter)) return;
                 waiter.cleanup(); reject(abortError()); if (!job.waiters.size) cancelJob(job);
             };
             job.waiters.add(waiter); signal?.addEventListener('abort', abort, { once: true });
+            // A request that joins a read already under way starts from its current progress.
+            if (!fresh && job.loaded > 0 && typeof waiter.onProgress === 'function') {
+                try { waiter.onProgress({ loaded: job.loaded, total: job.total }); } catch (_) {}
+            }
             if (signal?.aborted) abort();
         });
         if (fresh) Promise.resolve().then(() => execute(job));

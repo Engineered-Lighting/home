@@ -548,6 +548,15 @@ function aptCameraAlignment(dev) {
   };
 }
 
+/* A camera view is a room pose. Victoria offers none until Den supplies a
+ * calibrated camera pose; room or socket positions never stand in for one. */
+const APT_DEN_CAMERA_POSE_REASON = "Needs a Den-calibrated camera pose. Room and socket positions are never used as a camera pose.";
+function aptCameraViewAvailability(siteId, devices) {
+  if (siteId === "victoria") return { available: false, reason: APT_DEN_CAMERA_POSE_REASON };
+  return (devices || []).some((d) => d?.type === "camera" || !!d?.camera)
+    ? { available: true, reason: null } : { available: false, reason: "No camera is placed in this home's model." };
+}
+
 function aptSnapshotSrc(src) {
   const clean = String(src || "").replace(/\/+$/, "");
   if (!clean || /\/latest\.jpg(?:[?#]|$)/.test(clean)) return clean;
@@ -2266,7 +2275,7 @@ function AptUnifiedIcon({ name }) {
 
 function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
   onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
-  homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about,
+  homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about, modeProgress = null, viewLockedReason = null, onDismissNotice,
   lit = null, onLit = null }) {
   const Guide = window.HomeApartmentRoomGuide;
   const [popover, setPopover] = useState(null);
@@ -2277,9 +2286,21 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
   const openGuide = (dialog) => { setPopover(null); setGuideDialog(dialog); };
   Guide.useHelpShortcut(!guideDialog, () => openGuide("help"));
   Guide.useFitPopover(popoverRef, popover);
-  const photoError = !modeLoading && modeError?.mode === "splat";
+  /* Per-mode loading and recovery words. A saved-view failure keeps the room on
+   * the mode it already shows; nothing here switches homes. */
+  const APT_MODE_WORDS = { points: "Cloud", splat: "Photo", mesh: "Mesh" };
+  const recoveryFor = (error, home = homeName || "this home") => {
+    if (!error || typeof error !== "object" || !APT_MODE_WORDS[error.mode] || error.mode === "points") return null;
+    const word = APT_MODE_WORDS[error.mode];
+    return error.source === "saved-view"
+      ? { word, title: "Your saved view didn't load", body: `${word} isn't available here, so the room stays on Cloud. You're still looking at ${home}.` }
+      : { word, title: `${word} isn't available here`, body: `You're still looking at ${home}.` };
+  };
+  const recovery = !modeLoading ? recoveryFor(modeError) : null;
+  const photoError = !!recovery && modeError.mode === "splat" && modeError.source !== "saved-view";
   const retryPhotoDisabled = !!(disabled || pointsOnlyReason || modeLockedReason);
   const backToCloudDisabled = !!(disabled || modeLockedReason);
+  const loadingPercent = modeLoading && modeProgress?.mode === modeLoading && Number.isFinite(modeProgress.percent) ? modeProgress.percent : null;
   return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view">
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
@@ -2293,10 +2314,14 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
         disabled={disabled || !onLit || !!modeLockedReason || !!pointsOnlyReason || modeLoading === "mesh"}
         onClick={() => onLit?.(!lit)}>Lit</button>
     </div><span className="apt-ui-toolbar-separator apt-ui-orbit" />
-    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
-    <span className="apt-home-toolbar-detent apt-ui-value apt-ui-orbit" aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
-    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit right" disabled={disabled} onClick={() => onOrbit(1)}><AptUnifiedIcon name="chevR" /></button>
-    <button type="button" className="apt-ui-button is-small hide-small" aria-label="Fit room" disabled={disabled} onClick={onFit}><AptUnifiedIcon name="fit" />Fit</button>
+    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || undefined} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
+    <span className="apt-home-toolbar-detent apt-ui-value apt-ui-orbit" role="status" aria-live="polite" aria-atomic="true"
+      aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
+    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit right" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || undefined} onClick={() => onOrbit(1)}><AptUnifiedIcon name="chevR" /></button>
+    <button type="button" className="apt-ui-button is-small hide-small" aria-label="Fit room" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || undefined} onClick={onFit}><AptUnifiedIcon name="fit" />Fit</button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-help"><button type="button" className="apt-ui-button is-small" aria-label="Layers"
       aria-expanded={popover === "layers"} onClick={() => setPopover(popover === "layers" ? null : "layers")}><AptUnifiedIcon name="layers" /><span className="apt-ui-toolbar-word">Layers</span></button>
@@ -2324,7 +2349,7 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
     {guideDialog === "about" && about && <Guide.AboutDialog homeName={homeName} facts={Guide.aboutFacts(about)}
       onClose={() => setGuideDialog(null)} />}
     <Guide.Legend homeId={homeId} selected={!!fixtureSelected} hasPerception={hasPerception}
-      suppressed={!!(popover || guideDialog || modeLoading || modeError)} />
+      suppressed={!!(popover || guideDialog || modeLoading || modeError || viewLockedReason)} />
     {popover === "source" && <div ref={popoverRef} className="apt-ui-toolbar-source-detail" role="dialog" aria-label="Scene source">
       <h3 className="apt-ui-heading">Scene source</h3><p className="apt-ui-copy">{sourceDetail || sourceLabel}</p>{sourceStatus}
       <p className="apt-ui-meta">Cloud, Photo and Mesh use this home's existing scene assets.</p>
@@ -2340,8 +2365,22 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
     {lit && !modeLoading && !modeError && <p className="apt-ui-toolbar-notice" role="note" data-apt-lit-disclosure={lit.quality}
       title={lit.disclosureDetail}>{lit.disclosure}{lit.quality === "reduced" ? " · reduced quality for speed" : ""}
       {lit.bounceLimit && <><br /><span data-apt-lit-bounce-limit="">{lit.bounceLimit}</span></>}</p>}
-    {(modeLoading || modeError) && <div className="apt-ui-toolbar-notice">
-      <span role="status">{modeLoading ? `Loading ${modeLoading === "splat" ? "Photo" : modeLoading}` : modeError.message}</span>
+    {(modeLoading || modeError) && <div className="apt-ui-toolbar-notice" data-apt-mode-notice={modeLoading ? "loading" : recovery ? modeError.source || "mode" : "message"}>
+      {modeLoading ? <><div role="status"><h3>Loading {APT_MODE_WORDS[modeLoading] || modeLoading}{loadingPercent != null ? ` · ${Math.round(loadingPercent)}%` : ""}</h3>
+        <p>The current view stays as it is.</p></div>
+        {loadingPercent != null && <div className="apt-ui-progress" role="progressbar" aria-label={`Loading ${APT_MODE_WORDS[modeLoading] || modeLoading}`}
+          aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(loadingPercent)}><i style={{ width: `${Math.max(0, Math.min(100, loadingPercent))}%` }} /></div>}</>
+        : recovery ? <div role="status"><h3>{recovery.title}</h3><p>{recovery.body}</p></div>
+          : <span role="status">{typeof modeError === "string" ? modeError : modeError?.message || "This view didn't load."}</span>}
+      {recovery && !photoError && <div className="apt-ui-toolbar-recovery" role="group" aria-label={`${recovery.word} recovery`}>
+        <button type="button" className="apt-ui-button is-small" aria-label={`Retry ${recovery.word}`} disabled={retryPhotoDisabled}
+          title={modeLockedReason || pointsOnlyReason || undefined}
+          onClick={() => { if (!retryPhotoDisabled) onMode(modeError.mode); }}>Retry</button>
+        {modeError.source === "saved-view"
+          ? <button type="button" className="apt-ui-button is-small" disabled={!onDismissNotice} onClick={() => onDismissNotice?.()}>Stay on Cloud</button>
+          : <button type="button" className="apt-ui-button is-small" disabled={backToCloudDisabled} title={modeLockedReason || undefined}
+            onClick={() => { if (!backToCloudDisabled) onMode("points"); }}>Back to Cloud</button>}
+      </div>}
       {photoError && <div className="apt-ui-toolbar-recovery" role="group" aria-label="Photo recovery">
         <button type="button" className="apt-ui-button is-small" aria-label="Retry Photo" disabled={retryPhotoDisabled}
           title={modeLockedReason || pointsOnlyReason || undefined}
@@ -2497,7 +2536,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   };
   return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Fixture lighting inspector">
     <header className="apt-ui-header"><div className="apt-ui-header-row">
-      <button type="button" className="apt-ui-button is-icon" aria-label="Back to room" onClick={onBack}><AptUnifiedIcon name="back" /></button>
+      <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
       <div className="apt-ui-grow"><h2 className="apt-ui-title">{fixture.label || fixture.fixture_id}</h2>
         <div className="apt-ui-sub">{homeName} · {isLit(fixture) ? "Light on" : "Light off"}</div></div>
       <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
@@ -2621,6 +2660,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [modeLoading, setModeLoading] = useState(null);
   const [litState, setLitState] = useState(null);
   const [modeError, setModeError] = useState(null);
+  const [modeProgress, setModeProgress] = useState(null);   // { mode, percent } for the loading notice
   const modeRequestRef = useRef(null);
   /* The loaded interior's disclosed placeholder (engine.scenePlaceholder), or
    * null for a real scan. Drives the "scan pending" badge and points-only. */
@@ -4513,6 +4553,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         const unsubs = [
           engine.on("progress", (p) => { if (current()) setProgress({ ...p }); }),
           engine.on("stats", (s) => { if (current()) setStats(s); }),
+          engine.modes.onLoadProgress?.(({ kind, loaded, total }) => {
+            const mode = kind === "splat" || kind === "sparkRenderer" ? "splat" : kind === "mesh" || kind === "collision" ? "mesh" : null;
+            if (mode && total && current()) setModeProgress({ mode, percent: Math.min(100, (loaded / total) * 100) });
+          }),
           engine.on("contextlost", () => { if (current()) showToast("graphics context lost — recovering"); }),
           engine.modes.onChange((next) => {
             if (modePresentationIsCurrent()) setMode(next);
@@ -4572,7 +4616,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           engine.rig.goTo?.({ az: preference.az, el: preference.el, zoom: preference.zoom, dur: 0 });
           if (!engine.scenePlaceholder && preference.mode !== engine.modes.mode) {
             try { await engine.modes.setMode(preference.mode, { duration: 0 }); }
-            catch (error) { if (current()) setModeError(String(error?.message || error)); }
+            catch (error) {
+              // Same shape as a picked mode's failure, so the toolbar can offer recovery.
+              if (current()) setModeError({ mode: preference.mode, source: "saved-view",
+                message: `${preference.mode === "splat" ? "photo" : preference.mode} unavailable`,
+                detail: String(error?.message || error || "asset load failed") });
+            }
           }
         }
         viewRestored = true;
@@ -6728,7 +6777,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       return;
     }
     if ((liveCam || engine.rig.inCameraPose?.()) && !calibCam) {
-      showToast("camera view is locked to mesh - tap back to change modes");
+      showToast("camera view is locked to mesh - Return to room to change modes");
       return;
     }
     const siteId = engine.siteId;
@@ -6785,6 +6834,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (modeRequestRef.current === request) modeRequestRef.current = null;
     }
   }, [showToast, refitMobileOverview, liveCam, calibCam, selectedSiteInterior]);
+  // Progress belongs to the load in flight; it can arrive before the loading
+  // state commits (a joined read), so it is cleared only when loading ends.
+  useEffect(() => { if (!modeLoading) setModeProgress(null); }, [modeLoading]);
   /* Tier-0 Lit (engine.setLit): Mesh first, then the relit mesh. Session
    * only and never restored, so Lit is off by default on every device. */
   const toggleLit = useCallback(async (next) => {
@@ -6954,7 +7006,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     }
 
     if (rig.inCameraPose?.()) {
-      showToast("camera view is locked - tap back before zooming");
+      showToast("camera view is locked - Return to room before zooming");
       return;
     }
     if (direction !== "outward" || !rig.atWorldBoundary?.() || !worldZoomEnabled) {
@@ -8248,6 +8300,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (!apartmentDeviceControlsEnabled) return false;
     const eng = engineRef.current;
     if (!eng) return false;
+    if (!aptCameraViewAvailability(eng.siteId, [dev]).available) return false;
     const seq = ++flySeqRef.current;
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
     const alignment = aptCameraAlignment(dev);
@@ -8588,7 +8641,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         };
       },
       flyFirstCamera: () => {
-        const dev = (model.devices || []).find((d) => d.type === "camera" || aptCameraCanFeed(d));
+        const devices = model.devices || [];
+        const dev = devices.find((d) => d.type === "camera") || devices.find((d) => aptCameraCanFeed(d));
         return dev ? flyToDeviceView(dev) : false;
       },
       flyFirstCalibratedCamera: () => {
@@ -8937,7 +8991,27 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const cameraSnap = cameraTop && !calibCam;
   const cameraAlignment = liveCam ? aptCameraAlignment(liveCam) : null;
   const mobileCameraSnap = mobile && cameraTop;
-  const hideViewHud = mobile ? cameraTop : cameraSnap;
+  /* Unified Home keeps its room toolbar through a camera view and says where
+   * the view is from in the shared hint bar; calibration keeps its own tools. */
+  const unifiedCameraView = !!(unifiedShell && spatialScale === "apartment" && cameraSnap);
+  const hideViewHud = unifiedShell && spatialScale === "apartment" && !calibCam ? false : mobile ? cameraTop : cameraSnap;
+  const canCalibrateCamera = !!(cameraTop && liveCam && !mobile && !simActive && window.HomeApartmentCalibrate);
+  const startCameraCalibration = () => {
+    if (!apartmentSceneControlsEnabled) return;
+    setLiveOn(false);
+    const e = engineRef.current;
+    if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
+    e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+    // snapped pose sits point-blank in the geometry — pull back to
+    // the overview so the room is visible and orbit/zoom unlock
+    aptBeginDollhouseCalibration(e);
+    calibPairCountRef.current = 0; calibEscArmRef.current = 0;
+    setCalibCam(liveCam);
+  };
+  const returnToRoom = () => {
+    if (!apartmentSceneControlsEnabled) return;
+    exitCameraPose(); restoreApartmentOperationFocus("camera");
+  };
   /* Navigation chrome stays fixed above the spatial effect. During a handoff,
    * the already-targeted direction is the only impossible action; the opposite
    * button remains enabled and retargets the one live reversible clock. */
@@ -9604,7 +9678,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       </div>
 
       {/* Classic tools remain available while a camera pose is active. */}
-      {!editing && (!unifiedShell || cameraTop) && (
+      {!editing && (!unifiedShell || (cameraTop && !!calibCam) || (cameraTop && spatialScale !== "apartment")) && (
         <div data-apt-legacy-toolbar="1" style={{
           position: "absolute", top: 0, left: 0, right: 0, display: "flex",
           flexDirection: mobileCameraSnap ? "column" : "row",
@@ -9706,23 +9780,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             width: mobileCameraSnap ? "100%" : "auto",
           }}>
             {cameraTop && (
-              <AptHudButton label="← back" disabled={!apartmentSceneControlsEnabled}
+              <AptHudButton label="Return to room" disabled={!apartmentSceneControlsEnabled}
                 onClick={() => { if (apartmentSceneControlsEnabled) exitCameraPose(); }} mobile={mobile} />
             )}
-            {cameraTop && liveCam && !mobile && !simActive && window.HomeApartmentCalibrate && (
+            {canCalibrateCamera && (
               <AptHudButton label="calibrate" active={!!calibCam}
-                disabled={!apartmentSceneControlsEnabled} onClick={() => {
-                if (!apartmentSceneControlsEnabled) return;
-                setLiveOn(false);
-                const e = engineRef.current;
-                if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
-                e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
-                // snapped pose sits point-blank in the geometry — pull back to
-                // the overview so the room is visible and orbit/zoom unlock
-                aptBeginDollhouseCalibration(e);
-                calibPairCountRef.current = 0; calibEscArmRef.current = 0;
-                setCalibCam(liveCam);
-              }} mobile={mobile} />
+                disabled={!apartmentSceneControlsEnabled} onClick={startCameraCalibration} mobile={mobile} />
             )}
             {!cameraTop && apartmentDeviceControlsEnabled && (
               <>
@@ -9769,7 +9832,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           </div>
         </div>
       )}
-      {phase === "error" && (
+      {phase === "error" && unifiedShell && (() => {
+        const Notice = window.HomeApartmentUI.Notice;
+        const other = homeSites.find(site => site.id !== selectedSiteId && site.sceneAvailable);
+        return <Notice kind="renderer" title={`${selectedSiteName}'s room didn't load`} label="Room recovery" actions={[
+          { label: "Retry", ariaLabel: "Retry room", primary: true, onClick: () => { void switchInteriorHome(selectedSiteId, { force: true }); } },
+          other && { label: `Open ${other.shortName}`, onClick: () => { void travelToSite(other.id, { presentation: "interior" }); } },
+        ]}>
+          <p>The room renderer stopped{error ? `: ${error}` : ""}.</p>
+          <p>Nothing else changed, and Home won't switch homes on its own.</p>
+        </Notice>;
+      })()}
+      {phase === "error" && !unifiedShell && (
         <div style={{ position: "absolute", left: 0, right: 0, top: "44%", textAlign: "center",
                       fontFamily: APT_FONT_MONO, fontSize: 11, color: "var(--hg-crit)" }}>
           renderer failed — {error}
@@ -9826,11 +9900,22 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           homeId={selectedSiteId} homeName={selectedSiteEntry?.shortName} fixtureCount={virtualFixtureItems.length}
           fixtureSelected={virtualFixtureControlsOpen && virtualSpotlightsVisible}
           hasPerception={selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception}
+          modeProgress={modeProgress} onDismissNotice={() => setModeError(null)}
+          viewLockedReason={unifiedCameraView ? "Camera view · Return to room to orbit or fit" : null}
           about={{ homeId: selectedSiteId, source: sourceMeta, revision: model.revision, liveShadow, simActive, trackerStatus,
             hasVirtualFixtures: !!virtualFixtureDocument, fixtureCount: virtualFixtureItems.length,
-            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception }}
+            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception,
+            cameraViews: aptCameraViewAvailability(selectedSiteId, model.devices) }}
           lit={litState?.active ? litState : null} onLit={virtualFixtureDocument ? next => { if (apartmentSceneControlsEnabled) void toggleLit(next); } : null} />
       )}
+
+      {unifiedCameraView && (() => {
+        const HintBar = window.HomeApartmentUI.HintBar;
+        return <HintBar kind="camera-view" detail={cameraAlignment ? cameraAlignment.short.replace(/^camera - /, "") : null} actions={[
+          canCalibrateCamera && { label: "Calibrate", disabled: !apartmentSceneControlsEnabled, onClick: startCameraCalibration },
+          { label: "Return to room", primary: true, escape: true, disabled: !apartmentSceneControlsEnabled, onClick: returnToRoom },
+        ]}>Viewing from {liveCam?.name || liveCam?.label || liveCam?.id || "camera"}</HintBar>;
+      })()}
 
       {/* Established HUD stays intact for Classic and the wider world view. */}
       {!editing && !hideViewHud && (!unifiedShell || spatialScale !== "apartment") && (
@@ -10113,7 +10198,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         })}
 
       {/* labels + cards layer */}
-      {phase === "ready" && spatialScale === "apartment" && !editing
+      {phase === "ready" && spatialScale === "apartment" && !editing && !unifiedCameraView
         && apartmentSceneControlsEnabled && apartmentDeviceControlsEnabled && (
         <>
           {hoverDevice && !cardDevice && (

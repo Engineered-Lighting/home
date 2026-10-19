@@ -26,7 +26,11 @@ fixturesSource = replaceOne(fixturesSource, 'import(`./equipment-spotlight-visua
 for (const name of ['home-den-fixtures.js', 'home-apartment-aiming.js']) fixturesSource = replaceOne(fixturesSource,
   'import(`../' + name + '${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(path.join(ROOT, 'app/src', name)).href) + ')');
 const { createEquipmentVirtualFixtures } = await import(dataModule(fixturesSource));
-const Lit = await import(dataModule(replaceOne(fs.readFileSync(sourceFile('lit-view.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL))));
+const Model = await import(pathToFileURL(sourceFile('lit-model.mjs')).href);
+let litSource = replaceOne(fs.readFileSync(sourceFile('lit-view.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL));
+litSource = replaceOne(litSource, 'import(`./lit-model.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-model.mjs')).href) + ')');
+const Lit = await import(dataModule(litSource));
+const EXPOSURE = .038;
 const SPEC_LUMENS = { spot: 450, down: 350, zone: 120 };
 const binding = { content_revision: 'authored-victoria-lit-r1', registration_version: 1,
   manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
@@ -46,6 +50,22 @@ function world(t) {
   return { scene, root, fixtures, mesh, face, display, hook, renderer, lit, setMesh: next => { current = next; } };
 }
 const lights = w => w.lit.group.children.filter(node => node.isSpotLight);
+
+test('the light model is renderer-independent and pure', () => {
+  const source = fs.readFileSync(sourceFile('lit-model.mjs'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(source, /\bimport\b|three|THREE|document|window/, 'no imports, no three.js, no DOM');
+  assert.deepEqual(Model.zoneDirection(0).map(v => +v.toFixed(5)), [.98503, 0, -.17238], 'outward and 0.35 down per 2 out, as in the prototype');
+  assert.ok(Math.abs(Math.hypot(...Model.zoneDirection(137)) - 1) < 1e-12);
+  assert.equal(Model.channelLevel({ on: true, brightness: .4 }), .4); assert.equal(Model.channelLevel({ on: false, brightness: 1 }), 0);
+  assert.deepEqual(Model.kelvinRgb(6600), [1, 1, 1]); assert.ok(Model.kelvinRgb(2700)[2] < Model.kelvinRgb(2700)[0], 'warm white');
+  const lights = Model.fixtureLights({ spot: { origin: [0, 0, 2], direction: [0, 0, -1], channel: { on: true, brightness: 1, color_temp_kelvin: 3000 } },
+    down: { origin: [0, 0, 1.9], channel: { on: true, brightness: .5 } }, center: [0, 0, 2],
+    zones: [1, 2, 3, 4, 5, 6].map(number => ({ number, azimuth_deg: number * 60, channel: { on: true, brightness: 1 } })) }, { spotFwhmDeg: 20 });
+  assert.deepEqual(lights.map(light => light.kind), ['spot', 'down', 'zone', 'zone', 'zone', 'zone', 'zone', 'zone']);
+  assert.ok(lights.every(light => Math.abs(light.intensity - light.candela * Model.LIT_EXPOSURE) < 1e-12));
+  assert.deepEqual(lights.map(light => light.shadow), ['crisp', 'soft', null, null, null, null, null, null]);
+  assert.ok(Math.abs(lights[1].candela - Model.candelaFromLumens(350, 1) * .5) < 1e-12);
+});
 
 test('candela comes from the assumed lumens spread over the beam angle', () => {
   assert.deepEqual({ ...Lit.LIT_ASSUMED_LUMENS }, SPEC_LUMENS, 'SPEC Lit view ratings, unchanged');
@@ -73,17 +93,17 @@ test('enable relights the mesh from the four fixtures with crisp spot, soft down
   for (const light of spots) {
     const theta = 20 * .8 * Math.PI / 180;
     assert.ok(Math.abs(light.angle - theta) < 1e-12);
-    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(450, theta) * 1) < 1e-9, 'spot at its restore-default brightness 1');
+    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(450, theta) * 1 * EXPOSURE) < 1e-9, 'spot at its restore-default brightness 1');
     assert.equal(light.castShadow, true); assert.equal(light.shadow.radius, 2.5, 'crisp');
     assert.equal(light.shadow.mapSize.x, 1024); assert.equal(light.decay, 2);
   }
   for (const light of downs) {
-    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(350, 1) * .75) < 1e-9);
+    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(350, 1) * .75 * EXPOSURE) < 1e-9);
     assert.equal(light.castShadow, true); assert.equal(light.shadow.radius, 6, 'soft');
   }
   for (const light of zones) {
     assert.equal(light.castShadow, false, 'each radial zone is its own unshadowed lobe');
-    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(120, .95) * .75) < 1e-9);
+    assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(120, .95) * .75 * EXPOSURE) < 1e-9);
   }
   assert.ok(all.every(light => light.userData.measured === false));
   assert.equal(w.renderer.shadowMap.enabled, true); assert.equal(w.renderer.shadowMap.type, THREE.PCFShadowMap);
@@ -107,7 +127,7 @@ test('the spot light follows the fixture exact aim, and its colour follows Kelvi
   assert.equal(w.renderer.shadowMap.needsUpdate, false);
   w.fixtures.setFixtureState(id, { spotlight: { color_temp_kelvin: 2700, brightness: .5 } }).ok || assert.fail('patch accepted'); w.lit.sync();
   const warm = Lit.kelvinColor(2700);
-  assert.ok(spot.color.equals(warm)); assert.ok(Math.abs(spot.intensity - Lit.candelaFromLumens(450, 20 * .8 * Math.PI / 180) * .5) < 1e-9);
+  assert.ok(spot.color.equals(warm)); assert.ok(Math.abs(spot.intensity - Lit.candelaFromLumens(450, 20 * .8 * Math.PI / 180) * .5 * EXPOSURE) < 1e-9);
   w.fixtures.setFixtureState(id, { spotlight: { on: false } }); w.lit.sync();
   assert.equal(spot.intensity, 0, 'an off channel adds no light');
 });
@@ -118,12 +138,8 @@ test('mesh materials are lit copies that keep the display hooks and confine tone
   assert.ok(litMaterial.isMeshStandardMaterial); assert.equal(litMaterial.map, w.display.map, 'the scan colours stand in for albedo');
   assert.equal(w.face.castShadow, true); assert.equal(w.face.receiveShadow, true);
   assert.equal(w.face.customDepthMaterial, undefined, 'default depth: the camera cutaway never changes world shadowing');
-  const shader = { uniforms: {}, vertexShader: '#include <common>\nvoid main(){}', fragmentShader: '#include <common>\nvoid main(){\n#include <tonemapping_fragment>\n}' };
-  litMaterial.onBeforeCompile(shader);
-  assert.match(shader.fragmentShader, /display-hook/, 'the display material hook (cutaway, near cut) still runs');
-  assert.match(shader.fragmentShader, /gl_FragColor\.rgb = litACES\(gl_FragColor\.rgb\)/); assert.doesNotMatch(shader.fragmentShader, /#include <tonemapping_fragment>/);
-  assert.equal(shader.uniforms.uLitExposure.value, .038);
-  assert.match(litMaterial.customProgramCacheKey(), /^lit-view-1\|home-scan-display-floor-0-1$/);
+  assert.equal(litMaterial.onBeforeCompile, THREE.Material.prototype.onBeforeCompile, 'no custom shader: built-in material only, WebGPU-portable');
+  assert.equal(litMaterial.toneMapped, true); assert.equal(Object.hasOwn(litMaterial, 'customProgramCacheKey'), false);
   const state = w.lit.disable();
   assert.equal(state.active, false);
   assert.equal(w.face.material, w.display, 'the exact display material returns');
@@ -194,6 +210,7 @@ test('one bounce: the eight strongest lit patches become hemispherical bounce li
   assert.equal(state.bounceLights, 8, 'a fixed set of eight bounce lights');
   assert.equal(state.bounceSources, 8, 'four fixtures give more than eight lit patches; the eight strongest are kept');
   assert.equal(state.bounceRangeM, 4.5);
+  assert.deepEqual({ ...state.assumedAlbedos }, { spotFlat: .35, spotVertical: .6, down: .35, zoneWall: .65, zoneOther: .4 }, 'the assumed albedos are reported with the view');
   assert.equal(state.bounceLimit, 'One bounce · casts no shadows · can leak up to 4.5 m through walls');
   const bounce = lit.group.children.filter(node => node.isSpotLight && node.userData.lit_source === 'bounce');
   assert.equal(bounce.length, 8);
@@ -201,7 +218,7 @@ test('one bounce: the eight strongest lit patches become hemispherical bounce li
     assert.equal(light.castShadow, false, 'bounce lights cast no shadows');
     assert.equal(light.distance, 4.5); assert.ok(Math.abs(light.angle - 1.45) < 1e-12); assert.equal(light.penumbra, 1);
     assert.ok(light.intensity > 0 && light.userData.patch.assumed === true && light.userData.measured === false);
-    assert.ok(Math.abs(light.intensity - light.userData.patch.reflected_lm / Math.PI * .9) < 1e-9, 'intensity is reflected flux / pi x 0.9');
+    assert.ok(Math.abs(light.intensity - light.userData.patch.reflected_lm / Math.PI * .9 * EXPOSURE) < 1e-9, 'intensity is reflected flux / pi x 0.9 x the night exposure');
     const off = light.target.position.clone().sub(light.position);
     assert.ok(Math.abs(off.length() - 1) < 1e-9, 'points along the patch normal');
   }
@@ -229,15 +246,19 @@ test('bounce follows the channels and drops a patch whose light is off', t => {
   assert.ok(lit.group.children.filter(node => node.userData.lit_source === 'bounce').every(light => light.intensity === 0));
 });
 
-test('bouncePatches uses the SPEC albedos and ignores rays that find no surface (an opening)', () => {
-  const up = new THREE.Vector3(0, 1, 0), at = (point, normal) => () => ({ point: new THREE.Vector3(...point), normal: new THREE.Vector3(...normal) });
-  const source = (kind, level, cast) => ({ kind, level, kelvin: 3000, origin: new THREE.Vector3(), direction: new THREE.Vector3(1, 0, 0), cast });
-  const rows = [source('spot', 1, at([1, 0, 0], [0, 1, 0])), source('spot', 1, at([1, 0, 0], [-1, 0, 0])), source('down', 1, at([0, 0, 0], [0, 1, 0])),
-    source('zone', 1, at([1, 0, 0], [-1, 0, 0])), source('zone', 1, at([1, 0, 0], [-.6, .6, 0])), source('zone', 1, () => null)];
-  const patches = Lit.bouncePatches(rows, (origin, direction) => rows.find(row => row.origin === origin).cast(), { up });
+test('bouncePatches (pure model) uses the assumed albedos and ignores rays that find no surface (an opening)', () => {
+  const light = (kind, level = 1) => ({ kind, level, kelvin: 3000, number: null });
+  const lights = [light('spot'), light('spot'), light('down'), light('zone'), light('zone'), light('zone'), light('zone', 0)];
+  const hits = [{ point: [1, 0, 0], normal: [0, 1, 0] }, { point: [1, 0, 0], normal: [-1, 0, 0] }, { point: [0, 0, 0], normal: [0, 1, 0] },
+    { point: [1, 0, 0], normal: [-1, 0, 0] }, { point: [1, 0, 0], normal: [-.6, .8, 0] }, null, { point: [1, 0, 0], normal: [-1, 0, 0] }];
+  const patches = Model.bouncePatches(lights, hits, { up: [0, 1, 0] });
   const by = kind => patches.filter(patch => patch.kind === kind).map(patch => patch.albedo).sort();
   assert.deepEqual(by('spot'), [.35, .6]); assert.deepEqual(by('down'), [.35]); assert.deepEqual(by('zone'), [.4, .65]);
-  assert.equal(patches.length, 5, 'the zone that found no surface adds nothing');
+  assert.equal(patches.length, 5, 'the zone with no surface and the zone that is off add nothing');
   assert.ok(Math.abs(patches.find(patch => patch.kind === 'down').reflected - 350 * .8 * .35) < 1e-9);
   assert.ok(Math.abs(patches.find(patch => patch.kind === 'zone' && patch.albedo === .65).reflected - 120 * .7 * .65) < 1e-9);
+  const strongest = patches[0];
+  assert.deepEqual(strongest.position, strongest.point.map((v, i) => v + strongest.normal[i] * .25), '0.25 m off the patch');
+  assert.ok(Math.abs(strongest.intensity - strongest.reflected / Math.PI * .9 * Model.LIT_EXPOSURE) < 1e-12);
+  assert.deepEqual({ ...Model.LIT_BOUNCE_ALBEDO }, { spotFlat: .35, spotVertical: .6, down: .35, zoneWall: .65, zoneOther: .4 });
 });

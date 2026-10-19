@@ -32,51 +32,82 @@ const originalCommands = ['node tools/run-chat-dedupe-tests.js', 'python3 tools/
   'node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}"'];
 const setupCommands = ['npm ci --no-audit --no-fund', 'npx playwright install --with-deps chromium'];
 const runs = entries => entries.filter(entry => /^        run:/m.test(entry)).map(entry => field(entry, 'run', 8));
+// One worker count names every shard, receipt, artifact and the aggregate's union check.
+const SHARDS = 3, shardList = Array.from({ length: SHARDS }, (_, index) => index + 1);
+const receiptDir = '.tmp/touched-harnesses', receiptPath = receiptDir + '/shard-${{ matrix.shard }}-of-' + SHARDS + '.json';
+const shardedCommand = originalCommands[5] + ' --shard "${{ matrix.shard }}/' + SHARDS + '" --receipt "' + receiptPath + '"';
+const verifyCommand = originalCommands[5] + ' --verify-receipts ' + receiptDir + ' --shards ' + SHARDS;
+const prOnly = "github.event_name == 'pull_request'";
+const withoutComments = value => value.replace(/^\s*#.*\n/gm, '').trim();
 
-test('independent workers retain runtime, deadlines, six original commands and unconditional workflow contract', () => {
+test('independent workers retain runtime, deadlines, six original commands and unconditional workflow contracts', () => {
   assert.match(source, /^on:\n  pull_request:\n  workflow_dispatch:\n/m);
-  for (const [name, entries] of [['shell_contracts', shell], ['touched_contracts', touched]]) {
+  for (const [name, entries, keys] of [['shell_contracts', shell, ['name', 'runs-on', 'timeout-minutes']],
+    ['touched_contracts', touched, ['name', 'runs-on', 'timeout-minutes', 'strategy']]]) {
     const prefix = jobs[name].split('    steps:\n')[0];
-    assert.deepEqual([...prefix.matchAll(/^    (\S+):/gm)].map(match => match[1]), ['name', 'runs-on', 'timeout-minutes']);
+    assert.deepEqual([...prefix.matchAll(/^    (\S+):/gm)].map(match => match[1]), keys);
     assert.equal(field(prefix, 'runs-on'), 'ubuntu-latest'); assert.equal(field(prefix, 'timeout-minutes'), '10');
     assert.match(entries[0], /^      - uses: actions\/checkout@v4$/m); assert.equal(field(entries[0], 'fetch-depth', 10), '0');
     assert.match(entries[1], /^      - uses: actions\/setup-node@v4$/m); assert.equal(field(entries[1], 'node-version', 10), '20');
-    for (const entry of entries.slice(0, -1)) {
-      if (entry.includes(originalCommands[5])) assert.equal(field(entry, 'if', 8), "github.event_name == 'pull_request'");
+    for (const entry of entries) {
+      if (/^        uses: actions\/upload-artifact@/m.test(entry)) assert.equal(field(entry, 'if', 8), 'always()');
+      else if (entry.includes(originalCommands[5])) assert.equal(field(entry, 'if', 8), prOnly);
       else assert.doesNotMatch(entry, /^        if:/m);
     }
   }
-  assert.equal(shell.length, 11); assert.equal(touched.length, 6);
-  const withoutComments = value => value.replace(/^\s*#.*\n/gm, '').trim();
+  assert.equal(shell.length, 12); assert.equal(touched.length, 7);
   assert.deepEqual(shell.slice(0, 4).map(withoutComments), touched.slice(0, 4).map(withoutComments));
   assert.deepEqual(runs(shell), [...setupCommands, ...originalCommands.slice(0, 4),
-    'node --test tools/test-ui-qa-workflow.mjs', originalCommands[4]]);
-  assert.deepEqual(runs(touched), [...setupCommands, originalCommands[5]]);
+    'node --test tools/test-ui-qa-workflow.mjs', 'node --test tools/test-touched-shards.mjs', originalCommands[4]]);
+  assert.deepEqual(runs(touched), [...setupCommands, shardedCommand]);
 });
 
-test('the original required check always requires both worker results', () => {
+test('every touched shard runs as its own non-fail-fast worker of one plan, with no hosted --all', () => {
+  const prefix = jobs.touched_contracts.split('    steps:\n')[0];
+  assert.equal(field(prefix, 'name'), 'touched-surface contracts (${{ matrix.shard }}/' + SHARDS + ')');
+  const strategy = prefix.split('    strategy:\n');
+  assert.equal(strategy.length, 2);
+  assert.equal(withoutComments(strategy[1]), 'fail-fast: false\n      matrix:\n        shard: [' + shardList.join(', ') + ']');
+  assert.equal(touched[4].split('\n')[0], '      - name: Touched-surface harnesses');
+  assert.equal(field(touched[4], 'run', 8), shardedCommand);
+  for (const entry of [shell, touched, aggregate].flat()) {
+    if (/^        run:/m.test(entry)) assert.doesNotMatch(field(entry, 'run', 8), /--all\b/, 'no hosted --all');
+  }
+});
+
+test('the original required check always requires both worker results and the verified shard union', () => {
   assert.equal(field(jobs.deterministic, 'name'), 'deterministic chat and ui contracts');
   assert.equal(field(jobs.deterministic, 'needs'), '[shell_contracts, touched_contracts]');
   assert.equal(field(jobs.deterministic, 'if'), 'always()'); assert.equal(field(jobs.deterministic, 'timeout-minutes'), '1');
-  assert.equal(aggregate.length, 1);
+  assert.equal(aggregate.length, 5);
   assert.doesNotMatch(aggregate[0], /^        if:/m);
   assert.equal(field(aggregate[0], 'SHELL_RESULT', 10), '${{ needs.shell_contracts.result }}');
   assert.equal(field(aggregate[0], 'TOUCHED_RESULT', 10), '${{ needs.touched_contracts.result }}');
+  assert.deepEqual(aggregate.slice(1, 3).map(withoutComments), touched.slice(0, 2).map(withoutComments));
+  for (const entry of aggregate.slice(1, 3)) assert.doesNotMatch(entry, /^        if:/m);
+  assert.equal(field(aggregate[3], 'if', 8), prOnly);
+  assert.equal(field(aggregate[3], 'uses', 8), 'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131');
+  assert.equal(field(aggregate[3], 'pattern', 10), 'touched-harness-shard-*-of-' + SHARDS);
+  assert.equal(field(aggregate[3], 'path', 10), receiptDir); assert.equal(field(aggregate[3], 'merge-multiple', 10), 'true');
+  assert.equal(field(aggregate[4], 'if', 8), prOnly);
+  assert.deepEqual(runs(aggregate).slice(1), [verifyCommand]);
 });
 
-test('all original diagnostics upload exactly once under distinct always-run artifact names', () => {
-  const uploads = [shell.at(-1), touched.at(-1)], names = [], paths = [];
+test('all original diagnostics and every worker receipt upload exactly once under distinct always-run artifact names', () => {
+  const uploads = [shell.at(-1), touched.at(-2), touched.at(-1)], names = [], paths = [];
   for (const entry of uploads) {
     assert.equal(field(entry, 'if', 8), 'always()');
     assert.equal(field(entry, 'uses', 8), 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a');
     assert.equal(field(entry, 'path', 10), '|'); names.push(field(entry, 'name', 10));
     assert.equal(field(entry, 'if-no-files-found', 10), 'ignore'); assert.equal(field(entry, 'include-hidden-files', 10), 'true');
     assert.equal(field(entry, 'retention-days', 10), '7');
-    paths.push(...[...entry.matchAll(/^            (\S+)$/gm)].map(match => match[1]));
+    paths.push(...[...entry.matchAll(/^            (\S.*)$/gm)].map(match => match[1]));
   }
-  assert.deepEqual(names, ['apartment-shell-authored-browser', 'apartment-touched-authored-browser']);
+  assert.deepEqual(names, ['apartment-shell-authored-browser', 'touched-harness-shard-${{ matrix.shard }}-of-' + SHARDS,
+    'apartment-touched-authored-browser-${{ matrix.shard }}-of-' + SHARDS]);
+  assert.deepEqual([...touched.at(-2).matchAll(/^            (\S.*)$/gm)].map(match => match[1]), [receiptPath]);
   assert.deepEqual(paths.sort(), ['.tmp/apartment-home-shell-browser/run-*/*receipt.json', '.tmp/apartment-home-shell-browser/run-*/*.png',
-    ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json')].sort());
+    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json')].sort());
 });
 
 test('the actual aggregate Bash gate rejects every non-success pair and genuinely absent variables', () => {

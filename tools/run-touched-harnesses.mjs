@@ -14,6 +14,17 @@
  *   node tools/run-touched-harnesses.mjs --files app/src/home-app.jsx,...
  *   node tools/run-touched-harnesses.mjs --all
  *   node tools/run-touched-harnesses.mjs --all --list
+ *   node tools/run-touched-harnesses.mjs --base origin/main --shard 2/3 \
+ *     --receipt .tmp/touched-harnesses/shard-2-of-3.json
+ *   node tools/run-touched-harnesses.mjs --base origin/main \
+ *     --verify-receipts .tmp/touched-harnesses --shards 3
+ *
+ * --shard i/n runs only the plan items a deterministic partition assigns to
+ * worker i. Every worker computes the same full plan first, so the n shards
+ * are disjoint and their union is exactly the unsharded plan (proved by
+ * tools/test-touched-shards.mjs). --receipt records the full plan, the
+ * shard's plan and each result; --verify-receipts recomputes the plan for the
+ * same base and fails unless the n receipts cover it exactly once, all green.
  * ========================================================================= */
 "use strict";
 
@@ -113,14 +124,85 @@ const MAP = [
 
 const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}.js`;
 
+/* Hosted-CI seconds per plan item, used only to balance --shard partitions.
+ * Measured on run 39214584656 (#293 touched job, 7m22s of harnesses) and the
+ * #287 sibling run 39174968832, rounded up. An unmeasured browser suite
+ * counts as its 145 s deadline and
+ * any other unmeasured item as 1 s. Weights never add, drop or reorder a
+ * harness; they only decide which worker runs it. */
+const SHARD_WEIGHT_S = {
+  "test-apartment-directional-browser.mjs": 141,
+  "test-apartment-room-selection-browser.mjs": 111,
+  "test-apartment-overlay-bridge-browser.mjs": 100,
+  "test-apartment-room-inspector-browser.mjs": 62,
+  "test-apartment-ui-browser.mjs": 6,
+  "test-apartment-chat-header-browser.mjs": 5,
+  "test-apartment-unread-integration.mjs": 5,
+  "test-apartment-escape-browser.mjs": 4,
+  "test-apartment-directional-integration.mjs": 4,
+  "check-jsx.js": 4,
+  "run-resilience-tests.js": 3,
+  "test-apartment-escape-stack.cjs": 3,
+};
+const MAX_SHARDS = 32;
+const RECEIPT_SCHEMA = "touched-harness-shard-receipt/v1";
+
+function shardWeight(name) {
+  if (Object.hasOwn(SHARD_WEIGHT_S, name)) return SHARD_WEIGHT_S[name];
+  return /-browser\.mjs$/.test(name) ? 145 : 1;
+}
+
+/* Longest-first greedy partition with total, input-independent tie-breaks
+ * (weight, then name; then the lowest-loaded, lowest-index worker). Each
+ * worker's items keep the unsharded plan order. */
+function partitionPlan(plan, count) {
+  const loads = Array(count).fill(0), owner = new Map();
+  const order = [...plan].sort((a, b) => shardWeight(b) - shardWeight(a) || (a < b ? -1 : a > b ? 1 : 0));
+  for (const name of order) {
+    let target = 0;
+    for (let i = 1; i < count; i++) if (loads[i] < loads[target]) target = i;
+    owner.set(name, target); loads[target] += shardWeight(name);
+  }
+  return loads.map((_, index) => plan.filter(name => owner.get(name) === index));
+}
+
+function usage(message) {
+  console.error(`[touched-harnesses] ${message}`);
+  process.exit(2);
+}
+
+function parseCount(value, flag) {
+  if (!/^[1-9]\d*$/.test(value || "") || Number(value) > MAX_SHARDS) usage(`${flag} needs a worker count from 1 to ${MAX_SHARDS}`);
+  return Number(value);
+}
+
 function parseArgs(argv) {
-  const out = { base: null, files: null, all: false, list: false };
+  const out = { base: null, files: null, all: false, list: false, shard: null, receipt: null, verifyReceipts: null, shards: null };
+  const value = (i, flag) => {
+    if (i >= argv.length || /^--/.test(argv[i])) usage(`${flag} needs a value`);
+    return argv[i];
+  };
   for (let i = 2; i < argv.length; i++) {
-    if (argv[i] === "--base") out.base = argv[++i];
-    else if (argv[i] === "--files") out.files = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
+    if (argv[i] === "--base") out.base = value(++i, "--base");
+    else if (argv[i] === "--files") out.files = value(++i, "--files").split(",").map((s) => s.trim()).filter(Boolean);
     else if (argv[i] === "--all") out.all = true;
     else if (argv[i] === "--list") out.list = true;
+    else if (argv[i] === "--shard") {
+      const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value(++i, "--shard"));
+      if (!match) usage("--shard needs i/n, for example 2/3");
+      const count = parseCount(match[2], "--shard"), index = Number(match[1]);
+      if (index > count) usage(`--shard ${index}/${count} names a worker outside 1..${count}`);
+      out.shard = { index, count };
+    } else if (argv[i] === "--receipt") out.receipt = value(++i, "--receipt");
+    else if (argv[i] === "--verify-receipts") out.verifyReceipts = value(++i, "--verify-receipts");
+    else if (argv[i] === "--shards") out.shards = parseCount(value(++i, "--shards"), "--shards");
+    else usage(`unknown argument ${JSON.stringify(argv[i])}`);
   }
+  if (out.all && (out.files || out.base)) usage("--all cannot be combined with --base or --files");
+  if (out.files && out.base) usage("--files cannot be combined with --base");
+  if (out.verifyReceipts && (out.shard || out.receipt || out.list || !out.shards)) usage("--verify-receipts needs --shards n and no --shard, --receipt or --list");
+  if (out.shards && !out.verifyReceipts) usage("--shards is only for --verify-receipts");
+  if (out.receipt && out.list) usage("--receipt records executed results and cannot be combined with --list");
   return out;
 }
 
@@ -130,6 +212,7 @@ function changedFiles(base) {
   return stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 }
 
+const git = argv => execFileSync("git", argv, { cwd: REPO, encoding: "utf8" }).trim();
 const args = parseArgs(process.argv);
 let files = [];
 let harnesses = new Set();
@@ -158,19 +241,57 @@ if (args.all) {
 
 const touchedAppSrc = args.all || files.some((f) => f.replace(/\\/g, "/").startsWith("app/src/"));
 const list = [...harnesses].sort();
+// The full plan: every harness, then check-jsx (which also runs the ESM checks).
+const plan = touchedAppSrc ? [...list, "check-jsx.js"] : list;
+const viaBase = !args.all && !args.files;
+const source = {
+  mode: args.all ? "all" : args.files ? "files" : "base",
+  base: viaBase ? args.base || "origin/main" : null,
+  merge_base: viaBase ? git(["merge-base", args.base || "origin/main", "HEAD"]) : null,
+  head: git(["rev-parse", "HEAD"]),
+  changed_files: files.map((f) => f.replace(/\\/g, "/")).sort(),
+};
 
 console.log(`[touched-harnesses] ${args.all ? "(--all)" : files.length + " changed files"} → ${list.length} harnesses${touchedAppSrc ? " + check-jsx" : ""}`);
-if (!list.length && !touchedAppSrc) {
+
+if (args.verifyReceipts) process.exit(verifyReceipts(args.verifyReceipts, args.shards));
+
+const shardPlan = args.shard ? partitionPlan(plan, args.shard.count)[args.shard.index - 1] : plan;
+if (args.shard) {
+  const weight = items => items.reduce((sum, name) => sum + shardWeight(name), 0);
+  console.log(`[touched-harnesses] shard ${args.shard.index}/${args.shard.count} → ${shardPlan.length} of ${plan.length} plan items (~${weight(shardPlan)}s of ~${weight(plan)}s measured)`);
+}
+const results = [];
+function finish(code) {
+  if (args.receipt) {
+    const receipt = { schema: RECEIPT_SCHEMA, ...source, plan,
+      shard: args.shard || { index: 1, count: 1 }, shard_plan: shardPlan, results };
+    fs.mkdirSync(path.dirname(path.resolve(REPO, args.receipt)), { recursive: true });
+    fs.writeFileSync(path.resolve(REPO, args.receipt), `${JSON.stringify(receipt, null, 2)}\n`);
+    console.log(`[touched-harnesses] receipt ${args.receipt}`);
+  }
+  process.exit(code);
+}
+
+if (!plan.length) {
   console.log("[touched-harnesses] nothing mapped — done");
-  process.exit(0);
+  finish(0);
+}
+if (!shardPlan.length) {
+  console.log("[touched-harnesses] this shard has no plan items — done");
+  finish(0);
 }
 
 let failed = [];
-for (const name of list) {
-  const file = path.join(TOOLS, name);
+function record(name, status, started) {
+  results.push({ name, status, duration_ms: Date.now() - started });
+  if (status !== "ok") failed.push(name);
+}
+for (const name of shardPlan.filter(item => item !== "check-jsx.js")) {
+  const file = path.join(TOOLS, name), started = Date.now();
   if (!fs.existsSync(file)) {
     console.log(`  FAIL ${name} (mapped harness file missing)`);
-    failed.push(name);
+    record(name, "missing", started);
     continue;
   }
   if (args.list) { console.log(`  PLAN ${name}`); continue; }
@@ -179,16 +300,20 @@ for (const name of list) {
   const res = spawnSync(process.execPath, nodeArgs, { cwd: REPO, encoding: "utf8", timeout: 180000 });
   if (res.status === 0) {
     console.log("ok");
+    record(name, "ok", started);
   } else {
     console.log("FAIL");
     const tail = `${res.stdout || ""}\n${res.stderr || ""}`.trim().split(/\r?\n/).slice(-15).join("\n");
     console.log(tail.replace(/^/gm, "       "));
-    failed.push(name);
+    record(name, "fail", started);
   }
 }
 
-if (touchedAppSrc && args.list) console.log("  PLAN check-jsx.js");
-if (touchedAppSrc && !args.list) {
+const runCheckJsx = shardPlan.includes("check-jsx.js");
+if (runCheckJsx && args.list) console.log("  PLAN check-jsx.js");
+if (runCheckJsx && !args.list) {
+  const started = Date.now();
+  let status = "ok";
   process.stdout.write("  RUN  check-jsx ... ");
   const res = spawnSync(process.execPath, [path.join(TOOLS, "check-jsx.js")], { cwd: REPO, encoding: "utf8", timeout: 180000 });
   if (res.status === 0) console.log("ok");
@@ -196,6 +321,7 @@ if (touchedAppSrc && !args.list) {
     console.log("FAIL");
     console.log(`${res.stdout || ""}\n${res.stderr || ""}`.trim().split(/\r?\n/).slice(-15).join("\n").replace(/^/gm, "       "));
     failed.push("check-jsx");
+    status = "fail";
   }
 
   // home-3d/ and home-agent/ are real ES modules — check-jsx's Function-based
@@ -213,12 +339,59 @@ if (touchedAppSrc && !args.list) {
       console.log("FAIL");
       console.log(`${r.stderr || ""}`.trim().split(/\r?\n/).slice(-6).join("\n").replace(/^/gm, "       "));
       failed.push(`node-check:${f}`);
+      status = "fail";
     }
   }
+  results.push({ name: "check-jsx.js", status, duration_ms: Date.now() - started });
 }
 
 if (failed.length) {
   console.log(`\n[touched-harnesses] FAILED: ${failed.join(", ")}`);
-  process.exit(1);
+  finish(1);
 }
 console.log(args.list ? "\n[touched-harnesses] plan complete (no harnesses executed)" : "\n[touched-harnesses] all green");
+finish(0);
+
+/* The aggregate gate: recompute the plan for the same base, then require the
+ * workers' receipts to be exactly shards 1..n of that plan, each item run once
+ * and green, so the shards are disjoint and their union is the unsharded plan.
+ * Returns the exit code. */
+function verifyReceipts(dir, count) {
+  const problems = [], expected = partitionPlan(plan, count), ranIn = new Map(), present = new Set();
+  const absolute = path.resolve(REPO, dir);
+  const entries = fs.existsSync(absolute) ? fs.readdirSync(absolute).filter(name => /^shard-.*\.json$/.test(name)).sort() : [];
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (const name of entries) {
+    const match = /^shard-([1-9]\d*)-of-([1-9]\d*)\.json$/.exec(name);
+    if (!match || Number(match[2]) !== count || Number(match[1]) > count) { problems.push(`${name}: not a receipt for shards 1..${count}`); continue; }
+    let receipt;
+    try { receipt = JSON.parse(fs.readFileSync(path.join(absolute, name), "utf8")); } catch (error) { problems.push(`${name}: unreadable (${error.message})`); continue; }
+    const index = Number(match[1]), label = `shard ${index}/${count}`;
+    present.add(index);
+    if (receipt?.schema !== RECEIPT_SCHEMA) problems.push(`${label}: schema ${JSON.stringify(receipt?.schema)}`);
+    if (!same(receipt?.shard, { index, count })) problems.push(`${label}: receipt names shard ${JSON.stringify(receipt?.shard)}`);
+    for (const key of ["mode", "base", "merge_base", "head", "changed_files"]) {
+      if (!same(receipt?.[key], source[key])) problems.push(`${label}: ${key} ${JSON.stringify(receipt?.[key])} differs from ${JSON.stringify(source[key])}`);
+    }
+    if (!same(receipt?.plan, plan)) problems.push(`${label}: full plan differs from the unsharded plan`);
+    if (!same(receipt?.shard_plan, expected[index - 1])) problems.push(`${label}: shard plan differs from the partition`);
+    const ran = Array.isArray(receipt?.results) ? receipt.results : [];
+    if (!same(ran.map(result => result?.name), expected[index - 1])) problems.push(`${label}: results do not match its shard plan one to one`);
+    for (const result of ran) {
+      if (result?.status !== "ok") problems.push(`${label}: ${result?.name} ${result?.status}`);
+      if (ranIn.has(result?.name)) problems.push(`${label}: ${result?.name} also ran in shard ${ranIn.get(result?.name)}`);
+      else ranIn.set(result?.name, index);
+    }
+  }
+  for (let index = 1; index <= count; index++) if (!present.has(index)) problems.push(`shard ${index}/${count}: receipt missing`);
+  const missing = plan.filter(name => !ranIn.has(name)), extra = [...ranIn.keys()].filter(name => !plan.includes(name));
+  if (missing.length || extra.length) problems.push(`union differs from the unsharded plan: missing ${JSON.stringify(missing)}, extra ${JSON.stringify(extra)}`);
+  for (const problem of problems) console.log(`  FAIL ${problem}`);
+  if (problems.length) {
+    console.log(`\n[touched-harnesses] receipts REJECTED: ${problems.length} problem(s)`);
+    return 1;
+  }
+  console.log(`  OK   ${count} receipts, disjoint, union = unsharded plan (${plan.length} items), all green`);
+  console.log("\n[touched-harnesses] receipts verified");
+  return 0;
+}

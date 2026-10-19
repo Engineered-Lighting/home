@@ -265,4 +265,58 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
   );
 }
 
-Object.assign(window, { AptDeviceLabel, AptPersonLabel, AptRoomChip, AptControlCard });
+// Room membership comes from the admitted model, never from display positions.
+function aptRoomLightGroups({ rooms = [], lights = [] } = {}) {
+  const roomById = new Map(rooms.filter(room => typeof room?.id === "string" && room.id)
+    .map(room => [room.id, room]));
+  const groups = new Map(), seen = new Set();
+  for (const light of lights) {
+    if (typeof light?.id !== "string" || !light.id || seen.has(light.id)) continue;
+    seen.add(light.id);
+    const room = roomById.get(light.room_id), id = room ? room.id : null;
+    if (!groups.has(id)) groups.set(id, { id, label: room?.name || room?.label || room?.id || "Unassigned", lights: [] });
+    groups.get(id).lights.push(light);
+  }
+  return [...groups.values()].map(group => {
+    const states = group.lights.map(light => light.power);
+    const power = states.some(state => state !== "on" && state !== "off") ? "unknown"
+      : states.every(state => state === "on") ? "on" : states.every(state => state === "off") ? "off" : "mixed";
+    return { ...group, power };
+  });
+}
+
+function AptRoomLightGroups({ groups = [], onSelect, onPower, disabledReason = "" }) {
+  return <>{groups.map(group => {
+    const reason = disabledReason || (group.power === "unknown" ? "Light state unavailable" : "");
+    return <section className="apt-ui-section" key={group.id ?? "unassigned"} aria-label={`${group.label} lights`}>
+      <div className="apt-ui-row"><h3 className="apt-ui-heading grow">{group.label}</h3>
+        <label className="apt-ui-switch"><input type="checkbox" aria-label={`${group.label} room power`}
+          checked={group.power === "on"} disabled={!!reason}
+          ref={node => { if (node) node.indeterminate = group.power === "mixed" || group.power === "unknown"; }}
+          onChange={event => onPower(group.id, event.target.checked)} />
+          <span>{({ on: "On", off: "Off", mixed: "Mixed", unknown: "Unknown" })[group.power]}</span></label>
+      </div>
+      {reason && <p className="apt-ui-meta">{reason}</p>}
+      <ul className="apt-ui-list">{group.lights.map(light => <li key={light.id}>
+        <button type="button" className="apt-ui-list-button" aria-label={light.ariaLabel}
+          aria-current={light.selected ? "true" : undefined} onClick={() => onSelect(light.id)}>
+          <span className={`apt-ui-lamp${light.power === "on" ? " is-on" : ""}`} aria-hidden="true" />
+          <span className="nm">{light.label || light.id}</span><span className="vl">{light.power === "on" ? "On" : light.power === "off" ? "Off" : "Unavailable"}</span>
+        </button></li>)}</ul>
+    </section>;
+  })}</>;
+}
+
+function AptNamedAimList({ targets = [], onEdit, disabledReason = "" }) {
+  return <section className="apt-ui-section" aria-label="Named aims"><h3 className="apt-ui-heading">Named aims</h3>
+    {targets.length ? <ul className="apt-ui-list">{targets.map(target => <li key={target.id} className="apt-ui-row">
+      <span className="grow">{target.name || target.label || target.id}</span>
+      <button type="button" className="apt-ui-button is-small" aria-label={`Edit ${target.name || target.label || target.id}`}
+        disabled={!!disabledReason} onClick={() => onEdit(target.id)}>Edit</button>
+    </li>)}</ul> : <p className="apt-ui-meta">No named aims saved for this home.</p>}
+    {disabledReason && targets.length > 0 && <p className="apt-ui-meta">{disabledReason}</p>}
+  </section>;
+}
+
+Object.assign(window, { AptDeviceLabel, AptPersonLabel, AptRoomChip, AptControlCard,
+  aptRoomLightGroups, AptRoomLightGroups, AptNamedAimList });

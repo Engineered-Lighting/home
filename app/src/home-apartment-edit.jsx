@@ -391,13 +391,17 @@ function EdEquipmentFields({ record, document, onUpdate, onReference, disabled, 
 function HomeApartmentEdit({
   engine, model, onModel, seedModel, registry, onSave, onDirtyChange,
   onExit, sim, connection, sourceMeta, saveStatus, saving,
-  liveReview, liveComparison, onCompareLive, mobile = false,
+  liveReview, liveComparison, onCompareLive, mobile = false, initialTargetId = null,
 }) {
-  const [tool, setTool] = useState("select");          // select | add | targets | links | measure | zones
+  // Initial navigation only: opening an existing target never places or saves it.
+  // Later model updates must not reset this editor's selection or dirty history.
+  const [entryTargetId] = useState(() => !model._equipment_registration && typeof initialTargetId === "string"
+    && (model.targets || []).some(target => target.id === initialTargetId) ? initialTargetId : null);
+  const [tool, setTool] = useState(entryTargetId ? "targets" : "select"); // select | add | targets | links | measure | zones
   const [placing, setPlacing] = useState(null);        // palette item being placed
   const [placingTarget, setPlacingTarget] = useState(null);
   const [selectedId, setSelectedId] = useState(null);  // device id
-  const [selectedTargetId, setSelectedTargetId] = useState(null);
+  const [selectedTargetId, setSelectedTargetId] = useState(entryTargetId);
   const [moveTargetId, setMoveTargetId] = useState(null);
   const [targetDraftId, setTargetDraftId] = useState(null);
   const [selectedZone, setSelectedZone] = useState(null);

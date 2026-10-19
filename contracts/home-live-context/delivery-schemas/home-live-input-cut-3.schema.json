@@ -1,0 +1,5231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-live-input-cut-3.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-live-input-cut-3"
+    },
+    "version": {
+      "const": 3
+    },
+    "stream_epoch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "cursor": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/publication"
+      },
+      "maxItems": 256
+    },
+    "revocation_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "source_generations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "maxProperties": 16,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "stream_epoch",
+    "cursor",
+    "items",
+    "revocation_generation",
+    "source_generations"
+  ],
+  "$defs": {
+    "association": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "person_status": {
+          "enum": [
+            "qualified",
+            "unresolved",
+            "not_applicable"
+          ]
+        },
+        "subject_status": {
+          "enum": [
+            "qualified",
+            "unresolved",
+            "not_applicable"
+          ]
+        },
+        "association_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "candidate_person_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/person"
+          },
+          "minItems": 0,
+          "maxItems": 8,
+          "uniqueItems": true
+        },
+        "candidate_subject_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subject"
+          },
+          "minItems": 0,
+          "maxItems": 8,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "person_status",
+        "subject_status",
+        "association_id",
+        "generation",
+        "method_ref",
+        "candidate_person_refs",
+        "candidate_subject_refs"
+      ]
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "commissioned"
+        },
+        "mapping_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "mapping_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "original_unit": {
+          "enum": [
+            "unix_ns",
+            "device_ns",
+            "monotonic_ns",
+            "unix_s"
+          ]
+        },
+        "original_value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$"
+        },
+        "uncertainty_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status",
+        "mapping_id",
+        "mapping_digest",
+        "source_epoch",
+        "original_unit",
+        "original_value",
+        "uncertainty_s"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "original_unit": {
+                "enum": [
+                  "unix_ns",
+                  "device_ns",
+                  "monotonic_ns"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "original_value": {
+                "pattern": "^[0-9]+$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "home-live-intent-event-1"
+        },
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "manifest_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "actor_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "origin": {
+          "enum": [
+            "human_declaration",
+            "human_preference"
+          ]
+        },
+        "truth_role": {
+          "const": "runtime_intent"
+        },
+        "kind": {
+          "enum": [
+            "bind_profile",
+            "unbind_profile"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/person"
+        },
+        "set_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "available_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "valid_until": {
+          "type": "number",
+          "minimum": 0
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "profile_ref": {
+                  "$ref": "#/$defs/pin"
+                },
+                "example_ref": {
+                  "$ref": "#/$defs/pin"
+                }
+              },
+              "required": [
+                "profile_ref",
+                "example_ref"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reply_to": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "id",
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "manifest_ref",
+        "actor_ref",
+        "origin",
+        "truth_role",
+        "kind",
+        "target",
+        "set_at",
+        "available_at",
+        "valid_until",
+        "value",
+        "reply_to"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "unbind_profile"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "value": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "profile_ref": {
+                    "$ref": "#/$defs/pin"
+                  },
+                  "example_ref": {
+                    "$ref": "#/$defs/pin"
+                  }
+                },
+                "required": [
+                  "profile_ref",
+                  "example_ref"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "original_receipt_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "store_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "component_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "observed_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "available_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "clock_mapping_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "store_id",
+        "receipt_id",
+        "digest",
+        "component_id",
+        "observed_at",
+        "available_at",
+        "clock_mapping_id"
+      ]
+    },
+    "person": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "track_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "track_epoch",
+        "pid"
+      ]
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "probability": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "p": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "calibration_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "applicability_ref": {
+              "$ref": "#/$defs/pin"
+            }
+          },
+          "required": [
+            "p",
+            "calibration_ref",
+            "applicability_ref"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "home-context-publication-1"
+        },
+        "producer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "stream_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "context_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "committed_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "payload_type": {
+          "enum": [
+            "home-live-fact-1",
+            "home-live-geometry-1",
+            "home-live-intent-event-1"
+          ]
+        },
+        "payload_version": {
+          "const": "1.0"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/raw_fact"
+            },
+            {
+              "$ref": "#/$defs/raw_geometry"
+            },
+            {
+              "$ref": "#/$defs/intent"
+            }
+          ]
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "schema",
+        "producer_id",
+        "stream_epoch",
+        "cursor",
+        "context_seq",
+        "committed_at",
+        "payload_type",
+        "payload_version",
+        "payload",
+        "payload_digest",
+        "id"
+      ]
+    },
+    "publication_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stream_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "producer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "component_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "stream_epoch",
+        "cursor",
+        "producer_id",
+        "id",
+        "payload_digest",
+        "component_id"
+      ]
+    },
+    "raw_fact": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "home-live-fact-1"
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "schema",
+        "version"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schema": {
+              "const": "home-live-fact-1"
+            },
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "site_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "room_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "domain_epoch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "manifest_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "person_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/person"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "subject_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/subject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "association": {
+              "$ref": "#/$defs/association"
+            },
+            "head": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                    },
+                    "payload_type": {
+                      "const": "home-live-fact-1"
+                    },
+                    "person_ref": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/person"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "subject_ref": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/subject"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "predicate": {
+                      "enum": [
+                        "person_presence",
+                        "material_state",
+                        "hand_material_relation",
+                        "object_interaction",
+                        "pc_input_interaction",
+                        "activity_refinement",
+                        "negative_engagement"
+                      ]
+                    },
+                    "method_ref": {
+                      "$ref": "#/$defs/pin"
+                    }
+                  },
+                  "required": [
+                    "source_id",
+                    "payload_type",
+                    "person_ref",
+                    "subject_ref",
+                    "predicate",
+                    "method_ref"
+                  ]
+                },
+                "position": {
+                  "$ref": "#/$defs/source_position"
+                },
+                "supersedes": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/publication_ref"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "key",
+                "position",
+                "supersedes"
+              ]
+            },
+            "observed_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "available_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "valid_until": {
+              "type": "number",
+              "minimum": 0
+            },
+            "source_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "sensor_roots": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "observation_roots": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "observation_root_times": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 0
+              },
+              "minProperties": 1,
+              "maxProperties": 32
+            },
+            "sensor_root_bindings": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 32,
+                "uniqueItems": true
+              },
+              "minProperties": 1,
+              "maxProperties": 32
+            },
+            "parent_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/publication_ref"
+              },
+              "minItems": 0,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "original_receipt_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/original_receipt_ref"
+              },
+              "minItems": 0,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "clock": {
+              "$ref": "#/$defs/clock"
+            },
+            "method_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "source_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "layer": {
+              "enum": [
+                "observation",
+                "interpretation"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "person_presence",
+                "material_state",
+                "hand_material_relation",
+                "object_interaction",
+                "pc_input_interaction",
+                "activity_refinement",
+                "negative_engagement"
+              ]
+            },
+            "status": {
+              "enum": [
+                "supplied",
+                "missing",
+                "stale",
+                "unobservable",
+                "conflict"
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "present",
+                    "observed_absent",
+                    "open",
+                    "closed",
+                    "visible_state_unknown",
+                    "near",
+                    "supported_holding",
+                    "contact",
+                    "manipulation",
+                    "not_interacting",
+                    "attributed_recent",
+                    "active_unattributed",
+                    "observed_inactive",
+                    "computer_work",
+                    "gaming",
+                    "desk_hobby",
+                    "reading",
+                    "phone_use",
+                    "listening",
+                    "resting",
+                    "sleeping_likely",
+                    "cleaning",
+                    "transition",
+                    "other",
+                    "unknown",
+                    "observed_use_ended",
+                    "observed_departure"
+                  ]
+                }
+              ]
+            },
+            "assertion_basis": {
+              "enum": [
+                "measured",
+                "inferred"
+              ]
+            },
+            "reason": {
+              "enum": [
+                "qualified_person_detection",
+                "qualified_per_observation_holding",
+                "per_capture_holding_without_motion_requirement",
+                "open_material_no_use_claim",
+                "proximity_only",
+                "fresh_covered_use_ending",
+                "qualified_coarse_bounds",
+                "qualified_material_state",
+                "qualified_hand_material_relation",
+                "qualified_object_interaction",
+                "qualified_pc_input_attribution",
+                "qualified_activity_refinement",
+                "qualified_observed_absence",
+                "qualified_per_observation_evidence",
+                "material_occluded",
+                "hand_occluded_no_enclosing_bound",
+                "association_ambiguous",
+                "person_association_ambiguous",
+                "subject_association_ambiguous",
+                "source_unavailable",
+                "model_unavailable",
+                "detector_unavailable",
+                "pose_unavailable",
+                "depth_unavailable",
+                "insufficient_coverage",
+                "missing_measurement_bound",
+                "missing_applicability",
+                "primitive_capacity_exceeded",
+                "stale_capture",
+                "conflicting_evidence",
+                "outside_coverage",
+                "front_back_ambiguous",
+                "required_part_unobservable",
+                "unsupported_distinction",
+                "capture_gap",
+                "registration_unavailable",
+                "calibration_unavailable"
+              ]
+            },
+            "model_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/pin"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "probability": {
+              "$ref": "#/$defs/probability"
+            },
+            "conflicting_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/publication_ref"
+              },
+              "minItems": 0,
+              "maxItems": 32,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "schema",
+            "version",
+            "id",
+            "site_id",
+            "room_id",
+            "session_id",
+            "domain_epoch",
+            "manifest_ref",
+            "person_ref",
+            "subject_ref",
+            "association",
+            "head",
+            "observed_at",
+            "available_at",
+            "valid_until",
+            "source_id",
+            "sensor_roots",
+            "observation_roots",
+            "observation_root_times",
+            "sensor_root_bindings",
+            "parent_refs",
+            "original_receipt_refs",
+            "clock",
+            "method_ref",
+            "source_generation",
+            "layer",
+            "kind",
+            "status",
+            "value",
+            "assertion_basis",
+            "reason",
+            "model_ref",
+            "probability",
+            "conflicting_refs"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "person_status": {
+                        "const": "qualified"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "person_ref": {
+                    "$ref": "#/$defs/person"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_person_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "person_status": {
+                        "const": "unresolved"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "person_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_person_refs": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "person_status": {
+                        "const": "not_applicable"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "person_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_person_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "subject_status": {
+                        "const": "qualified"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "subject_ref": {
+                    "$ref": "#/$defs/subject"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_subject_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "subject_status": {
+                        "const": "unresolved"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "subject_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_subject_refs": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "subject_status": {
+                        "const": "not_applicable"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "subject_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_subject_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "qualified_person_detection",
+                      "qualified_per_observation_holding",
+                      "per_capture_holding_without_motion_requirement",
+                      "open_material_no_use_claim",
+                      "proximity_only",
+                      "fresh_covered_use_ending",
+                      "qualified_coarse_bounds",
+                      "qualified_material_state",
+                      "qualified_hand_material_relation",
+                      "qualified_object_interaction",
+                      "qualified_pc_input_attribution",
+                      "qualified_activity_refinement",
+                      "qualified_observed_absence",
+                      "qualified_per_observation_evidence"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "missing",
+                      "stale",
+                      "unobservable",
+                      "conflict"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "probability": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "enum": [
+                      "material_occluded",
+                      "hand_occluded_no_enclosing_bound",
+                      "association_ambiguous",
+                      "person_association_ambiguous",
+                      "subject_association_ambiguous",
+                      "source_unavailable",
+                      "model_unavailable",
+                      "detector_unavailable",
+                      "pose_unavailable",
+                      "depth_unavailable",
+                      "insufficient_coverage",
+                      "missing_measurement_bound",
+                      "missing_applicability",
+                      "primitive_capacity_exceeded",
+                      "stale_capture",
+                      "conflicting_evidence",
+                      "outside_coverage",
+                      "front_back_ambiguous",
+                      "required_part_unobservable",
+                      "unsupported_distinction",
+                      "capture_gap",
+                      "registration_unavailable",
+                      "calibration_unavailable"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "conflict"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "conflicting_refs": {
+                    "minItems": 1
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "person_presence"
+                  },
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "present",
+                      "observed_absent"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "material_state"
+                  },
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "open",
+                      "closed",
+                      "visible_state_unknown"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "hand_material_relation"
+                  },
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "near",
+                      "supported_holding",
+                      "contact",
+                      "manipulation",
+                      "not_interacting"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "object_interaction"
+                  },
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "pc_input_interaction"
+                  },
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "attributed_recent",
+                      "active_unattributed",
+                      "observed_inactive"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "activity_refinement"
+                  },
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "computer_work",
+                      "gaming",
+                      "desk_hobby",
+                      "reading",
+                      "phone_use",
+                      "listening",
+                      "resting",
+                      "sleeping_likely",
+                      "cleaning",
+                      "transition",
+                      "other",
+                      "unknown"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "negative_engagement"
+                  },
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "observed_use_ended",
+                      "observed_departure"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schema": {
+              "const": "home-live-fact-1"
+            },
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "site_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "room_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "domain_epoch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "manifest_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "source_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "source_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "status": {
+              "const": "withdrawn"
+            },
+            "reason": {
+              "enum": [
+                "capture_clock_unavailable",
+                "source_unavailable",
+                "source_restarted",
+                "association_lost",
+                "registration_invalidated",
+                "grant_revoked",
+                "operator_withdrawal",
+                "camera_unavailable",
+                "depth_unavailable",
+                "clock_mapping_invalidated",
+                "capacity_exceeded"
+              ]
+            },
+            "observed_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "available_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "valid_until": {
+              "type": "number",
+              "minimum": 0
+            },
+            "control": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "source_barrier"
+                },
+                "asserted_at": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "clock": {
+                  "$ref": "#/$defs/clock"
+                },
+                "expected_source_generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "next_source_generation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "expected_authority_generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "retired_refs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/publication_ref"
+                  },
+                  "minItems": 0,
+                  "maxItems": 128,
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "kind",
+                "asserted_at",
+                "clock",
+                "expected_source_generation",
+                "next_source_generation",
+                "expected_authority_generation",
+                "retired_refs"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "version",
+            "id",
+            "site_id",
+            "room_id",
+            "session_id",
+            "domain_epoch",
+            "manifest_ref",
+            "source_id",
+            "source_generation",
+            "status",
+            "reason",
+            "observed_at",
+            "available_at",
+            "valid_until",
+            "control"
+          ]
+        }
+      ]
+    },
+    "raw_geometry": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "home-live-geometry-1"
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "schema",
+        "version"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schema": {
+              "const": "home-live-geometry-1"
+            },
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "site_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "room_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "domain_epoch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "manifest_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "person_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/person"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "subject_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/subject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "association": {
+              "$ref": "#/$defs/association"
+            },
+            "head": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                    },
+                    "payload_type": {
+                      "const": "home-live-geometry-1"
+                    },
+                    "person_ref": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/person"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "subject_ref": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/subject"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "predicate": {
+                      "const": "geometry_bundle"
+                    },
+                    "method_ref": {
+                      "$ref": "#/$defs/pin"
+                    }
+                  },
+                  "required": [
+                    "source_id",
+                    "payload_type",
+                    "person_ref",
+                    "subject_ref",
+                    "predicate",
+                    "method_ref"
+                  ]
+                },
+                "position": {
+                  "$ref": "#/$defs/source_position"
+                },
+                "supersedes": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/publication_ref"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "key",
+                "position",
+                "supersedes"
+              ]
+            },
+            "observed_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "available_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "valid_until": {
+              "type": "number",
+              "minimum": 0
+            },
+            "source_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "sensor_roots": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "observation_roots": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "observation_root_times": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 0
+              },
+              "minProperties": 1,
+              "maxProperties": 32
+            },
+            "sensor_root_bindings": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 32,
+                "uniqueItems": true
+              },
+              "minProperties": 1,
+              "maxProperties": 32
+            },
+            "parent_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/publication_ref"
+              },
+              "minItems": 0,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "original_receipt_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/original_receipt_ref"
+              },
+              "minItems": 0,
+              "maxItems": 32,
+              "uniqueItems": true
+            },
+            "clock": {
+              "$ref": "#/$defs/clock"
+            },
+            "method_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "source_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "status": {
+              "enum": [
+                "supplied",
+                "missing",
+                "stale",
+                "unobservable",
+                "conflict"
+              ]
+            },
+            "reason": {
+              "enum": [
+                "qualified_person_detection",
+                "qualified_per_observation_holding",
+                "per_capture_holding_without_motion_requirement",
+                "open_material_no_use_claim",
+                "proximity_only",
+                "fresh_covered_use_ending",
+                "qualified_coarse_bounds",
+                "qualified_material_state",
+                "qualified_hand_material_relation",
+                "qualified_object_interaction",
+                "qualified_pc_input_attribution",
+                "qualified_activity_refinement",
+                "qualified_observed_absence",
+                "qualified_per_observation_evidence",
+                "material_occluded",
+                "hand_occluded_no_enclosing_bound",
+                "association_ambiguous",
+                "person_association_ambiguous",
+                "subject_association_ambiguous",
+                "source_unavailable",
+                "model_unavailable",
+                "detector_unavailable",
+                "pose_unavailable",
+                "depth_unavailable",
+                "insufficient_coverage",
+                "missing_measurement_bound",
+                "missing_applicability",
+                "primitive_capacity_exceeded",
+                "stale_capture",
+                "conflicting_evidence",
+                "outside_coverage",
+                "front_back_ambiguous",
+                "required_part_unobservable",
+                "unsupported_distinction",
+                "capture_gap",
+                "registration_unavailable",
+                "calibration_unavailable"
+              ]
+            },
+            "registration": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "registration_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "registration_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "geometry_revision": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "geometry_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "mount_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "calibration_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "coverage_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                  },
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "uniqueItems": true
+                },
+                "frame": {
+                  "const": "z_up_metric_floor0"
+                },
+                "unit": {
+                  "const": "m"
+                },
+                "transform_chain_refs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/pin"
+                  },
+                  "minItems": 1,
+                  "maxItems": 16,
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "registration_ref",
+                "registration_digest",
+                "geometry_revision",
+                "geometry_digest",
+                "mount_digest",
+                "calibration_digest",
+                "coverage_refs",
+                "frame",
+                "unit",
+                "transform_chain_refs"
+              ]
+            },
+            "parts": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "work": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "aabb"
+                            },
+                            "center_m": {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            },
+                            "half_extents_m": {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "center_m",
+                            "half_extents_m"
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "conservative_additive_radius-1"
+                            },
+                            "bound_at_observation_m": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "components_m": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "capture_association": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "depth": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "registration": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "estimator": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "capture_association",
+                                "depth",
+                                "registration",
+                                "estimator"
+                              ]
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_speed_m_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_accel_m_s2": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_speed_m_s",
+                                "max_accel_m_s2"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "bound_at_observation_m",
+                            "components_m",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                },
+                "body": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "opaque_primitives"
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "part_id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "kind": {
+                                        "const": "aabb"
+                                      },
+                                      "center_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      },
+                                      "half_extents_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number",
+                                            "exclusiveMinimum": 0
+                                          },
+                                          {
+                                            "type": "number",
+                                            "exclusiveMinimum": 0
+                                          },
+                                          {
+                                            "type": "number",
+                                            "exclusiveMinimum": 0
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      }
+                                    },
+                                    "required": [
+                                      "part_id",
+                                      "kind",
+                                      "center_m",
+                                      "half_extents_m"
+                                    ]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "part_id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "kind": {
+                                        "const": "capsule"
+                                      },
+                                      "a_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      },
+                                      "b_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      },
+                                      "radius_m": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                      }
+                                    },
+                                    "required": [
+                                      "part_id",
+                                      "kind",
+                                      "a_m",
+                                      "b_m",
+                                      "radius_m"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "minItems": 1,
+                              "maxItems": 12,
+                              "uniqueItems": true
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "items"
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "conservative_additive_radius-1"
+                            },
+                            "bound_at_observation_m": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "components_m": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "capture_association": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "depth": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "registration": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "estimator": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "capture_association",
+                                "depth",
+                                "registration",
+                                "estimator"
+                              ]
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_speed_m_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_accel_m_s2": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_speed_m_s",
+                                "max_accel_m_s2"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "bound_at_observation_m",
+                            "components_m",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                },
+                "head": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "aabb"
+                                },
+                                "center_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "half_extents_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "center_m",
+                                "half_extents_m"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "capsule"
+                                },
+                                "a_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "b_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "radius_m": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "a_m",
+                                "b_m",
+                                "radius_m"
+                              ]
+                            }
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "conservative_additive_radius-1"
+                            },
+                            "bound_at_observation_m": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "components_m": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "capture_association": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "depth": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "registration": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "estimator": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "capture_association",
+                                "depth",
+                                "registration",
+                                "estimator"
+                              ]
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_speed_m_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_accel_m_s2": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_speed_m_s",
+                                "max_accel_m_s2"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "bound_at_observation_m",
+                            "components_m",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                },
+                "hand_left": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "aabb"
+                                },
+                                "center_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "half_extents_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "center_m",
+                                "half_extents_m"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "capsule"
+                                },
+                                "a_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "b_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "radius_m": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "a_m",
+                                "b_m",
+                                "radius_m"
+                              ]
+                            }
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "conservative_additive_radius-1"
+                            },
+                            "bound_at_observation_m": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "components_m": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "capture_association": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "depth": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "registration": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "estimator": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "capture_association",
+                                "depth",
+                                "registration",
+                                "estimator"
+                              ]
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_speed_m_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_accel_m_s2": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_speed_m_s",
+                                "max_accel_m_s2"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "bound_at_observation_m",
+                            "components_m",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                },
+                "hand_right": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "aabb"
+                                },
+                                "center_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "half_extents_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "center_m",
+                                "half_extents_m"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "capsule"
+                                },
+                                "a_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "b_m": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "items": false,
+                                  "minItems": 3,
+                                  "maxItems": 3
+                                },
+                                "radius_m": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "a_m",
+                                "b_m",
+                                "radius_m"
+                              ]
+                            }
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "conservative_additive_radius-1"
+                            },
+                            "bound_at_observation_m": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "components_m": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "capture_association": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "depth": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "registration": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "estimator": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "capture_association",
+                                "depth",
+                                "registration",
+                                "estimator"
+                              ]
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_speed_m_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_accel_m_s2": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_speed_m_s",
+                                "max_accel_m_s2"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "bound_at_observation_m",
+                            "components_m",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                },
+                "protection": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "protected_primitives"
+                            },
+                            "policy_ref": {
+                              "$ref": "#/$defs/pin"
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "part_id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "kind": {
+                                        "const": "aabb"
+                                      },
+                                      "center_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      },
+                                      "half_extents_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number",
+                                            "exclusiveMinimum": 0
+                                          },
+                                          {
+                                            "type": "number",
+                                            "exclusiveMinimum": 0
+                                          },
+                                          {
+                                            "type": "number",
+                                            "exclusiveMinimum": 0
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      }
+                                    },
+                                    "required": [
+                                      "part_id",
+                                      "kind",
+                                      "center_m",
+                                      "half_extents_m"
+                                    ]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "part_id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "kind": {
+                                        "const": "capsule"
+                                      },
+                                      "a_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      },
+                                      "b_m": {
+                                        "type": "array",
+                                        "prefixItems": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "number"
+                                          }
+                                        ],
+                                        "items": false,
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                      },
+                                      "radius_m": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                      }
+                                    },
+                                    "required": [
+                                      "part_id",
+                                      "kind",
+                                      "a_m",
+                                      "b_m",
+                                      "radius_m"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "minItems": 1,
+                              "maxItems": 4,
+                              "uniqueItems": true
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "policy_ref",
+                            "items"
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "conservative_additive_radius-1"
+                            },
+                            "bound_at_observation_m": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "components_m": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "capture_association": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "depth": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "registration": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "estimator": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "capture_association",
+                                "depth",
+                                "registration",
+                                "estimator"
+                              ]
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_speed_m_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_accel_m_s2": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_speed_m_s",
+                                "max_accel_m_s2"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "bound_at_observation_m",
+                            "components_m",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                },
+                "body_forward": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "direction"
+                            },
+                            "unit_vector": {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            },
+                            "front_back": {
+                              "enum": [
+                                "resolved",
+                                "ambiguous"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "unit_vector",
+                            "front_back"
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "bounded_angle-1"
+                            },
+                            "angular_error_rad": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 3.141592653589793
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_angular_speed_rad_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_angular_speed_rad_s"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "angular_error_rad",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                },
+                "head_forward": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "supplied"
+                        },
+                        "basis": {
+                          "enum": [
+                            "measured",
+                            "inferred"
+                          ]
+                        },
+                        "shape": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "direction"
+                            },
+                            "unit_vector": {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            },
+                            "front_back": {
+                              "enum": [
+                                "resolved",
+                                "ambiguous"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "unit_vector",
+                            "front_back"
+                          ]
+                        },
+                        "uncertainty": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "model": {
+                              "const": "bounded_angle-1"
+                            },
+                            "angular_error_rad": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 3.141592653589793
+                            },
+                            "age": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin_at": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "max_age_s": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "max_angular_speed_rad_s": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "origin_at",
+                                "max_age_s",
+                                "max_angular_speed_rad_s"
+                              ]
+                            },
+                            "applicability_ref": {
+                              "$ref": "#/$defs/pin"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "angular_error_rad",
+                            "age",
+                            "applicability_ref"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 1,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "method_ref": {
+                          "$ref": "#/$defs/pin"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "basis",
+                        "shape",
+                        "uncertainty",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until",
+                        "method_ref"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "status": {
+                          "const": "unobservable"
+                        },
+                        "reason": {
+                          "enum": [
+                            "material_occluded",
+                            "hand_occluded_no_enclosing_bound",
+                            "association_ambiguous",
+                            "person_association_ambiguous",
+                            "subject_association_ambiguous",
+                            "source_unavailable",
+                            "model_unavailable",
+                            "detector_unavailable",
+                            "pose_unavailable",
+                            "depth_unavailable",
+                            "insufficient_coverage",
+                            "missing_measurement_bound",
+                            "missing_applicability",
+                            "primitive_capacity_exceeded",
+                            "stale_capture",
+                            "conflicting_evidence",
+                            "outside_coverage",
+                            "front_back_ambiguous",
+                            "required_part_unobservable",
+                            "unsupported_distinction",
+                            "capture_gap",
+                            "registration_unavailable",
+                            "calibration_unavailable"
+                          ]
+                        },
+                        "support_refs": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/support_ref"
+                          },
+                          "minItems": 0,
+                          "maxItems": 32,
+                          "uniqueItems": true
+                        },
+                        "observed_at": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "valid_until": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason",
+                        "support_refs",
+                        "observed_at",
+                        "valid_until"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "work",
+                "body",
+                "head",
+                "hand_left",
+                "hand_right",
+                "protection",
+                "body_forward",
+                "head_forward"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "version",
+            "id",
+            "site_id",
+            "room_id",
+            "session_id",
+            "domain_epoch",
+            "manifest_ref",
+            "person_ref",
+            "subject_ref",
+            "association",
+            "head",
+            "observed_at",
+            "available_at",
+            "valid_until",
+            "source_id",
+            "sensor_roots",
+            "observation_roots",
+            "observation_root_times",
+            "sensor_root_bindings",
+            "parent_refs",
+            "original_receipt_refs",
+            "clock",
+            "method_ref",
+            "source_generation",
+            "status",
+            "reason",
+            "registration",
+            "parts"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "person_status": {
+                        "const": "qualified"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "person_ref": {
+                    "$ref": "#/$defs/person"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_person_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "person_status": {
+                        "const": "unresolved"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "person_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_person_refs": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "person_status": {
+                        "const": "not_applicable"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "person_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_person_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "subject_status": {
+                        "const": "qualified"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "subject_ref": {
+                    "$ref": "#/$defs/subject"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_subject_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "subject_status": {
+                        "const": "unresolved"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "subject_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_subject_refs": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "association": {
+                    "properties": {
+                      "subject_status": {
+                        "const": "not_applicable"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "subject_ref": {
+                    "type": "null"
+                  },
+                  "association": {
+                    "properties": {
+                      "candidate_subject_refs": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "supplied"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "qualified_person_detection",
+                      "qualified_per_observation_holding",
+                      "per_capture_holding_without_motion_requirement",
+                      "open_material_no_use_claim",
+                      "proximity_only",
+                      "fresh_covered_use_ending",
+                      "qualified_coarse_bounds",
+                      "qualified_material_state",
+                      "qualified_hand_material_relation",
+                      "qualified_object_interaction",
+                      "qualified_pc_input_attribution",
+                      "qualified_activity_refinement",
+                      "qualified_observed_absence",
+                      "qualified_per_observation_evidence"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "missing",
+                      "stale",
+                      "unobservable",
+                      "conflict"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "material_occluded",
+                      "hand_occluded_no_enclosing_bound",
+                      "association_ambiguous",
+                      "person_association_ambiguous",
+                      "subject_association_ambiguous",
+                      "source_unavailable",
+                      "model_unavailable",
+                      "detector_unavailable",
+                      "pose_unavailable",
+                      "depth_unavailable",
+                      "insufficient_coverage",
+                      "missing_measurement_bound",
+                      "missing_applicability",
+                      "primitive_capacity_exceeded",
+                      "stale_capture",
+                      "conflicting_evidence",
+                      "outside_coverage",
+                      "front_back_ambiguous",
+                      "required_part_unobservable",
+                      "unsupported_distinction",
+                      "capture_gap",
+                      "registration_unavailable",
+                      "calibration_unavailable"
+                    ]
+                  },
+                  "parts": {
+                    "properties": {
+                      "work": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      },
+                      "body": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      },
+                      "head": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      },
+                      "hand_left": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      },
+                      "hand_right": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      },
+                      "protection": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      },
+                      "body_forward": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      },
+                      "head_forward": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "unobservable"
+                          },
+                          "reason": {
+                            "enum": [
+                              "material_occluded",
+                              "hand_occluded_no_enclosing_bound",
+                              "association_ambiguous",
+                              "person_association_ambiguous",
+                              "subject_association_ambiguous",
+                              "source_unavailable",
+                              "model_unavailable",
+                              "detector_unavailable",
+                              "pose_unavailable",
+                              "depth_unavailable",
+                              "insufficient_coverage",
+                              "missing_measurement_bound",
+                              "missing_applicability",
+                              "primitive_capacity_exceeded",
+                              "stale_capture",
+                              "conflicting_evidence",
+                              "outside_coverage",
+                              "front_back_ambiguous",
+                              "required_part_unobservable",
+                              "unsupported_distinction",
+                              "capture_gap",
+                              "registration_unavailable",
+                              "calibration_unavailable"
+                            ]
+                          },
+                          "support_refs": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/$defs/support_ref"
+                            },
+                            "minItems": 0,
+                            "maxItems": 32,
+                            "uniqueItems": true
+                          },
+                          "observed_at": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "valid_until": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "support_refs",
+                          "observed_at",
+                          "valid_until"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schema": {
+              "const": "home-live-geometry-1"
+            },
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "site_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "room_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "domain_epoch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "manifest_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "source_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "source_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "status": {
+              "const": "withdrawn"
+            },
+            "reason": {
+              "enum": [
+                "capture_clock_unavailable",
+                "source_unavailable",
+                "source_restarted",
+                "association_lost",
+                "registration_invalidated",
+                "grant_revoked",
+                "operator_withdrawal",
+                "camera_unavailable",
+                "depth_unavailable",
+                "clock_mapping_invalidated",
+                "capacity_exceeded"
+              ]
+            },
+            "observed_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "available_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "valid_until": {
+              "type": "number",
+              "minimum": 0
+            },
+            "control": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "source_barrier"
+                },
+                "asserted_at": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "clock": {
+                  "$ref": "#/$defs/clock"
+                },
+                "expected_source_generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "next_source_generation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "expected_authority_generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "retired_refs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/publication_ref"
+                  },
+                  "minItems": 0,
+                  "maxItems": 128,
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "kind",
+                "asserted_at",
+                "clock",
+                "expected_source_generation",
+                "next_source_generation",
+                "expected_authority_generation",
+                "retired_refs"
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "version",
+            "id",
+            "site_id",
+            "room_id",
+            "session_id",
+            "domain_epoch",
+            "manifest_ref",
+            "source_id",
+            "source_generation",
+            "status",
+            "reason",
+            "observed_at",
+            "available_at",
+            "valid_until",
+            "control"
+          ]
+        }
+      ]
+    },
+    "source_position": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capture_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "capture_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        }
+      },
+      "required": [
+        "capture_epoch",
+        "capture_seq",
+        "revision"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "subject_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "subject_id",
+        "subject_epoch"
+      ]
+    },
+    "support_ref": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/publication_ref"
+        },
+        {
+          "$ref": "#/$defs/original_receipt_ref"
+        }
+      ]
+    }
+  }
+}

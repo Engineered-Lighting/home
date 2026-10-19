@@ -2253,11 +2253,17 @@ function AptUnifiedIcon({ name }) {
 }
 
 function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
-  onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible }) {
+  onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
+  homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about }) {
+  const Guide = window.HomeApartmentRoomGuide;
   const [popover, setPopover] = useState(null);
+  const [guideDialog, setGuideDialog] = useState(null);
   const popoverRef = useRef(null);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-room-toolbar", active: !!popover, rootRef: popoverRef,
     trap: false, initialFocus: "first", onEscape: () => setPopover(null) });
+  const openGuide = (dialog) => { setPopover(null); setGuideDialog(dialog); };
+  Guide.useHelpShortcut(!guideDialog, () => openGuide("help"));
+  Guide.useFitPopover(popoverRef, popover);
   const photoError = !modeLoading && modeError?.mode === "splat";
   const retryPhotoDisabled = !!(disabled || pointsOnlyReason || modeLockedReason);
   const backToCloudDisabled = !!(disabled || modeLockedReason);
@@ -2279,31 +2285,33 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
       aria-expanded={popover === "layers"} onClick={() => setPopover(popover === "layers" ? null : "layers")}><AptUnifiedIcon name="layers" /><span className="apt-ui-toolbar-word">Layers</span></button>
       {popover === "layers" && <div ref={popoverRef} role="dialog" aria-label="Room layers">
         <h3 className="apt-ui-heading">Room layers</h3>
-        {hasVirtualFixtures ? <label className="apt-ui-row apt-ui-copy"><input type="checkbox" checked={virtualVisible}
-          aria-label="Show virtual spotlights layer" onChange={event => onVirtualVisible(event.target.checked)} />Virtual spotlights</label>
-          : <p className="apt-ui-copy">Mapped lights and room surfaces follow the current scene.</p>}
-        <p className="apt-ui-meta">Body and analyzed-frame layers are controlled in Camera · JEV.</p>
-        <p className="apt-ui-meta">Shadows and body occlusion are planned.</p>
+        <Guide.LayersPanel homeId={homeId} hasPerception={hasPerception} fixtureCount={fixtureCount}
+          seams={hasVirtualFixtures ? { fixtures: { value: virtualVisible, set: onVirtualVisible } } : {}} />
         <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close layers</button>
       </div>}
     </div>
-    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-icon is-small" aria-label="Room help"
-      aria-expanded={popover === "help"} onClick={() => setPopover(popover === "help" ? null : "help")}><AptUnifiedIcon name="help" /></button>
-      {popover === "help" && <div ref={popoverRef} role="dialog" aria-label="Room navigation help"><h3 className="apt-ui-heading">Room navigation</h3>
-        <p className="apt-ui-copy">Drag empty space to orbit. Scroll or pinch to zoom. Select a fixture to open its controls.</p>
-        <p className="apt-ui-meta">Arrow keys change the room view. H returns home. N / P selects a mapped device.</p>
-        {onRehearse && <button type="button" className="apt-ui-button is-small" onClick={() => { setPopover(null); onRehearse(); }}>Rehearse moving book</button>}
-        {nativePacks && <section className="apt-ui-channel"><h3 className="apt-ui-heading">Home pack</h3>
-          <button type="button" className="apt-ui-button" disabled={packBusy} onClick={() => { setPopover(null); onPackChange(); }}>Import home pack</button>
-          {nativePacks.length > 1 && <select className="apt-ui-input" aria-label="Home pack version" value={packVersion} disabled={packBusy}
-            onChange={event => { setPopover(null); onPackChange(event.target.value); }}>{nativePacks.map(pack =>
-              <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>)}</select>}
-        </section>}
-        <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close help</button></div>}
+    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-icon is-small" aria-label="Gestures and keys"
+      title="Gestures and keys (?)" aria-haspopup="dialog" aria-expanded={guideDialog === "help"}
+      onClick={() => openGuide("help")}><AptUnifiedIcon name="help" /></button>
     </div>
+    {guideDialog === "help" && <Guide.HelpDialog homeId={homeId} hasPerception={hasPerception}
+      onClose={() => setGuideDialog(null)} onAbout={about ? () => setGuideDialog("about") : null}>
+      {onRehearse && <button type="button" className="apt-ui-button is-small" onClick={() => { setGuideDialog(null); onRehearse(); }}>Rehearse moving book</button>}
+      {nativePacks && <section className="apt-ui-channel"><h3 className="apt-ui-heading">Home pack</h3>
+        <button type="button" className="apt-ui-button" disabled={packBusy} onClick={() => { setGuideDialog(null); onPackChange(); }}>Import home pack</button>
+        {nativePacks.length > 1 && <select className="apt-ui-input" aria-label="Home pack version" value={packVersion} disabled={packBusy}
+          onChange={event => { setGuideDialog(null); onPackChange(event.target.value); }}>{nativePacks.map(pack =>
+            <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>)}</select>}
+      </section>}
+    </Guide.HelpDialog>}
+    {guideDialog === "about" && about && <Guide.AboutDialog homeName={homeName} facts={Guide.aboutFacts(about)}
+      onClose={() => setGuideDialog(null)} />}
+    <Guide.Legend homeId={homeId} selected={!!fixtureSelected} hasPerception={hasPerception}
+      suppressed={!!(popover || guideDialog || modeLoading || modeError)} />
     {popover === "source" && <div ref={popoverRef} className="apt-ui-toolbar-source-detail" role="dialog" aria-label="Scene source">
       <h3 className="apt-ui-heading">Scene source</h3><p className="apt-ui-copy">{sourceDetail || sourceLabel}</p>{sourceStatus}
       <p className="apt-ui-meta">Cloud, Photo and Mesh use this home's existing scene assets.</p>
+      {about && <button type="button" className="apt-ui-button is-small" onClick={() => openGuide("about")}>What's real here</button>}
       {stats && <details><summary className="apt-ui-meta">Renderer details</summary><p className="apt-ui-meta">
         {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k points · DPR {stats.pixelRatio}
         {stats.calls != null ? ` · ${stats.calls} draw calls` : ""}{stats.tris ? ` · ${(stats.tris / 1e6).toFixed(1)}m triangles` : ""}
@@ -9072,7 +9080,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           nativePacks={!liveShadow && window.HomeContentPacks?.isNative ? contentPacks.filter(pack => pack.manifest.siteId === selectedSiteId) : null}
           packVersion={contentPacks.find(pack => pack.active && pack.manifest.siteId === selectedSiteId)?.manifest.revision || ""}
           packBusy={contentPackBusy} onPackChange={version => { void changeContentPack(version); }}
-          hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible} />
+          hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible}
+          homeId={selectedSiteId} homeName={selectedSiteEntry?.shortName} fixtureCount={virtualFixtureItems.length}
+          fixtureSelected={virtualFixtureControlsOpen && virtualSpotlightsVisible}
+          hasPerception={selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception}
+          about={{ homeId: selectedSiteId, source: sourceMeta, revision: model.revision, liveShadow, simActive, trackerStatus,
+            hasVirtualFixtures: !!virtualFixtureDocument, fixtureCount: virtualFixtureItems.length,
+            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception }} />
       )}
 
       {/* Established HUD stays intact for Classic and the wider world view. */}

@@ -1,0 +1,56 @@
+{
+  "schema": "vjepa-den-tune-config-1",
+  "note": "AL-T (#327). Offline den V-JEPA probe tuning. Read with vjepa_tune_eval.py, vjepa_tune_labels.py, vjepa_tune_export.py and tools/la-vjepa-worker/vjepa_den_encode.py.",
+  "export": {
+    "stride_s": 2.0,
+    "span_variants": {
+      "3.5s_8f": {"step_s": 0.5, "slot_tolerance_s": 0.4},
+      "7s_8f": {"step_s": 1.0, "slot_tolerance_s": 0.5}
+    },
+    "box_min_frames": 4,
+    "box_min_confidence": 0.5,
+    "box_match_seconds": 0.75,
+    "max_clips_per_session": 600
+  },
+  "encode": {
+    "crops": ["union", "hands"],
+    "pool_grid": [4, 12, 12],
+    "hands_box_scale": 2.2,
+    "hands_min_side_px": 96
+  },
+  "weak": {
+    "window_pad_s": 2.0,
+    "qwen_min_agree": 1,
+    "jev_min_confidence": 0.6,
+    "pc_active_states": ["under_15s", "15_to_60s", "under_60s"],
+    "pc_inactive_states": ["over_5_min", "locked"],
+    "label_fraction": 0.8
+  },
+  "select": {"crop": "union", "span_variant": "3.5s_8f", "single_person_only": true},
+  "protocol": {
+    "fold": "session",
+    "train_tiers": ["gold", "owner", "weak"],
+    "eval_tiers": ["gold", "owner"],
+    "min_train_rows": 20,
+    "min_class_support": 10,
+    "stride_s": 2.0
+  },
+  "probes": [
+    {"name": "linear_mean", "probe": "linear", "features": "mean", "l2": 0.001, "steps": 400, "lr": 0.05, "seeds": [0, 1, 2]},
+    {"name": "linear_mean_motion", "probe": "linear", "features": "mean_motion", "l2": 0.001, "steps": 400, "lr": 0.05, "seeds": [0, 1, 2]},
+    {"name": "attentive_h2_k16", "probe": "attentive", "heads": 2, "key_dim": 16, "l2": 0.001, "epochs": 40, "batch": 32, "lr": 0.002, "seeds": [0, 1, 2]}
+  ],
+  "smoothing": [
+    {"name": "none", "kind": "none"},
+    {"name": "ema_0.5", "kind": "ema", "alpha": 0.5, "max_gap_s": 8.0},
+    {"name": "window_3", "kind": "window", "k": 3, "max_gap_s": 8.0},
+    {"name": "hmm_0.9", "kind": "hmm", "stay": 0.9, "max_gap_s": 8.0}
+  ],
+  "buckets": {
+    "targets": {"high": 0.9, "medium": 0.7},
+    "min_support": 15,
+    "min_positive": 10,
+    "hold_s": 12.0
+  },
+  "synthetic": {"sessions": 6, "clips": 120, "dim": 64, "grid": [4, 3, 3], "seed": 0}
+}

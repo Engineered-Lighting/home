@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as THREE from '../app/src/vendor/three-0.180.0/three.module.js';
 import Core from '../app/src/home-equipment-registration.js';
 import { authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { ORB_COSMETIC_NAME, pinnedEquivalence, protectedScenario } from './fixtures/apartment-orb-protected-equivalence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceFile = name => path.join(ROOT, 'app/src/home-3d', name);
@@ -418,4 +419,149 @@ test('Off fades CCT alongside level and hidden/resume or current reduced motion 
   f.api.setVisible(false); f.api.setVisible(true);
   assertShownTemperatures(f, reference, [4200, 3000, 3000, 3000, 3000, 3000]);
   assert.equal(f.api.advancePresentation(time.now + 16), false);
+});
+
+// Orb cosmetics (APT-Z01): the drawn body changes; nothing a test, Den case or
+// the preview relies on does.
+const fixtureSource = fs.readFileSync(sourceFile('equipment-virtual-fixtures.mjs'), 'utf8');
+const orbParts = root => ({ core: root.getObjectByName('fixture-orb-core'),
+  sectors: [1, 2, 3, 4, 5, 6].map(number => root.getObjectByName('radial-diffuser-sector-' + number)),
+  down: root.getObjectByName('orb-halo-downward'), spot: root.getObjectByName('orb-halo-spotlight') });
+const haloLayers = root => { const parts = orbParts(root); return [...parts.sectors, parts.down, parts.spot]; };
+const allOff = { radials: [1, 2, 3, 4, 5, 6].map(number => ({ number, on: false })), downward: { on: false }, spotlight: { on: false } };
+
+test('orb cosmetics leave readback, descriptors, picks, sources, beam and receiver buffers identical to the cylinder fixture', t => {
+  const pinned = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/fixtures/apartment-orb-protected-equivalence.json'), 'utf8'));
+  assert.match(pinned.recorded_from, /at 4a374e78 \(cylinder fixture\)$/);
+  const parent = new THREE.Group(), api = createEquipmentVirtualFixtures(parent, { binding }); t.after(() => api.dispose());
+  const loaded = api.setDocument(authoredDocument(binding, Core));
+  assert.equal(loaded.status, 'ready'); assert.equal(loaded.fixture_count, 4);
+  const actual = pinnedEquivalence(protectedScenario(api, loaded.fixtures[0].fixture_id));
+  assert.deepEqual(actual.paths, pinned.paths, 'the same protected nodes exist in the same places');
+  for (const [state, parts] of Object.entries(pinned.states)) assert.deepEqual(actual.states[state], parts, 'protected values unchanged after ' + state);
+  assert.deepEqual(Object.keys(actual.states), Object.keys(pinned.states));
+});
+
+test('protected proportions, limits, easing and the pick and handle geometry stay exactly as before', t => {
+  assert.match(fixtureSource, /^const TUBE_RADIUS = \.04, TUBE_HEIGHT = \.16;$/m);
+  assert.match(fixtureSource, /^const DISPLAY_PIVOT_Z = -\.14;$/m);
+  assert.match(fixtureSource, /^const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = \.0005, RADIAL_SETTLED_KELVIN = 2;$/m);
+  assert.equal(fixtureSource.match(/^const ORB_[A-Z_]+ = .+;$/gm).length, 2, 'orb values are separate cosmetic constants');
+  const f = fixture(t), descriptor = f.api.interactionDescriptor(f.id);
+  assert.deepEqual(f.api.readback().fixtures[0].limits, { pan_min_deg: -180, pan_max_deg: 180, tilt_min_deg: -90, tilt_max_deg: 90,
+    limit_role: 'virtual_preview', physical_travel: 'unknown' });
+  assert.deepEqual(descriptor.display_origin_m, [descriptor.display_anchor_m[0], descriptor.display_anchor_m[1], descriptor.display_anchor_m[2] - .14]);
+  const pick = f.root.getObjectByName('virtual-fixture-pick'), handle = f.root.getObjectByName('virtual-fixture-aim-handle');
+  const handlePick = f.root.getObjectByName('virtual-fixture-aim-pick');
+  assert.deepEqual([pick.geometry.type, pick.geometry.parameters.radius, pick.position.toArray()], ['SphereGeometry', .13, [0, 0, -.08]]);
+  assert.deepEqual([handle.geometry.parameters.radius, handlePick.geometry.parameters.radius], [.075, .14]);
+  for (let number = 1; number <= 6; number++) {
+    const port = f.root.getObjectByName('radial-emitter-' + number), angle = descriptor.state.radials[number - 1].azimuth_deg * Math.PI / 180;
+    assert.ok(port.position.distanceTo(new THREE.Vector3(Math.cos(angle) * .032, Math.sin(angle) * .032, -.08)) < 1e-12, 'radial source ' + number);
+  }
+  assert.equal(f.root.getObjectByName('downward-emitter').position.z, -.1605);
+});
+
+test('the drawn body is one opaque depth-writing orb core and one shared halo, with no housing, strips, cylinder or new light', t => {
+  const f = fixture(t);
+  for (const root of f.api.root.children) {
+    const { core, sectors, down, spot } = orbParts(root), names = [];
+    root.traverse(node => { names.push(node.name); assert.equal(node.isLight, undefined, 'no light is added: ' + node.name); });
+    for (const gone of ['symbolic-fixture-housing', 'tubular-diffuser', 'diffuser-top', 'diffuser-base']) assert.equal(names.includes(gone), false, gone + ' is not drawn');
+    const opaque = []; root.traverse(node => { if (node.isMesh && node.material.visible && !node.material.transparent && node.material.depthWrite) opaque.push(node); });
+    assert.deepEqual(opaque.map(node => node.name), ['fixture-orb-core'], 'the only drawn opaque depth-writing fixture mesh is the orb core');
+    assert.equal(opaque[0], core);
+    assert.equal(core.geometry.type, 'SphereGeometry'); assert.ok(core.geometry.parameters.radius < .13, 'core stays inside the pick sphere');
+    assert.equal(core.parent.name, 'fixture-orb'); assert.equal(core.parent.parent.name, 'symbolic-engineered-fixture-assembly');
+    const center = root.getObjectByName('virtual-fixture-pick').getWorldPosition(new THREE.Vector3());
+    assert.ok(core.getWorldPosition(new THREE.Vector3()).distanceTo(center) < 1e-12, 'the core is centred on the pick sphere');
+    for (const layer of [...sectors, down, spot]) {
+      assert.equal(layer.geometry, sectors[0].geometry, 'every layer draws the same halo shell');
+      assert.notEqual(layer.geometry.type, 'CylinderGeometry'); assert.equal(layer.geometry.type, 'SphereGeometry');
+      assert.ok(layer.getWorldPosition(new THREE.Vector3()).distanceTo(center) < 1e-12, layer.name + ' is centred on the orb');
+      assert.ok(layer.geometry.parameters.radius > core.geometry.parameters.radius, 'the halo shell lies in front of the core');
+      assert.equal(layer.material.blending, THREE.AdditiveBlending); assert.equal(layer.material.side, THREE.FrontSide);
+      assert.equal(layer.material.depthWrite, false); assert.equal(layer.material.depthTest, true);
+      assert.equal(layer.material.customProgramCacheKey(), 'equipment-orb-halo-1');
+    }
+    sectors.forEach((sector, index) => {
+      assert.equal(sector.parent.name, 'radial-zone-' + (index + 1)); assert.equal(sector.userData.channel_number, index + 1);
+    });
+    assert.equal(down.parent.name, 'downward-zone'); assert.equal(spot.parent.name, 'robotic-spotlight');
+  }
+});
+
+test('halo layers are never hit targets and the pick inventory is unchanged', t => {
+  const f = fixture(t), objects = f.api.pickObjects(); f.api.root.updateMatrixWorld(true);
+  const center = f.root.getObjectByName('virtual-fixture-pick').getWorldPosition(new THREE.Vector3());
+  const offset = new THREE.Vector3(-1.2, -.9, -.5), raycaster = new THREE.Raycaster(center.clone().add(offset), offset.clone().negate().normalize());
+  assert.ok(raycaster.intersectObject(f.root.getObjectByName('virtual-fixture-pick'), false).length, 'the same oblique ray does hit the pick sphere');
+  for (const layer of haloLayers(f.root)) assert.deepEqual(raycaster.intersectObject(layer, false), [], layer.name);
+  assert.deepEqual(f.api.pickObjects(), objects); assert.equal(objects.length, 5);
+});
+
+test('an all-off socket shows only its dim core and stays selectable', t => {
+  const f = fixture(t), before = f.api.interactionDescriptor(f.id), objects = f.api.pickObjects();
+  assert.equal(f.api.setFixtureState(f.id, allOff).ok, true); f.api.setVisible(false); f.api.setVisible(true);
+  const { core } = orbParts(f.root);
+  assert.equal(core.visible, true); assert.deepEqual(core.material.color.toArray(), new THREE.Color(0x3d3f43).toArray());
+  for (const layer of haloLayers(f.root)) assert.equal(layer.visible, false, layer.name + ' is dark');
+  const after = f.api.interactionDescriptor(f.id);
+  assert.deepEqual({ ...after, state: null }, { ...before, state: null }, 'only the modeled channel state changed');
+  assert.equal(after.state.spotlight.brightness, before.state.spotlight.brightness);
+  assert.equal(after.state.downward.color_temp_kelvin, before.state.downward.color_temp_kelvin);
+  assert.deepEqual(f.api.pickObjects(), objects);
+  assert.equal(f.api.setSelected(null), null); assert.equal(f.api.setSelected(f.id).fixture_id, f.id, 'an off socket is still selectable');
+});
+
+test('every channel and mixed CCT tint the halo through the producer display white', t => {
+  const { f, reference } = temperatureFixture(t), parts = orbParts(f.root);
+  assert.equal(f.api.setFixtureState(f.id, allOff).ok, true); f.api.setVisible(false); f.api.setVisible(true);
+  for (let number = 1; number <= 6; number++) {
+    assert.equal(f.api.setFixtureState(f.id, { radials: [{ number, on: true, brightness: .8, color_temp_kelvin: 2200 + 400 * number }] }).ok, true);
+    f.api.setVisible(false); f.api.setVisible(true);
+    assert.equal(parts.sectors[number - 1].visible, true); assert.ok(Math.abs(parts.sectors[number - 1].material.opacity - .08) < 1e-12);
+  }
+  assertShownTemperatures(f, reference, [2600, 3000, 3400, 3800, 4200, 4600]);
+  assert.equal(new Set(parts.sectors.map(sector => sector.material.color.getHexString())).size, 6, 'mixed CCT stays per channel');
+  assert.equal(parts.down.visible, false); assert.equal(parts.spot.visible, false);
+  assert.equal(f.api.setFixtureState(f.id, { downward: { on: true, brightness: .5, color_temp_kelvin: 2700 } }).ok, true);
+  assert.equal(parts.down.visible, true); assert.ok(Math.abs(parts.down.material.opacity - .3 * .5) < 1e-12);
+  assert.deepEqual(parts.down.material.color.toArray(), f.root.getObjectByName('downward-emitter').material.color.toArray());
+  assert.equal(f.api.setFixtureState(f.id, { spotlight: { on: true, brightness: 1, color_temp_kelvin: 4500 } }).ok, true);
+  assert.equal(parts.spot.visible, true); assert.ok(Math.abs(parts.spot.material.opacity - .3) < 1e-12);
+  assert.deepEqual(parts.spot.material.color.toArray(), f.root.getObjectByName('robotic-spotlight-emitter').material.color.toArray());
+  assert.notDeepEqual(parts.spot.material.color.toArray(), parts.down.material.color.toArray());
+  assert.equal(f.api.setFixtureState(f.id, { downward: { on: false } }).ok, true);
+  assert.equal(parts.down.visible, false); assert.equal(parts.spot.visible, true);
+});
+
+test('the halo falloff hooks the vendored basic shader exactly once and shares one program', t => {
+  const f = fixture(t), layers = haloLayers(f.root);
+  const shader = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader };
+  for (const [source, hook] of [[shader.vertexShader, '#include <project_vertex>'], [shader.fragmentShader, '#include <opaque_fragment>'],
+    [shader.vertexShader, '#include <common>'], [shader.fragmentShader, '#include <common>']]) assert.equal(source.split(hook).length - 1, 1, hook);
+  layers[0].material.onBeforeCompile(shader);
+  assert.match(shader.vertexShader, /#include <project_vertex>\nvOrbHaloNormal = normalize\( normalMatrix \* normal \);\nvOrbHaloView = - mvPosition\.xyz;/);
+  assert.match(shader.fragmentShader, /diffuseColor\.a \*= pow\( clamp\( dot\( normalize\( vOrbHaloNormal \), normalize\( vOrbHaloView \) \), 0\.0, 1\.0 \), 2\.50 \);\n#include <opaque_fragment>/);
+  for (const text of [shader.vertexShader, shader.fragmentShader]) assert.equal(text.split('varying vec3 vOrbHaloNormal;').length - 1, 1);
+  assert.equal(new Set(layers.map(layer => layer.material.onBeforeCompile)).size, 1);
+  assert.equal(new Set(layers.map(layer => layer.material.customProgramCacheKey())).size, 1);
+});
+
+test('disposal releases every orb geometry and material', () => {
+  const parent = new THREE.Group(), api = createEquipmentVirtualFixtures(parent, { binding });
+  assert.equal(api.setDocument(authoredDocument(binding, Core)).status, 'ready');
+  const owned = new Set(), released = new Set();
+  for (const root of api.root.children) {
+    const parts = orbParts(root);
+    for (const node of [parts.core, ...haloLayers(root)]) for (const item of [node.geometry, node.material]) {
+      if (!owned.has(item)) item.addEventListener('dispose', () => released.add(item));
+      owned.add(item);
+    }
+  }
+  assert.equal(owned.size, 4 * (2 + 1 + 8), 'per fixture: core geometry and material, one shared halo shell, eight layer materials');
+  api.dispose();
+  assert.equal(released.size, owned.size); assert.equal(parent.children.length, 0);
+  const names = []; api.root.traverse(node => names.push(node.name)); assert.equal(names.some(name => ORB_COSMETIC_NAME.test(name)), false);
 });

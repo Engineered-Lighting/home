@@ -222,6 +222,28 @@
       && (engine.sceneIdentity?.contentRevision ?? null) === (scope.contentRevision ?? null);
   }
 
+  // The automatic post-boot run defers the large Photo/mesh downloads so they
+  // do not saturate the link while Cloud is the visible view. A manual or
+  // explicit start keeps warming them immediately.
+  const LARGE_GROUP_LABELS = new Set(["photo scan", "mesh"]);
+  const POST_BOOT_LARGE_DELAY_MS = 10000;
+
+  function deferLargeGroup(signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason || new DOMException("aborted", "AbortError")); return; }
+      let idleId = null;
+      const timer = setTimeout(() => { idleId = idle(() => { cleanup(); resolve(); }, 5000); }, POST_BOOT_LARGE_DELAY_MS);
+      const onAbort = () => {
+        cleanup();
+        clearTimeout(timer);
+        if (idleId != null) { window.cancelIdleCallback?.(idleId); clearTimeout(idleId); }
+        reject(signal.reason || new DOMException("aborted", "AbortError"));
+      };
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
   async function warmOneOf(group, signal, scope, engineModule, isCurrent) {
     if (group === CLOUD_ASSETS[0] && residentCloudLoaded(scope)) {
       const skipped = { label: group.label, skipped: "resident engine owns the point cloud" };
@@ -342,8 +364,15 @@
             if (validAssetPlan(sharedPlan)) assetPlan = sharedPlan;
           } catch (e) { /* compatibility fallback for an older cached engine module */ }
         }
+        let deferred = false;
         for (const group of groupsForMode(mode, assetPlan)) {
           if (!isCurrent()) return;
+          if (!deferred && state.reason === "post-boot" && LARGE_GROUP_LABELS.has(group.label)) {
+            deferred = true;
+            state.current = "waiting for idle before large assets";
+            await deferLargeGroup(ownController.signal);
+            if (!isCurrent()) return;
+          }
           await warmOneOf(group, ownController.signal, scope, engineModule, isCurrent);
         }
         if (!isCurrent()) return;

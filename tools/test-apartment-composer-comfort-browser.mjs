@@ -24,6 +24,8 @@ const R0 = .14, R1 = 1.3, MARGIN = .12, HUB_PX = 34, OLD_HUB_PX = 22;
 const LOBE_START_M = .55;
 const levelAt = radius => Math.round(Math.max(0, Math.min(1, (radius - R0) / (R1 - R0))) * 100) / 100;
 const radiusFor = level => R0 + level * (R1 - R0);
+// Levels are whole percents; compare in steps so float rounding never decides.
+const withinSteps = (level, target, steps = 1) => Math.abs(Math.round(level * 100) - Math.round(target * 100)) <= steps;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 // The same public-code fence as the directional and shell proofs.
@@ -240,6 +242,7 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
     };
     const mouse = {
       move: (x, y, buttons = 0) => delivered('mouse', x, y, () => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: buttons ? 'left' : 'none', buttons, pointerType: 'mouse' })),
+      drag: (x, y) => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1, pointerType: 'mouse' }),
       down: (x, y) => send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' }),
       up: (x, y) => send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' }),
     };
@@ -289,7 +292,7 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
       await desk.mouse.move(out.x, out.y, 1); await desk.mouse.up(out.x, out.y); await settle(desk.page);
       const after = await desk.descriptor(), rows = (await desk.calls()).slice(before);
       assert.ok(rows.length > 0 && onlyRadialWrites(rows), 'the hub gesture writes radials only');
-      assert.ok(Math.abs(after.state.radials[1].brightness - .95) <= .01, 'dragging out from the wide hub paints the zone under the cursor');
+      assert.ok(withinSteps(after.state.radials[1].brightness, .95), 'dragging out from the wide hub paints the zone under the cursor');
       assert.deepEqual(withoutRadials(after), withoutRadials(original));
       return { hub_px: centre.r, pressed_px_from_centre: offset, painted_zone: 2, level: after.state.radials[1].brightness };
     });
@@ -305,7 +308,7 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
       await desk.mouse.move(outward.x, outward.y, 1); await settle(desk.page);
       assert.deepEqual((await desk.descriptor()).state.radials[0], zone, 'pickup outside the edge changes nothing until the edge is crossed');
       const inward = await desk.planePoint(1, radiusFor(.35)); await desk.mouse.move(inward.x, inward.y, 1); await settle(desk.page);
-      assert.ok(Math.abs((await desk.descriptor()).state.radials[0].brightness - .35) <= .01);
+      assert.ok(withinSteps((await desk.descriptor()).state.radials[0].brightness, .35));
       assert.match((await desk.readout()).text, /^Zone 1 · 3[456]%$/);
       const zero = await desk.planePoint(1, R0 * .6); await desk.mouse.move(zero.x, zero.y, 1); await settle(desk.page);
       const off = await desk.readout(); assert.equal(off.hidden, false); assert.equal(off.text, 'Zone 1 · Off');
@@ -328,7 +331,8 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
       assert.ok(outside, 'one past-margin point reaches the canvas: ' + JSON.stringify(probed)); assert.equal(outside.start, null);
       const before = await desk.descriptor(), poseBefore = await desk.pose(), callsBefore = (await desk.calls()).length;
       await desk.mouse.move(outside.x, outside.y); await desk.mouse.down(outside.x, outside.y);
-      for (let step = 1; step <= 8; step++) await desk.mouse.move(outside.x + step * 5, outside.y + step, 1);
+      // An orbit does not depend on each sample, so these are sent without delivery waits.
+      for (let step = 1; step <= 8; step++) await desk.mouse.drag(outside.x + step * 5, outside.y + step);
       await desk.mouse.up(outside.x + 40, outside.y + 8);
       await desk.page.waitForFunction(before => window.__APT_ENGINE.camera.matrixWorld.toArray().some((value, index) => value !== before[index]), poseBefore);
       assert.deepEqual((await desk.calls()).slice(callsBefore), [], 'no modeled write from an orbit');
@@ -357,9 +361,9 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
       const after = await desk.descriptor(), zone = number => after.state.radials[number - 1];
       observe('sweep', { pickup: n, zones: [a, skipped, b], levels: [zone(a).brightness, zone(skipped).brightness, zone(b).brightness] });
       assert.deepEqual(zone(n), before.state.radials[n - 1], 'the pickup zone is never written');
-      assert.ok(Math.abs(zone(a).brightness - .4) <= .01 && Math.abs(zone(b).brightness - .8) <= .01);
+      assert.ok(withinSteps(zone(a).brightness, .4) && withinSteps(zone(b).brightness, .8));
       const expected = Math.round((zone(a).brightness + zone(b).brightness) / 2 * 100) / 100;
-      assert.ok(Math.abs(zone(skipped).brightness - expected) <= .011, 'the skipped zone takes the swept level between its neighbours');
+      assert.ok(withinSteps(zone(skipped).brightness, expected), 'the skipped zone takes the swept level between its neighbours');
       assert.ok(zone(skipped).brightness > zone(a).brightness && zone(skipped).brightness < zone(b).brightness && zone(skipped).on);
       assert.ok(onlyRadialWrites((await desk.calls()).slice(callsBefore)));
       const mouseEvents = await trustedPointers(desk.page, 'mouse');
@@ -386,7 +390,7 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
       const target = await tablet.planePoint(number, radiusFor(.7)); await tablet.touch('touchMove', [[target.x, target.y, 1]]);
       await tablet.touch('touchEnd', []); await settle(tablet.page);
       const after = await tablet.descriptor(); observe('one-finger', { zone: number, level: after.state.radials[number - 1].brightness });
-      assert.ok(Math.abs(after.state.radials[number - 1].brightness - .7) <= .01, 'one finger paints like the mouse');
+      assert.ok(withinSteps(after.state.radials[number - 1].brightness, .7), 'one finger paints like the mouse');
       assert.ok(onlyRadialWrites((await tablet.calls()).slice(callsBefore))); assert.deepEqual(withoutRadials(after), withoutRadials(before));
       return { zone: number, level: after.state.radials[number - 1].brightness };
     });
@@ -396,7 +400,7 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
       const beyond = await tablet.planePoint(number, Math.min(R1, radiusFor(zone.brightness) + .1)); await tablet.touch('touchMove', [[beyond.x, beyond.y, 1]]);
       const set = await tablet.planePoint(number, radiusFor(.5)); await tablet.touch('touchMove', [[set.x, set.y, 1]]); await settle(tablet.page);
       const painted = await tablet.descriptor(); observe('two-finger-set', { zone: number, level: painted.state.radials[number - 1].brightness });
-      assert.ok(Math.abs(painted.state.radials[number - 1].brightness - .5) <= .01);
+      assert.ok(withinSteps(painted.state.radials[number - 1].brightness, .5));
       const later = await tablet.planePoint(number, radiusFor(.9)), other = await tablet.planePoint(number % 6 + 1, radiusFor(1)); assert.ok(later && other);
       const callsAtCancel = (await tablet.calls()).length;
       await tablet.touch('touchStart', [[set.x, set.y, 1], [other.x, other.y, 2]]);

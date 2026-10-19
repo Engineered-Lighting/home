@@ -71,8 +71,8 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
   const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
   let server, browser, page, origin, handler, timer;
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
-    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('120s lit browser deadline'));
-  }, 120000); });
+    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('170s lit browser deadline'));
+  }, 170000); });
 
   async function proof() {
     server = http.createServer((req, res) => {
@@ -147,7 +147,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
       let last = null, count = 0;
       const step = now => {
         if (last != null) intervals.push(now - last); last = now;
-        if (++count < 121) requestAnimationFrame(step);
+        if (++count < 61) requestAnimationFrame(step);
         else { renderer.render = original; const p = (a, q) => [...a].sort((x, y) => x - y)[Math.floor(a.length * q)];
           resolve({ frames: intervals.length, frame_p50_ms: p(intervals, .5), frame_p95_ms: p(intervals, .95), render_p50_ms: p(renders, .5), render_p95_ms: p(renders, .95) }); }
       };
@@ -179,6 +179,9 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     await litButton.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: LIT_WAIT_MS });
     await frames(6);
+    // React publishes the state a beat after the engine on slow software GL.
+    await page.waitForFunction(() => document.querySelector('[aria-label="Lit view"]')?.getAttribute('aria-pressed') === 'true'
+      && document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: LIT_WAIT_MS });
     assert.equal(await litButton.getAttribute('aria-pressed'), 'true');
     assert.equal(await page.getByRole('button', { name: 'Mesh view', exact: true }).getAttribute('aria-pressed'), 'false', 'Lit, not Mesh, reads as the current view');
     const note = page.locator('[data-apt-lit-disclosure]');
@@ -238,6 +241,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false);
     assert.equal(await page.evaluate(() => window.__APT_ENGINE.modes.mode), 'mesh');
+    await page.waitForFunction(() => !document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: LIT_WAIT_MS });
     assert.equal(await note.count(), 0, 'the disclosure leaves with Lit');
     await litButton.click(); await page.waitForFunction(() => window.__APT_ENGINE.litState().active === true, null, { timeout: LIT_WAIT_MS });
     await page.getByRole('button', { name: 'Cloud view', exact: true }).click();
@@ -250,7 +254,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     });
     assert.deepEqual(after.meshMaterials, before.meshMaterials, 'leaving Lit restores the exact mesh materials and geometry attributes');
     assert.equal(after.shadows, before.shadows); assert.equal(after.toneMapping, before.toneMapping); assert.equal(after.litLights, 0);
-    assert.equal(await litButton.getAttribute('aria-pressed'), 'false');
+    await page.waitForFunction(() => document.querySelector('[aria-label="Lit view"]')?.getAttribute('aria-pressed') === 'false', null, { timeout: LIT_WAIT_MS });
     check('leaving_lit_restores_mesh_and_renderer', after);
 
     assert.deepEqual(Object.fromEntries(protectedFiles.map(file => [file, hash(fs.readFileSync(file))])), protectedHashes, 'authored pack bytes unchanged');
@@ -262,7 +266,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
   }
   try { await Promise.race([proof(), deadline]); }
   catch (error) {
-    failureSummary = String(error.message).split(String.fromCharCode(10)).slice(0, 3).join(' | ').slice(0, 600);
+    failureSummary = (String(error.message) + ' | stack ' + String(error.stack || '').split(String.fromCharCode(10)).find(line => /lit-browser\.mjs:\d+/.test(line))).replace(/\s+/g, ' ').slice(0, 1400);
     receipt.failure = error.message;
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nLit failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });

@@ -73,6 +73,13 @@ function installSetupRooms(run, { echoOverrides = {}, echoModel = authoredEchoMo
     packHashes: () => Object.fromEntries(packFiles.map(file => [file, hash(fs.readFileSync(file))])) };
 }
 
+/** Back to the freshly authored registration (revision 0), for a second
+ * pass over the same server. */
+function resetRegistration(rooms) {
+  fs.rmSync(rooms.privateRoot, { recursive: true, force: true });
+  initRegistration(rooms.privateRoot, authoredDocument(readActiveBinding(rooms.packs), Core), { contentPacksDir: rooms.packs });
+}
+
 function publicSources(root) {
   const result = new Map(), excluded = new Set(['node_modules', 'data', 'artifacts', 'private', 'recordings', 'logs']);
   function visit(directory, depth = 0) {
@@ -193,8 +200,10 @@ async function openSetupContext(browser, origin, log, { viewport = { width: 1366
  * states with the Travel Mode helper, and a spy on every call_service. The
  * app connects through its remembered-login path to `${origin}/proxy/ha`.
  * Nothing leaves the browser; no real Home Assistant is involved. */
-async function mockHomeAssistant(context, origin, { travel = 'off', lights = [], registry = lights } = {}) {
-  const ha = { travel, frames: [], calls: [], sockets: [], subscriptions: [] };
+async function mockHomeAssistant(context, origin, { travel = 'off', lights = [], registry = lights, online = true } = {}) {
+  // With online: false, authentication is held (the app stays connecting, so
+  // it reads Home Assistant as offline) until goOnline().
+  const ha = { travel, online, frames: [], calls: [], sockets: [], subscriptions: [], held: [] };
   const states = () => [
     ...(ha.travel === null ? [] : [{ entity_id: 'input_boolean.living_lights_travel_mode', state: ha.travel, attributes: {} }]),
     ...lights.map(light => ({ entity_id: light.entity_id, state: 'off', attributes: { friendly_name: light.name, supported_color_modes: ['brightness'] },
@@ -209,7 +218,10 @@ async function mockHomeAssistant(context, origin, { travel = 'off', lights = [],
     socket.send(JSON.stringify({ type: 'auth_required', ha_version: '2026.10.0' }));
     socket.onMessage(raw => {
       const message = JSON.parse(raw); ha.frames.push(message);
-      if (message.type === 'auth') { socket.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.10.0' })); return; }
+      if (message.type === 'auth') {
+        if (ha.online) socket.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.10.0' })); else ha.held.push(socket);
+        return;
+      }
       let result = null;
       if (message.type === 'get_states') result = states();
       else if (message.type === 'config/entity_registry/list') result = registry.map(light => ({ entity_id: light.entity_id, name: light.name, platform: 'authored', area_id: null, device_id: null }));
@@ -219,6 +231,10 @@ async function mockHomeAssistant(context, origin, { travel = 'off', lights = [],
       socket.send(JSON.stringify({ id: message.id, type: 'result', success: true, result }));
     });
   });
+  ha.goOnline = () => {
+    ha.online = true;
+    for (const socket of ha.held.splice(0)) { try { socket.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.10.0' })); } catch { /* closed */ } }
+  };
   /** Changes the helper in Home Assistant; `announce` also pushes the
    * state_changed event the app subscribes to. */
   ha.setTravel = (state, { announce = true } = {}) => {
@@ -258,4 +274,4 @@ function homeShell(page, origin) {
   };
 }
 
-export { authoredEchoModel, installSetupRooms, startSetupServer, openSetupContext, mockHomeAssistant, browserOptions, homeShell, STAMP, hash };
+export { authoredEchoModel, resetRegistration, installSetupRooms, startSetupServer, openSetupContext, mockHomeAssistant, browserOptions, homeShell, STAMP, hash };

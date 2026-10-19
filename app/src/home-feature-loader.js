@@ -73,6 +73,7 @@
         ["home-apartment-den-perception.jsx", true],
         ["home-apartment-ui.jsx", true],
         ["home-apartment-directional.js", false],
+        ["home-apartment-aim-proposals.js", false],
         ["home-apartment-cards.jsx", true],
         ["home-apartment-aim.jsx", true],
         ["home-apartment-calibrate.jsx", true],

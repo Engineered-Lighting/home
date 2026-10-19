@@ -229,10 +229,10 @@ test('real authored room selection keeps native input ownership and never dispat
       && document.querySelector('[data-apt-semantic-device-select="1"]')?.disabled === false);
     await check('Echo N/P reaches the actual unpositioned semantic device without output', async () => {
       assert.equal(echo.seed.devices[0].pos, null); await blur(); await page.keyboard.press('n');
-      await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
       assert.match(await page.locator('.apt-home-controls').innerText(), /Authored Echo light/);
-      await page.keyboard.press('p'); await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
-      await page.getByRole('button', { name: 'close card', exact: true }).click();
+      await page.keyboard.press('p'); await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Close light', exact: true }).click();
       return { id: echo.seed.devices[0].id, unpositioned: true };
     });
     await selectHome('victoria');
@@ -346,7 +346,7 @@ test('real authored room selection keeps native input ownership and never dispat
     assert.deepEqual(restoredInventory.fixtures, inventory.fixtures);
     assert.equal(restoredInventory.visible, true);
     await selectHome('echo'); await page.getByRole('button', { name: 'Authored Echo light Unavailable', exact: true }).click();
-    await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
     await check('native Echo list uses the same semantic device after a home change', async () => {
       assert.match(await page.locator('.apt-home-controls').innerText(), /Authored Echo light/); return { id: echo.seed.devices[0].id };
     });

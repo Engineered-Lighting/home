@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { installSetupRooms, startSetupServer, openSetupContext, browserOptions, homeShell, hash } from './fixtures/apartment-setup-fixtures.mjs';
+import { installSetupRooms, startSetupServer, openSetupContext, mockHomeAssistant, browserOptions, homeShell, hash } from './fixtures/apartment-setup-fixtures.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,7 +57,7 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
       const expect = {
         sockets: /Select a marker or target directly in 3D/, names: /Renames stay in Apartment; Home Assistant keeps its own names/,
         targets: /add target · step 1 of 2/i, zones: /edit room zones/i, position: /Mapped fixtures · 2/,
-        links: /fixture, target, zone, and tape geometry cannot be changed in this workflow/, cameras: /Placed by hand · not calibrated/,
+        links: /Match each light in the model to the Home Assistant light that controls it/, cameras: /Placed by hand · not calibrated/,
       };
       for (const [id, label] of TOOLS) {
         await shell.tool(id); await page.waitForFunction(label => document.querySelector('[data-apt-setup-inspector] .apt-ui-title')?.textContent === label, label);
@@ -69,6 +69,11 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
       assert.equal(await page.getByRole('textbox', { name: 'Name for Authored ceiling A', exact: true }).inputValue(), 'Authored ceiling A');
       await shell.tool('cameras');
       assert.equal(await page.getByRole('button', { name: 'Calibrate Authored camera', exact: true }).isDisabled(), false);
+      await shell.tool('links');
+      assert.deepEqual(await shell.inspector().locator('[data-setup-link]').evaluateAll(rows => rows.map(row => [row.dataset.setupLink, row.dataset.linkState])),
+        [['authored-ceiling-a', 'linked'], ['authored-ceiling-b', 'linked'], ['authored-lamp', 'linked']]);
+      assert.match(await shell.inspector().locator('[data-setup-links-note="offline"]').innerText(), /Home Assistant is offline. You can change matches; Flash needs a connection/);
+      for (const name of ['Authored ceiling A', 'Authored ceiling B', 'Authored lamp']) assert.equal(await page.getByRole('button', { name: 'Flash ' + name, exact: true }).isDisabled(), true);
       assert.equal(await saveButton().isDisabled(), true); assert.equal(await draft(), originalDraft);
       return { opened: Object.keys(seen), dirty: false };
     });
@@ -110,21 +115,25 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
       for (const [id, label] of TOOLS) {
         await shell.tool(id); await page.waitForFunction(label => document.querySelector('[data-apt-setup-inspector] .apt-ui-title')?.textContent === label, label);
         const available = await shell.rail().locator(`[data-setup-tool="${id}"]`).getAttribute('data-available');
-        if (['names', 'targets', 'zones', 'links'].includes(id)) {
+        if (['names', 'targets', 'zones'].includes(id)) {
           assert.equal(available, 'false', id);
           reasons[id] = await shell.inspector().locator('[data-setup-unavailable] .apt-ui-copy').innerText();
           assert.ok(reasons[id].length > 20, id + ' states a reason');
           assert.equal(await shell.inspector().locator('[data-apt-edit-ui="inspector"] fieldset').count(), 0);
         } else assert.equal(available, 'true', id);
       }
-      assert.match(reasons.links, /no Home Assistant lights until each fixture is commissioned/);
+      await shell.tool('links');
+      assert.match(await shell.inspector().locator('[data-setup-links-note="registration"]').innerText(), /Each is matched when its fixture is commissioned/);
+      const rows = await shell.inspector().locator('[data-setup-link]').evaluateAll(nodes => nodes.map(node => node.dataset.linkState));
+      assert.equal(rows.length, 6); assert.ok(rows.every(state => state === 'not_linked'), 'every Victoria socket and fixture reads Not linked');
+      assert.equal(await shell.inspector().locator('[data-setup-link] select, [data-setup-link] button').count(), 0, 'no picker and no Flash');
       await shell.tool('position'); await shell.inspector().locator('[data-equipment-kinds="fixture"]').waitFor();
       await shell.tool('cameras'); await shell.inspector().locator('[data-equipment-kinds="camera"]').waitFor();
       assert.equal(await shell.inspector().locator('[data-equipment-selected]').getAttribute('data-equipment-selected'), 'victoria-den-oak-d-pro-01');
       await shell.tool('sockets'); await shell.inspector().getByRole('button', { name: 'Add socket', exact: true }).waitFor();
       await page.locator('[data-apt-setup-inspector] .apt-setup-done').click(); await shell.rail().waitFor({ state: 'detached' });
       assert.equal(hash(fs.readFileSync(rooms.registrationFile)), registration, 'opening Victoria tools changes no registration bytes');
-      return { unavailable: Object.keys(reasons), available: ['sockets', 'position', 'cameras'] };
+      return { unavailable: Object.keys(reasons), available: ['sockets', 'position', 'links', 'cameras'], victoria_link_rows: 6 };
     });
 
     await check('the camera dock is hidden in Setup and returns exactly as it was in each presentation', async () => {
@@ -146,6 +155,48 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
       }
       assert.deepEqual([...new Set(states)].sort(), ['collapsed', 'default', 'expanded']);
       return { states };
+    });
+
+    const lights = [{ entity_id: 'light.authored_ceiling_a', name: 'Ceiling A' }, { entity_id: 'light.authored_ceiling_b', name: 'Ceiling B' },
+      { entity_id: 'light.authored_lamp', name: 'Lamp' }, { entity_id: 'light.authored_spare', name: 'Spare' }];
+    const online = await openSetupContext(browser, server.origin, server.log);
+    const ha = await mockHomeAssistant(online.context, server.origin, { lights });
+    const onlineShell = homeShell(online.page, server.origin);
+    await onlineShell.boot('1', 'echo');
+    await check('Home Assistant connected: Flash sends exactly one guarded short flash, and is refused with zero dispatch under Travel Mode on or unknown', async () => {
+      const page = online.page, flash = name => page.getByRole('button', { name: 'Flash ' + name, exact: true });
+      await page.waitForFunction(() => window.__HOME_TRAVEL_MODE_STATE === 'off');
+      await onlineShell.openSetup(); await onlineShell.tool('links');
+      assert.equal(await flash('Authored ceiling A').isDisabled(), false);
+      await flash('Authored ceiling A').click();
+      await page.locator('[data-setup-link="authored-ceiling-a"] [data-flash-result="sent"]').waitFor();
+      assert.deepEqual(ha.calls, [{ domain: 'light', service: 'turn_on', service_data: { flash: 'short' }, target: { entity_id: 'light.authored_ceiling_a' } }]);
+      // Home Assistant turns Travel Mode on before the app hears about it:
+      // the button is still offered, and the guard refuses at dispatch.
+      ha.setTravel('on', { announce: false });
+      await flash('Authored ceiling B').click();
+      await page.locator('[data-setup-link="authored-ceiling-b"] [data-flash-result="refused"]').waitFor();
+      assert.match(await page.locator('[data-setup-link="authored-ceiling-b"] [data-flash-result]').innerText(), /Travel Mode is on/);
+      ha.setTravel('on');
+      await page.waitForFunction(() => window.__HOME_TRAVEL_MODE_STATE === 'on');
+      assert.equal(await flash('Authored ceiling B').isDisabled(), true);
+      assert.match(await page.locator('[data-setup-links-note="travel"]').innerText(), /Travel Mode is on, so Flash is refused/);
+      ha.setTravel(null);
+      await page.waitForFunction(() => window.__HOME_TRAVEL_MODE_STATE === null);
+      assert.equal(await flash('Authored lamp').isDisabled(), true);
+      assert.match(await page.locator('[data-setup-links-note="travel"]').innerText(), /unknown, so Flash is refused/);
+      assert.equal(ha.calls.length, 1, 'only the first Flash reached Home Assistant');
+      // Re-matching from the registry changes only the link and sends nothing.
+      const lamp = () => page.evaluate(() => window.__havApartmentDebug.modelSnapshot().devices.find(device => device.id === 'authored-lamp'));
+      const before = await lamp();
+      await page.getByRole('combobox', { name: 'Home Assistant light for Authored lamp', exact: true }).selectOption('light.authored_spare');
+      await page.waitForFunction(() => window.__havApartmentDebug.modelSnapshot().devices.find(device => device.id === 'authored-lamp').ha_entity_id === 'light.authored_spare');
+      const after = await lamp();
+      assert.deepEqual(after.pos, before.pos); assert.deepEqual(after.fixture_calibration ?? null, before.fixture_calibration ?? null);
+      const options = await page.getByRole('combobox', { name: 'Home Assistant light for Authored ceiling A', exact: true }).locator('option').evaluateAll(nodes => nodes.map(node => node.value));
+      assert.deepEqual(options, ['', 'light.authored_ceiling_a', 'light.authored_lamp'], 'lights linked elsewhere are not offered: no new duplicates');
+      assert.equal(ha.calls.length, 1); await online.context.close();
+      return { flash_calls: ha.calls, refused: ['travel-on-at-dispatch', 'travel-on', 'travel-unknown'], rematch_geometry_unchanged: true };
     });
 
     const { page: phone } = await openSetupContext(browser, server.origin, server.log, { viewport: { width: 390, height: 844 }, theme: 'light', mobile: true });

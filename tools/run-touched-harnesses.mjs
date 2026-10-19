@@ -106,7 +106,7 @@ const MAP = [
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
-  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|tools\/(?:test-apartment-setup-rail-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-rail-browser.mjs"]],
+  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-rail-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment-(?:setup|edit)\.jsx|home-apartment-data\.js|home-equipment-registration\.js)|web-gateway\/equipment-registration\.mjs|tools\/(?:test-apartment-setup-saves-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-saves-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:test-apartment-directional(?:-integration|-browser(?:-part2)?)?\.mjs|fixtures\/apartment-directional-browser-proof\.mjs)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
@@ -128,6 +128,7 @@ const MAP = [
   [/^tools\/test-apartment-chat-presenter\.cjs$/, ["test-apartment-chat-presenter.cjs"]],
   [/^tools\/test-apartment-unread-(?:state\.cjs|integration\.mjs)$/, ["test-apartment-unread-state.cjs", "test-apartment-unread-integration.mjs"]],
   [/^tools\/test-apartment-travel-guard\.cjs$/, ["test-apartment-travel-guard.cjs"]],
+  [/^(?:app\/src\/(?:home-apartment-setup-links|home-apartment-data)\.js|tools\/test-apartment-setup-links\.cjs)$/, ["test-apartment-setup-links.cjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
   [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-shell-tests.js", "run-apartment-data-tests.js", "test-apartment-travel-guard.cjs", "test-home-app-source-contracts.cjs"]],

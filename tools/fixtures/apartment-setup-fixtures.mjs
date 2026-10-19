@@ -189,6 +189,49 @@ async function openSetupContext(browser, origin, log, { viewport = { width: 1366
   return { context, page };
 }
 
+/** An authored Home Assistant WebSocket for one context: auth, registries,
+ * states with the Travel Mode helper, and a spy on every call_service. The
+ * app connects through its remembered-login path to `${origin}/proxy/ha`.
+ * Nothing leaves the browser; no real Home Assistant is involved. */
+async function mockHomeAssistant(context, origin, { travel = 'off', lights = [], registry = lights } = {}) {
+  const ha = { travel, frames: [], calls: [], sockets: [], subscriptions: [] };
+  const states = () => [
+    ...(ha.travel === null ? [] : [{ entity_id: 'input_boolean.living_lights_travel_mode', state: ha.travel, attributes: {} }]),
+    ...lights.map(light => ({ entity_id: light.entity_id, state: 'off', attributes: { friendly_name: light.name, supported_color_modes: ['brightness'] },
+      last_updated: '2026-10-19T00:00:00.000Z' })),
+  ];
+  await context.addInitScript(base => {
+    localStorage.setItem('hg-prefs', JSON.stringify({ endpoint: base + '/proxy/ha' }));
+    localStorage.setItem('home.ha.remembered-login.v1', JSON.stringify({ endpoint: base + '/proxy/ha', token: 'authored-test-token' }));
+  }, origin);
+  await context.routeWebSocket(new RegExp('^ws://' + new URL(origin).host.replace(/[.]/g, '\\.') + '/proxy/ha/api/websocket$'), socket => {
+    ha.sockets.push(socket);
+    socket.send(JSON.stringify({ type: 'auth_required', ha_version: '2026.10.0' }));
+    socket.onMessage(raw => {
+      const message = JSON.parse(raw); ha.frames.push(message);
+      if (message.type === 'auth') { socket.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.10.0' })); return; }
+      let result = null;
+      if (message.type === 'get_states') result = states();
+      else if (message.type === 'config/entity_registry/list') result = registry.map(light => ({ entity_id: light.entity_id, name: light.name, platform: 'authored', area_id: null, device_id: null }));
+      else if (message.type === 'config/area_registry/list' || message.type === 'config/device_registry/list') result = [];
+      else if (message.type === 'subscribe_events') ha.subscriptions.push({ socket, id: message.id, event_type: message.event_type });
+      else if (message.type === 'call_service') ha.calls.push({ domain: message.domain, service: message.service, service_data: message.service_data, target: message.target });
+      socket.send(JSON.stringify({ id: message.id, type: 'result', success: true, result }));
+    });
+  });
+  /** Changes the helper in Home Assistant; `announce` also pushes the
+   * state_changed event the app subscribes to. */
+  ha.setTravel = (state, { announce = true } = {}) => {
+    ha.travel = state;
+    if (!announce) return;
+    for (const subscription of ha.subscriptions.filter(item => !item.event_type || item.event_type === 'state_changed')) {
+      subscription.socket.send(JSON.stringify({ id: subscription.id, type: 'event', event: { event_type: 'state_changed',
+        data: { entity_id: 'input_boolean.living_lights_travel_mode', new_state: state === null ? null : { entity_id: 'input_boolean.living_lights_travel_mode', state, attributes: {} } } } }));
+    }
+  };
+  return ha;
+}
+
 /** Real Home shell navigation used by every Setup suite. */
 function homeShell(page, origin) {
   const waitSite = site => page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
@@ -215,4 +258,4 @@ function homeShell(page, origin) {
   };
 }
 
-export { authoredEchoModel, installSetupRooms, startSetupServer, openSetupContext, browserOptions, homeShell, STAMP, hash };
+export { authoredEchoModel, installSetupRooms, startSetupServer, openSetupContext, mockHomeAssistant, browserOptions, homeShell, STAMP, hash };

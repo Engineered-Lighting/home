@@ -2321,8 +2321,10 @@ function aptUnifiedRadialPowerPatch(radials, on) {
 
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
-  onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls }) {
-  const [tab, setTab] = useState("light");
+  onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
+  tab: controlledTab, onTabChange }) {
+  const [localTab, setLocalTab] = useState("light");
+  const tab = controlledTab ?? localTab, setTab = onTabChange || setLocalTab;
   const [zone, setZone] = useState(null);
   useEffect(() => { setZone(null); }, [fixture?.fixture_id]);
   useEffect(() => {
@@ -2703,6 +2705,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [virtualFixtureId, setVirtualFixtureId] = useState("");
   const [virtualFixtureChannel, setVirtualFixtureChannel] = useState("spotlight");
   const [virtualFixtureControlsOpen, setVirtualFixtureControlsOpen] = useState(false);
+  const [virtualInspectorTab, setVirtualInspectorTab] = useState("light");
   const [unifiedDockCollapsed, setUnifiedDockCollapsed] = useState(false);
   const [unifiedDockExpanded, setUnifiedDockExpanded] = useState(false);
   const [virtualAimNotice, setVirtualAimNotice] = useState("");
@@ -5007,6 +5010,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         virtualAimHistoryRef.current = { undo: [], redo: [] };
         setVirtualAimHistoryVersion(value => value + 1);
         setVirtualAimNotice("");
+        setVirtualInspectorTab("light");
       }
       for (const [id, state] of virtualFixtureStatesRef.current.states) overlay.setVirtualFixtureState?.(id, state);
       for (const [id, target] of virtualFixtureStatesRef.current.targets) overlay.aimVirtualFixtureAtTarget?.(id, target);
@@ -5045,6 +5049,58 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const changeVirtualChannel = (patch) => changeVirtualFixture(virtualFixtureChannel.startsWith("radial-")
     ? { radials: [{ number: Number(virtualFixtureChannel.slice(7)), ...patch }] }
     : { [virtualFixtureChannel]: patch });
+
+  // Selection is presentation only. Capture the installed viewport lifetime,
+  // rather than a travel intent that may be canceled without replacing it.
+  const selectionEngine = engineRef.current;
+  const selectionLifecycle = spatialLifecycleRevisionRef.current;
+  const getVirtualFixtureSelectionContext = useCallback(() => {
+    try {
+      const engine = selectionEngine, document = virtualFixtureDocument, binding = document?.binding;
+      if (!open || phase !== "ready" || !viewOpenRef.current || !apartmentSceneControlsEnabledRef.current
+          || !engine || engineRef.current !== engine || spatialLifecycleRevisionRef.current !== selectionLifecycle
+          || workspaceAuthorityRef.current.key !== apartmentAuthorityKey || modelSiteRef.current !== "victoria"
+          || modelScopeRef.current?.authorityKey !== apartmentAuthorityKey || !binding
+          || modelScopeRef.current.frameDigest !== binding.frame_digest
+          || modelScopeRef.current.registrationVersion !== binding.registration_version
+          || modelScopeRef.current.contentRevision !== binding.content_revision
+          || selectedSiteId !== "victoria" || window.HomeSpatialViewport?.getSelectedSiteId?.() !== "victoria"
+          || engine.siteId !== "victoria" || engine.sceneIdentity?.siteId !== "victoria"
+          || engine.contentRevision !== binding.content_revision
+          || engine.sceneIdentity.contentRevision !== binding.content_revision
+          || engine.sceneIdentity.registrationVersion !== binding.registration_version
+          || engine.sceneIdentity.frameDigest !== binding.frame_digest
+          || editing || calibCam || liveOn || rehearsalIsolated
+          || spatialScale !== "apartment" || travellingRef.current || deskTargetCaptureRef.current?.active) return null;
+      const preview = engine.overlay.virtualFixturesReadback?.();
+      if (preview?.status !== "ready"
+          || preview.revision !== document.revision || preview.digest !== document.digest) return null;
+      return { engine, document, preview };
+    } catch (_) { return null; }
+  }, [selectionEngine, selectionLifecycle, open, phase, apartmentAuthorityKey, selectedSiteId,
+    virtualFixtureDocument, editing, calibCam, liveOn, rehearsalIsolated, spatialScale]);
+
+  const selectVirtualFixture = useCallback((id, { fromGesture = false } = {}) => {
+    try {
+      const context = getVirtualFixtureSelectionContext();
+      if (!context || typeof id !== "string") return false;
+      const { engine, document, preview } = context;
+      if (fromGesture && preview.visible !== true) return false;
+      const gesture = virtualAimGestureRef.current?.readback();
+      if (gesture?.active && !(fromGesture && gesture.fixture_id === id)) return false;
+      if (!preview.fixtures?.some(fixture => fixture.fixture_id === id)) return false;
+      const descriptor = engine.overlay.virtualFixtureInteractionDescriptor?.(id), binding = document.binding;
+      if (!descriptor || descriptor.fixture_id !== id || descriptor.equipment_revision !== document.revision
+          || descriptor.equipment_digest !== document.digest || !descriptor.binding
+          || Object.keys(descriptor.binding).length !== Object.keys(binding).length
+          || Object.keys(binding).some(key => descriptor.binding[key] !== binding[key])) return false;
+      const selected = engine.overlay.setVirtualFixtureSelected?.(id);
+      if (selected?.fixture_id !== id || getVirtualFixtureSelectionContext()?.engine !== engine) return false;
+      setVirtualFixtureId(id); setVirtualFixtureControlsOpen(true);
+      if (unifiedShell) onShowShellControls?.();
+      return true;
+    } catch (_) { return false; }
+  }, [getVirtualFixtureSelectionContext, unifiedShell, onShowShellControls]);
 
   const deskTargetContextCurrent = (capture) => {
     const engine = engineRef.current, document = virtualFixtureDocument;
@@ -5189,9 +5245,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       previewTarget: (id, target, before) => overlay.aimVirtualFixtureAtTarget(id, target, { expectedGeneration: before.generation }),
       restoreSnapshot: (id, before) => overlay.restoreVirtualFixtureAim(id, before),
       onSelect: id => {
-        overlay.setVirtualFixtureSelected(id); setVirtualFixtureId(id); setVirtualFixtureChannel("spotlight");
-        setVirtualFixtureControlsOpen(true); setVirtualAimNotice("Drag a fixture or its aim handle onto a room surface.");
-        if (unifiedShell) onShowShellControls?.();
+        if (!selectVirtualFixture(id, { fromGesture: true })) return;
+        setVirtualFixtureChannel("spotlight");
+        setVirtualAimNotice("Drag a fixture or its aim handle onto a room surface.");
       },
       onPreview: info => {
         if (!current()) return;
@@ -5217,7 +5273,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       overlay.setVirtualFixtureSelected(null);
     };
   }, [open, phase, virtualFixtureBindingKey, virtualFixtureDocument, apartmentAuthorityKey,
-    editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale, rehearsalIsolated, unifiedShell, onShowShellControls]);
+    editing, calibCam, liveOn, virtualSpotlightsVisible, spatialScale, rehearsalIsolated, unifiedShell,
+    onShowShellControls, selectVirtualFixture]);
 
   /*
    * The engine owns the ESM/classic-script boundary. Rebuild the small frozen
@@ -5503,25 +5560,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       }
       setCardId(deviceId);
     };
-    const onDbl = (e) => {
-      if (aimMode) return;
-      const hits = engine.picking.pick(engine.overlay.pickObjects(), e.clientX, e.clientY);
-      if (!hits.length) return;
-      const dev = (model.devices || []).find((d) => d.id === hits[0].object.userData.deviceId);
-      if (dev && dev.ha_entity_id && (dev.type === "light" || dev.ha_entity_id.startsWith("switch."))) {
-        // double-click = instant toggle (the anti-"slower than 2D" rule)
-        callSvc(dev.ha_entity_id.split(".")[0], "toggle", { entity_id: dev.ha_entity_id });
-      }
-    };
     host.addEventListener("pointerdown", onDown);
     host.addEventListener("pointermove", onMove);
     host.addEventListener("click", onClick);
-    host.addEventListener("dblclick", onDbl);
     return () => {
       host.removeEventListener("pointerdown", onDown);
       host.removeEventListener("pointermove", onMove);
       host.removeEventListener("click", onClick);
-      host.removeEventListener("dblclick", onDbl);
       cancelAnimationFrame(raf);
     };
   }, [open, phase, editing, model, aimMode, aimDestination?.id, showToast, simActive,
@@ -5577,13 +5622,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
+      if (e.defaultPrevented) return;
       /* Native controls and editors own their arrows/typing. Without SELECT
        * and BUTTON here, moving through the home picker also rotated the 3D
        * scene behind it. N/P is the one deliberate button exception: after a
        * semantic shortcut opens a card, focus moves to its first button, and
        * the same shortcut must be able to continue through every device. */
-      const semanticCycleFromCard = (e.key === "n" || e.key === "p")
-        && e.target?.closest?.('[data-apt-control-card="1"]');
+      const cycleKey = (e.key === "n" || e.key === "p") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+      const semanticCycleFromCard = cycleKey
+        && e.target?.closest?.('[data-apt-control-card="1"], [data-victoria-virtual-fixtures="1"]');
       if (e.target?.isContentEditable
           || (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName))
           || (e.target?.tagName === "BUTTON" && !semanticCycleFromCard)) return;
@@ -5610,7 +5657,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         e.preventDefault();
         zoomRequestRef.current?.(-1, { source: "keyboard" });
       }
-      else if ((e.key === "n" || e.key === "p") && !editing && apartmentOwnsViewport) {
+      else if (cycleKey && !editing && apartmentOwnsViewport) {
+        if (selectedSiteId === "victoria") {
+          const context = getVirtualFixtureSelectionContext();
+          if (!context) return;
+          const ids = context.preview.fixtures.map(fixture => fixture.fixture_id);
+          if (!ids.length) return;
+          const index = virtualFixtureControlsOpen ? ids.indexOf(virtualFixtureId) : -1;
+          const next = index < 0 ? (e.key === "n" ? 0 : ids.length - 1)
+            : (index + (e.key === "n" ? 1 : -1) + ids.length) % ids.length;
+          if (selectVirtualFixture(ids[next])) e.preventDefault();
+          return;
+        }
         /* The semantic list is deliberately broader than overlay picks:
          * unpositioned devices have no marker but must remain keyboard
          * discoverable and open the same control card at its safe fallback
@@ -5623,7 +5681,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, editing, spatialScale, selectedSiteInterior, apartmentSceneControlsEnabled,
-    semanticDevicesForRoom, stepSemanticDevice]);
+    semanticDevicesForRoom, stepSemanticDevice, selectedSiteId, getVirtualFixtureSelectionContext,
+    virtualFixtureControlsOpen, virtualFixtureId, selectVirtualFixture]);
 
   // Remember the actual local UI/canvas trigger before its control can unmount.
   // React portal events still pass through this view, including column controls.
@@ -5659,6 +5718,62 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     setVirtualFixtureControlsOpen(false);
     engineRef.current?.overlay.setVirtualFixtureSelected?.(null);
   }, []);
+
+  // Record claims before the canvas aim controller consumes pointer events.
+  // Its pointerup can still be followed by a native compatibility click.
+  useEffect(() => {
+    const context = getVirtualFixtureSelectionContext(), host = hostRef.current;
+    const engine = context?.engine, canvas = engine?.renderer?.domElement;
+    if (!engine || !host || !canvas) return undefined;
+    let pointer = null;
+    const current = () => getVirtualFixtureSelectionContext()?.engine === engine;
+    const fixtureAt = event => {
+      try { return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), event.clientX, event.clientY).length > 0; }
+      catch (_) { return true; } // An unavailable pick cannot authorize deselection.
+    };
+    const canvasAt = event => {
+      try { return host.ownerDocument.elementFromPoint(event.clientX, event.clientY) === canvas; }
+      catch (_) { return false; }
+    };
+    const onDown = event => {
+      pointer = null;
+      if (event.target !== canvas || event.button !== 0 || event.isPrimary === false || event.defaultPrevented
+          || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || !current()
+          || virtualAimGestureRef.current?.readback().active) return;
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY,
+        claimed: fixtureAt(event), moved: false, released: false };
+    };
+    const onMove = event => {
+      if (pointer?.id === event.pointerId && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) >= 5) pointer.moved = true;
+    };
+    const onUp = event => {
+      if (pointer?.id !== event.pointerId) return;
+      onMove(event); pointer.released = true;
+      if (event.defaultPrevented || virtualAimGestureRef.current?.readback().active || !current() || !canvasAt(event)) pointer.claimed = true;
+    };
+    const cancel = () => { pointer = null; };
+    const lostCapture = event => { if (pointer?.id === event.pointerId && !pointer.released) cancel(); };
+    const onClick = event => {
+      const click = pointer; pointer = null;
+      if (!click?.released || click.claimed || click.moved || event.defaultPrevented || event.button !== 0
+          || Number.isFinite(event.pointerId) && event.pointerId > 0 && event.pointerId !== click.id
+          // The orbit owner captures on host; native clicks can retarget there.
+          // Only the recorded canvas-origin pointer and uncovered canvas qualify.
+          || event.target !== canvas && event.target !== host || !canvasAt(event)
+          || !current() || virtualAimGestureRef.current?.readback().active
+          || fixtureAt(event)) return;
+      clearVirtualFixtureSelection();
+    };
+    const listeners = [["pointerdown", onDown], ["pointermove", onMove], ["pointerup", onUp],
+      ["pointercancel", cancel], ["lostpointercapture", lostCapture], ["click", onClick], ["wheel", cancel]];
+    for (const [name, listener] of listeners) host.addEventListener(name, listener, true);
+    window.addEventListener("blur", cancel);
+    return () => {
+      cancel();
+      for (const [name, listener] of listeners) host.removeEventListener(name, listener, true);
+      window.removeEventListener("blur", cancel);
+    };
+  }, [getVirtualFixtureSelectionContext, clearVirtualFixtureSelection]);
 
   // One claimed Escape calls one existing cancellation path. Child overlays
   // and their editable fields have priority through HomeOverlay. No generic
@@ -8659,7 +8774,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)",
                            letterSpacing: "0.1em", display: mobile ? "none" : "inline" }}>
               {liveShadow ? 'Read-only room inspection · physical controls unavailable' : spatialScale === "apartment"
-                ? "drag · wheel zoom · ←→↑↓ · h home · dbl-click toggles lights · n/p select device"
+                ? "drag · wheel zoom · ←→↑↓ · h home · n/p select device · use inspector switches for power"
                 : "wheel zoom · + / - scale · zoom in to return to apartment"}
             </span>
           </div>
@@ -8893,10 +9008,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         <AptHomePanelSlot enabled={true} target={shellControlsHost}>
           <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
-            onSelect={id => {
-              setVirtualFixtureId(id); setVirtualFixtureControlsOpen(true);
-              engineRef.current?.overlay.setVirtualFixtureSelected?.(id); onShowShellControls?.();
-            }}
+            tab={virtualInspectorTab} onTabChange={setVirtualInspectorTab} onSelect={selectVirtualFixture}
             onBack={clearVirtualFixtureSelection}
             onPatch={changeVirtualFixture} onPatchAll={on => {
               for (const fixture of virtualFixtureItems) changeVirtualFixture({ spotlight: { on }, downward: { on },

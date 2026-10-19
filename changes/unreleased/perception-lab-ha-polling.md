@@ -1,6 +1,6 @@
 ---
 title: Connect recording-owned HA state polling
-target: stack
+target: backend
 type: added
 ---
 

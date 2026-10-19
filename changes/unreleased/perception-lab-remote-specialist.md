@@ -1,6 +1,6 @@
 ---
 title: Add exact-pixel remote specialist adapter
-target: stack
+target: backend
 type: added
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Add durable remote specialist execution core
-target: stack
+target: backend
 type: added
 ---
 

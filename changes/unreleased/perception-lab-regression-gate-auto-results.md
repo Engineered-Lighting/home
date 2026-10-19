@@ -1,7 +1,9 @@
 ---
-area: perception-lab
-target: controller
+title: Perception Lab gets a regression set, a ship gate and automatic per-activity results
+target: backend
+type: changed
 ---
+
 Perception Lab gets a regression set, a ship gate and automatic per-activity results. A JEV change is
 now checked across every labelled interaction in the room (reading, phone, computer work, resting,
 transition, other and the empty room), not only the one it targets.

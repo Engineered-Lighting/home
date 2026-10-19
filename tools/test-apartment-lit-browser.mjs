@@ -185,7 +185,11 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     assert.equal(await litButton.getAttribute('aria-pressed'), 'true');
     assert.equal(await page.getByRole('button', { name: 'Mesh view', exact: true }).getAttribute('aria-pressed'), 'false', 'Lit, not Mesh, reads as the current view');
     const note = page.locator('[data-apt-lit-disclosure]');
-    assert.equal((await note.textContent()).trim(), 'Simulated · not photometric · assumed output');
+    // Software GL may fall under 30 fps; Lit must then say so, never drop frames silently.
+    const shownQuality = await page.evaluate(() => window.__APT_ENGINE.litState().quality);
+    assert.equal((await note.textContent()).trim(), 'Simulated · not photometric · assumed output'
+      + (shownQuality === 'reduced' ? ' · reduced quality for speed' : ''), 'the note states the disclosure and any declared reduced quality');
+    assert.equal(await note.getAttribute('data-apt-lit-disclosure'), shownQuality);
     assert.match(await note.getAttribute('title'), /Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm/);
     const lit = await page.evaluate(() => {
       const engine = window.__APT_ENGINE, state = engine.litState(), lights = [];

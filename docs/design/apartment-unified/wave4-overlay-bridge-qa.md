@@ -1,6 +1,9 @@
 # Renderer overlay bridge QA — APT-F01
 
 Functional checks passed with real mode-readiness and real dot-draw assertions.
+The [completed matched follow-up review](wave5-overlay-performance-review-20261019.md)
+supports the bounded one-anchor frame-interval case in all three modes, while
+the representative four-anchor and render-proxy qualification remains unresolved.
 Performance remains qualified: the corrected Mesh frame-p95 median increases
 0.075 ms against a 0.050 ms within-run empty spread. Do not mark the entire
 frame-cost acceptance clear. F01 remains draft/partial for this acceptance gap.

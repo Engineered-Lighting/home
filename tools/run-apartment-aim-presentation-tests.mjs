@@ -275,10 +275,21 @@ test('a throwing owner predicate retires rather than revives', { timeout: DEADLI
   assert.equal(view.frame(), false); assert.equal(retired, 1);
 });
 
-test('nothing is wired: no loader, page, worker or host references the new modules', { timeout: DEADLINE_MS.unit }, () => {
-  for (const file of ['home-apartment.jsx', 'home-app.jsx', 'home-feature-loader.js', 'index.html', 'home-service-worker.js']) {
-    const text = read(file);
-    assert.doesNotMatch(text, /home-apartment-room-overlay|apartment-aim-presentation|AptRoomOverlay|AptSpotPendingDot/, file);
+test('nothing is wired: only inert list entries name the new modules, and no host mounts them', { timeout: DEADLINE_MS.unit }, () => {
+  for (const file of ['home-apartment.jsx', 'home-app.jsx'])
+    assert.doesNotMatch(read(file), /home-apartment-room-overlay|apartment-aim-presentation|AptRoomOverlay|AptSpotPendingDot|aptAimPendingFor/, file);
+  // Den-approved list unions (2026-10-19): one entry per list, after the store's.
+  const entries = {
+    'index.html': ["['home-apartment-room-overlay.jsx', true],", "'home-apartment-room-overlay.jsx': true,"],
+    'home-feature-loader.js': ['["home-apartment-room-overlay.jsx", true],'],
+    'home-service-worker.js': ['"/home-apartment-room-overlay.jsx",', '"/home-3d/apartment-aim-presentation.mjs",'],
+  };
+  for (const [file, lines] of Object.entries(entries)) {
+    const text = read(file), named = text.split(/\r?\n/).filter(line => /home-apartment-room-overlay|apartment-aim-presentation|AptRoomOverlay|AptSpotPendingDot/.test(line));
+    assert.deepEqual(named.map(line => line.trim()), lines, file);
+    const store = text.split(/\r?\n/).map(line => line.trim());
+    for (const line of lines.filter(line => line.includes('room-overlay')))
+      assert.match(store[store.indexOf(line) - 1], /home-apartment-aim-proposals\.js/, file + ' appends after the store');
   }
 });
 

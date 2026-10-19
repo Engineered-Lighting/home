@@ -5653,11 +5653,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // History restores only where the light points. Its channels keep their
   // current values, and a snapshot from another preview generation refuses.
   const applyAimHistoryState = (id, state, reason) => {
+    // Release first, so a desk preview that owns this light withdraws before
+    // its aim is read or compared (Den gate, 2026-10-19).
+    releaseFixtureForHandChange(id, { reason });
     const held = aimScopeFor(id), aim = state?.aim;
     if (!held || !aim || aim.fixture_id !== id || aim.generation !== held.descriptor.generation) return false;
     if (aim.state.pan_deg !== held.descriptor.state.pan_deg || aim.state.tilt_deg !== held.descriptor.state.tilt_deg
         || JSON.stringify(aim.target) !== JSON.stringify(held.descriptor.target)) {
-      releaseFixtureForHandChange(id, { reason });
       const result = held.context.engine.overlay.restoreVirtualFixtureAim?.(id, { ...aim,
         state: { ...held.descriptor.state, pan_deg: aim.state.pan_deg, tilt_deg: aim.state.tilt_deg } });
       if (!result?.ok) return false;
@@ -5711,13 +5713,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // `sweep` asks for Repair's 650 ms Set sweep where the producer has it;
   // undo and redo restore without one.
   const setAimProposal = ({ fixture_id: id, proposal } = {}) => {
+    // Release first: the undo entry's "before" must be the person's aim, not
+    // a desk preview's temporary one (Den gate, 2026-10-19).
+    releaseFixtureForHandChange(id, { reason: "aim" });
     const held = aimScopeFor(id), target = proposal?.target;
     if (!held?.proposal || held.proposal.id !== proposal?.id || target?.valid !== true || !Array.isArray(target.normal_m)) {
       setVirtualAimNotice("That proposal belongs to an earlier scene. Drag the aim handle again."); return false;
     }
     const before = { aim: held.descriptor, proposal: held.proposal };
     if (!aimProposals.take(held.scope, proposal.id).ok) return false;
-    releaseFixtureForHandChange(id, { reason: "aim" });
     const result = held.context.engine.overlay.aimVirtualFixtureAtTarget(id, { point: target.point_m.slice(),
       normal: target.normal_m.slice(), kind: "registered_mesh" }, { expectedGeneration: held.descriptor.generation, sweep: true });
     if (!result?.ok) {

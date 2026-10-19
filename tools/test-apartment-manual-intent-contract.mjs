@@ -79,7 +79,9 @@ test('every UI-originated fixture write passes the switch point first, in the sa
     // Den-reserved hunks, unchanged by W2: the re-apply effect replays the
     // remembered state of a reloaded preview, and changeVirtualFixture's own
     // producer write is reached only through the wrapped call below.
-    if (row.owner === 'useEffect' && text(row.effect).includes('virtualFixtureStatesRef.current.targets) overlay.aimVirtualFixtureAtTarget')) {
+    // Den's composition moves the same replay into reapplyVirtualFixtureMemory.
+    if (row.owner === 'reapplyVirtualFixtureMemory'
+        || row.owner === 'useEffect' && text(row.effect).includes('virtualFixtureStatesRef.current.targets) overlay.aimVirtualFixtureAtTarget')) {
       allowed.push({ name: row.name, site: 'virtualFixtureStatesRef re-apply effect (Den-reserved replay)' }); continue;
     }
     if (row.owner === 'changeVirtualFixture' && row.name === 'setVirtualFixtureState') {
@@ -87,9 +89,13 @@ test('every UI-originated fixture write passes the switch point first, in the sa
     }
     const hooks = rows.filter(item => item.name === HOOK && item.fn === row.fn && item.start < row.start);
     assert.equal(hooks.length, 1, `${row.name} in ${row.owner} is preceded by exactly one ${HOOK} in the same function`);
+    // Den gate: the release comes before the light's aim is read (aimScopeFor).
+    const reads = []; walk(row.fn, node => { if (node.type === 'CallExpression' && node.callee?.name === 'aimScopeFor') reads.push(node.start); });
+    assert.ok(reads.every(start => start > hooks[0].start), `${row.owner} releases before it reads the light's aim`);
     gated.push({ name: row.name, owner: row.owner, reason: text(hooks[0].reason || hooks[0].node.arguments[1]) });
   }
-  assert.deepEqual(allowed.map(item => item.name).sort(), ['aimVirtualFixtureAtTarget', 'setVirtualFixtureState', 'setVirtualFixtureState']);
+  assert.deepEqual([...new Set(allowed.map(item => item.name))].sort(), ['aimVirtualFixtureAtTarget', 'setVirtualFixtureState']);
+  assert.equal(allowed.filter(item => item.site.startsWith('inside changeVirtualFixture')).length, 1);
   // The complete set of switch-point call sites Den signs off (2026-10-19).
   // TODO(Den): future Chat-originated and perception-Set fixture writes must
   // call the switch point too, and join this list when they land.
@@ -164,7 +170,7 @@ test('actual channel change, aim Set and history restore call the switch point b
 
   f = authored();
   assert.equal(install('setAimProposal', f.context)({ fixture_id: 'fixture-a', proposal: f.pending }), true);
-  assert.deepEqual(f.calls.slice(0, 3), [['take', 'p1'], ['switch', 'fixture-a', 'aim'], ['aim', 'fixture-a', 3]]);
+  assert.deepEqual(f.calls.slice(0, 3), [['switch', 'fixture-a', 'aim'], ['take', 'p1'], ['aim', 'fixture-a', 3]]);
 
   for (const direction of ['undo', 'redo']) {
     f = authored(); f.pending = null;
@@ -175,14 +181,14 @@ test('actual channel change, aim Set and history restore call the switch point b
   }
 });
 
-test('proposals change no fixture, so proposing, discarding and an unchanged history step skip the switch point', () => {
+test('proposals change no fixture, so proposing and discarding skip the switch point; an unchanged history step releases but never rewrites', () => {
   let f = authored();
   install('proposeAim', f.context)({ fixture_id: 'fixture-a', target: { point_m: [1, 2, 0], valid: true, normal_m: [0, 0, 1] } });
   assert.equal(f.calls.some(call => call[0] === 'switch'), false);
   f = authored(); f.pending = null;
   const same = { fixture_id: 'fixture-a', generation: 3, state: { pan_deg: 10, tilt_deg: 40, radials: [] }, target: null };
   assert.equal(install('applyAimHistoryState', f.context)('fixture-a', { aim: same, proposal: null }, 'undo'), true);
-  assert.equal(f.calls.some(call => call[0] === 'switch' || call[0] === 'restore'), false, 'an unchanged aim is not rewritten');
+  assert.deepEqual(f.calls, [['switch', 'fixture-a', 'undo']], 'the release still comes first; an unchanged aim is not rewritten');
 });
 
 test('a refused Set leaves the fixture alone after the switch point and keeps the proposal', () => {
@@ -192,6 +198,6 @@ test('a refused Set leaves the fixture alone after the switch point and keeps th
   const proposal = f.pending;
   f.context.aimProposals.propose = (scope, request) => { f.calls.push(['repropose', request.target === proposal.target]); return { ok: true }; };
   assert.equal(install('setAimProposal', f.context)({ fixture_id: 'fixture-a', proposal }), false);
-  assert.deepEqual(f.calls.map(call => call[0]), ['take', 'switch', 'aim-refused', 'repropose']);
+  assert.deepEqual(f.calls.map(call => call[0]), ['switch', 'take', 'aim-refused', 'repropose']);
   assert.equal(f.calls.at(-1)[1], true);
 });

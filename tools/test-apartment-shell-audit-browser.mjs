@@ -107,6 +107,29 @@ test('unified shell text, targets, surfaces, motion, focus and phone layout meet
       else expect(!state.small_targets.length, 'coarse targets ≥ 44 px · ' + label, state.small_targets);
     }
     state.stage = await page.evaluate(() => getComputedStyle(document.querySelector('.apt-home-stage')).backgroundColor);
+    if (surface === 'room') {
+      const overlays = state.overlays = await page.evaluate(() => {
+        const stage = document.querySelector('.apt-home-stage').getBoundingClientRect();
+        const named = { toolbar: '.apt-ui-room-toolbar', zoom: '[aria-label="apartment zoom controls"]', toast: '.apt-ui-toast',
+          legend: '.apt-room-guide-legend', badge: '[data-apartment-approximate-badge="1"]' };
+        const boxes = Object.entries(named).map(([name, selector]) => [name, document.querySelector(selector)])
+          .filter(([, element]) => element && element.getClientRects().length && getComputedStyle(element).visibility === 'visible')
+          .map(([name, element]) => [name, element.getBoundingClientRect().toJSON()]);
+        const overlaps = [];
+        for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+          const [a, ra] = boxes[i], [b, rb] = boxes[j];
+          const x = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left), y = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+          if (x > .5 && y > .5) overlaps.push([a, b, Math.round(x * y)]);
+        }
+        const outside = boxes.filter(([name, r]) => name !== 'badge' && (r.left < stage.left - .5 || r.right > stage.right + .5 || r.top < stage.top - .5 || r.bottom > stage.bottom + .5)).map(([name]) => name);
+        const can = label => [...document.querySelectorAll('.apt-home-stage button')].some(button => button.getAttribute('aria-label') === label
+          && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' && !button.closest('[hidden]'));
+        return { names: boxes.map(([name]) => name), overlaps, outside,
+          nonDrag: { zoomIn: can('zoom in'), zoomOut: can('zoom out'), orbitLeft: can('Orbit left'), orbitRight: can('Orbit right'), fit: can('Fit room') } };
+      });
+      expect(!overlays.overlaps.length && !overlays.outside.length, 'room overlays never collide and stay on the stage · ' + label, overlays);
+      expect(Object.values(overlays.nonDrag).every(Boolean), 'the room can be zoomed, turned and refit without dragging · ' + label, overlays.nonDrag);
+    }
     expect(state.stage === 'rgb(0, 0, 0)', 'the room stage stays dark · ' + label, state.stage);
     if (surface === 'room' || surface === 'light') {
       const s = state.surfaces = await page.evaluate(auditSurfaces);
@@ -188,6 +211,93 @@ test('unified shell text, targets, surfaces, motion, focus and phone layout meet
     layout.screenshot = 'evidence/phone-390x844-victoria-dark.png';
   }
 
+  // APT-S02: the status popover says, per system, what this home is
+  // connected to, from this home's own facts. Victoria never shows Echo's
+  // Home Assistant state.
+  async function statusRows() {
+    receipt.status_rows = {};
+    for (const [profile, theme] of [[PROFILES[0], 'dark'], [PROFILES[1], 'light']]) {
+      await setProfile(profile); await setTheme(theme);
+      for (const site of ['echo', 'victoria']) {
+        await selectHome(site);
+        const summary = page.getByRole('group', { name: 'Home', exact: true }).locator('xpath=..').locator('.apt-home-status > summary');
+        await summary.click(); await settle();
+        const rows = await page.evaluate(() => [...document.querySelectorAll('.apt-home-status-row')].map(row => ({
+          system: row.dataset.system, text: row.querySelector('.apt-home-status-value').textContent.trim(),
+          badge: row.querySelector('.apt-ui-badge')?.dataset.state || null, detail: row.querySelector('.apt-home-status-detail')?.textContent.trim() || '' })));
+        receipt.status_rows[[profile.name, theme, site].join(' ')] = rows;
+        const lights = rows.find(row => row.system === 'lights');
+        expect(['room', 'lights', 'save', 'camera', 'capabilities'].every(key => rows.some(row => row.system === key)), 'status names each system · ' + site, rows);
+        expect(rows.every(row => row.system === 'camera' && site === 'victoria' || row.badge), 'status rows use the shared badge vocabulary · ' + site, rows);
+        if (site === 'echo') expect(/^Home Assistant (connected|not connected)$/.test(lights?.text), 'Echo names its Home Assistant connection', lights);
+        else expect(/^No light entities for \S.* fixtures$/.test(lights?.text) && !rows.some(row => /Home Assistant/.test(row.text)),
+          'Victoria says its fixtures have no light entities and never shows Echo\'s Home Assistant state', rows);
+        expect(rows.find(row => row.system === 'capabilities')?.badge === 'unavailable', 'capability rows wait on the agreed contract · ' + site, rows);
+        await audit(profile, site, theme, 'status');
+        await summary.click(); await settle();
+      }
+    }
+  }
+
+  // APT-S02 Home isolation: parked unsaved Echo work keeps its mark while
+  // Victoria is shown, switching says it was kept, and Victoria shows nothing
+  // of it. The authored parked workspace stands in for an Echo draft.
+  async function unsavedRoundTrip() {
+    await setProfile(PROFILES[0]); await setTheme('dark'); await selectHome('echo');
+    const echoScene = await page.evaluate(() => JSON.parse(JSON.stringify(window.__APT_ENGINE.sceneIdentity || window.__APT_ENGINE.workspaceScope)));
+    await selectHome('victoria');
+    expect(!(await page.evaluate(() => window.HomeApartmentData.dirtySites())).length, 'no home holds unsaved work before the draft', null);
+    // Park an authored Echo draft at Echo's own scene scope, as leaving Echo
+    // with unsaved edits does; Echo then restores it through the real path.
+    const parked = await page.evaluate(async scope => {
+      const seed = await fetch('/proxy/ha/api/apartment_model').then(response => response.json()).catch(() => null);
+      return !!window.HomeApartmentData.captureWorkspace(scope, { model: { ...seed, site: 'echo' }, dirty: true });
+    }, echoScene);
+    expect(parked, 'the authored Echo draft is parked', parked);
+    await selectHome('echo');
+    const active = await page.evaluate(() => [...document.querySelectorAll('.apt-home-switcher > button[aria-pressed="true"] .apt-home-site-dot')].map(dot => dot.dataset.state));
+    expect(active.join() === 'unsaved', 'the active home shows its restored unsaved work', active);
+    await selectHome('victoria');
+    const marks = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.apt-home-switcher > button')]
+      .map(button => [button.textContent.replace(', unsaved work kept', '').trim(), button.querySelector('.apt-home-site-dot').dataset.state])));
+    const toast = await page.locator('.apt-ui-toast-message').textContent().catch(() => null);
+    receipt.unsaved_round_trip = { marks, toast };
+    expect(marks['Echo Park'] === 'unsaved' && marks.Victoria !== 'unsaved', 'the Echo segment keeps its unsaved mark while Victoria is shown', marks);
+    expect(toast === 'Echo Park · your unsaved work here is kept', 'switching away says the unsaved work was kept', toast);
+    const victoriaRows = await page.evaluate(() => [...document.querySelectorAll('.apt-home-status-row')].map(row => row.textContent));
+    expect(!victoriaRows.some(text => /Home Assistant connected|Unsaved changes/.test(text)), 'Victoria shows none of Echo\'s state', victoriaRows);
+  }
+
+  // APT-S05: drag the handle between detents by touch, and the non-drag
+  // alternatives (tap, Arrow keys) reach every detent too.
+  async function sheetGrip() {
+    await setProfile(PROFILES[1]); await setTheme('dark'); await selectHome('victoria');
+    const detent = () => page.locator('.apt-home-shell').getAttribute('data-sheet');
+    const grip = page.getByRole('button', { name: 'Resize Home sheet', exact: true });
+    const drag = async dy => {
+      const box = await grip.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2, steps = 6;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+      for (let i = 1; i <= steps; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + dy * i / steps, id: 1 }] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(300); await settle();
+    };
+    const path = [await detent()];
+    await drag(-260); path.push(await detent());
+    await drag(520); path.push(await detent());
+    await drag(-60); path.push(await detent());
+    await grip.focus(); await page.keyboard.press('ArrowUp'); await settle(); path.push(await detent());
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await settle(); path.push(await detent());
+    await grip.click(); await settle(); path.push(await detent());
+    const motion = await page.evaluate(() => getComputedStyle(document.querySelector('.apt-home-panel')).transitionDuration);
+    receipt.sheet_grip = { path, motion };
+    expect(JSON.stringify(path) === JSON.stringify(['half', 'full', 'peek', 'half', 'full', 'peek', 'half']),
+      'the handle drags and steps through peek, half and full', path);
+    expect(motion.split(', ').includes('0.22s'), 'the sheet eases over 0.22 s', motion);
+    const bounds = await page.evaluate(() => ({ panel: document.querySelector('.apt-home-panel').getBoundingClientRect().toJSON(),
+      padding: getComputedStyle(document.querySelector('.apt-home-panel')).paddingBottom, viewport: innerHeight }));
+    expect(Math.abs(bounds.panel.bottom - bounds.viewport) <= .5, 'the sheet sits on the bottom edge with its safe-area padding', bounds);
+  }
+
   // F03/Q02: designed micro-motion, and the snap under reduced motion.
   async function motion() {
     await setProfile(PROFILES[0]);
@@ -253,7 +363,9 @@ test('unified shell text, targets, surfaces, motion, focus and phone layout meet
     const order = stops.map(stop => stop.region).filter((region, index, all) => region !== all[index - 1]);
     receipt.keyboard_regions = order;
     expect(order[0] === 'header', 'Tab starts in the header', order);
-    expect(order.includes('stage') && order.includes('inspector'), 'Tab reaches the room toolbar and the inspector', order);
+    const first = region => order.indexOf(region);
+    expect(first('header') === 0 && first('stage') > first('header') && first('inspector') > first('stage') && first('dock') > first('inspector'),
+      'Tab moves header → room → inspector → dock', order);
   }
 
   async function exercise() {
@@ -290,6 +402,9 @@ test('unified shell text, targets, surfaces, motion, focus and phone layout meet
     }
     await phase('phone example', phoneExample);
     await phase('motion', motion);
+    await phase('status rows', statusRows);
+    await phase('unsaved work kept', unsavedRoundTrip);
+    await phase('sheet grip', sheetGrip);
     await phase('keyboard', keyboard);
   }
 

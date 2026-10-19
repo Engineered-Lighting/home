@@ -153,6 +153,8 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * Measured on run 39214584656 (#293 touched job, 7m22s of harnesses) and the
  * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
  * rounded up, and the composer-comfort suite's first hosted run 39307352122.
+ * The shell audit ran alone in 85 s on run 39323737291; its status, unsaved
+ * and grip stages round it up to 100.
  * The two directional parts are that run's setup plus their own stages.
  * test-precompiled-jsx.mjs is twice its 45 s local run until hosted-measured.
  * An unmeasured browser suite counts as its 145 s deadline and
@@ -168,6 +170,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-inspector-browser.mjs": 62,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-rig-fit-browser.mjs": 45,
+  "test-apartment-shell-audit-browser.mjs": 100,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,

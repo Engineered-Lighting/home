@@ -925,3 +925,33 @@ button.hg-no-press:active {
 @container apartment-home (width < 900px) {
   @media (pointer: coarse) { .apt-home-shell .apt-home-chat { height: calc(var(--apt-sheet-height, 50%) - 88px); } }
 }
+
+/* ── Shell: status rows, sheet detents, non-drag room controls (APT-S02, S05, Q02) ── */
+.apt-home-shell .apt-home-status > div { max-height: calc(100dvh - 72px); overflow-y: auto; }
+.apt-home-shell .apt-home-status-row { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 2px 12px; align-items: start; padding: 9px 10px; }
+.apt-home-shell .apt-home-status-row + .apt-home-status-row { border-top: 1px solid var(--apt-border-soft); }
+.apt-home-shell .apt-home-status-system { color: var(--apt-muted); font-size: 12px; line-height: 22px; }
+.apt-home-shell .apt-home-status-value { min-width: 0; color: var(--apt-text); font-size: 13px; line-height: 22px; }
+.apt-home-shell .apt-home-status-detail { grid-column: 2; color: var(--apt-muted); font-size: 12px; line-height: 1.45; }
+/* The sheet eases between detents over 0.22 s and follows a drag exactly. */
+@container apartment-home (width < 900px) {
+  .apt-home-shell .apt-home-panel { transition: height .22s cubic-bezier(.2,.8,.2,1); }
+  .apt-home-shell .apt-home-sheet-grip { touch-action: none; }
+  .apt-home-shell[data-sheet-dragging] .apt-home-panel { height: var(--apt-sheet-drag-height); transition: none; }
+  .apt-home-shell[data-sheet-dragging] .apt-home-chat { height: calc(var(--apt-sheet-drag-height) - 66px); }
+}
+/* Touch keeps a non-drag way to zoom, turn and refit the room (Q02): the zoom
+ * pair returns under 900 px, and the phone toolbar wraps to a second row with
+ * ‹ › and Fit instead of hiding them. */
+@media (pointer: coarse) {
+  @container apartment-home (width < 900px) {
+    .apt-home-shell .apt-home-stage [aria-label="apartment zoom controls"] { display: flex!important; }
+    .apt-home-shell[data-sheet-dragging] .apt-home-chat { height: calc(var(--apt-sheet-drag-height) - 88px); }
+  }
+  @container apartment-home (width < 600px) {
+    .apt-home-shell .apt-ui-room-toolbar { flex-wrap: wrap; justify-content: center; row-gap: 4px; width: max-content; }
+    .apt-home-shell .apt-ui-room-toolbar .apt-ui-orbit:not(.apt-home-toolbar-detent) { display: inline-flex; }
+    .apt-home-shell .apt-ui-room-toolbar .apt-ui-toolbar-separator.apt-ui-orbit { flex-basis: 100%; width: auto; height: 0; margin: 0; background: none; }
+    .apt-home-shell .apt-ui-room-toolbar [aria-label="Fit room"] { display: inline-flex; font-size: 0; gap: 0; }
+  }
+}

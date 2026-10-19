@@ -239,6 +239,7 @@ function callbackFixture(site = 'echo') {
     viewOpenRef: { current: true }, apartmentSceneControlsEnabledRef: { current: true }, travellingRef: { current: false }, deskTargetCaptureRef: { current: null },
     virtualFixtureDocument: virtualDocument, virtualFixtureItems: preview().fixtures, selectedVirtualFixture: null, virtualFixtureControlsOpen: false, virtualFixtureId: '', cardId: null,
     virtualFixtureStatesRef: { current: { states: new Map(), targets: new Map() } },
+    virtualFixturePreviewDirtyRef: { current: false }, directionalViewRef: { current: null },
     statesRef: { current: { 'light.authored_a': { state: 'on' }, 'light.authored_b': { state: 'off' } } },
     getVirtualFixtureSelectionContext: () => state.current ? { engine, document: virtualDocument, preview: preview() } : null,
     isControlCurrent: () => state.controlsCurrent,

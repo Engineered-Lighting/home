@@ -23,6 +23,10 @@ const rigSource = fs.readFileSync(path.join(ROOT, 'app/src/home-3d/rig.js'), 'ut
 assert.equal((rigSource.match(/from 'three'/g) || []).length, 1);
 const { createRig } = await import('data:text/javascript;base64,' + Buffer.from(rigSource.replace("from 'three'",
   'from ' + JSON.stringify(pathToFileURL(path.join(ROOT, 'app/src/vendor/three-0.180.0/three.module.js')).href))).toString('base64'));
+const presentationSource = fs.readFileSync(path.join(ROOT, 'app/src/home-3d/apartment-directional-presentation.mjs'), 'utf8');
+assert.equal((presentationSource.match(/from 'three'/g) || []).length, 1);
+const Presentation = await import('data:text/javascript;base64,' + Buffer.from(presentationSource.replace("from 'three'",
+  'from ' + JSON.stringify(pathToFileURL(path.join(ROOT, 'app/src/vendor/three-0.180.0/three.module.js')).href))).toString('base64'));
 
 function walk(node, visit) {
   if (!node || typeof node !== 'object') return;
@@ -105,7 +109,13 @@ function apartmentSource() {
     const compiled = babel.transform('(' + text(node) + ')', { presets: ['react'] }).code;
     return vm.runInContext(compiled, context, { timeout: 1000 });
   }
-  return { owner, text, initializer, initialState, install, effect, component, prop, portal, renderExpression,
+  function assignment(name, context) {
+    const matches = owner.body.body.filter(node => node.type === 'ExpressionStatement' && node.expression?.type === 'AssignmentExpression'
+      && node.expression.left?.object?.name === name);
+    assert.equal(matches.length, 1, 'one actual live assignment: ' + name);
+    return vm.runInContext(text(matches[0]), context, { timeout: 1000 });
+  }
+  return { owner, text, initializer, initialState, install, effect, component, prop, portal, renderExpression, assignment,
     evaluate: (node, context) => vm.runInContext('(' + text(node) + ')', context, { timeout: 1000 }) };
 }
 
@@ -115,10 +125,21 @@ class AuthoredTarget {
     this.listeners = new Map(); this.attributes = new Map(); this.captures = new Set();
     this.isContentEditable = false; this.isConnected = true;
     this.clientWidth = 400; this.clientHeight = 400;
+    this.children = []; this.ownerDocument = parent?.ownerDocument; this.hidden = false; this.textContent = '';
   }
+  appendChild(child) { child.remove(); this.children.push(child); child.parentElement = this; child.ownerDocument = this.ownerDocument; child.isConnected = this.isConnected; return child; }
+  remove() { if (this.parentElement) { const index = this.parentElement.children.indexOf(this); if (index >= 0) this.parentElement.children.splice(index, 1); this.parentElement = null; } this.isConnected = false; }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   hasAttribute(name) { return this.attributes.has(name); }
+  removeAttribute(name) { this.attributes.delete(name); }
+  querySelectorAll(selector) {
+    const found = [], match = /^\[([^=\]]+)(?:="([^"]+)")?\]$/.exec(selector); assert.ok(match);
+    for (const child of this.children) { if (child.hasAttribute(match[1]) && (match[2] === undefined || child.getAttribute(match[1]) === match[2])) found.push(child); found.push(...child.querySelectorAll(selector)); }
+    return found;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  getContext(kind) { assert.equal(kind, '2d'); return { createRadialGradient: () => ({ addColorStop() {} }), fillRect() {} }; }
   closest(selector) {
     for (let node = this; node; node = node.parentElement) for (const part of selector.split(',')) {
       const name = part.trim(), attribute = /^\[([^=\]]+)(?:=["']?([^"'\]]+)["']?)?\]$/.exec(name);
@@ -184,6 +205,9 @@ const nextState = producerTransition();
 
 function fixture({ mode = 'zones' } = {}) {
   const window = new AuthoredTarget('window'), host = new AuthoredTarget('div', window), canvas = new AuthoredTarget('canvas', host);
+  const domDocument = new AuthoredTarget('document'); domDocument.visibilityState = 'visible';
+  domDocument.createElement = tag => { const node = new AuthoredTarget(tag); node.ownerDocument = domDocument; return node; };
+  host.ownerDocument = domDocument;
   const hub = new AuthoredTarget('circle', host); hub.setAttribute('data-apt-radial-start', 'hub');
   const binding = { content_revision: 'authored-victoria-r1', registration_version: 1,
     manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
@@ -200,7 +224,7 @@ function fixture({ mode = 'zones' } = {}) {
     target: { point: [1, 2, 0], normal: [0, 0, 1], kind: 'registered_mesh' }, truth_role: 'virtual_preview', physical_commands: false,
   }]));
   const state = { patches: [], calls: [], intervals: [], selectedSite: 'victoria', pickId: ids[0],
-    previewRevision: 7, previewDigest: document.digest, previewVisible: true, previewStatus: 'ready', readout: null, projection: null, panel: 'controls' };
+    previewRevision: 7, previewDigest: document.digest, previewVisible: true, previewStatus: 'ready', readout: null, projection: null, panel: 'controls', previewPublications: 0, nowMs: 0 };
   const preview = () => ({ status: state.previewStatus, visible: state.previewVisible, revision: state.previewRevision,
     digest: state.previewDigest, fixtures: ids.map(id => ({ fixture_id: id, label: id, state: copy(descriptors.get(id).state) })) });
   const overlay = {
@@ -209,7 +233,7 @@ function fixture({ mode = 'zones' } = {}) {
     setVirtualFixtureSelected: id => { state.calls.push(['selected', id]); return overlay.virtualFixtureInteractionDescriptor(id); },
     setVirtualFixtureState(id, patch) {
       state.patches.push({ id, patch: copy(patch) });
-      const before = descriptors.get(id); before.state = nextState(before.state, patch); return { ok: true };
+      const before = descriptors.get(id); before.state = nextState(before.state, patch); return { ok: true, ...preview() };
     },
     restoreVirtualFixtureAim: () => ({ ok: true }),
     aimVirtualFixtureAtTarget: () => assert.fail('Zones routing must never invoke the aim producer'),
@@ -225,6 +249,14 @@ function fixture({ mode = 'zones' } = {}) {
       projectToScreen: () => assert.fail('no legacy marker projection is needed by this authored timer fixture') },
     displaySurfaceHit: () => ({ point: [1, 2, 0], normal: [0, 0, 1] }),
     rig: { inCameraPose: () => false, stepAzimuth() {}, stepElevation() {}, snapHome() {} } };
+  const engineListeners = new Map(), layers = new Set(); state.running = true; state.layerRequests = [];
+  engine.on = (name, listener) => { const rows = engineListeners.get(name) || new Set(); rows.add(listener); engineListeners.set(name, rows); return () => rows.delete(listener); };
+  engine.createUiOverlayLayer = async options => {
+    state.layerRequests.push(options); if (!state.running || options.signal.aborted || !options.isCurrent()) return null;
+    const layer = { group: new THREE.Group(), disposed: false, dispose() { if (this.disposed) return false; this.disposed = true; layers.delete(this); options.signal.removeEventListener('abort', abort); options.onPresentationDispose(); return true; },
+      frame(info) { if (this.disposed) return false; if (options.signal.aborted || !options.isCurrent()) { this.dispose(); return false; } options.onPresentationFrame(info); return true; } };
+    const abort = () => layer.dispose(); options.signal.addEventListener('abort', abort); layers.add(layer); return layer;
+  };
   const frames = new Map(); let frameId = 0;
   overlay.createVirtualFixtureAimGesture = options => createDirectAimGestureController({ ...options,
     requestFrame: callback => { const id = ++frameId; frames.set(id, callback); return id; }, cancelFrame: id => frames.delete(id) });
@@ -232,7 +264,8 @@ function fixture({ mode = 'zones' } = {}) {
   window.AptDirectionalComposer = function AuthoredComposerElement() {};
   window.HomeSpatialViewport = { getSelectedSiteId: () => state.selectedSite };
   window.HomeOverlay = { topKey: () => 'apartment-embedded' };
-  const values = { window, open: true, phase: 'ready', selectedSiteId: 'victoria', selectedContentRevision: binding.content_revision,
+  window.Home3D = { ready: Promise.resolve({ loadDirectionalPresentation: async () => Presentation }) };
+  const values = { window, document: domDocument, AbortController, open: true, phase: 'ready', selectedSiteId: 'victoria', selectedContentRevision: binding.content_revision,
     editing: false, calibCam: null, liveOn: false, rehearsalIsolated: false, spatialScale: 'apartment', unifiedShell: true,
     virtualSpotlightsVisible: true, apartmentSceneControlsEnabled: true, selectedSiteInterior: true,
     apartmentAuthorityKey: 'authored-authority', workspaceAuthorityRef: { current: { key: 'authored-authority' } },
@@ -245,18 +278,21 @@ function fixture({ mode = 'zones' } = {}) {
     fixtureInteractionMode: mode, fixtureInteractionModeRef: { current: mode },
     virtualAimGestureRef: { current: null }, radialGestureOwnerRef: { current: null }, flushRadialGestureRef: { current: null },
     directionalProjectionRef: { current: null }, deskTargetCaptureRef: { current: null },
+    directionalView: null, directionalViewRef: { current: null }, directionalProjectRef: { current: null },
+    virtualFixturePreviewDirtyRef: { current: false }, publishVirtualFixturePreviewRef: { current: null },
     radialReadout: null, radialGestureActive: false, anchors: {},
     virtualFixtureStatesRef: { current: { states: new Map(), targets: new Map() } },
     virtualAimHistoryRef: { current: { undo: [{ authored: 'previous aim' }], redo: [] } },
     virtualFixtureBindingKey: JSON.stringify(binding), hoverId: null, cardId: null, semanticDevicesForRoom: [],
-    setVirtualFixturePreview: value => { values.virtualFixtureItems = value.fixtures; },
+    setVirtualFixturePreview: value => { state.previewPublications++; values.virtualFixtureItems = value.fixtures; },
     setVirtualFixtureId: value => { values.virtualFixtureId = value; state.calls.push(['fixture', value]); },
     setVirtualFixtureControlsOpen: value => { values.virtualFixtureControlsOpen = value; state.calls.push(['open', value]); },
     setFixtureInteractionMode: value => { values.fixtureInteractionMode = value; values.fixtureInteractionModeRef.current = value; state.calls.push(['mode', value]); },
     setVirtualInspectorTab: value => { values.virtualInspectorTab = value; state.calls.push(['tab', value]); },
     setRadialReadout: value => { state.readout = value; values.radialReadout = value; },
     setRadialGestureActive: value => { values.radialGestureActive = value; },
-    setAnchors: value => { state.projection = value; values.anchors = value; },
+    setAnchors: value => { const next = typeof value === 'function' ? value(values.anchors) : value; state.projection = next; values.anchors = next; },
+    setDirectionalView: value => { values.directionalView = typeof value === 'function' ? value(values.directionalView) : value; },
     onShowShellControls: () => { state.panel = 'controls'; state.calls.push(['show']); },
     setVirtualFixtureChannel: value => state.calls.push(['channel', value]), setVirtualAimNotice() {}, setVirtualAimHistoryVersion() {},
     restoreApartmentOperationFocus: value => state.calls.push(['focus', value]),
@@ -268,20 +304,44 @@ function fixture({ mode = 'zones' } = {}) {
   const context = vm.createContext(values), cleanups = [];
   for (const name of ['selectionEngine', 'selectionLifecycle']) context[name] = actual.initializer(name, context);
   for (const name of ['getDirectionalSnapshot', 'isDirectionalProjectionCurrent', 'projectDirectionalFixture', 'changeFixtureInteractionMode', 'changeVirtualInspectorTab', 'selectVirtualFixture', 'changeVirtualFixture']) actual.install(name, context);
+  values.directionalProjectRef.current = context.projectDirectionalFixture;
+  actual.assignment('publishVirtualFixturePreviewRef', context);
   const mount = signature => {
     const cleanup = actual.evaluate(actual.effect(signature), context)();
     if (typeof cleanup === 'function') cleanups.push(cleanup);
   };
-  const commit = anchors => {
-    context.anchors = anchors;
-    context.directionalDisplay = actual.initializer('directionalDisplay', context);
-    actual.evaluate(actual.effect('directionalProjectionRef.current = directionalDisplay'), context)();
-    return context.directionalProjectionRef.current;
+  const attach = view => {
+    const root = domDocument.createElement('svg'), pill = domDocument.createElement('div'), readout = domDocument.createElement('div');
+    for (let number = 1; number <= 6; number++) { const path = domDocument.createElement('path'); path.setAttribute('data-apt-radial-number', number); root.appendChild(path); }
+    const hit = domDocument.createElement('circle'); hit.setAttribute('data-apt-radial-hub', 'hit'); root.appendChild(hit);
+    host.appendChild(root); host.appendChild(pill); host.appendChild(readout); view.attach({ root, pill, readout });
+    view.subscribe(() => { state.readout = view.getSnapshot().readout; });
+    return { root, pill, readout };
   };
-  const refresh = () => commit({ __directional: context.projectDirectionalFixture() });
+  let elements, presentationGroup;
+  const refresh = () => {
+    const initial = context.getDirectionalSnapshot(values.virtualFixtureId, { drawing: false });
+    let view = values.directionalViewRef.current;
+    if (!initial) { view?.dispose(); return null; }
+    if (!view || view.readback().disposed || view.readback().identity !== Directional.identityKey(initial.descriptor)) {
+      view?.dispose();
+      presentationGroup = new THREE.Group();
+      view = Presentation.createDirectionalPresentation({ group: presentationGroup, host, api: Directional, initial,
+        getProjection: () => values.directionalProjectRef.current(), getMode: () => values.fixtureInteractionModeRef.current,
+        publishPlane: value => { values.directionalProjectionRef.current = value; },
+        isCurrent: () => !!context.getDirectionalSnapshot(values.virtualFixtureId, { drawing: false }),
+        onRetire: () => { if (values.directionalViewRef.current === view) { values.directionalViewRef.current = null; values.directionalView = null; } } });
+      values.directionalViewRef.current = view; values.directionalView = view; elements = attach(view);
+    }
+    view.frame({ nowMs: state.nowMs += 16 });
+    return values.directionalProjectionRef.current;
+  };
   refresh();
-  return { state, values, context, ids, descriptors, binding, document, engine, window, host, canvas, hub, refresh, commit,
-    mountRadial: () => mount('const current = owner =>'), mountTimer: () => mount('const directional = projectDirectionalFixture()'),
+  return { state, values, context, ids, descriptors, binding, document, domDocument, engine, window, host, canvas, hub, refresh, attach,
+    get elements() { return elements; },
+    get presentationGroup() { return presentationGroup; },
+    mountRadial: () => mount('const current = owner =>'), mountTimer: () => mount('virtualFixturePreviewDirtyRef.current &&'),
+    mountPresentation: () => { values.directionalViewRef.current?.dispose(); values.directionalView = null; mount('let closed = false, lease = null'); },
     mountPreview: () => mount('overlay.setVirtualFixtures(document)'),
     mountKeyboard: () => mount('const semanticCycleFromCard'), mountSpot: () => mount('overlay.createVirtualFixtureAimGesture'),
     point(relative = [0, 0], projection = values.directionalProjectionRef.current) {
@@ -289,9 +349,13 @@ function fixture({ mode = 'zones' } = {}) {
       assert.ok(point?.visible); return { clientX: rect.left + point.x * rect.width / host.clientWidth,
         clientY: rect.top + point.y * rect.height / host.clientHeight };
     },
-    flush: () => values.flushRadialGestureRef.current?.(),
-    dispose() { for (const cleanup of cleanups.reverse()) cleanup(); },
+    checkOwner: () => { const owner = values.radialGestureOwnerRef.current; if (owner) emit(host, 'pointermove', { ...pointFor(owner.projection, [1.1, 0]) }); },
+    emitRunning(running) { state.running = running; if (!running) for (const layer of [...layers]) layer.dispose(); for (const callback of [...engineListeners.get('running') || []]) callback({ running }); },
+    frame() { for (const layer of [...layers]) layer.frame({ nowMs: state.nowMs += 16, deltaSeconds: .016 }); },
+    listeners: engineListeners, layers,
+    dispose() { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); values.directionalViewRef.current?.dispose(); },
   };
+  function pointFor(projection, relative) { const point = projection.frame.project(relative), rect = host.getBoundingClientRect(); return { clientX: rect.left + point.x * rect.width / host.clientWidth, clientY: rect.top + point.y * rect.height / host.clientHeight }; }
 }
 
 for (const [name, change] of [
@@ -309,18 +373,25 @@ for (const [name, change] of [
   assert.deepEqual(f.state.patches, []); assert.equal(f.host.captures.size, 0); f.dispose();
 });
 
-function queuePaint(f) {
+function paintNow(f) {
   emit(f.canvas, 'pointerdown', f.point());
   assert.equal(f.values.radialGestureOwnerRef.current?.gesture.readback().active, true);
+  assert.ok(f.state.readout, 'down publishes the existing zone level immediately');
+  assert.equal(f.state.patches.length, 0, 'pickup alone does not write');
   emit(f.host, 'pointermove', f.point([1.1, 0]));
-  assert.ok(f.values.radialGestureOwnerRef.current?.pending?.radials.length > 0);
+  assert.ok(f.values.radialGestureOwnerRef.current?.lastPatch);
+  assert.equal(f.state.patches.length, 1, 'the admitted modeled setter completes in this input turn');
+  assert.equal(f.state.readout.zone, 1); assert.equal(f.state.readout.level, .83);
 }
 
-test('actual 80 ms HUD flush applies a radial-only modeled patch and publishes its matching projection/readout', () => {
+test('input immediately applies only modeled radials/readout; the 80 ms HUD publishes summary only after the gesture', () => {
   const f = fixture(), before = copy(f.descriptors.get(f.ids[0])), history = f.values.virtualAimHistoryRef.current;
   f.mountRadial(); f.mountTimer(); assert.equal(f.state.intervals.length, 1); assert.equal(f.state.intervals[0].delay, 80);
-  queuePaint(f); assert.deepEqual(f.state.patches, []); assert.equal(f.state.readout, null);
+  paintNow(f); assert.ok(f.state.readout); assert.equal(f.state.previewPublications, 0);
+  const drawn = f.values.directionalProjectionRef.current;
   f.state.intervals[0].callback(); assert.equal(f.state.patches.length, 1);
+  assert.equal(f.state.previewPublications, 0, 'an active gesture keeps the unrelated full-room React summary deferred');
+  assert.equal(f.values.directionalProjectionRef.current, drawn, 'HUD cannot claim a newly drawn plane');
   const [{ id, patch }] = f.state.patches; assert.equal(id, f.ids[0]); assert.deepEqual(Object.keys(patch), ['radials']);
   for (const zone of patch.radials) assert.deepEqual(Object.keys(zone).sort(), ['brightness', 'number', 'on']);
   const after = f.descriptors.get(f.ids[0]);
@@ -331,16 +402,21 @@ test('actual 80 ms HUD flush applies a radial-only modeled patch and publishes i
     assert.equal(zone.color_temp_kelvin, original.color_temp_kelvin); assert.equal(zone.azimuth_deg, original.azimuth_deg);
   }
   assert.equal(f.values.virtualAimHistoryRef.current, history); assert.deepEqual(copy(history), { undo: [{ authored: 'previous aim' }], redo: [] });
-  assert.ok(f.state.readout); assert.ok(f.state.projection.__directional.geometry);
+  assert.ok(f.state.readout); assert.ok(f.values.directionalProjectionRef.current.geometry);
+  assert.equal(f.values.virtualFixtureStatesRef.current.states.get(id).radials[0].brightness, patch.radials[0].brightness, 'remembered state follows the setter immediately');
+  assert.deepEqual(copy(f.values.virtualFixtureStatesRef.current.targets.get(id)), before.target);
   f.state.intervals[0].callback(); assert.equal(f.state.patches.length, 1, 'already flushed intent is not repeated');
   assert.deepEqual(f.state.calls, [['selected', f.ids[0]], ['fixture', f.ids[0]], ['open', true], ['show']],
     'painting admission only reuses the existing selection/reveal callback');
+  emit(f.window, 'keydown', { key: 'Escape' }); f.state.intervals[0].callback();
+  assert.equal(f.state.previewPublications, 1); assert.equal(f.values.virtualFixturePreviewDirtyRef.current, false);
+  const anchors = f.values.anchors; f.state.intervals[0].callback(); assert.equal(f.values.anchors, anchors, 'identical generic HUD anchors retain their state identity');
   f.dispose(); assert.equal(f.state.intervals[0].cleared, true);
 });
 
-test('pointerup flushes the final queued modeled level and releases only its owned capture', () => {
-  const f = fixture(); f.mountRadial(); queuePaint(f); emit(f.host, 'pointerup', f.point([1.1, 0]));
-  assert.equal(f.state.patches.length, 1); assert.equal(f.values.radialGestureOwnerRef.current, null);
+test('pointerup applies a different final modeled level synchronously and releases only its owned capture', () => {
+  const f = fixture(); f.mountRadial(); paintNow(f); emit(f.host, 'pointerup', f.point([1.3, 0]));
+  assert.equal(f.state.patches.length, 2); assert.equal(f.descriptors.get(f.ids[0]).state.radials[0].brightness, 1); assert.equal(f.values.radialGestureOwnerRef.current, null);
   assert.equal(f.host.captures.size, 0); assert.equal(f.values.virtualFixtureControlsOpen, true); f.dispose();
 });
 
@@ -353,18 +429,18 @@ for (const [name, cancel] of [
   ['wheel', f => emit(f.host, 'wheel')],
   ['owner cleanup', f => f.dispose()],
   ['overlay Escape path', f => actual.install('handleApartmentEscape', f.context)()],
-]) test('actual radial owner drops unflushed intent and releases capture on ' + name, () => {
-  const f = fixture(), before = copy([...f.descriptors]); f.mountRadial(); queuePaint(f); cancel(f); f.flush();
+]) test('actual radial owner retains applied levels, stops later writes and releases capture on ' + name, () => {
+  const f = fixture(); f.mountRadial(); paintNow(f); const applied = copy([...f.descriptors]); cancel(f); f.checkOwner();
   assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.host.captures.size, 0);
-  assert.deepEqual(f.state.patches, []); assert.deepEqual(copy([...f.descriptors]), before);
+  assert.equal(f.state.patches.length, 1); assert.deepEqual(copy([...f.descriptors]), applied);
   assert.equal(f.values.virtualFixtureId, f.ids[0]); assert.equal(f.values.virtualFixtureControlsOpen, true); f.dispose();
 });
 
-test('cancel retains already applied modeled levels while dropping later queued values', () => {
-  const f = fixture(); f.mountRadial(); queuePaint(f); f.flush(); const applied = copy([...f.descriptors]);
-  emit(f.host, 'pointermove', f.point([0, 1.1])); assert.ok(f.values.radialGestureOwnerRef.current.pending);
-  emit(f.window, 'keydown', { key: 'Escape' }); f.flush();
-  assert.equal(f.state.patches.length, 1); assert.deepEqual(copy([...f.descriptors]), applied); f.dispose();
+test('cancel retains both earlier and latest synchronous modeled levels without any late write', () => {
+  const f = fixture(); f.mountRadial(); paintNow(f);
+  emit(f.host, 'pointermove', f.point([0, 1.1])); assert.equal(f.state.patches.length, 2); const applied = copy([...f.descriptors]);
+  emit(f.window, 'keydown', { key: 'Escape' }); f.checkOwner();
+  assert.equal(f.state.patches.length, 2); assert.deepEqual(copy([...f.descriptors]), applied); f.dispose();
 });
 
 for (const [name, retire] of [
@@ -394,9 +470,9 @@ for (const [name, retire] of [
   ['collision binding', f => { f.descriptors.get(f.ids[0]).binding.canonical_collision_digest = 'e'.repeat(64); }],
   ['preview provenance', f => { f.descriptors.get(f.ids[0]).truth_role = 'reported'; }],
   ['physical provenance', f => { f.descriptors.get(f.ids[0]).physical_commands = true; }],
-]) test('queued directional patch cannot cross retired ' + name, () => {
-  const f = fixture(); f.mountRadial(); queuePaint(f); retire(f); f.flush();
-  assert.deepEqual(f.state.patches, []); assert.equal(f.values.radialGestureOwnerRef.current, null);
+]) test('a later directional input cannot cross retired ' + name, () => {
+  const f = fixture(); f.mountRadial(); paintNow(f); retire(f); f.checkOwner();
+  assert.equal(f.state.patches.length, 1); assert.equal(f.values.radialGestureOwnerRef.current, null);
   assert.equal(f.host.captures.size, 0); f.dispose();
 });
 
@@ -409,7 +485,7 @@ test('native capture failure cancels without output or a stranded owner', () => 
 test('a different pointer cannot move or release the captured radial gesture', () => {
   const f = fixture(); f.mountRadial(); emit(f.canvas, 'pointerdown', f.point()); const owner = f.values.radialGestureOwnerRef.current;
   emit(f.host, 'pointermove', { ...f.point([1.1, 0]), pointerId: 2 }); emit(f.host, 'pointerup', { ...f.point([1.1, 0]), pointerId: 2 });
-  assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(owner.pending, null); assert.deepEqual(f.state.patches, []); f.dispose();
+  assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(owner.lastPatch, null); assert.deepEqual(f.state.patches, []); f.dispose();
 });
 
 test('Zones leaves empty canvas input to the existing orbit owner', () => {
@@ -459,6 +535,7 @@ test('Spot routes fixture input to the actual existing direct-aim controller', (
 test('A/Z uses the actual mode callback and changes the matching inspector tab', () => {
   const f = fixture({ mode: 'spot' }); f.mountKeyboard(); const zones = emit(f.host, 'keydown', { key: 'z' });
   assert.equal(zones.defaultPrevented, true); assert.deepEqual(f.state.calls, [['mode', 'zones'], ['tab', 'light']]);
+  assert.equal(f.values.directionalViewRef.current.getSnapshot().mode, 'zones', 'pill selection publishes before another renderer frame');
   f.state.calls.length = 0; const spot = emit(f.host, 'keydown', { key: 'a' });
   assert.equal(spot.defaultPrevented, true); assert.deepEqual(f.state.calls, [['mode', 'spot'], ['tab', 'aim']]); f.dispose();
 });
@@ -479,7 +556,7 @@ for (const modifier of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey', 'defaultPrev
 });
 
 test('an active radial owner retains keyboard mode ownership until cancellation', () => {
-  const f = fixture(); f.mountRadial(); f.mountKeyboard(); queuePaint(f); emit(f.host, 'keydown', { key: 'a' });
+  const f = fixture(); f.mountRadial(); f.mountKeyboard(); paintNow(f); emit(f.host, 'keydown', { key: 'a' });
   assert.equal(f.values.fixtureInteractionModeRef.current, 'zones');
   assert.deepEqual(f.state.calls, [['selected', f.ids[0]], ['fixture', f.ids[0]], ['open', true], ['show']],
     'the key adds no mode/tab calls to the existing selection/reveal admission'); f.dispose();
@@ -489,9 +566,9 @@ for (const [name, change] of [
   ['default-prevented Escape', event => { event.defaultPrevented = true; }],
   ['child modal', (_, f) => { f.window.HomeOverlay.topKey = () => 'authored-child-modal'; }],
 ]) test('radial Escape preserves ' + name + ' ownership', () => {
-  const f = fixture(); f.mountRadial(); queuePaint(f); const owner = f.values.radialGestureOwnerRef.current, detail = { key: 'Escape' };
+  const f = fixture(); f.mountRadial(); paintNow(f); const owner = f.values.radialGestureOwnerRef.current, detail = { key: 'Escape' };
   change(detail, f); emit(f.window, 'keydown', detail);
-  assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(f.state.patches.length, 0); f.dispose();
+  assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(f.state.patches.length, 1); f.dispose();
 });
 
 test('immediate display state withdraws directional admission before the overlay effect updates readback', () => {
@@ -533,6 +610,7 @@ for (const [tab, mode] of [['light', 'zones'], ['aim', 'spot']]) {
     const f = fixture({ mode: mode === 'zones' ? 'spot' : 'zones' });
     actual.evaluate(actual.prop('AptUnifiedVirtualInspector', 'onTabChange'), f.context)(tab);
     assert.equal(f.values.virtualInspectorTab, tab); assert.equal(f.values.fixtureInteractionModeRef.current, mode);
+    assert.equal(f.values.directionalViewRef.current.getSnapshot().mode, mode, 'mode control does not wait for the next renderer frame');
     assert.deepEqual(f.state.patches, []); f.dispose();
   });
 }
@@ -544,10 +622,10 @@ test('the inspector Setup tab preserves the selected room tool', () => {
 });
 
 test('tab navigation cannot switch tools underneath an active radial owner', () => {
-  const f = fixture(); f.mountRadial(); queuePaint(f); const owner = f.values.radialGestureOwnerRef.current;
+  const f = fixture(); f.mountRadial(); paintNow(f); const owner = f.values.radialGestureOwnerRef.current;
   actual.evaluate(actual.prop('AptUnifiedVirtualInspector', 'onTabChange'), f.context)('aim');
   assert.equal(f.values.fixtureInteractionModeRef.current, 'zones'); assert.equal(f.values.virtualInspectorTab, 'light');
-  assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.deepEqual(f.state.patches, []); f.dispose();
+  assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(f.state.patches.length, 1); f.dispose();
 });
 
 test('a newly admitted equipment binding resets the inspector and tool together', () => {
@@ -563,8 +641,7 @@ test('readmitting the same equipment binding preserves its inspector and tool ch
   assert.equal(f.values.virtualAimHistoryRef.current, history); assert.deepEqual(f.state.patches, []); f.dispose();
 });
 
-function renderComposer(f, projection = f.values.directionalProjectionRef.current) {
-  f.context.anchors = { __directional: projection }; f.context.radialReadout = f.state.readout;
+function renderComposer(f) {
   f.context.window.AptDirectionalComposer = function AuthoredComposerElement() {};
   f.context.React = { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }) };
   f.context.ReactDOM = { createPortal: (element, host) => ({ element, host }) };
@@ -615,29 +692,32 @@ test('actual createRig ambient settling preserves painting against the same comm
   assert.notDeepEqual(f.engine.camera.matrixWorldInverse.toArray(), downMatrix, 'ambient motion genuinely continues during the gesture');
   emit(f.host, 'pointermove', f.point([1.1, 0], committed));
   assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(owner.projection, committed);
-  assert.ok(owner.pending?.radials.length); f.flush(); assert.equal(f.state.patches.length, 1); f.dispose();
+  assert.ok(owner.lastPatch); assert.equal(f.state.patches.length, 1); f.dispose();
 });
 
-test('the HUD cannot publish an undrawn frame; the actual layout commit advances active painting', () => {
-  const f = realRigFixture(); f.mountRadial(); f.mountTimer(); queuePaint(f);
+test('the HUD cannot publish an undrawn plane; real presentation drawing advances the exact plane used by input', () => {
+  const f = realRigFixture(); f.mountRadial(); f.mountTimer(); paintNow(f);
   const owner = f.values.radialGestureOwnerRef.current, drawn = owner.projection;
   for (let frame = 0; frame < 6; frame++) f.step();
-  f.state.intervals[0].callback(); const pendingRender = f.state.projection.__directional;
-  assert.ok(pendingRender); assert.notEqual(pendingRender, drawn);
-  assert.equal(f.values.directionalProjectionRef.current, drawn, 'the timer has not claimed React committed its geometry');
+  f.state.intervals[0].callback();
+  assert.equal(f.state.projection.__directional, undefined);
+  assert.equal(f.values.directionalProjectionRef.current, drawn, 'the generic HUD never claims a drawing commit');
   assert.equal(owner.projection, drawn);
-  const rendered = renderComposer(f, pendingRender); assert.ok(rendered);
-  assert.equal(rendered.element.props.projection, pendingRender.frame, 'the real portal consumes the pending render geometry');
-  f.commit(f.state.projection); assert.equal(f.values.directionalProjectionRef.current, pendingRender);
+  const pendingRender = f.refresh(); assert.ok(pendingRender); assert.notEqual(pendingRender, drawn);
+  const rendered = renderComposer(f); assert.ok(rendered);
+  assert.equal(rendered.element.props.view, f.values.directionalViewRef.current, 'the portal consumes the admitted presentation owner');
+  assert.equal(f.values.directionalProjectionRef.current, pendingRender);
+  const hitPath = f.elements.root.querySelector('[data-apt-radial-number="1"]');
+  assert.equal(hitPath.getAttribute('d'), pendingRender.geometry.zones[0].path, 'native paths precede published plane ownership');
   emit(f.host, 'pointermove', f.point([1.1, 0], pendingRender));
   assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(owner.projection, pendingRender);
   assert.ok(Math.abs(owner.gesture.readback().radius - 1.1) < 1e-8, 'input inverts the frame actually committed'); f.dispose();
 });
 
-test('actual createRig navigation retires pending paint while ambient drift alone does not', () => {
-  const f = realRigFixture(); f.mountRadial(); queuePaint(f);
-  f.rig.stepAzimuth(1, 0); f.step(); f.flush();
-  assert.equal(f.values.radialGestureOwnerRef.current, null); assert.deepEqual(f.state.patches, []);
+test('actual createRig navigation retires later paint while preserving previously applied levels', () => {
+  const f = realRigFixture(); f.mountRadial(); paintNow(f);
+  f.rig.stepAzimuth(1, 0); f.step(); f.checkOwner();
+  assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.state.patches.length, 1);
   assert.equal(f.host.captures.size, 0); f.dispose();
 });
 
@@ -649,60 +729,67 @@ test('an actual rig navigation tween withdraws the drawing and cannot start pain
   assert.equal(f.values.radialGestureOwnerRef.current, null); assert.deepEqual(f.state.patches, []); f.dispose();
 });
 
-test('a null presentation is published by the actual layout effect and retires its owner', () => {
-  const f = fixture(); f.mountRadial(); queuePaint(f); f.commit({});
-  assert.equal(f.values.directionalProjectionRef.current, null); f.flush();
-  assert.equal(f.values.radialGestureOwnerRef.current, null); assert.deepEqual(f.state.patches, []); f.dispose();
+test('a failed real drawing withdraws its plane and the next input retires its owner without a late write', () => {
+  const f = fixture(); f.mountRadial(); paintNow(f); f.values.directionalProjectRef.current = () => null; f.refresh();
+  assert.equal(f.values.directionalProjectionRef.current, null); f.checkOwner();
+  assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.state.patches.length, 1); f.dispose();
 });
 
 test('the real composer receives active drag ownership through the actual portal', () => {
-  const f = fixture(); f.mountRadial(); queuePaint(f);
-  assert.equal(renderComposer(f).element.props.ownedGesture, true);
-  emit(f.window, 'keydown', { key: 'Escape' }); assert.equal(renderComposer(f).element.props.ownedGesture, false); f.dispose();
+  const f = fixture(); f.mountRadial(); paintNow(f);
+  assert.equal(renderComposer(f).element.props.view.getSnapshot().active, true);
+  emit(f.window, 'keydown', { key: 'Escape' }); assert.equal(renderComposer(f).element.props.view.getSnapshot().active, false); f.dispose();
 });
 
-test('the actual composer places its pill above the hub and hides it during owned dragging', () => {
+test('the actual composer attaches native hit paths/readout/pill to the admitted view and preserves visible drawing cues', () => {
   const source = fs.readFileSync(path.join(ROOT, 'app/src/home-apartment-cards.jsx'), 'utf8');
   const program = babel.transform(source, { parserOpts: { plugins: ['jsx'] }, ast: true, code: false }).ast.program;
-  const declarations = ['aptDirectionalTone', 'AptDirectionalComposer'].map(name => {
-    const nodes = program.body.filter(node => node.type === 'FunctionDeclaration' && node.id?.name === name);
-    assert.equal(nodes.length, 1); return source.slice(nodes[0].start, nodes[0].end);
-  });
-  const context = vm.createContext({ window: { HomeApartmentDirectional: Directional }, CARD_FONT_SANS: 'authored-sans', CARD_FONT_MONO: 'authored-mono',
-    React: { Fragment: 'fragment', useId: () => ':authored-composer:',
+  const declaration = program.body.find(node => node.type === 'FunctionDeclaration' && node.id?.name === 'AptDirectionalComposer'); assert.ok(declaration);
+  const effects = [], refs = [], modes = [], f = fixture();
+  const context = vm.createContext({ window: {}, CARD_FONT_SANS: 'authored-sans', CARD_FONT_MONO: 'authored-mono',
+    useRef: () => { const ref = { current: null }; refs.push(ref); return ref; },
+    React: { Fragment: 'fragment', useSyncExternalStore: (_, read) => read(), useLayoutEffect: callback => effects.push(callback),
       createElement: (type, props, ...children) => ({ type, props: { ...props, children: children.flat(Infinity) } }) } });
-  vm.runInContext(babel.transform(declarations.join('\n'), { presets: ['react'] }).code, context, { timeout: 1000 });
-  const f = fixture(), projection = f.values.directionalProjectionRef.current;
-  const props = { projection: projection.frame, descriptor: projection.descriptor, geometry: projection.geometry, mode: 'zones' };
-  const nodes = elementNodes(context.AptDirectionalComposer({ ...props, ownedGesture: false }));
-  const pill = nodes.find(node => node.props?.['aria-label'] === 'Room lighting tool'); assert.ok(pill);
-  const button = elementNodes(pill).find(node => node.type === 'button'); assert.ok(button);
-  const lowerEdge = pill.props.style.top + button.props.style.height + 2 * pill.props.style.padding + 2;
-  assert.ok(lowerEdge < projection.geometry.hub.y - 22, 'the source pill box clears the hub pickup region above it');
-  const activeNodes = elementNodes(context.AptDirectionalComposer({ ...props, ownedGesture: true, readout: { zone: 2, level: .5 } }));
-  assert.equal(activeNodes.some(node => node.props?.['aria-label'] === 'Room lighting tool'), false);
-  const gradients = nodes.filter(node => node.type === 'linearGradient'); assert.equal(gradients.length, 6);
-  for (const item of projection.geometry.zones) {
-    const gradient = gradients.find(node => node.props.id.endsWith('-zone-' + item.number)); assert.ok(gradient);
-    assert.equal(gradient.props.gradientUnits, 'userSpaceOnUse');
-    assert.deepEqual([gradient.props.x1, gradient.props.y1], [projection.geometry.hub.x, projection.geometry.hub.y]);
-    assert.deepEqual([gradient.props.x2, gradient.props.y2], [item.node.x, item.node.y]);
-    const stops = elementNodes(gradient).filter(node => node.type === 'stop').map(node => Number(node.props.stopOpacity));
-    assert.ok(stops.length >= 2 && stops.every((opacity, index) => index === 0 || opacity < stops[index - 1]));
-    assert.equal(stops.at(-1), 0, 'the projected lobe fades outward to transparent');
-    assert.equal(nodes.find(node => node.props?.['data-apt-radial-start'] === 'zone:' + item.number)?.props.fill, 'url(#' + gradient.props.id + ')');
+  vm.runInContext(babel.transform(source.slice(declaration.start, declaration.end), { presets: ['react'] }).code, context, { timeout: 1000 });
+  const view = f.values.directionalViewRef.current, tree = context.AptDirectionalComposer({ view, onMode: value => modes.push(value) });
+  const nodes = elementNodes(tree), pill = nodes.find(node => node.props?.['aria-label'] === 'Room lighting tool'); assert.ok(pill);
+  const buttons = elementNodes(pill).filter(node => node.type === 'button'); assert.equal(buttons.length, 2);
+  assert.deepEqual(buttons.map(node => node.props['aria-keyshortcuts']), ['Z', 'A']);
+  assert.deepEqual(buttons.map(node => node.props['aria-pressed']), [true, false]);
+  buttons[1].props.onClick(); assert.deepEqual(modes, ['spot']);
+  let stopped = 0; pill.props.onPointerDownCapture({ stopPropagation: () => stopped++ }); pill.props.onClick({ stopPropagation: () => stopped++ }); assert.equal(stopped, 2);
+  function mount(node, parent) {
+    if (!node || typeof node !== 'object') return;
+    const element = f.domDocument.createElement(node.type); parent.appendChild(element);
+    for (const [key, value] of Object.entries(node.props)) {
+      if (key === 'ref') value.current = element;
+      else if (key === 'hidden') element.hidden = value;
+      else if (key === 'style') Object.assign(element.style, value);
+      else if (key.startsWith('data-') || key.startsWith('aria-')) element.setAttribute(key, value);
+    }
+    node.props.children.forEach(child => mount(child, element));
   }
-  const white = activeNodes.filter(node => node.type === 'circle' && node.props.r === '5' && node.props.fill === '#fff');
-  assert.equal(white.length, 1); assert.equal(white[0].props.cx, projection.geometry.zones[1].node.x);
-  assert.equal(white[0].props.cy, projection.geometry.zones[1].node.y);
-  assert.equal(nodes.some(node => node.type === 'circle' && node.props.r === '5' && node.props.fill === '#fff'), false);
-  assert.ok(nodes.some(node => node.props?.['data-apt-radial-start'] === 'hub')); f.dispose();
+  mount(tree, f.host); const cleanups = effects.map(effect => effect());
+  assert.equal(refs.length, 3); assert.equal(refs[0].current.hidden, true, 'React does not publish a plane before drawing');
+  const projection = f.refresh(); assert.equal(refs[0].current.hidden, false);
+  assert.equal(refs[0].current.querySelectorAll('[data-apt-radial-number]').length, 6);
+  assert.equal(refs[0].current.querySelector('[data-apt-radial-hub="hit"]').getAttribute('data-apt-radial-start'), 'hub');
+  assert.match(refs[1].current.style.transform, new RegExp('translate3d\\(' + projection.geometry.hub.x + 'px,' + (projection.geometry.hub.y - 26) + 'px,0\\) translate\\(-50%,-100%\\)'));
+  assert.equal(refs[1].current.hidden, false);
+  view.pointer({ zone: 2, level: .5, x: 10, y: 10 }, true); f.refresh();
+  assert.equal(refs[1].current.hidden, true); assert.equal(refs[2].current.hidden, false); assert.match(refs[2].current.textContent, /Zone 2.*50%/);
+  const composer = f.presentationGroup.getObjectByName('apartment-directional-composer');
+  const fill = composer.getObjectByName('directional-polar-fill'); assert.equal(fill.geometry.index.count, 720);
+  assert.match(fill.material.fragmentShader, /pow\(1\.0-vT,1\.8\)/); assert.match(fill.material.fragmentShader, /smoothstep\(0\.8,1\.0,vT\)/);
+  const active = composer.getObjectByName('directional-zone-node-2'); assert.deepEqual(active.material.color.toArray(), [1, 1, 1]); assert.equal(active.scale.x, .17);
+  view.pointer(null, false); f.refresh(); assert.notDeepEqual(active.material.color.toArray(), [1, 1, 1]); assert.equal(refs[1].current.hidden, false);
+  for (const cleanup of cleanups) cleanup?.(); assert.equal(f.values.directionalProjectionRef.current, null); f.dispose();
 });
-
 function inspector() {
   const states = [], effectDeps = new Map(), effects = []; let cursor = 0;
   const element = (type, props, ...children) => ({ type, props: { ...(props || {}), children: children.flat(Infinity) } });
-  const context = vm.createContext({ window: {}, React: { createElement: element, Fragment: 'fragment' },
+  const context = vm.createContext({ window: {}, aptEmptySubscribe: () => () => {}, aptEmptySnapshot: () => null,
+    React: { createElement: element, Fragment: 'fragment', useSyncExternalStore: (_, snapshot) => snapshot() },
     useState(initial) { const index = cursor++; if (!Object.hasOwn(states, index)) states[index] = initial;
       return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }]; },
     useRef(initial) { const index = cursor++; if (!Object.hasOwn(states, index)) states[index] = { current: initial }; return states[index]; },
@@ -755,7 +842,10 @@ for (const selectedZone of [null, 3]) test('actual inspector ' + (selectedZone =
     f.engine.overlay.setVirtualFixtureState(f.ids[0], patch);
     props.fixture = copy(f.descriptors.get(f.ids[0])); props.fixtures = [props.fixture];
   };
-  const render = () => { const tree = component.render(props); component.flushEffects(); return elementNodes(tree); };
+  const render = () => { const tree = component.render(props); component.flushEffects(); const nodes = elementNodes(tree);
+    // The authored ring is a leaf boundary. Its native power element is passed
+    // by the actual inspector, and the real ring renders that element unchanged.
+    return [...nodes, ...nodes.flatMap(node => elementNodes(node.props?.power))]; };
   let nodes = render();
   if (selectedZone != null) {
     nodes.find(node => node.type === component.context.window.AptDirectionalRing).props.onZone(selectedZone); nodes = render();
@@ -775,14 +865,30 @@ for (const selectedZone of [null, 3]) test('actual inspector ' + (selectedZone =
   assert.deepEqual(copy(f.descriptors.get(f.ids[0])), before); f.dispose();
 });
 
-test('actual inspector ring selection narrows the same native fallback controls to one existing zone', () => {
+test('actual inspector ring selection narrows the native brightness range to one existing zone', () => {
   const f = fixture(), component = inspector(), patches = [], props = inspectorProps(f, patches);
   component.context.window.AptDirectionalRing = function AuthoredRingElement() {};
   const first = elementNodes(component.render(props)), ring = first.find(node => node.type === component.context.window.AptDirectionalRing);
   assert.ok(ring); ring.props.onZone(3);
-  const next = elementNodes(component.render(props)); next.find(node => node.type === 'button' && elementText(node) === '50%').props.onClick();
+  const next = elementNodes(component.render(props)); next.find(node => node.props?.ariaLabel === 'Radial brightness').props.onChange(50);
   assert.deepEqual(patches, [{ radials: [{ number: 3, on: true, brightness: .5 }] }]);
   assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
+for (const value of [0, 25, 50, 100]) test(`actual ${value}% quick preset clears a selected zone and changes all six radial levels only`, () => {
+  const f = fixture(), component = inspector(), props = inspectorProps(f, []), before = copy(f.descriptors.get(f.ids[0]));
+  const Ring = component.context.window.AptDirectionalRing = function AuthoredRingElement() {};
+  props.onPatch = patch => { f.engine.overlay.setVirtualFixtureState(f.ids[0], patch); props.fixture = copy(f.descriptors.get(f.ids[0])); props.fixtures = [props.fixture]; };
+  const render = () => { const nodes = elementNodes(component.render(props)); component.flushEffects(); return nodes; };
+  let nodes = render(); nodes.find(node => node.type === Ring).props.onZone(3); nodes = render();
+  assert.equal(nodes.find(node => node.type === Ring).props.zone, 3);
+  const label = value ? `${value}%` : 'Off'; nodes.find(node => node.type === 'button' && elementText(node) === label).props.onClick();
+  assert.deepEqual(f.state.patches, [{ id: f.ids[0], patch: { radials: before.state.radials.map(zone => ({ number: zone.number, on: value > 0, brightness: value / 100 })) } }]);
+  nodes = render(); assert.equal(nodes.find(node => node.type === Ring).props.zone, null);
+  assert.equal(nodes.find(node => node.type === 'button' && elementText(node) === label).props['aria-pressed'], true);
+  const after = copy(f.descriptors.get(f.ids[0]));
+  assert.deepEqual(after, { ...before, state: { ...before.state, radials: before.state.radials.map(zone => ({ ...zone, on: value > 0, brightness: value / 100 })) } });
+  f.dispose();
 });
 
 test('a fresh inspector hook instance retains Light and Zones for an old aim notice, but routes a new notice', () => {
@@ -809,4 +915,116 @@ test('changed non-aim notices preserve the inspector tab and tool choice', () =>
   component.render({ ...props, notice: 'Authored modeled channels updated.' }); component.flushEffects();
   assert.equal(f.values.virtualInspectorTab, 'light'); assert.equal(f.values.fixtureInteractionModeRef.current, 'zones');
   assert.deepEqual(f.state.calls, []); assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
+// These execute the actual async parent effect. Its engine/module boundaries
+// are controlled adapters; real engine pause/import/frame behavior is covered
+// separately by test-apartment-ui-overlay-bridge.mjs. No scheduler is created.
+const settlePromises = async () => { for (let turn = 0; turn < 10; turn++) await Promise.resolve(); };
+
+test('the actual async presentation effect creates one lease but publishes no plane before attached real drawing', async () => {
+  const f = fixture(); f.mountPresentation();
+  assert.equal(f.values.directionalViewRef.current, null); assert.equal(f.values.directionalProjectionRef.current, null);
+  await settlePromises();
+  const view = f.values.directionalViewRef.current; assert.ok(view); assert.equal(f.values.directionalView, view);
+  assert.equal(f.state.layerRequests.length, 1); assert.equal(f.layers.size, 1);
+  assert.equal(f.values.directionalProjectionRef.current, null);
+  f.frame(); assert.equal(f.values.directionalProjectionRef.current, null, 'an unattached DOM cannot publish a plane');
+  const elements = f.attach(view); f.frame();
+  const drawn = f.values.directionalProjectionRef.current; assert.ok(drawn?.geometry);
+  assert.equal(elements.root.hidden, false); assert.equal(elements.root.querySelector('[data-apt-radial-number="1"]').getAttribute('d'), drawn.geometry.zones[0].path);
+  assert.deepEqual(f.state.patches, []); assert.equal(f.state.intervals.length, 0);
+  f.dispose(); assert.equal(f.layers.size, 0); assert.equal(f.listeners.get('running').size, 0); assert.equal(f.domDocument.listeners.get('visibilitychange').length, 0);
+});
+
+test('actual pause retires the parent view/plane/capture synchronously and resume acquires a fresh lease', async () => {
+  const f = fixture(); f.mountPresentation(); await settlePromises();
+  const old = f.values.directionalViewRef.current, elements = f.attach(old); f.frame(); f.mountRadial(); paintNow(f);
+  const applied = copy([...f.descriptors]); f.emitRunning(false);
+  assert.equal(old.readback().disposed, true); assert.equal(f.values.directionalProjectionRef.current, null); assert.equal(f.values.directionalViewRef.current, null);
+  assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.host.captures.size, 0); assert.equal(elements.root.hidden, true);
+  assert.deepEqual(copy([...f.descriptors]), applied); assert.equal(f.state.patches.length, 1);
+  f.emitRunning(true); await settlePromises(); const next = f.values.directionalViewRef.current;
+  assert.ok(next); assert.notEqual(next, old); assert.equal(f.state.layerRequests.length, 2); assert.equal(f.layers.size, 1);
+  assert.equal(f.values.directionalProjectionRef.current, null); f.attach(next); f.frame(); assert.ok(f.values.directionalProjectionRef.current);
+  f.dispose(); assert.equal(next.readback().disposed, true);
+});
+
+test('actual visibility retirement clears the plane and visible resume recreates without another timer', async () => {
+  const f = fixture(); f.mountPresentation(); await settlePromises(); const old = f.values.directionalViewRef.current;
+  f.attach(old); f.frame(); f.domDocument.visibilityState = 'hidden'; emit(f.domDocument, 'visibilitychange');
+  assert.equal(old.readback().disposed, true); assert.equal(f.values.directionalViewRef.current, null); assert.equal(f.values.directionalProjectionRef.current, null);
+  await settlePromises(); assert.equal(f.state.layerRequests.length, 1);
+  f.domDocument.visibilityState = 'visible'; emit(f.domDocument, 'visibilitychange'); await settlePromises();
+  assert.ok(f.values.directionalViewRef.current); assert.notEqual(f.values.directionalViewRef.current, old); assert.equal(f.state.layerRequests.length, 2);
+  assert.equal(f.state.intervals.length, 0); assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
+test('a hidden initial parent refuses creation until its visibility producer admits the same owner', async () => {
+  const f = fixture(); f.domDocument.visibilityState = 'hidden'; f.mountPresentation(); await settlePromises();
+  assert.equal(f.state.layerRequests.length, 0); assert.equal(f.values.directionalViewRef.current, null);
+  f.domDocument.visibilityState = 'visible'; emit(f.domDocument, 'visibilitychange'); await settlePromises();
+  assert.equal(f.state.layerRequests.length, 1); assert.ok(f.values.directionalViewRef.current); f.dispose();
+});
+
+for (const [name, retire] of [
+  ['effect cleanup', f => f.dispose()],
+  ['workspace authority', f => { f.values.workspaceAuthorityRef.current.key = 'retired'; }],
+  ['visibility', f => { f.domDocument.visibilityState = 'hidden'; emit(f.domDocument, 'visibilitychange'); }],
+  ['selection', f => { f.values.virtualFixtureId = f.ids[1]; }],
+]) test('a pending module namespace cannot create presentation after ' + name, async () => {
+  const f = fixture(); let release;
+  f.window.Home3D.ready = new Promise(resolve => { release = resolve; });
+  f.mountPresentation(); retire(f); release({ loadDirectionalPresentation: async () => Presentation }); await settlePromises();
+  assert.equal(f.state.layerRequests.length, 0); assert.equal(f.values.directionalViewRef.current, null); assert.equal(f.values.directionalProjectionRef.current, null);
+  assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
+test('cleanup during the real helper import refuses the later module before acquiring a layer', async () => {
+  const f = fixture(); let release;
+  f.window.Home3D.ready = Promise.resolve({ loadDirectionalPresentation: () => new Promise(resolve => { release = resolve; }) });
+  f.mountPresentation(); await settlePromises(); assert.equal(typeof release, 'function'); f.dispose();
+  release(Presentation); await settlePromises(); assert.equal(f.state.layerRequests.length, 0); assert.equal(f.values.directionalViewRef.current, null);
+});
+
+test('an already requested late layer is disposed exactly once after owner cleanup without publishing its view', async () => {
+  const f = fixture(); let release, options, disposals = 0;
+  f.engine.createUiOverlayLayer = value => { options = value; return new Promise(resolve => { release = resolve; }); };
+  f.mountPresentation(); await settlePromises(); assert.equal(typeof release, 'function'); f.dispose(); assert.equal(options.signal.aborted, true);
+  release({ group: new THREE.Group(), dispose() { disposals++; options.onPresentationDispose(); } }); await settlePromises();
+  assert.equal(disposals, 1); assert.equal(f.values.directionalViewRef.current, null); assert.equal(f.values.directionalView, null); assert.equal(f.values.directionalProjectionRef.current, null);
+  assert.deepEqual(f.state.patches, []);
+});
+
+for (const [name, change] of [
+  ['null layer', f => { f.engine.createUiOverlayLayer = async () => null; }],
+  ['rejected import', f => { f.window.Home3D.ready = Promise.resolve({ loadDirectionalPresentation: async () => { throw Error('Authored import refusal'); } }); }],
+]) test('actual parent ' + name + ' leaves no view, drawing or dispatch', async () => {
+  const f = fixture(); change(f); f.mountPresentation(); await settlePromises();
+  assert.equal(f.values.directionalViewRef.current, null); assert.equal(f.values.directionalView, null); assert.equal(f.values.directionalProjectionRef.current, null);
+  assert.equal(f.layers.size, 0); assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
+test('the actual parent lease refuses a later authority mismatch before another drawing callback', async () => {
+  const f = fixture(); f.mountPresentation(); await settlePromises(); const view = f.values.directionalViewRef.current, elements = f.attach(view); f.frame();
+  f.values.workspaceAuthorityRef.current.key = 'retired'; f.frame();
+  assert.equal(view.readback().disposed, true); assert.equal(elements.root.hidden, true); assert.equal(f.values.directionalProjectionRef.current, null);
+  assert.equal(f.values.directionalViewRef.current, null); assert.equal(f.layers.size, 0); assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
+for (const [name, change] of [
+  ['generation', f => { f.descriptors.get(f.ids[0]).generation++; }],
+  ['binding', f => { f.document.binding.manifest_digest = 'e'.repeat(64); f.descriptors.get(f.ids[0]).binding.manifest_digest = 'e'.repeat(64); }],
+]) test('actual inspector uses the newly admitted channels instead of a same-ID old ' + name + ' view before effect cleanup', () => {
+  const f = fixture(), old = f.values.directionalViewRef.current; assert.equal(old.getSnapshot().descriptor.state.radials[0].brightness, .5);
+  change(f); f.descriptors.get(f.ids[0]).state.radials[0].brightness = .9;
+  assert.ok(f.context.getDirectionalSnapshot(f.ids[0], { drawing: false }));
+  f.context.directionalDisplay = actual.initializer('directionalDisplay', f.context);
+  const view = actual.evaluate(actual.prop('AptUnifiedVirtualInspector', 'directionalView'), f.context);
+  assert.equal(view, null, 'the actual inspector prop shares the full identity admission used by the portal');
+  assert.equal(old.readback().disposed, false, 'this regression is checked before passive cleanup');
+  const component = inspector(), props = { ...inspectorProps(f, []), directionalView: view };
+  const range = elementNodes(component.render(props)).find(node => node.props?.ariaLabel === 'Radial brightness'); assert.ok(range);
+  assert.ok(Math.abs(range.props.value - (.9 + .5 * 5) / 6 * 100) < 1e-8);
+  assert.equal(old.getSnapshot().descriptor.state.radials[0].brightness, .5); assert.deepEqual(f.state.patches, []); f.dispose();
 });

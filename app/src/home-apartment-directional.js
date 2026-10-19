@@ -101,7 +101,7 @@
     }).sort((a,b)=>a.number-b.number);
     return valid ? {hub,inner,outer,contour,zones:result} : null;
   }
-  const signedAngle = value => {const a=angle(value);return a>180?a-360:a;};
+  const signedAngle = value => {const a=angle(value);return a>=180?a-360:a;};
   // Match the authored integer-percent readout. Stored channel values are
   // never quantized until that particular zone is deliberately painted.
   function paintPatch({point,azimuth,radius,radials,innerRadius=.14,outerRadius=1.3}={}) {
@@ -160,6 +160,9 @@
           last={...hit,level:initial.level};return report();
         }
         engaged=true;
+        // The first deliberate entry adopts that zone. Interpolation starts
+        // with the next sweep, not across zones traversed during soft pickup.
+        last=hit;
       }
       const delta=signedAngle(hit.azimuth-last.azimuth),distance=Math.abs(delta);
       if(distance>0){
@@ -178,5 +181,27 @@
     }
     return Object.freeze({move,end,cancel,readback:()=>({active,engaged,status,pointerId,fixture_id:fixtureId,identity,...report()})});
   }
-  return Object.freeze({createPlaneFrame,radialSectorPaths,paintPatch,identityKey,createRadialGesture});
+  // Logical targets remain exact. This is drawing-only state, advanced by
+  // the admitted renderer frame; it owns no clock, output or inventory.
+  function createRadialDisplay(radials) {
+    const read=next=>{const zones=zonesFrom(next);return zones&&next.every(zone=>finite(zone.color_temp_kelvin)&&zone.color_temp_kelvin>0)
+      ?zones.map(zone=>({...zone,color_temp_kelvin:next.find(item=>item.number===zone.number).color_temp_kelvin})):null;};
+    const initial=read(radials);if(!initial)return null;
+    const opacity=zone=>zone.level>0?.25+zone.level/1.3:0;
+    let shown=initial.map(zone=>({...zone,brightness:zone.level,on:zone.level>0,display_opacity:opacity(zone)})),target=initial,lastTime=null;
+    function set(next){const zones=read(next);if(!zones||zones.some((zone,i)=>zone.number!==target[i].number||zone.azimuth_deg!==target[i].azimuth_deg))return false;target=zones;return true;}
+    function advance(nowMs,{reducedMotion=false}={}){
+      if(!finite(nowMs))return null;
+      const dt=lastTime===null?0:Math.max(0,(nowMs-lastTime)/1000);lastTime=Math.max(lastTime??nowMs,nowMs);
+      const a=reducedMotion?1:1-Math.exp(-dt/.16);let moving=false;
+      shown=shown.map((zone,i)=>{
+        const goal=target[i],step=(current,wanted,epsilon)=>{const d=wanted-current;if(reducedMotion||Math.abs(d)<=epsilon)return wanted;moving=true;return current+d*a;};
+        const brightness=step(zone.brightness,goal.level,.002),kelvin=step(zone.color_temp_kelvin,goal.color_temp_kelvin,2);
+        return {...zone,on:brightness>0,brightness,color_temp_kelvin:kelvin,display_opacity:step(zone.display_opacity,opacity(goal),.002)};
+      });
+      return {radials:shown.map(zone=>({...zone})),moving};
+    }
+    return Object.freeze({set,advance});
+  }
+  return Object.freeze({createPlaneFrame,radialSectorPaths,paintPatch,identityKey,createRadialGesture,createRadialDisplay});
 });

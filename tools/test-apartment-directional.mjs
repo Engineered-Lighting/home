@@ -170,3 +170,73 @@ test('orthographic projection with the actual Z-up root conversion is applied ex
  close(screen.x,(expected.x+1)*450);close(screen.y,(1-expected.y)*300);
  const back=frame.unproject(screen.x,screen.y);close(back[0],point[0]);close(back[1],point[1]);
 });
+
+test('logical paint and readback update immediately while drawing follows the 160 ms time constant',()=>{
+ const source=snapshot(),display=D.createRadialDisplay(source.state.radials);display.advance(0);
+ const gesture=D.createRadialGesture({snapshot:source,pointerId:1,point:[.2,0],startable:true});
+ const result=gesture.move({snapshot:source,pointerId:1,point:[1.3,0]});
+ assert.equal(result.level,1);assert.equal(gesture.readback().level,1);
+ assert.deepEqual(result.patch,{radials:[{number:1,on:true,brightness:1}]});
+ const target=radials();target[0].brightness=1;assert.equal(display.set(target),true);
+ const first=display.advance(0);assert.equal(first.radials[0].brightness,.5);assert.equal(first.moving,true);
+ const eased=display.advance(160);close(eased.radials[0].brightness,.5+.5*(1-Math.exp(-1)));
+ assert.equal(gesture.readback().level,1);assert.equal(target[0].brightness,1);assert.equal(source.state.radials[0].brightness,.5);
+});
+
+test('drawing uses elapsed wall time through a slow frame instead of adding an artificial 100 ms lag cap',()=>{
+ const display=D.createRadialDisplay(radials());display.advance(0);const target=radials();target[0].brightness=1;display.set(target);
+ close(display.advance(500).radials[0].brightness,.5+.5*(1-Math.exp(-.5/.16)));
+});
+
+test('retargeting drawing begins at its current eased level rather than jumping to either target',()=>{
+ const display=D.createRadialDisplay(radials());display.advance(0);const up=radials();up[0].brightness=1;display.set(up);
+ const current=display.advance(160).radials[0].brightness,down=radials();down[0].brightness=.2;
+ assert.equal(display.set(down),true);close(display.advance(160).radials[0].brightness,current);
+ close(display.advance(320).radials[0].brightness,current+(.2-current)*(1-Math.exp(-1)));
+});
+
+test('reduced motion snaps only the drawing to exact current targets without waiting for another frame interval',()=>{
+ const input=radials(),display=D.createRadialDisplay(input);display.advance(10);const target=radials();
+ target[0].on=false;target[0].brightness=.8;target[1].brightness=.9;target[1].color_temp_kelvin=4200;display.set(target);
+ const shown=display.advance(10,{reducedMotion:true});assert.equal(shown.radials[0].brightness,0);assert.equal(shown.radials[0].display_opacity,0);
+ assert.equal(shown.radials[1].brightness,.9);assert.equal(shown.radials[1].color_temp_kelvin,4200);assert.equal(shown.moving,false);
+ assert.equal(target[0].brightness,.8);assert.equal(target[0].on,false);assert.deepEqual(input,radials());
+});
+
+test('power Off eases level and opacity to zero while the remembered modeled brightness stays intact',()=>{
+ const target=radials(),display=D.createRadialDisplay(target);const initial=display.advance(0).radials[0];
+ target[0].on=false;assert.equal(display.set(target),true);const fading=display.advance(160).radials[0];
+ close(fading.brightness,.5*Math.exp(-1));close(fading.display_opacity,initial.display_opacity*Math.exp(-1));
+ assert.ok(fading.brightness>0&&fading.brightness<.5);assert.equal(target[0].brightness,.5);assert.equal(target[0].on,false);
+ display.advance(2000);const settled=display.advance(2001).radials[0];assert.equal(settled.brightness,0);assert.equal(settled.display_opacity,0);assert.equal(settled.on,false);
+});
+
+test('display targets and frames are owned copies and direction changes cannot replace an existing presentation',()=>{
+ const input=radials(),display=D.createRadialDisplay(input),source=snapshot(),identity=D.identityKey(source);display.advance(0);
+ const target=radials();target[0].brightness=.9;assert.equal(display.set(target),true);target[0].brightness=.1;
+ const frame=display.advance(160);close(frame.radials[0].brightness,.5+.4*(1-Math.exp(-1)));frame.radials[0].brightness=0;
+ const reordered=radials().reverse();reordered.find(zone=>zone.number===1).brightness=.9;
+ assert.equal(display.set(reordered),true);const drift=radials();drift[0].azimuth_deg+=5;assert.equal(display.set(drift),false);
+ close(display.advance(160).radials[0].brightness,.5+.4*(1-Math.exp(-1)));
+ source.state.radials[0].brightness=.9;source.state.radials[1].on=false;assert.equal(D.identityKey(source),identity);assert.deepEqual(input,radials());
+});
+
+test('display refuses malformed targets without replacing the admitted target or inventing a temperature',()=>{
+ assert.equal(D.createRadialDisplay(radials().slice(1)),null);const malformed=radials();delete malformed[0].color_temp_kelvin;
+ assert.equal(D.createRadialDisplay(malformed),null);const display=D.createRadialDisplay(radials());display.advance(0);
+ assert.equal(display.set(malformed),false);assert.equal(display.advance(NaN),null);assert.deepEqual(display.advance(160).radials.map(zone=>zone.brightness),Array(6).fill(.5));
+});
+
+test('first pickup into a different zone adopts only that zone before later sweeps interpolate',()=>{
+ const source=snapshot(),gesture=D.createRadialGesture({snapshot:source,pointerId:1,point:[.2,0],startable:true});
+ const first=gesture.move({snapshot:source,pointerId:1,point:polar(120,.43)});
+ assert.equal(first.engaged,true);assert.deepEqual(first.patch,{radials:[{number:3,on:true,brightness:.25}]});
+ const next=gesture.move({snapshot:source,pointerId:1,point:polar(240,1.01)});
+ assert.deepEqual(next.patch,{radials:[{number:3,on:true,brightness:.25},{number:4,on:true,brightness:.5},{number:5,on:true,brightness:.75}]});
+});
+
+test('an exact half-turn sweep takes the prototype negative-direction tie without painting the opposite arc',()=>{
+ const source=snapshot(),gesture=D.createRadialGesture({snapshot:source,pointerId:1,point:[.2,0],startable:true});
+ gesture.move({snapshot:source,pointerId:1,point:[1.3,0]});const result=gesture.move({snapshot:source,pointerId:1,point:polar(180,.14)});
+ assert.deepEqual(result.patch,{radials:[{number:1,on:true,brightness:1},{number:4,on:false,brightness:0},{number:5,on:true,brightness:.33},{number:6,on:true,brightness:.67}]});
+});

@@ -320,125 +320,114 @@ function AptNamedAimList({ targets = [], onEdit, disabledReason = "" }) {
 
 // Temperature is a display cue, not a prediction of the room's measured color.
 function aptDirectionalTone(kelvin) {
-  const mix = Number.isFinite(kelvin) ? Math.max(0, Math.min(1, (kelvin - 2200) / 2800)) : .3;
-  return `rgb(255, ${Math.round(193 + mix * 57)}, ${Math.round(120 + mix * 126)})`;
+  const t = Math.max(1000, Math.min(12000, Number.isFinite(kelvin) ? kelvin : 2700)) / 100;
+  const r = t <= 66 ? 255 : 329.7 * Math.pow(t - 60, -.1332);
+  const g = t <= 66 ? 99.47 * Math.log(t) - 161.12 : 288.12 * Math.pow(t - 60, -.0755);
+  const b = t <= 19 ? 0 : t <= 66 ? 138.52 * Math.log(t - 10) - 305.04 : 255;
+  return `rgb(${[r, g, b].map(value => Math.round(Math.max(0, Math.min(255, value)))).join(",")})`;
 }
 
-function AptDirectionalRing({ radials = [], zone = null, onZone, onShow }) {
-  const frame = { project: ([x, y]) => ({ x: 100 + x * 72, y: 100 - y * 72, visible: true }) };
-  const geometry = window.HomeApartmentDirectional?.radialSectorPaths?.({ radials, frame, innerRadius: .47, outerRadius: 1 });
-  const selected = zone == null ? radials : radials.filter(item => item.number === zone);
-  const level = selected.length ? selected.reduce((sum, item) => sum + (item.on ? item.brightness : 0), 0) / selected.length : 0;
+function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, power }) {
+  const planRef = useRef(null);
+  const zones = [...radials].sort((a, b) => a.number - b.number);
+  const available = zones.length === 6 && zones.every((item, index) => item.number === index + 1 && Number.isFinite(item.azimuth_deg));
+  React.useLayoutEffect(() => {
+    if (view && planRef.current) return view.attachPlan(planRef.current);
+  }, [view, available]);
+  const selected = zone == null ? zones : zones.filter(item => item.number === zone);
+  const level = selected.length ? selected.reduce((sum, item) => sum + item.brightness, 0) / selected.length : 0;
+  const sector = azimuth => {
+    const start = (-azimuth - 28) * Math.PI / 180, end = (-azimuth + 28) * Math.PI / 180;
+    const point = (radius, angle) => `${59 + radius * Math.cos(angle)} ${59 + radius * Math.sin(angle)}`;
+    return `M${point(55, start)} A55 55 0 0 1 ${point(55, end)} L${point(32, end)} A32 32 0 0 0 ${point(32, start)} Z`;
+  };
   const activate = number => onZone?.(number === zone ? null : number);
   const keyActivate = (event, number) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault(); if (!event.repeat) activate(number);
     }
   };
-  return <div className="apt-directional-ring" data-aim-ignore="true" style={{ width: "100%", fontFamily: CARD_FONT_SANS }}>
-    {geometry ? <svg viewBox="0 0 200 200" role="group" aria-label="Radial zones"
-      style={{ display: "block", width: 208, maxWidth: "100%", height: "auto", margin: "0 auto", overflow: "visible" }}>
-      <path d={geometry.outer} fill="none" stroke="var(--hg-border)" strokeDasharray="2 5" pointerEvents="none" />
-      <path d={geometry.inner} fill="var(--hg-bg-2)" stroke="var(--hg-border-soft)" pointerEvents="none" />
-      {geometry.zones.map(item => {
-        const state = radials.find(radial => radial.number === item.number);
-        return <g key={item.number} role="button" tabIndex={0} className="hg-focusable"
+  return <div className="apt-directional-ring" data-aim-ignore="true" style={{ display: "grid", gridTemplateColumns: "118px minmax(0,1fr)", gap: 14, alignItems: "center", fontFamily: CARD_FONT_SANS }}>
+    <style>{`.apt-directional-ring .radial-sector:focus-visible{outline:none;stroke:var(--hg-blue);stroke-width:2}`}</style>
+    {available ? <svg ref={planRef} viewBox="0 0 118 118" role="group" aria-label="Radial zones" style={{ display: "block", width: 118, height: 118 }}>
+      {zones.map(item => <path key={`base-${item.number}`} d={sector(item.azimuth_deg)} fill="var(--apt-fill-2)" pointerEvents="none" />)}
+      {zones.map(item => <path key={item.number} role="button" tabIndex={0} className="radial-sector"
           aria-label={`Radial zone ${item.number}`} aria-pressed={zone === item.number}
-          onClick={() => activate(item.number)} onKeyDown={event => keyActivate(event, item.number)} style={{ cursor: "pointer" }}>
-          <title>{`Zone ${item.number}: ${item.level > 0 ? `${Math.round(item.level * 100)}%` : "Off"}, ${state.color_temp_kelvin} kelvin`}</title>
-          <path d={item.path} fill={aptDirectionalTone(state.color_temp_kelvin)} fillOpacity={.12 + item.level * .58}
-            stroke={zone === item.number ? "var(--hg-fg-0)" : "var(--hg-border)"} strokeWidth={zone === item.number ? 2 : 1} />
-          <circle cx={item.tick.x} cy={item.tick.y} r="22" fill="transparent" pointerEvents="all" />
-          <circle cx={item.tick.x} cy={item.tick.y} r="14" fill="var(--hg-bg-1)"
-            stroke={zone === item.number ? "var(--hg-fg-0)" : "var(--hg-border)"} strokeWidth={zone === item.number ? 2 : 1} pointerEvents="none" />
-          <text x={item.tick.x} y={item.tick.y + 4} textAnchor="middle" fill="var(--hg-fg-0)"
-            style={{ fontFamily: CARD_FONT_MONO, fontSize: 12 }} pointerEvents="none">{item.number}</text>
-        </g>;
-      })}
+          data-apt-radial-plan-zone={item.number} d={sector(item.azimuth_deg)}
+          fill={view ? "var(--apt-warm)" : item.on && item.brightness > 0 ? aptDirectionalTone(item.color_temp_kelvin) : "var(--apt-fill-2)"}
+          fillOpacity={view ? 0 : item.on && item.brightness > 0 ? .25 + item.brightness / 1.3 : 1}
+          stroke={zone === item.number ? "var(--hg-ice)" : "var(--hg-bg-1)"} strokeWidth="2"
+          onClick={() => activate(item.number)} onKeyDown={event => keyActivate(event, item.number)} style={{ cursor: "pointer" }} />)}
       <g role="button" tabIndex={0} className="hg-focusable" aria-label="All radial zones" aria-pressed={zone == null}
         onClick={() => onZone?.(null)} onKeyDown={event => {
           if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (!event.repeat) onZone?.(null); }
         }} style={{ cursor: "pointer" }}>
-        <circle cx="100" cy="100" r="31" fill="var(--hg-bg-1)" stroke={zone == null ? "var(--hg-fg-3)" : "var(--hg-border-soft)"} />
-        <text x="100" y="100" textAnchor="middle" fill="var(--hg-fg-0)" style={{ fontFamily: CARD_FONT_SANS, fontSize: 20, fontWeight: 550 }} pointerEvents="none">
+        <circle cx="59" cy="59" r="31" fill="transparent" />
+        <text x="59" y="56" textAnchor="middle" fill="var(--hg-fg-0)" style={{ fontFamily: CARD_FONT_SANS, fontSize: 13, fontWeight: 560 }} pointerEvents="none">
           {Math.round(level * 100)}%</text>
-        <text x="100" y="116" textAnchor="middle" fill="var(--hg-fg-3)" style={{ fontFamily: CARD_FONT_SANS, fontSize: 10.5 }} pointerEvents="none">
-          {zone == null ? "All zones" : `Zone ${zone}`}</text>
+        <text x="59" y="71" textAnchor="middle" fill="var(--hg-fg-3)" style={{ fontFamily: CARD_FONT_SANS, fontSize: 10.5, fontWeight: 500 }} pointerEvents="none">
+          {zone == null ? "all zones" : `zone ${zone}`}</text>
       </g>
     </svg> : <p className="apt-ui-meta">Facing unavailable</p>}
-    <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", marginTop: 8 }}>
-      <p className="apt-ui-meta" style={{ margin: 0, fontSize: 11, lineHeight: 1.5 }}>Modeled orientation · not commissioned</p>
-      <button type="button" className="apt-ui-button is-small" disabled={!geometry || typeof onShow !== "function"}
+    <div style={{ display: "grid", gap: 4, minWidth: 0, justifyItems: "start" }}>
+      <div style={{ fontSize: 13, fontWeight: 540 }}>{zone == null ? "All zones" : `Zone ${zone}`}</div>
+      {power}
+      <p className="apt-ui-meta" title="Directions are modeled; facing is unavailable until radial heading commissioning."
+        style={{ margin: 0, lineHeight: 1.5 }}>Facing unverified. Drag outward to brighten, inward to dim.</p>
+      <button type="button" className="apt-ui-button is-small" disabled={!available || typeof onShow !== "function"}
         onClick={() => onShow?.()} style={{ minHeight: 44, flexShrink: 0 }}>Show in room</button>
     </div>
   </div>;
 }
 
-function AptDirectionalComposer({ projection, descriptor, geometry: projectedGeometry, mode = "zones", onMode, readout, ownedGesture = false }) {
-  const gradientId = React.useId();
-  const radials = descriptor?.state?.radials || [];
-  const geometry = projectedGeometry || window.HomeApartmentDirectional?.radialSectorPaths?.({ radials, frame: projection });
-  if (!geometry || geometry.hub?.visible !== true) return null;
-  const hub = geometry.hub;
-  const pillButton = (value, label) => <button type="button" className="hg-focusable" data-aim-ignore="true"
-    data-apt-directional-mode={value} aria-keyshortcuts={value === "zones" ? "Z" : "A"} aria-pressed={mode === value}
-    onPointerDownCapture={event => event.stopPropagation()} onClick={() => onMode?.(value)} style={{
-      height: 44, minHeight: 44, boxSizing: "border-box", minWidth: 62, padding: "7px 12px", border: 0, borderRadius: 22,
-      color: mode === value ? "var(--hg-bg-0)" : "var(--hg-fg-2)", background: mode === value ? "var(--hg-fg-0)" : "transparent",
-      fontFamily: CARD_FONT_SANS, fontSize: 12, fontWeight: 550, cursor: "pointer",
-    }}>{label}</button>;
-  return <div data-apt-directional-composer="1" style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 4 }}>
-    <svg aria-hidden="true" width="100%" height="100%" style={{ display: "block", overflow: "hidden", pointerEvents: "none" }}>
-      {mode === "zones" && <>
-        <defs>{geometry.zones.map(item => {
-          const state = radials.find(radial => radial.number === item.number), edge = item.node || item.tick;
-          return <linearGradient key={item.number} id={`${gradientId}-zone-${item.number}`} gradientUnits="userSpaceOnUse"
-            x1={hub.x} y1={hub.y} x2={edge.x} y2={edge.y}>
-            <stop offset="0" stopColor={aptDirectionalTone(state.color_temp_kelvin)} stopOpacity=".6" />
-            <stop offset=".55" stopColor={aptDirectionalTone(state.color_temp_kelvin)} stopOpacity=".3" />
-            <stop offset="1" stopColor={aptDirectionalTone(state.color_temp_kelvin)} stopOpacity="0" />
-          </linearGradient>;
-        })}</defs>
-        <path d={geometry.outer} fill="none" stroke="var(--hg-fg-3)" strokeOpacity=".5" strokeDasharray="2 7" />
-        {geometry.zones.map(item => {
-          const state = radials.find(radial => radial.number === item.number);
-          const tone = aptDirectionalTone(state.color_temp_kelvin), dx = item.tick.x - hub.x, dy = item.tick.y - hub.y;
-          const length = Math.hypot(dx, dy) || 1;
-          return <g key={item.number}>
-            <path d={item.path} fill={`url(#${gradientId}-zone-${item.number})`} fillOpacity={item.level > 0 ? .55 + item.level * .45 : .04}
-              stroke={tone} strokeOpacity={item.level > 0 ? .72 : .2} strokeWidth="1.2"
-              data-apt-radial-start={item.level > 0 ? `zone:${item.number}` : undefined}
-              style={{ pointerEvents: item.level > 0 ? "fill" : "none", cursor: item.level > 0 ? "crosshair" : undefined }} />
-            <line x1={item.tick.x - dx / length * 3} y1={item.tick.y - dy / length * 3}
-              x2={item.tick.x + dx / length * 3} y2={item.tick.y + dy / length * 3} stroke="var(--hg-fg-2)" strokeOpacity=".7" />
-            {item.node?.visible && <circle cx={item.node.x} cy={item.node.y} r="5"
-              fill={ownedGesture && readout?.zone === item.number ? "#fff" : tone}
-              stroke={ownedGesture && readout?.zone === item.number ? "rgba(20,20,20,.8)" : "var(--hg-bg-1)"} strokeWidth="1.5" />}
-          </g>;
-        })}
-        <path d={geometry.inner} fill="var(--hg-bg-1)" fillOpacity=".3" stroke="var(--hg-fg-2)" strokeOpacity=".55" />
-      </>}
-      <circle cx={hub.x} cy={hub.y} r="22" fill="transparent" data-apt-radial-start={mode === "zones" ? "hub" : undefined}
-        style={{ pointerEvents: mode === "zones" ? "all" : "none", cursor: mode === "zones" ? "crosshair" : undefined }} />
-      <circle cx={hub.x} cy={hub.y} r="7" fill="var(--hg-fg-0)" stroke="var(--hg-bg-1)" strokeWidth="2" />
+const aptDirectionalEmptySnapshot = Object.freeze({ descriptor: null, mode: "spot", active: false, readout: null });
+const aptDirectionalEmptySubscribe = () => () => {};
+
+function AptDirectionalComposer({ view, onMode }) {
+  const rootRef = useRef(null), pillRef = useRef(null), readoutRef = useRef(null);
+  const snapshot = React.useSyncExternalStore(view?.subscribe || aptDirectionalEmptySubscribe,
+    view?.getSnapshot || (() => aptDirectionalEmptySnapshot), view?.getSnapshot || (() => aptDirectionalEmptySnapshot));
+  React.useLayoutEffect(() => {
+    if (view && rootRef.current && pillRef.current && readoutRef.current)
+      return view.attach({ root: rootRef.current, pill: pillRef.current, readout: readoutRef.current });
+  }, [view]);
+  const descriptor = snapshot.descriptor;
+  if (!descriptor) return null;
+  const pillButton = (value, label, key) => <button type="button" className="hg-focusable"
+    data-apt-directional-mode={value} aria-keyshortcuts={key} aria-pressed={snapshot.mode === value}
+    title={value === "zones" ? "Drag around the light to set its radial zones (Z)" : "Drag the reticle to aim the spot (A)"}
+    onClick={() => onMode?.(value)}>{label}</button>;
+  return <div ref={rootRef} hidden data-apt-directional-composer="1"
+    style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 4 }}>
+    <style>{`
+      .apt-directional-hits [data-apt-radial-number],.apt-directional-hits [data-apt-radial-hub="hit"]{pointer-events:none}
+      .apt-directional-hits [data-apt-radial-number][data-apt-radial-start]{pointer-events:fill;cursor:crosshair}
+      .apt-directional-hits [data-apt-radial-hub="hit"][data-apt-radial-start]{pointer-events:all;cursor:crosshair}
+      .apt-directional-toolpill{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:rgba(8,9,11,.84);border:1px solid rgba(255,255,255,.16);font-size:12px;white-space:nowrap;z-index:5}
+      .apt-directional-toolpill[hidden]{display:none}
+      .apt-directional-toolpill .nm{padding:0 6px 0 8px;color:#A1A1A1;font-weight:560;font-size:11.5px;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+      .apt-directional-toolpill button{position:relative;height:24px;padding:0 11px;border-radius:999px;border:0;background:transparent;color:#C9C9C9;font:inherit;font-weight:520;cursor:pointer}
+      .apt-directional-toolpill button::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+      .apt-directional-toolpill button:hover{color:#fff}
+      .apt-directional-toolpill button[aria-pressed="true"]{background:rgba(255,255,255,.15);color:#fff}
+      @media(pointer:coarse){.apt-directional-toolpill button{height:36px}}
+    `}</style>
+    <svg className="apt-directional-hits" aria-hidden="true" width="100%" height="100%"
+      style={{ display: "block", overflow: "hidden", pointerEvents: "none" }}>
+      {[1, 2, 3, 4, 5, 6].map(number => <path key={number} data-apt-radial-number={number} fill="transparent" />)}
+      <circle data-apt-radial-hub="hit" r="22" fill="transparent" />
+      <circle data-apt-radial-hub="dot" r="7" fill="transparent" pointerEvents="none" />
     </svg>
-    <div style={{ position: "absolute", left: hub.x, top: hub.y - 65, transform: "translateX(-50%)", maxWidth: 240,
-      padding: "6px 10px", background: "var(--hg-bg-1)", border: "1px solid var(--hg-border-soft)", borderRadius: 7,
-      fontFamily: CARD_FONT_SANS, textAlign: "center", color: "var(--hg-fg-0)", boxShadow: "0 2px 12px rgba(0,0,0,.12)" }}>
-      <div style={{ fontSize: 12, fontWeight: 550, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{descriptor.label || descriptor.fixture_id}</div>
-      <div style={{ fontSize: 10.5, lineHeight: 1.5, marginTop: 2, color: "var(--hg-fg-3)", whiteSpace: "nowrap" }}>Modeled orientation · not commissioned</div>
+    <div ref={pillRef} hidden className="apt-directional-toolpill" role="group" aria-label="Room lighting tool" data-aim-ignore="true"
+      onPointerDownCapture={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
+      style={{ fontFamily: CARD_FONT_SANS }}>
+      <span className="nm">{descriptor.label || descriptor.fixture_id}</span>
+      {pillButton("zones", "Zones", "Z")}{pillButton("spot", "Spot", "A")}
     </div>
-    {!ownedGesture && <div role="group" aria-label="Room lighting tool" data-aim-ignore="true" style={{ position: "absolute", left: hub.x, top: hub.y - 124,
-      transform: "translateX(-50%)", display: "flex", gap: 2, padding: 3, borderRadius: 26, pointerEvents: "auto",
-      background: "var(--hg-bg-1)", border: "1px solid var(--hg-border)", boxShadow: "0 3px 14px rgba(0,0,0,.15)" }}>
-      {pillButton("zones", "Zones")}{pillButton("spot", "Spot")}
-    </div>}
-    {mode === "zones" && readout && <div role="status" aria-live="off" style={{ position: "absolute",
-      left: Number.isFinite(readout.x) ? readout.x + 14 : hub.x + 26, top: Number.isFinite(readout.y) ? readout.y - 36 : hub.y - 18,
-      padding: "6px 9px", borderRadius: 6, background: "var(--hg-bg-1)", border: "1px solid var(--hg-border)",
-      color: "var(--hg-fg-0)", fontFamily: CARD_FONT_MONO, fontSize: 11, whiteSpace: "nowrap" }}>
-      {readout.zone == null ? "All zones" : `Zone ${readout.zone}`} · {Number.isFinite(readout.level) ? `${Math.round(readout.level * 100)}%` : "Unavailable"}
-    </div>}
+    <div ref={readoutRef} hidden role="status" aria-live="off" data-aim-ignore="true"
+      style={{ position: "absolute", left: 0, top: 0, padding: "6px 9px", borderRadius: 6,
+        background: "rgba(8,9,11,.84)", border: "1px solid rgba(255,255,255,.16)", color: "#fff",
+        fontFamily: CARD_FONT_MONO, fontSize: 11, whiteSpace: "nowrap" }} />
   </div>;
 }
 

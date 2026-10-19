@@ -4,4 +4,4 @@ target: desktop
 type: added
 ---
 
-Adds a six-direction ambient composer at the selected fixture, with Zones/Spot controls and a keyboard-accessible ring for brightness and warmth. The composer uses the existing modeled channels and registered scene, preserves spotlight aim, and sends nothing to hardware.
+Adds a six-direction ambient composer at the selected fixture, with Zones/Spot controls and a compact keyboard-accessible ring for brightness and warmth. Dragging updates levels immediately while the continuous light shape and diffuser ease smoothly; existing modeled channels, registered fixtures and spotlight aim are preserved, and nothing is sent to hardware.

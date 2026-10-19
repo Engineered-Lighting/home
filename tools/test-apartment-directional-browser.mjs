@@ -64,9 +64,11 @@ test('real authored directional controls preserve native input, aim and output b
   const sources = publicSources(SRC), receipt = { schema: 'home-apartment-directional-authored-browser-1',
     authored_room: true, real_renderer: true, complete_home_shell: true, household_data: false, screenshots: false,
     source_mode: 'current-worktree-only', source_sha256: Object.fromEntries(['home-apartment.jsx', 'home-apartment-cards.jsx', 'home-apartment-directional.js', 'home-3d/engine.js',
+      'home-3d/apartment-directional-presentation.mjs', 'home-3d/apartment-ui-overlay-bridge.mjs',
+      'home-3d/equipment-virtual-fixtures.mjs', 'home-3d/markers.js',
       'home-3d/picking.js', 'home-3d/direct-aim-gesture.mjs'].map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
     physical_commands: 0, saves: 0, camera_sessions: 0, model_sessions: 0,
-    checks: [], stage_timings: [], action_timings: [], native_progress: [], modeled_progress: [],
+    checks: [], stage_timings: [], action_timings: [], native_progress: [], modeled_progress: [], keyboard_targets: [],
     requests: [], forbidden: [], blocked_read_subscriptions: [], missing_code: [], errors: [], served: {}, browser: browserOptions() };
   let server, handler, origin, browser, context, page, rawPage, timer;
   const started = performance.now(), elapsed = () => performance.now() - started;
@@ -170,8 +172,117 @@ test('real authored directional controls preserve native input, aim and output b
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
     await context.addInitScript(() => {
       localStorage.setItem('apartment3d.site', 'echo'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true;
+      // Source-grounded DOM observation only. Strict scopes, names and native
+      // roles avoid Playwright's multiple element-handle protocol turns; no
+      // application callback, click, key event or model setter is dispatched.
+      const hiddenForRole = node => {
+        for (let current = node; current; current = current.parentElement) {
+          if (current.getAttribute('aria-hidden')?.toLowerCase() === 'true') return true;
+        }
+        return false;
+      };
+      const visible = node => !!node?.isConnected && !hiddenForRole(node)
+        && [...node.getClientRects()].some(rect => Number.isFinite(rect.width) && Number.isFinite(rect.height) && rect.width > 0 && rect.height > 0)
+        && getComputedStyle(node).visibility === 'visible';
+      // These controls use an explicit aria-label or plain literal text.
+      // Reject other naming mechanisms instead of approximating the accessible
+      // name algorithm and silently accepting a different name from getByRole.
+      const supportedName = node => {
+        if (node.hasAttribute('aria-labelledby')) throw Error('unsupported authored aria-labelledby name');
+        const label = node.getAttribute('aria-label');
+        if (label != null) {
+          if (!label.trim()) throw Error('unsupported empty authored aria-label');
+          return label.trim().replace(/\s+/g, ' ');
+        }
+        if (node.localName === 'input') throw Error('authored inputs require an explicit aria-label');
+        for (const child of node.querySelectorAll('*')) {
+          if (child.hasAttribute('aria-label') || child.hasAttribute('aria-labelledby')) throw Error('unsupported descendant naming in authored control');
+          if (child.textContent.trim() && (!visible(child) || ['title', 'script', 'style'].includes(child.localName)))
+            throw Error('unsupported hidden text in authored control name');
+        }
+        return node.textContent.trim().replace(/\s+/g, ' ');
+      };
+      const scope = selector => { const nodes = document.querySelectorAll(selector);
+        if (nodes.length > 1) throw Error('ambiguous authored DOM scope: ' + selector); return nodes[0] || null; };
+      const query = spec => {
+        const root = scope(spec.scope); if (!root) return null;
+        if (hiddenForRole(root)) return null;
+        if (root.hasAttribute('aria-labelledby')) throw Error('unsupported authored scope naming');
+        const nodes = [...root.querySelectorAll(spec.selector)].filter(node =>
+          !hiddenForRole(node) && supportedName(node) === spec.name);
+        if (nodes.length > 1) throw Error('ambiguous authored DOM control: ' + spec.name);
+        const node = nodes[0]; if (!node) return null;
+        const role = node.getAttribute('role') || (node.localName === 'button' ? 'button' : node.localName === 'h2' ? 'heading'
+          : node.localName === 'input' && node.type === 'checkbox' ? 'checkbox' : node.localName === 'input' && node.type === 'range' ? 'slider' : null);
+        if (node.localName !== spec.tag || role !== spec.role || spec.type && node.type !== spec.type) throw Error('wrong authored control identity: ' + spec.name);
+        return node;
+      };
+      window.__directionalDOM = { visible, scope, query };
+      window.__directionalKeyTargets = [];
       window.__directionalNative = [];
+      // Observe the trusted input only. The actual producer wrapper below
+      // records its synchronous state/readout result before another frame.
+      window.addEventListener('pointermove', event => {
+        window.__directionalLastMoveEvent = event;
+        window.__directionalLastMove = { at: event.timeStamp, isTrusted: event.isTrusted,
+          x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+      }, true);
+      const drawing = () => {
+        const engine = window.__APT_ENGINE, scenes = [];
+        engine?.scene.traverse(node => { if (node.name === 'apartment-directional-composer') scenes.push(node); });
+        if (scenes.length !== 1) throw Error('expected one actual borrowed directional scene');
+        const scene = scenes[0], fill = scene.getObjectByName('directional-polar-fill'), edge = scene.getObjectByName('directional-polar-edge');
+        if (!fill?.isMesh || !edge?.isLine) throw Error('missing actual continuous directional drawing');
+        if (!window.__directionalDrawObservers) window.__directionalDrawObservers = new Map();
+        let witness = window.__directionalDrawObservers.get(fill.uuid);
+        if (!witness) {
+          witness = { calls: 0, scene: scene.uuid, fill: fill.uuid, last: null };
+          window.__directionalDrawObservers.set(fill.uuid, witness);
+          const original = fill.onAfterRender;
+          fill.onAfterRender = function (...args) {
+            witness.calls++; witness.last = { actual_renderer: args[0] === engine.renderer,
+              actual_scene: args[1] === engine.scene, actual_camera: args[2] === engine.camera,
+              frame: engine.renderer.info.render.frame, at: performance.now() };
+            return original.apply(this, args);
+          };
+        }
+        return { engine, scene, fill, edge, witness };
+      };
+      window.__directionalDrawing = drawing;
+      window.__directionalDrawingState = () => {
+        const { engine, scene, fill, edge, witness } = drawing();
+        const sprites = prefix => [1, 2, 3, 4, 5, 6].map(number => {
+          const node = scene.getObjectByName(prefix + number);
+          if (!node?.isSprite) throw Error('missing actual directional sprite ' + number);
+          return { number, uuid: node.uuid, color: node.material.color.toArray(), visible: node.visible,
+            opacity: node.material.opacity, scale: node.scale.toArray(), depthTest: node.material.depthTest, depthWrite: node.material.depthWrite };
+        });
+        return { scene: scene.uuid, visible: scene.visible, position: scene.position.toArray(),
+          borrowed_layer: scene.parent?.name, borrowed_root: scene.parent?.parent === engine.overlay.overlayRoot,
+          presentation_only: scene.userData.presentation_only === true,
+          fan: { mesh: fill.isMesh, vertices: fill.geometry.attributes.position.count,
+            colors: fill.geometry.attributes.zoneTint.count, edge_vertices: edge.geometry.attributes.position.count,
+            index: [...fill.geometry.index.array], t: [...fill.geometry.attributes.t.array],
+            vertex: fill.material.vertexShader, fragment: fill.material.fragmentShader,
+            transparent: fill.material.transparent, additive: fill.material.blending === 2,
+            depthTest: fill.material.depthTest, depthWrite: fill.material.depthWrite,
+            edge_depthTest: edge.material.depthTest, edge_depthWrite: edge.material.depthWrite },
+          nodes: sprites('directional-zone-node-'), ticks: sprites('directional-zone-tick-'),
+          guides: scene.children.filter(node => node.isLine && node !== edge).map(node => ({ uuid: node.uuid,
+            visible: node.visible, depthTest: node.material.depthTest, depthWrite: node.material.depthWrite })),
+          draw: structuredClone(witness), frame: engine.renderer.info.render.frame,
+          draw_calls: engine.renderer.info.render.calls };
+      };
       for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture', 'keydown', 'click', 'wheel']) window.addEventListener(type, event => {
+        const expected = window.__directionalExpectedKey;
+        if (type === 'keydown' && expected && event.key === expected.key) {
+          let current = false; try { current = query(expected.spec) === expected.node && scope(expected.spec.scope) === expected.scope; } catch {}
+          const value = { id: expected.id, key: event.key, isTrusted: event.isTrusted,
+            exact_target: current && event.target === expected.node && expected.node.isConnected,
+            site: window.__APT_ENGINE?.siteId };
+          window.__directionalKeyTargets.push(value); window.__directionalExpectedKey = null;
+          window.__directionalDiagnostic?.({ kind: 'keyboard-target', value }).catch(() => {});
+        }
         if (type === 'keydown' && event.key !== 'Escape') return;
         const engine = window.__APT_ENGINE;
         const control = event.target?.closest?.('.apt-home-setup') ? 'Setup' : event.target?.getAttribute?.('aria-label') || event.target?.closest?.('button')?.getAttribute('title');
@@ -209,56 +320,78 @@ test('real authored directional controls preserve native input, aim and output b
     await rawPage.exposeBinding('__directionalDiagnostic', (_source, event) => {
       if (event.kind === 'native') receipt.native_progress.push(event.value);
       else if (event.kind === 'modeled') receipt.modeled_progress.push(event.value);
+      else if (event.kind === 'keyboard-target') receipt.keyboard_targets.push(event.value);
       progress({ event: 'browser-' + event.kind, value: event.value });
     });
     page = observe(rawPage, 'page'); page.setDefaultTimeout(15000); page.on('pageerror', error => receipt.errors.push(error.message));
     await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 });
     const waitSite = async site => page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === site, site);
-    // Static controls need native activation, not a pointer-stability frame.
-    // Keep visible/enabled/focus admission explicit; moving room controls and
-    // every canvas gesture below retain their actual mouse path and samples.
-    const activateStatic = async (control, key = 'Enter') => {
-      await control.focus();
-      const admission = await control.evaluate(node => ({ focused: node.ownerDocument.activeElement === node,
-        visible: [...node.getClientRects()].some(rect => rect.width > 0 && rect.height > 0) && getComputedStyle(node).visibility === 'visible',
-        enabled: !node.matches(':disabled') && node.getAttribute('aria-disabled') !== 'true' }));
-      assert.deepEqual(admission, { focused: true, visible: true, enabled: true });
+    const INSPECTOR = '[data-victoria-virtual-fixtures="1"][aria-label="Fixture lighting inspector"]', COMPOSER = '[data-apt-directional-composer="1"]';
+    const HOME = '[role="group"][aria-label="Home"]', SHELL_TABS = '[role="tablist"][aria-label="Home panels"]';
+    const RING = INSPECTOR + ' [role="group"][aria-label="Radial zones"]', CHANNEL = INSPECTOR + ' [aria-label="Radial channel"]';
+    const LAYERS = '[role="dialog"][aria-label="Room layers"]', TOOLBAR = '[data-apt-edit-ui="toolbar"]';
+    const button = (scope, name, role = 'button') => ({ scope, selector: role === 'tab' ? 'button[role="tab"]' : 'button', name, tag: 'button', role, type: 'button' });
+    const input = (scope, name, type) => ({ scope, selector: 'input[type="' + type + '"]', name, tag: 'input', type, role: type === 'range' ? 'slider' : 'checkbox' });
+    const zoneButton = number => ({ scope: RING, selector: 'path[role="button"]', name: 'Radial zone ' + number, tag: 'path', role: 'button' });
+    const expectedKeys = [];
+    // Playwright's focusNode also uses DOM focus twice. Resolve, focus and
+    // admit the exact current control in one browser turn, then send the same
+    // real keyboard input outside evaluate. A trusted keydown independently
+    // witnesses that the admitted scope/node actually received that key.
+    const activateStatic = async (spec, key = 'Enter') => {
+      const id = expectedKeys.length + 1, eventKey = key === 'Space' ? ' ' : key;
+      const admission = await page.evaluate(({ spec, id, key }) => {
+        const dom = window.__directionalDOM, node = dom.query(spec), root = dom.scope(spec.scope);
+        if (!node) throw Error('missing authored control: ' + spec.name);
+        node.focus(); node.focus();
+        const current = node.isConnected && dom.query(spec) === node && dom.scope(spec.scope) === root;
+        window.__directionalExpectedKey = { id, key, node, scope: root, spec };
+        return { exact_identity: current, focused: document.activeElement === node, visible: dom.visible(node),
+          enabled: !node.matches(':disabled') && !node.closest('[aria-disabled="true"]'), inert: !!node.closest('[inert]'), site: window.__APT_ENGINE?.siteId };
+      }, { spec, id, key: eventKey });
+      const { site, ...conditions } = admission;
+      assert.deepEqual(conditions, { exact_identity: true, focused: true, visible: true, enabled: true, inert: false });
+      expectedKeys.push({ id, key: eventKey, site });
       await page.keyboard.press(key);
     };
-    const selectHome = async site => { await activateStatic(page.getByRole('group', { name: 'Home', exact: true })
-        .getByRole('button', { name: site === 'victoria' ? 'Victoria' : 'Echo Park', exact: true })); await waitSite(site); };
+    const selectHome = async site => { await activateStatic(button(HOME, site === 'victoria' ? 'Victoria' : 'Echo Park')); await waitSite(site); };
     const blur = () => page.evaluate(() => document.activeElement?.blur());
-    const inspector = () => page.locator('[data-victoria-virtual-fixtures="1"][aria-label="Fixture lighting inspector"]');
-    const composer = () => page.locator('[data-apt-directional-composer="1"]');
     const descriptor = id => page.evaluate(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), id);
     const inventory = () => page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback());
-    const selected = () => page.evaluate(() => {
-      const ids = []; window.__APT_ENGINE.overlay.virtualFixturesGroup.traverse(node => {
-        if (node.name === 'virtual-fixture-aim-handle' && node.visible) ids.push(node.userData.fixture_id);
-      }); return ids;
-    });
     const expectSelected = async fixture => {
-      await inspector().getByRole('heading', { name: fixture.label, exact: true }).waitFor();
-      await page.waitForFunction(id => {
-        let found = false; window.__APT_ENGINE.overlay.virtualFixturesGroup.traverse(node => {
-          if (node.name === 'virtual-fixture-aim-handle' && node.visible && node.userData.fixture_id === id) found = true;
-        }); return found;
-      }, fixture.fixture_id);
-      assert.deepEqual(await selected(), [fixture.fixture_id]);
+      await page.waitForFunction(({ fixture, scope }) => {
+        const dom = window.__directionalDOM, heading = dom.query({ scope, selector: 'h2', name: fixture.label, tag: 'h2', role: 'heading' });
+        const ids = []; window.__APT_ENGINE.overlay.virtualFixturesGroup.traverse(node => {
+          if (node.name === 'virtual-fixture-aim-handle' && node.visible) ids.push(node.userData.fixture_id);
+        });
+        return dom.visible(heading) && ids.length === 1 && ids[0] === fixture.fixture_id;
+      }, { fixture, scope: INSPECTOR });
     };
     const expectMode = async mode => {
-      await composer().getByRole('button', { name: mode === 'zones' ? 'Zones' : 'Spot', exact: true }).waitFor();
-      await page.waitForFunction(mode => document.querySelector('[data-apt-directional-mode="' + mode + '"]')?.getAttribute('aria-pressed') === 'true', mode);
+      await page.waitForFunction(({ mode, spec }) => {
+        const dom = window.__directionalDOM, node = dom.query(spec);
+        return dom.visible(node) && node.getAttribute('data-apt-directional-mode') === mode && node.getAttribute('aria-pressed') === 'true';
+      }, { mode, spec: button(COMPOSER, mode === 'zones' ? 'Zones' : 'Spot') });
     };
+    const waitDOM = (selector, detached = false) => page.waitForFunction(({ selector, detached }) => {
+      const node = window.__directionalDOM.scope(selector); return detached ? !node : window.__directionalDOM.visible(node);
+    }, { selector, detached });
+    const attribute = (spec, name) => page.evaluate(({ spec, name }) => {
+      const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing authored control: ' + spec.name);
+      return node.getAttribute(name);
+    }, { spec, name });
+    const disabled = spec => page.evaluate(spec => {
+      const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing authored control: ' + spec.name); return node.disabled;
+    }, spec);
     const navigationFrom = pose => ({ az: pose.az, el: pose.el, zoom: pose.zoom, curAz: pose.curAz, curEl: pose.curEl, curRadius: pose.curRadius,
       previewAz: pose.previewAz, previewEl: pose.previewEl, overshoot: pose.overshoot, target: pose.target });
     const navigationPose = async () => navigationFrom(await page.evaluate(() => window.__APT_ENGINE.rig.snapshotPose()));
     const setMode = async mode => {
-      const button = composer().getByRole('button', { name: mode === 'zones' ? 'Zones' : 'Spot', exact: true });
-      const observation = await button.evaluate(node => { const rect = node.getBoundingClientRect();
-        return { box: node.getClientRects().length ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
-          pose: window.__APT_ENGINE.rig.snapshotPose() }; });
+      const observation = await page.evaluate(spec => { const dom = window.__directionalDOM, node = dom.query(spec);
+        if (!node) throw Error('missing native mode pill: ' + spec.name); const rect = node.getBoundingClientRect();
+        return { box: dom.visible(node) ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+          pose: window.__APT_ENGINE.rig.snapshotPose() }; }, button(COMPOSER, mode === 'zones' ? 'Zones' : 'Spot'));
       const box = observation.box; assert.ok(box); const before = navigationFrom(observation.pose);
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
       assert.equal(await captureActive(), false, 'the native pill press must not leak pointer capture to the orbit rig');
@@ -301,10 +434,9 @@ test('real authored directional controls preserve native input, aim and output b
         const angle = radial.azimuth_deg * Math.PI / 180, point = [radius * Math.cos(angle), radius * Math.sin(angle)];
         const screen = frame?.project(point), hub = frame?.project([0, 0]), tick = frame?.project([1.3 * Math.cos(angle), 1.3 * Math.sin(angle)]);
         const hubElement = document.querySelector('[data-apt-directional-composer="1"] [data-apt-radial-start="hub"]');
-        const lobe = document.querySelector('[data-apt-directional-composer="1"] [data-apt-radial-start="zone:' + number + '"]');
-        const line = lobe?.parentElement.querySelector('line');
         const actualHub = hubElement && { x: +hubElement.getAttribute('cx'), y: +hubElement.getAttribute('cy') };
-        const actualTick = line && { x: (+line.getAttribute('x1') + +line.getAttribute('x2')) / 2, y: (+line.getAttribute('y1') + +line.getAttribute('y2')) / 2 };
+        const drawing = window.__directionalDrawing(), tickNode = drawing.scene.getObjectByName('directional-zone-tick-' + number);
+        const actualTick = tickNode && engine.picking.projectToScreen(tickNode.getWorldPosition(engine.camera.position.clone()));
         const world = engine.camera.position.clone().set(snapshot.display_anchor_m[0] + point[0], snapshot.display_anchor_m[1] + point[1], snapshot.display_anchor_m[2]);
         engine.apartmentRoot.localToWorld(world);
         const independent = engine.picking.projectToScreen(world);
@@ -314,29 +446,70 @@ test('real authored directional controls preserve native input, aim and output b
         return { screen, hub, tick, actualHub, actualTick, independent, point, client,
           target: hit?.closest?.('[data-apt-radial-start]')?.getAttribute('data-apt-radial-start'), azimuth_deg: radial.azimuth_deg };
       }, { id, number, radius });
-      assert.ok(result.client, 'requested authored fixture-height point is visible and its SVG hub/tick are mounted');
+      assert.ok(result.client, 'requested authored fixture-height point is visible and its SVG hub and actual Three tick are mounted');
       assert.ok(Math.hypot(result.screen.x - result.independent.x, result.screen.y - result.independent.y) <= .01,
         'plane forward projection agrees with the actual renderer root/camera projection');
       assert.ok(Math.hypot(result.hub.x - result.actualHub.x, result.hub.y - result.actualHub.y) < .5, 'actual SVG hub follows the current renderer');
-      assert.ok(Math.hypot(result.tick.x - result.actualTick.x, result.tick.y - result.actualTick.y) < .5, 'actual SVG tick follows the actual azimuth plane');
+      assert.ok(result.actualTick.visible && Math.hypot(result.tick.x - result.actualTick.x, result.tick.y - result.actualTick.y) < .5,
+        'actual borrowed Three tick follows the actual canonical azimuth plane');
       return result;
     };
-    const verifyLobeFades = async () => {
-      const rows = await composer().locator('[data-apt-radial-start^="zone:"]').evaluateAll(paths => paths.map(path => {
-        const id = /^url\(#(.+)\)$/.exec(path.getAttribute('fill'))?.[1], gradient = id && path.ownerDocument.getElementById(id);
-        const hub = path.ownerSVGElement.querySelector('[data-apt-radial-start="hub"]'), node = path.parentElement.querySelector('circle');
-        return { id, units: gradient?.getAttribute('gradientUnits'),
-          origin: gradient && [+gradient.getAttribute('x1'), +gradient.getAttribute('y1')],
-          end: gradient && [+gradient.getAttribute('x2'), +gradient.getAttribute('y2')],
-          hub: [+hub.getAttribute('cx'), +hub.getAttribute('cy')], node: node && [+node.getAttribute('cx'), +node.getAttribute('cy')],
-          opacity: gradient && [...gradient.querySelectorAll('stop')].map(stop => +stop.getAttribute('stop-opacity')) };
-      }));
-      assert.equal(rows.length, 6); assert.equal(new Set(rows.map(row => row.id)).size, 6);
-      for (const row of rows) {
-        assert.equal(row.units, 'userSpaceOnUse'); assert.deepEqual(row.origin, row.hub); assert.deepEqual(row.end, row.node);
-        assert.ok(row.opacity[0] > row.opacity[1] && row.opacity[1] > row.opacity[2]); assert.equal(row.opacity[2], 0);
+    const expectedWarmColor = kelvin => {
+      // Independent literal prototype color oracle, not the production helper.
+      const t = Math.max(1000, Math.min(12000, kelvin)) / 100;
+      return [t <= 66 ? 255 : 329.7 * (t - 60) ** -.1332,
+        t <= 66 ? 99.47 * Math.log(t) - 161.12 : 288.12 * (t - 60) ** -.0755,
+        t <= 19 ? 0 : t <= 66 ? 138.52 * Math.log(t - 10) - 305.04 : 255]
+        .map(value => Math.max(0, Math.min(255, value)) / 255);
+    };
+    const assertNodeColors = (drawing, actual, active = null) => {
+      assert.equal(drawing.nodes.length, 6); assert.equal(new Set(drawing.nodes.map(node => node.uuid)).size, 6);
+      for (const node of drawing.nodes) {
+        if (node.number === active) { assert.deepEqual(node.color, [1, 1, 1]); continue; }
+        const initial = expectedWarmColor(originalAim.state.radials.find(zone => zone.number === node.number).color_temp_kelvin);
+        const target = expectedWarmColor(actual.state.radials.find(zone => zone.number === node.number).color_temp_kelvin);
+        // One keyboard CCT change may still be easing. Every channel must stay
+        // on that independently bounded warm-color path, never a white node.
+        node.color.forEach((value, index) => assert.ok(value >= Math.min(initial[index], target[index]) - 1e-7
+          && value <= Math.max(initial[index], target[index]) + 1e-7));
+        assert.equal(node.color[0], 1); assert.ok(node.color[1] < 1 && node.color[2] < 1);
       }
-      return { admitted_lobes: rows.length, projected_hub_to_node_gradients: true, outward_opacity_falls_to_zero: true };
+    };
+    const verifyContinuousDrawing = async () => {
+      await page.waitForFunction(() => window.__directionalDrawingState().draw.calls > 0);
+      const observed = await page.evaluate(id => ({ drawing: window.__directionalDrawingState(),
+        descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+        hits: [...document.querySelectorAll('[data-apt-directional-composer="1"] svg path')].map(path => ({
+          fill: path.getAttribute('fill'), number: +path.getAttribute('data-apt-radial-number'), start: path.getAttribute('data-apt-radial-start') })) }), fixture.fixture_id);
+      const { drawing, descriptor: actual } = observed, { fan } = drawing;
+      assert.equal(drawing.visible, true); assert.equal(drawing.borrowed_layer, 'apartment-ui-overlay-layer');
+      assert.equal(drawing.borrowed_root, true); assert.equal(drawing.presentation_only, true);
+      assert.deepEqual(drawing.position, actual.display_anchor_m);
+      assert.equal(fan.mesh, true); assert.equal(fan.vertices, 242); assert.equal(fan.colors, 242); assert.equal(fan.edge_vertices, 241);
+      assert.deepEqual(fan.index, Array.from({ length: 240 }, (_, index) => [0, index + 1, index + 2]).flat());
+      assert.deepEqual(fan.t, [0, ...Array(241).fill(1)]);
+      assert.match(fan.vertex, /vT=t;vTint=zoneTint/);
+      assert.match(fan.fragment.replace(/\s/g, ''), /a=pow\(1\.0-vT,1\.8\)\*0\.85\+0\.04\+0\.3\*smoothstep\(0\.8,1\.0,vT\)/);
+      assert.match(fan.fragment.replace(/\s/g, ''), /vec4\(vTint\*a\*0\.7,1\.0\)/);
+      // The actual shader has a bright center, soft middle and bright edge.
+      // GPU participation is witnessed separately; this is not a pixel claim.
+      const middle = .5 ** 1.8 * .85 + .04;
+      assert.ok(.85 + .04 > middle && .04 + .3 > middle);
+      assert.equal(fan.transparent, true); assert.equal(fan.additive, true);
+      for (const key of ['depthTest', 'depthWrite', 'edge_depthTest', 'edge_depthWrite']) assert.equal(fan[key], false);
+      assert.equal(drawing.guides.length, 3); assert.ok(drawing.guides.every(guide => !guide.visible && !guide.depthTest && !guide.depthWrite));
+      assert.equal(drawing.ticks.length, 6); assert.ok(drawing.ticks.every(tick => tick.visible && !tick.depthTest && !tick.depthWrite));
+      assert.ok(drawing.nodes.every(node => !node.depthTest && !node.depthWrite)); assert.equal(drawing.nodes[0].visible, true); assertNodeColors(drawing, actual);
+      assert.deepEqual(observed.hits.map(hit => hit.fill), Array(6).fill('transparent'), 'SVG owns hit regions only, with no duplicate drawn wedges');
+      for (const hit of observed.hits) {
+        const target = actual.state.radials.find(zone => zone.number === hit.number);
+        assert.equal(hit.start, target.on && target.brightness > 0 ? 'zone:' + hit.number : null,
+          'drawing fade never admits an off logical zone as a new pointer start');
+      }
+      assert.ok(drawing.draw.calls > 0 && drawing.draw_calls > 0);
+      assert.equal(drawing.draw.last.actual_renderer, true); assert.equal(drawing.draw.last.actual_scene, true); assert.equal(drawing.draw.last.actual_camera, true);
+      return { continuous_triangles: 240, six_actual_nodes: true, real_renderer_draws: drawing.draw.calls,
+        guides_hidden_idle: true, shader_center_fade_and_edge: true, visual_pixels_not_measured: true };
     };
     const hubPoint = async id => {
       const geometry = await planePoint(id, 1, 0);
@@ -347,6 +520,18 @@ test('real authored directional controls preserve native input, aim and output b
       return !!down && host.hasPointerCapture(down.pointerId);
     });
     const startHub = async id => { const hub = await hubPoint(id); await page.mouse.move(hub.x, hub.y); await page.mouse.down(); assert.equal(await captureActive(), true); return hub; };
+    const immediatePaint = async (number, level, point) => {
+      const row = await page.evaluate(() => [...window.__directionalCalls].reverse().find(call => call.immediate));
+      assert.ok(row?.immediate && row.native_move?.isTrusted, 'paint is observed in the actual trusted native move task');
+      assert.equal(row.native_dispatch_active, true, 'the actual producer is called during native host dispatch, rather than an 80ms timer');
+      assert.equal(row.method, 'setVirtualFixtureState'); assert.equal(row.fixture_id, fixture.fixture_id);
+      assert.ok(Math.hypot(row.native_move.x - point.client.x, row.native_move.y - point.client.y) < .01);
+      assert.equal(row.immediate.frame, row.frame, 'logical state and numeric readout update before another resident render frame');
+      assert.equal(row.immediate.descriptor.state.radials.find(zone => zone.number === number).brightness, level);
+      assert.equal(row.immediate.readout_hidden, false); assert.match(row.immediate.readout, new RegExp('Zone ' + number + '.*' + Math.round(level * 100) + '%'));
+      return { number, target: level, same_input_task: true, before_next_renderer_frame: true,
+        at_ms: row.immediate.at, native_at_ms: row.native_move.at };
+    };
     const unchangedAfterRetirement = async (marker, allowReconciliation = false) => {
       const before = await writes(); await waitHUD(); await page.mouse.up(); await waitHUD();
       const after = await writes(); assert.equal(marker.isTrusted, true); assert.ok(Number.isInteger(marker.call_count));
@@ -424,54 +609,74 @@ test('real authored directional controls preserve native input, aim and output b
       for (const method of ['setVirtualFixtureState', 'aimVirtualFixtureAtTarget', 'restoreVirtualFixtureAim']) {
         const original = overlay[method]; overlay[method] = (...args) => {
           const call = { method, fixture_id: args[0], patch: structuredClone(args[1]), arguments_length: args.length,
-            reconciliation: activeReconciliation?.id ?? null, at: performance.now() };
+            reconciliation: activeReconciliation?.id ?? null, at: performance.now(), frame: window.__APT_ENGINE.renderer.info.render.frame,
+            native_move: structuredClone(window.__directionalLastMove || null),
+            native_dispatch_active: window.__directionalLastMoveEvent?.isTrusted === true
+              && window.__directionalLastMoveEvent.eventPhase !== Event.NONE
+              && window.__directionalLastMoveEvent.currentTarget === window.__APT_ENGINE.picking.getHost() };
           window.__directionalCalls.push(call); const result = original(...args); call.ok = result?.ok === true;
+          if (method === 'setVirtualFixtureState' && Array.isArray(args[1]?.radials)) queueMicrotask(() => {
+            const readout = document.querySelector('[data-apt-directional-composer="1"] [role="status"]');
+            call.immediate = { at: performance.now(), frame: window.__APT_ENGINE.renderer.info.render.frame,
+              descriptor: structuredClone(overlay.virtualFixtureInteractionDescriptor(args[0])),
+              readout: readout?.textContent, readout_hidden: !readout?.isConnected || readout.hidden };
+          });
           window.__directionalDiagnostic?.({ kind: 'modeled', value: structuredClone(call) }).catch(() => {}); return result;
         };
       }
     });
-    await activateStatic(page.getByRole('button', { name: 'Select ' + fixture.label, exact: true })); await expectSelected(fixture);
+    await activateStatic(button('.apt-home-shell[data-home-layout="unified"]', 'Select ' + fixture.label)); await expectSelected(fixture);
     const originalAim = await descriptor(fixture.fixture_id);
-    await check('selected fixture defaults to Spot and Aim with a native pill above the reticle and no fabricated pending-aim dot', async () => {
+    await check('selected fixture defaults to Spot and Aim with the literal compact native pill above the reticle and no fabricated pending-aim dot', async () => {
       await expectMode('spot');
-      assert.equal(await inspector().getByRole('tab', { name: 'Aim', exact: true }).getAttribute('aria-selected'), 'true');
-      const mounted = await composer().evaluate(node => {
+      assert.equal(await attribute(button(INSPECTOR, 'Aim', 'tab'), 'aria-selected'), 'true');
+      const mounted = await page.evaluate(scope => {
+        const node = window.__directionalDOM.scope(scope); if (!node) throw Error('missing actual composer');
         const circles = [...node.querySelectorAll('svg circle')], rect = element => {
           if (!element?.getClientRects().length) return null;
           const value = element.getBoundingClientRect(); return { x: value.x, y: value.y, width: value.width, height: value.height };
         };
-        return { circles: circles.map(circle => ({ x: circle.getAttribute('cx'), y: circle.getAttribute('cy'), r: +circle.getAttribute('r') })),
+        const drawing = window.__directionalDrawingState(), pill = node.querySelector('[role="group"][aria-label="Room lighting tool"]');
+        return { circles: circles.map(circle => ({ x: circle.getAttribute('cx'), y: circle.getAttribute('cy'), r: +circle.getAttribute('r'), fill: circle.getAttribute('fill') })),
           pill: rect(node.querySelector('[role="group"][aria-label="Room lighting tool"]')), hub: rect(circles.at(-1)),
-          text: node.innerText, inventory: window.__APT_ENGINE.overlay.virtualFixturesReadback() };
-      });
+          pill_label: pill.querySelector('.nm')?.textContent, button_heights: [...pill.querySelectorAll('button')].map(button => rect(button)?.height),
+          visible_svg_paths: [...node.querySelectorAll('svg path')].filter(path => path.getAttribute('fill') !== 'transparent').length,
+          drawing, text: node.innerText, inventory: window.__APT_ENGINE.overlay.virtualFixturesReadback() };
+      }, COMPOSER);
       const circles = mounted.circles;
       assert.deepEqual(circles.map(circle => circle.r), [22, 7]);
       assert.equal(circles[0].x, circles[1].x); assert.equal(circles[0].y, circles[1].y);
+      assert.deepEqual(circles.map(circle => circle.fill), ['transparent', 'transparent']);
       const { pill, hub } = mounted;
-      assert.ok(pill && hub && pill.y + pill.height < hub.y - 22, 'mode pill clears the fixture reticle above the cylinder');
-      assert.match(mounted.text, /Modeled orientation · not commissioned/);
+      assert.ok(pill && hub && pill.width > 0 && hub.height > 0);
+      assert.ok(Math.abs(hub.y + hub.height / 2 - (pill.y + pill.height) - 26) < .5,
+        'native pill bottom follows the supplied prototype exact 26px offset above the actual projected hub');
+      assert.ok(pill.y + pill.height < hub.y, 'compact pill clears the existing registered fixture center');
+      assert.deepEqual(mounted.button_heights, [24, 24]); assert.ok(pill.height <= 34);
+      assert.equal(mounted.pill_label, fixture.label); assert.equal(mounted.visible_svg_paths, 0);
+      assert.equal(mounted.drawing.visible, false, 'Spot mode leaves the borrowed ambient drawing hidden');
       assert.equal(mounted.inventory.fixture_count, 4); return { default: 'spot', actual_hub_only: true, fixtures: 4 };
     });
     await check('existing native Spot drag still creates an aim and enables its existing Undo', async () => {
       const start = await canvasPoint('fixture', fixture.fixture_id), end = await canvasPoint('surface', null, start); assert.ok(start && end);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up();
-      await expectSelected(fixture); await inspector().getByRole('button', { name: 'Undo aim', exact: true }).waitFor();
-      assert.equal(await inspector().getByRole('button', { name: 'Undo aim', exact: true }).isDisabled(), false);
+      await expectSelected(fixture); await page.waitForFunction(spec => window.__directionalDOM.visible(window.__directionalDOM.query(spec)), button(INSPECTOR, 'Undo aim'));
+      assert.equal(await disabled(button(INSPECTOR, 'Undo aim')), false);
       const actual = await descriptor(fixture.fixture_id); assert.ok(actual.target); assert.notDeepEqual(actual.target, originalAim.target);
       return { native_drag: true, target_present: true, undo_enabled: true };
     });
     await check('all six modeled ring zones support native keyboard selection and isolated brightness/temperature controls', async () => {
-      await activateStatic(inspector().getByRole('tab', { name: 'Light', exact: true })); await expectMode('zones');
-      const ring = inspector().getByRole('group', { name: 'Radial zones', exact: true });
+      await activateStatic(button(INSPECTOR, 'Light', 'tab')); await expectMode('zones');
       for (let number = 1; number <= 6; number++) {
-        const button = ring.getByRole('button', { name: 'Radial zone ' + number, exact: true }); await button.focus();
-        await page.keyboard.press(number % 2 ? 'Enter' : 'Space'); assert.equal(await button.getAttribute('aria-pressed'), 'true');
+        await activateStatic(zoneButton(number), number % 2 ? 'Enter' : 'Space');
+        assert.equal(await attribute(zoneButton(number), 'aria-pressed'), 'true');
       }
-      const first = ring.getByRole('button', { name: 'Radial zone 1', exact: true }); await first.focus(); await page.keyboard.press('Enter');
-      const radialChannel = inspector().getByRole('region', { name: 'Radial channel', exact: true });
-      const power = radialChannel.getByRole('checkbox', { name: 'Radial zone 1 power', exact: true });
-      const powerObservation = () => power.evaluate((node, id) => ({ checked: node.checked,
-        descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id) }), fixture.fixture_id);
+      await activateStatic(zoneButton(1));
+      const power = input(CHANNEL, 'Radial zone 1 power', 'checkbox');
+      const powerObservation = () => page.evaluate(({ spec, id }) => {
+        const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing radial power checkbox');
+        return { checked: node.checked, descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id) };
+      }, { spec: power, id: fixture.fixture_id });
       const originalPower = await powerObservation(), before = originalPower.descriptor;
       assert.ok(before.state.radials[0].brightness > 0, 'power memory is tested from an actual nonzero saved level');
       assert.equal(originalPower.checked, true); await activateStatic(power, 'Space');
@@ -480,33 +685,40 @@ test('real authored directional controls preserve native input, aim and output b
       assert.equal(offPower.checked, false); await activateStatic(power, 'Space');
       const onPower = await powerObservation(); after = onPower.descriptor; assert.equal(after.state.radials[0].on, true);
       assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power On restores the same saved level');
-      assert.equal(onPower.checked, true); await activateStatic(radialChannel.getByRole('button', { name: 'Off', exact: true }));
-      after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[0].on, false);
-      assert.equal(after.state.radials[0].brightness, 0, 'the explicit Off preset sets a zero level');
-      const brightness = inspector().getByRole('slider', { name: 'Radial brightness', exact: true }); await brightness.focus(); await page.keyboard.press('ArrowRight');
-      const temperature = inspector().getByRole('slider', { name: 'Radial color temperature', exact: true }); await temperature.focus(); await page.keyboard.press('ArrowRight');
+      assert.deepEqual(after.state.radials.slice(1), before.state.radials.slice(1));
+      assert.deepEqual(withoutRadials(after), withoutRadials(before));
+      assert.equal(onPower.checked, true); await activateStatic(button(CHANNEL, 'Off'));
+      const allOff = await descriptor(fixture.fixture_id);
+      assert.ok(allOff.state.radials.every(zone => zone.on === false && zone.brightness === 0), 'the literal quick Off preset affects all six zones');
+      assert.deepEqual(allOff.state.radials.map(zone => zone.color_temp_kelvin), before.state.radials.map(zone => zone.color_temp_kelvin));
+      assert.deepEqual(withoutRadials(allOff), withoutRadials(before));
+      assert.equal(await attribute({ scope: RING, selector: 'g[role="button"]', name: 'All radial zones', tag: 'g', role: 'button' }, 'aria-pressed'), 'true',
+        'quick levels clear the individual zone selection');
+      await activateStatic(zoneButton(1));
+      await activateStatic(input(INSPECTOR, 'Radial brightness', 'range'), 'ArrowRight');
+      await activateStatic(input(INSPECTOR, 'Radial color temperature', 'range'), 'ArrowRight');
       after = await descriptor(fixture.fixture_id);
       assert.equal(after.state.radials[0].brightness, .01); assert.equal(after.state.radials[0].on, true);
       assert.equal(after.state.radials[0].color_temp_kelvin, before.state.radials[0].color_temp_kelvin + 100);
-      assert.deepEqual(after.state.radials.slice(1), before.state.radials.slice(1)); assert.deepEqual(withoutRadials(after), withoutRadials(before));
+      assert.deepEqual(after.state.radials.slice(1), allOff.state.radials.slice(1)); assert.deepEqual(withoutRadials(after), withoutRadials(before));
       await page.keyboard.press('z'); await expectMode('zones'); await page.keyboard.press('a'); await expectMode('zones');
       return { selected_with_enter_and_space: [1, 2, 3, 4, 5, 6], only_zone: 1, power_off_on_kept_saved_level: true,
-        explicit_off_preset_level: 0, native_brightness_step: .01, focused_field_owns_a_z: true };
+        explicit_off_preset_all_zones: 0, preset_clears_individual_selection: true, native_brightness_step: .01, focused_field_owns_a_z: true };
     });
     await check('Show in room and unfocused A/Z use native Zones/Spot modes on the actual projected fixture plane', async () => {
-      await activateStatic(inspector().getByRole('tab', { name: 'Aim', exact: true })); await expectMode('spot');
-      await activateStatic(inspector().getByRole('tab', { name: 'Light', exact: true })); await expectMode('zones');
-      await activateStatic(inspector().getByRole('button', { name: 'Show in room', exact: true })); await expectMode('zones');
+      await activateStatic(button(INSPECTOR, 'Aim', 'tab')); await expectMode('spot');
+      await activateStatic(button(INSPECTOR, 'Light', 'tab')); await expectMode('zones');
+      await activateStatic(button(INSPECTOR, 'Show in room')); await expectMode('zones');
       const geometry = await planePoint(fixture.fixture_id, 1, .7);
-      const fade = await verifyLobeFades();
-      await setMode('spot'); assert.equal(await inspector().getByRole('tab', { name: 'Aim', exact: true }).getAttribute('aria-selected'), 'true');
-      await setMode('zones'); assert.equal(await inspector().getByRole('tab', { name: 'Light', exact: true }).getAttribute('aria-selected'), 'true');
+      const fade = await verifyContinuousDrawing();
+      await setMode('spot'); assert.equal(await attribute(button(INSPECTOR, 'Aim', 'tab'), 'aria-selected'), 'true');
+      await setMode('zones'); assert.equal(await attribute(button(INSPECTOR, 'Light', 'tab'), 'aria-selected'), 'true');
       await blur(); await page.keyboard.press('a'); await expectMode('spot'); await page.keyboard.press('z'); await expectMode('zones');
-      return { native_tab_modes: ['Aim:spot', 'Light:zones'], svg_hub: geometry.actualHub, svg_tick: geometry.actualTick, renderer_projection_agrees: true, fade, shortcuts: ['a', 'z'] };
+      return { native_tab_modes: ['Aim:spot', 'Light:zones'], svg_hub: geometry.actualHub, actual_three_tick: geometry.actualTick, renderer_projection_agrees: true, fade, shortcuts: ['a', 'z'] };
     });
     await check('a native current-fixture hub click returns from Chat to Controls without a modeled write or aim change', async () => {
-      await activateStatic(page.getByRole('tab', { name: 'Chat', exact: true }));
-      assert.equal(await page.getByRole('tab', { name: 'Chat', exact: true }).getAttribute('aria-selected'), 'true');
+      await activateStatic(button(SHELL_TABS, 'Chat', 'tab'));
+      assert.equal(await attribute(button(SHELL_TABS, 'Chat', 'tab'), 'aria-selected'), 'true');
       const entry = await page.evaluate(id => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
         callCount: window.__directionalCalls.length }), fixture.fixture_id);
       const hub = await hubPoint(fixture.fixture_id); await page.mouse.click(hub.x, hub.y);
@@ -523,7 +735,10 @@ test('real authored directional controls preserve native input, aim and output b
         calls: window.__directionalCalls.length }), fixture.fixture_id);
       const before = entry.descriptor, callsBefore = entry.calls;
       await startHub(fixture.fixture_id);
-      await composer().getByRole('group', { name: 'Room lighting tool', exact: true }).waitFor({ state: 'detached' });
+      await page.waitForFunction(scope => {
+        const pill = document.querySelector(scope + ' [role="group"][aria-label="Room lighting tool"]');
+        return pill?.isConnected && pill.hidden && getComputedStyle(pill).display === 'none' && pill.getClientRects().length === 0;
+      }, COMPOSER);
       const settlingBefore = await page.evaluate(() => ({ matrix: window.__APT_ENGINE.camera.matrixWorld.toArray(), pose: window.__APT_ENGINE.rig.snapshotPose() }));
       const navigationBefore = navigationFrom(settlingBefore.pose); await waitHUD();
       const settlingAfter = await page.evaluate(id => {
@@ -535,34 +750,44 @@ test('real authored directional controls preserve native input, aim and output b
       assert.notDeepEqual(settlingAfter.matrix, settlingBefore.matrix, 'actual rendered camera movement witnesses the ambient case');
       assert.deepEqual(navigationFrom(settlingAfter.pose), navigationBefore); assert.equal(settlingAfter.captured, true, 'ambient settling does not retire the radial owner');
       assert.deepEqual(settlingAfter.descriptor, before);
-      const outward = await planePoint(fixture.fixture_id, 1, 1.184); await page.mouse.move(outward.client.x, outward.client.y, { steps: 4 }); await waitHUD();
-      const painted = await composer().evaluate((node, id) => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
-        nodes: [...node.querySelectorAll('[data-apt-radial-start^="zone:"]')].map(path => ({ zone: path.getAttribute('data-apt-radial-start'),
-          color: path.parentElement.querySelector('circle')?.getAttribute('fill') })) }), fixture.fixture_id);
+      const outward = await planePoint(fixture.fixture_id, 1, 1.184); await page.mouse.move(outward.client.x, outward.client.y, { steps: 4 });
+      const outwardImmediate = await immediatePaint(1, .9, outward); await waitHUD();
+      const painted = await page.evaluate(({ scope, id }) => {
+        const node = window.__directionalDOM.scope(scope); if (!node) throw Error('missing active composer');
+        return { descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+          drawing: window.__directionalDrawingState() };
+      }, { scope: COMPOSER, id: fixture.fixture_id });
       assert.equal(painted.descriptor.state.radials[0].brightness, .9);
-      assert.equal(painted.nodes.find(node => node.zone === 'zone:1')?.color, '#fff',
-        'only the active paint node becomes white while its owner is active');
-      const inactiveNodeColors = painted.nodes.filter(node => node.zone !== 'zone:1').map(node => node.color);
-      assert.equal(inactiveNodeColors.length, 5); assert.ok(inactiveNodeColors.every(color => color && color !== '#fff'), 'the other five nodes retain their temperature cue');
-      const inward = await planePoint(fixture.fixture_id, 1, .546); await page.mouse.move(inward.client.x, inward.client.y, { steps: 4 }); await waitHUD();
+      assertNodeColors(painted.drawing, painted.descriptor, 1);
+      assert.ok(painted.drawing.guides.every(guide => guide.visible), 'only an active gesture shows the actual Three inner, outer and zone guides');
+      const inward = await planePoint(fixture.fixture_id, 1, .546); await page.mouse.move(inward.client.x, inward.client.y, { steps: 4 });
+      const inwardImmediate = await immediatePaint(1, .35, inward); await waitHUD();
       assert.equal((await descriptor(fixture.fixture_id)).state.radials[0].brightness, .35);
-      const cross = await planePoint(fixture.fixture_id, 2, 1.068); await page.mouse.move(cross.client.x, cross.client.y, { steps: 8 }); await page.mouse.up();
+      const cross = await planePoint(fixture.fixture_id, 2, 1.068); await page.mouse.move(cross.client.x, cross.client.y, { steps: 8 });
+      const crossImmediate = await immediatePaint(2, .8, cross); await page.mouse.up();
       const after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[1].brightness, .8);
-      await composer().getByRole('group', { name: 'Room lighting tool', exact: true }).waitFor();
-      const released = await composer().evaluate(node => ({ color: node.querySelector('[data-apt-radial-start="zone:1"]').parentElement.querySelector('circle')?.getAttribute('fill'),
-        calls: window.__directionalCalls }));
-      assert.notEqual(released.color, '#fff');
+      await waitDOM(COMPOSER + ' [role="group"][aria-label="Room lighting tool"]');
+      const released = await page.evaluate(scope => {
+        const node = window.__directionalDOM.scope(scope); if (!node) throw Error('missing released composer');
+        return { drawing: window.__directionalDrawingState(), calls: window.__directionalCalls };
+      }, COMPOSER);
+      assertNodeColors(released.drawing, after);
+      assert.ok(released.drawing.guides.every(guide => !guide.visible), 'released native gesture withdraws all actual guides');
       assert.deepEqual(withoutRadials(after), withoutRadials(before));
       assert.deepEqual(after.state.radials.map(zone => zone.color_temp_kelvin), before.state.radials.map(zone => zone.color_temp_kelvin));
       const calls = released.calls.slice(callsBefore); assert.ok(paintWrites(calls).length > 0);
       for (const row of calls) { assert.equal(row.method, 'setVirtualFixtureState'); assert.deepEqual(Object.keys(row.patch), ['radials']);
         for (const zone of row.patch.radials) assert.deepEqual(Object.keys(zone).sort(), ['brightness', 'number', 'on']); }
-      await activateStatic(inspector().getByRole('tab', { name: 'Aim', exact: true }));
-      assert.equal(await inspector().getByRole('button', { name: 'Undo aim', exact: true }).isDisabled(), false);
-      assert.equal(await inspector().getByRole('button', { name: 'Redo aim', exact: true }).isDisabled(), true);
-      await activateStatic(inspector().getByRole('tab', { name: 'Light', exact: true }));
+      await activateStatic(button(INSPECTOR, 'Aim', 'tab'));
+      const history = await page.evaluate(specs => specs.map(spec => {
+        const node = window.__directionalDOM.query(spec); if (!node) throw Error('missing actual aim history control'); return node.disabled;
+      }), [button(INSPECTOR, 'Undo aim'), button(INSPECTOR, 'Redo aim')]);
+      assert.equal(history[0], false); assert.equal(history[1], true);
+      await activateStatic(button(INSPECTOR, 'Light', 'tab'));
       assert.deepEqual((await inventory()).fixtures.filter(item => item.fixture_id !== fixture.fixture_id), initialInventory.fixtures.filter(item => item.fixture_id !== fixture.fixture_id));
-      return { pickup_exact: true, ambient_camera_movement_observed: true, mode_pill_hidden_during_owned_drag: true, outward: .9, inward: .35, cross_zone: 2, cross_level: .8, only_radials_written: true, aim_target_and_history_controls_preserved: true };
+      return { pickup_exact: true, ambient_camera_movement_observed: true, mode_pill_hidden_during_owned_drag: true,
+        immediate_native_updates: [outwardImmediate, inwardImmediate, crossImmediate], outward: .9, inward: .35,
+        cross_zone: 2, cross_level: .8, only_radials_written: true, aim_target_and_history_controls_preserved: true };
     });
     await check('native empty-space orbit and another fixture selection retain their existing behavior in Zones', async () => {
       const empty = await canvasPoint('empty'); assert.ok(empty);
@@ -606,40 +831,43 @@ test('real authored directional controls preserve native input, aim and output b
       return { paint_canceled: true, zoom_preserved: true };
     });
     await check('hiding the native fixture layer retires paint before a later pointer release', async () => {
-      await activeMotion(); await page.getByRole('button', { name: 'Layers', exact: true }).focus(); await page.keyboard.press('Space');
-      const dialog = page.getByRole('dialog', { name: 'Room layers', exact: true }), checkbox = dialog.getByRole('checkbox', { name: 'Show virtual spotlights layer', exact: true });
-      await checkbox.focus(); await page.keyboard.press('Space'); await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible === false);
-      const marker = await nativeMarker('click', 'Show virtual spotlights layer'); await composer().waitFor({ state: 'detached' }); const reconciliation = await unchangedAfterRetirement(marker, true);
-      await checkbox.focus(); await page.keyboard.press('Space'); await activateStatic(dialog.getByRole('button', { name: 'Close layers', exact: true }));
+      await activeMotion(); await activateStatic(button('.apt-home-shell[data-home-layout="unified"]', 'Layers'), 'Space');
+      const checkbox = input(LAYERS, 'Show virtual spotlights layer', 'checkbox');
+      await activateStatic(checkbox, 'Space'); await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible === false);
+      const marker = await nativeMarker('click', 'Show virtual spotlights layer'); await waitDOM(COMPOSER, true); const reconciliation = await unchangedAfterRetirement(marker, true);
+      await activateStatic(checkbox, 'Space'); await activateStatic(button(LAYERS, 'Close layers'));
       await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible === true); await expectMode('zones');
       return { hidden_retired: true, ...reconciliation, restored_display_on: true };
     });
     await check('Setup retires active painting with only the exact saved-state reconciliation and no save', async () => {
-      await activeMotion(); await page.locator('.apt-home-setup').focus(); await page.keyboard.press('Space');
-      await page.locator('[data-apt-edit-ui="toolbar"]').waitFor(); const marker = await nativeMarker('click', 'Setup');
-      await composer().waitFor({ state: 'detached' }); const reconciliation = await unchangedAfterRetirement(marker, true);
-      await activateStatic(page.locator('[data-apt-edit-ui="toolbar"]').getByRole('button', { name: 'done', exact: true }));
+      await activeMotion(); await activateStatic(button('.apt-home-topbar', 'Setup'), 'Space');
+      await waitDOM(TOOLBAR); const marker = await nativeMarker('click', 'Setup');
+      await waitDOM(COMPOSER, true); const reconciliation = await unchangedAfterRetirement(marker, true);
+      await activateStatic(button(TOOLBAR, 'done'));
       // Returning from Setup must retain the chosen Zones tool; an old aim
       // notice replayed on inspector remount is not a new mode-selection event.
       await expectSelected(fixture); await expectMode('zones'); return { setup_retired: true, ...reconciliation, saves: 0 };
     });
     await check('the existing Spot Undo still restores its original aim after radial editing', async () => {
-      await setMode('spot'); await activateStatic(inspector().getByRole('button', { name: 'Undo aim', exact: true }));
+      await setMode('spot'); await activateStatic(button(INSPECTOR, 'Undo aim'));
       const actual = await descriptor(fixture.fixture_id); assert.deepEqual(actual.target, originalAim.target);
       assert.equal(actual.state.pan_deg, originalAim.state.pan_deg); assert.equal(actual.state.tilt_deg, originalAim.state.tilt_deg);
       await setMode('zones'); return { original_pan_tilt_target_restored: true };
     });
     await check('a native home change retires active painting and preserves the exact authored saves', async () => {
-      await activeMotion(); const echoButton = page.getByRole('group', { name: 'Home', exact: true }).getByRole('button', { name: 'Echo Park', exact: true });
-      await echoButton.focus(); await page.keyboard.press('Space'); await waitSite('echo'); const marker = await nativeMarker('click', 'Echo Park');
-      await composer().waitFor({ state: 'detached' }); await unchangedAfterRetirement(marker);
-      assert.equal(await inspector().count(), 0); await selectHome('victoria'); await expectSelected(fixture); await expectMode('zones');
+      await activeMotion(); await activateStatic(button(HOME, 'Echo Park'), 'Space'); await waitSite('echo'); const marker = await nativeMarker('click', 'Echo Park');
+      await waitDOM(COMPOSER, true); await unchangedAfterRetirement(marker);
+      assert.equal(await page.evaluate(scope => document.querySelectorAll(scope).length, INSPECTOR), 0); await selectHome('victoria'); await expectSelected(fixture); await expectMode('zones');
       const restored = await inventory(); assert.equal(restored.visible, true); assert.equal(restored.fixture_count, 4);
       return { home_retired: true, late_modeled_calls: 0, fixture_display_on: true, fixtures: 4 };
     });
     const finalEvents = await page.evaluate(() => ({ native: window.__directionalNative, calls: window.__directionalCalls,
-      reconciliations: window.__directionalReconciliations }));
+      reconciliations: window.__directionalReconciliations, keyboardTargets: window.__directionalKeyTargets }));
     receipt.native_events = finalEvents.native; receipt.modeled_calls = finalEvents.calls; receipt.reconciliations = finalEvents.reconciliations;
+    receipt.keyboard_targets = finalEvents.keyboardTargets;
+    assert.deepEqual(receipt.keyboard_targets.map(({ id, key, site }) => ({ id, key, site })), expectedKeys,
+      'every scheduled native key reaches its freshly admitted home/control in exact order');
+    for (const event of receipt.keyboard_targets) { assert.equal(event.isTrusted, true); assert.equal(event.exact_target, true); }
     for (const [file, expected] of Object.entries(protectedHashes)) assert.equal(hash(fs.readFileSync(file)), expected, 'authored pack and registration bytes stay exact');
     for (const [file, expected] of Object.entries(receipt.source_sha256)) assert.equal(receipt.served[file]?.sha256, expected, 'served production source matches the captured candidate');
     assert.deepEqual(receipt.forbidden, []); assert.deepEqual(receipt.missing_code, []); assert.deepEqual(receipt.errors, []);

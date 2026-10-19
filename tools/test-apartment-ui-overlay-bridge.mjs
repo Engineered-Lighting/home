@@ -3,6 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
 import * as THREE from '../app/src/vendor/three-0.180.0/three.module.js';
 import { createApartmentUiOverlayLayer } from '../app/src/home-3d/apartment-ui-overlay-bridge.mjs';
 
@@ -53,6 +55,17 @@ function fixture(overrides = {}) {
   return { document, host, camera, apartmentRoot, overlayRoot, abort, state, options, layer };
 }
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-7, `${actual} != ${expected}`);
+function assertLabelPlacement(label, x, y) {
+  assert.match(String(label.style.left), /^0(?:px)?$/, 'the fixed horizontal layout origin stays zero');
+  assert.match(String(label.style.top), /^0(?:px)?$/, 'the fixed vertical layout origin stays zero');
+  const number = '([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)';
+  const alignment = '\\s+translate\\(\\s*-50%,\\s*-100%\\s*\\)\\s*$';
+  const transform = String(label.style.transform);
+  const placement = new RegExp('^translate\\(\\s*' + number + 'px,\\s*' + number + 'px\\)' + alignment, 'i').exec(transform)
+    || new RegExp('^translate3d\\(\\s*' + number + 'px,\\s*' + number + 'px,\\s*0(?:px)?\\)' + alignment, 'i').exec(transform);
+  assert.ok(placement, 'pixel translation retains the existing centered, above-anchor alignment: ' + transform);
+  close(Number(placement[1]), x); close(Number(placement[2]), y);
+}
 
 test('projection transforms canonical local meters once, reuses real Three camera math and never mutates the input', () => {
   const f = fixture();
@@ -211,9 +224,59 @@ test('one failed anchor update hides only that anchor while sibling presentation
   f.layer.addAnchor({ point_m: [1, 0, 0], label: 'Current anchor' });
   assert.equal(f.layer.update(), false);
   const [failed, current] = f.host.children[0].children;
-  assert.equal(failed.hidden, true); assert.equal(current.hidden, false); assert.equal(current.style.left, '440px');
+  assert.equal(failed.hidden, true); assert.equal(current.hidden, false); assertLabelPlacement(current, 440, 300);
   assert.equal(f.state.disposed, 0); f.layer.dispose();
 });
+
+for (const count of [1, 4]) {
+  test(`moving ${count} anchors preserve exact geometry without layout-affecting style writes`, () => {
+    const f = fixture(), points = Array.from({ length: count }, (_, index) => [.25 + index * .2, .1 + index * .1, 0]);
+    const handles = points.map((point, index) => f.layer.addAnchor({ point_m: point, label: `Authored moving ${index}` }));
+    assert.ok(handles.every(Boolean));
+    const labels = f.host.children[0].children.slice(), dots = f.layer.group.children.slice();
+    const writes = [], timeline = [];
+    for (const [index, label] of labels.entries()) {
+      label.style = new Proxy(label.style, { set(style, property, value) {
+        writes.push({ index, property, value }); timeline.push('write:' + property);
+        style[property] = value; return true;
+      } });
+    }
+    const bounds = f.host.getBoundingClientRect.bind(f.host);
+    f.host.getBoundingClientRect = () => { timeline.push('viewport'); return bounds(); };
+    const expectedScreen = point => {
+      const world = f.apartmentRoot.localToWorld(new THREE.Vector3(...point)), screen = world.project(f.camera);
+      return [(screen.x * .5 + .5) * f.host.clientWidth, (-screen.y * .5 + .5) * f.host.clientHeight];
+    };
+    const assertNoLayoutWrites = () => assert.deepEqual(writes.filter(write =>
+      /^(?:left|top|right|bottom|width|height|inset|margin|padding)/.test(String(write.property))), [],
+    'movement must not invalidate layout before the preserved final viewport admission');
+
+    f.camera.position.set(1.2, .6, 10); f.camera.lookAt(.15, -.1, 0);
+    assert.equal(f.layer.update(), true);
+    assertNoLayoutWrites();
+    assert.equal(writes.filter(write => write.property === 'transform').length, count, 'every moved label receives its exact translation');
+    assert.equal(timeline.filter(event => event === 'viewport').length, 3, 'all existing before/after viewport admissions remain');
+    assert.ok(timeline.lastIndexOf('viewport') > timeline.lastIndexOf('write:transform'), 'the final viewport check still follows presentation writes');
+    labels.forEach((label, index) => {
+      assert.equal(f.host.children[0].children[index], label, 'movement reuses the actual label');
+      assertLabelPlacement(label, ...expectedScreen(points[index]));
+      assert.deepEqual(dots[index].position.toArray(), points[index], 'orbit never rewrites canonical local meters');
+    });
+
+    writes.length = 0; timeline.length = 0;
+    assert.equal(f.layer.update(), true);
+    assert.deepEqual(writes, [], 'an unchanged projection does not rewrite any style');
+    assert.equal(timeline.filter(event => event === 'viewport').length, 3);
+
+    points[0] = [.85, -.35, 0];
+    assert.equal(handles[0].update({ point_m: points[0] }), true);
+    assertNoLayoutWrites();
+    assert.equal(writes.filter(write => write.property === 'transform').length, 1, 'handle updates use the same movement path');
+    assertLabelPlacement(labels[0], ...expectedScreen(points[0]));
+    assert.deepEqual(dots[0].position.toArray(), points[0]);
+    f.layer.dispose();
+  });
+}
 
 function projectionWorkFixture() {
   const work = { allocations: 0, clones: 0, viewports: 0, ownerChecks: 0, projections: 0 };
@@ -327,4 +390,238 @@ test('positive host resize during projection stays live and the next call uses c
   assert.equal(f.state.disposed, 0);
   assert.deepEqual(f.layer.project([0, 0, 0]), { x: 320, y: 240, visible: true });
   f.layer.dispose();
+});
+
+test('an admitted presentation frame notifies an empty layer, while manual projection and update stay passive', () => {
+  const frames = [], f = fixture({ onPresentationFrame: frame => frames.push(frame) });
+  assert.ok(f.layer.project([0, 0, 0])); assert.ok(f.layer.pick(440, 360));
+  assert.equal(f.layer.update(), true); assert.deepEqual(frames, []);
+  assert.equal(f.layer.update({ nowMs: 1250, deltaSeconds: .016 }), true);
+  assert.deepEqual(frames, [{ nowMs: 1250, deltaSeconds: .016 }]);
+  f.layer.dispose();
+});
+
+test('retirement inside a frame synchronously withdraws external presentation before isolated unregister cleanup', () => {
+  const events = []; let plane = { authored: true }, f;
+  f = fixture({ onPresentationFrame: () => { f.state.current = false; },
+    onPresentationDispose: () => { plane = null; events.push('withdraw'); throw Error('Authored owner cleanup'); },
+    onDispose: () => { events.push('unregister'); assert.equal(plane, null); throw Error('Authored unregister'); } });
+  assert.equal(f.layer.update({ nowMs: 1300, deltaSeconds: .02 }), false);
+  assert.equal(plane, null); assert.deepEqual(events, ['withdraw', 'unregister']);
+  assert.equal(f.host.children.length, 0); assert.equal(f.layer.group.parent, null);
+  assert.equal(f.layer.dispose(), false); assert.deepEqual(events, ['withdraw', 'unregister']);
+});
+
+// Execute the real engine factory, frame and lifecycle methods with an authored
+// DOM/scene adapter. No WebGL context, room data, scheduler or service is opened.
+const require = createRequire(import.meta.url);
+const babel = require('../app/src/vendor/babel-7.29.0/babel.min.js');
+const engineSource = fs.readFileSync(new URL('../app/src/home-3d/engine.js', import.meta.url), 'utf8');
+const engineAst = babel.transform(engineSource, { ast: true, code: false }).ast;
+const engineNodes = [];
+function visitEngine(node) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type) engineNodes.push(node);
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) value.forEach(visitEngine);
+    else if (value && typeof value === 'object') visitEngine(value);
+  }
+}
+visitEngine(engineAst);
+const actualEngineText = node => engineSource.slice(node.start, node.end);
+const actualEngineNode = predicate => {
+  const matches = engineNodes.filter(predicate); assert.equal(matches.length, 1, 'one actual source seam'); return matches[0];
+};
+
+test('the classic presentation loader stays lazy and returns the cache-busted sibling namespace unchanged', async () => {
+  const loader = actualEngineNode(node => node.type === 'FunctionDeclaration' && node.id?.name === 'loadDirectionalPresentation');
+  const calls = [], namespace = Object.freeze({ authored: true });
+  const context = vm.createContext({ sib: name => { calls.push(name); return Promise.resolve(namespace); } });
+  vm.runInContext(actualEngineText(loader), context);
+  assert.deepEqual(calls, []);
+  assert.equal(await context.loadDirectionalPresentation(), namespace);
+  assert.deepEqual(calls, ['apartment-directional-presentation.mjs']);
+});
+
+const engineObject = actualEngineNode(node => node.type === 'VariableDeclarator' && node.id?.name === 'engine').init;
+const actualEngineMethod = name => actualEngineText(engineObject.properties.find(node => node.key?.name === name));
+function engineFixture() {
+  const f = fixture(); f.layer.dispose();
+  const canvas = f.document.createElement('canvas'); canvas.removeEventListener = () => {}; f.host.appendChild(canvas);
+  const scene = new THREE.Scene(); scene.add(f.apartmentRoot);
+  const state = { imports: 0, importPromise: null, activeHost: f.host, clock: 1000, renders: 0, scheduled: [], canceled: [], terminal: [] };
+  const sceneIdentity = { siteId: 'victoria', contentRevision: 'authored-r1', registrationVersion: 1, frameDigest: 'a'.repeat(64) };
+  const manifest = { revision: 'authored-r1', registrationVersion: 1,
+    assets: { 'frame.json': { sha256: 'a'.repeat(64) }, 'collision.glb': { sha256: 'b'.repeat(64) } } };
+  const lifetimeController = new AbortController();
+  const context = vm.createContext({ THREE, AbortController, EventTarget, CustomEvent, scene, canvas, sceneIdentity,
+    siteId: 'victoria', contentRevision: 'authored-r1', uiCollisionDigest: 'b'.repeat(64),
+    disposed: false, disposing: false, running: false, rafId: 0, last: 1000, statsAt: 1000, frameTimes: [], renderTimes: [],
+    camera: f.camera, apartmentRoot: f.apartmentRoot, lifetimeController, emitter: new EventTarget(),
+    overlay: { overlayRoot: f.overlayRoot, update() {}, dispose: () => state.terminal.push('overlay') },
+    picking: { getHost: () => state.activeHost, projectToScreen: f.options.projectWorld },
+    window: { devicePixelRatio: 1, HomeLiveSceneShadow: { active: false },
+      HomeContentPacks: { get: () => ({ manifest }) }, HomeSpatialViewport: { getSelectedSiteId: () => 'victoria' } },
+    sib: () => { state.imports++; return state.importPromise || Promise.resolve({ createApartmentUiOverlayLayer }); },
+    performance: { now: () => state.clock }, requestAnimationFrame: callback => state.scheduled.push(callback),
+    cancelAnimationFrame: id => state.canceled.push(id), applyPerformanceBudget() {},
+    performanceController: { setSamplingSourceActive() {}, recordFrame() {}, getDiagnostics: () => ({}) }, performanceSamplingSource: 'authored',
+    pointsMaterial: { uniforms: { uTime: {}, uFadeNear: {}, uFadeFar: {} }, dispose() {} },
+    rig: { update() {}, inCameraPose: () => false, currentRadius: () => 5 },
+    cutawayInverse: new THREE.Matrix4(), cutawayCamera: new THREE.Vector3(), lastFitLocalBox: null,
+    cutawayM: { deriveDollhouseCutaway: () => ({}) }, cutawayMaterialM: { updateCutawayUniforms() {} },
+    equipmentCutaway: { getShell: () => null, dispose: () => state.terminal.push('cutaway') },
+    cutawayEligible: false, scenePlaceholder: null, dollhouseContext: {},
+    modes: { update() {}, setDollhouseCutaway() {}, debugInfo: () => ({}), dispose: () => state.terminal.push('modes') },
+    renderer: { render: () => state.renders++, dispose: () => state.terminal.push('renderer'), forceContextLoss: () => state.terminal.push('context') },
+    gpuName: 'authored', pointTotal: 0, signal: undefined, onExternalAbort() {},
+    unsubscribePerformanceBudget: () => state.terminal.push('budget'), onApartmentContextLost() {}, onApartmentContextRestored() {},
+  });
+  const declarations = engineNodes.filter(node => node.type === 'VariableDeclaration' && node.declarations.length === 1
+    && ['uiLayers', 'presentationUiLayers', 'presentationRevision', 'retireUiLayer', 'emit'].includes(node.declarations[0].id?.name));
+  const frame = actualEngineNode(node => node.type === 'FunctionDeclaration' && node.id?.name === 'frame');
+  vm.runInContext(declarations.map(actualEngineText).join('\n') + '\n' + actualEngineText(frame)
+    + '\nglobalThis.engine = { siteId, contentRevision, sceneIdentity, displaySurfaceHit: () => null, '
+    + ['createUiOverlayLayer', 'on', 'setRunning', 'dispose'].map(actualEngineMethod).join(',\n') + ' };', context);
+  const options = extra => ({ host: f.host, isCurrent: () => true, signal: new AbortController().signal, ...extra });
+  return { ...f, state, context, engine: context.engine, options, leafOptions: f.options, lifetimeController,
+    frame(now) { state.clock = now; vm.runInContext('frame(' + now + ')', context); } };
+}
+
+test('the actual paused engine refuses presentation creation without changing passive creation', async () => {
+  const f = engineFixture(), passive = await f.engine.createUiOverlayLayer(f.options());
+  assert.ok(passive);
+  assert.equal(await f.engine.createUiOverlayLayer(f.options({ onPresentationFrame() {} })), null);
+  assert.equal(f.state.imports, 1, 'paused presentation refusal precedes the lazy import');
+  assert.equal(passive.update(), true); f.engine.dispose();
+});
+
+test('the actual engine frame supplies its existing clock and clamped delta once, including without anchors', async () => {
+  const f = engineFixture(), frames = []; f.engine.setRunning(true);
+  const layer = await f.engine.createUiOverlayLayer(f.options({ onPresentationFrame: frame => frames.push(frame) }));
+  assert.ok(layer); assert.ok(layer.project([0, 0, 0])); assert.equal(layer.update(), true);
+  assert.deepEqual(frames, []);
+  f.frame(1016); f.frame(1266);
+  assert.deepEqual(frames, [{ nowMs: 1016, deltaSeconds: .016 }, { nowMs: 1266, deltaSeconds: .1 }]);
+  assert.equal(f.state.renders, 2, 'the original renderer still renders each admitted frame'); f.engine.dispose();
+});
+
+test('pause retires only presentation leases synchronously and running events let owners recreate on resume', async () => {
+  const f = engineFixture(), events = [], frames = []; let passiveDisposals = 0;
+  const unsubscribe = f.engine.on('running', value => events.push(value.running ? 'running' : 'paused'));
+  f.engine.setRunning(true);
+  const passive = await f.engine.createUiOverlayLayer(f.options({ onPresentationDispose: () => passiveDisposals++ }));
+  const options = () => f.options({ onPresentationFrame: frame => frames.push(frame), onPresentationDispose: () => events.push('withdraw') });
+  const layer = await f.engine.createUiOverlayLayer(options()); assert.ok(layer);
+  f.frame(1016); f.engine.setRunning(false);
+  assert.equal(layer.group.parent, null); assert.equal(layer.update(), false);
+  assert.deepEqual(events, ['running', 'withdraw', 'paused']);
+  assert.equal(passiveDisposals, 0); assert.equal(passive.update(), true);
+  f.frame(1032); assert.equal(frames.length, 1); assert.equal(f.state.renders, 1);
+  f.engine.setRunning(false); assert.deepEqual(events, ['running', 'withdraw', 'paused']);
+  f.engine.setRunning(true); const resumed = await f.engine.createUiOverlayLayer(options());
+  assert.ok(resumed); assert.notEqual(resumed, layer); f.frame(1048); assert.equal(frames.length, 2);
+  unsubscribe(); f.engine.setRunning(false); assert.equal(events.at(-1), 'withdraw');
+  f.engine.dispose(); assert.equal(passiveDisposals, 1);
+  assert.deepEqual(f.state.terminal, ['cutaway', 'budget', 'modes', 'overlay', 'renderer', 'context']);
+});
+
+test('an import started before pause cannot create an old presentation lease after resume', async () => {
+  const f = engineFixture(); f.engine.setRunning(true);
+  let finishImport, notifications = 0;
+  f.state.importPromise = new Promise(resolve => { finishImport = resolve; });
+  const pending = f.engine.createUiOverlayLayer(f.options({ onPresentationFrame() {}, onPresentationDispose: () => notifications++ }));
+  assert.equal(f.state.imports, 1); f.engine.setRunning(false); f.engine.setRunning(true);
+  finishImport({ createApartmentUiOverlayLayer });
+  assert.equal(await pending === null, true, 'a resumed engine needs a newly requested presentation lease');
+  assert.equal(notifications, 0, 'a factory refusal before leaf ownership does not notify cleanup');
+  f.state.importPromise = null;
+  const current = await f.engine.createUiOverlayLayer(f.options({ onPresentationFrame() {}, onPresentationDispose: () => notifications++ }));
+  assert.ok(current); f.engine.dispose(); assert.equal(notifications, 1);
+});
+
+test('presentation recursion refuses a nested update but keeps projection and picking non-notifying', () => {
+  const observed = []; let f;
+  f = fixture({ onPresentationFrame: frame => {
+    observed.push(frame);
+    assert.equal(f.layer.update(frame), false);
+    assert.deepEqual(f.layer.project([0, 0, 0]), { x: 400, y: 300, visible: true });
+    assert.ok(f.layer.pick(440, 360));
+  } });
+  assert.equal(f.layer.update({ nowMs: 1500, deltaSeconds: .01 }), true);
+  assert.equal(observed.length, 1); assert.equal(f.state.disposed, 0); f.layer.dispose();
+});
+
+test('invalid frame metadata never invokes the synchronous presentation callback', () => {
+  const frames = [], f = fixture({ onPresentationFrame: value => frames.push(value) });
+  for (const value of [undefined, null, {}, { nowMs: NaN, deltaSeconds: .01 },
+    { nowMs: 10, deltaSeconds: Infinity }, { nowMs: 10, deltaSeconds: -.1 }, { nowMs: '10', deltaSeconds: .01 }]) {
+    assert.equal(f.layer.update(value), true);
+  }
+  assert.deepEqual(frames, []);
+  assert.equal(f.layer.update({ nowMs: 10, deltaSeconds: 0 }), true);
+  assert.deepEqual(frames, [{ nowMs: 10, deltaSeconds: 0 }]); f.layer.dispose();
+});
+
+for (const reason of ['abort', 'owner', 'hidden']) {
+  test(`presentation ${reason} retirement before and during a callback cannot publish a later frame`, () => {
+    let f, calls = 0, withdrawals = 0;
+    const retire = () => { if (reason === 'abort') f.abort.abort(); else if (reason === 'owner') f.state.current = false; else f.host.hidden = true; };
+    f = fixture({ onPresentationFrame: () => { calls++; retire(); }, onPresentationDispose: () => withdrawals++ });
+    assert.equal(f.layer.update({ nowMs: 1600, deltaSeconds: .01 }), false);
+    assert.equal(f.layer.group.parent, null); assert.equal(withdrawals, 1);
+    assert.equal(f.layer.update({ nowMs: 1616, deltaSeconds: .016 }), false); assert.equal(calls, 1);
+    f = fixture({ onPresentationFrame: () => calls++, onPresentationDispose: () => withdrawals++ }); retire();
+    assert.equal(f.layer.update({ nowMs: 1700, deltaSeconds: .01 }), false); assert.equal(calls, 1); assert.equal(withdrawals, 2);
+  });
+}
+
+test('the actual engine isolates a throwing frame owner, keeps sibling frames and renders, and unregisters once', async () => {
+  const f = engineFixture(); f.engine.setRunning(true); let withdrawn = 0, failedCalls = 0, siblingCalls = 0;
+  const failed = await f.engine.createUiOverlayLayer(f.options({ onPresentationFrame: () => { failedCalls++; throw Error('Authored frame'); },
+    onPresentationDispose: () => { withdrawn++; throw Error('Authored withdrawal'); } }));
+  const sibling = await f.engine.createUiOverlayLayer(f.options({ onPresentationFrame: () => siblingCalls++ }));
+  f.frame(1016); f.frame(1032);
+  assert.equal(failed.group.parent, null); assert.equal(failedCalls, 1); assert.equal(withdrawn, 1);
+  assert.equal(siblingCalls, 2); assert.equal(f.state.renders, 2); assert.ok(sibling.group.parent);
+  f.engine.setRunning(false); assert.equal(withdrawn, 1); f.engine.dispose();
+});
+
+test('factory ownership created just before pause cleans up exactly once and returns null', async () => {
+  const f = engineFixture(); f.engine.setRunning(true); let withdrawn = 0;
+  f.state.importPromise = Promise.resolve({ createApartmentUiOverlayLayer(options) {
+    const layer = createApartmentUiOverlayLayer(options); f.engine.setRunning(false); return layer;
+  } });
+  const layer = await f.engine.createUiOverlayLayer(f.options({ onPresentationFrame() {}, onPresentationDispose: () => withdrawn++ }));
+  assert.equal(layer === null, true); assert.equal(withdrawn, 1);
+  assert.equal(f.overlayRoot.children.length, 0); f.engine.dispose(); assert.equal(withdrawn, 1);
+});
+
+test('constructor attachment failure withdraws owned external presentation exactly once', () => {
+  const f = fixture(); f.layer.dispose(); let withdrawn = 0, unregistered = 0;
+  f.host.appendChild = () => { throw Error('Authored attachment failure'); };
+  const layer = createApartmentUiOverlayLayer({ ...f.options, onPresentationFrame() {},
+    onPresentationDispose: () => withdrawn++, onDispose: () => unregistered++ });
+  assert.equal(layer.update(), false); assert.equal(layer.group.parent, null);
+  assert.equal(withdrawn, 1); assert.equal(unregistered, 1); assert.equal(layer.dispose(), false);
+});
+
+for (const callback of ['onPresentationFrame', 'onPresentationDispose']) {
+  test(`invalid ${callback} refuses before the engine imports or the leaf takes ownership`, async () => {
+    const f = engineFixture(); f.engine.setRunning(true);
+    assert.equal(await f.engine.createUiOverlayLayer(f.options({ [callback]: null })) === null, true);
+    assert.equal(f.state.imports, 0);
+    const admitted = createApartmentUiOverlayLayer({ ...f.leafOptions, [callback]() {} });
+    assert.equal(admitted.update(), true); admitted.dispose();
+    assert.throws(() => createApartmentUiOverlayLayer({ ...f.leafOptions, [callback]: null }), /dependencies_required/);
+    f.engine.dispose();
+  });
+}
+
+test('a running notification cannot resume a terminally disposing engine', () => {
+  const f = engineFixture(); let resumeResult;
+  f.engine.on('running', value => { if (!value.running) resumeResult = f.engine.setRunning(true); });
+  f.engine.setRunning(true); assert.equal(f.engine.dispose(), true); f.frame(1016);
+  assert.equal(resumeResult, false); assert.equal(f.state.renders, 0);
+  assert.deepEqual(f.state.terminal, ['cutaway', 'budget', 'modes', 'overlay', 'renderer', 'context']);
 });

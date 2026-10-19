@@ -611,6 +611,16 @@ test('unified shell keeps the real room, private controls and one chat controlle
     async function assertRadials(stage, id, expected) {
       await page.waitForFunction(({ id, expected }) => JSON.stringify(window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials)
         === JSON.stringify(expected), { id, expected });
+      // Logical channels are immediate; the specified drawing fade settles
+      // separately. Keep exact visible-output checks after that native frame.
+      await page.waitForFunction(({ id, expected }) => {
+        const fixture = window.__APT_ENGINE.overlay.virtualFixturesGroup.getObjectByName('equipment-virtual-fixture:' + id);
+        return expected.every(zone => {
+          const group = fixture?.getObjectByName('radial-zone-' + zone.number), active = zone.on && zone.brightness > 0;
+          return group?.getObjectByName('radial-diffuser-sector-' + zone.number)?.visible === active
+            && group?.getObjectByName('radial-receiver-patch-' + zone.number)?.visible === active;
+        });
+      }, { id, expected });
       const descriptor = await aimDescriptor(id), output = await radialOutput(id);
       assert.deepEqual(descriptor.state.radials, expected, stage + ' preserves every zone number, direction and color temperature');
       assert.deepEqual(descriptor.state.spotlight, before[id].state.spotlight, stage + ' leaves Spot unchanged');
@@ -639,9 +649,14 @@ test('unified shell keeps the real room, private controls and one chat controlle
 
     // Author a mixed pattern through the real per-zone controls. A group power
     // operation must preserve its zero, partial and full levels independently.
-    for (const [number, preset] of [[2, 'Off'], [3, '25%'], [5, '100%']]) {
+    for (const [number, keys] of [[2, ['Home']], [3, ['Home', 'PageUp', 'PageUp', ...Array(5).fill('ArrowRight')]], [5, ['End']]]) {
       await radialPanel.getByRole('button', { name: 'Radial zone ' + number, exact: true }).press('Enter');
-      await radialPanel.getByRole('button', { name: preset, exact: true }).press('Enter');
+      // The supplied quick presets deliberately select all six zones. Author
+      // mixed values through the selected zone's real native range instead.
+      const range = page.getByRole('slider', { name: 'Radial brightness', exact: true });
+      await range.focus();
+      assert.equal(await range.evaluate(element => element === document.activeElement), true);
+      for (const key of keys) await page.keyboard.press(key);
     }
     const mixedRadials = (await aimDescriptor(channelId)).state.radials.map(zone => ({ ...zone, on: true }));
     assert.deepEqual(mixedRadials.map(zone => zone.brightness), [.5, 0, .25, .5, 1, .5]);

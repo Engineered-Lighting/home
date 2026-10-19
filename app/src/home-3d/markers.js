@@ -1200,6 +1200,7 @@ export function createOverlay(apartmentRoot) {
             }
         },
         update(dt) {
+            virtualFixtures.advancePresentation(performance.now());
             pulse += dt;
             // dot spring (critically damped: a = ω²(t−x) − 2ω·v), clamp 2.5 m/s
             if (personGroup.visible && spring.has) {

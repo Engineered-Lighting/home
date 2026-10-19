@@ -2,8 +2,9 @@
 
 This slice adds the selected fixture's six-zone ambient composer and native
 inspector ring. It retains the admitted diffuser cylinders, four fixtures and
-existing spotlight/downward channels. The renderer, picking, direct-aim
-algorithm, equipment schema and command transport are unchanged.
+existing spotlight/downward channels. Drawing borrows the resident renderer's
+frame; picking, direct aim, equipment schema and command transport retain their
+existing owners.
 
 ## Behavior and ownership
 
@@ -13,33 +14,77 @@ typing and keyboard behavior. The pill sits above the selected fixture and
 withdraws during gestures. Initial and newly admitted bindings start in Spot
 and Aim together; selecting another fixture preserves the chosen tool.
 
-The composer draws a soft polar shape at the descriptor's fixture height, using
-all six admitted azimuths. Pointer inversion uses that same last committed SVG
-plane. Outward motion brightens, inward motion dims, and a fast sweep fills
+The composer draws one continuous 240-segment cosine contour at the descriptor's
+fixture height, using all six admitted azimuths and the supplied center/edge
+shader, glow nodes and drag-only guides. Pointer inversion uses the plane whose
+matching hit paths were written synchronously in that admitted frame. Outward motion brightens, inward motion dims, and a fast sweep fills
 skipped zones. Pickup does not jump to the initial cursor radius. Only radial
 power and brightness change; spotlight aim, downward output, targets and aim
 history remain with their existing owners.
 
-The existing 80 ms HUD cadence projects the shape and flushes cumulative modeled
-patches. There is no additional RAF, timer, renderer subscription or hardware
-stream. Ordinary camera hover can keep settling without canceling painting;
-exact navigation, projection, viewport and root changes still retire it. Input
-uses the frame published after the matching portal commits, not an undrawn
-timer result.
+Modeled targets, remembered state and numeric readouts update during the native
+pointer event. Only drawing eases with a 160 ms exponential time constant,
+including each zone's warmth, diffuser ports and pools. Reduced motion snaps.
+The existing 80 ms HUD publishes the full-room summary after the gesture; it
+does not apply input or project this drawing. There is no additional RAF, timer
+or hardware stream. Ordinary camera hover can keep settling without canceling
+painting; exact navigation, projection, viewport and root changes still retire it.
 
 Each gesture pins the fixture, mount, generation, equipment revision/digest,
 complete binding, anchor and radial directions. Lifecycle changes, hidden
-layers, Setup, another pointer, lost capture, Escape, blur or wheel discard
-unflushed intent and release owned capture. Already applied modeled levels stay
+layers, Setup, another pointer, lost capture, Escape, blur or wheel release owned
+capture and refuse later input. Already applied modeled levels stay
 applied. No stale restoration crosses a scene or home boundary.
 
-The six inspector zones support native Enter/Space, individual or all-zone
-brightness and temperature, and power switches that preserve saved levels.
+The compact 118px inspector ring supports native Enter/Space, individual or
+all-zone brightness and temperature, and power switches that preserve saved levels.
+The quick Off/25/50/100 presets always clear a selected zone and affect all six,
+as specified in the handoff; the selected zone's range and switch remain isolated.
 The explicit Off brightness preset sets zero, preserving its existing meaning. The existing
 all-zero radial On restoration remains 0.5. The inspector remains a non-drag
 alternative when the projected plane is unavailable.
 
-## Verification
+## Current correction verification
+
+The correction was reconciled directly against the supplied prototype and
+reviewed independently. The original idle-timer readout, six separately outlined
+wedges, permanent guides, oversized pill/ring, selected-zone quick presets and
+instant diffuser-temperature jumps were genuine differences and are corrected.
+
+- 48 pure geometry, pickup and easing cases; 116 actual-source integration
+  cases; 19 presentation/resource cases; 56 engine/bridge cases; 26 actual
+  equipment drawing cases pass. Equipment timing includes analytical 160 ms and
+  stalled-frame checks, remembered targets and current reduced-motion behavior.
+- Native directional browser: all 13 stages pass in 20.6 seconds. Receipt:
+  `.tmp/apartment-directional-browser/run-1792386520871/receipt.json`.
+- Separate full Home shell browser passes in 47.3 seconds, retaining all ten
+  mixed/zero/restoration cases, native focus, exact aim/Undo and saved-byte
+  assertions. Receipt:
+  `.tmp/apartment-home-shell-browser/run-1792386541693/receipt.json`.
+  Its mixed pattern now uses the real selected-zone range because the quick
+  presets correctly select all six. Visibility is checked after its specified
+  fade; immediate logical publication is verified separately. This run also
+  caught and fixed a real one-frame mode-pill delay; mode, tab and pill now
+  publish together before another renderer frame.
+- Matching software-browser diagnostic: all 13 stages pass in 52.4 seconds.
+  Receipt: `.tmp/apartment-directional-browser/run-1792386062973/receipt.json`.
+  This is a workstation diagnostic, not hosted performance qualification.
+- Both retain the full authored scene, DPR1, normal motion, exact native mouse
+  sequence and 145-second deadline. The trusted native move's actual producer
+  call, logical target and numeric readout are observed before another renderer
+  frame. Geometry/material checks and real draw participation remain separate
+  from pixel acceptance. Independent method reviews found no weakened tests.
+- Retained room adapters include the new nullable presentation refs. The
+  overlay browser checks actual transformed bounds at the retained 0.01px
+  limit; authored transform/performance receipts remain separate. Its functional
+  checks pass, while representative F01 performance remains inconclusive.
+- Later owner-facing comparison uses the accepted actual room and saved
+  registration privately. It does not establish installed or physical behavior.
+
+## Prior implementation receipts
+
+The following receipts describe the earlier implementation and retained
+regressions. Their source hashes and timings are not current-correction results.
 
 - Pure geometry/gesture suite: 39 passing cases, including perspective and
   orthographic fixture-height inversion, canonical angles, pickup, sweep,
@@ -139,15 +184,27 @@ the full authored scene, device scale 1, normal motion and the same 145-second
 deadline. This single comparison measures harness cost on the workstation;
 hosted results must still be checked separately.
 
+Hosted run `39198106399` still exhausted the same directional deadline. Its
+always-run shell browser passed in 128.9 seconds; all other mapped suites
+passed. The new durable receipt shows cumulative cost, rather than a stuck
+painting operation: initial setup took 34.2 seconds, six-zone native controls
+took 48.4 seconds and mode/projection checks took 35.6 seconds. Four stages
+completed before the limit. Locator focus and element evaluation accumulated
+56.3 seconds in that prefix; direct page observations had a 347 ms median.
+The receipt remains at
+`.tmp/ci293-39198106399/apartment-directional-browser/run-1792383179535/receipt.json`.
+These findings motivate reducing protocol round trips while preserving native
+input, exact DOM identity/admission, every assertion and the full scene.
+
 ## Ticket coverage and retained limits
 
 | Ticket | Covered in this slice | Still open |
 | --- | --- | --- |
 | APT-Z01 / #247 | Admitted cylinders retained; fixture-height lobes, ticks, nodes and outward fade | Broader visual/responsive acceptance |
-| APT-Z02 / #248 | Pickup, radial paint, interpolated sweep, guarded flush and cancellation | Broader touch/keyboard journey acceptance |
+| APT-Z02 / #248 | Immediate target/readout, pickup, radial paint, interpolated sweep and guarded cancellation | Broader touch/keyboard journey acceptance |
 | APT-A03 / #249 | Pill, synchronized tabs, A/Z, above-fixture placement and gesture withdrawal | Pending dot requires a real proposal lifecycle |
 | APT-L03 / #252 | Six native zone selectors, all-zone selection, power, brightness, warmth and Show in room | Commissioned facing and wall shortcuts depend on Z04 |
-| APT-Z03 / #250 | Existing 80 ms modeled update path reused | Temporal easing and any future transport contract |
+| APT-Z03 / #250 | Private per-zone level/CCT drawing follows 160 ms easing on the existing frame | Any future physical transport contract |
 | APT-Z04 / #251 | Explicit modeled orientation disclosure | Authoritative facing/commissioning contract |
 
 An existing direct-aim target is not a pending proposal, so no cyan pending dot

@@ -2319,10 +2319,14 @@ function aptUnifiedRadialPowerPatch(radials, on) {
   return radials.map(zone => ({ number: zone.number, on, ...(restoreLevel ? { brightness: .5 } : {}) }));
 }
 
+const aptEmptySubscribe = () => () => {};
+const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
-  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer }) {
+  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView }) {
+  const radialSnapshot = React.useSyncExternalStore(directionalView?.subscribe || aptEmptySubscribe,
+    directionalView?.getSnapshot || aptEmptySnapshot, aptEmptySnapshot);
   const [localTab, setLocalTab] = useState("light");
   const tab = controlledTab ?? localTab, setTab = onTabChange || setLocalTab;
   const [zone, setZone] = useState(null);
@@ -2360,7 +2364,8 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
     <section className="apt-ui-section">{visibility}<p className="apt-ui-meta">Select a light in the room or list to adjust its channels and aim.</p>
       <p className="apt-ui-meta">{sourceLabel}</p></section>
   </aside>;
-  const state = fixture.state || {}, radials = state.radials || [];
+  const state = fixture.state || {}, radials = radialSnapshot?.descriptor.fixture_id === fixture.fixture_id
+    ? radialSnapshot.descriptor.state.radials : state.radials || [];
   const selectedRadials = zone == null ? radials : radials.filter(item => item.number === zone);
   const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.brightness ?? 1), 0) / selectedRadials.length : 0;
   const patchRadials = patch => onPatch({ radials: selectedRadials.map(item => ({ number: item.number, ...patch })) });
@@ -2401,13 +2406,15 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <label className="apt-ui-switch"><input type="checkbox" aria-label="Radial power" checked={radials.some(item => item.on)}
           onChange={event => onPatch({ radials: aptUnifiedRadialPowerPatch(radials, event.target.checked) })} />
           <span>{radials.some(item => item.on) ? "On" : "Off"}</span></label></div>
-        {window.AptDirectionalRing && <window.AptDirectionalRing radials={radials} zone={zone} onZone={setZone} onShow={onShowComposer} />}
-        <div className="apt-ui-grow"><div className="apt-ui-row"><div className="apt-ui-channel-name grow">{zone == null ? "All zones" : `Zone ${zone}`}</div>
-          {zone != null && <label className="apt-ui-switch"><input type="checkbox" aria-label={`Radial zone ${zone} power`}
-            checked={!!selectedRadials[0]?.on} onChange={event => patchRadials({ on: event.target.checked })} /><span>{selectedRadials[0]?.on ? "On" : "Off"}</span></label>}</div>
-          <p className="apt-ui-meta">Select a segment to adjust one radial LED strip. What it faces is unavailable until heading commissioning.</p></div>
-        <div className="apt-ui-actions">{[0, 25, 50, 100].map(value => <button type="button" className="apt-ui-button is-small" key={value}
-          onClick={() => patchRadials({ on: value > 0, brightness: value / 100 })}>{value ? `${value}%` : "Off"}</button>)}</div>
+        {window.AptDirectionalRing && <window.AptDirectionalRing radials={radials} zone={zone} onZone={setZone} onShow={onShowComposer} view={directionalView}
+          power={zone != null && <label className="apt-ui-switch"><input type="checkbox" aria-label={`Radial zone ${zone} power`}
+            checked={!!selectedRadials[0]?.on} onChange={event => patchRadials({ on: event.target.checked })} /><span>{selectedRadials[0]?.on ? "On" : "Off"}</span></label>} />}
+        <div className="apt-ui-actions"><span className="apt-ui-meta grow">All six zones</span>{[0, 25, 50, 100].map(value => <button type="button" className="apt-ui-button is-small" key={value}
+          aria-pressed={value === 0 ? radials.every(item => !item.on || item.brightness === 0)
+            : radials.every(item => item.on && item.brightness === value / 100)}
+          onClick={() => { setZone(null); onPatch({ radials: radials.map(item => ({ number: item.number, on: value > 0, brightness: value / 100 })) }); }}>{value ? `${value}%` : "Off"}</button>)}</div>
+        <div className="apt-ui-actions"><span className="apt-ui-meta grow">Light only</span>{["Toward walls", "Into the room"].map(label =>
+          <button key={label} type="button" className="apt-ui-button is-small" disabled title="Available after radial heading commissioning">{label}</button>)}</div>
         <AptUnifiedRange label="Brightness" ariaLabel="Radial brightness" value={radialLevel * 100} onChange={value => patchRadials({ on: value > 0, brightness: value / 100 })} />
         <AptUnifiedRange label="Color temp" ariaLabel="Radial color temperature" min={2200} max={5000} step={100} suffix=" K"
           value={selectedRadials[0]?.color_temp_kelvin ?? 3000} onChange={value => patchRadials({ color_temp_kelvin: value })} />
@@ -2711,10 +2718,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const fixtureInteractionModeRef = useRef("spot");
   fixtureInteractionModeRef.current = fixtureInteractionMode;
   const radialGestureOwnerRef = useRef(null);
-  const flushRadialGestureRef = useRef(null);
+  const virtualFixturePreviewDirtyRef = useRef(false);
+  const publishVirtualFixturePreviewRef = useRef(null);
   const directionalProjectionRef = useRef(null);
-  const [radialReadout, setRadialReadout] = useState(null);
-  const [radialGestureActive, setRadialGestureActive] = useState(false);
+  const directionalViewRef = useRef(null);
+  const [directionalView, setDirectionalView] = useState(null);
   const [unifiedDockCollapsed, setUnifiedDockCollapsed] = useState(false);
   const [unifiedDockExpanded, setUnifiedDockExpanded] = useState(false);
   const [virtualAimNotice, setVirtualAimNotice] = useState("");
@@ -5031,8 +5039,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   }, [open, phase, selectedSiteId, selectedContentRevision, virtualFixtureDocument,
     virtualFixtureBindingKey, virtualSpotlightsVisible, editing, calibCam, liveOn, spatialScale]);
 
-  const syncVirtualFixturePreview = (engine) => {
-    const result = engine?.overlay.virtualFixturesReadback?.();
+  const syncVirtualFixturePreview = (engine, suppliedResult, publish = true) => {
+    const result = suppliedResult || engine?.overlay.virtualFixturesReadback?.();
     if (!result) return;
     for (const fixture of result.fixtures || []) {
       const state = fixture.state;
@@ -5044,9 +5052,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (target) virtualFixtureStatesRef.current.targets.set(fixture.fixture_id, target);
       else virtualFixtureStatesRef.current.targets.delete(fixture.fixture_id);
     }
-    setVirtualFixturePreview(result);
+    if (publish) { virtualFixturePreviewDirtyRef.current = false; setVirtualFixturePreview(result); }
+    else virtualFixturePreviewDirtyRef.current = true;
   };
-  const changeVirtualFixture = (patch, fixtureId = selectedVirtualFixture?.fixture_id) => {
+  const changeVirtualFixture = (patch, fixtureId = selectedVirtualFixture?.fixture_id, { deferPreview = false } = {}) => {
     const engine = engineRef.current, binding = virtualFixtureDocument?.binding, identity = engine?.sceneIdentity;
     if (!virtualFixtureItems.some(fixture => fixture.fixture_id === fixtureId) || !binding || phase !== "ready" || workspaceAuthorityRef.current.key !== apartmentAuthorityKey
       || identity?.siteId !== "victoria"
@@ -5054,7 +5063,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       || identity.frameDigest !== binding.frame_digest) return;
     const result = engine.overlay.setVirtualFixtureState?.(fixtureId, patch);
     if (!result?.ok) return;
-    syncVirtualFixturePreview(engine);
+    // Targets, remembered state and the selected readout publish synchronously.
+    // Only the unrelated full-room React summary may wait for the HUD turn.
+    syncVirtualFixturePreview(engine, result, !deferPreview);
+    directionalViewRef.current?.sync(engine.overlay.virtualFixtureInteractionDescriptor?.(fixtureId));
+    return true;
   };
   const changeVirtualChannel = (patch) => changeVirtualFixture(virtualFixtureChannel.startsWith("radial-")
     ? { radials: [{ number: Number(virtualFixtureChannel.slice(7)), ...patch }] }
@@ -5090,6 +5103,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   }, [selectionEngine, selectionLifecycle, open, phase, apartmentAuthorityKey, selectedSiteId,
     virtualFixtureDocument, editing, calibCam, liveOn, rehearsalIsolated, spatialScale]);
 
+  publishVirtualFixturePreviewRef.current = () => {
+    const context = getVirtualFixtureSelectionContext();
+    if (context) syncVirtualFixturePreview(context.engine, context.preview);
+    else virtualFixturePreviewDirtyRef.current = false;
+  };
+
   const selectVirtualFixture = useCallback((id, { fromGesture = false, reveal = true } = {}) => {
     try {
       const context = getVirtualFixtureSelectionContext();
@@ -5122,10 +5141,14 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     virtualFixturePreview?.revision, virtualFixturePreview?.digest]);
 
   const changeFixtureInteractionMode = useCallback(mode => {
-    if (!["zones", "spot"].includes(mode) || !getVirtualFixtureSelectionContext()
+    const context = getVirtualFixtureSelectionContext();
+    if (!["zones", "spot"].includes(mode) || !context
         || radialGestureOwnerRef.current || virtualAimGestureRef.current?.readback().active) return false;
+    fixtureInteractionModeRef.current = mode;
     setFixtureInteractionMode(mode);
     setVirtualInspectorTab(mode === "zones" ? "light" : "aim");
+    const view = directionalViewRef.current;
+    if (view) view.sync(context.engine.overlay.virtualFixtureInteractionDescriptor?.(view.getSnapshot().descriptor.fixture_id));
     return true;
   }, [getVirtualFixtureSelectionContext]);
   const changeVirtualInspectorTab = useCallback(tab => {
@@ -5144,11 +5167,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       pose && [pose.az, pose.el, pose.zoom, pose.curAz, pose.curEl, pose.curRadius,
         pose.previewAz, pose.previewEl, pose.overshoot, pose.fitDistance, pose.target]]);
   };
-  const getDirectionalSnapshot = useCallback(id => {
+  const getDirectionalSnapshot = useCallback((id, { drawing = true } = {}) => {
     const context = getVirtualFixtureSelectionContext();
     if (!context || !virtualFixtureControlsOpen || !virtualSpotlightsVisible || id !== virtualFixtureId || context.preview.visible !== true
-        || context.engine.rig.state?.locked || context.engine.rig.inCameraPose?.() || context.engine.rig.isTweening?.()
-        || virtualAimGestureRef.current?.readback().active) return null;
+        || drawing && (context.engine.rig.state?.locked || context.engine.rig.inCameraPose?.() || context.engine.rig.isTweening?.()
+          || virtualAimGestureRef.current?.readback().active)) return null;
     const descriptor = context.engine.overlay.virtualFixtureInteractionDescriptor?.(id), binding = context.document.binding;
     if (!descriptor || descriptor.truth_role !== "virtual_preview" || descriptor.physical_commands !== false
         || descriptor.fixture_id !== id || descriptor.equipment_revision !== context.document.revision
@@ -5171,32 +5194,88 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       const frame = api.createPlaneFrame({ anchor: descriptor.display_anchor_m, clipFromLocal: matrix.elements,
         width: host.clientWidth, height: host.clientHeight });
       if (!frame?.project([0, 0])?.visible) return null;
-      const geometry = api.radialSectorPaths({ radials: descriptor.state.radials, frame });
-      if (!geometry) return null;
-      return { frame, descriptor: { ...descriptor, label: virtualFixtureItems.find(item => item.fixture_id === virtualFixtureId)?.label },
-        geometry, key: directionalCameraKey(engine) };
+      return { frame, descriptor: { ...descriptor, label: context.preview.fixtures.find(item => item.fixture_id === virtualFixtureId)?.label },
+        key: directionalCameraKey(engine) };
     } catch (_) { return null; }
-  }, [getDirectionalSnapshot, virtualFixtureId, virtualFixtureItems]);
+  }, [getDirectionalSnapshot, virtualFixtureId]);
+  const directionalProjectRef = useRef(projectDirectionalFixture);
+  directionalProjectRef.current = projectDirectionalFixture;
 
-  const directionalDisplay = apartmentSceneControlsEnabled && virtualFixtureControlsOpen && !editing && !calibCam && !liveOn
-    && virtualSpotlightsVisible && anchors.__directional?.descriptor.fixture_id === virtualFixtureId
-    && isDirectionalProjectionCurrent(anchors.__directional) && hostRef.current && window.AptDirectionalComposer
-    ? anchors.__directional : null;
-  // Input inverts the plane actually committed to the DOM, never a timer's
-  // projection waiting for React to paint. Both advance on the existing HUD.
-  React.useLayoutEffect(() => {
-    directionalProjectionRef.current = directionalDisplay;
-  }, [directionalDisplay]);
+  // Drawing borrows the resident engine's admitted frame. Logical targets and
+  // readouts remain event-driven; no second render loop or delayed input queue.
+  useEffect(() => {
+    const engine = selectionEngine, host = hostRef.current, api = window.HomeApartmentDirectional;
+    const initial = getDirectionalSnapshot(virtualFixtureId, { drawing: false });
+    if (!engine || !host || !api || !initial || !apartmentSceneControlsEnabled) return undefined;
+    const identity = api.identityKey(initial.descriptor);
+    let closed = false, lease = null;
+    const admitted = () => {
+      const context = getDirectionalSnapshot(virtualFixtureId, { drawing: false });
+      return !closed && document.visibilityState !== "hidden" && context?.engine === engine
+        && api.identityKey(context.descriptor) === identity && host.isConnected;
+    };
+    const retire = owned => {
+      if (!owned || owned.retired) return;
+      owned.retired = true;
+      const view = owned.view;
+      if (directionalViewRef.current === view && view) {
+        directionalProjectionRef.current = null;
+        radialGestureOwnerRef.current?.cancel();
+        directionalViewRef.current = null;
+      }
+      try { view?.dispose(); } finally {
+        owned.controller.abort(); owned.layer?.dispose();
+        setDirectionalView(previous => previous === view ? null : previous);
+      }
+      if (lease === owned) lease = null;
+    };
+    const start = async () => {
+      if (lease || !admitted()) return;
+      const owned = { controller: new AbortController(), layer: null, view: null, retired: false };
+      lease = owned;
+      const current = () => lease === owned && !owned.retired && !owned.controller.signal.aborted && admitted();
+      try {
+        const module = await window.Home3D.ready;
+        if (!current()) { retire(owned); return; }
+        const presentation = await module.loadDirectionalPresentation();
+        if (!current()) { retire(owned); return; }
+        const layer = await engine.createUiOverlayLayer({ host, signal: owned.controller.signal, isCurrent: current,
+          onPresentationFrame: info => owned.view?.frame(info), onPresentationDispose: () => retire(owned) });
+        if (!layer || !current()) { layer?.dispose(); retire(owned); return; }
+        owned.layer = layer;
+        const context = getDirectionalSnapshot(virtualFixtureId, { drawing: false });
+        owned.view = presentation.createDirectionalPresentation({ group: owned.layer.group, host, api,
+          initial: { descriptor: { ...context.descriptor, label: context.preview.fixtures.find(item => item.fixture_id === virtualFixtureId)?.label } },
+          getProjection: () => directionalProjectRef.current(), getMode: () => fixtureInteractionModeRef.current,
+          publishPlane: value => { if (directionalViewRef.current === owned.view) directionalProjectionRef.current = value; },
+          isCurrent: current, onRetire: () => retire(owned),
+          reducedMotion: () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true });
+        if (!current()) { retire(owned); return; }
+        directionalViewRef.current = owned.view;
+        setDirectionalView(owned.view);
+      } catch (_) { retire(owned); }
+    };
+    const onRunning = ({ running }) => { if (running) void start(); else retire(lease); };
+    const unsubscribe = engine.on("running", onRunning);
+    const onVisibility = () => { retire(lease); if (document.visibilityState !== "hidden") void start(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    void start();
+    return () => { closed = true; unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(lease); };
+  }, [selectionEngine, getDirectionalSnapshot, virtualFixtureId, apartmentSceneControlsEnabled]);
+
+  const directionalDisplay = directionalView && !directionalView.readback().disposed && hostRef.current && window.AptDirectionalComposer
+    && window.HomeApartmentDirectional?.identityKey(getDirectionalSnapshot(virtualFixtureId, { drawing: false })?.descriptor)
+      === directionalView.readback().identity ? directionalView : null;
 
   // Component input owns radial painting; the existing renderer and direct-aim
-  // algorithms are unchanged. The existing 80ms HUD timer flushes previews.
+  // algorithms are unchanged. Numeric readouts and modeled edits are immediate.
   useEffect(() => {
     const host = hostRef.current, api = window.HomeApartmentDirectional;
     if (!host || !api) return undefined;
     const consume = event => { event.preventDefault(); event.stopPropagation(); };
     const cancel = reason => {
       const owner = radialGestureOwnerRef.current; radialGestureOwnerRef.current = null;
-      owner?.gesture.cancel(reason); setRadialReadout(null); setRadialGestureActive(false);
+      owner?.gesture.cancel(reason); directionalViewRef.current?.pointer(null, false);
       try { if (owner && host.hasPointerCapture?.(owner.pointerId)) host.releasePointerCapture(owner.pointerId); } catch (_) { /* detached viewport */ }
     };
     const current = owner => {
@@ -5213,16 +5292,6 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       return projection.frame.unproject((event.clientX - rect.left) * host.clientWidth / rect.width,
         (event.clientY - rect.top) * host.clientHeight / rect.height);
     };
-    const flush = () => {
-      const owner = radialGestureOwnerRef.current;
-      if (!owner) return;
-      if (!current(owner)) { cancel("retired"); return; }
-      if (owner.readout) setRadialReadout(owner.readout);
-      if (!owner.pending) return;
-      const patch = owner.pending; owner.pending = null;
-      changeVirtualFixture(patch, owner.fixtureId);
-    };
-    flushRadialGestureRef.current = flush;
     const down = event => {
       if (radialGestureOwnerRef.current) {
         if (event.pointerId !== radialGestureOwnerRef.current.pointerId) { consume(event); cancel("multiple-pointers"); }
@@ -5258,8 +5327,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (!gesture?.readback().active) return;
       consume(event);
       radialGestureOwnerRef.current = { gesture, projection, pointerId: event.pointerId, fixtureId: virtualFixtureId,
-        identity: api.identityKey(snapshot.descriptor), pending: null, cancel: () => cancel("escape") };
-      setRadialGestureActive(true);
+        identity: api.identityKey(snapshot.descriptor), lastPatch: null, cancel: () => cancel("escape") };
+      const initial = gesture.readback(), rect = host.getBoundingClientRect();
+      directionalViewRef.current?.pointer({ zone: initial.zone, level: initial.level,
+        x: event.clientX - rect.left, y: event.clientY - rect.top }, true);
       try { host.setPointerCapture(event.pointerId); } catch (_) { cancel("capture-unavailable"); }
     };
     const move = event => {
@@ -5270,14 +5341,20 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (!context || !local) { cancel("retired-or-unprojectable"); return; }
       const result = owner.gesture.move({ snapshot: context.descriptor, pointerId: event.pointerId, point: local });
       if (!owner.gesture.readback().active) { cancel("retired"); return; }
-      if (result?.patch?.radials?.length) owner.pending = result.patch;
-      if (result) owner.readout = { zone: result.zone, level: result.level,
-        x: event.clientX - host.getBoundingClientRect().left, y: event.clientY - host.getBoundingClientRect().top };
+      if (result?.patch?.radials?.length) {
+        const key = JSON.stringify(result.patch);
+        if (key !== owner.lastPatch) {
+          if (!changeVirtualFixture(result.patch, owner.fixtureId, { deferPreview: true })) { cancel("write-refused"); return; }
+          owner.lastPatch = key;
+        }
+      }
+      if (result) directionalViewRef.current?.pointer({ zone: result.zone, level: result.level,
+        x: event.clientX - host.getBoundingClientRect().left, y: event.clientY - host.getBoundingClientRect().top }, true);
     };
     const up = event => {
       const owner = radialGestureOwnerRef.current;
       if (!owner || owner.pointerId !== event.pointerId) return;
-      move(event); flush();
+      move(event);
       if (radialGestureOwnerRef.current === owner) {
         owner.gesture.end({ snapshot: current(owner)?.descriptor, pointerId: event.pointerId }); cancel("ended");
       }
@@ -5299,7 +5376,6 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       cancel("owner-disposed");
       for (const [name, listener] of listeners) host.removeEventListener(name, listener, true);
       window.removeEventListener("keydown", key, true); window.removeEventListener("blur", blur);
-      if (flushRadialGestureRef.current === flush) flushRadialGestureRef.current = null;
     };
   }, [getDirectionalSnapshot, isDirectionalProjectionCurrent, getVirtualFixtureSelectionContext, selectVirtualFixture,
     virtualFixtureId, virtualFixtureControlsOpen, fixtureInteractionMode]);
@@ -5780,10 +5856,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const timer = setInterval(() => {
       const engine = engineRef.current;
       if (!engine) return;
-      flushRadialGestureRef.current?.();
+      if (virtualFixturePreviewDirtyRef.current && !radialGestureOwnerRef.current) publishVirtualFixturePreviewRef.current?.();
       const out = {};
-      const directional = projectDirectionalFixture();
-      if (directional) out.__directional = directional;
       const px = (obj) => engine.picking.projectToScreen(
         obj.getWorldPosition(new (Object.getPrototypeOf(obj.position).constructor)()));
       // person anchor
@@ -5795,10 +5869,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         const m = engine.overlay.markersById.get(id);
         if (m) out[id] = px(m.group);
       }
-      setAnchors(out);
+      setAnchors(previous => JSON.stringify(previous) === JSON.stringify(out) ? previous : out);
     }, 80);
     return () => clearInterval(timer);
-  }, [open, phase, hoverId, cardId, projectDirectionalFixture]);
+  }, [open, phase, hoverId, cardId]);
 
   /* leave the camera snap: shared by esc, the '← back' button, and the
      resurrect-guard — closes the feed, cancels the pending feed timer,
@@ -8421,10 +8495,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       />
 
       {directionalDisplay && ReactDOM.createPortal(
-        <window.AptDirectionalComposer projection={directionalDisplay.frame} descriptor={directionalDisplay.descriptor}
-          geometry={directionalDisplay.geometry}
-          mode={fixtureInteractionMode} onMode={changeFixtureInteractionMode} readout={radialReadout}
-          ownedGesture={radialGestureActive} />, hostRef.current)}
+        <window.AptDirectionalComposer view={directionalDisplay} onMode={changeFixtureInteractionMode} />, hostRef.current)}
 
       {/* Renderer-only outer scale layer. It occupies the same viewport while
           every Apartment control and information surface remains a sibling
@@ -9316,6 +9387,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
             tab={virtualInspectorTab} onTabChange={changeVirtualInspectorTab} onSelect={selectVirtualFixture}
             onBack={clearVirtualFixtureSelection}
+            directionalView={directionalDisplay}
             onShowComposer={() => changeFixtureInteractionMode("zones")}
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}
             onPatch={changeVirtualFixture} onPatchAll={on => {

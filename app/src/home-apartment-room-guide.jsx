@@ -32,11 +32,13 @@
     { id: "help", owner: "guide", keys: ["?"], label: "?", action: "Show these gestures and keys" },
   ].map(Object.freeze));
 
-  /* Pointer input in home-3d/rig.js and the room's pick and aim handlers.
-   * Pinch and pan are not bound, so they are not listed. */
+  /* Pointer input in home-3d/rig.js and the room's pick and aim handlers:
+   * exactly what is bound, nothing more (the test checks both directions). */
   const GESTURES = Object.freeze([
     { id: "drag-orbit", label: "Drag empty space", action: "Orbit the room; one finger on touch" },
+    { id: "pan", label: "Shift-drag or right-drag", action: "Pan across the floor; at the full-room view it springs back" },
     { id: "wheel-zoom", label: "Scroll wheel", action: "Zoom" },
+    { id: "pinch-zoom", label: "Pinch with two fingers", action: "Zoom one step at a time" },
     { id: "select", label: "Click a light", action: "Select it and open its controls" },
     { id: "aim-handle", label: "Drag the aim handle", homes: ["victoria"],
       action: "Propose where the selected modeled light points; nothing physical moves" },

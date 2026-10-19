@@ -680,6 +680,54 @@ function realRigFixture() {
   return { ...f, rig, step };
 }
 
+function stationaryPointerAcrossDrawnDrift() {
+  const f = realRigFixture(), future = realRigFixture();
+  try {
+    const selected = f.descriptors.get(f.ids[0]);
+    for (const zone of selected.state.radials) { zone.on = true; zone.brightness = .01; }
+    const initial = f.refresh(), firstHub = f.point([0, 0], initial);
+    for (let frame = 0; frame < 6; frame++) future.step();
+    const futureProjection = future.refresh(), futureHub = future.point([0, 0], futureProjection);
+    // Independent instances run the same actual rig. The midpoint puts the
+    // unchanged client pointer on opposite sides of the settling hub; both
+    // local samples stay inside the pickup radius and imply no real drag.
+    const pointer = { clientX: (firstHub.clientX + futureHub.clientX) / 2,
+      clientY: (firstHub.clientY + futureHub.clientY) / 2 };
+    const local = projection => {
+      const rect = f.host.getBoundingClientRect();
+      return projection.frame.unproject((pointer.clientX - rect.left) * f.host.clientWidth / rect.width,
+        (pointer.clientY - rect.top) * f.host.clientHeight / rect.height);
+    };
+    const beforePoint = local(initial), afterPoint = local(futureProjection);
+    assert.ok(Math.hypot(...beforePoint) < .14 && Math.hypot(...afterPoint) < .14);
+    assert.notEqual(Directional.paintPatch({ point: beforePoint, radials: selected.state.radials }).zone,
+      Directional.paintPatch({ point: afterPoint, radials: selected.state.radials }).zone,
+      'actual ambient settling crosses a local nearest-zone boundary at the stationary client point');
+    return { f, pointer, initial, local };
+  } catch (error) { f.dispose(); throw error; }
+  finally { future.dispose(); }
+}
+
+for (const eventType of ['pointerup', 'pointermove']) test('stationary ' + eventType + ' cannot paint when the actual rig republishes a drifting plane', () => {
+  const { f, pointer, initial, local } = stationaryPointerAcrossDrawnDrift();
+  try {
+    const before = copy([...f.descriptors]), history = copy(f.values.virtualAimHistoryRef.current);
+    f.state.panel = 'chat'; f.mountRadial(); emit(f.hub, 'pointerdown', pointer);
+    assert.equal(f.state.panel, 'controls', 'stationary pickup still reveals the retained fixture controls');
+    assert.ok(f.values.radialGestureOwnerRef.current); assert.equal(f.host.captures.size, 1); assert.deepEqual(f.state.patches, []);
+    for (let frame = 0; frame < 6; frame++) f.step();
+    const updated = f.refresh(); assert.notEqual(updated, initial); assert.equal(updated.key, initial.key);
+    assert.notDeepEqual(local(updated), local(initial), 'the drawn plane really changes under the unchanged native client point');
+    emit(f.host, eventType, pointer);
+    assert.deepEqual(f.state.patches, [], 'camera settling alone is never modeled paint intent');
+    assert.deepEqual(copy([...f.descriptors]), before, 'the saved .01 level, all other channels, aims and canonical identities remain exact');
+    if (eventType === 'pointermove') emit(f.host, 'pointerup', pointer);
+    assert.deepEqual(f.state.patches, []); assert.deepEqual(copy([...f.descriptors]), before);
+    assert.deepEqual(copy(f.values.virtualAimHistoryRef.current), history);
+    assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.host.captures.size, 0);
+  } finally { f.dispose(); }
+});
+
 test('actual createRig ambient settling preserves painting against the same committed plane', () => {
   const f = realRigFixture(), committed = f.values.directionalProjectionRef.current;
   const before = f.engine.camera.matrixWorldInverse.toArray(), key = f.context.directionalCameraKey(f.engine);

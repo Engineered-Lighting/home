@@ -51,12 +51,13 @@ reviewed independently. The original idle-timer readout, six separately outlined
 wedges, permanent guides, oversized pill/ring, selected-zone quick presets and
 instant diffuser-temperature jumps were genuine differences and are corrected.
 
-- 48 pure geometry, pickup and easing cases; 116 actual-source integration
+- 48 pure geometry, pickup and easing cases; 118 actual-source integration
   cases; 20 presentation/resource cases; 56 engine/bridge cases; 26 actual
   equipment drawing cases pass. Equipment timing includes analytical 160 ms and
   stalled-frame checks, remembered targets and current reduced-motion behavior.
-- Native directional browser: all 13 stages pass in 19.3 seconds. Receipt:
-  `.tmp/apartment-directional-browser/run-1792387027111/receipt.json`.
+- Native directional browser: all 13 stages and the 91-event native input
+  ledger pass after the stationary-click fix in 23.0 seconds. Receipt:
+  `.tmp/apartment-directional-browser/run-1792389971571/receipt.json`.
 - Separate full Home shell browser passes in 47.3 seconds, retaining all ten
   mixed/zero/restoration cases, native focus, exact aim/Undo and saved-byte
   assertions. Receipt:
@@ -66,8 +67,9 @@ instant diffuser-temperature jumps were genuine differences and are corrected.
   fade; immediate logical publication is verified separately. This run also
   caught and fixed a real one-frame mode-pill delay; mode, tab and pill now
   publish together before another renderer frame.
-- Matching software-browser diagnostic: all 13 stages pass in 52.4 seconds.
-  Receipt: `.tmp/apartment-directional-browser/run-1792386062973/receipt.json`.
+- Matching software-browser diagnostic: all 13 stages and the native input
+  ledger pass after the stationary-click fix in 44.3 seconds.
+  Receipt: `.tmp/apartment-directional-browser/run-1792390036569/receipt.json`.
   This is a workstation diagnostic, not hosted performance qualification.
 - Both retain the full authored scene, DPR1, normal motion, exact native mouse
   sequence and 145-second deadline. The trusted native move's actual producer
@@ -273,6 +275,23 @@ drag starts occur. Receipts:
 `.tmp/apartment-directional-browser/run-1792388990095/receipt.json` and
 `.tmp/apartment-directional-browser/run-1792389024486/receipt.json`.
 The workstation passes do not substitute for fresh hosted checks.
+
+Hosted run `39206732227` completed within the unchanged ten-minute window.
+The full Home shell passed in 143 seconds and 29 mapped suites passed, but the
+directional proof found a real stationary-click regression after 77 seconds.
+The native down/up coordinates were identical with no intervening movement;
+the release nevertheless changed a 1% radial to Off. Re-unprojecting that fixed
+screen point after the ambient camera's drawn plane moved had manufactured a
+new paint sample. The exact descriptor-preservation assertion remains intact.
+
+The parent now remembers the last admitted native client coordinates and skips
+duplicate samples after all existing currentness and unprojection guards.
+Distinct-coordinate final releases still paint synchronously. No threshold,
+pickup math, renderer, input sequence, deadline or authority contract changes.
+Two actual-source regressions using the real rig and published presentation
+planes fail before the fix and pass after it; all 118 integration cases pass.
+The failed hosted receipt remains at
+`.tmp/radial-ci-670f-artifacts/apartment-directional-browser/run-1792389310882/receipt.json`.
 
 ## Ticket coverage and retained limits
 

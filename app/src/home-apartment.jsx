@@ -5327,7 +5327,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (!gesture?.readback().active) return;
       consume(event);
       radialGestureOwnerRef.current = { gesture, projection, pointerId: event.pointerId, fixtureId: virtualFixtureId,
-        identity: api.identityKey(snapshot.descriptor), lastPatch: null, cancel: () => cancel("escape") };
+        identity: api.identityKey(snapshot.descriptor), lastClientX: event.clientX, lastClientY: event.clientY,
+        lastPatch: null, cancel: () => cancel("escape") };
       const initial = gesture.readback(), rect = host.getBoundingClientRect();
       directionalViewRef.current?.pointer({ zone: initial.zone, level: initial.level,
         x: event.clientX - rect.left, y: event.clientY - rect.top }, true);
@@ -5339,6 +5340,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       consume(event);
       const context = current(owner), local = point(event, owner.projection);
       if (!context || !local) { cancel("retired-or-unprojectable"); return; }
+      // Camera settling can move the plane beneath a stationary pointer.
+      // Only a new native client point supplies another paint sample.
+      if (event.clientX === owner.lastClientX && event.clientY === owner.lastClientY) return;
+      owner.lastClientX = event.clientX; owner.lastClientY = event.clientY;
       const result = owner.gesture.move({ snapshot: context.descriptor, pointerId: event.pointerId, point: local });
       if (!owner.gesture.readback().active) { cancel("retired"); return; }
       if (result?.patch?.radials?.length) {

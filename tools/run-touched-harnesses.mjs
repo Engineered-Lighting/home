@@ -118,8 +118,8 @@ const MAP = [
       "test-apartment-aim-wiring-room-browser.mjs", "test-apartment-aim-wiring-phone-browser.mjs", "test-apartment-manual-intent-contract.mjs",
       "run-apartment-aim-presentation-tests.mjs", "run-apartment-aim-lifecycle-browser.mjs", "run-apartment-aim-proposals-tests.mjs"]],
   // Named aims and Echo's engineered aim on the shared proposal path.
-  [/^(?:app\/src\/(?:home-apartment(?:-named-aims|-echo-aim|-aim-proposals)\.js|home-apartment(?:-named-aim|-room-overlay|-aim)?\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-named-aims(?:-browser|-shell-browser)?\.mjs)$/,
-    ["test-apartment-named-aims.mjs", "test-apartment-named-aims-browser.mjs", "test-apartment-named-aims-shell-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-named-aims|-echo-aim|-chat-aim|-aim-proposals)\.js|home-apartment(?:-named-aim|-room-overlay|-aim)?\.jsx|home-app\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-(?:named-aims(?:-browser|-shell-browser)?|chat-aim)\.mjs)$/,
+    ["test-apartment-named-aims.mjs", "test-apartment-named-aims-browser.mjs", "test-apartment-named-aims-shell-browser.mjs", "test-apartment-chat-aim.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [

@@ -8614,12 +8614,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         ? unifiedDockCollapsed ? "collapsed" : unifiedDockExpanded ? "expanded" : "default" : "hidden",
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
-      openSetup: openUnifiedSetup,
+      openSetup: openUnifiedSetup, aimBridge: echoNamedAims.chatBridge || null,
       selectHome: id => travelToSite(id, { presentation: "interior" }) });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
-    unifiedDockCollapsed, unifiedDockExpanded]);
+    unifiedDockCollapsed, unifiedDockExpanded, echoNamedAims.chatBridge]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);

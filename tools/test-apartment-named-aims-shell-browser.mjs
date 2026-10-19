@@ -55,7 +55,7 @@ const files = sources(SRC);
 for (const name of ['frame.json', 'manifest.json', 'points.sim.ply', 'seed-model.json']) files.set('/assets/apartment/' + name, path.join(SRC, 'assets/apartment', name));
 const receipt = { schema: 'home-apartment-named-aims-shell-browser-1', authored_room: true, simulation_mode: true, household_data: false,
   screenshots: false, source_sha256: Object.fromEntries(['home-apartment.jsx', 'home-apartment-named-aim.jsx', 'home-apartment-named-aims.js',
-    'home-apartment-echo-aim.js', 'home-apartment-aim.jsx'].map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
+    'home-apartment-echo-aim.js', 'home-apartment-aim.jsx', 'home-apartment-chat-aim.js', 'home-app.jsx'].map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
   checks: [], requests: [], forbidden: [], websocket_sends: [], errors: [] };
 const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
 
@@ -164,6 +164,40 @@ async function proof() {
     await page.waitForFunction(() => window.__SIM_APARTMENT_AIM_RUNTIME.read('authored-echo-spot').current_destination.id === 'authored-painting');
     await page.waitForFunction(() => /no hardware command sent/.test(document.body.innerText));
     return { chip: chip.replace(/\s+/g, ' ').trim(), set: 'simulated' };
+  });
+  await check('C04 Chat aim: the card proposes in cyan, its Set equals the bar Set, and nothing is dispatched', async () => {
+    // Count every other route a submitted message could take.
+    await page.evaluate(() => {
+      const spy = window.__chatAimSpy = { lighting: 0, memory: 0, sockets: 0, hooked: [] };
+      for (const [name, key] of [['HomeLightingControl', 'lighting'], ['HomePersonalMemory', 'memory']]) {
+        const api = window[name]; if (!api?.run) continue;
+        const run = api.run.bind(api); api.run = (...args) => { spy[key]++; return run(...args); }; spy.hooked.push(name);
+      }
+      const Socket = window.WebSocket; window.WebSocket = function (...args) { spy.sockets++; return new Socket(...args); };
+    });
+    const before = { requests: receipt.requests.length, sends: receipt.websocket_sends.length };
+    await page.getByRole('tab', { name: /^Chat/ }).click();
+    const composer = page.getByRole('combobox', { name: 'Command input' });
+    await composer.fill('aim the authored spot at the floor spot');
+    await composer.press('Enter');
+    const card = page.locator('[data-apt-chat-aim-card]');
+    await card.waitFor();
+    assert.equal(await card.getAttribute('data-origin'), 'chat');
+    assert.match(await card.innerText(), /Authored spot → Floor spot[\s\S]*Proposed · simulated/);
+    await page.waitForFunction(() => { const bar = document.querySelector('[data-apt-aim-bar]'); return bar && !bar.hidden; });
+    assert.equal(await page.locator('[data-apt-aim-bar-target]').innerText(), 'Floor spot', 'the same proposal shows in the room');
+    assert.equal((await page.evaluate(() => window.__SIM_APARTMENT_AIM_RUNTIME.read('authored-echo-spot').current_destination)).id, 'authored-painting');
+    await card.locator('[data-apt-chat-aim-action="set"]').click();
+    await page.waitForFunction(() => window.__SIM_APARTMENT_AIM_RUNTIME.read('authored-echo-spot').current_destination.id === 'authored-floor-spot');
+    await page.waitForFunction(() => document.querySelector('[data-apt-chat-aim-card]')?.getAttribute('data-state') === 'set');
+    assert.equal(await page.locator('[data-apt-aim-bar]').isHidden(), true, 'Set from the card clears the room bar too');
+    const spy = await page.evaluate(() => window.__chatAimSpy);
+    assert.deepEqual(spy, { lighting: 0, memory: 0, sockets: 0, hooked: ['HomeLightingControl', 'HomePersonalMemory'] }, 'no lighting-control or memory dispatch and no WebSocket');
+    const later = receipt.requests.slice(before.requests);
+    assert.equal(later.some(request => !['GET', 'HEAD'].includes(request.method) || /\/api\/|\/proxy\//.test(request.path)), false,
+      'no agent, service or proxy request');
+    assert.equal(receipt.websocket_sends.length, before.sends);
+    return { card: 'set', dispatches: spy };
   });
   assert.deepEqual(receipt.forbidden, [], 'no forbidden route, other origin or non-GET request');
   assert.equal(receipt.requests.some(request => !['GET', 'HEAD'].includes(request.method)), false, 'zero non-GET requests');

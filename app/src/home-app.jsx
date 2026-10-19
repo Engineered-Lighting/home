@@ -5230,7 +5230,7 @@ function HomeChatSurface({ children, unified, active, style }) {
     data-home-chat-surface="1" style={unified ? undefined : style}>{children}</div>;
 }
 
-function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelAction, onUndoAction, onControlAction, controlLifecycles, onWhy }) {
+function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelAction, onUndoAction, onControlAction, controlLifecycles, onWhy, aimBridge }) {
   const ChatEvent = window.EventContent;
   // Keep the same component and event path across layout switches. Remounting
   // an action or private review would discard its local lifecycle state.
@@ -5238,8 +5238,9 @@ function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelA
     <TurnHeader speaker={group.speaker} time={group.time} tone={group.speaker === "system" ? "system" : group.speaker} />
     <TurnBody density={density}>{group.events.map(event =>
       <div key={event.id} className={unified ? "apt-ui-chat-event" : undefined} data-kind={event.kind}>
-        <ChatEvent e={event} onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction}
-          onControlAction={onControlAction} lifecycle={controlLifecycles ? controlLifecycles.get(event.id) : undefined} onWhy={onWhy} />
+        {event.kind === "apartment-aim-proposal" && window.AptChatAimCard ? <window.AptChatAimCard event={event} bridge={aimBridge} />
+          : <ChatEvent e={event} onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction}
+          onControlAction={onControlAction} lifecycle={controlLifecycles ? controlLifecycles.get(event.id) : undefined} onWhy={onWhy} />}
       </div>)}</TurnBody>
   </div>;
 }
@@ -5617,6 +5618,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   shellTabRef.current = shellTab;
   const [shellDetent, setShellDetent] = useState("half");
   const [shellState, setShellState] = useState(null);
+  const shellStateRef = useRef(null);
+  shellStateRef.current = shellState;
   const [shellControlsHost, setShellControlsHost] = useState(null);
   const [shellCameraHost, setShellCameraHost] = useState(null);
   const [shellMetricsOpen, setShellMetricsOpen] = useState(false);
@@ -9654,6 +9657,12 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     setInput("");
     const cameraQueryClient = haClientRef.current;
     const cameraQueryGeneration = cameraQueryGenerationRef.current;
+    // Chat aim proposals (APT-C04) go to the Apartment's shared Set/Discard
+    // path and nowhere else: no lighting control, agent or service call.
+    if (window.HomeApartmentChatAim?.run(text, { addEvent, bridge: shellStateRef.current?.aimBridge })) {
+      window.HomeCameraQuery?.reset();
+      return;
+    }
     if (window.HomePersonalMemory?.run(text, {addEvent,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
     })) {
@@ -12277,7 +12286,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
                   onConfirmAction={confirmAction} onCancelAction={cancelAction}
                   onUndoAction={undoAction}
                   onControlAction={onControlAction} controlLifecycles={controlLifecycles}
-                  onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} />
+                  onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} aimBridge={shellState?.aimBridge} />
               </div>
             ))}
           </div>

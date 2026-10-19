@@ -29,6 +29,7 @@ const APP_CODE_ASSET = /\.(?:js|jsx)$/i;
 // changes. The versioned loader, not a stale service-worker cache, owns them.
 const FRESH_APARTMENT_MODULES = new Set([
   "/home-apartment-aiming.js",
+  "/home-apartment-directional.js",
   "/home-apartment-gimbal-telemetry.js",
   "/home-apartment-aim.jsx",
   "/home-apartment-data.js",

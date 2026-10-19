@@ -295,6 +295,7 @@ function apartmentOperation(flags = {}) {
   const calls = [], focus = [];
   const current = { ...flags }, refs = { count: { current: flags.pairs || 0 }, arm: { current: flags.arm || 0 } };
   const bindings = {
+    radialGestureOwnerRef: { current: flags.radial ? { cancel: () => { calls.push('radial'); bindings.radialGestureOwnerRef.current = null; } } : null },
     deskTargetCaptureRef: { current: !!flags.desk },
     virtualAimGestureRef: { current: { readback: () => ({ active: !!flags.drag }), cancel: () => calls.push('drag') } },
     mapRehearsalOpen: !!flags.rehearsal,
@@ -319,6 +320,7 @@ function apartmentOperation(flags = {}) {
 const allLowerOperations = { drag: true, rehearsal: true, travel: true, tap: true, calibration: true, pairs: 3,
   camera: true, setup: true, card: true, selection: true };
 for (const row of [
+  { name: 'radial drag', flags: { radial: true, desk: true, ...allLowerOperations }, expected: 'radial', focus: 'selection' },
   { name: 'desk capture', flags: { desk: true, ...allLowerOperations }, expected: 'desk', focus: 'desk' },
   { name: 'reticle drag', flags: allLowerOperations, expected: 'drag', focus: 'drag' },
   { name: 'existing rehearsal owner', flags: { rehearsal: true, travel: true, tap: true, setup: true }, expected: 'rehearsal' },
@@ -339,6 +341,15 @@ for (const row of [
     // lifecycle, geometry or persistence effects are outside this VM seam.
   });
 }
+
+test('actual radial Escape cancels only painting and retains the selected fixture for a later Escape', () => {
+  const f = apartmentOperation({ radial: true, selection: true });
+  assert.equal(f.handle(), true); assert.deepEqual(f.calls, ['radial']); assert.deepEqual(f.focus, ['selection']);
+  assert.equal(f.bindings.radialGestureOwnerRef.current, null);
+  assert.equal(f.bindings.virtualFixtureControlsOpen, true, 'the radial cancellation path does not clear fixture selection');
+  assert.equal(f.handle(), true); assert.deepEqual(f.calls, ['radial', 'selection']);
+  assert.deepEqual(f.focus, ['selection', 'selection']);
+});
 
 test('actual embedded idle callback passes without closing; the separate modal adapter retains its close', () => {
   const f = apartmentOperation(); let closes = 0;

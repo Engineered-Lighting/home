@@ -5244,7 +5244,7 @@ function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelA
   </div>;
 }
 
-function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) {
+function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
@@ -5295,7 +5295,9 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) 
         }}>
           {[["perceptionLab", "Perception Lab"], ["metrics", "Metrics"], ["people", "People"],
             ["intel", "Intelligence"], ["labeler", "Video labeler"], ["lights", "Lights / Travel Mode"],
-            ["preferences", "Preferences / connection"], ["simulation", "Simulation"]].map(([key, label]) =>
+            ["preferences", "Preferences / connection"],
+            // As in the classic menu: simulation controls exist only inside simulation (/simulation starts it).
+            ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label]) =>
             <button type="button" role="menuitem" key={key} onClick={() => run(() => onFeature(key))}>{label}</button>)}
           <button type="button" role="menuitem" onClick={() => run(onTheme)}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
           <button type="button" role="menuitem" onClick={() => run(onPreviousHome)}>Previous Home</button>
@@ -11685,7 +11687,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       paddingBottom: 0,
     }}>
       {unifiedHome && <>
-        <ApartmentHomeBar state={shellState} theme={theme} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+        <ApartmentHomeBar state={shellState} theme={theme} simulationActive={!!sim.active} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
           onPreviousHome={() => chooseHomeLayout("classic")} onFeature={key => {
             if (key === "metrics") { setShellMetricsOpen(true); return; }
             if (key === "preferences") { showShellTab("chat"); setRemotePanelOpen(true); return; }
@@ -11726,7 +11728,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           </div>
         </aside>
         {shellMetricsOpen && <div ref={shellMetricsRef} className="apt-home-metrics" role="dialog" aria-modal="true" aria-label="Home metrics">
-          <button type="button" onClick={() => setShellMetricsOpen(false)}>Close metrics</button>{metricsStrip}</div>}
+          <button type="button" onClick={() => setShellMetricsOpen(false)}>Back</button>{metricsStrip}</div>}
       </>}
       {isSpatialWide && window.HomeApartmentView && (
         <div className={unifiedHome ? "apt-home-stage" : undefined} data-theme={unifiedHome ? theme : "dark"} style={{

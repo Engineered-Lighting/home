@@ -116,6 +116,7 @@ const MAP = [
   [/^(?:app\/src\/home-apartment-room-guide\.jsx|tools\/test-apartment-room-guide(?:\.cjs|-browser\.mjs))$/, ["test-apartment-room-guide.cjs", "test-apartment-room-guide-browser.mjs"]],
   [/^app\/src\/(?:home-apartment\.jsx|index\.html|home-feature-loader\.js|home-3d\/(?:rig\.js|markers\.js|equipment-virtual-fixtures\.mjs|apartment-perception-layer\.mjs|registered-desk-target\.mjs))$/, ["test-apartment-room-guide.cjs"]],
   [/^app\/src\/home-apartment(?:-ui)?\.jsx$/, ["test-apartment-room-guide-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-ui|-room-guide)?\.jsx|home-app\.jsx|home-perception-lab\.jsx|home-tokens\.css|home-3d\/(?:modes\.js|asset-byte-cache\.mjs|rig\.js))|tools\/(?:test-apartment-m2-(?:shell|links)-browser|fixtures\/apartment-m2-shell-harness|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["test-apartment-m2-shell-browser.mjs", "test-apartment-m2-links-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",
@@ -139,11 +140,15 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * rounded up. An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
+// The two M2 shell suites are unmeasured on hosted CI: local runs of 54 s
+// (links) and 38 s (shell), doubled for the software renderer.
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 141,
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
+  "test-apartment-m2-links-browser.mjs": 110,
+  "test-apartment-m2-shell-browser.mjs": 80,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,

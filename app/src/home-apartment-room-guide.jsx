@@ -250,7 +250,7 @@
   const ABOUT_GROUPS = [["live", "Live"], ["modeled", "Modeled"], ["authored", "Authored"], ["recorded", "Recorded"], ["unavailable", "Not available here"]];
 
   function aboutFacts({ homeId, source = {}, revision = null, liveShadow = false, simActive = false,
-    trackerStatus = null, hasVirtualFixtures = false, fixtureCount = 0, hasPerception = false } = {}) {
+    trackerStatus = null, hasVirtualFixtures = false, fixtureCount = 0, hasPerception = false, cameraViews = null } = {}) {
     const facts = [];
     const add = (group, id, title, detail) => facts.push({ group, id, title, detail });
     const rev = Number.isInteger(revision) ? ` · rev ${revision}` : "";
@@ -272,6 +272,10 @@
         "Exact analyzed frames with approximate room placement. Start and stop sessions in Camera · JEV.");
       else add("unavailable", "perception", "Body and camera results", "Need pose data");
     }
+    // Camera views are room poses. A home without a calibrated pose says why instead of guessing one.
+    if (cameraViews?.available) add("authored", "camera-views", "Camera views",
+      "Open a camera's card and choose fly to view. Return to room leaves it.");
+    else if (cameraViews) add("unavailable", "camera-views", "Camera views", cameraViews.reason || "No camera pose here");
     return facts;
   }
 

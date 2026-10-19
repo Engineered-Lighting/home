@@ -512,7 +512,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     const roomScrollBefore = await page.locator('#apt-home-panel-controls').evaluate(panel => panel.scrollTop);
     assert.ok(roomScrollBefore > 0, 'the phone room list genuinely scrolls before selecting its fourth fixture');
     await roomFixtureButton.click();
-    await page.getByRole('button', { name: 'Back to room', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'All lights', exact: true }).waitFor();
     const selectedPhoneBounds = await page.locator('[aria-label="Fixture lighting inspector"] .apt-ui-title').evaluate(title => {
       const panel = document.getElementById('apt-home-panel-controls');
       return { title: title.getBoundingClientRect().toJSON(), panel: panel.getBoundingClientRect().toJSON(), scrollTop: panel.scrollTop };
@@ -520,7 +520,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     assert.equal(selectedPhoneBounds.scrollTop, 0, 'phone list selection starts the inspector at its header');
     assert.ok(selectedPhoneBounds.title.top >= selectedPhoneBounds.panel.top - .5
       && selectedPhoneBounds.title.bottom <= selectedPhoneBounds.panel.bottom + .5, 'the selected phone fixture title is visible inside Controls');
-    await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+    await page.getByRole('button', { name: 'All lights', exact: true }).click();
     assert.equal(await page.locator('#apt-home-panel-controls').evaluate(panel => panel.scrollTop), 0, 'returning to the room starts at its header');
     checks.push({ stage: 'phone_scrolled_room_list_selection_starts_at_inspector_top', room_scroll_before: roomScrollBefore,
       selected_fixture_id: lastRoomFixture.fixture_id, ...selectedPhoneBounds });
@@ -714,8 +714,8 @@ test('unified shell keeps the real room, private controls and one chat controlle
 
     const roomZeroId = fixtureIds[0];
     async function openFixtureFromRoom(id) {
-      if (await page.getByRole('button', { name: 'Back to room', exact: true }).isVisible()) {
-        await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+      if (await page.getByRole('button', { name: 'All lights', exact: true }).isVisible()) {
+        await page.getByRole('button', { name: 'All lights', exact: true }).click();
       }
       const fixture = overviewFixtures.find(item => item.fixture_id === id);
       await page.getByRole('button', { name: 'Select ' + (fixture.label || id), exact: true }).click();
@@ -723,7 +723,7 @@ test('unified shell keeps the real room, private controls and one chat controlle
     }
     await openFixtureFromRoom(roomZeroId);
     await radialPanel.getByRole('button', { name: 'Off', exact: true }).press('Enter');
-    await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+    await page.getByRole('button', { name: 'All lights', exact: true }).click();
     await page.getByRole('button', { name: 'All off', exact: true }).press('Enter');
     await page.getByRole('button', { name: 'All on', exact: true }).press('Enter');
     for (const id of fixtureIds) {

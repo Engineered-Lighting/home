@@ -4794,9 +4794,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       }, timeout), delay));
     };
 
+    /* Collision is small and needed for picking. The Photo splat and the
+       textured mesh are large; they yield to the visible Cloud and to an
+       explicit mode switch (which loads on demand), so they wait for idle
+       time well after Cloud is usable. */
     schedule(40, 1200, () => engine.modes.preload(["collision"]));
-    schedule(mobile ? 450 : 700, 2500, () => engine.modes.preload(["splat"]));
-    schedule(mobile ? 2600 : 1600, 4500, () => engine.modes.preload(["mesh"]));
+    schedule(mobile ? 5000 : 3000, 10000, () => engine.modes.preload(["splat"]));
+    schedule(mobile ? 12000 : 8000, 20000, () => engine.modes.preload(["mesh"]));
 
     return () => {
       cancelled = true;

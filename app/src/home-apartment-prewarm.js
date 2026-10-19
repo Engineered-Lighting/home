@@ -194,7 +194,10 @@
     // large response into the HTTP cache can discard it at browser entry-size
     // limits, causing a simultaneous or subsequent Photo load to download it
     // again. Metadata and older engine bridges retain the existing read path.
-    if (/\.(?:ply|spz|glb)(?:$|[?#])/i.test(url) && engineModule?.warmApartmentAssetBytes) {
+    // points.ply is read by the engine's point loader through the HTTP cache,
+    // so it stays on the plain fetch path below rather than the byte cache.
+    if (label !== CLOUD_ASSETS[0].label
+        && /\.(?:ply|spz|glb)(?:$|[?#])/i.test(url) && engineModule?.warmApartmentAssetBytes) {
       const result = await engineModule.warmApartmentAssetBytes({ url, ...scope, signal });
       return { label, url, bytes: result.bytes, cacheHit: result.cacheHit,
         ms: Math.round(performance.now() - started) };
@@ -210,7 +213,57 @@
     };
   }
 
+  // The resident engine reads points.ply through its own loader, never the
+  // shared byte cache. Once it owns the same scope's cloud, warming it again is
+  // a duplicate download (and an unread byte-cache copy).
+  function residentCloudLoaded(scope) {
+    const engine = window.__APT_ENGINE;
+    return !!engine?.pointsPromise && engine.sceneIdentity?.siteId === scope.siteId
+      && (engine.sceneIdentity?.contentRevision ?? null) === (scope.contentRevision ?? null);
+  }
+
+  // The automatic post-boot run defers the large Photo/mesh downloads so they
+  // do not saturate the link while Cloud is the visible view. A manual or
+  // explicit start keeps warming them immediately.
+  const LARGE_GROUP_LABELS = new Set(["photo scan", "mesh"]);
+  const POST_BOOT_LARGE_DELAY_MS = 10000;
+
+  function deferLargeGroup(signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason || new DOMException("aborted", "AbortError")); return; }
+      let idleId = null;
+      const timer = setTimeout(() => { idleId = idle(() => { cleanup(); resolve(); }, 5000); }, POST_BOOT_LARGE_DELAY_MS);
+      const onAbort = () => {
+        cleanup();
+        clearTimeout(timer);
+        if (idleId != null) { window.cancelIdleCallback?.(idleId); clearTimeout(idleId); }
+        reject(signal.reason || new DOMException("aborted", "AbortError"));
+      };
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  // A resident engine loading the Photo splat owns the link; the mesh warm
+  // waits for that load to settle instead of competing with it.
+  function waitForSplatIdle(signal, timeoutMs = 120000) {
+    const loading = () => window.__APT_ENGINE?.modes?.debugInfo?.()?.loadStatus?.splat === "loading";
+    if (!loading()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (signal?.aborted) { clearInterval(timer); reject(signal.reason || new DOMException("aborted", "AbortError")); return; }
+        if (!loading() || Date.now() - started >= timeoutMs) { clearInterval(timer); resolve(); }
+      }, 500);
+    });
+  }
+
   async function warmOneOf(group, signal, scope, engineModule, isCurrent) {
+    if (group === CLOUD_ASSETS[0] && residentCloudLoaded(scope)) {
+      const skipped = { label: group.label, skipped: "resident engine owns the point cloud" };
+      if (isCurrent()) state.warmed.push(skipped);
+      return skipped;
+    }
     const errors = [];
     for (const name of group.names) {
       if (!isCurrent()) return null;
@@ -325,8 +378,19 @@
             if (validAssetPlan(sharedPlan)) assetPlan = sharedPlan;
           } catch (e) { /* compatibility fallback for an older cached engine module */ }
         }
+        let deferred = false;
         for (const group of groupsForMode(mode, assetPlan)) {
           if (!isCurrent()) return;
+          if (!deferred && state.reason === "post-boot" && LARGE_GROUP_LABELS.has(group.label)) {
+            deferred = true;
+            state.current = "waiting for idle before large assets";
+            await deferLargeGroup(ownController.signal);
+            if (!isCurrent()) return;
+          }
+          if (group.label === "mesh") {
+            await waitForSplatIdle(ownController.signal);
+            if (!isCurrent()) return;
+          }
           await warmOneOf(group, ownController.signal, scope, engineModule, isCurrent);
         }
         if (!isCurrent()) return;
@@ -387,7 +451,12 @@
         setTimeout(waitForBoot, 500);
         return;
       }
-      idle(() => start({ mode: "full", reason: "post-boot" }), window.HG_WEB_MODE ? 1800 : 5000);
+      // Honour a saved prewarm preference; "full" stays the default.
+      let saved = null;
+      try { saved = localStorage.getItem(MODE_KEY); } catch (_) { /* optional preference storage */ }
+      const mode = VALID_MODES.has(saved) ? saved : "full";
+      if (mode === "off") return;
+      idle(() => start({ mode, reason: "post-boot" }), window.HG_WEB_MODE ? 1800 : 5000);
     };
     setTimeout(waitForBoot, window.HG_WEB_MODE ? 350 : 2500);
   }

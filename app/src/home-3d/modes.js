@@ -89,9 +89,13 @@ export function validateSceneFrame(frame, { siteId = null } = {}) {
 /** Own network cancellation; Spark's decoder itself has no AbortSignal API. */
 export async function loadSplatAsset({ url, signal, siteId = null, contentRevision = null }) {
     assertLiveSignal(signal);
-    const { SplatMesh } = await import('@sparkjsdev/spark');
-    assertLiveSignal(signal);
-    const fileBytes = await fetchApartmentAssetBytes({ url, siteId, contentRevision, signal });
+    // A cold Spark module (several MB) and the splat bytes download in
+    // parallel; neither waits for the other. Both stay owned by `signal`.
+    const modulePromise = import('@sparkjsdev/spark');
+    const bytesPromise = fetchApartmentAssetBytes({ url, siteId, contentRevision, signal });
+    modulePromise.catch(() => {});
+    bytesPromise.catch(() => {});
+    const [{ SplatMesh }, fileBytes] = await Promise.all([modulePromise, bytesPromise]);
     assertLiveSignal(signal);
     const splat = new SplatMesh({ fileBytes, fileName: new URL(url, window.location.href).pathname });
     try {
@@ -350,6 +354,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         }
     }
 
+    let photoFloorLoading = null;
+
     function loadSplat() {
         assertLive();
         if (state.splat) return Promise.resolve(state.splat);
@@ -367,12 +373,10 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     async function _loadSplatImpl() {
         if (activeDecodes.has('sparkRenderer')) throw new Error('scene_loader_still_stopping');
         const frame = await sceneFrame();
-        // These independent, owned loads must overlap. The textured floor is
-        // still required before Photo adopts, but need not wait for Spark.
-        const photoFloorReady = usePhotoFloor ? loadMesh({ requireTextured: true }) : null;
-        // A fast mesh failure is observed below after the splat settles; attach
-        // a handler now so it cannot become an unhandled promise rejection.
-        photoFloorReady?.catch(() => {});
+        // Photo adopts as soon as the splat decodes. The textured floor backing
+        // is requested afterwards (startPhotoFloor) so it neither delays Photo
+        // nor shares bandwidth with the splat download; the point cloud backs
+        // transparent gaps until the floor arrives.
         let lastErr = null;
         const assetPlan = currentAssetPlan();
         const mobile = assetPlan.deviceClass === 'mobile';
@@ -415,13 +419,6 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     }
                 }
                 assertLive();
-                // The same revision's actual scan floor backs transparent Photo
-                // gaps. Reuse the owned/deduplicated mesh loader and textures.
-                if (usePhotoFloor) {
-                    await photoFloorReady;
-                    assertLive();
-                    if (state.meshFallback) throw new Error('photo_floor_support_unavailable');
-                }
                 splat.renderOrder = 0;
                 // Spark's objects have no geometry bounds — three.js frustum-
                 // culls them, which silently skips onBeforeRender (Spark's
@@ -432,6 +429,9 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 state.splatCutaway = splatCutaway;
                 state.splatSource = url;
                 visibleFor(state.mode);
+                // The same revision's actual scan floor backs transparent Photo
+                // gaps. Reuse the owned/deduplicated mesh loader and textures.
+                if (usePhotoFloor) startPhotoFloor();
                 return splat;
             } catch (e) {
                 splatCutaway?.dispose?.();
@@ -442,6 +442,24 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             }
         }
         throw lastErr || new Error('no splat asset reachable');
+    }
+
+    function photoFloorReady() {
+        return !!state.mesh && !state.meshFallback;
+    }
+
+    // Owned, best-effort floor backing for an adopted Photo splat. A failure
+    // keeps the point-cloud backing; it never retracts the splat.
+    function startPhotoFloor() {
+        if (photoFloorReady() || photoFloorLoading) return;
+        state.photoFloorUnavailable = false;
+        const p = loadMesh({ requireTextured: true });
+        photoFloorLoading = p;
+        p.catch(() => { if (!disposed && !lifetime.signal.aborted) state.photoFloorUnavailable = true; })
+            .finally(() => {
+                if (photoFloorLoading === p) photoFloorLoading = null;
+                if (!disposed && !lifetime.signal.aborted) visibleFor(state.mode);
+            });
     }
 
     function loadMesh({ requireTextured = false } = {}) {
@@ -543,6 +561,9 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         const map = material && material.map;
         if (map) {
             map.colorSpace = THREE.SRGBColorSpace;
+            // Floors and walls are seen at grazing dollhouse angles.
+            const maxAnisotropy = renderer?.capabilities?.getMaxAnisotropy?.();
+            if (Number.isFinite(maxAnisotropy) && maxAnisotropy > 1) map.anisotropy = maxAnisotropy;
             map.needsUpdate = true;
             return new THREE.MeshBasicMaterial({
                 map,
@@ -644,7 +665,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
     function visibleFor(mode) {
         const splatActive = mode === 'splat' || !!state.fading;
-        const floorOnly = usePhotoFloor && splatActive;
+        const floorOnly = usePhotoFloor && splatActive && photoFloorReady();
+        const pointsBacking = usePhotoFloor && mode === 'splat' && !!state.splat && !photoFloorReady();
         photoFloorUniforms.uPhotoFloorOnly.value = floorOnly ? 1 : 0;
         if (state.splat) {
             state.splat.visible = splatActive;
@@ -662,7 +684,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 }
             });
         }
-        setPointsVisible(mode === 'points' || !!state.fading);
+        setPointsVisible(mode === 'points' || !!state.fading || pointsBacking);
     }
 
     const modes = {
@@ -820,7 +842,12 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     .catch((e) => ({ mode: 'splat', ok: false, error: String(e?.message || e) })));
             }
             if (list.includes('mesh') && !state.mesh) {
-                jobs.push(loadMesh()
+                // A background mesh preload yields to an in-flight Photo splat
+                // so the two large downloads never share the link; Photo then
+                // requests its own floor mesh, which this joins.
+                const afterSplat = splatLoading ? splatLoading.then(() => {}, () => {}) : Promise.resolve();
+                jobs.push(afterSplat
+                    .then(() => { assertLive(); return state.mesh || loadMesh(); })
                     .then(() => ({ mode: 'mesh', ok: true }))
                     .catch((e) => ({ mode: 'mesh', ok: false, error: String(e?.message || e) })));
             }
@@ -865,6 +892,9 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     enabled: usePhotoFloor,
                     visible: usePhotoFloor && !!state.mesh?.visible && photoFloorUniforms.uPhotoFloorOnly.value > 0.5,
                     source: usePhotoFloor ? state.meshSource : null,
+                    pending: usePhotoFloor && !!photoFloorLoading,
+                    unavailable: usePhotoFloor && state.photoFloorUnavailable === true,
+                    pointsBacking: usePhotoFloor && state.mode === 'splat' && !!state.splat && !photoFloorReady(),
                     geometry: 'registered_display_mesh',
                     floorRangeM: [-0.25, 0.10],
                     writesDepth: false,

@@ -31,13 +31,16 @@ const FRESH_APARTMENT_MODULES = new Set([
   "/home-apartment-aiming.js",
   "/home-apartment-directional.js",
   "/home-apartment-aim-proposals.js",
+  "/home-apartment-room-overlay.jsx",
   "/home-apartment-gimbal-telemetry.js",
   "/home-apartment-aim.jsx",
+  "/home-apartment-command-ladder.jsx",
   "/home-apartment-data.js",
   "/home-apartment-sim.js",
   "/home-apartment.jsx",
   "/home-3d/markers.js",
   "/home-3d/apartment-directional-presentation.mjs",
+  "/home-3d/apartment-aim-presentation.mjs",
 ]);
 const HEAVY_APARTMENT_ASSET = /^\/assets\/apartment\/.*\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i;
 const NEVER_CACHE_PREFIXES = [

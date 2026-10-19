@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import Core from '../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { ABBA_CRITERION, analyzeAbba, displayBound } from './apartment-overlay-abba.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), SRC = path.join(ROOT, 'app/src');
@@ -19,7 +20,10 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const phase=process.env.HOME_APARTMENT_OVERLAY_PROOF_PHASE||'candidate';
 assert.ok(['candidate','baseline-before','baseline-after'].includes(phase),'only explicit baseline or candidate benchmark phases are allowed');
 const profile=process.env.HOME_APARTMENT_OVERLAY_PROOF_PROFILE||'functional';
-assert.ok(['functional','desktop-benchmark'].includes(profile),'only functional or desktop-benchmark resource profiles are allowed');
+assert.ok(['functional','desktop-benchmark','desktop-abba'].includes(profile),'only functional, desktop-benchmark or desktop-abba resource profiles are allowed');
+assert.ok(profile!=='desktop-abba'||phase==='candidate','the pre-registered ABBA profile measures the current worktree only');
+// The functional proof keeps its 145s deadline; the separate ABBA profile has its own fixed deadline.
+const PROOF_DEADLINE_MS=profile==='desktop-abba'?420000:145000;
 assert.ok(phase==='candidate'||profile==='desktop-benchmark','source-paired baseline phases require the explicit desktop-benchmark profile');
 const viewport=profile==='functional'?{width:390,height:844}:{width:1366,height:768};
 const deviceScaleFactor=profile==='functional'?0.5:1;
@@ -67,7 +71,7 @@ function noiseComparison(before,active,after,key){
     interpretation:overlay.every(value=>value>=min&&value<=max)?'within-observed-baseline-variability':'requires-review'};
 }
 
-test('real renderer overlay bridge stays canonical across modes, lifetime races and paired performance windows',{timeout:180000},async()=>{
+test('real renderer overlay bridge stays canonical across modes, lifetime races and paired performance windows',{timeout:profile==='desktop-abba'?450000:180000},async()=>{
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT,'this proof uses only current worktree source');
   const run=path.join(ROOT,'.tmp/apartment-overlay-bridge-browser','run-'+Date.now()+'-'+phase);fs.mkdirSync(run,{recursive:true});
   const packs=path.join(run,'packs'),privateRoot=path.join(run,'private'),echo=installPack(packs,'echo'),victoria=installPack(packs,'victoria');
@@ -81,7 +85,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
     household_data:false,physical_commands:0,camera_sessions:0,model_sessions:0,survey_writes:0,screenshots:false,
     source_phase:phase,proof_profile:profile,proof_pacing:'browser-default',configured_viewport:viewport,configured_device_scale_factor:deviceScaleFactor,
     fixture_display_scope:profile==='functional'?'on-for-sustained-orbit-off-for-bridge-sampling':'on-throughout',
-    performance_scope:profile==='functional'?'functional-viewport-capacity-only':'desktop-benchmark-requires-paired-review',
+    performance_scope:profile==='functional'?'functional-viewport-capacity-only':profile==='desktop-abba'?'desktop-abba-preregistered-authored-scenes':'desktop-benchmark-requires-paired-review',
     engine_source:baselineEngine?{mode:'public-baseline-engine-only',commit:baselineCommit,sha256:hash(baselineEngine),other_sources:'current-worktree'}
       :{mode:'candidate-worktree',sha256:hash(fs.readFileSync(path.join(SRC,'home-3d/engine.js')))},
     checks:[],performance:[],warmups:[],checkpoints:[],timing_windows:[],requests:[],forbidden:[],missing_code:[],errors:[],served:{},browser:browserOptions(),startup:{checkpoints:[],responses:[]}};
@@ -89,7 +93,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
   const checkpoint=(name,detail={})=>{receipt.current_phase=name;receipt.checkpoints.push({name,elapsed_ms:Date.now()-proofStarted,...detail});};
   const recordWindow=(mode,condition,rows)=>{receipt.timing_windows.push({mode,condition,elapsed_ms:Date.now()-proofStarted,rows});checkpoint(mode+' '+condition+' stats complete');};
   let server,browser,context,page,origin,handler,timer,releaseLeafRequest;
-  const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{browser?.close().catch(()=>{});server?.closeAllConnections();reject(Error('145s overlay bridge browser deadline'));},145000)});
+  const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{browser?.close().catch(()=>{});server?.closeAllConnections();reject(Error((PROOF_DEADLINE_MS/1000)+'s overlay bridge browser deadline'));},PROOF_DEADLINE_MS)});
   async function proof(){
     server=http.createServer((req,res)=>{
       try{
@@ -269,6 +273,61 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       });
       p.stats=()=>new Promise((resolve,reject)=>{const rows=[],timeout=setTimeout(()=>{off();reject(Error('production stats deadline'))},10000);const off=p.engine.on('stats',value=>{rows.push({p95:value.p95,renderP95:value.renderP95,fps:value.fps,pixelRatio:value.pixelRatio,calls:value.calls,tris:value.tris,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,virtual_spotlights_visible:p.engine.overlay.virtualFixturesReadback().visible,...(p.expectActive?{dotDraws:p.timedDraws,labelHidden:p.label.hidden,dotVisible:p.layer.group.children[0]?.visible,layerAttached:!!p.layer.group.parent,projection:p.layer.project(p.point)}:{})});if(rows.length===4){clearTimeout(timeout);off();resolve(rows)}})});
     },profile==='functional');
+    if(profile==='desktop-abba')await page.evaluate(()=>{
+      const p=window.__overlayBridgeProof,p95=values=>{const sorted=[...values].sort((a,b)=>a-b);return sorted[Math.floor(sorted.length*.95)]||0;};
+      // Treatment A: no overlay layer. Treatment B: one layer, one dot and
+      // label per fixture display anchor. Switching never touches fixtures.
+      p.abbaSet=async(treatment,descriptors)=>{
+        if(treatment==='A'){p.abbaController?.abort();p.abbaController=null;p.abbaLayer=null;return;}
+        if(p.abbaLayer)return;
+        const controller=new AbortController();p.abbaController=controller;
+        p.abbaLayer=await p.engine.createUiOverlayLayer({host:p.host,signal:controller.signal,isCurrent:()=>window.__APT_ENGINE===p.engine&&p.engine.sceneIdentity===p.identity});
+        if(!p.abbaLayer)throw Error('ABBA overlay layer refused');
+        for(const item of descriptors)p.abbaLayer.addAnchor({point_m:item.point,label:item.label});
+        // Draw witness: renderer.info call counts do not include these dots,
+        // so count actual onBeforeRender calls, as the functional proof does.
+        for(const dot of p.abbaLayer.group.children){const original=dot.onBeforeRender;dot.onBeforeRender=function(...args){p.abbaDotDraws=(p.abbaDotDraws||0)+1;original?.apply(this,args)};}
+      };
+      // 120 warm-up frames, then the first production stats emission whose
+      // 120-frame ring lies entirely after the warm-up.
+      p.abbaWindow=()=>new Promise((resolve,reject)=>{
+        let rafs=0,last=null,raf,settled=false,drawsAtWindow=null;const intervals=[];
+        const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timeout);cancelAnimationFrame(raf);off();if(error)reject(error);else resolve(value);};
+        const timeout=setTimeout(()=>finish(Error('ABBA window deadline')),20000);
+        const off=p.engine.on('stats',value=>{
+          if(rafs<240)return;
+          const labels=[...p.host.querySelectorAll('.apt-ui-overlay-label')];
+          finish(null,{frameP95:value.p95,medianFrame:1000/value.fps,renderP95:value.renderP95,rafP95:p95(intervals.slice(-120)),
+            fps:value.fps,raf_intervals:intervals.length,warmup_rafs:120,observed_rafs:rafs,calls:value.calls,tris:value.tris,
+            pixelRatio:value.pixelRatio,quality:value.performance.qualityLevel,performanceMode:value.performance.mode,
+            spotlightsVisible:p.engine.overlay.virtualFixturesReadback().visible,visibility:document.visibilityState,
+            layers:p.host.querySelectorAll('.apt-ui-overlay-layer').length,labels:labels.length,visibleLabels:labels.filter(label=>!label.hidden).length,
+            visibleDots:p.abbaLayer?p.abbaLayer.group.children.filter(child=>child.visible).length:0,
+            windowDotDraws:(p.abbaDotDraws||0)-(drawsAtWindow??(p.abbaDotDraws||0))});
+        });
+        const step=time=>{rafs++;if(rafs===120)drawsAtWindow=p.abbaDotDraws||0;if(rafs>120&&last!==null)intervals.push(time-last);last=time;raf=requestAnimationFrame(step);};
+        raf=requestAnimationFrame(step);
+      });
+    });
+    const runAbba=async mode=>{
+      const descriptors=await page.evaluate(()=>{const overlay=window.__APT_ENGINE.overlay;return overlay.virtualFixturesReadback().fixtures.map(item=>({id:item.fixture_id,label:item.label,point:overlay.virtualFixtureInteractionDescriptor(item.fixture_id).display_anchor_m}));});
+      assert.equal(descriptors.length,4);
+      const slots=[];
+      for(let block=1;block<=ABBA_CRITERION.minimumBlocks;block++)for(const slot of ABBA_CRITERION.order){
+        const treatment=slot[0];checkpoint(mode+' abba block '+block+' '+slot+' start');
+        const row=await page.evaluate(async({treatment,descriptors})=>{const p=window.__overlayBridgeProof;await p.abbaSet(treatment,descriptors);return p.abbaWindow();},{treatment,descriptors});
+        assert.ok([row.frameP95,row.medianFrame,row.renderP95,row.rafP95].every(value=>Number.isFinite(value)&&value>=0));
+        assert.ok(row.raf_intervals>=120);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');
+        assert.equal(row.pixelRatio,deviceScaleFactor);assert.equal(row.spotlightsVisible,true);assert.equal(row.visibility,'visible');
+        if(treatment==='A')assert.deepEqual([row.layers,row.labels],[0,0],'treatment A has no overlay layer');
+        else{assert.deepEqual([row.layers,row.labels],[1,4],'treatment B labels all four fixtures');assert.ok(row.visibleLabels>0&&row.visibleDots>0,'treatment B draws actual labels and dots');
+          assert.ok(row.windowDotDraws>=row.visibleDots*120,'treatment B witnesses actual dot draws on every window frame');}
+        slots.push({block,slot,treatment,...row});
+      }
+      await page.evaluate(()=>window.__overlayBridgeProof.abbaSet('A'));
+      (receipt.abba.scenes ||= []).push({mode,anchors:descriptors.map(item=>({fixture_id:item.id,point_m:item.point})),slots});
+    };
+    if(profile==='desktop-abba')receipt.abba={criterion:ABBA_CRITERION,camera:'snapHome(0) static',treatments:{A:'no overlay layer',B:'one layer, four fixture anchors with dot and label'}};
     for(const mode of ['points','splat','mesh']){
       checkpoint(mode+' mode and empty warm start');
       await page.evaluate(async mode=>{const p=window.__overlayBridgeProof;p.engine.setPerformanceMode('maxFidelity');p.engine.rig.snapHome(0);await p.engine.modes.setMode(mode);await p.warm('empty')},mode);
@@ -277,6 +336,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       if(mode==='points'){assert.ok(readiness.points.count>0);assert.equal(readiness.points.visible,true);}
       if(mode==='splat'){assert.equal(readiness.debug.loadStatus.splat,'loaded');assert.equal(readiness.debug.splat,true);assert.equal(readiness.debug.splatVisible,true);assert.equal(readiness.debug.sparkVisible,true);assert.ok(readiness.debug.splatSource);assert.ok(readiness.debug.numSplats>0);}
       if(mode==='mesh'){assert.equal(readiness.debug.loadStatus.mesh,'loaded');assert.equal(readiness.debug.meshFallback,false);assert.ok(readiness.debug.meshSource?.endsWith('mesh.glb'));}
+      if(profile==='desktop-abba'){await runAbba(mode);continue;}
       checkpoint(mode+' before stats start');
       const before=await page.evaluate(()=>window.__overlayBridgeProof.stats());recordWindow(mode,'before',before);
       if(phase!=='candidate'){
@@ -306,16 +366,82 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
           const fixtureReadback=p.engine.overlay.virtualFixturesReadback();
           const draw={draws,ancestry,world:world.toArray(),view:view.toArray(),clip:clip.toArray(),cameraLayers:p.engine.camera.layers.mask,frustumCulled:dot.frustumCulled,materialVisible:dot.material.visible,materialOpacity:dot.material.opacity,
             virtualSpotlightsVisible:fixtureReadback.visible,spotlightVolumeDraws:volumeWitnesses.map(witness=>witness.draws),depthPasses:fixtureReadback.depth.passes-depthBefore};
-          const last=p.layer.project(p.point),label=p.label,hostRect=p.host.getBoundingClientRect(),labelRect=label.getBoundingClientRect();
-          const scale={x:hostRect.width/p.host.clientWidth,y:hostRect.height/p.host.clientHeight},style=getComputedStyle(label);
-          return {first,last,anchorIdentity,draw,label:{x:labelRect.left+labelRect.width/2,y:labelRect.bottom,
-            width:labelRect.width,height:labelRect.height,scale,
-            expected:{x:hostRect.left+last?.x*scale.x,y:hostRect.top+last?.y*scale.y},
-            layout:{left:style.left,top:style.top},sameNode:label===originalLabel&&p.host.querySelector('.apt-ui-overlay-label')===originalLabel,
-            hidden:label.hidden,text:label.textContent},position:p.layer.group.children[0].position.toArray(),mode:p.engine.modes.mode,
+          // One native reader for the main sample and the #288 presentation
+          // cases: projection first, then rendered label and host geometry.
+          const readLabel=point=>{
+            const projected=p.layer.project(point),hostRect=p.host.getBoundingClientRect(),labelRect=p.label.getBoundingClientRect();
+            const layerElement=p.label.parentElement,layerRect=layerElement.getBoundingClientRect();
+            const scale={x:hostRect.width/p.host.clientWidth,y:hostRect.height/p.host.clientHeight},style=getComputedStyle(p.label);
+            const worldPoint=p.engine.apartmentRoot.localToWorld(dot.position.clone().fromArray(point));
+            const cameraPoint=worldPoint.clone().applyMatrix4(p.engine.camera.matrixWorldInverse),ndc=worldPoint.clone().project(p.engine.camera);
+            const depth=-cameraPoint.z,near=p.engine.camera.near,far=p.engine.camera.far;
+            return {projected,x:labelRect.left+labelRect.width/2,y:labelRect.bottom,
+              width:labelRect.width,height:labelRect.height,scale,
+              expected:{x:hostRect.left+projected?.x*scale.x,y:hostRect.top+projected?.y*scale.y},
+              layout:{left:style.left,top:style.top},hidden:p.label.hidden,text:p.label.textContent,
+              childElements:p.label.childElementCount,sameNode:p.label===originalLabel&&p.host.querySelector('.apt-ui-overlay-label')===originalLabel,
+              point:dot.position.toArray(),hostSize:[p.host.clientWidth,p.host.clientHeight],
+              dotVisible:dot.visible,clipFacts:{ndc:ndc.toArray(),depth,near,far,
+                inside:[ndc.x,ndc.y,ndc.z,depth,near,far].every(Number.isFinite)&&depth>0&&depth>=near&&depth<=far
+                  &&Math.abs(ndc.x)<=1&&Math.abs(ndc.y)<=1&&ndc.z>=-1&&ndc.z<=1},
+              canvasSize:[p.engine.renderer.domElement.width,p.engine.renderer.domElement.height],
+              bounds:{left:labelRect.left,top:labelRect.top,right:labelRect.right,bottom:labelRect.bottom},
+              clipping:{overflow:getComputedStyle(layerElement).overflow,left:labelRect.left<layerRect.left,
+                right:labelRect.right>layerRect.right,top:labelRect.top<layerRect.top,bottom:labelRect.bottom>layerRect.bottom},
+            };
+          };
+          const label=readLabel(p.point),last=label.projected;
+          const rightWorld=world.clone().project(p.engine.camera);rightWorld.x=.92;rightWorld.y=0;rightWorld.unproject(p.engine.camera);
+          const nearRight=p.engine.apartmentRoot.worldToLocal(rightWorld).toArray();
+          const longText='Authored literal <img src="authored.invalid"> room label with a deliberately long saved description near the viewport edge.';
+          const originalSize=[p.host.clientWidth,p.host.clientHeight],savedSize=['width','height'].map(property=>({property,
+            value:p.host.style.getPropertyValue(property),priority:p.host.style.getPropertyPriority(property)}));
+          const restoreHost=()=>{for(const item of savedSize){if(item.value)p.host.style.setProperty(item.property,item.value,item.priority);else p.host.style.removeProperty(item.property);}};
+          const nativeSize=async(expected,onFirstSettled)=>{
+            let consecutive=0,notified=false;
+            for(let frames=1;frames<=12;frames++){
+              await new Promise(resolve=>requestAnimationFrame(resolve));
+              const canvas=p.engine.renderer.domElement,dpr=p.engine.renderer.getPixelRatio();
+              const settled=p.host.clientWidth===expected[0]&&p.host.clientHeight===expected[1]
+                &&canvas.width===Math.floor(expected[0]*dpr)&&canvas.height===Math.floor(expected[1]*dpr)
+                &&Math.abs(p.engine.camera.aspect-expected[0]/expected[1])<1e-9;
+              consecutive=settled?consecutive+1:0;
+              if(settled&&!notified){notified=true;onFirstSettled?.();}
+              if(consecutive===2)return {settled:true,frames,expected,actual:[p.host.clientWidth,p.host.clientHeight]};
+            }
+            return {settled:false,frames:12,expected,actual:[p.host.clientWidth,p.host.clientHeight]};
+          };
+          const presentation=[],presentationBeforeRender=dot.onBeforeRender;let presentationDraws=0,restoreSize,restoredAnchor,resizeWithdrawal,resizedAnchor;
+          dot.onBeforeRender=function(...args){presentationDraws++;presentationBeforeRender?.apply(this,args)};
+          try{
+            const updated=p.anchor.update({point_m:nearRight,label:longText});let drawStart=presentationDraws;
+            const stable=await nativeSize(originalSize);
+            presentation.push({stage:'long label near right edge',updated,size:stable,expectedPoint:nearRight,draws:presentationDraws-drawStart,...readLabel(nearRight)});
+            const smaller=originalSize.map(value=>Math.max(1,Math.floor(value*.8)));drawStart=presentationDraws;
+            p.host.style.setProperty('width',smaller[0]+'px');p.host.style.setProperty('height',smaller[1]+'px');
+            const resized=await nativeSize(smaller,()=>{
+              // Native resize can refit the camera and exclude this synthetic
+              // edge point. Preserve that guard result before testing a real
+              // authored fixture at the new size, within the same two RAFs.
+              resizeWithdrawal=readLabel(nearRight);
+              resizedAnchor=p.anchor.update({point_m:p.point,label:longText});drawStart=presentationDraws;
+            });
+            presentation.push({stage:'native host resize',size:resized,expectedPoint:p.point,draws:presentationDraws-drawStart,...readLabel(p.point)});
+            drawStart=presentationDraws;restoreHost();const restored=await nativeSize(originalSize);
+            presentation.push({stage:'native host restore',size:restored,expectedPoint:p.point,draws:presentationDraws-drawStart,...readLabel(p.point)});
+          }finally{
+            try{restoreHost();restoreSize=await nativeSize(originalSize);restoredAnchor=p.anchor.update({point_m:p.point,label:'Authored fixture overlay'});
+              await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+            }finally{dot.onBeforeRender=presentationBeforeRender;}
+          }
+          return {first,last,anchorIdentity,draw,label,presentation,longText,nearRight,originalSize,restoreSize,restoredAnchor,resizeWithdrawal,resizedAnchor,
+            restoredLabel:readLabel(p.point),position:p.layer.group.children[0].position.toArray(),mode:p.engine.modes.mode,
             hostUnchanged:p.engine.picking.getHost()===p.host,engineUnchanged:window.__APT_ENGINE===p.engine};
         });
         (receipt.overlay_draw_diagnostics ||= []).push({mode,...result.draw});
+        (receipt.overlay_presentation_diagnostics ||= []).push({mode,longText:result.longText,nearRight:result.nearRight,
+          cases:result.presentation,resizeWithdrawal:result.resizeWithdrawal,resizedAnchor:result.resizedAnchor,
+          restoreSize:result.restoreSize,restoredAnchor:result.restoredAnchor,restoredLabel:result.restoredLabel});
         assert.ok(result.first&&result.last);assert.ok(Math.hypot(result.last.x-result.first.x,result.last.y-result.first.y)>0);
         assert.ok(result.draw.draws>0,'the actual canonical dot must reach the real renderer, not only its DOM label');
         assert.equal(result.draw.virtualSpotlightsVisible,true);assert.ok(result.draw.spotlightVolumeDraws.some(draws=>draws>0),'actual spotlight volume rendering must coexist with the bridge dot');assert.ok(result.draw.depthPasses>0);
@@ -327,6 +453,36 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
         assert.equal(parseFloat(result.label.layout.left),0);assert.equal(parseFloat(result.label.layout.top),0);assert.equal(result.label.sameNode,true);
         assert.ok(Math.abs(result.label.x-result.label.expected.x)<.01&&Math.abs(result.label.y-result.label.expected.y)<.01,
           'native label center-bottom must match the canonical projected host coordinate within .01px');
+        // #288 robustness cases, held to the same direct .01px bound.
+        assert.equal(result.presentation.length,3);
+        for(const sample of result.presentation){
+          assert.equal(sample.size.settled,true,sample.stage+' uses actual host/renderer resize delivery');
+          assert.equal(sample.sameNode,true);assert.equal(sample.hidden,false);assert.equal(sample.text,result.longText);
+          assert.equal(sample.childElements,0,'literal labels cannot create markup');assert.deepEqual(sample.point,sample.expectedPoint);
+          assert.ok(sample.draws>0,sample.stage+' includes the actual canonical dot draw');assert.ok(sample.projected?.visible);
+          assert.ok([sample.x,sample.y,sample.width,sample.height,sample.scale.x,sample.scale.y,sample.expected.x,sample.expected.y].every(Number.isFinite));
+          assert.ok(sample.width>0&&sample.height>0&&sample.scale.x>0&&sample.scale.y>0);
+          assert.equal(parseFloat(sample.layout.left),0);assert.equal(parseFloat(sample.layout.top),0);
+          assert.ok(Math.abs(sample.x-sample.expected.x)<.01&&Math.abs(sample.y-sample.expected.y)<.01,
+            sample.stage+' keeps native center-bottom at its canonical projection within .01px');
+          assert.equal(sample.clipping.overflow,'hidden');
+        }
+        assert.equal(result.presentation[0].updated,true);
+        assert.ok(result.presentation[0].projected.x/result.originalSize[0]>.9,'the long literal label is actually near the right edge');
+        assert.equal(result.presentation[0].clipping.right,true,'record actual edge clipping without claiming all text is visible');
+        assert.equal(result.resizedAnchor,true);
+        const withdrawal=result.resizeWithdrawal;
+        assert.equal(withdrawal.sameNode,true);assert.equal(withdrawal.text,result.longText);assert.deepEqual(withdrawal.point,result.nearRight);
+        assert.equal(withdrawal.projected!==null,withdrawal.clipFacts.inside,'native resize respects independent Three clip/depth admission');
+        assert.equal(withdrawal.hidden,!withdrawal.clipFacts.inside);assert.equal(withdrawal.dotVisible,withdrawal.clipFacts.inside);
+        if(withdrawal.clipFacts.inside){
+          assert.ok(withdrawal.width>0&&withdrawal.height>0);
+          assert.ok(Math.abs(withdrawal.x-withdrawal.expected.x)<.01&&Math.abs(withdrawal.y-withdrawal.expected.y)<.01);
+        }
+        assert.ok(result.presentation[1].hostSize.every((value,index)=>value<result.originalSize[index]),'the native host size actually changes');
+        assert.deepEqual(result.presentation[2].hostSize,result.originalSize);assert.equal(result.restoreSize.settled,true);
+        assert.equal(result.restoredAnchor,true);assert.equal(result.restoredLabel.sameNode,true);
+        assert.equal(result.restoredLabel.text,'Authored fixture overlay');assert.deepEqual(result.restoredLabel.point,[.6,.9,2.3]);
         assert.equal(result.mode,mode);assert.equal(result.hostUnchanged,true);assert.equal(result.engineUnchanged,true);
         return result;
       });
@@ -346,6 +502,22 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       for(const rows of [before,active,after])for(const row of rows){assert.ok(Number.isFinite(row.p95)&&row.p95>0&&Number.isFinite(row.renderP95)&&row.renderP95>=0);assert.equal(row.performanceMode,'maxFidelity');assert.equal(row.quality,'maximum');assert.equal(row.pixelRatio,deviceScaleFactor);assert.equal(row.virtual_spotlights_visible,profile!=='functional');}
       receipt.performance.push({mode,orbit:'snapHome(0)',quality:'maxFidelity',warmup_renderer_ticks:120,before,active,after,
         comparisons:['p95','renderP95'].map(key=>noiseComparison(before,active,after,key))});
+    }
+    if(profile==='desktop-abba'){
+      await assertFixtureState();
+      for(const [file,expected] of Object.entries(protectedHashes))assert.equal(hash(fs.readFileSync(file)),expected,'authored pack remains unchanged');
+      assert.deepEqual(receipt.forbidden,[]);assert.deepEqual(receipt.missing_code,[]);assert.deepEqual(receipt.errors,[]);
+      receipt.abba.source_pins=Object.fromEntries(['home-3d/apartment-ui-overlay-bridge.mjs','home-3d/engine.js','home-3d/picking.js'].map(file=>[file,receipt.served[file]?.sha256||null]));
+      const metrics=[...ABBA_CRITERION.primaryMetrics,...ABBA_CRITERION.descriptiveMetrics];
+      receipt.abba.analysis=receipt.abba.scenes.map(scene=>{
+        const blocks=metric=>Array.from({length:ABBA_CRITERION.minimumBlocks},(_,index)=>Object.fromEntries(ABBA_CRITERION.order.map(slot=>[slot,scene.slots.find(row=>row.block===index+1&&row.slot===slot)[metric]])));
+        const results=Object.fromEntries(metrics.map(metric=>[metric,analyzeAbba(blocks(metric),{metric})]));
+        return {mode:scene.mode,display_bound:displayBound(results.frameP95.a_median),results};
+      });
+      receipt.functional_result='not-run-abba-profile';
+      receipt.performance_result=receipt.abba.analysis.map(scene=>scene.mode+':'+ABBA_CRITERION.primaryMetrics.map(metric=>scene.results[metric].result).join('/')+(scene.display_bound?':display-bound':'')).join(' ');
+      await page.evaluate(()=>window.__overlayBridgeProof.engine.dispose());
+      return;
     }
     if(phase!=='candidate'){
       await assertFixtureState();

@@ -126,6 +126,18 @@ function aptUseSyntheticSpatialQa(simActive, qaEnabled) {
   return simActive === true && qaEnabled === true;
 }
 
+/* SPEC Layout > Fitting: the room toolbar floats over the bottom of the
+ * canvas, so the renderer fits the room above it. Bottom inset in CSS pixels
+ * from the host's bottom edge to just above the toolbar, or 0 without one. */
+function aptRoomToolbarInsets(host) {
+  const toolbar = host?.parentElement?.querySelector?.(".apt-ui-room-toolbar");
+  if (!host || !toolbar) return { top: 0, right: 0, bottom: 0, left: 0 };
+  const box = host.getBoundingClientRect(), bar = toolbar.getBoundingClientRect();
+  const visible = bar.width > 0 && bar.height > 0 && getComputedStyle(toolbar).visibility !== "hidden"
+    && bar.right > box.left && bar.left < box.right && bar.bottom > box.top && bar.top < box.bottom;
+  return { top: 0, right: 0, bottom: visible ? Math.max(0, Math.round(box.bottom - bar.top + 8)) : 0, left: 0 };
+}
+
 function aptZoomTransitionDisabled(phase, targetDirection, requestedDirection) {
   return phase !== "idle" && targetDirection === requestedDirection;
 }
@@ -8264,6 +8276,29 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   React.useLayoutEffect(() => {
     if (unifiedShell && shellControlsHost) shellControlsHost.scrollTop = 0;
   }, [unifiedShell, shellControlsHost, cardId, virtualFixtureId, virtualFixtureControlsOpen, aimMode, editing]);
+  /* Room toolbar inset for the renderer's fit (aptRoomToolbarInsets). */
+  React.useLayoutEffect(() => {
+    const host = hostRef.current, engine = engineRef.current;
+    if (!open || phase !== "ready" || !host?.parentElement || typeof engine?.setViewInsets !== "function") return undefined;
+    let toolbar = null, raf = 0;
+    const resize = new ResizeObserver(() => measure());
+    function measure() {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const next = host.parentElement?.querySelector(".apt-ui-room-toolbar") || null;
+        if (next !== toolbar) { if (toolbar) resize.unobserve(toolbar); toolbar = next; if (toolbar) resize.observe(toolbar); }
+        if (engineRef.current === engine) engine.setViewInsets(aptRoomToolbarInsets(host));
+      });
+    }
+    const children = new MutationObserver(measure);
+    children.observe(host.parentElement, { childList: true });
+    resize.observe(host);
+    measure();
+    return () => {
+      cancelAnimationFrame(raf); children.disconnect(); resize.disconnect();
+      if (engineRef.current === engine) engine.setViewInsets({ top: 0, right: 0, bottom: 0, left: 0 });
+    };
+  }, [open, phase, unifiedShell, selectedSiteId]);
 
   if (!open) return null;
 

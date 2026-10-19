@@ -50,6 +50,7 @@ const MAP = [
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
   [/^tools\/test-apartment-(?:ui-overlay-bridge|overlay-bridge-browser)\.mjs$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-3d\/(?:rig|engine)\.js|home-apartment\.jsx|home-tokens\.css)|tools\/(?:run-apartment-rig-fit-tests|test-apartment-rig-fit-browser)\.mjs)$/, ["run-apartment-rig-fit-tests.mjs", "run-apartment-edit-orbit-tests.mjs", "test-apartment-rig-fit-browser.mjs"]],
   [/^tools\/(?:lib\/home-frontend-inventory|test-home-frontend-inventory)\.cjs$/, ["run-bootstrap-tests.js", "run-lab-tests.js", "test-home-frontend-inventory.cjs"]],
 
   [/^app\/src\/home-app\.jsx$/, [
@@ -158,6 +159,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
   "test-apartment-composer-comfort-browser.mjs": 55,
+  "test-apartment-rig-fit-browser.mjs": 45,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,

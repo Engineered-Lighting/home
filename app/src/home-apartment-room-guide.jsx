@@ -158,7 +158,7 @@
     return <div className="apt-room-guide-row" data-apt-layer={row.id} data-available={row.available ? "1" : "0"}>
       <label className="apt-ui-row apt-ui-copy">
         <input type="checkbox" disabled={!row.available} checked={row.available ? !!row.value : false}
-          aria-label={row.ariaLabel} aria-describedby={row.available ? undefined : reasonId}
+          aria-label={row.ariaLabel || row.label} aria-describedby={row.available ? undefined : reasonId}
           onChange={(event) => row.set(event.target.checked)} />
         <span>{row.label}{row.detail && <span className="apt-ui-meta"> · {row.detail}</span>}</span>
       </label>

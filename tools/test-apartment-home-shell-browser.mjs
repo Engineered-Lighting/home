@@ -432,14 +432,21 @@ test('unified shell keeps the real room, private controls and one chat controlle
         await select.focus(); await select.selectOption('authored-echo-light');
         const open = page.locator('[data-apt-semantic-open="1"]');
         await open.focus(); await open.press('Enter');
-        const close = page.getByRole('button', { name: 'close card', exact: true });
+        // APT-L04: an Echo light opens the shared Light inspector, not the legacy card.
+        const close = page.locator('[data-apt-echo-light-inspector="1"]').getByRole('button', { name: 'Close light', exact: true });
         await close.waitFor();
         const bounds = await close.evaluate(button => {
-          const card = button.parentElement.parentElement, panel = document.querySelector('.apt-home-controls');
+          const inspector = button.closest('[data-apt-echo-light-inspector="1"]'), card = inspector.querySelector('.apt-ui-header');
+          const panel = document.querySelector('.apt-home-controls');
           return { card: card.getBoundingClientRect().toJSON(), panel: panel.getBoundingClientRect().toJSON(),
             close: button.getBoundingClientRect().toJSON(), inControls: !!button.closest('.apt-home-controls'),
-            name: card.innerText, panelScrollWidth: panel.scrollWidth, panelClientWidth: panel.clientWidth };
+            name: card.innerText, entity: inspector.querySelector('[data-apt-echo-entity="1"]')?.textContent,
+            blocked: inspector.querySelector('[data-apt-echo-blocked]')?.innerText || null,
+            powerDisabled: inspector.querySelector('input[type="checkbox"]')?.disabled === true,
+            panelScrollWidth: panel.scrollWidth, panelClientWidth: panel.clientWidth };
         });
+        assert.match(bounds.name, /Authored Echo light/); assert.equal(bounds.entity, 'light.authored_echo');
+        assert.ok(bounds.blocked && bounds.powerDisabled, 'without a connected Home Assistant the Echo controls are disabled with a reason');
         const inside = (inner, outer) => inner.width > 0 && inner.height > 0 && inner.left >= outer.left - 1
           && inner.right <= outer.right + 1 && inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1;
         const result = { stage: 'echo_generic_card_within_controls', viewport: { width, height }, ...bounds,

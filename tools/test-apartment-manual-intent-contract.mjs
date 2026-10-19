@@ -90,7 +90,9 @@ test('every UI-originated fixture write passes the switch point first, in the sa
     gated.push({ name: row.name, owner: row.owner, reason: text(hooks[0].reason || hooks[0].node.arguments[1]) });
   }
   assert.deepEqual(allowed.map(item => item.name).sort(), ['aimVirtualFixtureAtTarget', 'setVirtualFixtureState', 'setVirtualFixtureState']);
-  // The complete set of switch-point call sites Den signs off.
+  // The complete set of switch-point call sites Den signs off (2026-10-19).
+  // TODO(Den): future Chat-originated and perception-Set fixture writes must
+  // call the switch point too, and join this list when they land.
   assert.deepEqual(gated.map(({ name, owner, reason }) => [owner, name, reason]).sort(), [
     ['applyAimHistoryState', 'restoreVirtualFixtureAim', 'reason'],
     ['changeVirtualFixtureByHand', 'changeVirtualFixture', '"change"'],

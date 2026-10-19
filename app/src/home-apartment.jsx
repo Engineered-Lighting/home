@@ -5708,6 +5708,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   };
   // Set goes through the existing fenced write, at the preview generation
   // the proposal was made in. A moved scope refuses and nothing changes.
+  // `sweep` asks for Repair's 650 ms Set sweep where the producer has it;
+  // undo and redo restore without one.
   const setAimProposal = ({ fixture_id: id, proposal } = {}) => {
     const held = aimScopeFor(id), target = proposal?.target;
     if (!held?.proposal || held.proposal.id !== proposal?.id || target?.valid !== true || !Array.isArray(target.normal_m)) {
@@ -5717,7 +5719,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (!aimProposals.take(held.scope, proposal.id).ok) return false;
     releaseFixtureForHandChange(id, { reason: "aim" });
     const result = held.context.engine.overlay.aimVirtualFixtureAtTarget(id, { point: target.point_m.slice(),
-      normal: target.normal_m.slice(), kind: "registered_mesh" }, { expectedGeneration: held.descriptor.generation });
+      normal: target.normal_m.slice(), kind: "registered_mesh" }, { expectedGeneration: held.descriptor.generation, sweep: true });
     if (!result?.ok) {
       aimProposals.propose(held.scope, { origin: proposal.origin, target });
       setVirtualAimNotice("That aim is unavailable. Choose another room surface."); return false;
@@ -5831,7 +5833,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         if (!layer || !current()) { layer?.dispose(); retire(owned); return; }
         owned.layer = layer;
         owned.presentation = api.createAimPresentation({ layer, host, isCurrent: current,
-          getInsets: () => aptShellInsets(host), onRetire: () => retire(owned) });
+          getInsets: () => aptShellInsets(host), onRetire: () => retire(owned),
+          // Repair's canonical beam trace, once the engine has one; until then nothing is called blocked.
+          traceBeam: typeof engine.traceBeam === "function" ? (origin, point) => engine.traceBeam(origin, point) : undefined });
         if (!current()) { retire(owned); return; }
         aimPresentationRef.current = owned.presentation;
         setAimPresentation(owned.presentation);

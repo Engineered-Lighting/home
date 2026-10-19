@@ -185,7 +185,11 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     assert.equal(await litButton.getAttribute('aria-pressed'), 'true');
     assert.equal(await page.getByRole('button', { name: 'Mesh view', exact: true }).getAttribute('aria-pressed'), 'false', 'Lit, not Mesh, reads as the current view');
     const note = page.locator('[data-apt-lit-disclosure]');
-    assert.ok((await note.textContent()).trim().startsWith('Simulated · not photometric · assumed output'));
+    // Software GL may fall under 30 fps; Lit must then say so, never drop frames silently.
+    const shownQuality = await page.evaluate(() => window.__APT_ENGINE.litState().quality);
+    assert.ok((await note.textContent()).trim().startsWith('Simulated · not photometric · assumed output'
+      + (shownQuality === 'reduced' ? ' · reduced quality for speed' : '')), 'the note states the disclosure and any declared reduced quality');
+    assert.equal(await note.getAttribute('data-apt-lit-disclosure'), shownQuality);
     assert.equal((await page.locator('[data-apt-lit-bounce-limit]').textContent()).trim(), 'One bounce · casts no shadows · can leak up to 4.5 m through walls',
       'the bounce leak limit is stated with the view');
     assert.match(await note.getAttribute('title'), /Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm/);

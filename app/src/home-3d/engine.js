@@ -361,16 +361,28 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
      * of the column and above the phone/tablet sheet; what still covers the
      * room is chrome inside the canvas, such as the room toolbar. The host
      * reports those as insets in CSS pixels. Fit frames the room in the rest,
-     * and the projection centre moves to the middle of that rest with
-     * setViewOffset. camera.zoom keeps one pixel spanning the same angle, so
-     * an inset change shifts the room without rescaling it. With no insets
-     * (the default) the projection is exactly the plain camera's. A camera
-     * pose (snap or flight) owns the full canvas, so the offset is suspended
-     * while one is held. */
+     * and the projection centre moves to the middle of that rest: the same
+     * principal-point shift setViewOffset makes, written as an off-axis term
+     * of the projection so camera.aspect, fov and zoom stay exactly the
+     * canvas's (other code reads them). One pixel keeps spanning the same
+     * angle, so an inset change shifts the room without rescaling it. With
+     * no insets (the default) the projection is exactly the plain camera's.
+     * A camera pose (snap or flight) owns the full canvas, so the shift is
+     * suspended while one is held. */
     const NO_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 });
     let viewInsets = NO_INSETS;
     let viewSize = { width: 1, height: 1 };
     let appliedViewKey = '';
+    let projectionShift = { x: 0, y: 0 };
+    const plainUpdateProjection = camera.updateProjectionMatrix.bind(camera);
+    camera.updateProjectionMatrix = function updateShiftedProjection() {
+        plainUpdateProjection();
+        if (!projectionShift.x && !projectionShift.y) return;
+        // x_ndc' = x_ndc + shift.x for every point: subtract it from the z term.
+        this.projectionMatrix.elements[8] -= projectionShift.x;
+        this.projectionMatrix.elements[9] -= projectionShift.y;
+        this.projectionMatrixInverse.copy(this.projectionMatrix).invert();
+    };
 
     function normalizedInsets(value, width, height) {
         const side = key => {
@@ -411,20 +423,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         const key = [width, height, insets.top, insets.right, insets.bottom, insets.left].join(',');
         if (!force && key === appliedViewKey) return;
         appliedViewKey = key;
+        // The visible centre sits dx px right and dy px down of the canvas centre.
         const dx = (insets.left - insets.right) / 2;
         const dy = (insets.top - insets.bottom) / 2;
-        if (dx === 0 && dy === 0) {
-            if (camera.view?.enabled) camera.clearViewOffset();
-            camera.zoom = 1;
-            camera.aspect = width / Math.max(1, height);
-            camera.updateProjectionMatrix();
-            return;
-        }
-        const fullWidth = width + 2 * Math.abs(dx);
-        const fullHeight = height + 2 * Math.abs(dy);
-        camera.aspect = fullWidth / fullHeight;
-        camera.zoom = height / fullHeight;
-        camera.setViewOffset(fullWidth, fullHeight, Math.abs(dx) - dx, Math.abs(dy) - dy, width, height);
+        projectionShift = { x: (2 * dx) / Math.max(1, width), y: (-2 * dy) / Math.max(1, height) };
+        camera.aspect = width / Math.max(1, height);
+        camera.updateProjectionMatrix();
     }
 
     /* The fit frame for the visible rect, or null when it is the whole canvas

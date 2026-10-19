@@ -161,6 +161,10 @@ test('renderer fits the visible canvas at 1920, 1366 and 1024, pans, and keeps t
       assert.equal(state.fit.visibleOk, true, viewport.width + ': the fitted room lies inside the visible canvas ' + JSON.stringify(state.fit));
       assert.ok(state.fit.bounds.maxY <= state.toolbar.top - state.stage.top + 1, viewport.width + ': the fitted room clears the toolbar');
       assert.equal(state.zoom, 0); assert.equal(state.ownerPose, false);
+      const camera = await page.evaluate(() => ({ aspect: window.__APT_ENGINE.camera.aspect, zoom: window.__APT_ENGINE.camera.zoom,
+        fov: window.__APT_ENGINE.camera.fov, view: !!window.__APT_ENGINE.camera.view?.enabled }));
+      assert.ok(Math.abs(camera.aspect - state.canvas.width / state.canvas.height) < 1e-6 && camera.zoom === 1 && camera.view === false,
+        viewport.width + ': the camera keeps the canvas aspect, zoom and fov; only the principal point moves ' + JSON.stringify(camera));
       check('fit_' + viewport.width + 'x' + viewport.height, { column: state.panel.width, insets: state.fit.insets, bounds: state.fit.bounds, visible: state.fit.visible });
     }
 
@@ -231,12 +235,15 @@ test('renderer fits the visible canvas at 1920, 1366 and 1024, pans, and keeps t
     const pose = await page.evaluate(() => {
       const engine = window.__APT_ENGINE, camera = engine.camera, insets = engine.viewInsets();
       engine.rig.flyToPose({ position: camera.position.clone(), quaternion: camera.quaternion.clone(), fov: camera.fov, dur: 1 });
-      const held = { insets: engine.viewInsets(), view: !!camera.view?.enabled, zoom: camera.zoom };
+      const offAxis = () => [camera.projectionMatrix.elements[8], camera.projectionMatrix.elements[9]];
+      camera.updateProjectionMatrix();
+      const held = { insets: engine.viewInsets(), offAxis: offAxis() };
       engine.rig.returnToOverview(1);
-      return { before: insets, held, after: engine.viewInsets(), view: !!camera.view?.enabled };
+      return { before: insets, held, after: engine.viewInsets(), offAxis: offAxis() };
     });
-    assert.deepEqual(pose.held, { insets: { top: 0, right: 0, bottom: 0, left: 0 }, view: false, zoom: 1 }, 'a camera pose suspends the view offset');
-    assert.deepEqual(pose.after, pose.before, 'returning to the room restores the toolbar inset'); assert.equal(pose.view, true);
+    assert.deepEqual(pose.held, { insets: { top: 0, right: 0, bottom: 0, left: 0 }, offAxis: [0, 0] }, 'a camera pose suspends the projection shift');
+    assert.deepEqual(pose.after, pose.before, 'returning to the room restores the toolbar inset');
+    assert.ok(pose.offAxis[1] < 0 && pose.offAxis[0] === 0, 'and its upward projection shift ' + JSON.stringify(pose.offAxis));
     await settle();
     check('camera_pose_suspends_view_offset', pose);
 

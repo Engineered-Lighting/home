@@ -75,6 +75,7 @@
         ["home-apartment-cards.jsx", true],
         ["home-apartment-command-ladder.jsx", true],
         ["home-apartment-aim.jsx", true],
+        ["home-apartment-room-guide.jsx", true],
         ["home-apartment-calibrate.jsx", true],
         ["home-apartment-edit.jsx", true],
         ["home-apartment.jsx", true],

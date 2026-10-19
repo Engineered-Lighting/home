@@ -34,6 +34,14 @@ const ELEV_PX = 36;
 const PIVOT_MAX = 0.010;              // rad — EL feel, slightly amplified
 const TAU_PIVOT = 0.55;               // s (EL 0.003/frame ≈ 5.5 s is too dreamy for a dashboard at first paint; 10× faster, still soft)
 const TAU_DRIFT = 1.1;
+/* Pan (Shift-drag or right-drag). Inside the Apartment the orbit centre
+ * follows the cursor across the floor plane. At the overview detent the
+ * centre must stay fitted (see the header), so there the same gesture is a
+ * resisted preview that springs back on release, like the orbit preview. */
+const PAN_PREVIEW_MAX = 0.12;         // x fitDistance, overview only
+/* Pinch: each factor of 1.3 in finger spread steps one zoom detent, so a
+ * pinch walks the same five detents as the wheel and the zoom buttons. */
+export const PINCH_STEP = 1.3;
 
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -102,6 +110,11 @@ export function createRig(camera) {
          * "drag to look around while pulled back" must not silently inflate the
          * Apartment back to full size. */
         overshoot: 0,
+        /* True once the owner has orbited, tilted, zoomed or panned since the
+         * last fit. Layout changes (window resize, sheet, dock, toolbar inset)
+         * then keep the owner's pose instead of refitting (SPEC Layout >
+         * Fitting). An explicit fit or snapHome clears it. */
+        ownerPose: false,
     };
 
     const cur = { az: azRad(HOME.az), el: elRad(HOME.el), radius: 18 };
@@ -109,6 +122,7 @@ export function createRig(camera) {
     let poseTween = null;   // absolute-pose flight (camera snap)
     let heldPose = null;    // held camera pose after arrival
     let editReturn = null;  // detented pose restored when Apartment editing ends
+    let pan = null;         // { from } while a pan drag is live
     const BASE_FOV = camera.fov;
     /* Where detent 0 orbits (fitBounds() sets it), the world-space box the
      * zoom focus may not leave, and the cursor of the wheel event being
@@ -159,6 +173,17 @@ export function createRig(camera) {
              * just at its ends: eye = focus + (1 - k*s) * (eye0 - focus). */
             fromTarget: state.target.clone(), toTarget: toTarget.clone(),
         };
+    }
+
+    /* Land an in-flight tween now. A pan starts from what the user sees, and
+     * update() would otherwise keep lerping the centre underneath the drag. */
+    function finishTween() {
+        if (!tween) return;
+        cur.az = ((tween.fromAz + tween.dAz) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+        cur.el = tween.fromEl + tween.dEl;
+        cur.radius = tween.fromR + tween.dR;
+        state.target.copy(tween.toTarget);
+        tween = null;
     }
 
     /* The world point under a cursor, for zoom-to-cursor.
@@ -290,8 +315,12 @@ export function createRig(camera) {
     const rig = {
         state,
         goTo,
-        stepAzimuth(dir, dur = 450) { if (!state.locked) goTo({ az: state.az + dir, dur }); },
-        stepElevation(dir, dur = 450) { if (!state.locked) goTo({ el: state.el + dir, dur }); },
+        stepAzimuth(dir, dur = 450) { if (!state.locked) { state.ownerPose = true; goTo({ az: state.az + dir, dur }); } },
+        stepElevation(dir, dur = 450) {
+            if (state.locked) return;
+            if (THREE.MathUtils.clamp(state.el + dir, 0, ELEVATIONS.length - 1) !== state.el) state.ownerPose = true;
+            goTo({ el: state.el + dir, dur });
+        },
         stepZoom(dir, dur = 350) {
             if (state.locked) return { accepted: false, reason: 'locked', zoom: state.zoom };
             const next = THREE.MathUtils.clamp(state.zoom + dir, 0, ZOOM_FACTORS.length - 1);
@@ -304,6 +333,7 @@ export function createRig(camera) {
             }
             // Only a wheel supplies a cursor; buttons and keys zoom on the centre.
             const focus = next > state.zoom ? zoomFocusPoint(zoomFocus) : null;
+            state.ownerPose = true;
             goTo({ zoom: next, dur, focus });
             return { accepted: true, zoom: state.zoom };
         },
@@ -323,32 +353,46 @@ export function createRig(camera) {
             return zoomRadius(THREE.MathUtils.clamp(Math.trunc(Number(i) || 0), 0, ZOOM_FACTORS.length - 1));
         },
         homeTarget() { return homeTarget.clone(); },
-        snapHome(dur = 500) { if (!state.locked) goTo({ ...HOME, dur }); },
+        snapHome(dur = 500) { if (!state.locked) { state.ownerPose = false; goTo({ ...HOME, dur }); } },
+        ownerPose() { return state.ownerPose === true; },
 
         /* Fit the apartment bounds (world space). Desktop keeps the established
          * tight dollhouse crop; portrait mobile uses projected box corners so
-         * the whole apartment lands inside the usable HUD-safe viewport. */
-        fitBounds(box3, { dur = 700 } = {}) {
+         * the whole apartment lands inside the usable HUD-safe viewport.
+         *
+         * `frame` is the visible part of the canvas ({ fovV radians, aspect })
+         * when the engine has a view offset (toolbar inset); without it the
+         * camera's own frustum is the frame, exactly as before. `keepPose`
+         * refreshes the fit (distance, fitted centre, bounds) without moving
+         * the camera: the owner has orbited or zoomed, so a layout change must
+         * not throw the view back to the default zoom and centre. */
+        fitBounds(box3, { dur = 700, frame = null, keepPose = false } = {}) {
             const sphere = box3.getBoundingSphere(new THREE.Sphere());
-            const fovV = THREE.MathUtils.degToRad(camera.fov);
-            const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
-            state.target.copy(sphere.center);
-            state.target.y = Math.min(Math.max(0.9, sphere.center.y * 0.6), sphere.center.y);
-            homeTarget.copy(state.target);
+            const aspect = frame && Number.isFinite(frame.aspect) && frame.aspect > 0
+                ? frame.aspect : (camera.aspect || 1);
+            const fovV = frame && Number.isFinite(frame.fovV) && frame.fovV > 0
+                ? frame.fovV : THREE.MathUtils.degToRad(camera.fov);
+            const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect);
+            const fitted = sphere.center.clone();
+            fitted.y = Math.min(Math.max(0.9, sphere.center.y * 0.6), sphere.center.y);
+            if (!keepPose) state.target.copy(fitted);
+            homeTarget.copy(fitted);
             targetBounds = box3.clone();
-            const viewport = fitViewport(camera.aspect || 1);
+            const viewport = fitViewport(aspect);
             const sphereFit = (sphere.radius * 0.85) / Math.sin(Math.min(fovV, fovH) / 2);
             const viewFit = projectedFitDistance(
                 box3,
-                state.target,
+                fitted,
                 azRad(state.az),
                 elRad(state.el),
                 fovV,
-                camera.aspect || 1,
+                aspect,
                 viewport.safeX,
                 viewport.safeY,
             );
             state.fitDistance = Math.max(sphereFit, viewFit) * viewport.extra;
+            if (keepPose) return;
+            state.ownerPose = false;
             goTo({ zoom: HOME.zoom, dur });
         },
 
@@ -382,6 +426,61 @@ export function createRig(camera) {
                 goTo({ dur: 300 }); // snap back
             }
         },
+        /* A second finger turns an orbit drag into a pinch: drop the preview
+         * without committing a step. */
+        dragCancel() {
+            const hadPreview = state.previewAz !== 0 || state.previewEl !== 0;
+            state.previewAz = 0;
+            state.previewEl = 0;
+            if (hadPreview && !state.locked) applyOrbitPose();
+        },
+
+        /* Pan: the orbit centre moves across the floor plane so the room
+         * follows the cursor. Screen x maps to the camera's horizontal right
+         * vector and screen y to its horizontal forward vector scaled by
+         * 1/sin(elevation), which is what one pixel covers on the floor. One
+         * pixel spans the same angle with or without the engine's view offset,
+         * so the canvas height is the right scale either way. */
+        panStart() {
+            if (state.locked) return false;
+            finishTween();
+            pan = { from: state.target.clone() };
+            return true;
+        },
+        panMove(dxPx, dyPx, viewportHeightPx) {
+            if (!pan || state.locked) return;
+            const r = cur.radius * (1 + state.overshoot);
+            const perPx = (2 * r * Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2))
+                / Math.max(1, Number(viewportHeightPx) || 800);
+            const az = cur.az + state.previewAz;
+            const el = THREE.MathUtils.clamp(cur.el + state.previewEl, 0.05, Math.PI / 2 - 0.02);
+            const right = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
+            const forward = new THREE.Vector3(-Math.sin(az), 0, -Math.cos(az));
+            const delta = new THREE.Vector3()
+                .addScaledVector(right, -(Number(dxPx) || 0) * perPx)
+                .addScaledVector(forward, ((Number(dyPx) || 0) * perPx) / Math.max(0.2, Math.sin(el)));
+            if (state.zoom === 0) {
+                delta.multiplyScalar(DRAG_RESIST);
+                const max = PAN_PREVIEW_MAX * state.fitDistance;
+                if (delta.length() > max) delta.setLength(max);
+            }
+            const next = pan.from.clone().add(delta);
+            if (state.zoom > 0 && targetBounds) {
+                next.x = THREE.MathUtils.clamp(next.x, targetBounds.min.x, targetBounds.max.x);
+                next.z = THREE.MathUtils.clamp(next.z, targetBounds.min.z, targetBounds.max.z);
+            }
+            state.target.copy(next);
+            applyOrbitPose();
+        },
+        panEnd() {
+            if (!pan) return;
+            const moved = state.target.distanceToSquared(pan.from) > 1e-10;
+            pan = null;
+            if (state.locked) return;
+            if (state.zoom === 0) goTo({ dur: 300 }); // the overview springs back to the fitted centre
+            else if (moved) state.ownerPose = true;
+        },
+        isPanning() { return !!pan; },
         hoverPivot(nx, ny) { // normalized -1..1
             if (reducedMotion()) { nx = 0; ny = 0; } // no ambient parallax
             state.pivot.tx = nx * PIVOT_MAX;
@@ -639,6 +738,7 @@ export function createRig(camera) {
         resetPose() {
             poseTween = null;
             heldPose = null;
+            pan = null;
             state.locked = false;
             state.previewAz = 0;
             state.previewEl = 0;
@@ -659,17 +759,88 @@ export function createRig(camera) {
     return rig;
 }
 
-/* Attach constrained pointer/wheel input to a host element. Returns detach(). */
+/* Attach constrained pointer/wheel input to a host element. Returns detach().
+ *
+ * Drag orbits; Shift-drag or right-drag pans; two pointers pinch through the
+ * zoom detents (each PINCH_STEP of spread is one detent, toward the midpoint
+ * like a wheel notch toward the cursor). A second pointer cancels an orbit or
+ * pan in progress, and the pointers left after a pinch never start an orbit. */
 export function attachInput(el, rig, { onZoomStep = null } = {}) {
     let drag = null;
+    let panDrag = null;
+    let pinch = null;
     let wheelAt = 0;
+    const pointers = new Map();
+
+    const ndcAt = (clientX, clientY) => {
+        let rect = null;
+        try { rect = el.getBoundingClientRect?.() ?? null; } catch (err) { /* */ }
+        return rect && rect.width > 0 && rect.height > 0 ? {
+            x: ((clientX - rect.left) / rect.width) * 2 - 1,
+            y: -((clientY - rect.top) / rect.height) * 2 + 1,
+        } : null;
+    };
+    const capture = (e) => { try { el.setPointerCapture(e.pointerId); } catch (err) { /* */ } };
+    const release = (e) => { try { el.releasePointerCapture(e.pointerId); } catch (err) { /* */ } };
+    const spread = () => {
+        const [a, b] = [...pointers.values()];
+        return { d: Math.hypot(b.x - a.x, b.y - a.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    };
+    /* One zoom detent, through the host's zoom path when it has one (the
+     * same path a wheel notch takes), with the pinch midpoint lent as the
+     * focus for exactly this dispatch. */
+    const zoomStep = (direction, at) => {
+        rig.setZoomFocus?.(direction > 0 ? ndcAt(at.x, at.y) : null);
+        try {
+            if (typeof onZoomStep === 'function') onZoomStep(direction, {
+                source: 'pinch',
+                continuousBoundary: false,
+                viewportHeightPx: el.clientHeight || 800,
+            });
+            else rig.stepZoom(direction);
+        } finally {
+            rig.setZoomFocus?.(null);
+        }
+    };
 
     const onDown = (e) => {
+        if (e.pointerType === 'touch' || pointers.size > 0) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pointers.size >= 2) {
+            if (drag) { rig.dragCancel?.(); drag = null; }
+            if (panDrag) { rig.panEnd?.(); panDrag = null; }
+            if ((!pinch || pinch.ended) && pointers.size === 2) {
+                const s = spread();
+                pinch = { d0: Math.max(1, s.d), steps: 0 };
+            }
+            capture(e);
+            return;
+        }
+        if (pinch) return;
+        if (e.button === 2 || (e.button === 0 && e.shiftKey)) {
+            if (rig.panStart?.()) {
+                panDrag = { x0: e.clientX, y0: e.clientY, id: e.pointerId };
+                capture(e);
+            }
+            return;
+        }
         if (e.button !== 0) return;
-        drag = { x0: e.clientX, y0: e.clientY, t0: performance.now(), lastX: e.clientX, lastT: performance.now(), vx: 0 };
-        try { el.setPointerCapture(e.pointerId); } catch (err) { /* */ }
+        drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), lastX: e.clientX, lastT: performance.now(), vx: 0 };
+        capture(e);
     };
     const onMove = (e) => {
+        if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch) {
+            if (pinch.ended || pointers.size < 2) return;
+            const s = spread();
+            const target = Math.trunc(Math.log(Math.max(1e-3, s.d / pinch.d0)) / Math.log(PINCH_STEP));
+            while (pinch && pinch.steps < target) { pinch.steps += 1; zoomStep(1, s); }
+            while (pinch && pinch.steps > target) { pinch.steps -= 1; zoomStep(-1, s); }
+            return;
+        }
+        if (panDrag) {
+            if (e.pointerId === panDrag.id) rig.panMove?.(e.clientX - panDrag.x0, e.clientY - panDrag.y0, el.clientHeight || 800);
+            return;
+        }
         if (drag) {
             const now = performance.now();
             const dtm = Math.max(1, now - drag.lastT);
@@ -684,11 +855,28 @@ export function attachInput(el, rig, { onZoomStep = null } = {}) {
         }
     };
     const onUp = (e) => {
-        if (!drag) return;
+        pointers.delete(e.pointerId);
+        if (pinch) {
+            // A finger left after a pinch stays inert until every finger lifts.
+            if (!pointers.size) pinch = null;
+            else if (pointers.size < 2) pinch.ended = true;
+            release(e);
+            return;
+        }
+        if (panDrag) {
+            if (e.pointerId !== panDrag.id) return;
+            rig.panEnd?.();
+            panDrag = null;
+            release(e);
+            return;
+        }
+        if (!drag || drag.id !== e.pointerId) return;
         rig.dragRelease(e.clientX - drag.x0, e.clientY - drag.y0, drag.vx);
         drag = null;
-        try { el.releasePointerCapture(e.pointerId); } catch (err) { /* */ }
+        release(e);
     };
+    // The canvas has no context menu; a right-drag pans instead.
+    const onContextMenu = (e) => { e.preventDefault?.(); };
     const onWheel = (e) => {
         e.preventDefault();
         const now = performance.now();
@@ -733,6 +921,7 @@ export function attachInput(el, rig, { onZoomStep = null } = {}) {
     el.addEventListener('pointercancel', onUp);
     el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('pointerleave', onLeave);
+    el.addEventListener('contextmenu', onContextMenu);
     return () => {
         el.removeEventListener('pointerdown', onDown);
         el.removeEventListener('pointermove', onMove);
@@ -740,5 +929,6 @@ export function attachInput(el, rig, { onZoomStep = null } = {}) {
         el.removeEventListener('pointercancel', onUp);
         el.removeEventListener('wheel', onWheel);
         el.removeEventListener('pointerleave', onLeave);
+        el.removeEventListener('contextmenu', onContextMenu);
     };
 }

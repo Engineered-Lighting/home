@@ -4,6 +4,7 @@
   "timezone": "America/Vancouver",
   "room_off_after_s": 120.0,
   "room_off_fade_s": 3.0,
+  "unknown_occupancy_off_s": 1800.0,
   "ambient_level": 0.3,
   "ambient_cct_k": 2700,
   "ambient_fade_s": 2.0,

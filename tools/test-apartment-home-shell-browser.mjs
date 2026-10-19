@@ -698,6 +698,11 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await page.mouse.click(selectedCylinder.x, selectedCylinder.y);
     await page.waitForFunction(() => document.getElementById('apt-home-tab-controls')?.getAttribute('aria-selected') === 'true'
       && document.getElementById('apt-home-panel-controls')?.hidden === false);
+    // Light now owns Zones. Select the native Spot tool before testing an
+    // aim drag with Setup's fixture selector retaining keyboard focus.
+    const spotTool = page.locator('[data-apt-directional-mode="spot"]');
+    await spotTool.click();
+    assert.equal(await spotTool.getAttribute('aria-pressed'), 'true');
     await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Setup', exact: true }).click();
     const fixtureSelect = page.getByRole('combobox', { name: 'Virtual fixture', exact: true });
     await fixtureSelect.focus(); await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown');
@@ -799,9 +804,12 @@ test('unified shell keeps the real room, private controls and one chat controlle
         fixtureIds, focus_case: focusCase, aimed, undo: await aimDescriptor(directId) });
     }
     await timedPhase('canonical_drag_setup', () => dragAndUndo('setup_keyboard', 'Virtual fixture'));
-    await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Light', exact: true }).click();
-    await page.getByRole('slider', { name: 'Brightness', exact: true }).focus();
-    await timedPhase('canonical_drag_spot', () => dragAndUndo('spot_slider', 'Brightness'));
+    // The focused-range aiming case belongs to Aim/Spot; Light/Brightness
+    // intentionally selects Zones, whose isolated channel edits were tested above.
+    await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Aim', exact: true }).click();
+    assert.equal(await spotTool.getAttribute('aria-pressed'), 'true');
+    await page.getByRole('slider', { name: 'Pan', exact: true }).focus();
+    await timedPhase('canonical_drag_spot', () => dragAndUndo('spot_pan_slider', 'Pan'));
 
     await capture('unified-fixture-controls-1366x768');
 

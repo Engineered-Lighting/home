@@ -2407,7 +2407,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
             checked={!!selectedRadials[0]?.on} onChange={event => patchRadials({ on: event.target.checked })} /><span>{selectedRadials[0]?.on ? "On" : "Off"}</span></label>}</div>
           <p className="apt-ui-meta">Select a segment to adjust one radial LED strip. What it faces is unavailable until heading commissioning.</p></div>
         <div className="apt-ui-actions">{[0, 25, 50, 100].map(value => <button type="button" className="apt-ui-button is-small" key={value}
-          onClick={() => patchRadials(value ? { on: true, brightness: value / 100 } : { on: false })}>{value ? `${value}%` : "Off"}</button>)}</div>
+          onClick={() => patchRadials({ on: value > 0, brightness: value / 100 })}>{value ? `${value}%` : "Off"}</button>)}</div>
         <AptUnifiedRange label="Brightness" ariaLabel="Radial brightness" value={radialLevel * 100} onChange={value => patchRadials({ on: value > 0, brightness: value / 100 })} />
         <AptUnifiedRange label="Color temp" ariaLabel="Radial color temperature" min={2200} max={5000} step={100} suffix=" K"
           value={selectedRadials[0]?.color_temp_kelvin ?? 3000} onChange={value => patchRadials({ color_temp_kelvin: value })} />
@@ -5246,6 +5246,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         return; // A new selection needs its own admitted, drawn plane.
       }
       if (picked || handle) consume(event);
+      // A retained selection can be behind Chat. Reuse the same guarded
+      // selection/reveal path even when its ID and open state are unchanged.
+      if (!selectVirtualFixture(virtualFixtureId, { fromGesture: true })) return;
       const snapshot = getDirectionalSnapshot(virtualFixtureId), projection = directionalProjectionRef.current;
       if (!snapshot || !isDirectionalProjectionCurrent(projection)) return;
       const local = point(event, projection);

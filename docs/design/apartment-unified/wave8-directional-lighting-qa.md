@@ -34,7 +34,8 @@ unflushed intent and release owned capture. Already applied modeled levels stay
 applied. No stale restoration crosses a scene or home boundary.
 
 The six inspector zones support native Enter/Space, individual or all-zone
-brightness and temperature, power and preserved Off levels. The existing
+brightness and temperature, and power switches that preserve saved levels.
+The explicit Off brightness preset sets zero, preserving its existing meaning. The existing
 all-zero radial On restoration remains 0.5. The inspector remains a non-drag
 alternative when the projected plane is unavailable.
 
@@ -43,25 +44,29 @@ alternative when the projected plane is unavailable.
 - Pure geometry/gesture suite: 39 passing cases, including perspective and
   orthographic fixture-height inversion, canonical angles, pickup, sweep,
   cumulative output and exact identity retirement.
-- Actual-source integration suite: 93 passing cases with authored event/hook
+- Actual-source integration suite: 97 passing cases with authored event/hook
   adapters. These execute the actual callbacks and actual `createRig`, but do
   not mount the full Home app. Regressions cover real ambient camera settling,
   committed-frame publication, tab/tool wiring and same-ID cache retirement.
 - Existing room-selection and room-inspector source suites: 122 passing cases.
 - Escape stack: 49 passing cases; mounted overlay browser: 35 passing checks.
-- Native full Home directional browser: all 12 stages pass on the actual
+- Native full Home directional browser: all 13 stages pass on the actual
   renderer, including painting during ambient camera settling, six zone
   selectors, tabs/pill/A/Z, canceled gestures, exact layer/Setup reconciliation,
-  retained tool after Setup, original spotlight Undo and home retirement.
+  retained tool after Setup, same-fixture selection from Chat, original spotlight
+  Undo and home retirement.
 - Full touched-surface run: all 22 mapped suites plus all 87 JSX/classic parse
   checks pass. Runtime: Edge 155.0.4283.62, Playwright 1.62.1, Node 24.14.1.
 - Passing directional receipt:
-  `.tmp/apartment-directional-browser/run-1792380920896/receipt.json`.
-  Apartment SHA-256: `f987179cacbcc574270a357c28d466318d031b68276c9e88e315eb6370413fdd`;
+  `.tmp/apartment-directional-browser/run-1792381575734/receipt.json`.
+  Apartment SHA-256: `93ddf0e5dd5b4a9232af1262b705f84c0348e76c536cd4d66c18f8944681fae8`;
   Cards: `2cfe71c98219eb46569d0eb4cbaf842d1648f2664698176c2654c16d45d6304c`;
   geometry/controller: `763526e7d2e3dbe1c0d7cc51b4814a6ca7a3b94ebd87f3bf945eb5c1d5f5cda6`.
-  This final 12-stage run used the exact staged Git bytes after normalizing only
-  new-file CRLF endings, and completed in 13.94 seconds.
+  This final run used the exact staged Git bytes and the unchanged 145-second
+  deadline.
+- Always-run full shell browser: all retained radial, responsive, focus,
+  controller/draft, canonical drag and Undo checks pass in 31.0 seconds:
+  `.tmp/apartment-home-shell-browser/run-1792381539458/receipt.json`.
 
 Independent production Standards review reported no findings. Independent Spec
 review found four issues in the first integration: exact camera-matrix equality
@@ -91,6 +96,19 @@ the correction. The red receipt remains in
 The existing Escape adapters needed the new nullable gesture ref; the original
 assertions remain, with additional radial-before-selection cancellation cases.
 These adapter failures were not production Escape regressions.
+
+Hosted shell QA also caught an unintended explicit Off-preset change. Restoring
+its existing zero-brightness meaning keeps all ten original radial regression
+cases intact; ordinary power switches still preserve remembered levels. Local
+full-shell QA then caught a selected cylinder in Zones failing to reveal Controls
+from Chat. That path now reuses the same guarded selection helper even when the
+fixture ID stays unchanged. Both new source and native regressions pass.
+
+The shell's two direct-aim checks now explicitly select Spot before Setup focus,
+and use the Aim/Pan range for the focused-range case. Light intentionally selects
+Zones. Native focus, fixture/engine identity, canonical pointer-up hit, the 3 cm
+bound, socket preservation and Undo checks remain unchanged. The failed hosted
+run `39195480542` and local red receipts remain preserved; no deadline increased.
 
 ## Ticket coverage and retained limits
 

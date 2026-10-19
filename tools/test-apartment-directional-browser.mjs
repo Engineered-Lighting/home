@@ -387,18 +387,27 @@ test('real authored directional controls preserve native input, aim and output b
       }
       const first = ring.getByRole('button', { name: 'Radial zone 1', exact: true }); await first.focus(); await page.keyboard.press('Enter');
       const before = await descriptor(fixture.fixture_id);
+      assert.ok(before.state.radials[0].brightness > 0, 'power memory is tested from an actual nonzero saved level');
       const radialChannel = inspector().getByRole('region', { name: 'Radial channel', exact: true });
-      await radialChannel.getByRole('button', { name: 'Off', exact: true }).click();
+      const power = radialChannel.getByRole('checkbox', { name: 'Radial zone 1 power', exact: true });
+      await power.uncheck();
       let after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[0].on, false);
-      assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness);
+      assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power Off remembers the saved nonzero level');
+      await power.check();
+      after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[0].on, true);
+      assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power On restores the same saved level');
+      await radialChannel.getByRole('button', { name: 'Off', exact: true }).click();
+      after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[0].on, false);
+      assert.equal(after.state.radials[0].brightness, 0, 'the explicit Off preset sets a zero level');
       const brightness = inspector().getByRole('slider', { name: 'Radial brightness', exact: true }); await brightness.focus(); await page.keyboard.press('ArrowRight');
       const temperature = inspector().getByRole('slider', { name: 'Radial color temperature', exact: true }); await temperature.focus(); await page.keyboard.press('ArrowRight');
       after = await descriptor(fixture.fixture_id);
-      assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness + .01); assert.equal(after.state.radials[0].on, true);
+      assert.equal(after.state.radials[0].brightness, .01); assert.equal(after.state.radials[0].on, true);
       assert.equal(after.state.radials[0].color_temp_kelvin, before.state.radials[0].color_temp_kelvin + 100);
       assert.deepEqual(after.state.radials.slice(1), before.state.radials.slice(1)); assert.deepEqual(withoutRadials(after), withoutRadials(before));
       await page.keyboard.press('z'); await expectMode('zones'); await page.keyboard.press('a'); await expectMode('zones');
-      return { selected_with_enter_and_space: [1, 2, 3, 4, 5, 6], only_zone: 1, off_kept_saved_level: true, focused_field_owns_a_z: true };
+      return { selected_with_enter_and_space: [1, 2, 3, 4, 5, 6], only_zone: 1, power_off_on_kept_saved_level: true,
+        explicit_off_preset_level: 0, native_brightness_step: .01, focused_field_owns_a_z: true };
     });
     await check('Show in room and unfocused A/Z use native Zones/Spot modes on the actual projected fixture plane', async () => {
       await inspector().getByRole('tab', { name: 'Aim', exact: true }).click(); await expectMode('spot');
@@ -410,6 +419,17 @@ test('real authored directional controls preserve native input, aim and output b
       await setMode('zones'); assert.equal(await inspector().getByRole('tab', { name: 'Light', exact: true }).getAttribute('aria-selected'), 'true');
       await blur(); await page.keyboard.press('a'); await expectMode('spot'); await page.keyboard.press('z'); await expectMode('zones');
       return { native_tab_modes: ['Aim:spot', 'Light:zones'], svg_hub: geometry.actualHub, svg_tick: geometry.actualTick, renderer_projection_agrees: true, fade, shortcuts: ['a', 'z'] };
+    });
+    await check('a native current-fixture hub click returns from Chat to Controls without a modeled write or aim change', async () => {
+      await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+      assert.equal(await page.getByRole('tab', { name: 'Chat', exact: true }).getAttribute('aria-selected'), 'true');
+      const before = await descriptor(fixture.fixture_id), callCount = (await writes()).length;
+      const hub = await hubPoint(fixture.fixture_id); await page.mouse.click(hub.x, hub.y);
+      await page.waitForFunction(() => document.querySelector('#apt-home-tab-controls')?.getAttribute('aria-selected') === 'true');
+      await expectSelected(fixture); await expectMode('zones'); await waitHUD();
+      assert.deepEqual(await descriptor(fixture.fixture_id), before, 'revealing the current selection preserves its state, aim target and canonical binding');
+      assert.deepEqual((await writes()).slice(callCount), [], 'a current-fixture click is selection/navigation only');
+      return { restored_tab: 'controls', selected_fixture_id: fixture.fixture_id, descriptor_exact: true, modeled_calls: 0 };
     });
     await check('native hub pickup survives ambient rig settling without a jump; outward, inward and cross-zone motion only paints modeled radials', async () => {
       const before = await descriptor(fixture.fixture_id), callsBefore = (await writes()).length;

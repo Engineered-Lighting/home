@@ -200,7 +200,7 @@ function fixture({ mode = 'zones' } = {}) {
     target: { point: [1, 2, 0], normal: [0, 0, 1], kind: 'registered_mesh' }, truth_role: 'virtual_preview', physical_commands: false,
   }]));
   const state = { patches: [], calls: [], intervals: [], selectedSite: 'victoria', pickId: ids[0],
-    previewRevision: 7, previewDigest: document.digest, previewVisible: true, previewStatus: 'ready', readout: null, projection: null };
+    previewRevision: 7, previewDigest: document.digest, previewVisible: true, previewStatus: 'ready', readout: null, projection: null, panel: 'controls' };
   const preview = () => ({ status: state.previewStatus, visible: state.previewVisible, revision: state.previewRevision,
     digest: state.previewDigest, fixtures: ids.map(id => ({ fixture_id: id, label: id, state: copy(descriptors.get(id).state) })) });
   const overlay = {
@@ -256,7 +256,8 @@ function fixture({ mode = 'zones' } = {}) {
     setVirtualInspectorTab: value => { values.virtualInspectorTab = value; state.calls.push(['tab', value]); },
     setRadialReadout: value => { state.readout = value; values.radialReadout = value; },
     setRadialGestureActive: value => { values.radialGestureActive = value; },
-    setAnchors: value => { state.projection = value; values.anchors = value; }, onShowShellControls: () => state.calls.push(['show']),
+    setAnchors: value => { state.projection = value; values.anchors = value; },
+    onShowShellControls: () => { state.panel = 'controls'; state.calls.push(['show']); },
     setVirtualFixtureChannel: value => state.calls.push(['channel', value]), setVirtualAimNotice() {}, setVirtualAimHistoryVersion() {},
     restoreApartmentOperationFocus: value => state.calls.push(['focus', value]),
     callSvc: () => assert.fail('directional UI cannot send a physical command'), saveModel: () => assert.fail('directional UI cannot save equipment'),
@@ -332,7 +333,9 @@ test('actual 80 ms HUD flush applies a radial-only modeled patch and publishes i
   assert.equal(f.values.virtualAimHistoryRef.current, history); assert.deepEqual(copy(history), { undo: [{ authored: 'previous aim' }], redo: [] });
   assert.ok(f.state.readout); assert.ok(f.state.projection.__directional.geometry);
   f.state.intervals[0].callback(); assert.equal(f.state.patches.length, 1, 'already flushed intent is not repeated');
-  assert.deepEqual(f.state.calls, []); f.dispose(); assert.equal(f.state.intervals[0].cleared, true);
+  assert.deepEqual(f.state.calls, [['selected', f.ids[0]], ['fixture', f.ids[0]], ['open', true], ['show']],
+    'painting admission only reuses the existing selection/reveal callback');
+  f.dispose(); assert.equal(f.state.intervals[0].cleared, true);
 });
 
 test('pointerup flushes the final queued modeled level and releases only its owned capture', () => {
@@ -426,6 +429,27 @@ test('Zones selects another fixture without entering direct aim and waits for it
   assert.deepEqual(f.state.patches, []); f.dispose();
 });
 
+test('pressing the already selected fixture in Zones reveals Controls through the existing guarded callback', () => {
+  const f = fixture(), before = copy([...f.descriptors]), history = f.values.virtualAimHistoryRef.current;
+  f.state.panel = 'chat'; f.mountRadial();
+  const event = emit(f.canvas, 'pointerdown', f.point());
+  assert.equal(event.defaultPrevented, true); assert.equal(f.state.panel, 'controls');
+  assert.deepEqual(f.state.calls, [['selected', f.ids[0]], ['fixture', f.ids[0]], ['open', true], ['show']]);
+  assert.equal(f.values.virtualFixtureId, f.ids[0]); assert.equal(f.values.virtualFixtureControlsOpen, true);
+  assert.equal(f.values.virtualAimHistoryRef.current, history); assert.deepEqual(copy([...f.descriptors]), before);
+  assert.deepEqual(f.state.patches, []); assert.ok(f.values.radialGestureOwnerRef.current); f.dispose();
+});
+
+test('a declined same-fixture selection prevents Zones painting and cannot reveal Controls', () => {
+  const f = fixture(), before = copy([...f.descriptors]); f.state.panel = 'chat';
+  f.engine.overlay.setVirtualFixtureSelected = id => { f.state.calls.push(['selection-declined', id]); return null; };
+  f.mountRadial(); emit(f.canvas, 'pointerdown', f.point());
+  assert.deepEqual(f.state.calls, [['selection-declined', f.ids[0]]]); assert.equal(f.state.panel, 'chat');
+  assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.host.captures.size, 0);
+  assert.equal(f.values.virtualFixtureId, f.ids[0]); assert.equal(f.values.virtualFixtureControlsOpen, true);
+  assert.deepEqual(copy([...f.descriptors]), before); assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
 test('Spot routes fixture input to the actual existing direct-aim controller', () => {
   const f = fixture({ mode: 'spot' }); f.mountSpot(); f.mountRadial(); const event = emit(f.canvas, 'pointerdown', f.point());
   assert.equal(event.defaultPrevented, true); assert.equal(f.values.radialGestureOwnerRef.current, null);
@@ -456,7 +480,9 @@ for (const modifier of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey', 'defaultPrev
 
 test('an active radial owner retains keyboard mode ownership until cancellation', () => {
   const f = fixture(); f.mountRadial(); f.mountKeyboard(); queuePaint(f); emit(f.host, 'keydown', { key: 'a' });
-  assert.equal(f.values.fixtureInteractionModeRef.current, 'zones'); assert.deepEqual(f.state.calls, []); f.dispose();
+  assert.equal(f.values.fixtureInteractionModeRef.current, 'zones');
+  assert.deepEqual(f.state.calls, [['selected', f.ids[0]], ['fixture', f.ids[0]], ['open', true], ['show']],
+    'the key adds no mode/tab calls to the existing selection/reveal admission'); f.dispose();
 });
 
 for (const [name, change] of [
@@ -713,7 +739,40 @@ test('actual inspector retains native all-zone preset and range controls when th
   assert.deepEqual(patches[0], { radials: Array.from({ length: 6 }, (_, index) => ({ number: index + 1, on: true, brightness: .25 })) });
   const range = nodes.find(node => node.props?.ariaLabel === 'Radial brightness'); assert.ok(range); range.props.onChange(80);
   assert.deepEqual(patches[1], { radials: Array.from({ length: 6 }, (_, index) => ({ number: index + 1, on: true, brightness: .8 })) });
+  nodes.find(node => node.type === 'button' && elementText(node) === 'Off').props.onClick();
+  assert.deepEqual(patches[2], { radials: Array.from({ length: 6 }, (_, index) => ({ number: index + 1, on: false, brightness: 0 })) },
+    'the explicit Off preset retains its credited zero-brightness behavior');
   assert.deepEqual(f.state.patches, []); f.dispose();
+});
+
+for (const selectedZone of [null, 3]) test('actual inspector ' + (selectedZone == null ? 'master' : 'selected-zone')
+  + ' power switches retain remembered nonzero levels through Off and On', () => {
+  const f = fixture(), component = inspector();
+  f.descriptors.get(f.ids[0]).state.radials.forEach((zone, index) => { zone.brightness = .2 + index * .08; });
+  const before = copy(f.descriptors.get(f.ids[0])), props = inspectorProps(f, []);
+  component.context.window.AptDirectionalRing = function AuthoredRingElement() {};
+  props.onPatch = patch => {
+    f.engine.overlay.setVirtualFixtureState(f.ids[0], patch);
+    props.fixture = copy(f.descriptors.get(f.ids[0])); props.fixtures = [props.fixture];
+  };
+  const render = () => { const tree = component.render(props); component.flushEffects(); return elementNodes(tree); };
+  let nodes = render();
+  if (selectedZone != null) {
+    nodes.find(node => node.type === component.context.window.AptDirectionalRing).props.onZone(selectedZone); nodes = render();
+  }
+  const label = selectedZone == null ? 'Radial power' : `Radial zone ${selectedZone} power`;
+  const affected = before.state.radials.filter(zone => selectedZone == null || zone.number === selectedZone);
+  for (const on of [false, true]) {
+    const control = nodes.find(node => node.type === 'input' && node.props?.['aria-label'] === label); assert.ok(control);
+    control.props.onChange({ target: { checked: on } });
+    assert.deepEqual(f.state.patches.at(-1), { id: f.ids[0], patch: { radials: affected.map(zone => ({ number: zone.number, on })) } },
+      'power-only output must not include even unchanged brightness, temperature, pan, tilt or target fields');
+    const after = copy(f.descriptors.get(f.ids[0]));
+    assert.deepEqual(after.state.radials, before.state.radials.map(zone => ({ ...zone, on: selectedZone == null || zone.number === selectedZone ? on : zone.on })));
+    for (const key of ['spotlight', 'downward', 'pan_deg', 'tilt_deg']) assert.deepEqual(after.state[key], before.state[key]);
+    assert.deepEqual(after.target, before.target); nodes = render();
+  }
+  assert.deepEqual(copy(f.descriptors.get(f.ids[0])), before); f.dispose();
 });
 
 test('actual inspector ring selection narrows the same native fallback controls to one existing zone', () => {

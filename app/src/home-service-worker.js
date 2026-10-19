@@ -33,6 +33,7 @@ const FRESH_APARTMENT_MODULES = new Set([
   "/home-apartment-aim-proposals.js",
   "/home-apartment-gimbal-telemetry.js",
   "/home-apartment-aim.jsx",
+  "/home-apartment-command-ladder.jsx",
   "/home-apartment-data.js",
   "/home-apartment-sim.js",
   "/home-apartment.jsx",

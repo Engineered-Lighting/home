@@ -2336,7 +2336,7 @@ const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
-  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView }) {
+  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, commandBinding }) {
   const radialSnapshot = React.useSyncExternalStore(directionalView?.subscribe || aptEmptySubscribe,
     directionalView?.getSnapshot || aptEmptySnapshot, aptEmptySnapshot);
   const [localTab, setLocalTab] = useState("light");
@@ -2441,6 +2441,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
       <div className="apt-ui-actions"><button type="button" className="apt-ui-button" disabled={!canUndo} onClick={onUndo}>Undo aim</button>
         <button type="button" className="apt-ui-button" disabled={!canRedo} onClick={onRedo}>Redo aim</button></div>
       {notice && <p role="status" className="apt-ui-copy">{notice}</p>}<p className="apt-ui-meta">Modeled aim · virtual preview only.</p>
+      {window.AptCommandLadder && <window.AptCommandLadder site="victoria" fixture={fixture} binding={commandBinding} />}
     </section>}
     {tab === "setup" && <section className="apt-ui-section" id="apt-ui-virtual-setup" role="tabpanel" aria-label="Fixture setup">
       <h3 className="apt-ui-heading">Fixture</h3><select className="apt-ui-input" aria-label="Virtual fixture" value={fixture.fixture_id} onChange={event => onSelect(event.target.value)}>
@@ -9465,7 +9466,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
             tab={virtualInspectorTab} onTabChange={changeVirtualInspectorTab} onSelect={selectVirtualFixture}
-            onBack={clearVirtualFixtureSelection}
+            onBack={clearVirtualFixtureSelection} commandBinding={virtualFixtureDocument.binding}
             directionalView={directionalDisplay}
             onShowComposer={() => changeFixtureInteractionMode("zones")}
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}

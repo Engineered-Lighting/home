@@ -148,7 +148,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
-  "test-apartment-lit-browser.mjs": 50,
+  "test-apartment-lit-browser.mjs": 90,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,

@@ -145,6 +145,22 @@ async function openApp(browser, served) {
   await context.addInitScript(() => {
     window.HG_DISABLE_SERVICE_WORKER = true;
     try { localStorage.setItem("home.perf.backgroundWarmup", "off"); } catch (_) {}
+    // Every boot-file record, from the first. __homePerf.snapshot() keeps only
+    // the newest 160, and a full boot plus the Apartment feature writes more.
+    const records = window.__precompiledTestRecords = [];
+    let perf;
+    Object.defineProperty(window, "__homePerf", {
+      configurable: true,
+      get: () => perf,
+      set(value) {
+        const record = value.recordBootFile;
+        value.recordBootFile = function (file, phase, ...rest) {
+          records.push({ file, phase });
+          return record.call(this, file, phase, ...rest);
+        };
+        perf = value;
+      },
+    });
   });
   await context.route("**/*", (route) => {
     const url = new URL(route.request().url());
@@ -176,7 +192,7 @@ async function loadEveryFeature(page) {
 }
 
 function transformedFiles(page) {
-  return page.evaluate(() => (window.__homePerf.snapshot().bootFiles || [])
+  return page.evaluate(() => window.__precompiledTestRecords
     .filter((entry) => /transform/.test(entry.phase)).map((entry) => entry.file));
 }
 

@@ -747,7 +747,7 @@ test('real authored directional controls preserve native input, aim and output b
       }, { scope: COMPOSER, tab: button(INSPECTOR, 'Aim', 'tab') });
       assert.equal(mounted.selected_tab, 'true');
       const circles = mounted.circles;
-      assert.deepEqual(circles.map(circle => circle.r), [22, 7]);
+      assert.deepEqual(circles.map(circle => circle.r), [34, 7]);
       assert.equal(circles[0].x, circles[1].x); assert.equal(circles[0].y, circles[1].y);
       assert.deepEqual(circles.map(circle => circle.fill), ['transparent', 'transparent']);
       const { pill, hub } = mounted;

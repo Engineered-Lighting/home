@@ -111,6 +111,7 @@ const MAP = [
   [/^tools\/(?:fixtures\/apartment-directional-native-mouse|test-apartment-directional-native-mouse)\.mjs$/, ["test-apartment-directional-native-mouse.mjs", "test-apartment-directional-browser.mjs"]],
   [/^tools\/(?:fixtures\/apartment-directional-readiness|test-apartment-directional-readiness)\.mjs$/, ["test-apartment-directional-readiness.mjs", "test-apartment-directional-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-directional-presentation\.mjs|tools\/test-apartment-directional-presentation\.mjs)$/, ["test-apartment-directional-presentation.mjs", "test-apartment-directional-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)|home-3d\/apartment-directional-presentation\.mjs)|tools\/test-apartment-composer-comfort-browser\.mjs)$/, ["test-apartment-composer-comfort-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures\.mjs|markers\.js)|tools\/test-apartment-radial-visual\.mjs)$/, ["test-apartment-radial-visual.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
@@ -133,7 +134,8 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
 /* Hosted-CI seconds per plan item, used only to balance --shard partitions.
  * Measured on run 39214584656 (#293 touched job, 7m22s of harnesses) and the
  * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
- * rounded up. An unmeasured browser suite counts as its 145 s deadline and
+ * rounded up; the composer-comfort suite is a conservative estimate until its
+ * first hosted run. An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
 const SHARD_WEIGHT_S = {
@@ -141,6 +143,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
+  "test-apartment-composer-comfort-browser.mjs": 120,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,

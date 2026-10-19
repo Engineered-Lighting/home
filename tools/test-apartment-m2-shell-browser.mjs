@@ -23,17 +23,24 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
     // HANDOFF › Acceptance examples › "Photo missing": loading with its
     // percentage, then "Photo isn't available here" with Retry and Back to
     // Cloud, still Echo Park.
-    const splat = assetPath(echo, 'apartment.ply');
-    faults.set(splat, 'stall');
-    for (const name of ['apartment.spz', 'apartment.mobile.ply']) faults.set(assetPath(echo, name), 'fail');
+    // Every Photo candidate stalls, so the first one the device's asset plan
+    // asks for (desktop or mobile tier) shows a real partial percentage.
+    const splatNames = ['apartment.mobile.ply', 'apartment.ply', 'apartment.spz'];
+    for (const name of splatNames) faults.set(assetPath(echo, name), 'stall');
     await modeButton('Photo').click();
-    await notice().getByRole('heading', { name: /^Loading Photo · \d+%$/ }).waitFor();
+    await notice().getByRole('heading', { name: /^Loading Photo · \d+%$/ }).waitFor().catch(async error => {
+      error.message += ' ' + JSON.stringify({ notice: await notice().allInnerTexts().catch(() => null),
+        requests: requests.filter(row => /\/apartment\./.test(row.path)).map(row => row.path),
+        plan: await page.evaluate(() => window.__APT_ENGINE?.modes?.debugInfo?.()?.loadStatus).catch(() => null) });
+      throw error;
+    });
     const loading = await notice().evaluate(node => ({ title: node.querySelector('h3').textContent,
       value: Number(node.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')) }));
     assert.ok(loading.value > 0 && loading.value < 100, 'a real partial percentage is shown: ' + loading.title);
     await still('photo-loading');
     assert.equal(await engineMode(), 'points', 'the current view stays as it is while Photo loads');
-    faults.set(splat, 'fail'); for (const res of stalled.splice(0)) res.destroy();
+    for (const name of splatNames) faults.set(assetPath(echo, name), 'fail');
+    for (const res of stalled.splice(0)) res.destroy();
     await notice().getByRole('heading', { name: "Photo isn't available here", exact: true }).waitFor();
     const recovery = page.getByRole('group', { name: 'Photo recovery', exact: true });
     assert.equal(await recovery.getByRole('button', { name: 'Retry Photo', exact: true }).isEnabled(), true);
@@ -42,7 +49,7 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
     await still('photo-missing');
     assert.equal(await selectedHome(), 'Echo Park', 'a missing Photo never switches homes');
     assert.equal(await engineMode(), 'points');
-    const splatRequests = () => requests.filter(row => row.path === splat).length;
+    const splatRequests = () => requests.filter(row => splatNames.some(name => row.path === assetPath(echo, name))).length;
     const before = splatRequests();
     await recovery.getByRole('button', { name: 'Retry Photo', exact: true }).click();
     await waitForDirectionalReadiness(page, () => !!document.querySelector('[aria-label="Photo recovery"]'));
@@ -52,7 +59,7 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
     assert.equal(await modeButton('Cloud').getAttribute('aria-pressed'), 'true');
     assert.equal(await selectedHome(), 'Echo Park');
     checks.push({ stage: 'handoff_photo_missing_in_real_shell', loading });
-    for (const name of ['apartment.ply', 'apartment.spz', 'apartment.mobile.ply']) faults.delete(assetPath(echo, name));
+    for (const name of splatNames) faults.delete(assetPath(echo, name));
 
     // Camera view: a room pose inside the unified chrome with Return to room.
     const hint = page.locator('[data-apt-hint="camera-view"]');

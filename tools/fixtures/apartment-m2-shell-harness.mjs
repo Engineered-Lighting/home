@@ -61,7 +61,7 @@ function staticSources(root) {
 
 function launchOptions(platform = process.platform) {
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
-  if (platform === 'win32') args.unshift('--use-angle=d3d11');
+  if (platform === 'win32') args.unshift(process.env.M2_SWIFTSHADER === '1' ? '--use-angle=swiftshader' : '--use-angle=d3d11');
   else if (platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
   const installed = fs.existsSync(chromium.executablePath());
   return { headless: true, args, ...(platform === 'linux' ? { channel: 'chromium' } : !installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
@@ -115,9 +115,15 @@ export async function runM2Shell(name, steps) {
             body = pack.files[url.pathname.slice(pack.base.length)];
             if (fault === 'fail') { res.writeHead(404); res.end(); return; }
             if (fault === 'stall' && body) {
-              // Half the declared bytes, then hold: the toolbar shows a real percentage.
+              // Part of the declared bytes, then hold: the toolbar shows a real percentage.
               res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length, 'Cache-Control': 'no-store' });
-              res.write(body.subarray(0, Math.floor(body.length / 2))); stalled.push(res); return;
+              // Three quarters arrive in steps, so a reader that joins late still sees new bytes.
+              const quarter = Math.floor(body.length / 4);
+              res.write(body.subarray(0, quarter)); stalled.push(res);
+              for (const [step, delay] of [[2, 400], [3, 1200]]) setTimeout(() => {
+                if (!res.destroyed && !res.writableEnded) res.write(body.subarray((step - 1) * quarter, step * quarter));
+              }, delay);
+              return;
             }
             if (url.pathname.endsWith('.json')) type = 'application/json';
           }

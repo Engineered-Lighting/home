@@ -1,5 +1,5 @@
 ---
-title: Perception Lab (deploy)
+title: Paired-scheduler staleness fix and a steady 2 Hz preview grid
 target: backend
 type: changed
 ---

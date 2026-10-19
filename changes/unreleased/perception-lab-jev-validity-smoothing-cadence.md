@@ -1,5 +1,5 @@
 ---
-title: Live JEV (v6 facts wire)
+title: Facts-bound JEV validity, a smoothed activity timeline and change-driven cadence
 target: backend
 type: changed
 ---

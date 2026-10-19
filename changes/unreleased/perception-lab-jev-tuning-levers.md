@@ -1,5 +1,5 @@
 ---
-title: JEV tuning levers for the v6 facts wire, all off by default (no live behaviour changes…
+title: JEV tuning levers for the v6 facts wire, off by default
 target: backend
 type: changed
 ---

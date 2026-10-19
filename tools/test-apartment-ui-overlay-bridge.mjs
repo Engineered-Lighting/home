@@ -53,6 +53,17 @@ function fixture(overrides = {}) {
   return { document, host, camera, apartmentRoot, overlayRoot, abort, state, options, layer };
 }
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-7, `${actual} != ${expected}`);
+function assertLabelPlacement(label, x, y) {
+  assert.match(String(label.style.left), /^0(?:px)?$/, 'the fixed horizontal layout origin stays zero');
+  assert.match(String(label.style.top), /^0(?:px)?$/, 'the fixed vertical layout origin stays zero');
+  const number = '([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)';
+  const alignment = '\\s+translate\\(\\s*-50%,\\s*-100%\\s*\\)\\s*$';
+  const transform = String(label.style.transform);
+  const placement = new RegExp('^translate\\(\\s*' + number + 'px,\\s*' + number + 'px\\)' + alignment, 'i').exec(transform)
+    || new RegExp('^translate3d\\(\\s*' + number + 'px,\\s*' + number + 'px,\\s*0(?:px)?\\)' + alignment, 'i').exec(transform);
+  assert.ok(placement, 'pixel translation retains the existing centered, above-anchor alignment: ' + transform);
+  close(Number(placement[1]), x); close(Number(placement[2]), y);
+}
 
 test('projection transforms canonical local meters once, reuses real Three camera math and never mutates the input', () => {
   const f = fixture();
@@ -211,9 +222,59 @@ test('one failed anchor update hides only that anchor while sibling presentation
   f.layer.addAnchor({ point_m: [1, 0, 0], label: 'Current anchor' });
   assert.equal(f.layer.update(), false);
   const [failed, current] = f.host.children[0].children;
-  assert.equal(failed.hidden, true); assert.equal(current.hidden, false); assert.equal(current.style.left, '440px');
+  assert.equal(failed.hidden, true); assert.equal(current.hidden, false); assertLabelPlacement(current, 440, 300);
   assert.equal(f.state.disposed, 0); f.layer.dispose();
 });
+
+for (const count of [1, 4]) {
+  test(`moving ${count} anchors preserve exact geometry without layout-affecting style writes`, () => {
+    const f = fixture(), points = Array.from({ length: count }, (_, index) => [.25 + index * .2, .1 + index * .1, 0]);
+    const handles = points.map((point, index) => f.layer.addAnchor({ point_m: point, label: `Authored moving ${index}` }));
+    assert.ok(handles.every(Boolean));
+    const labels = f.host.children[0].children.slice(), dots = f.layer.group.children.slice();
+    const writes = [], timeline = [];
+    for (const [index, label] of labels.entries()) {
+      label.style = new Proxy(label.style, { set(style, property, value) {
+        writes.push({ index, property, value }); timeline.push('write:' + property);
+        style[property] = value; return true;
+      } });
+    }
+    const bounds = f.host.getBoundingClientRect.bind(f.host);
+    f.host.getBoundingClientRect = () => { timeline.push('viewport'); return bounds(); };
+    const expectedScreen = point => {
+      const world = f.apartmentRoot.localToWorld(new THREE.Vector3(...point)), screen = world.project(f.camera);
+      return [(screen.x * .5 + .5) * f.host.clientWidth, (-screen.y * .5 + .5) * f.host.clientHeight];
+    };
+    const assertNoLayoutWrites = () => assert.deepEqual(writes.filter(write =>
+      /^(?:left|top|right|bottom|width|height|inset|margin|padding)/.test(String(write.property))), [],
+    'movement must not invalidate layout before the preserved final viewport admission');
+
+    f.camera.position.set(1.2, .6, 10); f.camera.lookAt(.15, -.1, 0);
+    assert.equal(f.layer.update(), true);
+    assertNoLayoutWrites();
+    assert.equal(writes.filter(write => write.property === 'transform').length, count, 'every moved label receives its exact translation');
+    assert.equal(timeline.filter(event => event === 'viewport').length, 3, 'all existing before/after viewport admissions remain');
+    assert.ok(timeline.lastIndexOf('viewport') > timeline.lastIndexOf('write:transform'), 'the final viewport check still follows presentation writes');
+    labels.forEach((label, index) => {
+      assert.equal(f.host.children[0].children[index], label, 'movement reuses the actual label');
+      assertLabelPlacement(label, ...expectedScreen(points[index]));
+      assert.deepEqual(dots[index].position.toArray(), points[index], 'orbit never rewrites canonical local meters');
+    });
+
+    writes.length = 0; timeline.length = 0;
+    assert.equal(f.layer.update(), true);
+    assert.deepEqual(writes, [], 'an unchanged projection does not rewrite any style');
+    assert.equal(timeline.filter(event => event === 'viewport').length, 3);
+
+    points[0] = [.85, -.35, 0];
+    assert.equal(handles[0].update({ point_m: points[0] }), true);
+    assertNoLayoutWrites();
+    assert.equal(writes.filter(write => write.property === 'transform').length, 1, 'handle updates use the same movement path');
+    assertLabelPlacement(labels[0], ...expectedScreen(points[0]));
+    assert.deepEqual(dots[0].position.toArray(), points[0]);
+    f.layer.dispose();
+  });
+}
 
 function projectionWorkFixture() {
   const work = { allocations: 0, clones: 0, viewports: 0, ownerChecks: 0, projections: 0 };

@@ -306,15 +306,123 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
           const fixtureReadback=p.engine.overlay.virtualFixturesReadback();
           const draw={draws,ancestry,world:world.toArray(),view:view.toArray(),clip:clip.toArray(),cameraLayers:p.engine.camera.layers.mask,frustumCulled:dot.frustumCulled,materialVisible:dot.material.visible,materialOpacity:dot.material.opacity,
             virtualSpotlightsVisible:fixtureReadback.visible,spotlightVolumeDraws:volumeWitnesses.map(witness=>witness.draws),depthPasses:fixtureReadback.depth.passes-depthBefore};
-          const last=p.layer.project(p.point),label=p.label;return {first,last,anchorIdentity,draw,label:{x:parseFloat(label.style.left),y:parseFloat(label.style.top),hidden:label.hidden,text:label.textContent},position:p.layer.group.children[0].position.toArray(),mode:p.engine.modes.mode,hostUnchanged:p.engine.picking.getHost()===p.host,engineUnchanged:window.__APT_ENGINE===p.engine};
+          const readLabel=point=>{
+            const projected=p.layer.project(point),hostRect=p.host.getBoundingClientRect(),labelRect=p.label.getBoundingClientRect();
+            const layerElement=p.label.parentElement,layerRect=layerElement.getBoundingClientRect();
+            const scale={x:hostRect.width/p.host.clientWidth,y:hostRect.height/p.host.clientHeight},style=getComputedStyle(p.label);
+            const worldPoint=p.engine.apartmentRoot.localToWorld(dot.position.clone().fromArray(point));
+            const cameraPoint=worldPoint.clone().applyMatrix4(p.engine.camera.matrixWorldInverse),ndc=worldPoint.clone().project(p.engine.camera);
+            const depth=-cameraPoint.z,near=p.engine.camera.near,far=p.engine.camera.far;
+            return {projected,x:labelRect.left+labelRect.width/2,y:labelRect.bottom,
+              width:labelRect.width,height:labelRect.height,scale,
+              expected:{x:hostRect.left+projected?.x*scale.x,y:hostRect.top+projected?.y*scale.y},
+              layout:{left:style.left,top:style.top},hidden:p.label.hidden,text:p.label.textContent,
+              childElements:p.label.childElementCount,sameNode:p.label===originalLabel&&p.host.querySelector('.apt-ui-overlay-label')===originalLabel,
+              point:dot.position.toArray(),hostSize:[p.host.clientWidth,p.host.clientHeight],
+              dotVisible:dot.visible,clipFacts:{ndc:ndc.toArray(),depth,near,far,
+                inside:[ndc.x,ndc.y,ndc.z,depth,near,far].every(Number.isFinite)&&depth>0&&depth>=near&&depth<=far
+                  &&Math.abs(ndc.x)<=1&&Math.abs(ndc.y)<=1&&ndc.z>=-1&&ndc.z<=1},
+              canvasSize:[p.engine.renderer.domElement.width,p.engine.renderer.domElement.height],
+              bounds:{left:labelRect.left,top:labelRect.top,right:labelRect.right,bottom:labelRect.bottom},
+              clipping:{overflow:getComputedStyle(layerElement).overflow,left:labelRect.left<layerRect.left,
+                right:labelRect.right>layerRect.right,top:labelRect.top<layerRect.top,bottom:labelRect.bottom>layerRect.bottom},
+            };
+          };
+          const label=readLabel(p.point),last=label.projected;
+          const rightWorld=world.clone().project(p.engine.camera);rightWorld.x=.92;rightWorld.y=0;rightWorld.unproject(p.engine.camera);
+          const nearRight=p.engine.apartmentRoot.worldToLocal(rightWorld).toArray();
+          const longText='Authored literal <img src="authored.invalid"> room label with a deliberately long saved description near the viewport edge.';
+          const originalSize=[p.host.clientWidth,p.host.clientHeight],savedSize=['width','height'].map(property=>({property,
+            value:p.host.style.getPropertyValue(property),priority:p.host.style.getPropertyPriority(property)}));
+          const restoreHost=()=>{for(const item of savedSize){if(item.value)p.host.style.setProperty(item.property,item.value,item.priority);else p.host.style.removeProperty(item.property);}};
+          const nativeSize=async(expected,onFirstSettled)=>{
+            let consecutive=0,notified=false;
+            for(let frames=1;frames<=12;frames++){
+              await new Promise(resolve=>requestAnimationFrame(resolve));
+              const canvas=p.engine.renderer.domElement,dpr=p.engine.renderer.getPixelRatio();
+              const settled=p.host.clientWidth===expected[0]&&p.host.clientHeight===expected[1]
+                &&canvas.width===Math.floor(expected[0]*dpr)&&canvas.height===Math.floor(expected[1]*dpr)
+                &&Math.abs(p.engine.camera.aspect-expected[0]/expected[1])<1e-9;
+              consecutive=settled?consecutive+1:0;
+              if(settled&&!notified){notified=true;onFirstSettled?.();}
+              if(consecutive===2)return {settled:true,frames,expected,actual:[p.host.clientWidth,p.host.clientHeight]};
+            }
+            return {settled:false,frames:12,expected,actual:[p.host.clientWidth,p.host.clientHeight]};
+          };
+          const presentation=[],presentationBeforeRender=dot.onBeforeRender;let presentationDraws=0,restoreSize,restoredAnchor,resizeWithdrawal,resizedAnchor;
+          dot.onBeforeRender=function(...args){presentationDraws++;presentationBeforeRender?.apply(this,args)};
+          try{
+            const updated=p.anchor.update({point_m:nearRight,label:longText});let drawStart=presentationDraws;
+            const stable=await nativeSize(originalSize);
+            presentation.push({stage:'long label near right edge',updated,size:stable,expectedPoint:nearRight,draws:presentationDraws-drawStart,...readLabel(nearRight)});
+            const smaller=originalSize.map(value=>Math.max(1,Math.floor(value*.8)));drawStart=presentationDraws;
+            p.host.style.setProperty('width',smaller[0]+'px');p.host.style.setProperty('height',smaller[1]+'px');
+            const resized=await nativeSize(smaller,()=>{
+              // Native resize can refit the camera and exclude this synthetic
+              // edge point. Preserve that guard result before testing a real
+              // authored fixture at the new size, within the same two RAFs.
+              resizeWithdrawal=readLabel(nearRight);
+              resizedAnchor=p.anchor.update({point_m:p.point,label:longText});drawStart=presentationDraws;
+            });
+            presentation.push({stage:'native host resize',size:resized,expectedPoint:p.point,draws:presentationDraws-drawStart,...readLabel(p.point)});
+            drawStart=presentationDraws;restoreHost();const restored=await nativeSize(originalSize);
+            presentation.push({stage:'native host restore',size:restored,expectedPoint:p.point,draws:presentationDraws-drawStart,...readLabel(p.point)});
+          }finally{
+            try{restoreHost();restoreSize=await nativeSize(originalSize);restoredAnchor=p.anchor.update({point_m:p.point,label:'Authored fixture overlay'});
+              await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+            }finally{dot.onBeforeRender=presentationBeforeRender;}
+          }
+          return {first,last,anchorIdentity,draw,label,presentation,longText,nearRight,originalSize,restoreSize,restoredAnchor,resizeWithdrawal,resizedAnchor,
+            restoredLabel:readLabel(p.point),position:p.layer.group.children[0].position.toArray(),mode:p.engine.modes.mode,
+            hostUnchanged:p.engine.picking.getHost()===p.host,engineUnchanged:window.__APT_ENGINE===p.engine};
         });
         (receipt.overlay_draw_diagnostics ||= []).push({mode,...result.draw});
+        (receipt.overlay_presentation_diagnostics ||= []).push({mode,longText:result.longText,nearRight:result.nearRight,
+          cases:result.presentation,resizeWithdrawal:result.resizeWithdrawal,resizedAnchor:result.resizedAnchor,
+          restoreSize:result.restoreSize,restoredAnchor:result.restoredAnchor,restoredLabel:result.restoredLabel});
         assert.ok(result.first&&result.last);assert.ok(Math.hypot(result.last.x-result.first.x,result.last.y-result.first.y)>0);
         assert.ok(result.draw.draws>0,'the actual canonical dot must reach the real renderer, not only its DOM label');
         assert.equal(result.draw.virtualSpotlightsVisible,true);assert.ok(result.draw.spotlightVolumeDraws.some(draws=>draws>0),'actual spotlight volume rendering must coexist with the bridge dot');assert.ok(result.draw.depthPasses>0);
         assert.equal(result.label.hidden,false);assert.equal(result.label.text,'Authored fixture overlay');assert.deepEqual(result.position,[.6,.9,2.3]);
         assert.equal(result.anchorIdentity,true);
-        assert.ok(Math.abs(result.label.x-result.last.x)<.01&&Math.abs(result.label.y-result.last.y)<.01);assert.equal(result.mode,mode);assert.equal(result.hostUnchanged,true);assert.equal(result.engineUnchanged,true);
+        assert.ok([result.label.x,result.label.y,result.label.width,result.label.height,result.label.scale.x,result.label.scale.y,
+          result.label.expected.x,result.label.expected.y].every(Number.isFinite),'native label geometry must be finite');
+        assert.ok(result.label.width>0&&result.label.height>0&&result.label.scale.x>0&&result.label.scale.y>0,'the actual label has positive native geometry');
+        assert.equal(parseFloat(result.label.layout.left),0);assert.equal(parseFloat(result.label.layout.top),0);
+        const alignmentTolerance=.1*Math.max(1,result.label.scale.x,result.label.scale.y);
+        assert.ok(Math.abs(result.label.x-result.label.expected.x)<alignmentTolerance
+          &&Math.abs(result.label.y-result.label.expected.y)<alignmentTolerance,'native label center-bottom must match the projected host coordinate within a subpixel');
+        assert.equal(result.presentation.length,3);
+        for(const sample of result.presentation){
+          assert.equal(sample.size.settled,true,sample.stage+' uses actual host/renderer resize delivery');
+          assert.equal(sample.sameNode,true);assert.equal(sample.hidden,false);assert.equal(sample.text,result.longText);
+          assert.equal(sample.childElements,0,'literal labels cannot create markup');assert.deepEqual(sample.point,sample.expectedPoint);
+          assert.ok(sample.draws>0,sample.stage+' includes the actual canonical dot draw');assert.ok(sample.projected?.visible);
+          assert.ok([sample.x,sample.y,sample.width,sample.height,sample.scale.x,sample.scale.y,sample.expected.x,sample.expected.y].every(Number.isFinite));
+          assert.ok(sample.width>0&&sample.height>0&&sample.scale.x>0&&sample.scale.y>0);
+          const tolerance=.1*Math.max(1,sample.scale.x,sample.scale.y);
+          assert.ok(Math.abs(sample.x-sample.expected.x)<tolerance&&Math.abs(sample.y-sample.expected.y)<tolerance,
+            sample.stage+' keeps native center-bottom at its canonical projection');
+          assert.equal(sample.clipping.overflow,'hidden');
+        }
+        assert.equal(result.presentation[0].updated,true);
+        assert.ok(result.presentation[0].projected.x/result.originalSize[0]>.9,'the long literal label is actually near the right edge');
+        assert.equal(result.presentation[0].clipping.right,true,'record actual edge clipping without claiming all text is visible');
+        assert.equal(result.resizedAnchor,true);
+        const withdrawal=result.resizeWithdrawal;
+        assert.equal(withdrawal.sameNode,true);assert.equal(withdrawal.text,result.longText);assert.deepEqual(withdrawal.point,result.nearRight);
+        assert.equal(withdrawal.projected!==null,withdrawal.clipFacts.inside,'native resize respects independent Three clip/depth admission');
+        assert.equal(withdrawal.hidden,!withdrawal.clipFacts.inside);assert.equal(withdrawal.dotVisible,withdrawal.clipFacts.inside);
+        if(withdrawal.clipFacts.inside){
+          assert.ok(withdrawal.width>0&&withdrawal.height>0);
+          const tolerance=.1*Math.max(1,withdrawal.scale.x,withdrawal.scale.y);
+          assert.ok(Math.abs(withdrawal.x-withdrawal.expected.x)<tolerance&&Math.abs(withdrawal.y-withdrawal.expected.y)<tolerance);
+        }
+        assert.ok(result.presentation[1].hostSize.every((value,index)=>value<result.originalSize[index]),'the native host size actually changes');
+        assert.deepEqual(result.presentation[2].hostSize,result.originalSize);assert.equal(result.restoreSize.settled,true);
+        assert.equal(result.restoredAnchor,true);assert.equal(result.restoredLabel.sameNode,true);
+        assert.equal(result.restoredLabel.text,'Authored fixture overlay');assert.deepEqual(result.restoredLabel.point,[.6,.9,2.3]);
+        assert.equal(result.mode,mode);assert.equal(result.hostUnchanged,true);assert.equal(result.engineUnchanged,true);
         return result;
       });
       await setFixtureDisplay(false,mode+' bridge timing windows');

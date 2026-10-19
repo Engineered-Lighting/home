@@ -114,8 +114,12 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
         if (!screen || !anchor.validLabel) { hide(anchor); return false; }
         if (anchor.dot.position.x !== anchor.point[0] || anchor.dot.position.y !== anchor.point[1]
             || anchor.dot.position.z !== anchor.point[2]) anchor.dot.position.set(...anchor.point);
-        if (anchor.lastX !== screen.x) { anchor.label.style.left = `${screen.x}px`; anchor.lastX = screen.x; }
-        if (anchor.lastY !== screen.y) { anchor.label.style.top = `${screen.y}px`; anchor.lastY = screen.y; }
+        if (anchor.lastX !== screen.x || anchor.lastY !== screen.y) {
+            // Keep the final viewport/owner check without forcing layout after
+            // each moving label. The percentage offset still uses label size.
+            anchor.label.style.transform = `translate(${screen.x}px, ${screen.y}px) translate(-50%, -100%)`;
+            anchor.lastX = screen.x; anchor.lastY = screen.y;
+        }
         anchor.dot.visible = true;
         anchor.label.hidden = false;
         return true;
@@ -129,7 +133,7 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
             dot = new THREE.Mesh(geometry, material);
             labelElement = host.ownerDocument.createElement('span');
             labelElement.className = 'apt-ui-overlay-label';
-            Object.assign(labelElement.style, { position: 'absolute', transform: 'translate(-50%, -100%)', pointerEvents: 'none' });
+            Object.assign(labelElement.style, { position: 'absolute', left: '0px', top: '0px', pointerEvents: 'none' });
             labelElement.textContent = label;
             anchor = { geometry, material, dot, label: labelElement, point: point_m.slice(), validLabel: true, disposed: false };
             dot.position.set(...anchor.point);

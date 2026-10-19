@@ -1,5 +1,9 @@
 # Renderer overlay bridge QA — APT-F01
 
+The [moving-label layout correction](wave6-overlay-transform-review-20261019.md)
+removes the measured repeated-layout defect while retaining overall timing
+qualification. The earlier results below remain historical evidence.
+
 Functional checks passed with real mode-readiness and real dot-draw assertions.
 The [completed matched follow-up review](wave5-overlay-performance-review-20261019.md)
 supports the bounded one-anchor frame-interval case in all three modes, while

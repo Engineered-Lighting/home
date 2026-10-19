@@ -73,6 +73,7 @@
         ["home-apartment-aim-proposals.js", false],
         ["home-apartment-room-overlay.jsx", true],
         ["home-apartment-cards.jsx", true],
+        ["home-apartment-command-ladder.jsx", true],
         ["home-apartment-aim.jsx", true],
         ["home-apartment-calibrate.jsx", true],
         ["home-apartment-edit.jsx", true],

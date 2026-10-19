@@ -10,6 +10,7 @@ const CARDS = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-card
 const DATA = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-data.js"), "utf8");
 const AIM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-aim.jsx"), "utf8");
 const AIM_CORE = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-aiming.js"), "utf8");
+const LADDER = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-command-ladder.jsx"), "utf8");
 const GIMBAL_TELEMETRY = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-gimbal-telemetry.js"), "utf8");
 const SIM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-sim.js"), "utf8");
 const INDEX = fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8");
@@ -418,8 +419,10 @@ assert("inspector exposes raw and calibrated pose with provenance", AIM.includes
 assert("inspector exposes tape worksheet fields and practical origin", AIM.includes("floor → ceiling")
   && AIM.includes("ceiling → fixture bottom") && AIM.includes("derived fixture-bottom height")
   && AIM.includes("fixture-bottom origin"));
-assert("live Product command and movement are visibly disabled", AIM.includes("copy command")
-  && AIM.includes("move light") && AIM.includes("no Home owner-authority delegation"));
+assert("Product Aim request lives in the command ladder with Copy request disabled", AIM.includes("<window.AptCommandLadder site=\"echo\"")
+  && AIM.includes("blockers={liveBlockers}") && AIM.includes("no Home owner-authority delegation")
+  && !AIM.includes("copy simulated request") && !AIM.includes("navigator.clipboard")
+  && LADDER.includes("disabled={exact.copyRequest.disabled}") && LADDER.includes("copyRequest: { disabled: true"));
 assert("mobile Aim controls meet the 44px target and reduced motion is honored", APT.includes("min-height: 44px !important")
   && APT.includes("prefers-reduced-motion"));
 

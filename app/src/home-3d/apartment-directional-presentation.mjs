@@ -3,6 +3,9 @@
 import * as THREE from 'three';
 
 const R0 = .14, R1 = 1.3, N = 240, TAU = Math.PI * 2;
+// The supplied prototype admits a lit lobe 12 cm past its drawn edge, so a
+// small lobe stays as easy to grab as the design intends. Hit paths only.
+const LOBE_HIT_MARGIN_M = .12;
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 // The supplied prototype's qualitative color cue; not measured photometry.
 export function radialDisplayColor(kelvin) {
@@ -77,7 +80,8 @@ export function createDirectionalPresentation({ group, host, api, initial, getPr
         elements.pill.hidden = snapshot.active;
         elements.readout.hidden = !active || !value;
         if (active && value) {
-            elements.readout.textContent = `Zone ${value.zone} · ${Math.round(value.level * 100)}%`;
+            const percent = Math.round(value.level * 100);
+            elements.readout.textContent = `Zone ${value.zone} · ${percent > 0 ? percent + '%' : 'Off'}`;
             elements.readout.style.transform = `translate3d(${value.x + 14}px,${value.y - 36}px,0)`;
         }
     }
@@ -142,7 +146,7 @@ export function createDirectionalPresentation({ group, host, api, initial, getPr
             setAttribute(path, 'fill-opacity', zone.display_opacity);
         }
         if (!projection || !shown || !elements?.root.isConnected) { withdraw(); return false; }
-        const radials = shown.radials, geometry = api.radialSectorPaths({ radials, frame: projection.frame });
+        const radials = shown.radials, geometry = api.radialSectorPaths({ radials, frame: projection.frame, hitMargin: LOBE_HIT_MARGIN_M });
         if (!geometry?.hub?.visible) { withdraw(); return false; }
         scene.position.fromArray(projection.descriptor.display_anchor_m); scene.visible = snapshot.mode === 'zones';
         const renderKey = JSON.stringify([radials, snapshot.mode, snapshot.active, snapshot.readout?.zone]);

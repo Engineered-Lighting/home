@@ -1,8 +1,9 @@
 # app/ — the Home desktop client
 
 A [Tauri 2](https://tauri.app) app. Rust shell + a small React frontend
-served from disk. No bundler — JSX is compiled in-browser via Babel
-Standalone.
+served from disk. No bundler. JSX is compiled ahead of time by
+`node tools/build-app-jsx.mjs` (see [Precompiled JSX](#precompiled-jsx)), and
+anything not precompiled is compiled in the browser by Babel Standalone.
 
 ## Build prerequisites
 
@@ -44,6 +45,25 @@ cargo tauri dev          # opens the borderless 420×720 window with hot reload
 
 The webview loads from `app/src/` directly — edit a `.jsx` file and
 the change appears on next Babel transform (refresh the window).
+
+## Precompiled JSX
+
+Compiling the JSX in the browser used to cost 7–10 s on every desktop load
+and about a minute on a phone. `node tools/build-app-jsx.mjs` (`npm run
+build:jsx`) does it once instead, with the vendored Babel and the exact
+options the browser uses, into `app/src/precompiled/` (gitignored). A rerun
+only recompiles changed files.
+
+- **Web gateway:** `tools/deploy-home-web.sh` runs the build after each pull.
+  The gateway serves `precompiled/manifest.json` re-verified against the
+  sources on every request, so browsers download only the compiled files.
+- **Desktop installer:** `cargo tauri build` runs the build first
+  (`beforeBuildCommand`), so the `.msi`/`.dmg` embeds the compiled files.
+- **Development:** nothing changes. A plain checkout has no `precompiled/`,
+  so everything compiles in the browser as before. If an older build is
+  present, each edited file is detected by checksum and compiled in the
+  browser; only unchanged files use the build. `node tools/build-app-jsx.mjs
+  --clean` removes it, and `--check` reports any stale file.
 
 ## Build a release
 

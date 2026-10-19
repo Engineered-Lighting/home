@@ -240,3 +240,22 @@ test('an exact half-turn sweep takes the prototype negative-direction tie withou
  gesture.move({snapshot:source,pointerId:1,point:[1.3,0]});const result=gesture.move({snapshot:source,pointerId:1,point:polar(180,.14)});
  assert.deepEqual(result.patch,{radials:[{number:1,on:true,brightness:1},{number:4,on:false,brightness:0},{number:5,on:true,brightness:.33},{number:6,on:true,brightness:.67}]});
 });
+test('a hit margin widens only each zone hit path past its lit edge, in plane metres',()=>{
+ const input=radials();input[1].on=false;input[2].brightness=1;
+ const base=D.radialSectorPaths({radials:input,frame:plan}),wide=D.radialSectorPaths({radials:input,frame:plan,hitMargin:.12});
+ assert.deepEqual(D.radialSectorPaths({radials:input,frame:plan,hitMargin:0}),base,'zero margin is the existing drawing');
+ for(const key of ['hub','inner','outer','contour'])assert.deepEqual(wide[key],base[key]);
+ const points=path=>path.slice(1,-2).split(' L').map(pair=>pair.split(' ').map(Number));
+ wide.zones.forEach((zone,i)=>{
+  const was=base.zones[i];
+  assert.deepEqual([zone.number,zone.azimuth_deg,zone.level,zone.node,zone.tick],[was.number,was.azimuth_deg,was.level,was.node,was.tick]);
+  const a=points(zone.path),b=points(was.path);assert.equal(a.length,26);assert.equal(b.length,26);
+  for(let j=0;j<13;j++){
+   close(Math.hypot(a[j][0]-200,a[j][1]-200)-Math.hypot(b[j][0]-200,b[j][1]-200),12,1e-9);
+   close(Math.atan2(a[j][1]-200,a[j][0]-200),Math.atan2(b[j][1]-200,b[j][0]-200),1e-12);
+  }
+  assert.deepEqual(a.slice(13),b.slice(13),'the inner arc stays on the hub ring');
+ });
+ close(Math.max(...points(wide.zones[2].path).slice(0,13).map(([x,y])=>Math.hypot(x-200,y-200))),142,1e-9);
+ for(const hitMargin of [-.01,NaN,Infinity,'0.12',null])assert.equal(D.radialSectorPaths({radials:input,frame:plan,hitMargin}),null);
+});

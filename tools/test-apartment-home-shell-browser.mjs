@@ -926,6 +926,21 @@ test('unified shell keeps the real room, private controls and one chat controlle
     await timedPhase('canonical_drag_spot', () => dragAndUndo('spot_pan_slider', 'Pan'));
     assert.deepEqual(receipt.native_drag_mouse.map(scope => scope.proof.samples), [16, 16]);
 
+    // APT-A06: one collapsed, modeled-only command ladder in the Victoria Aim tab; reading it sends nothing.
+    const ladder = page.locator('#apt-ui-virtual-aim [data-apt-command-ladder="modeled"]'), ladderRequests = requests.length;
+    assert.equal(await ladder.count(), 1, 'one command ladder in the Victoria Aim tab');
+    assert.equal(await ladder.locator('details').first().evaluate(node => node.open), false, 'the ladder starts collapsed');
+    assert.equal(await ladder.locator('[data-apt-command-status]').innerText(), 'Modeled · nothing sent');
+    await ladder.locator('summary').first().click();
+    assert.equal(await ladder.locator('[data-apt-command-step="accepted"] .apt-ui-meta').innerText(), 'not available · not commissioned');
+    assert.match(await ladder.locator('[data-apt-command-step="modeled"] .apt-ui-meta').innerText(), / · travel limits not commissioned$/);
+    await ladder.getByText('Exact output', { exact: true }).click();
+    assert.equal(await ladder.getByRole('button', { name: 'Copy request', exact: true }).isDisabled(), true);
+    assert.doesNotMatch(await ladder.innerText(), /within/i, 'Victoria never claims within-limit pan or tilt');
+    assert.equal(requests.slice(ladderRequests).some(row => !['GET', 'HEAD'].includes(row.method)), false, 'the ladder sends nothing');
+    await ladder.locator('summary').first().click();
+    checks.push({ stage: 'victoria_command_ladder_modeled_only' });
+
     await capture('unified-fixture-controls-1366x768');
 
     await page.setViewportSize({ width: 390, height: 844 });

@@ -415,7 +415,7 @@ function AptDirectionalComposer({ view, onMode }) {
     <svg className="apt-directional-hits" aria-hidden="true" width="100%" height="100%"
       style={{ display: "block", overflow: "hidden", pointerEvents: "none" }}>
       {[1, 2, 3, 4, 5, 6].map(number => <path key={number} data-apt-radial-number={number} fill="transparent" />)}
-      <circle data-apt-radial-hub="hit" r="22" fill="transparent" />
+      <circle data-apt-radial-hub="hit" r="34" fill="transparent" />
       <circle data-apt-radial-hub="dot" r="7" fill="transparent" pointerEvents="none" />
     </svg>
     <div ref={pillRef} hidden className="apt-directional-toolpill" role="group" aria-label="Room lighting tool" data-aim-ignore="true"

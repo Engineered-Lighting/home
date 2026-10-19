@@ -2913,6 +2913,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const refreshDenDeskAimPreview = useCallback((engine) => {
     if (engineRef.current === engine) setVirtualFixturePreview(engine?.overlay.virtualFixturesReadback?.() || null);
   }, []);
+  // AL-4: the den's virtual fixtures follow the central lighting brain.
+  const lightingBrainRef = useRef(null);
+  const [lightingBrain, setLightingBrain] = useState(null);
+  const [targetMarkKind, setTargetMarkKind] = useState("desk");
   const virtualFixtureDocument = selectedSiteId === "victoria" && apartmentPlacementDisplayEnabled
     && !rehearsalIsolated && model._equipment_registration?.scope?.site_id === "victoria"
     && model._equipment_registration?.binding?.content_revision === selectedContentRevision
@@ -5262,9 +5266,30 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     }
     overlay.setVirtualFixturesVisible(virtualSpotlightsVisible && !editing && !calibCam
       && !liveOn && spatialScale === "apartment");
+    if (document) lightingBrainRef.current?.follower.refresh();
     setVirtualFixturePreview(overlay.virtualFixturesReadback?.() || null);
   }, [open, phase, selectedSiteId, selectedContentRevision, virtualFixtureDocument,
     virtualFixtureBindingKey, virtualSpotlightsVisible, editing, calibCam, liveOn, spatialScale]);
+
+  // Always on while the Victoria view shows the registered fixtures. Brain
+  // offline holds the last applied state; physical output is never involved.
+  useEffect(() => {
+    const engine = engineRef.current, Follower = window.HomeLightingBrainFollower, Client = window.HomeLightingBrainClient;
+    if (!open || phase !== "ready" || !virtualFixtureBindingKey || rehearsalIsolated || !Follower || !Client
+        || !engine?.overlay?.setVirtualFixtureState || typeof window.fetch !== "function") {
+      setLightingBrain(null); return undefined;
+    }
+    const following = Follower.createBrainFollowing({ Client, fetch: window.fetch.bind(window), EventSource: window.EventSource,
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id),
+      getOverlay: () => engineRef.current === engine ? engine.overlay : null,
+      onChange: setLightingBrain,
+      onApplied: () => { if (engineRef.current === engine) syncVirtualFixturePreview(engine); } });
+    lightingBrainRef.current = following;
+    return () => {
+      following.dispose();
+      if (lightingBrainRef.current === following) lightingBrainRef.current = null;
+    };
+  }, [open, phase, virtualFixtureBindingKey, rehearsalIsolated]);
 
   const syncVirtualFixturePreview = (engine, suppliedResult, publish = true) => {
     const result = suppliedResult || engine?.overlay.virtualFixturesReadback?.();
@@ -5314,6 +5339,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       preview?.manualTakeover?.(reason === "aim" ? "manual_aim_gesture"
         : reason === "undo" || reason === "redo" ? "manual_aim_history" : "manual_fixture_control");
     } catch (_) { /* The seam never blocks a person's change. */ }
+    // AL-4: a person's change pauses only that fixture and posts the brain
+    // override before the change is applied.
+    try { lightingBrainRef.current?.follower.handChange(fixtureId, { reason: reason || "change" }); } catch (_) { /* as above */ }
     return { released, restored: false, excluded: false };
   };
   const changeVirtualFixtureByHand = (patch, fixtureId = selectedVirtualFixture?.fixture_id, options) => {
@@ -5749,14 +5777,14 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (deskTargetContextCurrent(capture)) capture.engine.overlay.setTargets?.(model.targets || []);
     deskTargetCaptureRef.current = null; setDeskTargetSelection(null);
   };
-  const startDeskTargetSelection = async () => {
+  const startDeskTargetSelection = async (kind = "desk") => {
     cancelDeskTargetSelection();
     const engine = engineRef.current, document = virtualFixtureDocument;
     if (!document || !engine?.overlay.createDeskTargetCapture) return;
     const capture = { engine, authorityKey: apartmentAuthorityKey,
       binding: JSON.parse(JSON.stringify(document.binding)),
       equipment_ref: { revision: document.revision, digest: document.digest },
-      corners: [], active: true };
+      corners: [], active: true, kind: kind === "sofa" ? "sofa" : "desk" };
     if (!deskTargetContextCurrent(capture)) return;
     denDeskAimPreviewRef.current?.manualTakeover('desk_selection_started');
     virtualAimGestureRef.current?.cancel();
@@ -5834,14 +5862,19 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         corners: capture.corners, confirmed: true,
         ...(capture.surface_ref ? { surface_ref: capture.surface_ref } : {}),
       };
-      const record = capture.engine.overlay.sealRegisteredDeskTarget(input, window.HomeEquipmentRegistration.digest);
+      // The sofa mark reuses the desk sealing and is kept private beside it.
+      const record = capture.kind === "sofa"
+        ? window.HomeLightingSofaTarget.sealSofaTarget(input, { sealDesk: capture.engine.overlay.sealRegisteredDeskTarget,
+          digest: window.HomeEquipmentRegistration.digest })
+        : capture.engine.overlay.sealRegisteredDeskTarget(input, window.HomeEquipmentRegistration.digest);
       const blob = new Blob([JSON.stringify(record, null, 2) + "\n"], { type: "application/json" });
       const url = URL.createObjectURL(blob), link = document.createElement("a");
-      link.href = url; link.download = "victoria-den-desk-target.json"; link.click();
+      link.href = url; link.download = capture.kind === "sofa" ? "victoria-den-sofa-target.json" : "victoria-den-desk-target.json"; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setDeskTargetSelection(value => ({ ...value, status: "saved" }));
     } catch (error) {
-      setVirtualAimNotice("Desk target unavailable. Select its four actual scan corners again.");
+      setVirtualAimNotice(capture.kind === "sofa" ? "Sofa mark unavailable. Select its four seat corners again."
+        : "Desk target unavailable. Select its four actual scan corners again.");
     }
   };
   useEffect(() => () => {
@@ -10458,10 +10491,14 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
             canSetup={apartmentPlacementControlsEnabled}
             deskControls={<section aria-label="Desk target" className="apt-ui-channel">
-              <button type="button" className="apt-ui-button" disabled={!virtualSpotlightsVisible} onClick={startDeskTargetSelection}>Select desk surface</button>
+              {window.HomeLightingBrainPanel && <window.HomeLightingBrainPanel brain={lightingBrain}
+                labels={Object.fromEntries(virtualFixtureItems.map((fixture) => [fixture.fixture_id, fixture.label]))}
+                onReturnToAuto={(id) => lightingBrainRef.current?.follower.returnToAuto(id)} />}
+              <button type="button" className="apt-ui-button" disabled={!virtualSpotlightsVisible} onClick={() => { setTargetMarkKind("desk"); startDeskTargetSelection("desk"); }}>Select desk surface</button>
+              <button type="button" className="apt-ui-button" disabled={!virtualSpotlightsVisible} onClick={() => { setTargetMarkKind("sofa"); startDeskTargetSelection("sofa"); }}>Mark sofa</button>
               {deskTargetSelection && <>
                 <p role="status" className="apt-ui-copy">{deskTargetSelection.status === "selecting"
-                  ? `${deskTargetSelection.surface_ref ? "Detailed registered scan mesh. " : ""}Click the four desktop corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
+                  ? `${deskTargetSelection.surface_ref ? "Detailed registered scan mesh. " : ""}Click the four ${targetMarkKind === "sofa" ? "sofa seat" : "desktop"} corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
                     registered_surface_unavailable: "No registered scan surface at that point.",
                     registered_collision_unavailable: "Registered scan geometry is not available yet.",
                     registered_surface_no_hit: "No registered scan triangle at that point.",
@@ -10477,13 +10514,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                   }[deskTargetSelection.reason] || "That point was not added. Your selected corners are still kept.") : ""}`
                   : deskTargetSelection.status === "preparing" ? "Loading the detailed registered scan mesh for desk selection. Clear selection cancels."
                   : deskTargetSelection.status === "unavailable" ? "Desk selection is unavailable: the detailed mesh or its registered identity could not be verified."
-                  : deskTargetSelection.status === "complete" ? "Four corners selected. Check the numbered markers cover your whole desktop."
-                  : deskTargetSelection.status === "saved" ? "Desk target download prepared. Keep the file private; it enables no automatic light yet."
+                  : deskTargetSelection.status === "complete" ? `Four corners selected. Check the numbered markers cover your whole ${targetMarkKind === "sofa" ? "sofa seat" : "desktop"}.`
+                  : deskTargetSelection.status === "saved" ? (targetMarkKind === "sofa"
+                      ? "Sofa mark download prepared. Keep it private beside the desk target; the brain reads only its private export."
+                      : "Desk target download prepared. Keep the file private; it enables no automatic light yet.")
                   : "Selection canceled. Start again to choose the desktop."}</p>
                 {deskTargetSelection.status === "complete" && <>
                   <label className="apt-ui-row apt-ui-copy"><input type="checkbox" checked={deskTargetSelection.confirmed}
-                    onChange={event => setDeskTargetSelection(value => ({ ...value, confirmed: event.target.checked }))} />These corners bound my whole desktop.</label>
-                  <button type="button" className="apt-ui-button" disabled={!deskTargetSelection.confirmed} onClick={saveDeskTargetSelection}>Save desk target</button>
+                    onChange={event => setDeskTargetSelection(value => ({ ...value, confirmed: event.target.checked }))} />{targetMarkKind === "sofa" ? "These corners bound the sofa seat." : "These corners bound my whole desktop."}</label>
+                  <button type="button" className="apt-ui-button" disabled={!deskTargetSelection.confirmed} onClick={saveDeskTargetSelection}>{targetMarkKind === "sofa" ? "Save sofa mark" : "Save desk target"}</button>
                 </>}
                 <button type="button" className="apt-ui-button" onClick={cancelDeskTargetSelection}>Clear selection</button>
               </>}
@@ -10506,13 +10545,19 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           <div style={{ marginTop: 5, opacity: .7, fontSize: 10 }}>
             {virtualFixtureItems.length} fixtures · 6 radial + down + robotic spot each
           </div>
+          {window.HomeLightingBrainPanel && <window.HomeLightingBrainPanel brain={lightingBrain}
+            labels={Object.fromEntries(virtualFixtureItems.map((fixture) => [fixture.fixture_id, fixture.label]))}
+            onReturnToAuto={(id) => lightingBrainRef.current?.follower.returnToAuto(id)} />}
           {virtualSpotlightsVisible && (
             <section aria-label="Desk target" style={{ marginTop: 10 }}>
-              <button type="button" onClick={startDeskTargetSelection} style={{ minHeight: 34 }}>Select desk surface</button>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => { setTargetMarkKind("desk"); startDeskTargetSelection("desk"); }} style={{ minHeight: 34 }}>Select desk surface</button>
+                <button type="button" onClick={() => { setTargetMarkKind("sofa"); startDeskTargetSelection("sofa"); }} style={{ minHeight: 34 }}>Mark sofa</button>
+              </div>
               {deskTargetSelection && <>
                 <p role="status" style={{ fontSize: 11, lineHeight: 1.45 }}>
                   {deskTargetSelection.status === "selecting"
-                    ? `${deskTargetSelection.surface_ref ? "Detailed registered scan mesh. " : ""}Click the four desktop corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
+                    ? `${deskTargetSelection.surface_ref ? "Detailed registered scan mesh. " : ""}Click the four ${targetMarkKind === "sofa" ? "sofa seat" : "desktop"} corners in order around its edge (${deskTargetSelection.corners.length}/4). Escape cancels.${deskTargetSelection.reason ? " " + ({
                         registered_surface_unavailable: "No registered scan surface at that point.",
                         registered_collision_unavailable: "Registered scan geometry is not available yet.",
                         registered_surface_no_hit: "No registered scan triangle at that point.",
@@ -10528,18 +10573,20 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
                       }[deskTargetSelection.reason] || "That point was not added. Your selected corners are still kept.") : ""}`
                     : deskTargetSelection.status === "preparing" ? "Loading the detailed registered scan mesh for desk selection. Clear selection cancels."
                     : deskTargetSelection.status === "unavailable" ? "Desk selection is unavailable: the detailed mesh or its registered identity could not be verified."
-                    : deskTargetSelection.status === "complete" ? "Four corners selected. Check the numbered markers cover your whole desktop."
-                    : deskTargetSelection.status === "saved" ? "Desk target download prepared. Keep the file private; it enables no automatic light yet."
+                    : deskTargetSelection.status === "complete" ? `Four corners selected. Check the numbered markers cover your whole ${targetMarkKind === "sofa" ? "sofa seat" : "desktop"}.`
+                    : deskTargetSelection.status === "saved" ? (targetMarkKind === "sofa"
+                      ? "Sofa mark download prepared. Keep it private beside the desk target; the brain reads only its private export."
+                      : "Desk target download prepared. Keep the file private; it enables no automatic light yet.")
                     : "Selection canceled. Start again to choose the desktop."}
                 </p>
                 {deskTargetSelection.status === "complete" && <>
                   <label style={{ display: "flex", gap: 6, fontSize: 11 }}>
                     <input type="checkbox" checked={deskTargetSelection.confirmed}
                       onChange={event => setDeskTargetSelection(value => ({ ...value, confirmed: event.target.checked }))} />
-                    These corners bound my whole desktop.
+                    {targetMarkKind === "sofa" ? "These corners bound the sofa seat." : "These corners bound my whole desktop."}
                   </label>
                   <button type="button" disabled={!deskTargetSelection.confirmed} onClick={saveDeskTargetSelection}
-                    style={{ minHeight: 34, marginTop: 7 }}>Save desk target</button>
+                    style={{ minHeight: 34, marginTop: 7 }}>{targetMarkKind === "sofa" ? "Save sofa mark" : "Save desk target"}</button>
                 </>}
                 <button type="button" onClick={cancelDeskTargetSelection} style={{ minHeight: 34, marginTop: 7 }}>Clear selection</button>
               </>}

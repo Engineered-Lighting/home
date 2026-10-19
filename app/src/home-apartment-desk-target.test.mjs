@@ -251,7 +251,7 @@ test('actual selecting status explains rejected clicks while retaining the first
   const from = host.indexOf('<p role="status"', section), to = host.indexOf('</p>', from) + 4;
   assert.ok(section >= 0 && from > section && to > from, 'the actual desk selection status paragraph exists');
   const Babel = createRequire(import.meta.url)('./vendor/babel-7.29.0/babel.min.js');
-  const compiled = Babel.transform(`const renderStatus = (deskTargetSelection) => (${host.slice(from, to)});`,
+  const compiled = Babel.transform(`const renderStatus = (deskTargetSelection, targetMarkKind = 'desk') => (${host.slice(from, to)});`,
     { presets: ['react'], filename: 'actual-desk-selection-status.jsx', sourceMaps: false }).code;
   const React = { createElement: (type, props, ...children) => ({ type, props, children }) };
   const render = new Function('React', `${compiled}\nreturn renderStatus;`)(React);
@@ -286,7 +286,7 @@ test('actual host distinguishes missing collision, an empty ray and an unselecte
   const from = host.indexOf('<p role="status"', section), to = host.indexOf('</p>', from) + 4;
   assert.ok(section >= 0 && from > section && to > from);
   const Babel = createRequire(import.meta.url)('./vendor/babel-7.29.0/babel.min.js');
-  const compiled = Babel.transform(`const renderStatus = (deskTargetSelection) => (${host.slice(from, to)});`,
+  const compiled = Babel.transform(`const renderStatus = (deskTargetSelection, targetMarkKind = 'desk') => (${host.slice(from, to)});`,
     { presets: ['react'], filename: 'actual-desk-failure-status.jsx', sourceMaps: false }).code;
   const React = { createElement: (type, props, ...children) => ({ type, props, children }) };
   const render = new Function('React', `${compiled}\nreturn renderStatus;`)(React);
@@ -355,3 +355,18 @@ test('the actual Home download feeds the actual four-fixture aim consumer withou
   f.render().cancelDeskTargetSelection();
 });
 
+test('AL-4: the same host selector marks the sofa and saves a private sofa record beside the desk target', async () => {
+  const Sofa = createRequire(import.meta.url)('./home-lighting-sofa-target.js');
+  const f = fixture(); f.windowTarget.HomeLightingSofaTarget = Sofa;
+  f.render().startDeskTargetSelection('sofa');
+  for (let index = 0; index < 4; index++) f.click();
+  assert.equal(f.state.selection.status, 'complete');
+  f.state.selection = { ...f.state.selection, confirmed: true }; f.render().saveDeskTargetSelection();
+  assert.deepEqual(f.state.downloads, [{ href: 'blob:authored-desk', filename: 'victoria-den-sofa-target.json' }]);
+  const record = JSON.parse(await f.state.blob.text());
+  assert.equal(record.schema, 'home-registered-sofa-target-1'); assert.deepEqual(record.zone.vertices_m, f.corners);
+  const equipment_ref = { revision: f.document.revision, digest: f.document.digest };
+  assert.deepEqual(Sofa.validateSofaTarget(record, { binding: f.binding, equipment_ref }, { sealDesk: sealRegisteredDeskTarget, digest: Core.digest }), record);
+  assert.equal(f.state.selection.status, 'saved');
+  f.render().cancelDeskTargetSelection();
+});

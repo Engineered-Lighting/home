@@ -95,21 +95,28 @@ function assertNumericallyEqual(actual, expected, label, epsilon = 1e-9) {
   return largest;
 }
 
-/* Per-pixel largest channel difference, over pixels either frame covers. */
+/*
+ * Per-pixel largest colour difference, over pixels either frame covers.
+ * The canvas is premultiplied and the stage behind it is dark, so what is
+ * seen is the RGB channels. Alpha is reported apart: at silhouettes it is
+ * MSAA coverage, which WebGPU and ANGLE's D3D11 resolve differently.
+ */
 function compareFrames(a, b) {
   assert.equal(a.width, b.width); assert.equal(a.height, b.height);
   const histogram = new Uint32Array(256);
-  let covered = 0, sum = 0;
+  let covered = 0, sum = 0, alphaOver48 = 0;
   for (let i = 0; i < a.pixels.length; i += 4) {
     if (a.pixels[i + 3] === 0 && b.pixels[i + 3] === 0) continue;
     let diff = 0;
-    for (let c = 0; c < 4; c++) diff = Math.max(diff, Math.abs(a.pixels[i + c] - b.pixels[i + c]));
+    for (let c = 0; c < 3; c++) diff = Math.max(diff, Math.abs(a.pixels[i + c] - b.pixels[i + c]));
+    if (Math.abs(a.pixels[i + 3] - b.pixels[i + 3]) > 48) alphaOver48++;
     histogram[diff]++; covered++; sum += diff;
   }
   const over = threshold => { let n = 0; for (let d = threshold + 1; d < 256; d++) n += histogram[d]; return covered ? n / covered : 0; };
   let p99 = 0;
   for (let d = 0, seen = 0; d < 256; d++) { seen += histogram[d]; if (seen >= covered * 0.99) { p99 = d; break; } }
-  return { covered, mean: covered ? sum / covered : 0, p99, over16: over(16), over48: over(48) };
+  return { covered, mean: covered ? sum / covered : 0, p99, over16: over(16), over48: over(48),
+    alphaOver48: covered ? alphaOver48 / covered : 0 };
 }
 
 function png(frame) {
@@ -345,7 +352,8 @@ test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { 
         largestContractDifference: contracts, comparisons });
       for (const row of comparisons) {
         console.log(`${backend} vs WebGL, ${row.mode} ${row.pose}: covered ${row.covered}, mean ${row.mean.toFixed(2)}, `
-          + `p99 ${row.p99}, >16 ${(row.over16 * 100).toFixed(2)}%, >48 ${(row.over48 * 100).toFixed(2)}%`);
+          + `p99 ${row.p99}, >16 ${(row.over16 * 100).toFixed(2)}%, >48 ${(row.over48 * 100).toFixed(2)}%, `
+          + `alpha >48 ${(row.alphaOver48 * 100).toFixed(2)}%`);
       }
       for (const row of comparisons) {
         assert.ok(row.covered > 1000, `${row.mode} ${row.pose}: the scene covers the frame`);

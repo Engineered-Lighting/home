@@ -323,6 +323,36 @@ pointer/wheel events, and no HTML drag starts. Full shell passes in 41.5 and
 `.tmp/apartment-home-shell-browser/run-1792391498369/receipt.json`.
 These Windows runs remain distinct from fresh hosted qualification.
 
+Hosted run `39210796521` passed the full shell in 142 seconds and all thirteen
+directional stages, thirteen renderer snapshots and the exact 91-event ledger
+in 141 seconds. Twenty-four of thirty mapped suites passed before the job's
+unchanged ten-minute limit canceled room selection after seven of eight stages.
+The serial suite budget, rather than a failed directional assertion, now blocks
+qualification. Its authored receipts and log remain in
+`.tmp/radial-ci-6049-artifacts/` and `.tmp/radial-ci-6049.log`.
+
+Repair and Den agreed the CI-only ownership window. Independent workers now
+run the original fast contracts/full shell and the unchanged touched-harness
+dispatcher concurrently. Both retain the existing Ubuntu runner label, Node 20,
+lockfile/Chromium setup, ten-minute worker limit, complete test scenes and
+original test deadlines. This uses a second runner and duplicate setup work;
+it does not extend test deadlines. Original diagnostic paths and retention are
+preserved across two distinct artifacts. Manual dispatch retains the original
+PR-only condition on the touched test step.
+
+The original required check name and job ID remain as an always-run aggregate
+that accepts only two successful workers. A new unconditional workflow contract
+test checks coverage/conditions/artifact conservation and executes the actual
+aggregate shell command against successful, failed, canceled, skipped and
+missing-result combinations. Production sources, dispatcher mappings and all
+browser harnesses are unchanged by this correction. Fresh hosted qualification
+is still required.
+
+All four new workflow contracts pass locally in 2.0 seconds. The executed Bash
+gate covers 49 result pairs and three genuinely absent-variable cases; only two
+successful workers produce success. Independent review also checks the actual
+workflow and release fragment. These checks require no new test dependencies.
+
 ## Ticket coverage and retained limits
 
 | Ticket | Covered in this slice | Still open |

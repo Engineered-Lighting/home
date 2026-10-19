@@ -4,4 +4,4 @@ target: web
 type: changed
 ---
 
-The web app and the desktop app now load JSX compiled ahead of time instead of compiling about 3 MB of it with Babel on every launch. On the workstation the Apartment view's first Cloud frame moves from about 8 s to about 1 s, and from over a minute to a few seconds at 4× CPU slowdown. Deploys of the web gateway and desktop installer builds run `node tools/build-app-jsx.mjs`; any file that is not precompiled, or has changed since, still compiles in the browser as before.
+The web app and the desktop app now load JSX compiled ahead of time instead of compiling about 3 MB of it with Babel on every launch. On the workstation the Apartment view's first Cloud frame moved from about 8 s to about 0.5 s, and from about 73 s to about 1.5 s with a phone-sized window and 4× CPU slowdown. Web gateway deploys and desktop installer builds run `node tools/build-app-jsx.mjs`; a file that is not precompiled, or has changed since, still compiles in the browser as before.

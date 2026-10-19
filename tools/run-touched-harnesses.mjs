@@ -120,6 +120,9 @@ const MAP = [
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
     "run-native-agent-security-tests",
   ]],
+  // Ahead-of-time JSX: the loaders, the build, the gateway's verified
+  // manifest and the hooks that run the build on deploy and installer builds.
+  [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],
   [/^tools\/lib\/home-app-source-contracts\.cjs$/, ["run-bootstrap-tests.js", "run-simulation-command-tests.js", "test-home-app-source-contracts.cjs"]],
   [/^tools\/(?:run-bootstrap-tests|run-simulation-command-tests)\.js$/, ["test-home-app-source-contracts.cjs"]],
   [/^tools\/test-home-app-source-contracts\.cjs$/, ["test-home-app-source-contracts.cjs"]],

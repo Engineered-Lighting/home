@@ -79,6 +79,13 @@ if ! npm run web:check; then
   exit 1
 fi
 
+# Precompile the app's JSX so browsers stop compiling it on every load. Not
+# fatal: anything left uncompiled (or stale) is compiled in the browser, as
+# before, because the gateway only serves entries that match the sources.
+if ! node tools/build-app-jsx.mjs; then
+  echo "Warning: JSX precompile incomplete; affected files will compile in the browser." >&2
+fi
+
 if command -v python3 >/dev/null 2>&1 && [[ -f "${repo_dir}/app/data/apartment/apartment.ply" ]]; then
   if ! python3 tools/make-apartment-mobile-splat.py --quiet; then
     rollback "mobile apartment photo asset generation failed"

@@ -10,8 +10,11 @@ import crypto from 'node:crypto';
 // and .1 x level opacity, the opaque core) are asserted directly in tests.
 export const ORB_COSMETIC_NAME = /^(?:symbolic-fixture-housing|tubular-diffuser|diffuser-(?:top|base)|radial-diffuser-sector-[1-6]|fixture-orb(?:-core)?|orb-halo-(?:downward|spotlight))$/;
 
-const clone = value => JSON.parse(JSON.stringify(value));
-const digest = array => crypto.createHash('sha256').update(Buffer.from(array.buffer, array.byteOffset, array.byteLength)).digest('hex');
+// Numbers are compared at 9 significant digits: a real protected change is far
+// larger, while the last bit of Math.pow/cos may differ between JS engines.
+const round = value => typeof value === 'number' && Number.isFinite(value) ? Number(value.toPrecision(9)) : value;
+const clone = value => JSON.parse(JSON.stringify(value), (_, item) => round(item));
+const digest = array => crypto.createHash('sha256').update(JSON.stringify(Array.from(array, round))).digest('hex');
 function snapshot(value) {
   if (value?.isTexture) return { texture: value.constructor.name, width: value.image?.width ?? null, height: value.image?.height ?? null,
     data: value.image?.data ? digest(value.image.data) : null };
@@ -50,11 +53,11 @@ export function protectedFingerprint(api) {
     return { fixture_id: root.userData.fixture_id, nodes };
   });
   const readback = api.readback();
-  return { readback: clone(readback),
-    descriptors: readback.fixtures.map(item => clone(api.interactionDescriptor(item.fixture_id))),
-    picks: api.pickObjects().map(node => ({ name: node.name, userData: clone(node.userData), position: node.position.toArray(),
+  return clone({ readback,
+    descriptors: readback.fixtures.map(item => api.interactionDescriptor(item.fixture_id)),
+    picks: api.pickObjects().map(node => ({ name: node.name, userData: node.userData, position: node.position.toArray(),
       geometry: geometry(node.geometry), visible: node.material.visible })),
-    fixtures };
+    fixtures });
 }
 
 // The pinned form: protected node paths per fixture, then one SHA-256 per

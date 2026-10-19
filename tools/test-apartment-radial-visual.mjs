@@ -430,18 +430,6 @@ const orbParts = root => ({ core: root.getObjectByName('fixture-orb-core'),
 const haloLayers = root => { const parts = orbParts(root); return [...parts.sectors, parts.down, parts.spot]; };
 const allOff = { radials: [1, 2, 3, 4, 5, 6].map(number => ({ number, on: false })), downward: { on: false }, spotlight: { on: false } };
 
-test('orb cosmetics leave readback, descriptors, picks, sources, beam and receiver buffers identical to the cylinder fixture', t => {
-  const pinned = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/fixtures/apartment-orb-protected-equivalence.json'), 'utf8'));
-  assert.match(pinned.recorded_from, /at 4a374e78 \(cylinder fixture\)$/);
-  const parent = new THREE.Group(), api = createEquipmentVirtualFixtures(parent, { binding }); t.after(() => api.dispose());
-  const loaded = api.setDocument(authoredDocument(binding, Core));
-  assert.equal(loaded.status, 'ready'); assert.equal(loaded.fixture_count, 4);
-  const actual = pinnedEquivalence(protectedScenario(api, loaded.fixtures[0].fixture_id));
-  assert.deepEqual(actual.paths, pinned.paths, 'the same protected nodes exist in the same places');
-  for (const [state, parts] of Object.entries(pinned.states)) assert.deepEqual(actual.states[state], parts, 'protected values unchanged after ' + state);
-  assert.deepEqual(Object.keys(actual.states), Object.keys(pinned.states));
-});
-
 test('protected proportions, limits, easing and the pick and handle geometry stay exactly as before', t => {
   assert.match(fixtureSource, /^const TUBE_RADIUS = \.04, TUBE_HEIGHT = \.16;$/m);
   assert.match(fixtureSource, /^const DISPLAY_PIVOT_Z = -\.14;$/m);
@@ -564,4 +552,16 @@ test('disposal releases every orb geometry and material', () => {
   api.dispose();
   assert.equal(released.size, owned.size); assert.equal(parent.children.length, 0);
   const names = []; api.root.traverse(node => names.push(node.name)); assert.equal(names.some(name => ORB_COSMETIC_NAME.test(name)), false);
+});
+
+test('orb cosmetics leave readback, descriptors, picks, sources, beam and receiver buffers identical to the cylinder fixture', t => {
+  const pinned = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/fixtures/apartment-orb-protected-equivalence.json'), 'utf8'));
+  assert.match(pinned.recorded_from, /at 4a374e78 \(cylinder fixture\)$/);
+  const parent = new THREE.Group(), api = createEquipmentVirtualFixtures(parent, { binding }); t.after(() => api.dispose());
+  const loaded = api.setDocument(authoredDocument(binding, Core));
+  assert.equal(loaded.status, 'ready'); assert.equal(loaded.fixture_count, 4);
+  const actual = pinnedEquivalence(protectedScenario(api, loaded.fixtures[0].fixture_id));
+  assert.deepEqual(actual.paths, pinned.paths, 'the same protected nodes exist in the same places');
+  for (const [state, parts] of Object.entries(pinned.states)) assert.deepEqual(actual.states[state], parts, 'protected values unchanged after ' + state);
+  assert.deepEqual(Object.keys(actual.states), Object.keys(pinned.states));
 });

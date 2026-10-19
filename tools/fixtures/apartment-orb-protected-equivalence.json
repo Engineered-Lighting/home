@@ -149,68 +149,68 @@
  "states": {
   "loaded": {
    "readback": "a1476de5caec2061377f5b1d6ee7b0a9028e66eb7fd9be22f36462f05d9000f1",
-   "descriptors": "d7a8e820cafe6f1b241d39746accf85eaeab74461ab736394963ab5a688c5835",
-   "picks": "2d1cab990e2f7d19e37bbf6028b7568330626365f423496e271c0d0cf1939a13",
+   "descriptors": "0d7e8422c040f99aabd961bf8572b9b0d0ebec51bd7de5f92cd866198db6a6b0",
+   "picks": "e0e990a6a38def6cfb2c7f5957d0e2fad9324ff40587702ab43a9f14f27a97a3",
    "fixtures": {
-    "victoria-den-proposed-fixture-01": "db7e7ec0ebc2e73566519fd34a4663f1c5fff6be10271cf3d97bafae2e674fd4",
-    "victoria-den-proposed-fixture-02": "468c50fe88a854017a237bc71d8edac0079897426baa20f0aaf290d85f90ca2e",
-    "victoria-den-mount-03-virtual-fixture": "b3097260c43381905df4bbc33fd170ffbf70b2d60937068ed970e0c808b08701",
-    "victoria-den-mount-04-virtual-fixture": "b63362480e0083eda9d645f1143c1ac13fc81a75fc1fa23e30bbeaf97e0e86e0"
+    "victoria-den-proposed-fixture-01": "211f47aeee230ff1181718983431651e002ae168b962bcb6a285f0f45abed943",
+    "victoria-den-proposed-fixture-02": "9075a8e1da35b022c42d85807e80c135010dcf15e3033092f1081b8e04e11770",
+    "victoria-den-mount-03-virtual-fixture": "d4b088197b7c3c59828cbce0ce1fd81ae8e0904d1b1fd2a695d85f0431b8e427",
+    "victoria-den-mount-04-virtual-fixture": "9b395b986b2b45e674d535de64d44ed5d74469a12618cb88609b0b6e6f62906f"
    }
   },
   "aimed": {
-   "readback": "63b5ab19bc375b39d60f4ae456a6f7c12c358f266873023f0410e3450eadee47",
-   "descriptors": "601747ac6b644afc5b9eb6c15d995e6286fa49f1ced7d63f7f12b7952e10de69",
-   "picks": "089ab9e9d7f152aea7a3937b0e35c2b512b133c75106c33641fe9a4a0895cd5a",
+   "readback": "52f6fcfbc121845e5221bbc80e5c17f0c46306aca9a08b0447f71a45ae3dc3f5",
+   "descriptors": "81c9c1150268070b38f38e3dd36728a60d79893906ea85e0c66a5c939abd2a70",
+   "picks": "12dcc477feb26b3228b95be3621be6b0d029ccce4abc6a77c319450ed45f0491",
    "fixtures": {
-    "victoria-den-proposed-fixture-01": "386d53f6c32c1347f838c8f58d7fc303484d659c7e163abb2320da792ef55930",
-    "victoria-den-proposed-fixture-02": "468c50fe88a854017a237bc71d8edac0079897426baa20f0aaf290d85f90ca2e",
-    "victoria-den-mount-03-virtual-fixture": "b3097260c43381905df4bbc33fd170ffbf70b2d60937068ed970e0c808b08701",
-    "victoria-den-mount-04-virtual-fixture": "b63362480e0083eda9d645f1143c1ac13fc81a75fc1fa23e30bbeaf97e0e86e0"
+    "victoria-den-proposed-fixture-01": "60ad7a3ec97fbabdb2511b4fe7f3cf818a7f749f81eb38f0b6a533d6cdceda10",
+    "victoria-den-proposed-fixture-02": "9075a8e1da35b022c42d85807e80c135010dcf15e3033092f1081b8e04e11770",
+    "victoria-den-mount-03-virtual-fixture": "d4b088197b7c3c59828cbce0ce1fd81ae8e0904d1b1fd2a695d85f0431b8e427",
+    "victoria-den-mount-04-virtual-fixture": "9b395b986b2b45e674d535de64d44ed5d74469a12618cb88609b0b6e6f62906f"
    }
   },
   "spot_and_down": {
-   "readback": "4ab266b8b44ccc9d8f05c910b0a7423bad8833e905e8f4744849e2dc5a79959f",
-   "descriptors": "ad6c61d9e481ce2c9f477db5378e37ab5eae3ea130482f161fe75dd5a8608eb7",
-   "picks": "089ab9e9d7f152aea7a3937b0e35c2b512b133c75106c33641fe9a4a0895cd5a",
+   "readback": "64ac55655915bc94d014a05b621e263d0057b8a01accfc945999d436bac991d2",
+   "descriptors": "285200d8c571daaf0e3c0de83b1f98d0104d01e114951519831bcb69dd5cb0b5",
+   "picks": "12dcc477feb26b3228b95be3621be6b0d029ccce4abc6a77c319450ed45f0491",
    "fixtures": {
-    "victoria-den-proposed-fixture-01": "943431e71b65a40c253977ffd94c078c7ee0192e3f618ce784323ab0231f9f16",
-    "victoria-den-proposed-fixture-02": "468c50fe88a854017a237bc71d8edac0079897426baa20f0aaf290d85f90ca2e",
-    "victoria-den-mount-03-virtual-fixture": "b3097260c43381905df4bbc33fd170ffbf70b2d60937068ed970e0c808b08701",
-    "victoria-den-mount-04-virtual-fixture": "b63362480e0083eda9d645f1143c1ac13fc81a75fc1fa23e30bbeaf97e0e86e0"
+    "victoria-den-proposed-fixture-01": "1d256e4289dd1e1b45963781313bdf1d0b3387084d9fe4d75a8e8e0826ae7fbe",
+    "victoria-den-proposed-fixture-02": "9075a8e1da35b022c42d85807e80c135010dcf15e3033092f1081b8e04e11770",
+    "victoria-den-mount-03-virtual-fixture": "d4b088197b7c3c59828cbce0ce1fd81ae8e0904d1b1fd2a695d85f0431b8e427",
+    "victoria-den-mount-04-virtual-fixture": "9b395b986b2b45e674d535de64d44ed5d74469a12618cb88609b0b6e6f62906f"
    }
   },
   "radials_settled": {
-   "readback": "68a3ec90e64eb198ceb72ef51950533cf465ae287c00c40148aa4905062d9035",
-   "descriptors": "7825ed8fb5a99e2dc16bef88892b45e7a1a44993a9396441bda714d73388f6ff",
-   "picks": "089ab9e9d7f152aea7a3937b0e35c2b512b133c75106c33641fe9a4a0895cd5a",
+   "readback": "efa5fb324d9cc60f2d26b874dadffb9ffba12f37a7a6988943a50b20d71b7a0d",
+   "descriptors": "0d37289af1fd0bb41ee35a82242892df26b404b33e90ce1d26c7a734deffc4b5",
+   "picks": "12dcc477feb26b3228b95be3621be6b0d029ccce4abc6a77c319450ed45f0491",
    "fixtures": {
-    "victoria-den-proposed-fixture-01": "9d729a7c2edbc8d7fb01856ca9cb7a46223b89d63a1bb9a22a57a8d76c55cf52",
-    "victoria-den-proposed-fixture-02": "468c50fe88a854017a237bc71d8edac0079897426baa20f0aaf290d85f90ca2e",
-    "victoria-den-mount-03-virtual-fixture": "b3097260c43381905df4bbc33fd170ffbf70b2d60937068ed970e0c808b08701",
-    "victoria-den-mount-04-virtual-fixture": "b63362480e0083eda9d645f1143c1ac13fc81a75fc1fa23e30bbeaf97e0e86e0"
+    "victoria-den-proposed-fixture-01": "ec6ce0ce11df15ef7912c426d5aebb119d4c50da536f98f7d0ed5f11850716f6",
+    "victoria-den-proposed-fixture-02": "9075a8e1da35b022c42d85807e80c135010dcf15e3033092f1081b8e04e11770",
+    "victoria-den-mount-03-virtual-fixture": "d4b088197b7c3c59828cbce0ce1fd81ae8e0904d1b1fd2a695d85f0431b8e427",
+    "victoria-den-mount-04-virtual-fixture": "9b395b986b2b45e674d535de64d44ed5d74469a12618cb88609b0b6e6f62906f"
    }
   },
   "restored": {
    "readback": "a1476de5caec2061377f5b1d6ee7b0a9028e66eb7fd9be22f36462f05d9000f1",
-   "descriptors": "d7a8e820cafe6f1b241d39746accf85eaeab74461ab736394963ab5a688c5835",
-   "picks": "2d1cab990e2f7d19e37bbf6028b7568330626365f423496e271c0d0cf1939a13",
+   "descriptors": "0d7e8422c040f99aabd961bf8572b9b0d0ebec51bd7de5f92cd866198db6a6b0",
+   "picks": "e0e990a6a38def6cfb2c7f5957d0e2fad9324ff40587702ab43a9f14f27a97a3",
    "fixtures": {
-    "victoria-den-proposed-fixture-01": "4769bce72186c42e193bf183ff47d42b0e52109e52f904c9de109f3291181ea8",
-    "victoria-den-proposed-fixture-02": "468c50fe88a854017a237bc71d8edac0079897426baa20f0aaf290d85f90ca2e",
-    "victoria-den-mount-03-virtual-fixture": "b3097260c43381905df4bbc33fd170ffbf70b2d60937068ed970e0c808b08701",
-    "victoria-den-mount-04-virtual-fixture": "b63362480e0083eda9d645f1143c1ac13fc81a75fc1fa23e30bbeaf97e0e86e0"
+    "victoria-den-proposed-fixture-01": "4c95b30be3210f985dc2820c818f70fc6b86fdfb63b107d0b23dd16e8ac804a1",
+    "victoria-den-proposed-fixture-02": "9075a8e1da35b022c42d85807e80c135010dcf15e3033092f1081b8e04e11770",
+    "victoria-den-mount-03-virtual-fixture": "d4b088197b7c3c59828cbce0ce1fd81ae8e0904d1b1fd2a695d85f0431b8e427",
+    "victoria-den-mount-04-virtual-fixture": "9b395b986b2b45e674d535de64d44ed5d74469a12618cb88609b0b6e6f62906f"
    }
   },
   "deselected": {
    "readback": "a1476de5caec2061377f5b1d6ee7b0a9028e66eb7fd9be22f36462f05d9000f1",
-   "descriptors": "d7a8e820cafe6f1b241d39746accf85eaeab74461ab736394963ab5a688c5835",
-   "picks": "5f125b7a2bbc0478891e7ec6d5605171cacf806b94b16e7e072bfcef79a9d09e",
+   "descriptors": "0d7e8422c040f99aabd961bf8572b9b0d0ebec51bd7de5f92cd866198db6a6b0",
+   "picks": "dfd3689c4381cf41b546e41ea55ad6ad4e4ffc7f50cd9cbde08c43ecfe9a07a1",
    "fixtures": {
-    "victoria-den-proposed-fixture-01": "8aa75824d0ff9b68c0a6dd24d287abd3d46d27844054dea445c238c6491318a2",
-    "victoria-den-proposed-fixture-02": "468c50fe88a854017a237bc71d8edac0079897426baa20f0aaf290d85f90ca2e",
-    "victoria-den-mount-03-virtual-fixture": "b3097260c43381905df4bbc33fd170ffbf70b2d60937068ed970e0c808b08701",
-    "victoria-den-mount-04-virtual-fixture": "b63362480e0083eda9d645f1143c1ac13fc81a75fc1fa23e30bbeaf97e0e86e0"
+    "victoria-den-proposed-fixture-01": "27694391e42a90271c03ff1877e4109a1e56bfa0bd969c7d397cd52fcbd78e18",
+    "victoria-den-proposed-fixture-02": "9075a8e1da35b022c42d85807e80c135010dcf15e3033092f1081b8e04e11770",
+    "victoria-den-mount-03-virtual-fixture": "d4b088197b7c3c59828cbce0ce1fd81ae8e0904d1b1fd2a695d85f0431b8e427",
+    "victoria-den-mount-04-virtual-fixture": "9b395b986b2b45e674d535de64d44ed5d74469a12618cb88609b0b6e6f62906f"
    }
   }
  }

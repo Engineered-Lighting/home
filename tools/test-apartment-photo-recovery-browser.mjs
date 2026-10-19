@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 const require=createRequire(import.meta.url),{chromium}=require('playwright');
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),SRC=path.join(ROOT,'app/src');
 const read=name=>fs.readFileSync(path.join(SRC,name),'utf8'),sha=value=>createHash('sha256').update(value).digest('hex');
-const source=read('home-apartment.jsx'),css=read('home-tokens.css'),uiSource=read('home-apartment-ui.jsx'),babel=require(path.join(SRC,'vendor/babel-7.29.0/babel.min.js'));
+const source=read('home-apartment.jsx'),css=read('home-tokens.css'),uiSource=read('home-apartment-ui.jsx'),guideSource=read('home-apartment-room-guide.jsx'),babel=require(path.join(SRC,'vendor/babel-7.29.0/babel.min.js'));
 const ast=babel.transform(source,{parserOpts:{plugins:['jsx']},ast:true,code:false}).ast.program,text=node=>source.slice(node.start,node.end);
 function walk(node,visit){if(!node||typeof node!=='object')return;if(node.type)visit(node);for(const[key,value]of Object.entries(node)){if(['loc','extra','leadingComments','trailingComments','innerComments'].includes(key))continue;if(Array.isArray(value))value.forEach(item=>walk(item,visit));else if(value&&typeof value==='object')walk(value,visit)}}
 const declaration=name=>{const found=ast.body.filter(node=>node.type==='FunctionDeclaration'&&node.id?.name===name);assert.equal(found.length,1,'one actual '+name);return text(found[0])};
@@ -72,7 +72,7 @@ test('Photo recovery uses the existing mode owner and preserves scope, locks and
   const run=path.join(ROOT,'.tmp/apartment-photo-recovery-browser','run-'+Date.now());fs.mkdirSync(run,{recursive:true});
   const receipt={schema:'home-apartment-photo-recovery-browser-1',actual_toolbar:true,actual_mode_callback:true,actual_cancel_callback:true,actual_renderer_mode_method:true,actual_installed_mode_subscription:true,authored_engine_promises:true,
     complete_home_app:false,real_renderer:false,room_assets_loaded:false,household_data_loaded:false,physical_commands:0,camera_sessions:0,model_sessions:0,screenshots:false,
-    sources:{'home-apartment.jsx':sha(source),'home-tokens.css':sha(css),'home-overlay.js':sha(read('home-overlay.js')),'home-3d/modes.js':sha(rendererSource),'home-apartment-ui.jsx':sha(uiSource)},checks:[],toast_coexistence:[],requests:[],websocket_attempts:[],errors:[]};
+    sources:{'home-apartment.jsx':sha(source),'home-tokens.css':sha(css),'home-overlay.js':sha(read('home-overlay.js')),'home-3d/modes.js':sha(rendererSource),'home-apartment-ui.jsx':sha(uiSource),'home-apartment-room-guide.jsx':sha(guideSource)},checks:[],toast_coexistence:[],requests:[],websocket_attempts:[],errors:[]};
   let browser;
   try{
     const installed=fs.existsSync(chromium.executablePath());browser=await chromium.launch({headless:true,args:['--disable-background-networking','--renderer-process-limit=2','--js-flags=--max-old-space-size=512'],...(!installed&&process.platform==='win32'?{channel:'msedge'}:{})});
@@ -85,6 +85,7 @@ test('Photo recovery uses the existing mode owner and preserves scope, locks and
         await page.addStyleTag({content:css.replace(/@font-face\s*\{[^}]*\}/g,'')});
         for(const name of ['vendor/react-18.3.1/react.production.min.js','vendor/react-18.3.1/react-dom.production.min.js','home-overlay.js'])await page.addScriptTag({content:read(name)});
         await page.addScriptTag({content:babel.transform(uiSource,{presets:['react']}).code});
+        await page.addScriptTag({content:babel.transform(guideSource,{presets:['react']}).code});
         await page.addScriptTag({content:'const {useState,useRef,useCallback}=React;\n'+babel.transform(declaration('AptUnifiedIcon')+'\n'+declaration('AptUnifiedRoomToolbar'),{presets:['react']}).code});
         const wrapper=`
           (()=>{

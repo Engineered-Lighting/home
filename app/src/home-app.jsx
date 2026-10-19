@@ -738,6 +738,7 @@ function HomeHeader({
   onOpenVideoLabeler, onOpenApartment, onOpenPerceptionLab, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false, unified = false,
   onExplainLastAnswer, onCopyTranscript, onNewConversation, conversationCopyState, conversationCopyDisabledReason,
+  chatSourceLine = "",
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   // Phase 5: the header dropdown is an overlay layer — topmost-only Escape
@@ -963,6 +964,7 @@ function HomeHeader({
     </span>
   );
   if (unified) return <header className="apt-ui-chat-header">
+    {chatSourceLine && <span className="apt-ui-chat-model" title={chatSourceLine}>{chatSourceLine}</span>}
     <span className="apt-ui-chat-source" title={sim?.active ? "Authored simulation; no hardware output" : warnText || `Home Assistant ${statusText}`}>
       {sim?.active ? "Simulation" : "Home Assistant"} <span className="apt-ui-badge" data-state={sim?.active ? "modeled" : statusText}>{sim?.active ? "authored" : statusText}</span>
     </span>
@@ -5244,6 +5246,80 @@ function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelA
   </div>;
 }
 
+/* Chat bound to the room (APT-C02/C03), Apartment only. A strip under each
+ * turn: chips for the lights and named aims a completed reply names, Show and
+ * Adjust for an action card's light, the "About" a message carried and how a
+ * Stop ended. It only highlights and selects through the room bridge and never
+ * sends; the turn above keeps delegating every event to EventContent. */
+function ApartmentChatRoomRefs({ group, room, bridge, bindings }) {
+  const showTimer = useRef(null);
+  useEffect(() => () => clearTimeout(showTimer.current), []);
+  const api = window.HomeApartmentChatContext;
+  if (!api) return null;
+  const rows = [];
+  const hover = ref => { try { return bridge?.hover?.(ref) === true; } catch (_) { return false; } };
+  for (const event of group.events) {
+    if (event.streaming) continue;
+    if (["home", "assistant", "action"].includes(event.kind) && !bindings.has(event.id)) bindings.set(event.id, api.bindEvent(event, room));
+    const binding = bindings.get(event.id) || null;
+    if (event.kind === "user" && typeof event.about === "string") {
+      rows.push(<p key={event.id + ":about"} className="apt-ui-chat-about">About {event.about}</p>);
+    }
+    if (event.stopped) rows.push(<p key={event.id + ":stopped"} className="apt-ui-chat-about">Reply cut short</p>);
+    const refs = binding?.refs || [];
+    if (refs.length) rows.push(<div key={event.id + ":refs"} className="apt-ui-chat-refs" role="group" aria-label="In the room">
+      {refs.map(ref => {
+        const reason = api.availability(ref, binding, room), selectable = !reason && ref.kind === "light";
+        const note = reason || (ref.kind === "aim" ? "The named-aim inspector isn't available yet." : "");
+        return <button key={ref.kind + ":" + ref.id} type="button" className="apt-ui-chat-chip" data-chat-ref={ref.kind}
+          data-available={reason ? "false" : "true"} aria-disabled={selectable ? undefined : "true"}
+          aria-description={note || undefined} title={note || "Show in the room"}
+          onMouseEnter={() => { if (!reason) hover(ref); }} onMouseLeave={() => hover(null)}
+          onFocus={() => { if (!reason) hover(ref); }} onBlur={() => hover(null)}
+          onClick={() => { if (selectable) bridge?.select?.(ref); }}>{ref.label}</button>;
+      })}</div>);
+    const light = binding?.action;
+    if (light) {
+      const reason = api.availability(light, binding, room);
+      const showReason = reason || (room?.siteId === "victoria" ? "Highlighting isn't available for Den lights yet." : "");
+      rows.push(<div key={event.id + ":card"} className="apt-ui-chat-refs" role="group" aria-label={light.label}>
+        <button type="button" className="apt-ui-button is-small" data-chat-card="show" disabled={!!showReason}
+          title={showReason || `Highlight ${light.label} in the room`} onClick={() => {
+            clearTimeout(showTimer.current);
+            if (hover(light)) showTimer.current = setTimeout(() => hover(null), 2500);
+          }}>Show</button>
+        <button type="button" className="apt-ui-button is-small" data-chat-card="adjust" disabled={!!reason}
+          title={reason || `Select ${light.label} and open its controls`} onClick={() => bridge?.adjust?.(light)}>Adjust</button>
+      </div>);
+    }
+  }
+  return rows.length ? <div className="apt-ui-chat-room">{rows}</div> : null;
+}
+
+function ApartmentChatContextChip({ label, onRemove }) {
+  return <div className="apt-ui-chat-context" data-chat-context="about">
+    <span>About {label}</span>
+    <button type="button" className="apt-ui-button is-small" aria-label={`Don't include ${label}`}
+      title="Don't include the selection" onClick={onRemove}>×</button>
+  </div>;
+}
+
+/* The final word on a message that carries the About chip. It is never routed
+ * on to memory, lighting control, cameras, the model or an external provider. */
+function apartmentChatAboutReply(text, about, current) {
+  let result;
+  try {
+    const api = window.HomeApartmentChatContext;
+    result = api ? api.resolveAbout(text, about, current?.room || null, current?.bridge || null) : null;
+  } catch (_) { result = null; }
+  if (!result || typeof result.text !== "string") {
+    result = { outcome: "refused", text: "The selection couldn't be used, so nothing changed." };
+  }
+  return result.outcome === "refused"
+    ? { kind: "system", tone: "warn", text: result.text, chatContext: "refused" }
+    : { kind: "assistant", text: result.text, chatContext: result.outcome };
+}
+
 function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -5615,6 +5691,20 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const [shellTab, setShellTab] = useState("controls");
   const [shellDetent, setShellDetent] = useState("half");
   const [shellState, setShellState] = useState(null);
+  // Chat bound to the room (APT-C02/C03): Apartment only, read from the shell.
+  const chatRoomBridge = unifiedHome ? shellState?.chatRoom || null : null;
+  const chatRoom = chatRoomBridge && window.HomeApartmentChatContext
+    ? window.HomeApartmentChatContext.normalizeRoom(chatRoomBridge) : null;
+  const chatSelection = chatRoom?.selection || null;
+  const chatSelectionKey = chatSelection ? [chatRoom.siteId, chatRoom.key, chatSelection.kind, chatSelection.id].join("|") : "";
+  const [chatAboutRemoved, setChatAboutRemoved] = useState(false);
+  useEffect(() => { setChatAboutRemoved(false); }, [chatSelectionKey]);
+  const chatAbout = chatSelection && !chatAboutRemoved ? { ...chatSelection, siteId: chatRoom.siteId, key: chatRoom.key } : null;
+  const chatAboutRef = useRef(null);
+  chatAboutRef.current = chatAbout;
+  const chatRoomRef = useRef(null);
+  chatRoomRef.current = { room: chatRoom, bridge: chatRoomBridge };
+  const chatBindingsRef = useRef(new Map());
   const [shellControlsHost, setShellControlsHost] = useState(null);
   const [shellCameraHost, setShellCameraHost] = useState(null);
   const [shellMetricsOpen, setShellMetricsOpen] = useState(false);
@@ -7258,6 +7348,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       time: fmtTime(),
       text: "calling assistant…",
       turnKey,
+      streaming: true,
+      awaitingReply: true,
     }]);
 
     // Addendum 29 Change 2: in-flight stub for the trace bar. Pushes a
@@ -7365,6 +7457,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
               ? ` (${tc.args.camera || tc.args.room})` : "";
             addEvent({ kind: "system", tone: "info",
                        text: `${friendly}${camHint}…` });
+            const step = `${friendly}${camHint}`;
+            setEvents((prev) => prev.map((e) => e.id === thinkingId && !e.progressStep
+              ? { ...e, progressStep: step, text: `working · ${step}…` } : e));
           }
           return;
         }
@@ -7603,6 +7698,14 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       setEvents((prev) => prev.map((e) => e.id === id ? { ...e, streaming: false, stopped: true } : e));
     });
     streamingIds.current.clear();
+    setEvents((prev) => {
+      const stub = prev.find((e) => e.kind === "thinking" && e.awaitingReply);
+      if (!stub) return prev;
+      return [...prev.filter((e) => e !== stub), { id: nextId(), kind: "system", tone: "info", time: fmtTime(),
+        turnKey: stub.turnKey, text: stub.progressStep
+          ? `Stopped after ${stub.progressStep} started; no reply will be shown.`
+          : "Stopped before Home reported any tool step." }];
+    });
   }, []);
 
   /* ── Confirm / cancel a pending-confirm action ────────────────────── */
@@ -9647,6 +9750,15 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       return;
     }
     setInput("");
+    const chatAbout = chatAboutRef.current;
+    if (chatAbout) {
+      // Claim-first: the About chip's message ends here, before memory,
+      // lighting control, cameras, the model or an external provider.
+      window.HomeCameraQuery?.reset();
+      addEvent({ kind: "user", text, about: chatAbout.label });
+      addEvent(apartmentChatAboutReply(text, chatAbout, chatRoomRef.current));
+      return;
+    }
     const cameraQueryClient = haClientRef.current;
     const cameraQueryGeneration = cameraQueryGenerationRef.current;
     if (window.HomePersonalMemory?.run(text, {addEvent,
@@ -12124,6 +12236,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       {!unifiedHome && <button type="button" className="apt-home-enable" onClick={() => chooseHomeLayout("unified")}>Open redesigned Home</button>}
       <HomeHeader
         unified={unifiedHome}
+        chatSourceLine={unifiedHome ? [hasLiveModelName(model) ? model : "Model not chosen",
+          sim.active ? "Simulation" : shellState?.siteId === "victoria" ? "Victoria · modeled room"
+            : shellState?.siteId === "echo" ? "Los Angeles · Home Assistant" : "Home Assistant"].join(" · ") : ""}
         onExplainLastAnswer={() => handleCommand("/why")}
         onCopyTranscript={copyConversationTranscript}
         onNewConversation={requestClearConfirm}
@@ -12272,6 +12387,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
                   onUndoAction={undoAction}
                   onControlAction={onControlAction} controlLifecycles={controlLifecycles}
                   onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} />
+                {unifiedHome && <ApartmentChatRoomRefs group={g} room={chatRoom} bridge={chatRoomBridge} bindings={chatBindingsRef.current} />}
               </div>
             ))}
           </div>
@@ -12298,6 +12414,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           </span>
         </div>
       )}
+      {chatAbout && <ApartmentChatContextChip label={chatAbout.label} onRemove={() => setChatAboutRemoved(true)} />}
       <InputRow
         unified={unifiedHome}
         value={input}

@@ -86,7 +86,7 @@
     </section>;
     return <aside className="apt-ui-inspector" data-apt-echo-light-inspector="1" aria-label="Echo light inspector">
       <header className="apt-ui-header"><div className="apt-ui-header-row">
-        <button type="button" className="apt-ui-button is-icon" aria-label="Back to room" onClick={onBack}><AptEchoIcon name="back" /></button>
+        <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptEchoIcon name="back" /></button>
         <div className="apt-ui-grow"><h2 className="apt-ui-title">{name}</h2>
           <div className="apt-ui-sub">{roomName || homeName} · {summary}</div></div>
         <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptEchoIcon name="close" /></button></div>

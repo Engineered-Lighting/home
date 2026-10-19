@@ -256,7 +256,8 @@ test('the in-room aim overlay proposes, sets, undoes and escapes through the mou
       await page.keyboard.press('p'); await until('P', label => document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent === label, target.label);
       await blur(); await page.keyboard.press('Escape');
       await inspector().and(page.locator('[aria-label="Room lighting inspector"]')).waitFor();
-      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement !== document.body), true, 'focus returns after Escape');
+      // Focus restoration runs on the next frame.
+      await until('focus returns after Escape', () => !!document.activeElement && document.activeElement !== document.body);
       await page.keyboard.press('Escape'); await settle();
       assert.equal(await page.locator('.apt-home-shell[data-home-layout="unified"]').count(), 1, 'idle Escape closes nothing');
       return { fixture_id: target.fixture_id, paths: ['label', 'cylinder', 'list'], hover_ring: other.fixture_id };

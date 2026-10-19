@@ -1,0 +1,11 @@
+---
+title: Run saved Qwen baseline and A/B analyses safely, one admitted request at a time
+target: backend
+type: added
+---
+
+The Lab controller can now own saved Qwen analysis for its whole lifetime: jobs run the baseline (qBase) and both arms (qA, qB) over the same windows, frames, model, output bound and Home Assistant facts, so only the specialist evidence differs. Human labels and Qwen's own historical captions never reach the model. Runs are causal unless retrospective mode is requested, and stored results replay with no new request.
+
+Only one request is ever in flight. A recording or worker preparation stops analysis before its next step. A request refused, expired in the queue or cancelled is recorded as a known failure and frees the engine. A request whose outcome is unproven stays blocking until an identity-only lookup resolves it; that lookup runs after a lost submission response, at controller start, before each new job, or through an operator reconcile job. An engine restart ends such a step as "outcome unknown" and never invents a result. Stored JPEG samples are sent unchanged, with a deadline, over a pinned mutual-TLS client. Each job takes the LA's current engine instance from an authenticated lookup, so an LA restart needs no Lab reprovisioning, while the model and artifact stay pinned. Queuing a new job for a session continues an interrupted or failed analysis: windows already completed are reused, not sent again. Controller shutdown stops status polling after a bounded wait. A session whose analysis never left the Lab can still be fully erased.
+
+A matching LA consumer queues these requests as background work through the existing shared admission queue, so camera chat is served first and keeps a free queue slot. It checks the body digest, image bounds, the fixed versioned instruction and the label ban before admission. It expires a queued lab request, provably unsent, before it could be claimed with less than a measured minimum execution time left, and bounds the Lab's deadline by its own clock. Nothing is provisioned or deployed yet, and the managed Lab entrypoint does not accept the Qwen provisioning keys yet. Until it does, the Lab reports saved analysis as unavailable (`qwen_admission_not_provisioned`).

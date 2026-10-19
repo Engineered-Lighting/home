@@ -120,6 +120,9 @@ const MAP = [
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
     "run-native-agent-security-tests",
   ]],
+  // Ahead-of-time JSX: the loaders, the build, the gateway's verified
+  // manifest and the hooks that run the build on deploy and installer builds.
+  [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],
   [/^tools\/lib\/home-app-source-contracts\.cjs$/, ["run-bootstrap-tests.js", "run-simulation-command-tests.js", "test-home-app-source-contracts.cjs"]],
   [/^tools\/(?:run-bootstrap-tests|run-simulation-command-tests)\.js$/, ["test-home-app-source-contracts.cjs"]],
   [/^tools\/test-home-app-source-contracts\.cjs$/, ["test-home-app-source-contracts.cjs"]],
@@ -138,12 +141,14 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
  * rounded up, and the composer-comfort suite's first hosted run 39307352122.
  * The two directional parts are that run's setup plus their own stages.
+ * test-precompiled-jsx.mjs is twice its 45 s local run until hosted-measured.
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
+  "test-precompiled-jsx.mjs": 90,
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,

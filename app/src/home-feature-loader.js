@@ -1,9 +1,6 @@
 (function () {
-  const BABEL_PLUGINS = [
-    "transform-class-properties",
-    "transform-object-rest-spread",
-    "transform-flow-strip-types",
-  ];
+  // Precompiled when available, otherwise compiled here; see home-precompiled-jsx.js.
+  const precompiledJsx = window.HomePrecompiledJsx;
 
   const FEATURES = {
     perceptionLab: {
@@ -178,9 +175,12 @@
   async function fetchFile(feature, name, isBabel) {
     if (loadedFiles.has(name)) return null;
     const fetchStart = now();
-    const text = await fetchWithRetry(name, 3);
+    const loaded = isBabel
+      ? await precompiledJsx.fetchJsx(name, (url) => fetchWithRetry(url, 3))
+      : { text: await fetchWithRetry(name, 3), precompiled: false };
     window.__homePerf?.recordBootFile?.(name, "feature-fetch", now() - fetchStart, { feature });
-    return { name, isBabel, text };
+    if (loaded.precompiled) window.__homePerf?.recordBootFile?.(name, "feature-precompiled", 0, { feature });
+    return { name, isBabel: isBabel && !loaded.precompiled, text: loaded.text };
   }
 
   function executeFile(feature, file) {
@@ -188,13 +188,7 @@
     let code = file.text;
     if (file.isBabel) {
       const transformStart = now();
-      code = Babel.transform(file.text, {
-        filename: file.name,
-        presets: ["react", "env"],
-        plugins: BABEL_PLUGINS,
-        sourceMaps: "inline",
-        sourceFileName: file.name,
-      }).code;
+      code = precompiledJsx.transform(file.name, file.text);
       window.__homePerf?.recordBootFile?.(file.name, "feature-transform", now() - transformStart, { feature });
     }
     const executeStart = now();
@@ -246,6 +240,7 @@
         const files = await Promise.all(
           def.files.map((item) => fetchFile(feature, item[0], item[1])),
         );
+        if (files.some((file) => file && file.isBabel)) await precompiledJsx.ensureBabel();
         for (const file of files) executeFile(feature, file);
         if (def.ready && !def.ready()) throw new Error(def.label + " loaded but did not register its window export");
         const next = emit(feature, "loaded", {

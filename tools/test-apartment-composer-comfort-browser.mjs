@@ -228,12 +228,23 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
     });
     const pose = () => page.evaluate(() => window.__APT_ENGINE.camera.matrixWorld.toArray());
     const send = async (method, packet) => { receipt.dispatched.push({ shell: label, method, type: packet.type }); await cdp.send(method, packet); };
+    // Chromium aligns moves to animation frames and may coalesce two quick
+    // ones. Each sample is sent only after the page saw the previous one as
+    // its own trusted pointermove, so every dispatched sample is delivered.
+    const delivered = async (pointerType, x, y, dispatch) => {
+      const seen = await page.evaluate(() => window.__comfortPointers.length); await dispatch();
+      await page.waitForFunction(({ seen, pointerType, x, y }) => window.__comfortPointers.slice(seen).some(row => row.type === 'pointermove'
+        && row.isTrusted && row.pointerType === pointerType && Math.abs(row.x - x) <= 1 && Math.abs(row.y - y) <= 1), { seen, pointerType, x, y });
+    };
     const mouse = {
-      move: (x, y, buttons = 0) => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: buttons ? 'left' : 'none', buttons, pointerType: 'mouse' }),
+      move: (x, y, buttons = 0) => delivered('mouse', x, y, () => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: buttons ? 'left' : 'none', buttons, pointerType: 'mouse' })),
       down: (x, y) => send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' }),
       up: (x, y) => send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' }),
     };
-    const touch = (type, points) => send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y, id]) => ({ x, y, id, radiusX: 4, radiusY: 4, force: 1 })) });
+    const touch = (type, points) => {
+      const dispatch = () => send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y, id]) => ({ x, y, id, radiusX: 4, radiusY: 4, force: 1 })) });
+      return type === 'touchMove' ? delivered('touch', points[0][0], points[0][1], dispatch) : dispatch();
+    };
     // The touch stages reuse this booted shell: Chromium's own touch emulation
     // (the protocol call Playwright's hasTouch makes) turns the pointer coarse.
     const enableTouch = () => cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });

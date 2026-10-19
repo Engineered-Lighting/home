@@ -134,8 +134,8 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
 /* Hosted-CI seconds per plan item, used only to balance --shard partitions.
  * Measured on run 39214584656 (#293 touched job, 7m22s of harnesses) and the
  * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
- * rounded up; the composer-comfort suite is a conservative estimate until its
- * first hosted run. An unmeasured browser suite counts as its 145 s deadline and
+ * rounded up, and the composer-comfort suite's first hosted run 39307352122.
+ * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
 const SHARD_WEIGHT_S = {
@@ -143,7 +143,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-room-inspector-browser.mjs": 62,
-  "test-apartment-composer-comfort-browser.mjs": 120,
+  "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,

@@ -108,7 +108,8 @@ test('room guide: help equals the key map, layers explain unavailable rows, lege
           assert.deepEqual(rows, expected.keys, `${home}: help key rows equal the key map`);
           assert.deepEqual(await help.locator('[data-apt-help-gesture]').evaluateAll(nodes => nodes.map(node => node.dataset.aptHelpGesture)), expected.gestures);
           assert.deepEqual(await help.locator('[data-apt-help-mark]').evaluateAll(nodes => nodes.map(node => node.dataset.aptHelpMark)), expected.marks);
-          assert.doesNotMatch(await help.textContent(), /pinch|\bpan\b/i);
+          assert.match(await help.textContent(), /Shift-drag or right-drag.*Pan the room/s);
+          assert.match(await help.textContent(), /Pinch with two fingers.*Zoom one step at a time/s);
           await page.waitForFunction(() => document.querySelector('[role="dialog"][aria-modal="true"]')?.contains(document.activeElement));
           await inViewport(help); await shot(`${home}-help`);
           await page.keyboard.press('Escape');

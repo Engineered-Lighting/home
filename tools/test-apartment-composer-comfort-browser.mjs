@@ -92,7 +92,7 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
     deadlines_ms: { proof: PROOF_DEADLINE_MS, warmup: WARMUP_MS, wait: WAIT_MS, file: 180000 },
     source_sha256: Object.fromEntries(['home-apartment.jsx', 'home-apartment-cards.jsx', 'home-apartment-directional.js',
       'home-3d/apartment-directional-presentation.mjs'].map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
-    checks: [], requests: [], forbidden: [], aborted_health_probes: [], blocked_read_subscriptions: [], missing_code: [], errors: [], console_errors: [],
+    checks: [], observations: [], requests: [], forbidden: [], aborted_health_probes: [], blocked_read_subscriptions: [], missing_code: [], errors: [], console_errors: [],
     dispatched: [], browser: browserOptions() };
   const started = performance.now(), elapsed = () => Math.round(performance.now() - started);
   const save = () => { receipt.elapsed_ms = elapsed(); fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n'); };
@@ -101,6 +101,8 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
     receipt.deadline_expired = true; save(); browser?.close().catch(() => {}); server?.closeAllConnections();
     reject(Error('145s composer comfort browser deadline'));
   }, PROOF_DEADLINE_MS); });
+  // Values a stage is about to assert, kept so a hosted failure shows them.
+  const observe = (stage, value) => { receipt.observations.push({ stage, at_ms: elapsed(), ...value }); save(); };
   const check = async (name, operation) => {
     const stage = { name, started_ms: elapsed() }; receipt.current_stage = name; save();
     try { const detail = await operation(); receipt.checks.push({ name, ...detail, elapsed_ms: elapsed() - stage.started_ms }); }
@@ -345,11 +347,15 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
       }
       assert.ok(start, 'a lit lobe start is open at this pose');
       const [a, skipped, b] = [next(n, 1), next(n, 2), next(n, 3)];
-      const first = await desk.planePoint(a, radiusFor(.4)), last = await desk.planePoint(b, radiusFor(.8)); assert.ok(first && last);
       const callsBefore = (await desk.calls()).length;
       await desk.mouse.move(start.x, start.y); await desk.mouse.down(start.x, start.y);
-      await desk.mouse.move(first.x, first.y, 1); await desk.mouse.move(last.x, last.y, 1); await desk.mouse.up(last.x, last.y); await settle(desk.page);
+      // Each target is projected after the previous sample is delivered: the
+      // rig's ambient hover drift moves the camera while input is in flight.
+      const first = await desk.planePoint(a, radiusFor(.4)); assert.ok(first); await desk.mouse.move(first.x, first.y, 1);
+      const last = await desk.planePoint(b, radiusFor(.8)); assert.ok(last); await desk.mouse.move(last.x, last.y, 1);
+      await desk.mouse.up(last.x, last.y); await settle(desk.page);
       const after = await desk.descriptor(), zone = number => after.state.radials[number - 1];
+      observe('sweep', { pickup: n, zones: [a, skipped, b], levels: [zone(a).brightness, zone(skipped).brightness, zone(b).brightness] });
       assert.deepEqual(zone(n), before.state.radials[n - 1], 'the pickup zone is never written');
       assert.ok(Math.abs(zone(a).brightness - .4) <= .01 && Math.abs(zone(b).brightness - .8) <= .01);
       const expected = Math.round((zone(a).brightness + zone(b).brightness) / 2 * 100) / 100;
@@ -373,25 +379,25 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
     });
     await check('one finger paints a lit lobe from inside its edge', async () => {
       const before = await tablet.descriptor(), { number, zone, point: start } = await openLobe(tablet, [5, 6, 4, 2, 1, 3]);
-      const beyond = await tablet.planePoint(number, Math.min(R1, radiusFor(zone.brightness) + .1)), target = await tablet.planePoint(number, radiusFor(.7));
       const callsBefore = (await tablet.calls()).length;
       await tablet.touch('touchStart', [[start.x, start.y, 1]]);
       assert.equal(await tablet.captured(), true, 'a single finger starts the owned gesture');
-      await tablet.touch('touchMove', [[beyond.x, beyond.y, 1]]); await tablet.touch('touchMove', [[target.x, target.y, 1]]);
+      const beyond = await tablet.planePoint(number, Math.min(R1, radiusFor(zone.brightness) + .1)); await tablet.touch('touchMove', [[beyond.x, beyond.y, 1]]);
+      const target = await tablet.planePoint(number, radiusFor(.7)); await tablet.touch('touchMove', [[target.x, target.y, 1]]);
       await tablet.touch('touchEnd', []); await settle(tablet.page);
-      const after = await tablet.descriptor();
+      const after = await tablet.descriptor(); observe('one-finger', { zone: number, level: after.state.radials[number - 1].brightness });
       assert.ok(Math.abs(after.state.radials[number - 1].brightness - .7) <= .01, 'one finger paints like the mouse');
       assert.ok(onlyRadialWrites((await tablet.calls()).slice(callsBefore))); assert.deepEqual(withoutRadials(after), withoutRadials(before));
       return { zone: number, level: after.state.radials[number - 1].brightness };
     });
     await check('a second finger cancels the gesture and keeps what was already set', async () => {
       const { number, zone, point: start } = await openLobe(tablet, [6, 4, 5, 2, 1, 3]);
-      const beyond = await tablet.planePoint(number, Math.min(R1, radiusFor(zone.brightness) + .1));
-      const set = await tablet.planePoint(number, radiusFor(.5)), later = await tablet.planePoint(number, radiusFor(.9));
-      const other = await tablet.planePoint(number % 6 + 1, radiusFor(1)); assert.ok(beyond && set && later && other);
       await tablet.touch('touchStart', [[start.x, start.y, 1]]);
-      await tablet.touch('touchMove', [[beyond.x, beyond.y, 1]]); await tablet.touch('touchMove', [[set.x, set.y, 1]]); await settle(tablet.page);
-      const painted = await tablet.descriptor(); assert.ok(Math.abs(painted.state.radials[number - 1].brightness - .5) <= .01);
+      const beyond = await tablet.planePoint(number, Math.min(R1, radiusFor(zone.brightness) + .1)); await tablet.touch('touchMove', [[beyond.x, beyond.y, 1]]);
+      const set = await tablet.planePoint(number, radiusFor(.5)); await tablet.touch('touchMove', [[set.x, set.y, 1]]); await settle(tablet.page);
+      const painted = await tablet.descriptor(); observe('two-finger-set', { zone: number, level: painted.state.radials[number - 1].brightness });
+      assert.ok(Math.abs(painted.state.radials[number - 1].brightness - .5) <= .01);
+      const later = await tablet.planePoint(number, radiusFor(.9)), other = await tablet.planePoint(number % 6 + 1, radiusFor(1)); assert.ok(later && other);
       const callsAtCancel = (await tablet.calls()).length;
       await tablet.touch('touchStart', [[set.x, set.y, 1], [other.x, other.y, 2]]);
       await tablet.touch('touchMove', [[later.x, later.y, 1], [other.x + 20, other.y, 2]]);

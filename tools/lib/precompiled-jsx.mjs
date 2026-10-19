@@ -127,7 +127,12 @@ export function buildPrecompiledJsx({ srcDir = APP_SRC, outDir = path.join(srcDi
     options: runtime.OPTIONS_ID,
     files,
   };
-  fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+  // Written last and renamed into place: a gateway still serving during a
+  // deploy reads either the old manifest or the new one, never half of one.
+  // Outputs need no such care, since an entry only names finished files.
+  const pending = `${manifestFile}.${process.pid}.tmp`;
+  fs.writeFileSync(pending, `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.renameSync(pending, manifestFile);
   return { manifest, ...summary };
 }
 

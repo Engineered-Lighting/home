@@ -187,9 +187,11 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     const note = page.locator('[data-apt-lit-disclosure]');
     // Software GL may fall under 30 fps; Lit must then say so, never drop frames silently.
     const shownQuality = await page.evaluate(() => window.__APT_ENGINE.litState().quality);
-    assert.equal((await note.textContent()).trim(), 'Simulated · not photometric · assumed output'
-      + (shownQuality === 'reduced' ? ' · reduced quality for speed' : ''), 'the note states the disclosure and any declared reduced quality');
+    assert.ok((await note.textContent()).trim().startsWith('Simulated · not photometric · assumed output'
+      + (shownQuality === 'reduced' ? ' · reduced quality for speed' : '')), 'the note states the disclosure and any declared reduced quality');
     assert.equal(await note.getAttribute('data-apt-lit-disclosure'), shownQuality);
+    assert.equal((await page.locator('[data-apt-lit-bounce-limit]').textContent()).trim(), 'One bounce · casts no shadows · can leak up to 4.5 m through walls',
+      'the bounce leak limit is stated with the view');
     assert.match(await note.getAttribute('title'), /Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm/);
     const lit = await page.evaluate(() => {
       const engine = window.__APT_ENGINE, state = engine.litState(), lights = [];
@@ -202,6 +204,9 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     });
     assert.equal(lit.state.active, true); assert.equal(lit.state.measured, false); assert.equal(lit.state.lights, 32); assert.equal(lit.state.shadowLights, 8);
     assert.deepEqual(lit.state.assumedLumens, { spot: 450, down: 350, zone: 120 });
+    assert.equal(lit.state.bounceLights, 8); assert.ok(lit.state.bounceSources > 0, 'lit patches in the authored room become bounce lights');
+    assert.equal(lit.state.bounceRangeM, 4.5);
+    assert.ok(lit.lights.filter(light => light.kind === 'bounce').every(light => !light.castShadow), 'bounce lights cast no shadows');
     assert.ok(lit.mesh.length > 0 && lit.mesh.every(row => row.standard && row.cast && row.receive), 'the scan mesh is relit');
     assert.ok(lit.lights.filter(light => light.kind === 'spot').every(light => light.castShadow && light.radius === 2.5 && light.intensity > 0));
     assert.ok(lit.lights.filter(light => light.kind === 'down').every(light => light.castShadow && light.radius === 6 && light.intensity > 0));

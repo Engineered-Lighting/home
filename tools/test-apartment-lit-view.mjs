@@ -145,7 +145,9 @@ test('mesh materials are lit copies that keep the display hooks and confine tone
   assert.equal(w.face.material, w.display, 'the exact display material returns');
   assert.equal(w.face.castShadow, false); assert.equal(w.face.receiveShadow, false);
   assert.equal(w.renderer.shadowMap.enabled, false); assert.equal(w.renderer.shadowMap.type, THREE.BasicShadowMap); assert.equal(w.renderer.shadowMap.autoUpdate, true);
-  assert.equal(w.lit.group.parent, null); assert.equal(lights(w).length, 0);
+  assert.equal(w.lit.group.parent, null);
+  assert.equal(lights(w).filter(light => light.userData.lit_source !== 'bounce').length, 0);
+  assert.ok(lights(w).every(light => light.intensity === 0), 'the detached group keeps only its eight dark bounce lights');
   assert.equal(Object.hasOwn(w.scene, 'onBeforeRender') ? w.scene.onBeforeRender : THREE.Object3D.prototype.onBeforeRender, THREE.Object3D.prototype.onBeforeRender);
 });
 
@@ -188,4 +190,75 @@ test('a replaced mesh is relit and the old one restored', t => {
   w.setMesh(other); w.lit.sync();
   assert.equal(w.face.material, w.display); assert.ok(other.material.isMeshStandardMaterial);
   w.lit.disable(); assert.equal(other.material, original);
+});
+
+test('one bounce: the eight strongest lit patches become hemispherical bounce lights with assumed albedo', t => {
+  const w = world(t);
+  // A closed room for the rays: floor, four walls (the display face is the floor).
+  const room = new THREE.Group(), side = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), side); room.add(floor);
+  for (const [x, y, rz] of [[6, 0, Math.PI / 2], [-6, 0, Math.PI / 2], [0, 6, 0], [0, -6, 0]]) {
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(12, 4), side);
+    wall.rotation.set(Math.PI / 2, rz, 0, 'ZXY'); wall.position.set(x, y, 2); room.add(wall);
+  }
+  w.root.add(room); w.root.updateMatrixWorld(true);
+  w.lit.disable();
+  const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
+    getCollision: () => room, spotFwhmDeg: 20 });
+  t.after(() => lit.disable());
+  const state = lit.enable();
+  assert.equal(state.bounceLights, 8, 'a fixed set of eight bounce lights');
+  assert.equal(state.bounceSources, 8, 'four fixtures give more than eight lit patches; the eight strongest are kept');
+  assert.equal(state.bounceRangeM, 4.5);
+  assert.deepEqual({ ...state.assumedAlbedos }, { spotFlat: .35, spotVertical: .6, down: .35, zoneWall: .65, zoneOther: .4 }, 'the assumed albedos are reported with the view');
+  assert.equal(state.bounceLimit, 'One bounce · casts no shadows · can leak up to 4.5 m through walls');
+  const bounce = lit.group.children.filter(node => node.isSpotLight && node.userData.lit_source === 'bounce');
+  assert.equal(bounce.length, 8);
+  for (const light of bounce) {
+    assert.equal(light.castShadow, false, 'bounce lights cast no shadows');
+    assert.equal(light.distance, 4.5); assert.ok(Math.abs(light.angle - 1.45) < 1e-12); assert.equal(light.penumbra, 1);
+    assert.ok(light.intensity > 0 && light.userData.patch.assumed === true && light.userData.measured === false);
+    assert.ok(Math.abs(light.intensity - light.userData.patch.reflected_lm / Math.PI * .9 * EXPOSURE) < 1e-9, 'intensity is reflected flux / pi x 0.9 x the night exposure');
+    const off = light.target.position.clone().sub(light.position);
+    assert.ok(Math.abs(off.length() - 1) < 1e-9, 'points along the patch normal');
+  }
+  const reflected = bounce.map(light => light.userData.patch.reflected_lm);
+  assert.deepEqual(reflected, [...reflected].sort((a, b) => b - a), 'strongest first');
+  // Spots: 450 x 1 x 0.8 x albedo; they outrank every zone patch.
+  assert.ok(bounce.slice(0, 4).every(light => light.userData.patch.kind === 'spot'));
+  for (const light of bounce.filter(item => item.userData.patch.kind === 'spot'))
+    assert.ok([.35, .6].includes(light.userData.patch.albedo) && Math.abs(light.userData.patch.reflected_lm - 450 * .8 * light.userData.patch.albedo) < 1e-9);
+});
+
+test('bounce follows the channels and drops a patch whose light is off', t => {
+  const w = world(t);
+  const room = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+  w.root.add(room); w.root.updateMatrixWorld(true); w.lit.disable();
+  const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
+    getCollision: () => room, spotFwhmDeg: 20 });
+  t.after(() => lit.disable());
+  lit.enable();
+  const before = lit.state().bounceSources;
+  for (const item of w.fixtures.readback().fixtures) w.fixtures.setFixtureState(item.fixture_id, { spotlight: { on: false }, downward: { on: false },
+    radials: [1, 2, 3, 4, 5, 6].map(number => ({ number, on: false })) });
+  lit.sync();
+  assert.ok(before > 0); assert.equal(lit.state().bounceSources, 0, 'no lit patch, no bounce');
+  assert.ok(lit.group.children.filter(node => node.userData.lit_source === 'bounce').every(light => light.intensity === 0));
+});
+
+test('bouncePatches (pure model) uses the assumed albedos and ignores rays that find no surface (an opening)', () => {
+  const light = (kind, level = 1) => ({ kind, level, kelvin: 3000, number: null });
+  const lights = [light('spot'), light('spot'), light('down'), light('zone'), light('zone'), light('zone'), light('zone', 0)];
+  const hits = [{ point: [1, 0, 0], normal: [0, 1, 0] }, { point: [1, 0, 0], normal: [-1, 0, 0] }, { point: [0, 0, 0], normal: [0, 1, 0] },
+    { point: [1, 0, 0], normal: [-1, 0, 0] }, { point: [1, 0, 0], normal: [-.6, .8, 0] }, null, { point: [1, 0, 0], normal: [-1, 0, 0] }];
+  const patches = Model.bouncePatches(lights, hits, { up: [0, 1, 0] });
+  const by = kind => patches.filter(patch => patch.kind === kind).map(patch => patch.albedo).sort();
+  assert.deepEqual(by('spot'), [.35, .6]); assert.deepEqual(by('down'), [.35]); assert.deepEqual(by('zone'), [.4, .65]);
+  assert.equal(patches.length, 5, 'the zone with no surface and the zone that is off add nothing');
+  assert.ok(Math.abs(patches.find(patch => patch.kind === 'down').reflected - 350 * .8 * .35) < 1e-9);
+  assert.ok(Math.abs(patches.find(patch => patch.kind === 'zone' && patch.albedo === .65).reflected - 120 * .7 * .65) < 1e-9);
+  const strongest = patches[0];
+  assert.deepEqual(strongest.position, strongest.point.map((v, i) => v + strongest.normal[i] * .25), '0.25 m off the patch');
+  assert.ok(Math.abs(strongest.intensity - strongest.reflected / Math.PI * .9 * Model.LIT_EXPOSURE) < 1e-12);
+  assert.deepEqual({ ...Model.LIT_BOUNCE_ALBEDO }, { spotFlat: .35, spotVertical: .6, down: .35, zoneWall: .65, zoneOther: .4 });
 });

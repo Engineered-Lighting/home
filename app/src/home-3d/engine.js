@@ -296,6 +296,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     const overlay = markersM.createOverlay(apartmentRoot);
     const picking = pickingM.createPicking(camera, hostEl);
     let disposed = false;
+    const uiLayers = new Set();
+    const uiCollisionDigest = pinnedPack?.assets?.['collision.glb']?.sha256 ?? null;
+    const retireUiLayer = layer => {
+        try { layer.dispose(); } catch (_) { /* Other layers and renderer cleanup still run. */ }
+        finally { uiLayers.delete(layer); }
+    };
     const equipmentCutaway = bindEquipmentCutawayRegistration({
         overlay, sceneIdentity, manifest: pinnedPack,
         enabled: cutawayEligible && !window.HomeLiveSceneShadow?.active,
@@ -615,6 +621,9 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         }
         modes.update(dt);
         overlay.update(dt);
+        if (uiLayers.size) for (const layer of uiLayers) {
+            try { layer.update(); } catch (_) { retireUiLayer(layer); }
+        }
         renderer.render(scene, camera);
 
         const renderTimeMs = Math.max(0, performance.now() - now);
@@ -662,6 +671,61 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             return picking.surfaceHit(apartmentRoot, [collision], clientX, clientY, {
                 acceptPoint: point => cutawayM.dollhouseKeep(point, policy) > .05,
             });
+        },
+        async createUiOverlayLayer(options = {}) {
+            const { host, isCurrent, signal: layerSignal } = options || {};
+            if (typeof isCurrent !== 'function' || typeof layerSignal?.aborted !== 'boolean'
+                || typeof layerSignal.addEventListener !== 'function'
+                || typeof layerSignal.removeEventListener !== 'function') return null;
+            const identityKeys = Object.keys(sceneIdentity);
+            const ownerCurrent = () => {
+                try {
+                    if (disposed || lifetimeController.signal.aborted || layerSignal.aborted
+                        || window.HomeLiveSceneShadow?.active || !host?.isConnected
+                        || picking.getHost() !== host || !host.contains?.(canvas)
+                        || engine.siteId !== siteId || engine.contentRevision !== contentRevision
+                        || identityKeys.some(key => engine.sceneIdentity?.[key] !== sceneIdentity[key])) return false;
+                    const selectedSite = window.HomeSpatialViewport?.getSelectedSiteId?.();
+                    if (selectedSite && selectedSite !== siteId) return false;
+                    if (contentRevision != null) {
+                        const manifest = window.HomeContentPacks?.get?.(siteId)?.manifest;
+                        const registrationVersion = manifest?.registrationVersion
+                            ?? window.HomeSpatialViewport?.getSite?.(siteId)?.sceneRegistration?.version ?? null;
+                        if (manifest?.revision !== contentRevision
+                            || registrationVersion !== sceneIdentity.registrationVersion
+                            || (manifest.assets?.['frame.json']?.sha256 ?? null) !== sceneIdentity.frameDigest
+                            || (manifest.assets?.['collision.glb']?.sha256 ?? null) !== uiCollisionDigest) return false;
+                    } else {
+                        const version = window.HomeSpatialViewport?.getSite?.(siteId)?.sceneRegistration?.version ?? null;
+                        if (version !== sceneIdentity.registrationVersion) return false;
+                    }
+                    return true;
+                } catch (_) { return false; }
+            };
+            const current = () => {
+                try { return ownerCurrent() && isCurrent() === true && ownerCurrent(); }
+                catch (_) { return false; }
+            };
+            if (!current()) return null;
+            let layer = null, retired = false;
+            try {
+                const module = await sib('apartment-ui-overlay-bridge.mjs');
+                if (!current()) return null;
+                layer = module.createApartmentUiOverlayLayer({
+                    THREE, camera, apartmentRoot, overlayRoot: overlay.overlayRoot, host,
+                    projectWorld: point => picking.projectToScreen(point),
+                    pickSurface: (x, y) => engine.displaySurfaceHit(x, y),
+                    isCurrent: current, signal: layerSignal,
+                    onDispose: () => { retired = true; uiLayers.delete(layer); },
+                });
+                if (!layer || typeof layer.update !== 'function' || typeof layer.dispose !== 'function') return null;
+                if (retired || !current()) { retireUiLayer(layer); return null; }
+                uiLayers.add(layer);
+                return layer;
+            } catch (_) {
+                if (layer) retireUiLayer(layer);
+                return null;
+            }
         },
         performanceController,
         /* The disclosed placeholder this interior declares, or null for a
@@ -953,6 +1017,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             if (disposed) return false;
             engine.setRunning(false);
             disposed = true;
+            for (const layer of uiLayers) retireUiLayer(layer);
             equipmentCutaway.dispose();
             unsubscribePerformanceBudget();
             signal?.removeEventListener?.('abort', onExternalAbort);

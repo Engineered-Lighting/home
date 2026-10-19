@@ -31,6 +31,8 @@ const REPO = path.resolve(TOOLS, "..");
 const MAP = [
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
+  [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
+  [/^tools\/test-apartment-(?:ui-overlay-bridge|overlay-bridge-browser)\.mjs$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
   [/^tools\/(?:lib\/home-frontend-inventory|test-home-frontend-inventory)\.cjs$/, ["run-bootstrap-tests.js", "run-lab-tests.js", "test-home-frontend-inventory.cjs"]],
 
   [/^app\/src\/home-app\.jsx$/, [

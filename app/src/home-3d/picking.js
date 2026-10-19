@@ -13,6 +13,7 @@ export function createPicking(camera, hostEl) {
     return {
         raycaster,
         setHost(el) { if (el) host = el; },
+        getHost() { return host; },
         /* world-space Vector3 -> {x, y, visible} in host-element pixels */
         projectToScreen(worldPos) {
             v.copy(worldPos).project(camera);

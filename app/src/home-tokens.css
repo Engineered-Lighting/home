@@ -903,6 +903,7 @@ button.hg-no-press:active {
  * HANDOFF › Phone). Visuals stay the design's; only hit areas grow. */
 @media (pointer: coarse) {
   .apt-home-shell .apt-home-status summary { min-width: 44px; min-height: 44px; }
+  .apt-home-shell .apt-ui-details > summary { min-height: 44px; }
   .apt-home-shell .apt-home-sheet-grip, .apt-home-shell .apt-home-sheet-toggle { flex-basis: 44px; height: 44px; min-height: 44px; }
   .apt-home-shell :is(.apt-ui-button.is-small, .apt-home-toolbar-source, .apt-ui-toolbar-source) { min-width: 44px; min-height: 44px; }
   .apt-home-shell [aria-label="apartment zoom controls"] button { width: 44px!important; min-width: 44px!important; height: 44px!important; min-height: 44px!important; }

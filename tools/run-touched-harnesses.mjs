@@ -48,8 +48,10 @@ const MAP = [
   [/^tools\/test-apartment-photo-recovery(?:-browser\.mjs|\.cjs)$/, ["test-apartment-photo-recovery.cjs", "test-apartment-photo-recovery-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
   [/^tools\/test-apartment-(?:ui-overlay-bridge|overlay-bridge-browser)\.mjs$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-3d\/(?:rig|engine)\.js|home-apartment\.jsx|home-tokens\.css)|tools\/(?:run-apartment-rig-fit-tests|test-apartment-rig-fit-browser)\.mjs)$/, ["run-apartment-rig-fit-tests.mjs", "run-apartment-edit-orbit-tests.mjs", "test-apartment-rig-fit-browser.mjs"]],
   [/^tools\/(?:lib\/home-frontend-inventory|test-home-frontend-inventory)\.cjs$/, ["run-bootstrap-tests.js", "run-lab-tests.js", "test-home-frontend-inventory.cjs"]],
 
   [/^app\/src\/home-app\.jsx$/, [
@@ -115,20 +117,32 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-directional-presentation\.mjs|tools\/test-apartment-directional-presentation\.mjs)$/, ["test-apartment-directional-presentation.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)|home-3d\/apartment-directional-presentation\.mjs)|tools\/test-apartment-composer-comfort-browser\.mjs)$/, ["test-apartment-composer-comfort-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures\.mjs|markers\.js)|tools\/test-apartment-radial-visual\.mjs)$/, ["test-apartment-radial-visual.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
+  [/^(?:app\/src\/home-apartment-room-guide\.jsx|tools\/test-apartment-room-guide(?:\.cjs|-browser\.mjs))$/, ["test-apartment-room-guide.cjs", "test-apartment-room-guide-browser.mjs"]],
+  [/^app\/src\/(?:home-apartment\.jsx|index\.html|home-feature-loader\.js|home-3d\/(?:rig\.js|markers\.js|equipment-virtual-fixtures\.mjs|apartment-perception-layer\.mjs|registered-desk-target\.mjs))$/, ["test-apartment-room-guide.cjs"]],
+  [/^app\/src\/home-apartment(?:-ui)?\.jsx$/, ["test-apartment-room-guide-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
     "run-native-agent-security-tests",
   ]],
+  // Ahead-of-time JSX: the loaders, the build, the gateway's verified
+  // manifest and the hooks that run the build on deploy and installer builds.
+  [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],
   [/^tools\/lib\/home-app-source-contracts\.cjs$/, ["run-bootstrap-tests.js", "run-simulation-command-tests.js", "test-home-app-source-contracts.cjs"]],
   [/^tools\/(?:run-bootstrap-tests|run-simulation-command-tests)\.js$/, ["test-home-app-source-contracts.cjs"]],
   [/^tools\/test-home-app-source-contracts\.cjs$/, ["test-home-app-source-contracts.cjs"]],
   [/^tools\/test-apartment-chat-presenter\.cjs$/, ["test-apartment-chat-presenter.cjs"]],
+  [/^app\/src\/(?:home-app\.jsx|home-apartment\.jsx|home-apartment-chat-context\.js|home-tokens\.css|index\.html)$/,
+    ["test-apartment-chat-context.cjs", "test-apartment-chat-dispatch.cjs", "test-apartment-chat-chips-browser.mjs", "test-apartment-chat-room-browser.mjs"]],
+  [/^tools\/test-apartment-chat-(?:context\.cjs|dispatch\.cjs|chips-browser\.mjs|room-browser\.mjs)$/,
+    ["test-apartment-chat-context.cjs", "test-apartment-chat-dispatch.cjs", "test-apartment-chat-chips-browser.mjs", "test-apartment-chat-room-browser.mjs"]],
   [/^tools\/test-apartment-unread-(?:state\.cjs|integration\.mjs)$/, ["test-apartment-unread-state.cjs", "test-apartment-unread-integration.mjs"]],
   [/^tools\/test-apartment-travel-guard\.cjs$/, ["test-apartment-travel-guard.cjs"]],
   [/^(?:app\/src\/(?:home-apartment-setup-links|home-apartment-data)\.js|tools\/test-apartment-setup-links\.cjs)$/, ["test-apartment-setup-links.cjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-aim|-command-ladder)?\.jsx|home-apartment-aiming\.js|index\.html|home-feature-loader\.js|home-service-worker\.js)|ha-config\/packages\/living_lights_manual_detection\.yaml)$/, ["run-apartment-command-ladder-tests.mjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
   [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-shell-tests.js", "run-apartment-data-tests.js", "test-apartment-travel-guard.cjs", "test-home-app-source-contracts.cjs"]],
@@ -141,18 +155,22 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
  * rounded up, and the composer-comfort suite's first hosted run 39307352122.
  * The two directional parts are that run's setup plus their own stages.
+ * test-precompiled-jsx.mjs is twice its 45 s local run until hosted-measured.
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
+  "test-precompiled-jsx.mjs": 90,
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
+  "test-apartment-beam-path-browser.mjs": 40,
   "test-apartment-room-inspector-browser.mjs": 62,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-setup-saves-browser.mjs": 110,
   "test-apartment-setup-rail-browser.mjs": 70,
+  "test-apartment-rig-fit-browser.mjs": 45,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,

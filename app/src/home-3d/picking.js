@@ -4,8 +4,50 @@
  */
 import * as THREE from 'three';
 
+/* The aim chip's grazing note ("the pool will be long and dim") starts here,
+ * matching the W2 aim presentation's threshold. */
+export const BEAM_GRAZING_DEG = 80;
+
+const finite3 = (value) => Array.isArray(value) && value.length >= 3
+    && value.slice(0, 3).every((n) => typeof n === 'number' && Number.isFinite(n));
+
+/* A surface class from an Apartment-frame (Z-up) normal that faces the light.
+ * No producer names furniture yet, so this is all a blocker or a surface can
+ * honestly be called. */
+export function surfaceClassFromNormal(normal, pointZ = null) {
+    const z = Array.isArray(normal) ? normal[2] : NaN;
+    if (!Number.isFinite(z)) return 'surface';
+    if (z >= 0.7) return Number.isFinite(pointZ) && pointZ <= 0.15 ? 'floor' : 'flat surface';
+    if (z <= -0.7) return 'ceiling';
+    if (Math.abs(z) <= 0.35) return 'wall';
+    return 'surface';
+}
+
+const normalDot = (n, d) => n[0] * d.x + n[1] * d.y + n[2] * d.z;
+
+const CLASS_NAMES = Object.freeze({
+    floor: 'the floor', 'flat surface': 'a surface', ceiling: 'the ceiling', wall: 'a wall', surface: 'an object',
+});
+
+/* The aim chip's `traceBeam` answer (W2 aim presentation): `{ point_m, name }`
+ * plus the blocker's normal, distance and class when something is in the
+ * way, else null. */
+export function aimChipBlocker(path) {
+    const blocker = path?.blocker;
+    if (!blocker) return null;
+    return Object.freeze({
+        point_m: blocker.point_m.slice(),
+        name: blocker.name,
+        normal_m: blocker.normal_m.slice(),
+        distance_m: blocker.distance_m,
+        surface_class: blocker.surface_class,
+    });
+}
+
 export function createPicking(camera, hostEl) {
     const raycaster = new THREE.Raycaster();
+    // beamPath has its own raycaster, so it can never change pick() bounds.
+    const pathRaycaster = new THREE.Raycaster();
     const v = new THREE.Vector3();
     let host = hostEl;   // re-homed on every view mount — the engine outlives
                          // the React tree, so the boot-time host div goes stale
@@ -130,6 +172,90 @@ export function createPicking(camera, hostEl) {
                 obstruction_point: blocked ? center.point : null,
                 blocked,
             };
+        },
+
+        /* One straight ray from a light toward an aim point, for the aim chip
+         * (SPEC Gestures: "Blocked by ..." with a marker, and the grazing
+         * note). Additive beside beamTrace: the same Apartment-local Z-up
+         * frame and collision objects, but it reports the hit normal and the
+         * first blocker.
+         *
+         * Returns null for unusable input; otherwise a frozen
+         *   { clear, target_distance_m,
+         *     hit: { point_m, normal_m, distance_m, surface_class, object } | null,
+         *     blocker: { point_m, normal_m, distance_m, surface_class, name, object } | null,
+         *     incidence_deg, grazing }
+         * `hit` is the first accepted surface along the ray, up to just past
+         * the target. It is the blocker when it lies more than `toleranceM`
+         * short of the target. Normals face the light. `incidence_deg` and
+         * `grazing` describe the target surface and are null while blocked or
+         * when the ray meets no surface. `acceptPoint(localPoint, candidate)`
+         * skips faces, such as dollhouse cut-away walls, that must not block.
+         * `name` is the object's explicit `userData.semantic_name` when it has
+         * one, otherwise a phrase from the surface class ("a wall"). */
+        beamPath(apartmentRoot, objects, originValue, targetValue, { toleranceM = 0.03, acceptPoint = null } = {}) {
+            if (!apartmentRoot || !objects || !finite3(originValue) || !finite3(targetValue)) return null;
+            apartmentRoot.updateMatrixWorld(true);
+            const originLocal = new THREE.Vector3(...originValue.slice(0, 3));
+            const targetLocal = new THREE.Vector3(...targetValue.slice(0, 3));
+            const directionLocal = targetLocal.clone().sub(originLocal);
+            const targetDistance = directionLocal.length();
+            if (!(targetDistance > 1e-4)) return null;
+            directionLocal.normalize();
+            const originWorld = apartmentRoot.localToWorld(originLocal.clone());
+            const directionWorld = apartmentRoot.localToWorld(targetLocal.clone()).sub(originWorld);
+            const worldPerLocal = directionWorld.length() / targetDistance;
+            directionWorld.normalize();
+            const rootQInverse = apartmentRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
+            pathRaycaster.set(originWorld, directionWorld);
+            pathRaycaster.near = 0.015 * worldPerLocal;
+            pathRaycaster.far = (targetDistance + 0.25) * worldPerLocal;
+            const tolerance = Number.isFinite(toleranceM) && toleranceM >= 0 ? toleranceM : 0.03;
+            let first = null;
+            for (const candidate of pathRaycaster.intersectObjects(Array.isArray(objects) ? objects : [objects], true)) {
+                if (!candidate.point) continue;
+                const local = apartmentRoot.worldToLocal(candidate.point.clone());
+                if (acceptPoint && !acceptPoint([local.x, local.y, local.z], candidate)) continue;
+                first = { candidate, local };
+                break;
+            }
+            let surface = null;
+            if (first) {
+                const { candidate, local } = first;
+                const normal = new THREE.Vector3(0, 0, 1);
+                if (candidate.face?.normal) {
+                    candidate.object.updateMatrixWorld(true);
+                    normal.copy(candidate.face.normal).transformDirection(candidate.object.matrixWorld)
+                        .applyQuaternion(rootQInverse).normalize();
+                }
+                // Double-sided scan triangles have mixed winding: face the light.
+                if (normal.dot(directionLocal) > 0) normal.negate();
+                const normalM = Object.freeze([normal.x, normal.y, normal.z]);
+                const surfaceClass = surfaceClassFromNormal(normalM, local.z);
+                const label = candidate.object?.userData?.semantic_name;
+                surface = {
+                    point_m: Object.freeze([local.x, local.y, local.z]),
+                    normal_m: normalM,
+                    distance_m: local.distanceTo(originLocal),
+                    surface_class: surfaceClass,
+                    name: typeof label === 'string' && label.trim() ? label.trim().slice(0, 80) : CLASS_NAMES[surfaceClass],
+                    object: candidate.object,
+                };
+            }
+            const blocked = !!(surface && surface.distance_m + tolerance < targetDistance);
+            const incidence = surface && !blocked
+                ? THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(-normalDot(surface.normal_m, directionLocal), -1, 1)))
+                : null;
+            let hit = null;
+            if (surface) { const { name, ...rest } = surface; hit = Object.freeze(rest); }
+            return Object.freeze({
+                clear: !blocked,
+                target_distance_m: targetDistance,
+                hit,
+                blocker: blocked ? Object.freeze(surface) : null,
+                incidence_deg: incidence,
+                grazing: incidence != null && incidence > BEAM_GRAZING_DEG,
+            });
         },
 
         /* Screen point -> apartment-frame floor coords [x, y] (Z-up, z=0).

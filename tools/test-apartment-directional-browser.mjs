@@ -66,13 +66,65 @@ test('real authored directional controls preserve native input, aim and output b
     source_mode: 'current-worktree-only', source_sha256: Object.fromEntries(['home-apartment.jsx', 'home-apartment-cards.jsx', 'home-apartment-directional.js', 'home-3d/engine.js',
       'home-3d/picking.js', 'home-3d/direct-aim-gesture.mjs'].map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
     physical_commands: 0, saves: 0, camera_sessions: 0, model_sessions: 0,
-    checks: [], requests: [], forbidden: [], blocked_read_subscriptions: [], missing_code: [], errors: [], served: {}, browser: browserOptions() };
-  let server, handler, origin, browser, context, page, timer;
-  const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
+    checks: [], stage_timings: [], action_timings: [], native_progress: [], modeled_progress: [],
+    requests: [], forbidden: [], blocked_read_subscriptions: [], missing_code: [], errors: [], served: {}, browser: browserOptions() };
+  let server, handler, origin, browser, context, page, rawPage, timer;
+  const started = performance.now(), elapsed = () => performance.now() - started;
+  const save = () => { receipt.elapsed_ms = elapsed(); fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n'); };
+  const progress = value => fs.appendFileSync(path.join(run, 'progress.jsonl'), JSON.stringify({ elapsed_ms: elapsed(), ...value }) + '\n');
+  const measure = async (name, operation, detail = {}) => {
+    const action = { id: receipt.action_timings.length + 1, stage: receipt.current_stage || 'setup', name, ...detail,
+      started_ms: elapsed(), callsite: new Error().stack?.split('\n').slice(3, 6).map(line => line.trim()) };
+    receipt.action_timings.push(action); receipt.current_action = action; progress({ event: 'action-start', action }); save();
+    try { const result = await operation(); action.result = 'passed'; return result; }
+    catch (error) { action.result = 'failed'; action.failure = error.message; throw error; }
+    finally { action.elapsed_ms = elapsed() - action.started_ms; progress({ event: 'action-end', action });
+      if (receipt.current_action === action) receipt.current_action = null; save(); }
+  };
+  // Transparent observation only: preserve each existing action, argument,
+  // await, pointer sample and readiness predicate. Persist the pending await
+  // in Node so a browser deadline cannot erase the diagnostic evidence.
+  const observed = new WeakMap();
+  const locatorFactories = new Set(['locator', 'getByRole', 'getByLabel', 'filter', 'nth', 'first', 'last']);
+  const observedMethods = new Set(['evaluate', 'evaluateAll', 'waitForFunction', 'goto', 'waitFor', 'getAttribute',
+    'boundingBox', 'inputValue', 'isDisabled', 'isChecked', 'count', 'innerText', 'click', 'focus', 'check', 'uncheck',
+    'move', 'down', 'up', 'dblclick', 'wheel', 'press', 'send']);
+  const observe = (target, kind) => {
+    if (observed.has(target)) return observed.get(target);
+    const proxy = new Proxy(target, { get(object, key) {
+      const member = Reflect.get(object, key, object);
+      if (kind === 'page' && (key === 'mouse' || key === 'keyboard')) return observe(member, key);
+      if (typeof member !== 'function') return member;
+      if (locatorFactories.has(key)) return (...args) => observe(member.apply(object, args), 'locator');
+      if (!observedMethods.has(key)) return member.bind(object);
+      return (...args) => measure(kind + '.' + String(key), () => member.apply(object, args), {
+        ...(kind === 'locator' ? { selector: String(object) } : {}),
+        ...(['mouse', 'keyboard', 'cdp'].includes(kind) ? { arguments: args } : {}),
+      });
+    } });
+    observed.set(target, proxy); return proxy;
+  };
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
+    receipt.deadline_expired = true; receipt.deadline_stage = receipt.current_stage; receipt.deadline_action = structuredClone(receipt.current_action);
+    progress({ event: 'deadline', current_stage: receipt.current_stage, current_action: receipt.current_action }); save();
     browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s directional browser deadline'));
   }, 145000); });
-  const check = async (name, operation) => { receipt.current_stage = name; save(); const detail = await operation(); receipt.checks.push({ name, ...detail }); save(); };
+  const check = async (name, operation) => {
+    receipt.current_stage = name; const stage = { name, started_ms: elapsed() }; receipt.stage_timings.push(stage); progress({ event: 'stage-start', stage }); save();
+    if (rawPage && !rawPage.isClosed()) {
+      stage.renderer = await measure('stage.renderer-snapshot', () => rawPage.evaluate(() => {
+        const engine = window.__APT_ENGINE, host = engine?.picking.getHost(), canvas = engine?.renderer.domElement;
+        return engine && { at: performance.now(), site: engine.siteId, mode: engine.modes.mode,
+          renderer_frame: engine.renderer.info.render.frame, draw_calls: engine.renderer.info.render.calls,
+          pixel_ratio: engine.renderer.getPixelRatio(), backing: [canvas.width, canvas.height], host: [host.clientWidth, host.clientHeight],
+          quality: engine.performanceBudget(), fixtures: engine.overlay.virtualFixturesReadback().fixture_count,
+          fixture_display_on: engine.overlay.virtualFixturesReadback().visible };
+      }));
+    }
+    try { const detail = await operation(); receipt.checks.push({ name, ...detail }); stage.result = 'passed'; }
+    catch (error) { stage.result = 'failed'; throw error; }
+    finally { stage.elapsed_ms = elapsed() - stage.started_ms; progress({ event: 'stage-end', stage }); save(); }
+  };
   async function proof() {
     server = http.createServer((req, res) => {
       try {
@@ -112,7 +164,7 @@ test('real authored directional controls preserve native input, aim and output b
     handler = createEquipmentRegistrationGateway({ env: { NODE_ENV: 'test', HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: '1',
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
-    browser = await chromium.launch(receipt.browser); context = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, reducedMotion: 'no-preference', serviceWorkers: 'block' });
+    browser = await measure('setup.launch', () => chromium.launch(receipt.browser)); context = await measure('setup.context', () => browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, reducedMotion: 'no-preference', serviceWorkers: 'block' }));
     receipt.reduced_motion = 'no-preference'; // Exercise the real rig's ambient hover settling, rather than its reduced-motion bypass.
     receipt.runtime = { node: process.version, playwright: require('playwright/package.json').version, module: require.resolve('playwright'), browser: browser.version() };
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
@@ -130,6 +182,9 @@ test('real authored directional controls preserve native input, aim and output b
           key: event.key, at: performance.now(), start: event.target?.closest?.('[data-apt-radial-start]')?.getAttribute('data-apt-radial-start'),
           control, call_count: window.__directionalCalls?.length || 0, descriptors,
           fixtures: type === 'keydown' ? engine?.overlay.virtualFixturesReadback?.().fixtures : undefined });
+        window.__directionalDiagnostic?.({ kind: 'native', value: { type, pointerId: event.pointerId, pointerType: event.pointerType,
+          key: event.key, at: performance.now(), control, isTrusted: event.isTrusted,
+          start: event.target?.closest?.('[data-apt-radial-start]')?.getAttribute('data-apt-radial-start') } }).catch(() => {});
       }, true);
     });
     await context.route('**/*', route => {
@@ -150,12 +205,29 @@ test('real authored directional controls preserve native input, aim and output b
       else receipt.forbidden.push({ websocket: socket.url() });
       socket.close();
     });
-    page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => receipt.errors.push(error.message));
+    rawPage = await measure('setup.page', () => context.newPage());
+    await rawPage.exposeBinding('__directionalDiagnostic', (_source, event) => {
+      if (event.kind === 'native') receipt.native_progress.push(event.value);
+      else if (event.kind === 'modeled') receipt.modeled_progress.push(event.value);
+      progress({ event: 'browser-' + event.kind, value: event.value });
+    });
+    page = observe(rawPage, 'page'); page.setDefaultTimeout(15000); page.on('pageerror', error => receipt.errors.push(error.message));
     await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 });
     const waitSite = async site => page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === site, site);
-    const selectHome = async site => { await page.getByRole('group', { name: 'Home', exact: true })
-      .getByRole('button', { name: site === 'victoria' ? 'Victoria' : 'Echo Park', exact: true }).click(); await waitSite(site); };
+    // Static controls need native activation, not a pointer-stability frame.
+    // Keep visible/enabled/focus admission explicit; moving room controls and
+    // every canvas gesture below retain their actual mouse path and samples.
+    const activateStatic = async (control, key = 'Enter') => {
+      await control.focus();
+      const admission = await control.evaluate(node => ({ focused: node.ownerDocument.activeElement === node,
+        visible: [...node.getClientRects()].some(rect => rect.width > 0 && rect.height > 0) && getComputedStyle(node).visibility === 'visible',
+        enabled: !node.matches(':disabled') && node.getAttribute('aria-disabled') !== 'true' }));
+      assert.deepEqual(admission, { focused: true, visible: true, enabled: true });
+      await page.keyboard.press(key);
+    };
+    const selectHome = async site => { await activateStatic(page.getByRole('group', { name: 'Home', exact: true })
+        .getByRole('button', { name: site === 'victoria' ? 'Victoria' : 'Echo Park', exact: true })); await waitSite(site); };
     const blur = () => page.evaluate(() => document.activeElement?.blur());
     const inspector = () => page.locator('[data-victoria-virtual-fixtures="1"][aria-label="Fixture lighting inspector"]');
     const composer = () => page.locator('[data-apt-directional-composer="1"]');
@@ -179,14 +251,15 @@ test('real authored directional controls preserve native input, aim and output b
       await composer().getByRole('button', { name: mode === 'zones' ? 'Zones' : 'Spot', exact: true }).waitFor();
       await page.waitForFunction(mode => document.querySelector('[data-apt-directional-mode="' + mode + '"]')?.getAttribute('aria-pressed') === 'true', mode);
     };
-    const navigationPose = () => page.evaluate(() => {
-      const pose = window.__APT_ENGINE.rig.snapshotPose();
-      return { az: pose.az, el: pose.el, zoom: pose.zoom, curAz: pose.curAz, curEl: pose.curEl, curRadius: pose.curRadius,
-        previewAz: pose.previewAz, previewEl: pose.previewEl, overshoot: pose.overshoot, target: pose.target };
-    });
+    const navigationFrom = pose => ({ az: pose.az, el: pose.el, zoom: pose.zoom, curAz: pose.curAz, curEl: pose.curEl, curRadius: pose.curRadius,
+      previewAz: pose.previewAz, previewEl: pose.previewEl, overshoot: pose.overshoot, target: pose.target });
+    const navigationPose = async () => navigationFrom(await page.evaluate(() => window.__APT_ENGINE.rig.snapshotPose()));
     const setMode = async mode => {
-      const button = composer().getByRole('button', { name: mode === 'zones' ? 'Zones' : 'Spot', exact: true }), box = await button.boundingBox();
-      assert.ok(box); const before = await navigationPose();
+      const button = composer().getByRole('button', { name: mode === 'zones' ? 'Zones' : 'Spot', exact: true });
+      const observation = await button.evaluate(node => { const rect = node.getBoundingClientRect();
+        return { box: node.getClientRects().length ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+          pose: window.__APT_ENGINE.rig.snapshotPose() }; });
+      const box = observation.box; assert.ok(box); const before = navigationFrom(observation.pose);
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
       assert.equal(await captureActive(), false, 'the native pill press must not leak pointer capture to the orbit rig');
       await page.mouse.move(box.x + box.width / 2 + 2, box.y + box.height / 2);
@@ -352,23 +425,32 @@ test('real authored directional controls preserve native input, aim and output b
         const original = overlay[method]; overlay[method] = (...args) => {
           const call = { method, fixture_id: args[0], patch: structuredClone(args[1]), arguments_length: args.length,
             reconciliation: activeReconciliation?.id ?? null, at: performance.now() };
-          window.__directionalCalls.push(call); const result = original(...args); call.ok = result?.ok === true; return result;
+          window.__directionalCalls.push(call); const result = original(...args); call.ok = result?.ok === true;
+          window.__directionalDiagnostic?.({ kind: 'modeled', value: structuredClone(call) }).catch(() => {}); return result;
         };
       }
     });
-    await page.getByRole('button', { name: 'Select ' + fixture.label, exact: true }).click(); await expectSelected(fixture);
+    await activateStatic(page.getByRole('button', { name: 'Select ' + fixture.label, exact: true })); await expectSelected(fixture);
     const originalAim = await descriptor(fixture.fixture_id);
     await check('selected fixture defaults to Spot and Aim with a native pill above the reticle and no fabricated pending-aim dot', async () => {
       await expectMode('spot');
       assert.equal(await inspector().getByRole('tab', { name: 'Aim', exact: true }).getAttribute('aria-selected'), 'true');
-      const circles = await composer().locator('svg circle').evaluateAll(nodes => nodes.map(node => ({ x: node.getAttribute('cx'), y: node.getAttribute('cy'), r: +node.getAttribute('r') })));
+      const mounted = await composer().evaluate(node => {
+        const circles = [...node.querySelectorAll('svg circle')], rect = element => {
+          if (!element?.getClientRects().length) return null;
+          const value = element.getBoundingClientRect(); return { x: value.x, y: value.y, width: value.width, height: value.height };
+        };
+        return { circles: circles.map(circle => ({ x: circle.getAttribute('cx'), y: circle.getAttribute('cy'), r: +circle.getAttribute('r') })),
+          pill: rect(node.querySelector('[role="group"][aria-label="Room lighting tool"]')), hub: rect(circles.at(-1)),
+          text: node.innerText, inventory: window.__APT_ENGINE.overlay.virtualFixturesReadback() };
+      });
+      const circles = mounted.circles;
       assert.deepEqual(circles.map(circle => circle.r), [22, 7]);
       assert.equal(circles[0].x, circles[1].x); assert.equal(circles[0].y, circles[1].y);
-      const pill = await composer().getByRole('group', { name: 'Room lighting tool', exact: true }).boundingBox();
-      const hub = await composer().locator('svg circle').last().boundingBox();
+      const { pill, hub } = mounted;
       assert.ok(pill && hub && pill.y + pill.height < hub.y - 22, 'mode pill clears the fixture reticle above the cylinder');
-      assert.match(await composer().innerText(), /Modeled orientation · not commissioned/);
-      assert.equal((await inventory()).fixture_count, 4); return { default: 'spot', actual_hub_only: true, fixtures: 4 };
+      assert.match(mounted.text, /Modeled orientation · not commissioned/);
+      assert.equal(mounted.inventory.fixture_count, 4); return { default: 'spot', actual_hub_only: true, fixtures: 4 };
     });
     await check('existing native Spot drag still creates an aim and enables its existing Undo', async () => {
       const start = await canvasPoint('fixture', fixture.fixture_id), end = await canvasPoint('surface', null, start); assert.ok(start && end);
@@ -379,24 +461,26 @@ test('real authored directional controls preserve native input, aim and output b
       return { native_drag: true, target_present: true, undo_enabled: true };
     });
     await check('all six modeled ring zones support native keyboard selection and isolated brightness/temperature controls', async () => {
-      await inspector().getByRole('tab', { name: 'Light', exact: true }).click(); await expectMode('zones');
+      await activateStatic(inspector().getByRole('tab', { name: 'Light', exact: true })); await expectMode('zones');
       const ring = inspector().getByRole('group', { name: 'Radial zones', exact: true });
       for (let number = 1; number <= 6; number++) {
         const button = ring.getByRole('button', { name: 'Radial zone ' + number, exact: true }); await button.focus();
         await page.keyboard.press(number % 2 ? 'Enter' : 'Space'); assert.equal(await button.getAttribute('aria-pressed'), 'true');
       }
       const first = ring.getByRole('button', { name: 'Radial zone 1', exact: true }); await first.focus(); await page.keyboard.press('Enter');
-      const before = await descriptor(fixture.fixture_id);
-      assert.ok(before.state.radials[0].brightness > 0, 'power memory is tested from an actual nonzero saved level');
       const radialChannel = inspector().getByRole('region', { name: 'Radial channel', exact: true });
       const power = radialChannel.getByRole('checkbox', { name: 'Radial zone 1 power', exact: true });
-      await power.uncheck();
-      let after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[0].on, false);
+      const powerObservation = () => power.evaluate((node, id) => ({ checked: node.checked,
+        descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id) }), fixture.fixture_id);
+      const originalPower = await powerObservation(), before = originalPower.descriptor;
+      assert.ok(before.state.radials[0].brightness > 0, 'power memory is tested from an actual nonzero saved level');
+      assert.equal(originalPower.checked, true); await activateStatic(power, 'Space');
+      const offPower = await powerObservation(); let after = offPower.descriptor; assert.equal(after.state.radials[0].on, false);
       assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power Off remembers the saved nonzero level');
-      await power.check();
-      after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[0].on, true);
+      assert.equal(offPower.checked, false); await activateStatic(power, 'Space');
+      const onPower = await powerObservation(); after = onPower.descriptor; assert.equal(after.state.radials[0].on, true);
       assert.equal(after.state.radials[0].brightness, before.state.radials[0].brightness, 'power On restores the same saved level');
-      await radialChannel.getByRole('button', { name: 'Off', exact: true }).click();
+      assert.equal(onPower.checked, true); await activateStatic(radialChannel.getByRole('button', { name: 'Off', exact: true }));
       after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[0].on, false);
       assert.equal(after.state.radials[0].brightness, 0, 'the explicit Off preset sets a zero level');
       const brightness = inspector().getByRole('slider', { name: 'Radial brightness', exact: true }); await brightness.focus(); await page.keyboard.press('ArrowRight');
@@ -410,9 +494,9 @@ test('real authored directional controls preserve native input, aim and output b
         explicit_off_preset_level: 0, native_brightness_step: .01, focused_field_owns_a_z: true };
     });
     await check('Show in room and unfocused A/Z use native Zones/Spot modes on the actual projected fixture plane', async () => {
-      await inspector().getByRole('tab', { name: 'Aim', exact: true }).click(); await expectMode('spot');
-      await inspector().getByRole('tab', { name: 'Light', exact: true }).click(); await expectMode('zones');
-      await inspector().getByRole('button', { name: 'Show in room', exact: true }).click(); await expectMode('zones');
+      await activateStatic(inspector().getByRole('tab', { name: 'Aim', exact: true })); await expectMode('spot');
+      await activateStatic(inspector().getByRole('tab', { name: 'Light', exact: true })); await expectMode('zones');
+      await activateStatic(inspector().getByRole('button', { name: 'Show in room', exact: true })); await expectMode('zones');
       const geometry = await planePoint(fixture.fixture_id, 1, .7);
       const fade = await verifyLobeFades();
       await setMode('spot'); assert.equal(await inspector().getByRole('tab', { name: 'Aim', exact: true }).getAttribute('aria-selected'), 'true');
@@ -421,50 +505,62 @@ test('real authored directional controls preserve native input, aim and output b
       return { native_tab_modes: ['Aim:spot', 'Light:zones'], svg_hub: geometry.actualHub, svg_tick: geometry.actualTick, renderer_projection_agrees: true, fade, shortcuts: ['a', 'z'] };
     });
     await check('a native current-fixture hub click returns from Chat to Controls without a modeled write or aim change', async () => {
-      await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+      await activateStatic(page.getByRole('tab', { name: 'Chat', exact: true }));
       assert.equal(await page.getByRole('tab', { name: 'Chat', exact: true }).getAttribute('aria-selected'), 'true');
-      const before = await descriptor(fixture.fixture_id), callCount = (await writes()).length;
+      const entry = await page.evaluate(id => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+        callCount: window.__directionalCalls.length }), fixture.fixture_id);
       const hub = await hubPoint(fixture.fixture_id); await page.mouse.click(hub.x, hub.y);
       await page.waitForFunction(() => document.querySelector('#apt-home-tab-controls')?.getAttribute('aria-selected') === 'true');
       await expectSelected(fixture); await expectMode('zones'); await waitHUD();
-      assert.deepEqual(await descriptor(fixture.fixture_id), before, 'revealing the current selection preserves its state, aim target and canonical binding');
-      assert.deepEqual((await writes()).slice(callCount), [], 'a current-fixture click is selection/navigation only');
+      const returned = await page.evaluate(id => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+        calls: window.__directionalCalls }), fixture.fixture_id);
+      assert.deepEqual(returned.descriptor, entry.descriptor, 'revealing the current selection preserves its state, aim target and canonical binding');
+      assert.deepEqual(returned.calls.slice(entry.callCount), [], 'a current-fixture click is selection/navigation only');
       return { restored_tab: 'controls', selected_fixture_id: fixture.fixture_id, descriptor_exact: true, modeled_calls: 0 };
     });
     await check('native hub pickup survives ambient rig settling without a jump; outward, inward and cross-zone motion only paints modeled radials', async () => {
-      const before = await descriptor(fixture.fixture_id), callsBefore = (await writes()).length;
+      const entry = await page.evaluate(id => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+        calls: window.__directionalCalls.length }), fixture.fixture_id);
+      const before = entry.descriptor, callsBefore = entry.calls;
       await startHub(fixture.fixture_id);
       await composer().getByRole('group', { name: 'Room lighting tool', exact: true }).waitFor({ state: 'detached' });
-      const settlingBefore = await page.evaluate(() => ({ matrix: window.__APT_ENGINE.camera.matrixWorld.toArray(), pivot: window.__APT_ENGINE.rig.snapshotPose().pivot }));
-      const navigationBefore = await navigationPose(); await waitHUD();
-      const settlingAfter = await page.evaluate(() => ({ matrix: window.__APT_ENGINE.camera.matrixWorld.toArray(), pivot: window.__APT_ENGINE.rig.snapshotPose().pivot }));
-      assert.notDeepEqual(settlingAfter.pivot, settlingBefore.pivot, 'the actual rig ambient pivot is still settling during pickup');
+      const settlingBefore = await page.evaluate(() => ({ matrix: window.__APT_ENGINE.camera.matrixWorld.toArray(), pose: window.__APT_ENGINE.rig.snapshotPose() }));
+      const navigationBefore = navigationFrom(settlingBefore.pose); await waitHUD();
+      const settlingAfter = await page.evaluate(id => {
+        const engine = window.__APT_ENGINE, down = [...window.__directionalNative].reverse().find(row => row.type === 'pointerdown' && row.pointerType === 'mouse');
+        return { matrix: engine.camera.matrixWorld.toArray(), pose: engine.rig.snapshotPose(),
+          captured: !!down && engine.picking.getHost().hasPointerCapture(down.pointerId), descriptor: engine.overlay.virtualFixtureInteractionDescriptor(id) };
+      }, fixture.fixture_id);
+      assert.notDeepEqual(settlingAfter.pose.pivot, settlingBefore.pose.pivot, 'the actual rig ambient pivot is still settling during pickup');
       assert.notDeepEqual(settlingAfter.matrix, settlingBefore.matrix, 'actual rendered camera movement witnesses the ambient case');
-      assert.deepEqual(await navigationPose(), navigationBefore); assert.equal(await captureActive(), true, 'ambient settling does not retire the radial owner');
-      assert.deepEqual(await descriptor(fixture.fixture_id), before);
+      assert.deepEqual(navigationFrom(settlingAfter.pose), navigationBefore); assert.equal(settlingAfter.captured, true, 'ambient settling does not retire the radial owner');
+      assert.deepEqual(settlingAfter.descriptor, before);
       const outward = await planePoint(fixture.fixture_id, 1, 1.184); await page.mouse.move(outward.client.x, outward.client.y, { steps: 4 }); await waitHUD();
-      assert.equal((await descriptor(fixture.fixture_id)).state.radials[0].brightness, .9);
-      assert.equal(await composer().locator('[data-apt-radial-start="zone:1"]').locator('..').locator('circle').getAttribute('fill'), '#fff',
+      const painted = await composer().evaluate((node, id) => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
+        nodes: [...node.querySelectorAll('[data-apt-radial-start^="zone:"]')].map(path => ({ zone: path.getAttribute('data-apt-radial-start'),
+          color: path.parentElement.querySelector('circle')?.getAttribute('fill') })) }), fixture.fixture_id);
+      assert.equal(painted.descriptor.state.radials[0].brightness, .9);
+      assert.equal(painted.nodes.find(node => node.zone === 'zone:1')?.color, '#fff',
         'only the active paint node becomes white while its owner is active');
-      const inactiveNodeColors = await composer().locator('[data-apt-radial-start^="zone:"]').evaluateAll(paths => paths
-        .filter(path => path.getAttribute('data-apt-radial-start') !== 'zone:1')
-        .map(path => path.parentElement.querySelector('circle')?.getAttribute('fill')));
+      const inactiveNodeColors = painted.nodes.filter(node => node.zone !== 'zone:1').map(node => node.color);
       assert.equal(inactiveNodeColors.length, 5); assert.ok(inactiveNodeColors.every(color => color && color !== '#fff'), 'the other five nodes retain their temperature cue');
       const inward = await planePoint(fixture.fixture_id, 1, .546); await page.mouse.move(inward.client.x, inward.client.y, { steps: 4 }); await waitHUD();
       assert.equal((await descriptor(fixture.fixture_id)).state.radials[0].brightness, .35);
       const cross = await planePoint(fixture.fixture_id, 2, 1.068); await page.mouse.move(cross.client.x, cross.client.y, { steps: 8 }); await page.mouse.up();
       const after = await descriptor(fixture.fixture_id); assert.equal(after.state.radials[1].brightness, .8);
       await composer().getByRole('group', { name: 'Room lighting tool', exact: true }).waitFor();
-      assert.notEqual(await composer().locator('[data-apt-radial-start="zone:1"]').locator('..').locator('circle').getAttribute('fill'), '#fff');
+      const released = await composer().evaluate(node => ({ color: node.querySelector('[data-apt-radial-start="zone:1"]').parentElement.querySelector('circle')?.getAttribute('fill'),
+        calls: window.__directionalCalls }));
+      assert.notEqual(released.color, '#fff');
       assert.deepEqual(withoutRadials(after), withoutRadials(before));
       assert.deepEqual(after.state.radials.map(zone => zone.color_temp_kelvin), before.state.radials.map(zone => zone.color_temp_kelvin));
-      const calls = (await writes()).slice(callsBefore); assert.ok(paintWrites(calls).length > 0);
+      const calls = released.calls.slice(callsBefore); assert.ok(paintWrites(calls).length > 0);
       for (const row of calls) { assert.equal(row.method, 'setVirtualFixtureState'); assert.deepEqual(Object.keys(row.patch), ['radials']);
         for (const zone of row.patch.radials) assert.deepEqual(Object.keys(zone).sort(), ['brightness', 'number', 'on']); }
-      await inspector().getByRole('tab', { name: 'Aim', exact: true }).click();
+      await activateStatic(inspector().getByRole('tab', { name: 'Aim', exact: true }));
       assert.equal(await inspector().getByRole('button', { name: 'Undo aim', exact: true }).isDisabled(), false);
       assert.equal(await inspector().getByRole('button', { name: 'Redo aim', exact: true }).isDisabled(), true);
-      await inspector().getByRole('tab', { name: 'Light', exact: true }).click();
+      await activateStatic(inspector().getByRole('tab', { name: 'Light', exact: true }));
       assert.deepEqual((await inventory()).fixtures.filter(item => item.fixture_id !== fixture.fixture_id), initialInventory.fixtures.filter(item => item.fixture_id !== fixture.fixture_id));
       return { pickup_exact: true, ambient_camera_movement_observed: true, mode_pill_hidden_during_owned_drag: true, outward: .9, inward: .35, cross_zone: 2, cross_level: .8, only_radials_written: true, aim_target_and_history_controls_preserved: true };
     });
@@ -493,7 +589,7 @@ test('real authored directional controls preserve native input, aim and output b
       await activeMotion(); await page.keyboard.press('Escape'); assert.equal(await captureActive(), false);
       const escape = await page.evaluate(() => [...window.__directionalNative].reverse().find(event => event.type === 'keydown' && event.key === 'Escape'));
       assert.ok(escape?.isTrusted); await unchangedAfterRetirement(escape); await expectSelected(fixture);
-      await activeMotion(); const cdp = await context.newCDPSession(page), second = await hubPoint(fixture.fixture_id);
+      await activeMotion(); const cdp = observe(await context.newCDPSession(rawPage), 'cdp'), second = await hubPoint(fixture.fixture_id);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: second.x, y: second.y, id: 7 }] });
       assert.equal(await captureActive(), false);
       const touch = await page.evaluate(() => [...window.__directionalNative].reverse().find(event => event.type === 'pointerdown' && event.pointerType === 'touch'));
@@ -514,7 +610,7 @@ test('real authored directional controls preserve native input, aim and output b
       const dialog = page.getByRole('dialog', { name: 'Room layers', exact: true }), checkbox = dialog.getByRole('checkbox', { name: 'Show virtual spotlights layer', exact: true });
       await checkbox.focus(); await page.keyboard.press('Space'); await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible === false);
       const marker = await nativeMarker('click', 'Show virtual spotlights layer'); await composer().waitFor({ state: 'detached' }); const reconciliation = await unchangedAfterRetirement(marker, true);
-      await checkbox.focus(); await page.keyboard.press('Space'); await dialog.getByRole('button', { name: 'Close layers', exact: true }).click();
+      await checkbox.focus(); await page.keyboard.press('Space'); await activateStatic(dialog.getByRole('button', { name: 'Close layers', exact: true }));
       await page.waitForFunction(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().visible === true); await expectMode('zones');
       return { hidden_retired: true, ...reconciliation, restored_display_on: true };
     });
@@ -522,13 +618,13 @@ test('real authored directional controls preserve native input, aim and output b
       await activeMotion(); await page.locator('.apt-home-setup').focus(); await page.keyboard.press('Space');
       await page.locator('[data-apt-edit-ui="toolbar"]').waitFor(); const marker = await nativeMarker('click', 'Setup');
       await composer().waitFor({ state: 'detached' }); const reconciliation = await unchangedAfterRetirement(marker, true);
-      await page.locator('[data-apt-edit-ui="toolbar"]').getByRole('button', { name: 'done', exact: true }).click();
+      await activateStatic(page.locator('[data-apt-edit-ui="toolbar"]').getByRole('button', { name: 'done', exact: true }));
       // Returning from Setup must retain the chosen Zones tool; an old aim
       // notice replayed on inspector remount is not a new mode-selection event.
       await expectSelected(fixture); await expectMode('zones'); return { setup_retired: true, ...reconciliation, saves: 0 };
     });
     await check('the existing Spot Undo still restores its original aim after radial editing', async () => {
-      await setMode('spot'); await inspector().getByRole('button', { name: 'Undo aim', exact: true }).click();
+      await setMode('spot'); await activateStatic(inspector().getByRole('button', { name: 'Undo aim', exact: true }));
       const actual = await descriptor(fixture.fixture_id); assert.deepEqual(actual.target, originalAim.target);
       assert.equal(actual.state.pan_deg, originalAim.state.pan_deg); assert.equal(actual.state.tilt_deg, originalAim.state.tilt_deg);
       await setMode('zones'); return { original_pan_tilt_target_restored: true };
@@ -538,12 +634,12 @@ test('real authored directional controls preserve native input, aim and output b
       await echoButton.focus(); await page.keyboard.press('Space'); await waitSite('echo'); const marker = await nativeMarker('click', 'Echo Park');
       await composer().waitFor({ state: 'detached' }); await unchangedAfterRetirement(marker);
       assert.equal(await inspector().count(), 0); await selectHome('victoria'); await expectSelected(fixture); await expectMode('zones');
-      assert.equal((await inventory()).visible, true); assert.equal((await inventory()).fixture_count, 4);
+      const restored = await inventory(); assert.equal(restored.visible, true); assert.equal(restored.fixture_count, 4);
       return { home_retired: true, late_modeled_calls: 0, fixture_display_on: true, fixtures: 4 };
     });
-    receipt.native_events = await page.evaluate(() => window.__directionalNative);
-    receipt.modeled_calls = await writes();
-    receipt.reconciliations = await page.evaluate(() => window.__directionalReconciliations);
+    const finalEvents = await page.evaluate(() => ({ native: window.__directionalNative, calls: window.__directionalCalls,
+      reconciliations: window.__directionalReconciliations }));
+    receipt.native_events = finalEvents.native; receipt.modeled_calls = finalEvents.calls; receipt.reconciliations = finalEvents.reconciliations;
     for (const [file, expected] of Object.entries(protectedHashes)) assert.equal(hash(fs.readFileSync(file)), expected, 'authored pack and registration bytes stay exact');
     for (const [file, expected] of Object.entries(receipt.source_sha256)) assert.equal(receipt.served[file]?.sha256, expected, 'served production source matches the captured candidate');
     assert.deepEqual(receipt.forbidden, []); assert.deepEqual(receipt.missing_code, []); assert.deepEqual(receipt.errors, []);

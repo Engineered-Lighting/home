@@ -110,6 +110,35 @@ Zones. Native focus, fixture/engine identity, canonical pointer-up hit, the 3 cm
 bound, socket preservation and Undo checks remain unchanged. The failed hosted
 run `39195480542` and local red receipts remain preserved; no deadline increased.
 
+The next hosted run, `39196364542`, passed the always-run shell browser in
+105.9 seconds and all other mapped checks, but the new directional browser hit
+its 145-second deadline during painting. Its receipt recorded five completed
+stages and no browser errors or forbidden output, but lacked action timings;
+it does not prove which await consumed the deadline. The runner actually used
+Ubuntu 24.04, Playwright 1.61.1 and software WebGL.
+
+A diagnostic kept all native inputs, assertions, scene detail and the deadline,
+and added durable stage/action timing before browser shutdown. A workstation
+run with the installed Playwright 1.61.1 Chromium and the same software WebGL
+flags passed all 13 stages in 70.3 seconds. Its paint stage took 7.5 seconds;
+static pointer activation and independent observation calls also accumulated
+measurable cost. Receipt:
+`.tmp/apartment-directional-browser/run-1792382548666/receipt.json`.
+Windows remains different from the hosted Ubuntu runner, so this result is
+diagnostic evidence and does not replace a fresh hosted pass.
+
+Static controls now use native Enter/Space after explicit visible, enabled and
+actual-focus admission. Moving pill, hub, spotlight, orbit and fixture pointer
+paths retain their exact input samples. Independent reads at the same semantic
+fence are captured together; every previous assertion and all 13 stages remain.
+Two independent method reviews found no test weakening or privacy findings.
+The matching software-browser comparison passed all 13 stages in 63.6 seconds:
+`.tmp/apartment-directional-browser/run-1792382882603/receipt.json`.
+Both runs use Playwright 1.61.1 / Chromium 149.0.7827.55 / Node 24.14.1,
+the full authored scene, device scale 1, normal motion and the same 145-second
+deadline. This single comparison measures harness cost on the workstation;
+hosted results must still be checked separately.
+
 ## Ticket coverage and retained limits
 
 | Ticket | Covered in this slice | Still open |

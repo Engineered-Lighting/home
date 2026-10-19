@@ -122,20 +122,19 @@ test('"?" is bound by the guide and wired from the toolbar', () => {
   assert.match(apartment.source, /Guide\.useHelpShortcut\(!guideDialog, \(\) => openGuide\("help"\)\)/);
 });
 
-test('gestures list exactly the bound pointer input: orbit, pan, wheel and pinch', () => {
+test('gestures list exactly the bound pointer input, pan and pinch included', () => {
   const rig = read('home-3d/rig.js');
   const attach = rig.slice(rig.indexOf('export function attachInput'));
   assert.match(attach, /addEventListener\('pointerdown', onDown\)/);
   assert.match(attach, /addEventListener\('wheel', onWheel/);
   assert.match(attach, /if \(e\.button !== 0\) return;/, 'only the primary button orbits');
-  assert.match(attach, /e\.button === 2 \|\| \(e\.button === 0 && e\.shiftKey\)/, 'Shift-drag and right-drag pan');
-  assert.match(attach, /pointers\.size === 2/, 'two pointers pinch');
-  assert.doesNotMatch(rig, /touchstart|gesturestart/i, 'pinch comes from pointer events only');
+  assert.match(attach, /e\.button === 2 \|\| \(e\.button === 0 && e\.shiftKey\)/, 'Shift-drag and right-drag pan are bound');
+  assert.match(attach, /rig\.panStart\?\.\(\)/);
+  assert.match(attach, /PINCH_STEP/, 'two-finger pinch is bound to the zoom detents');
+  assert.doesNotMatch(rig, /touchstart|gesturestart/i, 'pinch uses pointer events, not touch or gesture events');
   const words = [...Guide.GESTURES, ...Guide.KEY_MAP].map(row => `${row.label} ${row.action} ${row.when || ''}`).join(' ');
   assert.match(words, /Shift-drag or right-drag Pan the room/);
-  assert.match(words, /Pinch Zoom one step at a time on touch/);
-  assert.equal(Guide.GESTURES.filter(row => /pinch|\bpan\b|shift-drag|right-drag/i.test(row.label + ' ' + row.action)).length, 2,
-    'pan and pinch are each listed once');
+  assert.match(words, /Pinch with two fingers Zoom one step at a time/);
   assert.match(read('home-3d/equipment-virtual-fixtures.mjs'), /interaction_role: 'aim_handle'/, 'the aim handle exists');
 });
 
@@ -213,7 +212,7 @@ test('toolbar mount passes the single fixture setter and existing facts only', (
   const body = text(apartment, toolbar);
   assert.equal((body.match(/onVirtualVisible/g) || []).length, 2, 'the toolbar only forwards the fixture setter as the Layers seam');
   assert.match(body, /seams=\{hasVirtualFixtures \? \{ fixtures: \{ value: virtualVisible, set: onVirtualVisible \} \} : \{\}\}/);
-  assert.doesNotMatch(body, /pinch/i, 'the old help text promising pinch is gone');
+  assert.doesNotMatch(body, /pinch/i, 'gesture help lives in the guide, not in toolbar copy');
 });
 
 test('the guide loads with the Apartment, before the view that mounts it', () => {

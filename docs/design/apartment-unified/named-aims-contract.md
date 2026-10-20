@@ -98,3 +98,26 @@ The authored adapter (`createAuthoredDenNamedAimStore`) is for tests only. Produ
 `denNamedAimsUnavailable()`: no aims, Save shown disabled, and the reason "Den named aims wait on
 the Den’s named-aim store." It never writes the desk, the candidate or the registration. The real
 store waits on Den's contract.
+
+## Chat aim proposals (C04)
+
+`app/src/home-apartment-chat-aim.js` is the agreed UI-side parser:
+- **What it handles:** an aim verb (aim, point, shine, focus, spotlight, light up) plus a named aim of the current home.
+- **When it runs:** in `sendInput`, before personal memory, lighting control and the agent.
+- **What it never does:** a message it handles goes nowhere else.
+
+The Apartment publishes an aim bridge as `shellState.aimBridge` with `view`, `propose`, `live`,
+`set`, `discard`, `preview` and `subscribe`:
+- `propose` uses the shared store with origin `"chat"`.
+- `set` and `discard` call the Echo host's own Set and Discard, the same ones the room bar calls.
+
+`ApartmentChatTurn` renders `apartment-aim-proposal` events as `AptChatAimCard`, whose states are:
+- `Proposed · simulated`
+- `Aim set`
+- `Discarded`
+- `No longer proposed`
+
+Refusals:
+- **Physical light:** an Echo light outside Simulation Mode is refused with
+  `COPY.chatPhysical`.
+- **The Den:** refused with the Den store reason.

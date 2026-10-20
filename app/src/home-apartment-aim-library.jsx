@@ -270,7 +270,7 @@ function useAptAimPresentationLease({ engine, host, wanted, admitted, traceBeam 
   return wanted ? presentation : null;
 }
 
-const APT_ECHO_NAMED_AIMS_NONE = Object.freeze({ overlay: null, aimTab: null, roomList: null, inspector: null,
+const APT_ECHO_NAMED_AIMS_NONE = Object.freeze({ overlay: null, aimTab: null, roomList: null, inspector: null, chatBridge: null,
   escape: () => false, openNamedAim: () => false, recall: () => null, host: null });
 
 /* Echo's engineered light on the shared aim path, and Echo's named aims, for
@@ -434,7 +434,49 @@ function useAptEchoNamedAims(input) {
     return () => window.removeEventListener("keydown", key);
   }, [echo, open]);
 
-  if (!echo) return APT_ECHO_NAMED_AIMS_NONE;
+  // The aim bridge Chat uses (APT-C04): it proposes with origin "chat" and
+  // sets and discards through this host's own Set and Discard, so a card and
+  // the room bar give the same result. Physical lights are refused.
+  const bridgeRef = React.useRef(null);
+  if (!bridgeRef.current) {
+    const engineeredNow = () => (live.current.model?.devices || []).filter(device => device?.fixture_kind === window.HomeApartmentNamedAims?.ENGINEERED_KIND);
+    const pendingOf = (id, proposalId) => { const value = hostRef.current?.held(id)?.proposal; return value && value.id === proposalId ? value : null; };
+    const show = id => { const now = live.current; now.setAimFixtureId(id); now.setAimMode(true); now.onShowAim?.(); };
+    const view = () => {
+      const now = live.current, M = window.HomeApartmentNamedAims;
+      if (!M) return null;
+      if (now.siteId === "victoria") return { siteId: "victoria", available: false, reason: M.COPY.den.unavailable, aims: [], lights: [] };
+      if (now.siteId !== "echo" || !hostRef.current) return null;
+      const simulated = !!now.sim && !!window.__SIM_APARTMENT_AIM_RUNTIME;
+      return { siteId: "echo", available: simulated, reason: simulated ? null : M.COPY.chatPhysical, truth: "simulated",
+        aims: (now.model?.targets || []).filter(target => target?.id && Array.isArray(target.pos)).map(target => ({ id: target.id, name: target.name || target.id })),
+        lights: engineeredNow().map(device => ({ id: device.id, name: device.name || device.id })), selectedId: now.aimMode ? now.aimFixtureId : null };
+    };
+    bridgeRef.current = Object.freeze({
+      view,
+      propose({ fixture_id: id, aim_id: aimId, origin = "chat" } = {}) {
+        const now = live.current, M = window.HomeApartmentNamedAims, room = view();
+        if (!room?.available) return { ok: false, reason: room?.reason || "That aim is unavailable right now." };
+        const target = (now.model?.targets || []).find(item => item.id === aimId), device = engineeredNow().find(item => item.id === id);
+        if (!target || !device || !hostRef.current) return { ok: false, reason: "That aim is unavailable right now." };
+        const reach = M.reachOfAim(target, device, { siteId: "echo" });
+        const proposal = hostRef.current.recall({ fixture_id: id, origin, reach,
+          aim: { id: target.id, name: target.name, point_m: target.pos, normal_m: target.normal } });
+        if (!proposal) return { ok: false, reason: "That aim is unavailable right now." };
+        show(id);
+        return { ok: true, proposal, why: reach.state === "out_of_reach" ? reach.text : null };
+      },
+      live(id, proposalId) { const value = pendingOf(id, proposalId); return { pending: !!value, valid: value?.target.valid === true }; },
+      set(id, proposalId) { const value = pendingOf(id, proposalId); return value ? hostRef.current.set({ fixture_id: id, proposal: value }) : { ok: false, reason: "gone" }; },
+      discard(id, proposalId) { const value = pendingOf(id, proposalId); return !!value && hostRef.current.discard({ fixture_id: id, proposal: value }); },
+      preview: show,
+      subscribe(listener) {
+        const stop = store?.subscribe?.(listener), stopHost = hostRef.current?.subscribe?.(listener);
+        return () => { stop?.(); stopHost?.(); };
+      },
+    });
+  }
+  if (!echo) return { ...APT_ECHO_NAMED_AIMS_NONE, chatBridge: bridgeRef.current };
   const measure = point => context ? N.measure(context.descriptor.optical_origin_m, point)?.text || "" : "";
   const suggestion = proposal && proposal.target.valid === false ? N.COPY.suggest?.[proposal.target.reason] || null : null;
   const pendingFlag = pending?.conflict ? { aim: { id: pending.target_id, name: pending.name },
@@ -471,7 +513,7 @@ function useAptEchoNamedAims(input) {
       truth: sim ? "simulated" : "engineered profile", reach: N.reachOfAim(inspected, device, { siteId: "echo" }), canPropose: true }))}
     onBack={() => setInspectId(null)} onEdit={openNamedAimEditor} onAimHere={aimHere} editDisabledReason={setupReason}
     onCopy={async id => { if (!navigator.clipboard?.writeText) return false; await navigator.clipboard.writeText(id); return true; }} /> : null;
-  return { overlay, aimTab, roomList, inspector, host: aimHost, openNamedAim, recall,
+  return { overlay, aimTab, roomList, inspector, host: aimHost, openNamedAim, recall, chatBridge: bridgeRef.current,
     // SPEC › Cancel, Return and Escape: 1 a reticle drag, 4 the light's
     // proposal, 5 the named-aim inspector's selection.
     escape(step) {
@@ -482,6 +524,31 @@ function useAptEchoNamedAims(input) {
     } };
 }
 const aptNamedAimNoSubscribe = () => () => {};
+
+/* A Chat aim proposal card (APT-C04, prototype ui-chat.jsx): Set aim,
+ * Preview and Discard on the same proposal the room shows in cyan. Its Set
+ * and Discard are the room's own, through the Apartment's aim bridge. */
+function AptChatAimCard({ event, bridge }) {
+  const [outcome, setOutcome] = React.useState(null);
+  const key = React.useSyncExternalStore(bridge?.subscribe || aptNamedAimNoSubscribe, () => {
+    const live = bridge?.live?.(event.fixture_id, event.proposal_id);
+    return live?.pending ? (live.valid ? "open" : "invalid") : "gone";
+  }, () => "gone");
+  const state = outcome || (key === "gone" ? "gone" : "open");
+  const label = { open: `Proposed · ${event.truth || "modeled"}`, set: "Aim set", discarded: "Discarded", gone: "No longer proposed" }[state];
+  return <div className="apt-named-aim" data-apt-chat-aim-card={event.proposal_id} data-state={state} data-origin={event.origin}
+    style={{ border: "1px solid color-mix(in srgb, var(--apt-proposed,#45dfff) 45%, transparent)", borderRadius: 10, padding: "8px 10px", display: "grid", gap: 6 }}>
+    <div className="apt-ui-row"><span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--apt-proposed,#45dfff)" }} />
+      <span className="apt-ui-grow">{event.light_name} → {event.aim_name}</span><span className="apt-ui-meta" data-apt-chat-aim-state="">{label}</span></div>
+    {state === "open" && <div className="apt-ui-actions">
+      {key === "open" && <button type="button" className="apt-ui-button" data-apt-chat-aim-action="set"
+        onClick={() => { if (bridge?.set(event.fixture_id, event.proposal_id)?.ok) setOutcome("set"); }}>Set aim</button>}
+      <button type="button" className="apt-ui-button" data-apt-chat-aim-action="preview" onClick={() => bridge?.preview(event.fixture_id)}>Preview</button>
+      <button type="button" className="apt-ui-button" data-apt-chat-aim-action="discard"
+        onClick={() => { if (bridge?.discard(event.fixture_id, event.proposal_id)) setOutcome("discarded"); }}>Discard</button>
+    </div>}
+  </div>;
+}
 const aptNamedAimNoSnapshot = () => null;
 
 /* The Den's named aims in Victoria's Aim tab. Until Den's store contract
@@ -498,4 +565,4 @@ function AptDenNamedAims({ store, registrationRevision }) {
 }
 
 
-Object.assign(window, { useAptAimPresentationLease, useAptEchoNamedAims, AptDenNamedAims, AptNamedAimRows, AptNamedAimChips, AptNamedAimRoomList, AptNamedAimInspector, AptSaveNamedAim, AptNamedAimBadge });
+Object.assign(window, { AptChatAimCard, useAptAimPresentationLease, useAptEchoNamedAims, AptDenNamedAims, AptNamedAimRows, AptNamedAimChips, AptNamedAimRoomList, AptNamedAimInspector, AptSaveNamedAim, AptNamedAimBadge });

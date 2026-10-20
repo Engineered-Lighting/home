@@ -3,5 +3,5 @@
 import test from 'node:test';
 import { runLitWebgpuBrowserProof } from './fixtures/apartment-lit-webgpu-browser-proof.mjs';
 
-test('Lit on the WebGPU path: the dim ladder, bounded moonlight and warm spot pool (part 3)', { timeout: 175000 },
-  () => runLitWebgpuBrowserProof({ part: 3 }));
+test('Lit on the WebGPU path: the dim ladder, bounded moonlight and warm spot pool (part 3)', { timeout: 145000 },
+  t => runLitWebgpuBrowserProof({ part: 3, signal: t.signal }));

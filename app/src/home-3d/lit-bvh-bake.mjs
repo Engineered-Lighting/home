@@ -492,6 +492,67 @@ export function higherBouncesCpu(bvh, lights, lightCount, px, py, pz, nx, ny, nz
 }
 export const luminance = rgb => 0.2126729 * rgb[0] + 0.7151522 * rgb[1] + 0.0721750 * rgb[2];
 
+/* ---- Receiver sets (L4) --------------------------------------------------------
+ * L4 relights the splats and the point cloud from L3's precomputed basis; the
+ * four robotic spots move, so they are not in it. Each spot's column for an
+ * extra receiver set is re-baked here with the spot's own layer: direct light
+ * through a shadow ray, plus the spot's one bounce at the nearest scan vertex
+ * that faces the same way. Splats and points sit on or near the scan, not on
+ * it, so their shadow rays start a little further out. */
+export const LIT_RECEIVER_OFFSET_M = 0.02;
+export const LIT_RECEIVER_NEAREST_M = 0.12;
+const NEAREST_CELL_M = 0.06, NO_RECEIVER = 0xffffffff;
+
+/* For each extra receiver (positions/normals xyz), the nearest scan receiver
+ * (stride 8: pos, 0, normal, 0) within `radius`, preferring one that faces
+ * the same way; NO_RECEIVER when none is close. */
+export function nearestReceivers(receivers, receiverCount, positions, normals, count, { radius = LIT_RECEIVER_NEAREST_M } = {}) {
+    const cell = NEAREST_CELL_M, key = (x, y, z) => `${x},${y},${z}`;
+    const grid = new Map();
+    for (let r = 0; r < receiverCount; r++) {
+        const k = key(Math.floor(receivers[r * 8] / cell), Math.floor(receivers[r * 8 + 1] / cell), Math.floor(receivers[r * 8 + 2] / cell));
+        const list = grid.get(k);
+        if (list) list.push(r); else grid.set(k, [r]);
+    }
+    const out = new Uint32Array(count).fill(NO_RECEIVER), reach = Math.ceil(radius / cell), r2max = radius * radius;
+    for (let i = 0; i < count; i++) {
+        const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
+        const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+        const cx = Math.floor(px / cell), cy = Math.floor(py / cell), cz = Math.floor(pz / cell);
+        let best = NO_RECEIVER, bestScore = Infinity;
+        for (let dx = -reach; dx <= reach; dx++) for (let dy = -reach; dy <= reach; dy++) for (let dz = -reach; dz <= reach; dz++) {
+            const list = grid.get(key(cx + dx, cy + dy, cz + dz));
+            if (!list) continue;
+            for (const r of list) {
+                const o = r * 8, ex = receivers[o] - px, ey = receivers[o + 1] - py, ez = receivers[o + 2] - pz, d2 = ex * ex + ey * ey + ez * ez;
+                if (d2 > r2max) continue;
+                // A receiver facing away counts as four times as far.
+                const facing = receivers[o + 4] * nx + receivers[o + 5] * ny + receivers[o + 6] * nz;
+                const score = facing > 0.2 ? d2 : d2 * 16 + 1e-9;
+                if (score < bestScore) { bestScore = score; best = r; }
+            }
+        }
+        out[i] = best;
+    }
+    return out;
+}
+
+/* One spot's column (half rgb per receiver, at unit candela and white) for
+ * receivers [from, to): direct through a shadow ray plus the spot's bounce
+ * layer (half rgb per scan receiver) at the nearest scan receiver. `light`
+ * is the packed unit light (packLights). */
+export function receiverSpotColumn(bvh, light, extra, layer, from = 0, to = extra.count, out = new Uint16Array(extra.count * 3),
+    { eps = LIT_RECEIVER_OFFSET_M } = {}) {
+    const direct = [0, 0, 0], half = halfTableF32(), { positions: P, normals: N, nearest } = extra;
+    for (let i = from; i < to; i++) {
+        const o = i * 3;
+        directCpu(bvh, light, 1, P[o], P[o + 1], P[o + 2], N[o], N[o + 1], N[o + 2], { eps }, direct);
+        const r = nearest ? nearest[i] : NO_RECEIVER, b = r === NO_RECEIVER || !layer ? -1 : r * 3;
+        for (let c = 0; c < 3; c++) out[o + c] = toHalf(direct[c] + (b < 0 ? 0 : half[layer[b + c]]));
+    }
+    return out;
+}
+
 /* ---- Lightmap: 2 x 2 texels per triangle ----------------------------------- */
 export function lightmapLayout(triangleCount) {
     const cellsPerRow = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, triangleCount))));
@@ -811,7 +872,10 @@ export async function createGpuTracer(gpu, { adapterOptions = { powerPreference:
  *   { type: 'error', seq, message } */
 export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now = () => performance.now(), yieldTask = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
     let scene = null, tracer = null, tracerTried = false, latest = null, done = null, running = false, disposed = false;
-    const layers = new Map();   // key -> { signature, data: Uint16Array(R * 3) }
+    const layers = new Map();   // key -> { signature, data: Uint16Array(R * 3), light, version }
+    // L4: extra receiver sets (splats, points) -> { positions, normals, count, nearest, posted: key -> version }
+    const extras = new Map();
+    let layerVersion = 0, refreshing = false, refreshAgain = false;
     const post = (message, transfer = []) => { if (!disposed) scope.postMessage(message, transfer); };
     const ABORT = Symbol('stale');
 
@@ -833,9 +897,47 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
             try { gpuTracer.setScene(bvh, receivers.receivers, receivers.receiverCount); }
             catch (error) { tracer = null; post({ type: 'warning', message: String(error?.message || error) }); }
         }
+        for (const extra of extras.values()) { extra.nearest = null; extra.posted.clear(); }
         post({ type: 'scene', seq: message.seq, ok: true, backend: tracer ? 'webgpu' : 'cpu', receivers: receivers.receiverCount,
             triangles: receivers.triangleCount, nodes: bvh.nodeCount, depth: bvh.depth, buildMs: now() - t0, layout });
         void pump();
+    }
+
+    /* L4: each spot layer's column for every extra receiver set, posted once
+     * per layer version. Runs in chunks; a newer layer for the same spot (it
+     * moved again) or a new scene drops the column in progress. */
+    async function postExtraColumn(name, extra, key, entry) {
+        const t0 = now(), seq = scene.seq, out = new Uint16Array(extra.count * 3), light = unitLight(entry.light);
+        if (!extra.nearest) extra.nearest = nearestReceivers(scene.receivers, scene.receiverCount, extra.positions, extra.normals, extra.count);
+        let since = now();
+        for (let from = 0; from < extra.count;) {
+            const to = Math.min(extra.count, from + 4096);
+            receiverSpotColumn(scene.bvh, light, extra, entry.data, from, to, out);
+            from = to;
+            if (now() - since > LIT_BAKE_QUALITY.cpu.chunkMs) {
+                await yieldTask();
+                if (disposed || !scene || scene.seq !== seq || layers.get(key) !== entry || extras.get(name) !== extra) return;
+                since = now();
+            }
+        }
+        extra.posted.set(key, entry.version);
+        post({ type: 'receiverLayer', scene: seq, set: name, key, version: entry.version, data: out, ms: now() - t0 }, [out.buffer]);
+    }
+    async function refreshExtras() {
+        if (refreshing) { refreshAgain = true; return; }
+        refreshing = true;
+        try {
+            do {
+                refreshAgain = false;
+                for (const [name, extra] of extras) {
+                    for (const [key, entry] of [...layers]) {
+                        if (disposed || !scene || entry.light?.mode !== 'vpl' || extra.posted.get(key) === entry.version) continue;
+                        await postExtraColumn(name, extra, key, entry);
+                    }
+                }
+            } while (refreshAgain && !disposed);
+        } catch (error) { post({ type: 'warning', message: String(error?.message || error) }); }
+        finally { refreshing = false; }
     }
     const signatureOf = light => [light.mode, ...light.origin, ...light.direction, light.cosOuter, light.cosInner].map(v => (typeof v === 'number' ? v.toFixed(5) : v)).join(',');
     const unitLight = light => packLights([{ ...light, candela: 1, color: [1, 1, 1] }]).data;
@@ -953,11 +1055,12 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
                 minDistance: LIT_VPL_MIN_DISTANCE_M, range: LIT_BAKE_RANGE_M },
                 { onPass, check });
             else await bakeCpuVpl(packed, quality, onPass, check);
-            layers.set(light.key, { signature: keys[0][1], data: pending.get(light.key) });
+            layers.set(light.key, { signature: keys[0][1], data: pending.get(light.key), light, version: ++layerVersion });
             pending.delete(light.key);
             stats.jobs.push({ kind: 'spot', key: light.key, vpl: quality.vpl, passes: quality.vplPasses, firstPassMs: firstMs, ms: now() - t0 });
         }
         postLightmap(message, pending, true, stats);
+        if (spots.length && extras.size) void refreshExtras();
         // Lux waits for a quiet moment: a newer message (a slider still
         // moving) is composed first.
         if (latest === message && message.aims?.length) postLux(message);
@@ -1009,11 +1112,16 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
         try {
             if (message.type === 'scene') { latest = null; done = null; await setScene(message); }
             else if (message.type === 'lights') { latest = message; void pump(); }
-            else if (message.type === 'dispose') { disposed = true; tracer?.dispose?.(); scene = null; layers.clear(); }
+            else if (message.type === 'receivers') {
+                if (!message.positions) extras.delete(message.set);
+                else extras.set(message.set, { positions: message.positions, normals: message.normals, count: message.count, nearest: null, posted: new Map() });
+                if (scene) void refreshExtras();
+            }
+            else if (message.type === 'dispose') { disposed = true; tracer?.dispose?.(); scene = null; layers.clear(); extras.clear(); }
         } catch (error) { post({ type: 'error', seq: message.seq, message: String(error?.message || error) }); }
     }
     scope.addEventListener('message', onMessage);
-    return { onMessage, state: () => ({ scene: !!scene, layers: layers.size, backend: tracer ? 'webgpu' : 'cpu', running }) };
+    return { onMessage, state: () => ({ scene: !!scene, layers: layers.size, backend: tracer ? 'webgpu' : 'cpu', running, extras: extras.size }) };
 }
 
 /* An in-thread endpoint with a worker's interface (Node tests, and pages
@@ -1037,7 +1145,7 @@ export function createLocalBakeEndpoint(options = {}) {
 
 /* The page side of the protocol: keeps the scene sequence, drops replies
  * for a replaced scene, and transfers the triangle arrays. */
-export function createBakeClient({ endpoint, onScene, onLightmap, onLux, onError } = {}) {
+export function createBakeClient({ endpoint, onScene, onLightmap, onLux, onError, onReceiverLayer } = {}) {
     let seq = 0, sceneSeq = 0, closed = false;
     const listener = event => {
         const message = event?.data;
@@ -1046,6 +1154,7 @@ export function createBakeClient({ endpoint, onScene, onLightmap, onLux, onError
         if (message.scene !== undefined && message.scene !== sceneSeq) return;
         if (message.type === 'lightmap') onLightmap?.(message);
         else if (message.type === 'lux') onLux?.(message);
+        else if (message.type === 'receiverLayer') onReceiverLayer?.(message);
         else if (message.type === 'error' || message.type === 'warning') onError?.(message);
     };
     endpoint.addEventListener('message', listener);
@@ -1056,6 +1165,14 @@ export function createBakeClient({ endpoint, onScene, onLightmap, onLux, onError
             return sceneSeq;
         },
         update(payload) { if (!closed && sceneSeq) endpoint.postMessage({ ...payload, type: 'lights', seq: ++seq, scene: sceneSeq }); },
+        /* L4: an extra receiver set (world positions and normals, xyz each)
+         * whose live-spot columns follow every spot re-bake; null removes it. */
+        setReceivers(set, positions = null, normals = null) {
+            if (closed) return;
+            if (!positions) { endpoint.postMessage({ type: 'receivers', set, positions: null }); return; }
+            const count = Math.floor(positions.length / 3);
+            endpoint.postMessage({ type: 'receivers', set, positions, normals, count }, [positions.buffer, normals.buffer]);
+        },
         get scene() { return sceneSeq; },
         dispose() {
             if (closed) return;

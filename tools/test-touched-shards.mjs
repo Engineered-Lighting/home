@@ -188,3 +188,29 @@ test('all three WebGPU lighting proof parts are planned together and use separat
     }
   }
 });
+
+test('renderer parity always selects Cloud, Mesh and Photo on separate workers', () => {
+  const formats = ['test-apartment-webgpu-renderer-browser.mjs', 'test-apartment-webgpu-mesh-browser.mjs',
+    'test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
+  for (const file of ['app/src/home-apartment.jsx', 'app/src/home-3d/markers.js', 'app/src/home-3d/engine.js',
+    ...formats.map(name => 'tools/' + name)]) {
+    const full = planOf(['--files', file]);
+    assert.ok(formats.every(name => full.includes(name)), 'all scan formats guard ' + file);
+    const shards = Array.from({ length: 8 }, (_, index) => planOf(['--files', file, '--shard', `${index + 1}/8`]));
+    const owners = formats.map(name => shards.flatMap((plan, index) => plan.includes(name) ? [index] : []));
+    assert.ok(owners.every(list => list.length === 1), 'each format runs once');
+    assert.equal(new Set(owners.flat()).size, formats.length, 'renderer formats use separate workers for ' + file);
+  }
+});
+
+test('the two Photo parity parts retain frames and contracts without dropping either phase', () => {
+  const files = ['test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
+  const phases = files.map(file => {
+    const source = fs.readFileSync(path.join(root, 'tools', file), 'utf8');
+    assert.match(source, /__HOME_WEBGPU_PROOF_MODES = \['splat'\]/);
+    const match = /__HOME_WEBGPU_PROOF_PHASE = '(frames|contracts)'/.exec(source);
+    assert.ok(match, file + ' selects its Photo phase');
+    return match[1];
+  });
+  assert.deepEqual(phases.sort(), ['contracts', 'frames']);
+});

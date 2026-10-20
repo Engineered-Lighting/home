@@ -91,7 +91,7 @@ function browserOptions(backend) {
 }
 
 export async function runLitWebgpuBrowserProof({ part, signal }) {
-  assert.ok([1,2,3,4].includes(part), 'part 1, 2, 3 or 4');
+  assert.ok([1,2,3,4,5].includes(part), 'part 1, 2, 3, 4 or 5');
   for (const backend of backends) { signal?.throwIfAborted(); await proveOn(backend, part, signal); }
 }
 
@@ -345,7 +345,7 @@ async function proveOn(backend, part, signal) {
       await settled();
     };
     const ladder = {}, frameOf = {};
-    if (part === 2) await apply('off_moon');
+    if (part === 2 || part === 5) await apply('off_moon');
     if (part === 1 || part === 3) {
     const rungs = part === 1 ? LADDER.slice(0, 3) : LADDER.slice(2);
     for (const name of rungs) {
@@ -422,7 +422,9 @@ async function proveOn(backend, part, signal) {
     assert.ok(compare.linear.mean_display_luminance < compare.agx.mean_display_luminance, 'the linear comparison view shows no night adaptation');
     if (compare.reinhard) assert.ok(compare.reinhard.near_black_pct <= 60, 'the Reinhard fallback also passes the moonlight gate: ' + compare.reinhard.near_black_pct);
     check('tone_views_at_moonlight', compare);
+    }
 
+    if (part === 5) {
     // The adaptation eases: slowly as the room darkens, quickly as it brightens.
     at('adaptation_eases');
     // The room is settled in moonlight after the ladder: brighten first, then darken from the bright room.
@@ -461,7 +463,10 @@ async function proveOn(backend, part, signal) {
       'darkening follows its sampled 3s bound: '+JSON.stringify({darkFrom,darkening,darkElapsed,darkUpper}));
     check('adaptation_eases', { darkening, brightening, from_ev: fromEv,brightFrom,brightElapsed,brightUpper,darkFrom,darkElapsed,darkUpper });
     await page.emulateMedia({ reducedMotion: 'reduce' }); await all(true); await frames(3); await settled();
+    }
 
+    if (part === 2) {
+    await apply('all_on');
     // Performance in Lit, all on (descriptive on CI; gated on the owner's GPU).
     at('performance');
     const litTiming = await timing();

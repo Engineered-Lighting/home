@@ -158,8 +158,10 @@
     var root = _rootOf(layer);
     // Focus may already have moved into the panel before its deferred mount
     // callback runs. Preserve that choice instead of retargeting the next key.
+    // A wrapper can also contain its opener; that original focus still needs
+    // to enter the panel rather than suppressing the initial-focus target.
     var active = document.activeElement;
-    if (root && active !== root && root.contains && root.contains(active) && _canFocus(active)) return;
+    if (root && active !== root && active !== layer.opener && root.contains && root.contains(active) && _canFocus(active)) return;
     var target = null;
     try {
       if (layer.initialFocus && typeof layer.initialFocus === "object" && "current" in layer.initialFocus) {

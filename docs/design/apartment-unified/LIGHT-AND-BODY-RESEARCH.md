@@ -7,7 +7,7 @@ October 2026. The prototype's **Lit** view is Tier 0 below. Everything past Tier
 2. **Visibility.** Soft shadows from walls, furniture and the person, updated live.
 3. **Bounce.** The radial zones exist to light walls so the wall lights the room. Without indirect light, "Toward walls" looks like almost nothing happened.
 
-Materials cap all three. The scan gives albedo; roughness is assumed.
+Materials cap all three. The scan does **not** give albedo: its splat colours and photo atlas are radiance, recorded under one late-afternoon daylight state with auto exposure baked in. Albedo has to be recovered offline by de-lighting (the L3 lighting layer, `tools/spatial-pipeline/90_delight_layer.py`), and it stays modeled until the gray-card check below. Roughness is assumed.
 
 ## Techniques available in the browser
 - **Shadow-mapped spot lights** (WebGL or WebGPU). Direct light and soft shadows from any mesh, including a body proxy. Real time; each shadow-casting light renders the scene once more. This is what Lit uses.
@@ -25,7 +25,7 @@ Materials cap all three. The scan gives albedo; roughness is assumed.
 - One IES file per channel, measured on the fixture: spot at each zoom step, down, and one radial zone. Intensity in candela from lumen output × the driver's brightness curve.
 - Shadows: spot 2048² with softness from emitter size, down 1024², radial one 512² cube shadow per fixture shared by its six zones.
 - Bounce: SSGI first, plus a baked probe volume per room for off-screen walls.
-- Materials: albedo from the scan's photo atlas (already sampled for the cloud) and roughness by surface class, calibrated once against a gray card seen by the Den camera.
+- Materials: de-lit albedo from the additive lighting layer (the photo atlas divided by the capture-state irradiance, never the atlas as-is) and roughness by surface class, calibrated once against a gray card seen by the Den camera.
 - Readout: lux at each named aim, which photometric units make cheap, shown in the Aim tab.
 - Budget: 60 fps on desktop with up to 8 shadow-casting lights; fall back to Tier 0 without WebGPU.
 

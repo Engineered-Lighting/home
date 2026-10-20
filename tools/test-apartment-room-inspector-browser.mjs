@@ -348,7 +348,7 @@ test('real authored room inspector preserves named aims and modeled channel bind
       // Selection is retained per home. Re-admission must synchronize the
       // retained inspector with the new renderer before Back returns to room.
       await selectHome('victoria'); await expectSelected(fixtures[1]);
-      await fixtureInspector().getByRole('button', { name: 'Back to room', exact: true }).click();
+      await fixtureInspector().getByRole('button', { name: 'All lights', exact: true }).click();
       await group('Unassigned').waitFor(); assert.deepEqual(await selected(), []);
       // Generation is an engine-lifetime identity and may retire on a home
       // change. Persistent modeled state, targets and canonical bindings may not.

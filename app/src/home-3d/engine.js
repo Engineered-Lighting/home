@@ -53,6 +53,9 @@ export async function warmApartmentAssetBytes(options) {
 export async function loadDirectionalPresentation() {
     return sib('apartment-directional-presentation.mjs');
 }
+export async function loadAimPresentation() {
+    return sib('apartment-aim-presentation.mjs');
+}
 
 /* Beams and pools (APT-L02) use the same lazy, cache-busted ESM boundary. */
 export async function loadLightPools() {

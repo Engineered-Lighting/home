@@ -202,6 +202,37 @@ process.stdout.write("\noverlay_focus_in_test\n");
   h.pop();
 }
 
+process.stdout.write("\noverlay_deferred_focus_test\n");
+{
+  const queued = [], originalRaf = ctx.window.requestAnimationFrame;
+  ctx.window.requestAnimationFrame = fn => queued.push(fn);
+  const root = stubEl("deferred-root"), first = stubEl("legend"), chosen = stubEl("virtual-layer");
+  first.tagName = chosen.tagName = "INPUT";
+  root.children.push(first, chosen);
+  ctx.document.activeElement = null;
+  const h = O.push({ key: "deferred-focus", getRoot: () => root, initialFocus: "first" });
+  chosen.focus(); // A keyboard user has already moved into the newly opened panel.
+  queued.shift()();
+  assert("deferred initial focus preserves the control already chosen inside the panel",
+    ctx.document.activeElement === chosen && first.focusedCount === 0);
+  h.pop();
+  ctx.window.requestAnimationFrame = originalRaf;
+}
+{
+  const queued = [], originalRaf = ctx.window.requestAnimationFrame;
+  ctx.window.requestAnimationFrame = fn => queued.push(fn);
+  const root = stubEl("menu-wrapper"), opener = stubEl("menu-opener"), first = stubEl("setup-item");
+  opener.tagName = first.tagName = "BUTTON";
+  root.children.push(opener, first);
+  opener.focus();
+  const h = O.push({ key: "wrapped-menu", getRoot: () => root, initialFocus: { current: first } });
+  queued.shift()();
+  assert("an opener inside the wrapper does not prevent initial focus entering the menu",
+    ctx.document.activeElement === first && first.focusedCount === 1);
+  h.pop();
+  assert("closing the wrapped menu restores its opener", ctx.document.activeElement === opener);
+  ctx.window.requestAnimationFrame = originalRaf;
+}
 process.stdout.write("\noverlay_subscribe_test\n");
 {
   const seen = [];

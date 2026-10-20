@@ -29,11 +29,26 @@ test('shared mounted UI and labeler fixtures select every affected browser consu
     'test-home-full-ui-metrics-browser.mjs','test-home-full-ui-lab-browser.mjs','test-apartment-connected-view-browser.mjs',
     'test-home-full-ui-connection-browser.mjs','test-home-full-ui-simulation-browser.mjs','test-home-full-ui-labeler-browser.mjs','test-home-full-ui-labeler-editor-browser.mjs'];
   for(const [file,expected] of [['tools/fixtures/home-full-ui-harness.mjs',fullUi],
+    ['app/src/home-overlay.js',fullUi],
     ['tools/fixtures/home-video-labeler-harness.mjs',fullUi.filter(name=>name.includes('labeler'))],
     ['app/src/home-video-labeler-data.js',fullUi.filter(name=>name.includes('labeler'))],
     ['app/src/simulation/scenarios.js',['test-home-full-ui-simulation-browser.mjs']]]){
     const plan=planOf(['--files',file]);assert.ok(expected.every(name=>plan.includes(name)),'all mounted consumers are selected for '+file);
   }
+});
+
+test('People action browsers and both precision contracts are included in the complete plan',()=>{
+  const people=['run-people-agent-tray-ui-tests.cjs','run-people-bridge-ui-tests.cjs'];
+  const lighting=['test-apartment-lit-splats-browser.mjs','test-apartment-lit-splats-browser-part2.mjs',
+    'test-apartment-lit-splats-native-browser.mjs','test-apartment-lit-splats-native-browser-part2.mjs','test-apartment-lit-splats-native-browser-part3.mjs'];
+  const all=planOf(['--all']);assert.ok([...people,...lighting].every(name=>all.includes(name)));
+  assert.ok(people.every(name=>planOf(['--files','app/src/home-people.jsx']).includes(name)));
+  const argv=['--files','tools/fixtures/apartment-lit-splats-browser-proof.mjs'];
+  const shards=Array.from({length:8},(_,i)=>planOf([...argv,'--shard',`${i+1}/8`]));
+  const owners=lighting.map(name=>shards.findIndex(plan=>plan.includes(name)));
+  assert.ok(owners.every(index=>index>=0));assert.equal(new Set(owners).size,lighting.length);
+  assert.ok(fs.readFileSync(path.join(root,'tools/test-apartment-lit-splats-native-browser.mjs'),'utf8').includes("phase:'frames'"));
+  assert.ok(fs.readFileSync(path.join(root,'tools/test-apartment-lit-splats-native-browser-part3.mjs'),'utf8').includes("phase:'controls'"));
 });
 function assertExactCover(argv, counts) {
   const full = planOf(argv);

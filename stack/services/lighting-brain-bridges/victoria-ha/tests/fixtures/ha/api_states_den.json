@@ -1,0 +1,10 @@
+[
+  {"_comment": "Synthetic GET /api/states excerpt from Victoria Home Assistant with the Frigate integration after the den zones exist. No live read."},
+  {"entity_id": "binary_sensor.den_oak_person_occupancy", "state": "on", "attributes": {"friendly_name": "Den Oak Person occupancy", "device_class": "occupancy"}},
+  {"entity_id": "sensor.den_oak_person_count", "state": "1", "attributes": {"friendly_name": "Den Oak Person count", "unit_of_measurement": "objects"}},
+  {"entity_id": "binary_sensor.den_sofa_person_occupancy", "state": "on", "attributes": {"friendly_name": "Den sofa Person occupancy"}},
+  {"entity_id": "sensor.den_sofa_person_count", "state": "1", "attributes": {"friendly_name": "Den sofa Person count"}},
+  {"entity_id": "binary_sensor.den_desk_person_occupancy", "state": "off", "attributes": {"friendly_name": "Den desk Person occupancy"}},
+  {"entity_id": "sensor.den_desk_person_count", "state": "unavailable", "attributes": {"friendly_name": "Den desk Person count"}},
+  {"entity_id": "light.den_lamp", "state": "on", "attributes": {"friendly_name": "Den lamp"}}
+]

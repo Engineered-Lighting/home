@@ -41,6 +41,11 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const candidates = (process.env.HOME_WEBGPU_PROOF_BACKENDS || 'webgpu-webgl').split(',').map(value => value.trim()).filter(Boolean);
 assert.ok(candidates.every(value => ['webgpu', 'webgpu-webgl'].includes(value)), 'backends are webgpu and/or webgpu-webgl');
 const imageDir = process.env.HOME_WEBGPU_PROOF_IMAGES || null;
+/* Scan modes compared at the fixed poses. Cloud and Mesh by default; Photo
+ * has its own harness (test-apartment-webgpu-photo-browser.mjs), so each run
+ * fits the touched-harness deadline on SwiftShader. */
+const proofModes = globalThis.__HOME_WEBGPU_PROOF_MODES || ['points', 'mesh'];
+const modeNames = { points: 'Cloud', mesh: 'Mesh', splat: 'Photo' };
 const viewport = { width: 960, height: 600 };
 
 // Same fenced inventory policy as the overlay bridge proof.
@@ -138,7 +143,7 @@ function png(frame) {
 
 // In the page: fixed poses, both scan modes, and every renderer-independent
 // contract the WebGPU seam must leave untouched.
-async function proofInPage() {
+async function proofInPage(modes) {
   const e = window.__APT_ENGINE, overlay = e.overlay;
   const frames = n => new Promise(resolve => { let left = n; const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick)); requestAnimationFrame(tick); });
   // Steady state: the rig's tween, then eased presentation (fixture visuals,
@@ -158,6 +163,13 @@ async function proofInPage() {
   const capture = async () => {
     e.setRunning(false);
     e.pointsMaterial.uniforms.uTime.value = 0;
+    // Photo: Spark sorts and commits the cut asynchronously, so on a slow
+    // GPU (SwiftShader in CI) the last update can still belong to an earlier
+    // pose. Finish any update in flight, then one started at this pose. The
+    // node renderer's tick is synchronous; the same calls are no-ops there.
+    if (e.modes.mode === 'splat') {
+      for (let i = 0; i < 2; i++) { e.modes.tickSplat(e.camera, performance.now() / 1000); await e.modes.whenSparkIdle(); }
+    }
     const frame = await e.captureFrame({ scale: 1 });
     e.setRunning(true);
     return frame ? encode(frame) : null;
@@ -168,7 +180,9 @@ async function proofInPage() {
   const result = { backend: e.rendererBackend, gpu: e.gpu, poses: [], picks: [], projections: [], errors };
   const poses = [['home', () => {}], ['orbit+2', () => { e.rig.stepAzimuth(1, 0); e.rig.stepAzimuth(1, 0); }],
     ['zoom+2', () => { e.rig.stepZoom(1, 0); e.rig.stepZoom(1, 0); }]];
-  for (const mode of ['points', 'mesh']) {
+  // Photo is Spark on WebGL and Home's splat renderer on the node renderer;
+  // on Victoria it carries the dollhouse cut, exterior cleanup and photo floor.
+  for (const mode of modes) {
     await e.modes.setMode(mode, { duration: 0 });
     for (const [name, apply] of poses) {
       e.rig.snapHome(0); await settle(); apply(); await settle();
@@ -201,7 +215,7 @@ async function proofInPage() {
     descriptors: ids.map(id => overlay.virtualFixtureInteractionDescriptor(id)) };
   const aim = overlay.aimVirtualFixtureAtTarget(ids[0], { point: [2, 2, 0.5], normal: [0, 0, 1], kind: 'authored_floor' });
   result.fixtures.aim = { ok: aim?.ok ?? null, descriptor: overlay.virtualFixtureInteractionDescriptor(ids[0]) };
-  // Photo: Spark on WebGL; on the node renderer it reports unavailable.
+  // Photo loads on every backend (Spark on WebGL, the splat fork on the node renderer).
   try { await e.modes.setMode('splat', { duration: 0 }); result.photo = { ok: true, mode: e.modes.mode }; }
   catch (error) { result.photo = { ok: false, error: String(error?.message || error) }; }
   await e.modes.setMode('points', { duration: 0 });
@@ -219,7 +233,7 @@ async function proofInPage() {
   return result;
 }
 
-test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { timeout: 600000 }, async () => {
+test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mode => modeNames[mode]).join(' and ')}`, { timeout: 600000 }, async () => {
   const run = fs.mkdtempSync(path.join(os.tmpdir(), 'home-webgpu-proof-'));
   const privateRoot = path.join(run, 'private');
   let packs, echo, victoria;
@@ -302,7 +316,7 @@ test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { 
       await page.getByRole('group', { name: 'Home', exact: true }).getByRole('button', { name: 'Victoria', exact: true }).click();
       await page.waitForFunction(() => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === 'victoria', null, { timeout: 60000 });
       await page.waitForFunction(() => window.__APT_ENGINE?.overlay?.virtualFixturesReadback?.().fixture_count > 0);
-      const result = await page.evaluate(proofInPage);
+      const result = await page.evaluate(proofInPage, proofModes);
       return { ...result, pageErrors, warnings };
     } finally { await browser.close(); }
   }
@@ -330,7 +344,7 @@ test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { 
         fixtures: assertNumericallyEqual(candidate.fixtures, reference.fixtures, 'fixture readback, descriptors and aim'),
       };
       assert.equal(reference.photo.ok, true, 'Photo loads on WebGL: ' + reference.photo.error);
-      assert.deepEqual(candidate.photo, { ok: false, error: 'photo_unavailable_on_webgpu_preview' });
+      assert.equal(candidate.photo.ok, true, 'Photo loads on the node renderer: ' + candidate.photo.error);
       assert.ok(candidate.capture && candidate.capture.width > 0 && candidate.capture.length === candidate.capture.width * candidate.capture.height * 4,
         'captureFrame returns a frame');
       const comparisons = [];

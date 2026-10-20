@@ -1,5 +1,9 @@
 /* Presentation only: canonical room anchors over the resident renderer.
  * The engine owns the viewport, scene binding and AbortSignal lifetime. */
+// Names that glTF exporters make up for unnamed nodes ("geometry_0", "Mesh",
+// "Object_12"). They say nothing to the owner, so a pick falls back to the
+// plain surface label instead of showing them.
+const GENERATED_NODE_NAME = /^(?:geometry|mesh|node|object|primitive|scene|group)?[\s._-]*\d*$/i;
 export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, overlayRoot, host,
     projectWorld, pickSurface, isCurrent, signal, onDispose = () => {}, onPresentationFrame, onPresentationDispose } = {}) {
     if (!THREE?.Group || !THREE.Vector3 || !THREE.Mesh || !THREE.SphereGeometry || !THREE.MeshBasicMaterial
@@ -184,7 +188,8 @@ export function createApartmentUiOverlayLayer({ THREE, camera, apartmentRoot, ov
             if (!current() || !finitePoint(hit?.point) || !finitePoint(hit?.normal)
                 || hit.normal.every(value => value === 0)) return null;
             const name = typeof hit.object?.name === 'string' ? hit.object.name.trim() : '';
-            return { point: hit.point.slice(), normal: hit.normal.slice(), surfaceName: name || 'Scan surface' };
+            const named = name && !GENERATED_NODE_NAME.test(name);
+            return { point: hit.point.slice(), normal: hit.normal.slice(), surfaceName: named ? name : 'Scan surface' };
         } catch (_) { return null; }
     }
     function update(frameInfo) {

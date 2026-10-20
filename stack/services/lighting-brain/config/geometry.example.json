@@ -1,0 +1,42 @@
+{
+  "schema": "lighting-brain-geometry-1",
+  "synthetic": true,
+  "_note": "SYNTHETIC, CLEARLY FAKE geometry for tests and local runs: a 4.0 x 3.6 m box with fixtures in its corners. The real file is exported privately from Home (AL-4) and is never committed.",
+  "home": "victoria",
+  "room": "den",
+  "frame": "victoria-den",
+  "camera_m": [1.6, 0.05, 2.0],
+  "fixtures": [
+    {
+      "fixture_id": "victoria-den-proposed-fixture-01",
+      "aim_origin_m": [0.2, 0.2, 2.26],
+      "horizontal_world_reference": [0.832, 0.555, 0.0]
+    },
+    {
+      "fixture_id": "victoria-den-proposed-fixture-02",
+      "aim_origin_m": [3.8, 0.2, 2.26],
+      "horizontal_world_reference": [-0.832, 0.555, 0.0]
+    },
+    {
+      "fixture_id": "victoria-den-mount-03-virtual-fixture",
+      "aim_origin_m": [3.8, 3.4, 2.26],
+      "horizontal_world_reference": [-0.748, -0.664, 0.0]
+    },
+    {
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "aim_origin_m": [0.2, 3.4, 2.26],
+      "horizontal_world_reference": [0.748, -0.664, 0.0],
+      "limits": {"pan_min_deg": -180, "pan_max_deg": 180, "tilt_min_deg": -90, "tilt_max_deg": 90}
+    }
+  ],
+  "zones": {
+    "sofa": {
+      "seat_m": [1.6, 0.7, 0.45],
+      "near_fixtures": ["victoria-den-proposed-fixture-01", "victoria-den-proposed-fixture-02"]
+    },
+    "desk": {
+      "seat_m": null,
+      "near_fixtures": ["victoria-den-mount-03-virtual-fixture", "victoria-den-mount-04-virtual-fixture"]
+    }
+  }
+}

@@ -1528,7 +1528,7 @@
       if (!error) return children;
       if (!open) return null;
       const reason = String(error?.message || error || 'unknown error').slice(0, 300);
-      return <section className={'pl-root ' + (spatialMode ? 'pl-spatial' : '')} aria-label="Perception Lab"><header className="pl-header"><div className="pl-header-title"><Button onClick={onClose} aria-label="Return to Home">←</Button><div><h1>Perception Lab</h1><p>Choose setup → enable reasoning → record → compare</p></div></div></header>
+      return <section className={'pl-root ' + (spatialMode ? 'pl-spatial' : '')} aria-label="Perception Lab"><header className="pl-header"><div className="pl-header-title"><Button onClick={onClose} aria-label="Back">← Back</Button><div><h1>Perception Lab</h1><p>Choose setup → enable reasoning → record → compare</p></div></div></header>
         <div className="pl-message pl-view-error" role="alert"><span>This Lab view stopped drawing because of an error: {reason}. Recorded sessions and labels are unchanged.</span><Button primary onClick={() => this.setState({error: null})}>Reload Lab view</Button></div></section>;
     }
   }
@@ -1848,7 +1848,7 @@
                   return <tr key={i}><td>{row.run_id} · {row.arm}<small>{row.job_id ? `Job ${row.job_id}` : `Generation ${row.generation ?? 'unknown'}`} · {row.mode}</small></td><td>{m.reviewed_seconds?.toFixed(1)} s</td><td>{Number.isFinite(m.coverage) ? (m.coverage * 100).toFixed(1) + '%' : 'Not scored'}<small>{m.coverage_kind === 'delivered_non_abstaining_time' ? 'Delivered evidence' : 'Offline interval support'}</small></td><td>{Number.isFinite(m.exact_match_at_coverage) ? (m.exact_match_at_coverage * 100).toFixed(1) + '%' : 'Not scored'}</td><td>{m.false_confident_seconds?.toFixed(1)} s</td><td>{m.latency_kind === 'actual_delivery' ? 'Actual delivery' : 'Offline · no live latency'}<small>{m.missed_transitions ?? 0} missed transitions</small></td></tr>;
                 })}</tbody></table> : <p className="pl-muted">{detail.findings_error || 'Not enough reviewed human intervals and typed predictions to score this session.'}</p>}<p className="pl-muted">The service scores time coverage, delivery, and causal predictions separately. Diagnostic copies and retrospective outputs do not establish live performance. These results describe this session.</p><div className="pl-bookmarks">{events.filter(e => e.kind === 'bookmark').map(e => <Button key={e.id} onClick={() => setT(e.t_s)}>Bookmark {D.formatTime(e.t_s)}</Button>)}</div></section>
     </> : null;
-    return <section className={'pl-root ' + (spatialMode ? 'pl-spatial' : '')} aria-label="Perception Lab"><header className="pl-header"><div className="pl-header-title"><Button onClick={onClose} aria-label="Return to Home">←</Button><div><h1>Perception Lab</h1><p>Choose setup → enable reasoning → record → compare</p></div></div><div className="pl-segment pl-mode"><button aria-pressed={mode === 'live'} onClick={() => {
+    return <section className={'pl-root ' + (spatialMode ? 'pl-spatial' : '')} aria-label="Perception Lab"><header className="pl-header"><div className="pl-header-title"><Button onClick={onClose} aria-label="Back">← Back</Button><div><h1>Perception Lab</h1><p>Choose setup → enable reasoning → record → compare</p></div></div><div className="pl-segment pl-mode"><button aria-pressed={mode === 'live'} onClick={() => {
             setMode('live');
             setPlaying(false);
             if (state.activeSession) C.open(state.activeSession.id).catch(() => {});

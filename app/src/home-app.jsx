@@ -5320,7 +5320,7 @@ function apartmentChatAboutReply(text, about, current) {
     : { kind: "assistant", text: result.text, chatContext: result.outcome };
 }
 
-function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) {
+function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
@@ -5371,7 +5371,9 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme }) 
         }}>
           {[["perceptionLab", "Perception Lab"], ["metrics", "Metrics"], ["people", "People"],
             ["intel", "Intelligence"], ["labeler", "Video labeler"], ["lights", "Lights / Travel Mode"],
-            ["preferences", "Preferences / connection"], ["simulation", "Simulation"]].map(([key, label]) =>
+            ["preferences", "Preferences / connection"],
+            // As in the classic menu: simulation controls exist only inside simulation (/simulation starts it).
+            ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label]) =>
             <button type="button" role="menuitem" key={key} onClick={() => run(() => onFeature(key))}>{label}</button>)}
           <button type="button" role="menuitem" onClick={() => run(onTheme)}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
           <button type="button" role="menuitem" onClick={() => run(onPreviousHome)}>Previous Home</button>
@@ -5689,6 +5691,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const unifiedHome = homeLayout === "unified";
   const spatialLayout = homeLayout !== "classic";
   const [shellTab, setShellTab] = useState("controls");
+  const shellTabRef = useRef(shellTab);
+  shellTabRef.current = shellTab;
   const [shellDetent, setShellDetent] = useState("half");
   const [shellState, setShellState] = useState(null);
   // Chat bound to the room (APT-C02/C03): Apartment only, read from the shell.
@@ -5728,6 +5732,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     setShellDetent(value => value === "peek" ? "half" : value);
   }, []);
   const showShellControls = useCallback(() => showShellTab("controls"), [showShellTab]);
+  // Aiming from the room keeps Chat open if it was open (APT-A02); the room
+  // bar carries Set aim there. A phone sheet still rises from peek to half.
+  const showShellAim = useCallback(() => showShellTab(shellTabRef.current === "chat" ? "chat" : "controls"), [showShellTab]);
   useEffect(() => {
     if (!unifiedHome) return;
     const resize = () => { if (window.innerWidth >= 600) setShellTab(tab => tab === "camera" ? "controls" : tab); };
@@ -11797,7 +11804,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       paddingBottom: 0,
     }}>
       {unifiedHome && <>
-        <ApartmentHomeBar state={shellState} theme={theme} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+        <ApartmentHomeBar state={shellState} theme={theme} simulationActive={!!sim.active} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
           onPreviousHome={() => chooseHomeLayout("classic")} onFeature={key => {
             if (key === "metrics") { setShellMetricsOpen(true); return; }
             if (key === "preferences") { showShellTab("chat"); setRemotePanelOpen(true); return; }
@@ -11838,7 +11845,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           </div>
         </aside>
         {shellMetricsOpen && <div ref={shellMetricsRef} className="apt-home-metrics" role="dialog" aria-modal="true" aria-label="Home metrics">
-          <button type="button" onClick={() => setShellMetricsOpen(false)}>Close metrics</button>{metricsStrip}</div>}
+          <button type="button" onClick={() => setShellMetricsOpen(false)}>Back</button>{metricsStrip}</div>}
       </>}
       {isSpatialWide && window.HomeApartmentView && (
         <div className={unifiedHome ? "apt-home-stage" : undefined} data-theme={unifiedHome ? theme : "dark"} style={{
@@ -11865,6 +11872,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
             shellCameraHost={shellCameraHost}
             onShellState={setShellState}
             onShowShellControls={showShellControls}
+            onShowShellAim={showShellAim}
           />
           {!unifiedHome && <SpatialModeRail
             active={spatialActiveSurface}

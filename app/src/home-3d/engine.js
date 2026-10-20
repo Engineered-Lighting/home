@@ -53,6 +53,14 @@ export async function warmApartmentAssetBytes(options) {
 export async function loadDirectionalPresentation() {
     return sib('apartment-directional-presentation.mjs');
 }
+export async function loadAimPresentation() {
+    return sib('apartment-aim-presentation.mjs');
+}
+
+/* Beams and pools (APT-L02) use the same lazy, cache-busted ESM boundary. */
+export async function loadLightPools() {
+    return sib('apartment-light-pools.mjs');
+}
 
 /* Optional display evidence beside the unchanged marker API. All binding
  * checks are synchronous; no pending digest or private document survives reset. */
@@ -300,6 +308,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         photoFloorSupport: cutawayEligible,
     });
     const overlay = markersM.createOverlay(apartmentRoot);
+    let litView = null, litUnsubscribe = () => {};
     const picking = pickingM.createPicking(camera, hostEl);
     let disposed = false, disposing = false;
     const uiLayers = new Set();
@@ -804,6 +813,38 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         traceBeam(originValue, pointValue) {
             return pickingM.aimChipBlocker(engine.beamPath(originValue, pointValue));
         },
+        /* Tier-0 Lit (lit-view.mjs): the scan mesh relit with simulated light
+         * from the virtual fixtures, disclosed as simulated, not photometric
+         * and with assumed output. Mesh only: it needs Mesh to be the current
+         * mode and turns itself off when the mode changes. Emits 'lit' with
+         * the state on every change, including a declared reduced quality. */
+        async setLit(on) {
+            if (!on) {
+                if (litView?.state().active) { litView.disable(); litUnsubscribe(); emit('lit', litView.state()); }
+                return litView ? litView.state() : null;
+            }
+            if (disposed || modes.mode !== 'mesh' || !modes.getMesh?.()) return litView ? litView.state() : null;
+            if (!litView) {
+                const litM = await sib('lit-view.mjs');
+                if (disposed) return null;
+                litView ||= litM.createLitView({ scene, renderer,
+                    getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
+                    getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
+                    getCollision: () => modes.getCollision?.() || null,
+                    spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
+            }
+            if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
+            litView.enable();
+            const offMode = modes.onChange(next => { if (next !== 'mesh') void engine.setLit(false); });
+            const offStats = engine.on('stats', stats => {
+                const before = litView.state().quality, after = litView.observeFrameRate(stats?.fps).quality;
+                if (after !== before) emit('lit', litView.state());
+            });
+            litUnsubscribe = () => { offMode(); offStats(); litUnsubscribe = () => {}; };
+            emit('lit', litView.state());
+            return litView.state();
+        },
+        litState() { return litView ? litView.state() : null; },
         async createUiOverlayLayer(options = {}) {
             const { host, isCurrent, signal: layerSignal, onPresentationFrame, onPresentationDispose } = options || {};
             if (typeof isCurrent !== 'function' || typeof layerSignal?.aborted !== 'boolean'

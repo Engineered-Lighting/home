@@ -275,9 +275,15 @@ test('a throwing owner predicate retires rather than revives', { timeout: DEADLI
   assert.equal(view.frame(), false); assert.equal(retired, 1);
 });
 
-test('nothing is wired: only inert list entries name the new modules, and no host mounts them', { timeout: DEADLINE_MS.unit }, () => {
-  for (const file of ['home-apartment.jsx', 'home-app.jsx'])
-    assert.doesNotMatch(read(file), /home-apartment-room-overlay|apartment-aim-presentation|AptRoomOverlay|AptSpotPendingDot|aptAimPendingFor/, file);
+test('wired once: the Apartment host mounts the overlay and dot once, the shell never, and the lists stay as registered', { timeout: DEADLINE_MS.unit }, () => {
+  // W2 host wiring: one overlay mount, one Spot dot, one ESM load through the engine.
+  const host = read('home-apartment.jsx');
+  assert.equal(host.match(/<window\.AptRoomOverlay\b/g)?.length, 1, 'one room overlay mount');
+  assert.equal(host.match(/<window\.AptSpotPendingDot\b/g)?.length, 1, 'one Spot pending dot');
+  assert.equal(host.match(/module\.loadAimPresentation\(\)/g)?.length, 1, 'one presentation load');
+  assert.doesNotMatch(host, /import\(\s*[`'"][^`'"]*(?:room-overlay|aim-presentation)|aptAimPendingFor/, 'the host imports neither module itself');
+  assert.match(read('home-3d/engine.js'), /export async function loadAimPresentation\(\) \{\n {4}return sib\('apartment-aim-presentation\.mjs'\);\n\}/);
+  assert.doesNotMatch(read('home-app.jsx'), /home-apartment-room-overlay|apartment-aim-presentation|AptRoomOverlay|AptSpotPendingDot|aptAimPendingFor/, 'home-app.jsx');
   // Den-approved list unions (2026-10-19): one entry per list, after the store's.
   const entries = {
     'index.html': ["['home-apartment-room-overlay.jsx', true],", "'home-apartment-room-overlay.jsx': true,"],

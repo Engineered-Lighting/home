@@ -143,7 +143,7 @@ Get-Content stack\vllm\qwen36-download.sh -Raw | ssh hav-ubuntu "tr -d '\r' | ba
 Get-Content stack\vllm\qwen36-download.sh -Raw | ssh hav-ubuntu "tr -d '\r' | bash -s -- cleanup"
 ```
 
-- **Resource limits:** 2 CPUs, 4 GB RAM, the pinned image, the existing
+- **Resource limits:** 2 CPUs, 8 GB RAM, 2 parallel files, the pinned image, the existing
   volume, and a disk floor of 60 GB.
 - **Interrupted?** Re-run `start`; it resumes.
 - **Verify:** every LFS blob is checked against its sha256 content address,

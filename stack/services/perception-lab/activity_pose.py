@@ -54,6 +54,28 @@ def placed_person(approximate, raw_pose=None, *, slot=0):
             'head_pitch_deg': head_pitch_deg(raw_pose), 'approximate': True}
 
 
+def positions(approximate):
+    """person_position entries from a renderable approximate packet: every lifted
+    person's room-frame chest point (approximate_people), else the instance-0
+    pose's shoulder midpoint or head. [] when nothing is placed."""
+    if not isinstance(approximate, dict) or approximate.get('renderable') is not True:
+        return []
+    people = approximate.get('approximate_people')
+    if isinstance(people, list):
+        out = []
+        for slot, item in enumerate(people[:8]):
+            point = _xyz(item.get('position_m')) if isinstance(item, dict) else None
+            if point is not None:
+                out.append({'track_id': 'slot-%d' % slot, 'position_m': point, 'approximate': True})
+        return out
+    person = placed_person(approximate)
+    if person is None:
+        return []
+    shoulders = person['shoulders_m']
+    point = _mid(shoulders['left'], shoulders['right']) or shoulders['left'] or shoulders['right'] or person['head_m']
+    return [{'track_id': 'slot-0', 'position_m': point, 'approximate': True}] if point else []
+
+
 def person_count(result):
     """People in one model result after the duplicate-box merge, or None."""
     from apartment_desk_preview import distinct_people

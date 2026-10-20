@@ -37,8 +37,9 @@ export const LIT_ASSUMED_LUMENS = Object.freeze(Object.defineProperty({ spot: 45
 export const LIT_ASSUMPTION_SOURCE = LIT_LUMEN_SOURCE.summary;
 export const LIT_DISCLOSURE = 'Simulated · not photometric · assumed output';
 export const LIT_DISCLOSURE_DETAIL = 'Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm. '
-    + 'Fixed night exposure. Materials are assumed from the scan colours. One bounce, ray traced against the scan mesh '
+    + 'Materials are assumed from the scan colours. One bounce, ray traced against the scan mesh '
     + 'with assumed albedos; lux at named aims is modeled.';
+// The exposure sentence follows from lit-exposure.mjs, per renderer path.
 /* L5's bounce (lit-bvh-bake.mjs) traces and shadows every path, so it no
  * longer leaks through walls; what it still does not do is stated with the
  * view. Albedos are assumed: the scan colours x 0.8 (sRGB to linear,

@@ -1,0 +1,71 @@
+# Den lighting brain (AL-1, #321) on the LA AI host. Always on, virtual only.
+#
+# A systemd unit with a venv, not a compose service: AGENTS.md forbids image
+# builds on this host, and the brain is stdlib Python plus tzdata.
+# Render with ../../render_units.py; each placeholder comes from private values.
+#
+# Private files (root-owned, 0600, outside the repo) reach the service through
+# LoadCredential, so the dynamic service user can read them and nothing else
+# can:
+#   @PRIVATE_DIR@/geometry.json   lighting-brain-geometry-1 (AL-4 export)
+#   @PRIVATE_DIR@/tokens.json     lighting-brain-producer-tokens-1
+#   @PRIVATE_DIR@/settings.json   lighting-brain settings; `{}` keeps every default
+[Unit]
+Description=Den activity lighting brain (virtual only)
+Documentation=file://@RELEASE_DIR@/README.md
+After=network-online.target
+Wants=network-online.target
+# Restart with back-off: at most 10 starts in 10 min, then the unit stays
+# failed and the den-ops monitor alerts on the new failed unit.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=@RELEASE_DIR@
+LoadCredential=geometry.json:@PRIVATE_DIR@/geometry.json
+LoadCredential=tokens.json:@PRIVATE_DIR@/tokens.json
+LoadCredential=settings.json:@PRIVATE_DIR@/settings.json
+Environment=LIGHTING_BRAIN_GEOMETRY=%d/geometry.json
+Environment=LIGHTING_BRAIN_TOKENS=%d/tokens.json
+Environment=LIGHTING_BRAIN_SETTINGS=%d/settings.json
+Environment=LIGHTING_BRAIN_BIND=127.0.0.1
+Environment=LIGHTING_BRAIN_PORT=8101
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@VENV@/bin/python -m lighting_brain
+Restart=always
+RestartSec=5
+# systemd >= 254 also honours these; older versions ignore them with a warning.
+#RestartSteps=5
+#RestartMaxDelaySec=60
+
+# Resource limits. The brain is a small rule service (tens of MB, near-idle
+# CPU); these bound a leak or a busy loop, not normal use.
+MemoryMax=256M
+MemorySwapMax=0
+CPUQuota=50%
+TasksMax=64
+
+# Loopback only: the web gateway on this host is its one door.
+IPAddressDeny=any
+IPAddressAllow=localhost
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+KillMode=mixed
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lighting-brain
+
+[Install]
+WantedBy=multi-user.target

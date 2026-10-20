@@ -22,6 +22,7 @@
     "web:mobile-audit:matrix": "node tools/mobile-web-screenshot-audit.mjs --matrix-only",
     "test:services": "node tools/run-home-services-tests.js",
     "test:security": "node tools/run-home-security-tests.js",
+    "test:lighting-brain-gateway": "node tools/run-web-gateway-lighting-brain-tests.mjs",
     "test:native-agent-security": "node tools/build-home-agent-panel.js && node tools/run-native-agent-security-tests.js && node tools/run-agent-origin-boundary-tests.mjs && node tools/run-native-agent-gateway-tests.js && node tools/run-web-gateway-path-security-tests.mjs",
     "test:resilience": "node tools/run-resilience-tests.js",
     "test:apartment3d": "node tools/run-apartment-3d-contract-tests.js",

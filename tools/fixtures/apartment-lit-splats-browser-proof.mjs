@@ -106,9 +106,13 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       && window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.length === 4, null, { timeout: WAIT_MS });
     const backend=await page.evaluate(()=>{
       const gl=window.__APT_ENGINE.renderer.getContext?.(),extension=gl?.getExtension?.('WEBGL_debug_renderer_info');
-      return {renderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):gl?.getParameter?.(gl.RENDERER)||'unknown',unmasked:!!extension};
+      return {renderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):gl?.getParameter?.(gl.RENDERER)||'unknown',unmasked:!!extension,
+        samples:gl?.getParameter?.(gl.SAMPLES)||0};
     });
     backend.software=/swiftshader|llvmpipe|software|Microsoft Basic/i.test(backend.renderer);
+    // CI's software renderer is already deterministic. Sampling it three
+    // times adds cost without exercising the native-MSAA coverage variation.
+    await page.evaluate(enabled=>{window.__nativeMsaaReference=enabled},nativeWebgl&&!backend.software&&backend.samples>0);
     (receipt.renderer_backends||=[]).push({query,...backend});
     if(RENDERER==='webgl'&&query===RENDERER_QUERY&&process.platform==='win32'){
       assert.equal(backend.unmasked,true,'the selected graphics backend is observable');
@@ -129,7 +133,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       return {...frame,stateKey:JSON.stringify([engine.camera.matrixWorld.toArray(),engine.camera.projectionMatrix.toArray(),engine.modes.mode,engine.pointsMaterial.uniforms.uOpacity.value])};
     };
     let frame;
-    if(native){
+    if(native&&window.__nativeMsaaReference){
       const samples=[];for(let i=0;i<3;i++)samples.push(await captureOne());
       frame=window.__nativeRgbaReference(samples);
       const stats=window.__nativeReferenceStats||={references:0,rawFrames:0,colorMax:0,alphaMax:0,meanMax:0};
@@ -179,15 +183,23 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     return diff;
   }
   async function stable(page, name = 'stable') {
-    let previous = await capture(page, name + ':a');
+    let previous;
     for (let i = 0; i < 40; i++) {
-      await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
-      const next = await capture(page, name);
-      const diff = await frameDiff(page, name, name + ':a');
-      const equal = nativeWebgl ? diff.max <= NATIVE_QUANTIZATION.max && diff.mean <= NATIVE_QUANTIZATION.mean
-        : RENDERER === 'webgl' ? diff.max === 0 : diff.mean <= NOISE.mean && diff.over8 <= NOISE.over8;
-      if (equal) return next;
-      previous = await capture(page, name + ':a');
+      try {
+        previous = await capture(page, name + ':a');
+        await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
+        const next = await capture(page, name);
+        const diff = await frameDiff(page, name, name + ':a');
+        const equal = nativeWebgl ? diff.max <= NATIVE_QUANTIZATION.max && diff.mean <= NATIVE_QUANTIZATION.mean
+          : RENDERER === 'webgl' ? diff.max === 0 : diff.mean <= NOISE.mean && diff.over8 <= NOISE.over8;
+        if (equal) return next;
+      } catch (error) {
+        // A three-frame reference can straddle the Lighting-off restoration.
+        // Reject that sample while this existing bounded loop waits for rest.
+        // Calibration and all subsequent comparisons still reject raw faults.
+        if (!nativeWebgl || !/native reference (?:unstable raw frame|changed scene or dimensions)/.test(error.message)) throw error;
+        receipt.native_settling_rejections = (receipt.native_settling_rejections || 0) + 1;
+      }
     }
     throw new Error('the frame never settled: ' + JSON.stringify(previous));
   }

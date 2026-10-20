@@ -109,6 +109,27 @@
   <!-- Runs JSX precompiled by tools/build-app-jsx.mjs; loads Babel only for
        files that still need compiling in the browser. -->
   <script src="./home-precompiled-jsx.js"></script>
+  <!-- WebGPU renderer foundation (preview, off by default). ?renderer=webgpu,
+       or ?renderer=webgpu-webgl for the same renderer on its WebGL2 backend,
+       writes an importmap that maps 'three' to the vendored r186 WebGPU build
+       (home-3d/webgpu-renderer.mjs). Written before the default map, so it
+       wins: a later map never overrides a specifier already mapped. With the
+       flag off this writes nothing and the map below is the only one. -->
+  <script>
+    (function () {
+      var value = null;
+      try { value = new URLSearchParams(window.location.search).get('renderer'); } catch (_) { return; }
+      if (value !== 'webgpu' && value !== 'webgpu-webgl') return;
+      var r186 = './vendor/three-0.186.1/';
+      window.HomeRendererFlag = Object.freeze({ backend: 'webgpu', forceWebGL: value === 'webgpu-webgl' });
+      document.write('<script type="importmap">' + JSON.stringify({ imports: {
+        'three': r186 + 'three.webgpu.js',
+        'three/webgpu': r186 + 'three.webgpu.js',
+        'three/tsl': r186 + 'three.tsl.js',
+        'three/addons/': r186 + 'addons/'
+      } }) + '<\/script>');
+    })();
+  </script>
   <!-- 3D apartment engine: real ESM (vendored three.js + Spark via importmap;
        the Babel/window-global world stays untouched). The importmap MUST
        precede the first module script. -->

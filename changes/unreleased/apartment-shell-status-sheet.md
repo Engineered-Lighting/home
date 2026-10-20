@@ -12,5 +12,4 @@ when you are viewing the other home. Switching away says the work was kept. On
 phones and tablets, drag the sheet handle between peek, half and full, or tap
 it or use the arrow keys; the sheet eases over 0.22 s. Touch screens keep zoom,
 turn and Fit buttons so the room never needs dragging. The keyboard now moves
-from the header to the room toolbar before the side panel. "Gestures and keys" now lists pinch to zoom and Shift-drag or right-drag to
-pan, which the room supports.
+from the header to the room toolbar before the side panel.

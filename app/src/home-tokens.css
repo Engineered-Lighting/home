@@ -748,6 +748,25 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-toolbar-recovery .apt-ui-button { color: inherit; border-color: currentColor; }
 @media (pointer: coarse) { .apt-home-shell .apt-ui-toolbar-recovery .apt-ui-button { min-width: 44px; min-height: 44px; } }
 [data-home-apartment-view="1"]:has(.apt-ui-toolbar-recovery) > .apt-ui-toast { top: 12px; bottom: auto; }
+.apt-home-shell .apt-ui-toolbar-notice h3 { margin: 0; font-size: 13px; font-weight: 560; }
+.apt-home-shell .apt-ui-toolbar-notice p { margin: 2px 0 0; color: #a1a1a1; }
+.apt-home-shell .apt-ui-progress { position: relative; height: 3px; margin-top: 6px; border-radius: 2px; background: rgba(255,255,255,.14); overflow: hidden; }
+.apt-home-shell .apt-ui-progress > i { position: absolute; inset: 0 auto 0 0; background: #45dfff; transition: width .2s; }
+/* One top-centre hint for sub-modes (camera view, tap-to-aim); one centre notice host. */
+.apt-home-shell .apt-ui-hint { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px); box-sizing: border-box; padding: 6px 8px 6px 12px; border: 1px solid rgba(69,223,255,.35); border-radius: 10px; background: var(--apt-glass, rgba(10,10,10,.82)); color: #ededed; font-size: 12.5px; line-height: 1.4; }
+.apt-home-shell .apt-ui-hint-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apt-home-shell .apt-ui-hint-detail { color: #a1a1a1; }
+.apt-home-shell .apt-ui-hint .apt-ui-button { flex: 0 0 auto; }
+.apt-home-shell .apt-ui-hint .apt-ui-button:not(.is-primary) { color: inherit; border-color: rgba(255,255,255,.28); }
+.apt-home-shell .apt-ui-hint .apt-ui-button.is-primary .apt-ui-kbd { color: inherit; opacity: .6; }
+.apt-home-shell .apt-ui-hint .apt-ui-kbd { margin-left: 6px; font: 500 10.5px 'Geist Mono', ui-monospace, monospace; color: #a1a1a1; }
+@media (pointer: coarse) { .apt-home-shell .apt-ui-hint .apt-ui-button { min-height: 44px; } .apt-home-shell .apt-ui-hint .apt-ui-kbd { display: none; } }
+.apt-home-shell .apt-ui-notice { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6; display: grid; gap: 8px; width: min(380px, calc(100% - 32px)); box-sizing: border-box; padding: 14px 16px; border: 1px solid rgba(255,255,255,.18); border-radius: 12px; background: #111; color: #ededed; font-size: 12.5px; line-height: 1.5; }
+.apt-home-shell .apt-ui-notice-title { margin: 0; font-size: 14px; font-weight: 560; }
+.apt-home-shell .apt-ui-notice p { margin: 0; color: #a1a1a1; overflow-wrap: anywhere; }
+.apt-home-shell .apt-ui-notice-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.apt-home-shell .apt-ui-notice-actions .apt-ui-button:not(.is-primary) { color: inherit; border-color: currentColor; }
+@media (pointer: coarse) { .apt-home-shell .apt-ui-notice-actions .apt-ui-button { min-width: 44px; min-height: 44px; } }
 .apt-home-shell .apt-ui-radial-ring text { fill: currentColor; font-size: 12px; }
 .apt-home-shell [aria-label="apartment zoom controls"] { right: 14px!important; }
 .apt-home-shell [aria-label="apartment zoom controls"] button { width: 26px!important; min-width: 26px!important; height: 26px!important; min-height: 26px!important; padding: 0!important; border-radius: 7px!important; background: var(--apt-glass)!important; color: #ededed!important; font: 500 13px 'Geist', sans-serif!important; }
@@ -904,6 +923,7 @@ button.hg-no-press:active {
 @media (pointer: coarse) {
   .apt-home-shell .apt-home-status summary { min-width: 44px; min-height: 44px; }
   .apt-home-shell .apt-ui-details > summary { min-height: 44px; }
+  .apt-home-shell .apt-ui-seg > button { min-width: 44px; }
   .apt-home-shell .apt-home-sheet-grip, .apt-home-shell .apt-home-sheet-toggle { flex-basis: 44px; height: 44px; min-height: 44px; }
   .apt-home-shell :is(.apt-ui-button.is-small, .apt-home-toolbar-source, .apt-ui-toolbar-source) { min-width: 44px; min-height: 44px; }
   .apt-home-shell [aria-label="apartment zoom controls"] button { width: 44px!important; min-width: 44px!important; height: 44px!important; min-height: 44px!important; }

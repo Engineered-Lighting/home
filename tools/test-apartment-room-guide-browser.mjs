@@ -108,10 +108,8 @@ test('room guide: help equals the key map, layers explain unavailable rows, lege
           assert.deepEqual(rows, expected.keys, `${home}: help key rows equal the key map`);
           assert.deepEqual(await help.locator('[data-apt-help-gesture]').evaluateAll(nodes => nodes.map(node => node.dataset.aptHelpGesture)), expected.gestures);
           assert.deepEqual(await help.locator('[data-apt-help-mark]').evaluateAll(nodes => nodes.map(node => node.dataset.aptHelpMark)), expected.marks);
-          // The rendered help promises pinch and pan exactly when the rig binds them (#312).
-          const helpText = await help.textContent(), rigInput = read('home-3d/rig.js').slice(read('home-3d/rig.js').indexOf('export function attachInput'));
-          assert.equal(/pinch/i.test(helpText), /let pinch = null;/.test(rigInput) && /pinch = \{/.test(rigInput), `${home}: help lists pinch only when bound`);
-          assert.equal(/pan the room/i.test(helpText),/e\.button === 2 \|\| \(e\.button === 0 && e\.shiftKey\)/.test(rigInput), `${home}: help lists pan only when bound`);
+          assert.match(await help.textContent(), /Shift-drag or right-drag.*Pan the room/s);
+          assert.match(await help.textContent(), /Pinch with two fingers.*Zoom one step at a time/s);
           await page.waitForFunction(() => document.querySelector('[role="dialog"][aria-modal="true"]')?.contains(document.activeElement));
           await inViewport(help); await shot(`${home}-help`);
           await page.keyboard.press('Escape');

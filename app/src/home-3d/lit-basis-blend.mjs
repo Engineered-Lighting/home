@@ -179,7 +179,7 @@ into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
         if (!(flux > 0)) continue;
         weight += flux; mireds += flux * 1e6 / (Number.isFinite(light.kelvin) ? light.kelvin : 3000);
     }
-    const whiteKelvin = 1e6 / (mireds / weight);
+    const whiteKelvin = weight > 0 && mireds > 0 ? 1e6 / (mireds / weight) : ambient.kelvin;
     const balance = look === 'camera' && !monochrome ? Exposure.whiteBalanceMatrix(Model.cctToLinearRgb(whiteKelvin)) : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
     balance.forEach((row, r) => { for (let c = 0; c < 3; c++) into[(WB_SLOT + r) * 4 + c] = row[c]; });
     into[PARAMS_SLOT * 4] = exposure; into[PARAMS_SLOT * 4 + 1] = gain;

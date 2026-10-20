@@ -299,3 +299,9 @@ test('the point cloud stays monochrome: grey surfaces, the fixtures\' own colour
     const cool = Blend.blendReceiverDisplay(set, 5, at(0.75, 5000), null, { look: 'camera' });
     assert.ok(warm[0] / warm[2] > cool[0] / cool[2] && warm[0] > warm[2], 'the colour temperature shows');
 });
+
+test('all-off monochrome lighting retains finite white-balance metadata', () => {
+    const result = Blend.blendWeights({ lights: [], look: 'camera', monochrome: true });
+    assert.ok(Number.isFinite(result.whiteKelvin));
+    assert.ok(result.weights.every(Number.isFinite));
+});

@@ -75,6 +75,19 @@ test('each Den fixture shows one label: its HTML label, never also its canvas eq
       for (const row of state.tags.filter(item => item.tag && !labelled.has(item.id)))
         assert.equal(row.shown, true, label + ': equipment without an HTML label keeps its tag (' + row.id + ')');
     }
+    // Pausing retires the owned HTML layer synchronously. The fallback canvas
+    // labels must return in that same operation, before any React effect or
+    // asynchronous Spark sorting can change the capture's visible state.
+    const paused = await page.evaluate(() => {
+      const engine=window.__APT_ENGINE;engine.setRunning(false);
+      return {html:document.querySelectorAll('[data-apt-fixture-label]:not([hidden])').length,
+        tags:[...engine.overlay.markersById.values()].filter(marker=>marker.tag).map(marker=>({id:marker.device.id,shown:marker.tag.visible}))};
+    });
+    assert.equal(paused.html,0,'paused presentation removes its HTML labels synchronously');
+    assert.ok(paused.tags.every(tag=>tag.shown),'canvas fallback returns synchronously with HTML retirement');
+    receipt.paused=paused;
+    await page.evaluate(()=>window.__APT_ENGINE.setRunning(true));
+    await page.locator('[data-apt-fixture-label]').first().waitFor();
     // Without the HTML layer (the legacy path) every equipment tag is drawn.
     const legacy = await page.evaluate(() => { window.__APT_ENGINE.overlay.setRoomLabelledEquipment([]);
       return [...window.__APT_ENGINE.overlay.markersById.values()].filter(marker => marker.tag).every(marker => marker.tag.visible); });

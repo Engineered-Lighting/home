@@ -209,7 +209,9 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. The aim-wiring, chat,
  * shell-audit, room-guide, WebGPU-renderer, Lit and M2 browser weights are
- * hosted times from run 39350126935 (L5, #347), rounded up. */
+ * hosted times from run 39350126935 (L5, #347), rounded up; the Lit splats,
+ * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
+ * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
@@ -256,6 +258,26 @@ const SHARD_WEIGHT_S = {
   "test-apartment-aim-wiring-phone-browser.mjs": 48,
   "test-apartment-chat-chips-browser.mjs": 7,
   "test-apartment-room-guide-browser.mjs": 8,
+  "test-apartment-lit-splats-browser.mjs": 125,
+  "test-apartment-lit-splats-browser-part2.mjs": 90,
+  "test-apartment-webgpu-photo-browser.mjs": 140,
+  "test-apartment-composer-comfort-browser.mjs": 115,
+  "test-apartment-aim-wiring-keys-browser.mjs": 96,
+  "test-apartment-aim-reticle-drag-browser.mjs": 95,
+  "test-apartment-m2-links-browser.mjs": 96,
+  "test-apartment-m2-shell-browser.mjs": 67,
+  "test-apartment-lit-browser.mjs": 127,
+  "test-apartment-shell-audit-browser.mjs": 107,
+  "test-apartment-directional-browser.mjs": 103,
+  "test-apartment-directional-browser-part2.mjs": 105,
+  "test-apartment-chat-room-browser.mjs": 103,
+  "test-apartment-aim-wiring-browser.mjs": 96,
+  "test-apartment-aim-wiring-phone-browser.mjs": 76,
+  "test-apartment-room-selection-browser.mjs": 134,
+  "test-apartment-overlay-bridge-browser.mjs": 103,
+  "test-apartment-setup-rail-browser.mjs": 95,
+  "test-apartment-aim-wiring-room-browser.mjs": 113,
+  "test-apartment-aim-wiring-drag-browser.mjs": 109,
 };
 const MAX_SHARDS = 32;
 const RECEIPT_SCHEMA = "touched-harness-shard-receipt/v1";

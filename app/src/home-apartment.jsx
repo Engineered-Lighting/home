@@ -8854,11 +8854,54 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     disabledReason={model._equipment_registration ? "Named-aim editing is unavailable for this registration."
       : !apartmentPlacementControlsEnabled || !apartmentSceneControlsEnabled ? "Setup is unavailable for this room." : ""} />;
   const openUnifiedSetup = useCallback(() => {
+    // APT-U01: Setup is a pressed toggle; pressing it again leaves like Done.
+    if (editing) { setEditing(false); return; }
     if (!apartmentSceneControlsEnabled || !(apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)) return;
     setEditorTargetEntry(null);
     setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
     onShowShellControls?.();
-  }, [apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  }, [editing, apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  // APT-U01: Setup › Cameras and sensors starts the existing calibration. It
+  // leaves Setup, flies to the camera view, and once that flight has ended
+  // (settled or timed out) runs the same steps as the camera-view calibrate
+  // button.
+  // APT-U03: Setup › Home Assistant Flash. The same Echo, authority and
+  // currentness gates as callSvc, then the shared guarded dispatch (site,
+  // rehearsal, Travel Mode read from Home Assistant). Never queued.
+  const flashFromSetup = useCallback(device => {
+    const engine = engineRef.current, operation = spatialTravelIntentRef.current, authority = workspaceAuthorityRef.current.key;
+    const current = () => engineRef.current === engine && spatialTravelIntentRef.current === operation
+      && workspaceAuthorityRef.current.key === authority && modelScopeRef.current?.authorityKey === authority
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo" && isControlCurrent()
+      && window.HomeApartmentSiteSession.canControlEcho({ sceneSiteId: engineRef.current?.siteId,
+        selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
+        transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready" });
+    if (!window.AptSetupLinks) return Promise.resolve({ ok: false, reason: "Flash is unavailable; nothing was sent." });
+    return window.AptSetupLinks.flash({ client: rehearsalIsolated || simActive || window.HomeMapRehearsalOfflineState?.active ? null : window.__hav_haClient,
+      entityId: device?.ha_entity_id, siteId: engine?.siteId, isCurrent: current });
+  }, [rehearsalIsolated, simActive, isControlCurrent]);
+  const setupCalibrationRef = useRef(null);
+  const calibrateFromSetup = useCallback(device => {
+    if (!device || simActive || mobile || !window.HomeApartmentCalibrate || !device.camera?.frigate_name) return false;
+    setupCalibrationRef.current = device.id;
+    setEditing(false);
+    if (flyToDeviceView(device)) return true;
+    setupCalibrationRef.current = null; return false;
+  }, [simActive, mobile, flyToDeviceView]);
+  useEffect(() => {
+    const pending = setupCalibrationRef.current;
+    if (!pending) return;
+    if (!liveCam || liveCam.id !== pending || calibCam || !apartmentSceneControlsEnabled) { setupCalibrationRef.current = null; return; }
+    if (liveFeedStatus === "flying") return;
+    setupCalibrationRef.current = null;
+    setLiveOn(false);
+    const e = engineRef.current;
+    if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
+    e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+    aptBeginDollhouseCalibration(e);
+    calibPairCountRef.current = 0; calibEscArmRef.current = 0;
+    setCalibCam(liveCam);
+  }, [liveCam, calibCam, liveFeedStatus, apartmentSceneControlsEnabled]);
   const unifiedSelectionLabel = virtualFixtureControlsOpen && selectedVirtualFixture
     ? selectedVirtualFixture.label || selectedVirtualFixture.fixture_id
     : (model.devices || []).find(device => device.id === cardId)?.name || null;
@@ -8940,6 +8983,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     onShellState({ siteId: selectedSiteId, sites: window.HomeSpatialViewport?.getSites?.() || [], phase,
       sourceLabel: sourceMeta.label, saveState: saveStatus.state, saveDetail: saveStatus.detail,
       physicalControls: apartmentDeviceControlsEnabled && connection === "online",
+      ...aptShellLightFacts(model, virtualFixtureItems.length, virtualFixtureDocument?.scope?.room_id, connection),
       hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception,
       dockState: selectedSiteId === "victoria" && window.HomeApartmentDenPerception
         ? unifiedDockCollapsed ? "collapsed" : unifiedDockExpanded ? "expanded" : "default" : "hidden",
@@ -8948,12 +8992,22 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       openSetup: openUnifiedSetup,
       selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
-    saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite,
+    saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite, model.devices, model.zones, virtualFixtureItems.length, virtualFixtureDocument,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
     unifiedDockCollapsed, unifiedDockExpanded, chatRoomSnapshot]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);
+  // APT-S02: leaving a home that still holds unsaved work says the work was
+  // kept. The parked workspace is the only source; nothing is saved here.
+  const keptWorkSiteRef = useRef(selectedSiteId);
+  useEffect(() => {
+    const previous = keptWorkSiteRef.current;
+    keptWorkSiteRef.current = selectedSiteId;
+    if (!unifiedShell || !previous || previous === selectedSiteId) return;
+    if (!(window.HomeApartmentData?.dirtySites?.() || []).includes(previous)) return;
+    showToast(`${window.HomeSpatialViewport?.getSite?.(previous)?.shortName || "The other home"} · your unsaved work here is kept`);
+  }, [unifiedShell, selectedSiteId, showToast]);
   React.useLayoutEffect(() => {
     if (unifiedShell && shellControlsHost) shellControlsHost.scrollTop = 0;
   }, [unifiedShell, shellControlsHost, cardId, virtualFixtureId, virtualFixtureControlsOpen, aimMode, editing]);
@@ -10521,6 +10575,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           liveComparison={liveComparison}
           onCompareLive={compareLiveModel}
           mobile={mobile}
+          inspectorHost={unifiedShell ? shellControlsHost : null}
+          homeName={selectedSiteName}
+          onCalibrateCamera={calibrateFromSetup}
+          onFlashLight={flashFromSetup}
         />
       )}
 
@@ -10587,6 +10645,17 @@ function HomeApartmentProductView(props) {
     mapRehearsalError: replayError,
     onCloseMapRehearsal: () => setReplayOpen(false),
   });
+}
+
+/* APT-S02: the status popover's lights row from facts this home already has.
+ * Light entities come from this home's own model only, so a home never shows
+ * another home's Home Assistant state. */
+function aptShellLightFacts(model, modeledFixtures, roomId, connection) {
+  const lightEntities = (model?.devices || []).filter(device => typeof device?.ha_entity_id === "string"
+    && device.ha_entity_id.startsWith("light.")).length;
+  const zone = roomId && (model?.zones || []).find(item => item?.id === roomId);
+  const lightsRoom = zone?.name || (typeof roomId === "string" && roomId ? roomId[0].toUpperCase() + roomId.slice(1) : "");
+  return { lightEntities, modeledFixtures, lightsRoom, haConnection: connection };
 }
 
 /* Separate components keep the explicit test branch ahead of every live hook. */

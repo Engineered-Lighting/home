@@ -1,0 +1,61 @@
+name: den activity lighting ops
+
+# Offline tests for the always-on ops pieces (AL-5): the monitor, the soak
+# criteria, the unit templates and the brain health check. The monitor is
+# standard-library Python that runs on Python 3.10 (Victoria Jetson) and
+# 3.12 (LA host), so the suite runs on both. The gateway routes are tested by
+# tools/run-web-gateway-lighting-brain-tests.mjs in home-agent-web-boundary.yml.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/den-activity-lighting-ops.yml"
+      - "stack/ops/den-activity-lighting/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/den-activity-lighting-ops.yml"
+      - "stack/ops/den-activity-lighting/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-activity-lighting-ops-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  monitor-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-22.04 ships Python 3.10 (the Jetson's), ubuntu-24.04 ships 3.12.
+        runner: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install the hash-pinned test packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -m venv "${RUNNER_TEMP}/den-ops"
+          "${RUNNER_TEMP}/den-ops/bin/python" -m pip install \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --require-hashes \
+            --no-deps \
+            -r stack/ops/den-activity-lighting/monitor/requirements-test.lock
+
+      - name: Run the monitor, soak and unit tests
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        working-directory: stack/ops/den-activity-lighting/monitor
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/den-ops/bin/python" -m pytest -p no:cacheprovider -q tests

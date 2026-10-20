@@ -1,0 +1,8 @@
+[
+  {"at": 0, "connect": true},
+  {"at": 0, "topic": "frigate/available", "payload": "online", "retain": true},
+  {"at": 0, "topic": "frigate/den_oak/detect/state", "payload": "ON", "retain": true},
+  {"every": [1, 600, 60], "topic": "frigate/stats", "payload": "@stats"},
+  {"at": 5, "topic": "frigate/den_oak/person", "payload": "1"},
+  {"at": 200, "topic": "frigate/den_oak/person", "payload": "0"}
+]

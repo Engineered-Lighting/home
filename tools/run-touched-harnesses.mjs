@@ -45,8 +45,8 @@ const MAP = [
   [/^tools\/test-apartment-aim-theme-browser\.mjs$/, ["test-apartment-aim-theme-browser.mjs"]],
   [/^app\/src\/(?:home-apartment\.jsx|home-tokens\.css)$/, ["test-apartment-photo-recovery.cjs", "test-apartment-photo-recovery-browser.mjs"]],
   [/^tools\/test-apartment-photo-recovery(?:-browser\.mjs|\.cjs)$/, ["test-apartment-photo-recovery.cjs", "test-apartment-photo-recovery-browser.mjs"]],
-  [/^app\/src\/(?:home-tokens\.css|home-app\.jsx|home-apartment(?:-ui|-cards|-edit)?\.jsx|home-chat-header-actions\.jsx)$/, ["test-apartment-shell-audit-browser.mjs"]],
-  [/^tools\/(?:test-apartment-shell-audit-browser|fixtures\/apartment-shell-audit-(?:server|probes))\.mjs$/, ["test-apartment-shell-audit-browser.mjs"]],
+  [/^app\/src\/(?:home-tokens\.css|home-app\.jsx|home-apartment(?:-ui|-cards|-edit)?\.jsx|home-chat-header-actions\.jsx)$/, ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]],
+  [/^tools\/(?:test-apartment-shell-audit(?:-echo|-behaviour)?-browser|fixtures\/apartment-shell-audit(?:-server|-probes)?)\.mjs$/, ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
@@ -111,6 +111,8 @@ const MAP = [
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
+  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-rail-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment-(?:setup|edit)\.jsx|home-apartment-data\.js|home-equipment-registration\.js)|web-gateway\/equipment-registration\.mjs|tools\/(?:test-apartment-setup-saves-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-saves-browser.mjs"]],
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
@@ -144,8 +146,9 @@ const MAP = [
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
-    "run-native-agent-security-tests",
+    "run-native-agent-security-tests", "run-web-gateway-lighting-brain-tests.mjs",
   ]],
+  [/^tools\/run-web-gateway-lighting-brain-tests\.mjs$/, ["run-web-gateway-lighting-brain-tests.mjs"]],
   // Ahead-of-time JSX: the loaders, the build, the gateway's verified
   // manifest and the hooks that run the build on deploy and installer builds.
   [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],
@@ -159,6 +162,11 @@ const MAP = [
     ["test-apartment-chat-context.cjs", "test-apartment-chat-dispatch.cjs", "test-apartment-chat-chips-browser.mjs", "test-apartment-chat-room-browser.mjs"]],
   [/^tools\/test-apartment-unread-(?:state\.cjs|integration\.mjs)$/, ["test-apartment-unread-state.cjs", "test-apartment-unread-integration.mjs"]],
   [/^tools\/test-apartment-travel-guard\.cjs$/, ["test-apartment-travel-guard.cjs"]],
+  [/^(?:app\/src\/(?:home-apartment-setup-links|home-apartment-data)\.js|tools\/test-apartment-setup-links\.cjs)$/, ["test-apartment-setup-links.cjs"]],
+  [/^(?:app\/src\/home-apartment-(?:named-aims\.(?:js|jsx)|aiming\.js)|tools\/test-apartment-named-aims\.cjs)$/, ["test-apartment-named-aims.cjs"]],
+  [/^(?:app\/src\/home-apartment-setup-devices\.js|tools\/test-apartment-setup-devices\.cjs)$/, ["test-apartment-setup-devices.cjs"]],
+  [/^(?:app\/src\/home-apartment-(?:setup-devices\.(?:js|jsx)|setup\.jsx|edit\.jsx)|tools\/(?:test-apartment-setup-proposal-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-proposal-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment-named-aims\.(?:js|jsx)|home-apartment-(?:setup|edit)\.jsx|home-3d\/(?:picking\.js|apartment-ui-overlay-bridge\.mjs|markers\.js))|tools\/(?:test-apartment-named-aims-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-named-aims-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-aim|-command-ladder)?\.jsx|home-apartment-aiming\.js|index\.html|home-feature-loader\.js|home-service-worker\.js)|ha-config\/packages\/living_lights_manual_detection\.yaml)$/, ["run-apartment-command-ladder-tests.mjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
@@ -171,6 +179,9 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * Measured on run 39214584656 (#293 touched job, 7m22s of harnesses) and the
  * #287/#289/#290 sibling runs 39174968832, 39177569496 and 39176598325,
  * rounded up, and the composer-comfort suite's first hosted run 39307352122.
+ * The shell audit ran whole in 85 s on run 39323737291 and passed its 145 s
+ * deadline on a slow runner in run 39326017829, so it runs as three parts,
+ * each a page load plus its share (local 18-21 s, about 3.4x hosted).
  * The two directional parts are that run's setup plus their own stages.
  * test-precompiled-jsx.mjs is twice its 45 s local run until hosted-measured.
  * An unmeasured browser suite counts as its 145 s deadline and
@@ -190,7 +201,14 @@ const SHARD_WEIGHT_S = {
   "test-apartment-m2-shell-browser.mjs": 80,
   "test-apartment-lit-browser.mjs": 90,
   "test-apartment-composer-comfort-browser.mjs": 55,
+  "test-apartment-setup-saves-browser.mjs": 110,
+  "test-apartment-setup-rail-browser.mjs": 70,
+  "test-apartment-named-aims-browser.mjs": 45,
+  "test-apartment-setup-proposal-browser.mjs": 80,
   "test-apartment-rig-fit-browser.mjs": 45,
+  "test-apartment-shell-audit-browser.mjs": 72,
+  "test-apartment-shell-audit-echo-browser.mjs": 68,
+  "test-apartment-shell-audit-behaviour-browser.mjs": 66,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,
@@ -216,7 +234,8 @@ function shardWeight(name) {
  * worker's items keep the unsharded plan order. */
 // Parts of one split suite run on different workers whenever there are at
 // least as many workers as parts, so no worker carries the whole suite.
-const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]];
+const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
+  ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];
 function partitionPlan(plan, count) {
   const loads = Array(count).fill(0), owner = new Map();
   const order = [...plan].sort((a, b) => shardWeight(b) - shardWeight(a) || (a < b ? -1 : a > b ? 1 : 0));

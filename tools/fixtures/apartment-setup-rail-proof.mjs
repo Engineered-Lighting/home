@@ -52,6 +52,10 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
     const saveButton = () => page.locator('[data-apt-edit-ui="toolbar"] button[title*="Home Assistant"]');
 
     if (phase === 'rail') {
+    // Scene readiness and the shell's editor-capability callback commit
+    // separately. The authored Echo editor must reach the shell before its
+    // initial off state is asserted; loading is temporarily unavailable.
+    await shell.waitSetupState('off');
     await check('Setup opens one rail and its inspector in the right column; tabs, chat and dock are hidden', async () => {
       assert.equal(await shell.setupState(), 'off');
       assert.equal(await page.locator('.apt-home-topbar > .apt-home-top-actions > button').count(), 0, 'the top bar holds only Menu');

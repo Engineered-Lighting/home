@@ -172,9 +172,9 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * test-precompiled-jsx.mjs is twice its 45 s local run until hosted-measured.
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
- * harness; they only decide which worker runs it. */
-// The two M2 shell suites are unmeasured on hosted CI: local runs of 54 s
-// (links) and 38 s (shell), doubled for the software renderer.
+ * harness; they only decide which worker runs it. The aim-wiring, chat,
+ * shell-audit, room-guide, WebGPU-renderer, Lit and M2 browser weights are
+ * hosted times from run 39350126935 (L5, #347), rounded up. */
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
@@ -182,10 +182,10 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-beam-path-browser.mjs": 40,
-  "test-apartment-room-inspector-browser.mjs": 62,
-  "test-apartment-m2-links-browser.mjs": 110,
-  "test-apartment-m2-shell-browser.mjs": 80,
-  "test-apartment-lit-browser.mjs": 90,
+  "test-apartment-room-inspector-browser.mjs": 80,
+  "test-apartment-m2-links-browser.mjs": 90,
+  "test-apartment-m2-shell-browser.mjs": 38,
+  "test-apartment-lit-browser.mjs": 120,
   "test-lit-bvh-bake-browser.mjs": 20,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-rig-fit-browser.mjs": 45,
@@ -200,6 +200,16 @@ const SHARD_WEIGHT_S = {
   "check-jsx.js": 4,
   "run-resilience-tests.js": 3,
   "test-apartment-escape-stack.cjs": 3,
+  "test-apartment-aim-wiring-room-browser.mjs": 110,
+  "test-apartment-aim-wiring-drag-browser.mjs": 105,
+  "test-apartment-webgpu-renderer-browser.mjs": 100,
+  "test-apartment-shell-audit-browser.mjs": 70,
+  "test-apartment-chat-room-browser.mjs": 66,
+  "test-apartment-aim-wiring-browser.mjs": 63,
+  "test-apartment-aim-wiring-keys-browser.mjs": 56,
+  "test-apartment-aim-wiring-phone-browser.mjs": 48,
+  "test-apartment-chat-chips-browser.mjs": 7,
+  "test-apartment-room-guide-browser.mjs": 8,
 };
 const MAX_SHARDS = 32;
 const RECEIPT_SCHEMA = "touched-harness-shard-receipt/v1";

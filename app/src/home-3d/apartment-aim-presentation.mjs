@@ -149,8 +149,11 @@ export function describeAimHit({ descriptor, limits, hit, namedAims, traceBeam }
     if (!normal) return invalid('no_surface', AIM_OVERLAY_COPY.noSurface);
     let ray = unitOf(sub(point, origin.point_m));
     if (!ray) return invalid('not_aimable', AIM_OVERLAY_COPY.notAimable);
-    // The lit face is the one toward the light.
-    if (dot(normal, ray) > 0) normal = scale(normal, -1);
+    // Picking turns every normal toward the viewer. When that visible side
+    // faces away from the light, the light can't reach it: the viewer sees
+    // the back of the surface, such as the top of a ceiling above a
+    // ceiling-mounted light. A drag keeps its last good spot instead.
+    if (dot(normal, ray) > 0) return invalid('no_surface', AIM_OVERLAY_COPY.noSurface, { unlit_side: true });
     const near = nearestNamedAim(namedAims, point, normal);
     if (near) {
         point = near.aim.point_m.slice(); normal = near.normal;
@@ -521,7 +524,10 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
             drag.cursor = cursorOf(clientX, clientY);
             if (!drag.moved && Math.hypot(drag.cursor.x - drag.start.x, drag.cursor.y - drag.start.y) < DRAG_THRESHOLD_PX) { frame(); return null; }
             drag.moved = true;
-            drag.model = describeAt(clientX, clientY);
+            const model = describeAt(clientX, clientY);
+            // A sample on a surface's unlit side keeps the last good spot, so
+            // the proposal follows the floor rather than jumping to a ceiling.
+            drag.model = model?.unlit_side && drag.model?.valid ? drag.model : model;
             notify({ dragging: true, model: drag.model });
             frame();
             return drag.model;

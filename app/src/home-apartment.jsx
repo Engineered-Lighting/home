@@ -6059,6 +6059,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // keeps Chat open and raises a phone sheet to half (APT-A02).
   const startAimFromRoom = ({ fixture_id: id } = {}) => {
     if (id !== virtualFixtureId || !virtualFixtureControlsOpen) return;
+    // Grabbing the reticle is choosing Spot: no separate click on the tool,
+    // whichever tab or tool was showing.
+    if (fixtureInteractionModeRef.current !== "spot") changeFixtureInteractionMode("spot");
     setVirtualInspectorTab("aim");
     if (unifiedShell) (onShowShellAim || onShowShellControls)?.();
   };
@@ -6193,13 +6196,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     onSelect: id => aimActionsRef.current.select(id), onHover: id => setHoverFixtureId(id),
     onAimStart: info => aimActionsRef.current.start(info), onPropose: request => aimActionsRef.current.propose(request),
     onSet: request => aimActionsRef.current.setProposal(request), onDiscard: request => aimActionsRef.current.discard(request),
+    onReticleGrab: point => aimActionsRef.current.grab(point),
   }), []);
   const aimOverlaySelectedId = virtualFixtureControlsOpen ? virtualFixtureId : null;
   const aimOverlayPillId = directionalDisplay ? virtualFixtureId : null;
   const aimOverlayLimits = selectedVirtualFixture?.limits || null;
-  const aimOverlayAim = useMemo(() => aimSelectedDescriptor && fixtureInteractionMode === "spot"
+  // The reticle shows for the selected light on every tool; grabbing it
+  // switches to Spot (startAimFromRoom).
+  const aimOverlayAim = useMemo(() => aimSelectedDescriptor
     ? { descriptor: aimSelectedDescriptor, limits: aimOverlayLimits, namedAims: [] } : null,
-  [aimSelectedDescriptor, fixtureInteractionMode, aimOverlayLimits]);
+  [aimSelectedDescriptor, aimOverlayLimits]);
   const aimOverlayElement = useMemo(() => aimPresentation && window.AptRoomOverlay
     ? <window.AptRoomOverlay presentation={aimPresentation} store={aimProposals} siteId="victoria" fixtures={aimOverlayFixtures}
       selectedId={aimOverlaySelectedId} hoverId={hoverFixtureId} pillFixtureId={aimOverlayPillId} aim={aimOverlayAim} {...aimOverlayCallbacks} />
@@ -6288,6 +6294,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // any overlay above the Apartment keep their own keys.
   aimActionsRef.current = { propose: proposeAim, start: startAimFromRoom, select: id => selectVirtualFixture(id),
     setProposal: setAimProposal, discard: discardAimProposal,
+    // A press on the reticle over another light's body selects that light.
+    grab: ({ clientX, clientY }) => {
+      const engine = engineRef.current;
+      let id = null;
+      try { id = engine.picking.pick(engine.overlay.virtualFixturePickObjects(), clientX, clientY)[0]?.object.userData.fixture_id || null; }
+      catch (_) { id = null; }
+      if (!id || id === virtualFixtureId) return true;
+      selectVirtualFixture(id);
+      return false;
+    },
     enabled: () => !!(open && selectedSiteId === "victoria" && virtualFixtureControlsOpen && apartmentSceneControlsEnabled
       && !editing && !radialGestureOwnerRef.current && !virtualAimGestureRef.current?.readback().active
       && !aimPresentationRef.current?.readback().dragging),

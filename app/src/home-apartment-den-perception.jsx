@@ -68,7 +68,8 @@
         <dt>Observed</dt><dd>{timestamp(row.observed_at)}</dd>
         <dt>Available</dt><dd>{timestamp(row.available_at)}</dd>
         <dt>Expires</dt><dd>{timestamp(row.valid_until)}</dd>
-        <dt>Frame association</dt><dd>{words(row.association)}{row.frame_id?` · ${row.frame_id}`:''}</dd>
+        <dt>{historical?'Source frame':'Frame association'}</dt><dd>{historical
+          ?row.frame_id||'unavailable':`${words(row.association)}${row.frame_id?` · ${row.frame_id}`:''}`}</dd>
         {scope&&<><dt>Session</dt><dd>{scope.sessionId} · generation {scope.generation}</dd></>}
       </dl>
       <div style={note}>{historical?'History only · original expiry above; no current-evidence authority':ageText(row.age)}{row.reason?` · ${words(row.reason)}`:''}</div>

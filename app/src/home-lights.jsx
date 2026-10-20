@@ -492,12 +492,12 @@ function CascadeCard({ title, subtitle, intro, winning, locked, children }) {
 // tools; the external API has the headroom to propose concrete changes).
 function TravelModeCard({ active, available, cached, busy, disabled, onToggle, compact = false }) {
   const cardBorder = active ? "rgba(232,140,48,0.82)" : "var(--hg-border)";
-  const lockText = !available ? "checking travel mode" : active ? "travel mode on" : "travel mode off";
+  const lockText = !available ? "checking travel mode" : cached && active ? "local light lock on" : active ? "travel mode on" : "travel mode off";
   const body = !available
     ? "Checking Home Assistant before showing the travel safety state."
     : cached
     ? active
-      ? "Last known state is on; confirming with Home Assistant."
+      ? "Local light output is blocked; waiting for Home Assistant to confirm Travel Mode."
       : "Confirming with Home Assistant."
     : available
     ? active
@@ -540,6 +540,8 @@ function TravelModeCard({ active, available, cached, busy, disabled, onToggle, c
             cursor: disabled || busy ? "not-allowed" : "pointer",
             opacity: disabled || busy ? 0.5 : 1,
             whiteSpace: "nowrap",
+            minHeight: 44,
+            minWidth: 44,
           }}>
           {busy ? "saving" : active ? "turn off" : "turn on"}
         </button>
@@ -736,6 +738,8 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   const [states, setStates] = useState(() => seedTravelModeState({}));  // { entity_id: { state, attributes } }
   const [error, setError] = useState(null);
   const [travelModeBusy, setTravelModeBusy] = useState(false);
+  const [tuningActive, setTuningActive] = useState(false);
+  useEffect(() => { if (!open) setTuningActive(false); }, [open]);
   // Inline two-click confirmation for the destructive footer reset
   // (Pattern B1, copied from home-ai-stack.jsx confirmOrDispatch): first
   // click arms, second click within 3 s runs, otherwise the arm expires.
@@ -874,8 +878,8 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
     rootRef: lightsRootRef,
   });
 
-  // While the drawer is open, treat it as "tuning mode" — actively
-  // suppress the per-zone manual-override cooldown. The pilot's brightness
+  // After an explicit tuning edit, maintain the per-zone cooldown clear.
+  // Merely opening the drawer must remain read-only. The pilot's brightness
   // ramp is 12 s end-to-end (2 s fast + 10 s slow); the manual-detection
   // automation samples the bulb on a 3-s settle window during that ramp
   // and easily mis-flags the slider-driven mid-ramp value as a manual
@@ -884,10 +888,10 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   //
   // Single-shot clears on open + per-write are not enough because the
   // manual-detection can fire AFTER the clear during the ramp. Sweep
-  // every 4 s while open so any false-positive cooldown re-engagements
+  // every 4 s after that edit while open so false-positive cooldown re-engagements
   // get cleared before they can block the next pilot tick.
   useEffect(() => {
-    if (!open || !client) return undefined;
+    if (!open || !client || !haOnline || !tuningActive) return undefined;
     const cooldownEntities = LIGHTS_ZONES.map(z =>
       `input_datetime.living_lights_zone_${z.slug}_last_manual_at`
     );
@@ -900,10 +904,10 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
         if (p && typeof p.catch === "function") p.catch(() => { /* non-fatal */ });
       } catch (e) { /* non-fatal — client may be momentarily unavailable */ }
     };
-    sweep();                              // immediately on open
+    // The explicit edit already clears immediately; maintain it from here.
     const t = setInterval(sweep, 4000);   // and every 4 s while open
     return () => clearInterval(t);
-  }, [open, client, haOnline]);
+  }, [open, client, haOnline, tuningActive]);
 
   // Compute the winning-modifier description. MUST be called before any
   // conditional early return (rules of hooks). Cheap; runs every render.
@@ -929,7 +933,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   // Workaround: every slider write also resets last_manual_at to the
   // sentinel for ALL light-controlled zones. Cost: a single input_datetime
   // service call per slider write. Trade-off: if the user touched a bulb
-  // via Hue / wall switch in the last 15 minutes and then opens the drawer,
+  // via Hue / wall switch in the last 15 minutes and then edits a setting,
   // that manual touch is no longer "remembered" — but they're actively
   // tuning, which signals "I want the system to drive these lights now."
   const COOLDOWN_ENTITIES = LIGHTS_ZONES.map(z =>
@@ -937,6 +941,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   );
   const clearAllCooldowns = () => {
     if (!haOnline) { setError(offlineWriteMessage); return; }
+    setTuningActive(true);
     haCallService(client, "input_datetime", "set_datetime", {
       entity_id: COOLDOWN_ENTITIES,
       datetime: "1970-01-01 00:00:00",
@@ -1052,6 +1057,9 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
         throw new Error("Travel Mode helper is not loaded in Home Assistant yet. Reload HA packages or restart HA Core.");
       }
       const targetTravelModeState = enabled ? "on" : "off";
+      if (normalizeTravelModeState(confirmedHelper.state) !== targetTravelModeState) {
+        throw new Error(`Home Assistant has not confirmed Travel Mode ${targetTravelModeState}; reported ${normalizeTravelModeState(confirmedHelper.state) || "unavailable"}.`);
+      }
       persistTravelModeState(targetTravelModeState);
       setStates(prev => ({
         ...(confirmedStates || prev),

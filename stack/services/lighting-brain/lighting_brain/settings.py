@@ -19,7 +19,7 @@ _OFFSET = re.compile(r"^([+-])(\d{2}):(\d{2})$")
 
 @dataclass(frozen=True)
 class Settings:
-    settings_version: str = "v1"
+    settings_version: str = "v1.1"
     # IANA zone for the night window ("UTC" and "+HH:MM" also work offline).
     timezone: str = "America/Vancouver"
 
@@ -31,17 +31,26 @@ class Settings:
     # evidence from any source.
     unknown_occupancy_off_s: float = 1800.0
 
-    # zone_ambient
-    ambient_level: float = 0.30
+    # proximity_ambient (contract v1.1): level by distance from the nearest
+    # fresh person position to each fixture, linear between far and near.
+    prox_far_m: float = 3.0
+    prox_far_level: float = 0.10
+    prox_near_m: float = 1.0
+    prox_near_level: float = 0.60
+    prox_fade_s: float = 0.8
+    # A fixture's level only moves when the new level differs by more than this.
+    prox_deadband: float = 0.05
+    # The nearest-fixture name in the why line only switches when another
+    # fixture is this much closer.
+    prox_nearest_hysteresis_m: float = 0.25
+    # occupied_ambient: occupancy but no fresh position.
+    occupied_level: float = 0.30
     ambient_cct_k: int = 2700
     ambient_fade_s: float = 2.0
     night_start: str = "23:00"
     night_end: str = "06:00"
-    night_level: float = 0.10
+    night_factor: float = 0.35
     night_cct_k: int = 2200
-    # A zone keeps its ambient this long after it was last seen occupied while
-    # the room is still occupied (walking sofa -> desk doesn't blink).
-    zone_hold_s: float = 120.0
 
     # reading_spot_on / reading_spot_off
     reading_hold_on_s: float = 3.0
@@ -65,7 +74,8 @@ class Settings:
     # angle between "fixture direction from the person" and "behind").
     min_behind_cos: float = 0.0
     max_beam_m: float = 8.0
-    # The posed person must be this close (horizontally) to the sofa seat.
+    # "At the sofa": a fresh position (or the posed reader) this close,
+    # horizontally, to the sofa seat.
     pose_seat_max_m: float = 1.5
 
     # manual_pause
@@ -77,10 +87,13 @@ class Settings:
     # Output
     decision_log_size: int = 20
     stream_period_s: float = 5.0
-    tick_s: float = 0.5
+    # State changes reach the stream at most this often (contract v1.1: 4/s).
+    max_push_hz: float = 4.0
+    tick_s: float = 0.25
 
     def __post_init__(self) -> None:
-        for name in ("ambient_level", "night_level", "spot_level", "reading_min_confidence"):
+        for name in ("prox_far_level", "prox_near_level", "occupied_level", "night_factor", "spot_level",
+                     "reading_min_confidence"):
             value = getattr(self, name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"settings.{name} must be within 0..1")
@@ -91,8 +104,10 @@ class Settings:
             value = getattr(self, field.name)
             if field.name.endswith(("_s", "_m")) and value < 0:
                 raise ValueError(f"settings.{field.name} must not be negative")
-        if self.decision_log_size < 1 or self.tick_s <= 0 or self.stream_period_s <= 0:
-            raise ValueError("settings.decision_log_size, tick_s and stream_period_s must be positive")
+        if self.decision_log_size < 1 or self.tick_s <= 0 or self.stream_period_s <= 0 or self.max_push_hz <= 0:
+            raise ValueError("settings.decision_log_size, tick_s, stream_period_s and max_push_hz must be positive")
+        if self.prox_near_m >= self.prox_far_m:
+            raise ValueError("settings.prox_near_m must be less than prox_far_m")
         resolve_timezone(self.timezone)
 
     def tz(self) -> tzinfo:

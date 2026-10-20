@@ -1,7 +1,7 @@
 """CONTRACT "Producer notes" (v1 clarifications, 2026-10-19)."""
 import pytest
 from conftest import (F01, NOON, FakeClock, activity, health, healthy, occupancy, person, pose, reading_scene,
-                      test_settings, zone)
+                      position, test_settings, zone)
 from test_rules import feed, run
 from test_timeline import Replay, ambient_on, spot_on
 
@@ -16,7 +16,7 @@ S = test_settings()
 
 
 def sofa_lit_then_frigate_down():
-    inputs = feed([occupancy(NOON), zone(NOON), *healthy(NOON)], NOON)
+    inputs = feed([occupancy(NOON), *healthy(NOON)], NOON)
     feed([health(NOON + 10, "frigate", ok=False, detail="frigate_unreachable")], NOON + 10, inputs=inputs)
     return inputs
 
@@ -53,7 +53,7 @@ def test_unknown_occupancy_off_is_a_setting(geometry):
 
 
 def test_frigate_healthy_expiry_is_still_absent(geometry):
-    inputs = feed([occupancy(NOON), zone(NOON), *healthy(NOON)], NOON)
+    inputs = feed([occupancy(NOON), *healthy(NOON)], NOON)
     feed([health(NOON + 60, "frigate")], NOON + 60, inputs=inputs)
     assert run(geometry, inputs, NOON + 120).mode == "off"  # 120 s from the last present
 
@@ -65,10 +65,10 @@ def replay(geometry):
 
 
 def test_replay_frigate_outage_holds_the_reading_spot(replay):
-    replay.run(10, present=True, zone="sofa", label="resting")
+    replay.run(10, present=True, label="resting")
     replay.run(20, label="reading")
     assert spot_on(replay.state())
-    replay.run(200, frigate_ok=False)  # occupancy/zones expire at ~110
+    replay.run(200, frigate_ok=False)  # occupancy expires at ~110
     state = replay.state()
     assert state["mode"] == "degraded_ambient" and state["why"] == SENSOR_HOLD_WHY
     assert spot_on(state) and ambient_on(state)  # held: JEV still places the reader on the sofa
@@ -81,7 +81,7 @@ def test_replay_frigate_outage_holds_the_reading_spot(replay):
 
 
 def test_replay_no_new_spot_while_the_occupancy_sensor_is_down(replay):
-    replay.run(10, present=True, zone="sofa", label="resting")
+    replay.run(10, present=True, label="resting")
     replay.run(150, frigate_ok=False)
     replay.run(200, label="reading")
     assert not any(spot_on(s) for _, s in replay.timeline)
@@ -89,62 +89,60 @@ def test_replay_no_new_spot_while_the_occupancy_sensor_is_down(replay):
 
 
 def test_replay_occupancy_sensor_recovers(replay):
-    replay.run(10, present=True, zone="sofa", label="resting")
+    replay.run(10, present=True, label="resting")
     replay.run(150, frigate_ok=False)
     replay.run(170, frigate_ok=True, label="reading")
     state = replay.state()
     assert state["mode"] == "reading" and state["why"] == "Reading at sofa · spotlight on"
 
 
-# ------------------------------------------------- 2. A zone with no events is unknown
+# ------------------------------------------------- 2. v1.1: the sofa without zones
 
 
-def test_unreported_sofa_zone_uses_the_jev_zone_hint(geometry):
-    inputs = feed([occupancy(NOON), activity(NOON), pose(NOON), *healthy(NOON)], NOON)
-    feed([activity(NOON + 4), pose(NOON + 4), occupancy(NOON + 4)], NOON + 4, inputs=inputs)
-    ev = run(geometry, inputs, NOON + 4)
-    assert ev.facts.zone_states["sofa"] == "unknown"
-    assert ev.fixture(F01).ambient.radial_level == 0.30  # hinted zone lights its ambient
-    assert ev.mode == "reading" and ev.fixture(F01).spot.on
-
-
-def test_unreported_sofa_zone_without_hint_uses_the_seat(geometry):
+def test_reader_placed_at_the_seat_by_position_alone(geometry):
     inputs = feed([occupancy(NOON), activity(NOON, zone_hint=None), pose(NOON), *healthy(NOON)], NOON)
     feed([activity(NOON + 4, zone_hint=None), pose(NOON + 4)], NOON + 4, inputs=inputs)
-    assert run(geometry, inputs, NOON + 4).mode == "reading"
-    # Away from the seat, an unknown zone with no hint gives no spot.
-    far = [[x + 2.0, y + 2.0, z] for x, y, z in (person()["shoulders_m"]["left"], person()["shoulders_m"]["right"],
-                                                  person()["head_m"])]
-    feed([pose(NOON + 5, people=[person(*far)])], NOON + 5, inputs=inputs)
-    assert run(geometry, inputs, NOON + 5).rule_whys["reading_spot_off"] == "Pose not at sofa · no spotlight"
+    ev = run(geometry, inputs, NOON + 4)
+    assert ev.facts.at_sofa and ev.mode == "reading"
 
 
-def test_unreported_zone_without_hint_or_seat(geometry, tmp_path):
+def test_person_position_near_the_seat_counts(geometry):
+    inputs = feed([occupancy(NOON), position(NOON, (1.7, 0.9, 1.0)), activity(NOON, zone_hint=None),
+                   *healthy(NOON)], NOON)
+    assert run(geometry, inputs, NOON).facts.at_sofa
+    feed([position(NOON + 1, (3.5, 3.0, 1.0))], NOON + 1, inputs=inputs)
+    assert not run(geometry, inputs, NOON + 1).facts.at_sofa
+
+
+def test_zone_hint_sofa_works_without_a_seat_mark(geometry):
     import json
 
     from conftest import EXAMPLE_GEOMETRY
 
     data = json.loads(EXAMPLE_GEOMETRY.read_text())
-    data["zones"]["sofa"]["seat_m"] = None
+    data["zones"]["sofa"]["seat_m"] = None  # the owner has not marked the sofa yet
     no_seat = parse_geometry(data)
-    inputs = feed([occupancy(NOON), activity(NOON, zone_hint=None), pose(NOON), *healthy(NOON)], NOON)
+    inputs = feed(reading_scene(NOON, zone_hint="sofa"), NOON)
+    feed([activity(NOON + 4, zone_hint="sofa"), pose(NOON + 4)], NOON + 4, inputs=inputs)
+    assert run(no_seat, inputs, NOON + 4).mode == "reading"
+    inputs = feed(reading_scene(NOON), NOON)  # no hint and no seat: nothing places the reader
     feed([activity(NOON + 4, zone_hint=None), pose(NOON + 4)], NOON + 4, inputs=inputs)
-    assert run(no_seat, inputs, NOON + 4).rule_whys["reading_spot_off"] == "Sofa zone unknown · no spotlight"
+    assert run(no_seat, inputs, NOON + 4).rule_whys["reading_spot_off"] == "No one at sofa · no spotlight"
 
 
-def test_reported_absent_sofa_beats_the_hint(geometry):
-    inputs = feed([occupancy(NOON), zone(NOON, present=False), activity(NOON), pose(NOON), *healthy(NOON)], NOON)
-    feed([activity(NOON + 4), pose(NOON + 4)], NOON + 4, inputs=inputs)
-    ev = run(geometry, inputs, NOON + 4)
-    assert ev.facts.zone_states["sofa"] == "absent"
-    assert ev.rule_whys["reading_spot_off"] == "No one at sofa · no spotlight"
+def test_sofa_zone_events_are_not_required_or_used_for_the_spot(geometry):
+    # A stray "sofa absent" zone event no longer blocks a reader the pose places at the seat.
+    inputs = feed([occupancy(NOON), zone(NOON, present=False), activity(NOON, zone_hint=None), pose(NOON),
+                   *healthy(NOON)], NOON)
+    feed([activity(NOON + 4, zone_hint=None), pose(NOON + 4)], NOON + 4, inputs=inputs)
+    assert run(geometry, inputs, NOON + 4).mode == "reading"
 
 
 # ------------------------------------------------- 3. people_count null with present true
 
 
 def test_null_occupancy_count_uses_al3_person_count(geometry):
-    scene = [occupancy(NOON, people=None), zone(NOON, people=None), activity(NOON), pose(NOON), *healthy(NOON)]
+    scene = [occupancy(NOON, people=None), activity(NOON), pose(NOON), *healthy(NOON)]
     inputs = feed(scene, NOON)
     feed([activity(NOON + 4), pose(NOON + 4)], NOON + 4, inputs=inputs)
     ev = run(geometry, inputs, NOON + 4)
@@ -156,7 +154,7 @@ def test_null_occupancy_count_uses_al3_person_count(geometry):
 
 
 def test_people_count_unknown_everywhere(geometry):
-    inputs = feed([occupancy(NOON, people=None), zone(NOON, people=None), activity(NOON, persons=None),
+    inputs = feed([occupancy(NOON, people=None), activity(NOON, persons=None),
                    *healthy(NOON)], NOON)
     feed([activity(NOON + 4, persons=None)], NOON + 4, inputs=inputs)
     assert run(geometry, inputs, NOON + 4).rule_whys["reading_spot_off"] == "People count unknown · no spotlight"
@@ -171,11 +169,11 @@ def test_jev_egress_blocked_is_degraded(geometry):
     feed([health(NOON + 5, "jev", ok=False, detail="jev_egress_blocked_indeterminate")], NOON + 5, inputs=inputs)
     ev = run(geometry, inputs, NOON + 5)
     assert ev.mode == "degraded_ambient" and ev.why == "JEV offline · ambient only"
-    assert not ev.fixture(F01).spot.on and ev.fixture(F01).ambient.radial_level == 0.30
+    assert not ev.fixture(F01).spot.on and ev.fixture(F01).ambient.radial_level > 0
 
 
 def test_replay_jev_auto_release_brings_the_spot_back(replay):
-    replay.run(10, present=True, zone="sofa", label="reading")
+    replay.run(10, present=True, label="reading")
     assert spot_on(replay.state())
     replay.run(60, jev_ok=False, jev_detail="jev_egress_blocked_indeterminate")
     assert not spot_on(replay.state()) and replay.state()["mode"] == "degraded_ambient"

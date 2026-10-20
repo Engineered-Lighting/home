@@ -77,7 +77,7 @@ function installObservers() {
   };
 }
 
-test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native sweep and emulated touch', { timeout: 180000 }, async () => {
+test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native sweep and emulated touch', { timeout: 145000 }, async () => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'proof serves only this worktree');
   const run = path.join(ROOT, '.tmp/apartment-composer-comfort-browser', 'run-' + Date.now());
   fs.mkdirSync(run, { recursive: true });

@@ -67,7 +67,7 @@ function noiseComparison(before,active,after,key){
     interpretation:overlay.every(value=>value>=min&&value<=max)?'within-observed-baseline-variability':'requires-review'};
 }
 
-test('real renderer overlay bridge stays canonical across modes, lifetime races and paired performance windows',{timeout:180000},async()=>{
+test('real renderer overlay bridge stays canonical across modes, lifetime races and paired performance windows',{timeout: 145000},async()=>{
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT,'this proof uses only current worktree source');
   const run=path.join(ROOT,'.tmp/apartment-overlay-bridge-browser','run-'+Date.now()+'-'+phase);fs.mkdirSync(run,{recursive:true});
   const packs=path.join(run,'packs'),privateRoot=path.join(run,'private'),echo=installPack(packs,'echo'),victoria=installPack(packs,'victoria');

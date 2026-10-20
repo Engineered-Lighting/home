@@ -1164,6 +1164,7 @@ export function createOverlay(apartmentRoot) {
         virtualFixturePickObjects: virtualFixtures.pickObjects,
         virtualFixtureInteractionDescriptor: virtualFixtures.interactionDescriptor,
         aimVirtualFixtureAtTarget: virtualFixtures.aimAtTarget,
+        virtualFixturesPresentationActive: () => virtualFixtures.presentationActive?.() === true,
         restoreVirtualFixtureAim: virtualFixtures.restoreAim,
         setVirtualFixtureSelected: virtualFixtures.setSelected,
         createVirtualFixtureAimGesture: createDirectAimGestureController,

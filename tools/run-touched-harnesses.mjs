@@ -39,6 +39,7 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^(?:app\/src\/home-3d\/lit-(?:frame|display)\.mjs|tools\/test-lit-frame-lifecycle\.mjs)$/, ["test-lit-frame-lifecycle.mjs"]],
   [/^app\/src\/(?:home-app\.jsx|home-apartment-data\.js)$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs", "run-control-card-tests.js", "run-simulation-control-tests.js"]],
   [/^tools\/test-chat-(?:output-refusal|service-envelope)\.cjs$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs"]],
   [/^app\/src\/(?:home-apartment-aim\.jsx|home-tokens\.css)$/, ["test-apartment-aim-theme-browser.mjs"]],

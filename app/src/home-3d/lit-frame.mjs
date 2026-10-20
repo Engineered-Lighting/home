@@ -48,7 +48,7 @@ export function createLitFrame({ renderer, scene, T = null, now = () => performa
     group.userData = { presentation_only: true, photometry: 'assumed_not_measured' };
     const params = { look: 'camera', operator: 'agx', gain: 1, whiteBalance: IDENTITY, agxPower: Exposure.LIT_CAMERA_LOOK.agxPower,
         preExposure: Model.LIT_EXPOSURE, bloom: true, noise: true, seed: 1, msaa: false };
-    let inner = null, wrapper = null, active = false, lastCamera = null, frames = 0, lastPassMs = null;
+    let inner = null, wrapper = null, installation = null, active = false, lastCamera = null, frames = 0, lastPassMs = null;
     let receivers = [], receiverRoots = [], meshEntries = [], occluders = () => [], beforeFrame = null, lights = [], lumens = Model.LIT_ASSUMED_LUMENS;
     let meterTarget = null, meterPending = false, meterRequestedAt = -Infinity, meterToken = 0, meterWanted = false, metered = null, meterSerial = 0;
     let readTarget = null, clamped = 0;
@@ -353,18 +353,23 @@ export function createLitFrame({ renderer, scene, T = null, now = () => performa
             if (wrapper) return;
             active = true;
             scene.add(group);
-            inner = renderer.render;
+            const previous = renderer.render, owned = { active: true };
+            inner = previous; installation = owned;
             wrapper = function litFrameRender(target3d, camera) {
-                if (!active || target3d !== scene || !camera?.isCamera || scene.overrideMaterial) return inner.apply(this, arguments);
+                // A retired wrapper can still belong to a later render owner.
+                // Its delegate and retirement belong to this installation,
+                // even if this frame is installed again around that owner.
+                if (!owned.active || !active || target3d !== scene || !camera?.isCamera || scene.overrideMaterial) return previous.apply(this, arguments);
                 return render(camera);
             };
             renderer.render = wrapper;
         },
         uninstall() {
             active = false;
+            if (installation) installation.active = false;
             // A later wrapper (a test's timing probe) keeps ours as its inner; ours passes through once inactive.
             if (wrapper && renderer.render === wrapper) renderer.render = inner;
-            wrapper = null;
+            wrapper = null; installation = null;
             frame.setReceivers([]); meshEntries = []; occluders = () => []; beforeFrame = null; lights = [];
             scene.remove(group);
             meterToken++; meterPending = false; meterRequestedAt = -Infinity; metered = null;
@@ -439,7 +444,7 @@ export function createLitFrame({ renderer, scene, T = null, now = () => performa
                 glslUniforms: { uSource: { value: source } }, nodeFragment: () => T.textureLoad(source, T.ivec2(T.screenCoordinate.xy)) });
             const out = makeTarget(width, height, { type: THREE.UnsignedByteType });
             const previous = renderer.getRenderTarget();
-            let proof = null;
+            let proof = null, drawingRestored = false;
             try {
                 // Every draw happens before the first await, with the proof's own
                 // targets and parameters, so the live frame cannot interleave.
@@ -450,6 +455,7 @@ export function createLitFrame({ renderer, scene, T = null, now = () => performa
                 draw(out, proof.display, true);
                 Object.assign(params, saved); syncUniforms();
                 renderer.setRenderTarget(previous);
+                drawingRestored = true;
                 const bloom = await readPixelsAsync(proof.bloomTarget, proof.bloomTarget.width, proof.bloomTarget.height);
                 const frameHalf = await readPixelsAsync(proof.hdr, width, height);
                 let pixels;
@@ -466,6 +472,10 @@ export function createLitFrame({ renderer, scene, T = null, now = () => performa
                 return { width, height, mip: { width: proof.mips[0].width, height: proof.mips[0].height, data: bloom }, frame: frameHalf, display: display8,
                     sizes: proof.mips.map(target => [target.width, target.height]) };
             } finally {
+                // Draw failures happen before the normal synchronous restore.
+                // After asynchronous readback begins, leave the live frame's
+                // current target alone rather than restoring a stale target.
+                if (!drawingRestored) renderer.setRenderTarget(previous);
                 Object.assign(params, saved); syncUniforms();
                 source.dispose(); copyMaterial.dispose(); out.dispose(); proof?.dispose();
             }
@@ -476,13 +486,14 @@ export function createLitFrame({ renderer, scene, T = null, now = () => performa
             if (!chain) return null;
             const wait = async () => { if (node) await renderer.backend.device?.queue.onSubmittedWorkDone(); else renderer.getContext().finish(); };
             const scratch = makeTarget(chain.width, chain.height, { type: THREE.UnsignedByteType });
+            const previous = renderer.getRenderTarget();
             try {
                 await wait();
                 const t0 = performance.now();
                 for (let k = 0; k < batch; k++) { chain.bloom(); draw(scratch, chain.display, true); }
                 await wait();
                 return (performance.now() - t0) / batch;
-            } finally { scratch.dispose(); renderer.setRenderTarget(null); }
+            } finally { scratch.dispose(); renderer.setRenderTarget(previous); }
         },
         state() {
             return Object.freeze({ active, format: Display.LIT_FRAME.format, width: chain?.width ?? 0, height: chain?.height ?? 0, samples: chain?.samples || 0,

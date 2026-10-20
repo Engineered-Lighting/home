@@ -4,6 +4,16 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const source = fs.readFileSync(new URL('../app/src/home-perception-lab-transport.js', import.meta.url), 'utf8');
 
+test('read-only browser access stays separate from upstream readiness and refuses writes before fetch',async()=>{
+  const f=fixture({fetch:async()=>Response.json({recording_allowed:true},{headers:{'X-Home-Lab-Access':'read-only'}})});
+  const caps=await f.transport.request('capabilities.get',{siteId:'victoria'});
+  assert.equal(caps.recording_allowed,true,'runtime readiness is unchanged');
+  assert.equal(caps.browser_access.write,false);
+  for(const operation of ['sessions.start','sessions.stop','jobs.create'])
+    await assert.rejects(f.transport.request(operation,{siteId:'victoria',sessionId:'s1'}),{code:'lab_browser_read_only',status:403});
+  assert.equal(f.calls.length,1,'no forbidden browser write reaches the gateway');
+});
+
 test('activity-loop status is an exact Victoria GET, bounded and unavailable to native authority', async () => {
   const f=fixture({fetch:async()=>Response.json({schema:'perception-lab-activity-loop-1',state:'paused'})});
   await f.transport.request('activityLoop.get',{siteId:'victoria'});

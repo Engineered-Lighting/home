@@ -14,6 +14,7 @@
   const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
   let connectionEpoch = 0, nativeGeneration = null;
   const manifests = new Map(), pending = new Set(), responseCleanup = new WeakMap();
+  const readOnlySites = new Set();
   class LabTransportError extends Error {
     constructor(code, status) { super(code); this.name = "LabTransportError"; this.code = code; this.status = status || 0; }
   }
@@ -167,7 +168,7 @@
     return nativeGeneration;
   }
   async function invalidate() {
-    connectionEpoch++; manifests.clear(); pending.forEach(controller => controller.abort()); pending.clear();
+    connectionEpoch++; manifests.clear(); readOnlySites.clear(); pending.forEach(controller => controller.abort()); pending.clear();
     nativeGeneration = null;
     if (nativeContext()) return generation();
   }
@@ -259,6 +260,7 @@
       if (operation === "sessions.delete") manifests.delete(args.siteId + ":" + args.sessionId);
       return response.payload;
     }
+    if (route.method !== 'GET' && readOnlySites.has(route.siteId)) fail('lab_browser_read_only', 403);
     const response = await browserFetch(PREFIX + route.path, {
       method: route.method, credentials: "same-origin", cache: "no-store", redirect: "error",
       headers: Object.assign({ "X-Home-Lab-Site": route.siteId, Accept: "application/json" },
@@ -268,7 +270,10 @@
     let payload; const bytes = await boundedBytes(response, operation === 'activityLoop.get' ? 65536 : operation === 'cameras.structuredContext' ? 32768 : GRAPH_READS.has(operation) ? MAX_GRAPH_JSON : MAX_JSON);
     try { payload = JSON.parse(new TextDecoder().decode(bytes)); } catch (_) { fail("lab_invalid_response", response.status); }
     current(epoch);
+    if (response.headers.get('x-home-lab-access') === 'read-only') readOnlySites.add(route.siteId);
     if (!response.ok) fail(decodedError(payload, response.status), response.status);
+    if (operation === 'capabilities.get' && readOnlySites.has(route.siteId))
+      payload = Object.assign({}, payload, { browser_access: { read: true, write: false, reason: 'lab_browser_read_only' } });
     if (operation === "sessions.events") validateEventPage(args, payload);
     if (operation === "media.manifest") rememberManifest(args, payload);
     if (operation === "media.describe") rememberManifest(args, { generation: args.generation, items: [payload] });

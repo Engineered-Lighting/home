@@ -10,6 +10,7 @@ test('full Home: real Lab lists saved sessions, refuses recording, distinguishes
       await page.setViewportSize(viewport);
       state.lab = 'populated';
       await menu('Perception Lab');
+      await lab.locator('[data-lab-browser-access="read-only"]').waitFor();
       await lab.getByRole('button', { name: 'Review & analyze', exact: true }).click();
       const sessions = lab.getByRole('region', { name: 'Recorded sessions', exact: true });
       await sessions.getByRole('button', { name: /Authored reading session/ }).waitFor();
@@ -34,6 +35,12 @@ test('full Home: real Lab lists saved sessions, refuses recording, distinguishes
       await lab.getByRole('button', { name: 'Live & record', exact: true }).click();
       assert.equal(await lab.getByRole('button', { name: 'Start & record session', exact: true }).isDisabled(), true,
         'a browsable service does not grant capture or model admission');
+      assert.match(await lab.locator('#pl-start-reason').innerText(), /browser connection is read-only/i);
+      const refused = await page.evaluate(async () => {
+        try { await window.HomePerceptionLabController.action('sessions.start', {}); return 'unexpected_write'; }
+        catch (error) { return error.message; }
+      });
+      assert.equal(refused, 'lab_browser_read_only', 'the real controller refuses before any fixture write is attempted');
       await inViewport(lab.getByRole('button', { name: 'Back', exact: true }));
       await lab.getByRole('button', { name: 'Back', exact: true }).click();
       await lab.waitFor({ state: 'hidden' });

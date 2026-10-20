@@ -42,12 +42,12 @@
     const caps=await root.HomePerceptionLabTransport.request('capabilities.get',{siteId:'victoria'},{signal:options.signal});
     requireAnalysisCurrent(options);
     const recipe=caps?.experiments?.find?.(row=>row.id==='apartment-viewing'),bounded=caps?.apartment_viewing;
-    const available=caps?.site_id==='victoria'&&caps.recording_allowed===true&&recipe?.status==='ready'&&recipe.readiness?.state==='ready'
+    const available=caps?.site_id==='victoria'&&caps.browser_access?.write!==false&&caps.recording_allowed===true&&recipe?.status==='ready'&&recipe.readiness?.state==='ready'
       &&bounded?.provisioned===true&&bounded.experiment_id==='apartment-viewing'&&bounded.session_seconds===300
       &&bounded.media_storage==='bounded_ram'&&Number.isSafeInteger(bounded.max_frames)&&bounded.max_frames>0&&bounded.max_frames<=8
       &&Number.isSafeInteger(bounded.max_retained_bytes)&&bounded.max_retained_bytes>0&&bounded.max_retained_bytes<=8388608
       &&bounded.automatic_renewal===false&&bounded.viewing_only===true&&bounded.physical_permission===false;
-    return {available,reason:available?null:'apartment_viewing_recipe_unavailable',sessionSeconds:300};
+    return {available,reason:available?null:caps?.browser_access?.write===false?'apartment_viewing_browser_read_only':'apartment_viewing_recipe_unavailable',sessionSeconds:300};
   }
   function analysisSession(row,owner){
     if(!row||row.site_id!=='victoria'||row.camera_id!=='den'||row.experiment_id!=='apartment-viewing'||row.request_id!==owner.requestId

@@ -20,7 +20,8 @@ export async function runFullUiShell(name, steps) {
     const { page, origin, receipt, checks } = shell, context = page.context();
     const state = { people: 'populated', intelligence: 'populated', metrics: 'populated', lab: 'populated', detailError: false };
     const calls = [], writes = [], sockets = [];
-    const sourceFiles = ['home-app.jsx', 'home-people.jsx', 'home-intelligence.jsx', 'home-perception-lab.jsx', 'home-tokens.css'];
+    const sourceFiles = ['home-app.jsx', 'home-people.jsx', 'home-intelligence.jsx', 'home-perception-lab.jsx',
+      'home-perception-lab-data.js', 'home-perception-lab-transport.js', 'home-tokens.css'];
     const sourceHashes = () => Object.fromEntries(sourceFiles.map(name => [name,
       createHash('sha256').update(fs.readFileSync(new URL('../../app/src/' + name, import.meta.url))).digest('hex')]));
     receipt.full_ui = { authored_services: true, source_components_replaced: false, source_sha256: sourceHashes(), calls, writes, sockets };
@@ -44,7 +45,8 @@ export async function runFullUiShell(name, steps) {
         : p.includes('/identit') || p.includes('/agent_profile') || p.startsWith('/api/agent/') ? 'people'
           : p === '/proxy/metrics/metrics' ? 'metrics' : 'other';
       calls.push({ path: p, method, family, state: state[family] || null });
-      const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body),
+        ...(p.startsWith('/api/perception-lab/') ? { headers: { 'X-Home-Lab-Access': 'read-only' } } : {}) });
       if (!['GET', 'HEAD'].includes(method)) {
         writes.push({ path: p, method });
         return json({ error: 'authored_read_only_fixture' }, 403);
@@ -86,7 +88,7 @@ export async function runFullUiShell(name, steps) {
         const routeName = p.slice('/api/perception-lab/v1/'.length), site = req.headers()['x-home-lab-site'] || 'victoria';
         if (state.lab === 'error') return json({ error: { code: 'authored_lab_unavailable', message: 'Authored Lab is unavailable' } }, 503);
         if (routeName === 'capabilities') return json({ site_id: site, cameras: [], live_previews: {}, live_videos: {},
-          recording_allowed: false, experiments: [], apartment_viewing: { provisioned: false },
+          recording_allowed: true, experiments: [], apartment_viewing: { provisioned: false },
           reasoning: { available: false, reason: 'Authored read-only fixture' }, storage: { policy: 'Authored fixture only' } });
         if (routeName === 'sessions') return json({ site_id: site, version: 1, items: state.lab === 'empty' ? [] : [{ ...SESSION, site_id: site }] });
         if (routeName === 'sessions/' + SESSION.id) return json({ session: { ...SESSION, site_id: site },

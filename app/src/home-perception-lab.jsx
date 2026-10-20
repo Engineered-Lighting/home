@@ -1792,6 +1792,7 @@
     };
     openSessionRef.current = openSession;
     const openingName = opening ? (state.sessions.find(s => s.id === opening.id)?.name || opening.id) : '';
+    const browserReadOnly = state.mode === 'real' && caps?.browser_access?.write === false;
     const liveAllowed = state.mode === 'demo' || caps?.recording_allowed === true;
     const expView = statusView(exp, session);
     // The latest start that never reached recording, with its plain reason.
@@ -1799,7 +1800,7 @@
       D.startFailure({session, events: detail.events, caps}) : null;
     const reasoningOn = caps?.reasoning?.available === true;
     // Start is disabled with the explicit reason; the service still runs every gate.
-    const startWhy = D.startBlockedReason ? D.startBlockedReason({connected: state.status === 'ready', recordingAllowed: liveAllowed, experiment: exp, modalities}) :
+    const startWhy = browserReadOnly ? 'This browser connection is read-only. View existing analysis in Apartment.' : D.startBlockedReason ? D.startBlockedReason({connected: state.status === 'ready', recordingAllowed: liveAllowed, experiment: exp, modalities}) :
       state.status !== 'ready' || !liveAllowed || exp.saved_only || exp.status === 'blocked' || exp.needs_depth && !modalities.includes('depth') ? 'Inputs and admission must be ready' : '';
     const annotations = detail.annotations || [],
       events = detail.events || [];
@@ -1873,6 +1874,7 @@
           if (state.error) C.refresh();
         }}>{state.error ? 'Retry' : 'Dismiss'}</Button></div>}
       {opening?.error && <div className="pl-message pl-view-error" role="alert"><span>Could not open “{openingName}”: {opening.error}. Nothing was changed; the recording is still stored.</span><div className="pl-inline"><Button primary onClick={() => openSession(opening.id)}>Try again</Button><Button onClick={() => setOpening(null)}>Dismiss</Button></div></div>}
+      {browserReadOnly&&<p role="status" className="pl-message" data-lab-browser-access="read-only">Read-only browser access · view existing sessions, camera and model results. Recording, model changes and saved edits are unavailable through this connection.</p>}
       {state.status === 'blocked' && <div className="pl-blocked"><b>Live experiment service unavailable</b><p>Configure a provisioned Lab connection to record or run models. The catalog remains available; the developer demo is an explicit separate mode.</p><Button onClick={() => setCatalog(true)}>Browse experiment catalog</Button></div>}
       {state.mode === 'real' && caps && caps.recording_allowed !== true && <details className="pl-readiness"><summary>{recording ? 'New recordings are blocked; the existing session remains visible' : 'Recording is blocked until capture and admission are verified'}</summary>{(Array.isArray(caps.gates) ? caps.gates : []).map(g => <p key={g.id}><b>{g.id}</b>: {g.state} {g.reason || ''}</p>)}<p>Browsing this workspace does not start a model or capture process.</p></details>}
       <div className="pl-scroll">

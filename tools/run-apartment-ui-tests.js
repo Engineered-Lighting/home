@@ -94,6 +94,34 @@ test("shared vocabulary includes text and a distinct decorative shape for every 
   assert.equal(unknown.props.children[1].props.children[0], "Unavailable");
 });
 
+test("Holding is a distinct producer-reported state and its label never reads a clock", () => {
+  const { ui } = fixture();
+  const holding = ui.Badge({ state: "holding", children: ui.holdingLabel(2.4) });
+  assert.equal(holding.props["data-state"], "holding");
+  assert.equal(holding.props["data-tone"], "attn");
+  const shape = holding.props.children[0].props["data-shape"];
+  for (const other of ["live", "held", "stale", "authored", "recorded"]) {
+    assert.notEqual(ui.Badge({ state: other }).props.children[0].props["data-shape"], shape, "Holding is not shaped like " + other);
+  }
+  assert.equal(holding.props.children[1].props.children[0], "Holding · last seen 2s ago");
+  assert.equal(ui.Badge({ state: "holding" }).props.children[1].props.children[0], "Holding");
+  // A module copy whose clocks and timers all throw: Holding renders without any.
+  const clocks = [];
+  const refuse = name => () => { clocks.push(name); throw new Error(name + " is not available to Holding"); };
+  const strict = { React: { createElement: (type, props, ...kids) => ({ type, props: { ...props, children: kids } }) }, window: {},
+    Date: { now: refuse("Date.now") }, performance: { now: refuse("performance.now") }, setTimeout: refuse("setTimeout"),
+    setInterval: refuse("setInterval"), requestAnimationFrame: refuse("requestAnimationFrame") };
+  vm.runInNewContext(compiled, strict, { filename: "home-apartment-ui.jsx", timeout: 1000 });
+  for (const value of [0, 3, "3", null, undefined, -1, NaN, Infinity]) {
+    strict.window.HomeApartmentUI.Badge({ state: "holding", children: strict.window.HomeApartmentUI.holdingLabel(value) });
+  }
+  assert.deepEqual(clocks, [], "Holding formats the producer's age without a UI clock or timer");
+  assert.equal(ui.holdingLabel(undefined), "Holding");
+  assert.equal(ui.holdingLabel(-1), "Holding");
+  assert.equal(ui.holdingLabel(Infinity), "Holding");
+  assert.equal(ui.holdingLabel(0), "Holding · last seen 0s ago");
+});
+
 test("an action consumes itself before callback reentry and remains consumed after a thrown callback", () => {
   const { ui } = fixture();
   let calls = 0, action;

@@ -206,10 +206,26 @@ test('real authored room inspector preserves named aims and modeled channel bind
       assert.equal(await power.evaluate(node => node.indeterminate), true);
       assert.match(await room.innerText(), /Unknown/); assert.match(await room.innerText(), /Home Assistant controls unavailable/);
       await room.getByRole('button', { name: 'Authored Echo light Unavailable', exact: true }).click();
-      await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
       assert.match(await page.locator('.apt-home-controls').innerText(), /Authored Echo light/);
-      await page.getByRole('button', { name: 'close card', exact: true }).click(); await room.waitFor();
+      await page.getByRole('button', { name: 'Close light', exact: true }).click(); await room.waitFor();
       return { device_id: echo.seed.devices[0].id, saved_room_id: echo.seed.devices[0].room_id, unpositioned: true, room_power: 'unknown', physical_control_disabled: true };
+    });
+    await check('HA offline (Echo) in the real shell: Quick and the shared Light inspector disable with reasons and queue nothing', async () => {
+      const quick = page.locator('[data-apt-quick="1"]');
+      for (const name of ['All on', 'All off']) assert.equal(await quick.getByRole('button', { name, exact: true }).isDisabled(), true);
+      assert.match(await quick.locator('[data-apt-quick-reason="1"]').innerText(), /Home Assistant is offline\. Quick controls return when it reconnects\./);
+      assert.equal(await quick.getByRole('group', { name: 'Scenes and scripts', exact: true }).count(), 0, 'no invented chips');
+      await group('Authored study').getByRole('button', { name: 'Authored Echo light Unavailable', exact: true }).click();
+      const inspector = page.locator('[data-apt-echo-light-inspector="1"]'); await inspector.waitFor();
+      assert.equal(await inspector.locator('[data-apt-echo-entity="1"]').innerText(), 'light.authored_echo');
+      assert.match(await inspector.locator('[data-apt-echo-blocked]').innerText(), /Home Assistant is offline\. Nothing is queued\.\s*Last reported time unavailable/);
+      const power = inspector.getByRole('checkbox', { name: 'Authored Echo light power', exact: true });
+      assert.equal(await power.isDisabled(), true); await power.click({ force: true });
+      assert.equal(await inspector.locator('[data-apt-echo-calls="1"]').innerText(), 'In Home this calls light.turn_on for light.authored_echo.');
+      await inspector.getByRole('button', { name: 'Close light', exact: true }).click(); await group('Authored study').waitFor();
+      assert.equal(receipt.requests.some(request => !['GET', 'HEAD'].includes(request.method)), false);
+      return { quick_disabled: true, chips: 0, last_reported: 'unavailable', power_disabled: true, physical_commands: 0 };
     });
     await check('named aim Edit opens the existing target selected without placement, dirty state or a save', async () => {
       await page.getByRole('region', { name: 'Named aims', exact: true })
@@ -269,21 +285,62 @@ test('real authored room inspector preserves named aims and modeled channel bind
       assert.deepEqual(await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures), inventory.fixtures);
       return { fixtures: 4, channels_each: 8, on: true, complete_descriptor_restored_exact: true, fixture_display_on: true };
     });
+    const undoToast = async text => {
+      const toast = page.locator('.apt-ui-toast'); await toast.getByText(text, { exact: true }).waitFor();
+      await toast.getByRole('button', { name: 'Undo', exact: true }).click();
+    };
+    await check('APT-R03: a Den room switch Undo restores the exact modeled descriptors', async () => {
+      await group('Unassigned').getByRole('checkbox', { name: 'Unassigned room power', exact: true }).uncheck();
+      await verifyPower(false); await undoToast('Unassigned off · modeled');
+      assert.deepEqual(await verifyPower(true), originalDescriptors);
+      await page.locator('.apt-ui-toast').getByText('Unassigned off undone', { exact: true }).waitFor();
+      return { fixtures: 4, undo_exact: true, physical_commands: 0 };
+    });
+    await check('APT-R03: Den Quick All off Undo restores the exact modeled descriptors and shows no presets', async () => {
+      const quick = page.locator('aside[aria-label="Room lighting inspector"] section').filter({ has: page.getByRole('heading', { name: 'Quick', exact: true }) });
+      assert.equal(await quick.getByRole('group', { name: 'Scenes and scripts', exact: true }).count(), 0, 'Victoria has no Quick presets');
+      await quick.getByRole('button', { name: 'All off', exact: true }).click();
+      await verifyPower(false); await undoToast('All off · modeled');
+      assert.deepEqual(await verifyPower(true), originalDescriptors);
+      assert.equal(receipt.requests.some(request => !['GET', 'HEAD'].includes(request.method)), false);
+      return { fixtures: 4, undo_exact: true, presets: 0, physical_commands: 0 };
+    });
     await check('room list selection delegates to the same fixture selected by N and P', async () => {
       await group('Unassigned').getByRole('button', { name: 'Select ' + fixtures[1].label, exact: true }).click(); await expectSelected(fixtures[1]);
       await blur(); await page.keyboard.press('n'); await expectSelected(fixtures[2]);
       await page.keyboard.press('p'); await expectSelected(fixtures[1]);
       return { ids: [fixtures[1].fixture_id, fixtures[2].fixture_id, fixtures[1].fixture_id], renderer_selection_matches: true };
     });
+    await check('APT-L02: only the selected Den light draws its axis and cone; lit Down channels pool below their sockets, labelled modeled', async () => {
+      const pools = () => page.evaluate(() => {
+        const root = window.__APT_ENGINE.overlay.overlayRoot.getObjectByName('apartment-light-pools');
+        return root && { objects: root.children.map(child => child.name).sort(), truth_role: root.userData.truth_role,
+          labels: [...document.querySelectorAll('.apt-ui-overlay-label')].filter(node => !node.hidden).map(node => node.textContent).sort() };
+      });
+      await page.waitForFunction(id => {
+        const root = window.__APT_ENGINE.overlay.overlayRoot.getObjectByName('apartment-light-pools');
+        return !!root?.getObjectByName('light-pools-axis:' + id);
+      }, fixtures[1].fixture_id, { timeout: 15000 });
+      const drawn = await pools();
+      assert.equal(drawn.truth_role, 'virtual_preview');
+      assert.deepEqual(drawn.objects.filter(name => /^light-pools-(?:axis|cone|cone-rim):/.test(name)),
+        ['axis', 'cone', 'cone-rim'].map(kind => 'light-pools-' + kind + ':' + fixtures[1].fixture_id).sort(), 'beams: the selected light only');
+      assert.deepEqual(drawn.objects.filter(name => name.startsWith('light-pools-down:')),
+        fixtures.map(fixture => 'light-pools-down:' + fixture.fixture_id).sort(), 'every lit Down channel pools below its socket');
+      assert.ok(drawn.labels.includes('Down · modeled') && drawn.labels.includes('Spot · modeled'), JSON.stringify(drawn.labels));
+      assert.deepEqual((await descriptors()).map(({ generation, ...descriptor }) => descriptor),
+        originalDescriptors.map(({ generation, ...descriptor }) => descriptor), 'drawing pools changes no modeled state');
+      return { selected: fixtures[1].fixture_id, beams: 1, down_pools: fixtures.length, labels: drawn.labels };
+    });
     await check('a native home change retires Victoria controls and keyboard selection while preserving Echo named aims and clean state', async () => {
       await selectHome('echo'); await group('Authored study').waitFor();
       assert.equal(await fixtureInspector().count(), 0); assert.equal(await group('Unassigned').count(), 0);
       await page.locator('[data-apt-semantic-device-select="1"] option[value="authored-echo-light"]').waitFor({ state: 'attached' });
       await page.waitForFunction(() => document.querySelector('[data-apt-semantic-device-select="1"]')?.disabled === false);
-      await blur(); await page.keyboard.press('n'); await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
+      await blur(); await page.keyboard.press('n'); await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
       assert.match(await page.locator('.apt-home-controls').innerText(), /Authored Echo light/);
       assert.equal(await fixtureInspector().count(), 0);
-      await page.getByRole('button', { name: 'close card', exact: true }).click();
+      await page.getByRole('button', { name: 'Close light', exact: true }).click();
       const parked = await page.evaluate(scope => window.HomeApartmentData.restoreWorkspace(scope), echoScope);
       assert.ok(parked?.model, 'real Home transition parked the admitted Echo model');
       assert.equal(parked.dirty, false); assert.deepEqual(parked.model.targets, echo.seed.targets);
@@ -292,7 +349,7 @@ test('real authored room inspector preserves named aims and modeled channel bind
       // Selection is retained per home. Re-admission must synchronize the
       // retained inspector with the new renderer before Back returns to room.
       await selectHome('victoria'); await expectSelected(fixtures[1]);
-      await fixtureInspector().getByRole('button', { name: 'Back to room', exact: true }).click();
+      await fixtureInspector().getByRole('button', { name: 'All lights', exact: true }).click();
       await group('Unassigned').waitFor(); assert.deepEqual(await selected(), []);
       // Generation is an engine-lifetime identity and may retire on a home
       // change. Persistent modeled state, targets and canonical bindings may not.

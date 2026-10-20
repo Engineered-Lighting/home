@@ -2916,6 +2916,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // AL-4: the den's virtual fixtures follow the central lighting brain.
   const lightingBrainRef = useRef(null);
   const [lightingBrain, setLightingBrain] = useState(null);
+  const [denOpsBanner, setDenOpsBanner] = useState(null);
   const [targetMarkKind, setTargetMarkKind] = useState("desk");
   const virtualFixtureDocument = selectedSiteId === "victoria" && apartmentPlacementDisplayEnabled
     && !rehearsalIsolated && model._equipment_registration?.scope?.site_id === "victoria"
@@ -5285,7 +5286,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       onChange: setLightingBrain,
       onApplied: () => { if (engineRef.current === engine) syncVirtualFixturePreview(engine); } });
     lightingBrainRef.current = following;
+    // AL-5 monitor banner: polled while visible; a failed read shows nothing.
+    const ops = Client.createOpsStatusPoller({ fetch: window.fetch.bind(window),
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id),
+      isHidden: () => document.hidden === true, onChange: setDenOpsBanner });
+    const visible = () => ops.wake();
+    document.addEventListener("visibilitychange", visible);
+    ops.start();
     return () => {
+      document.removeEventListener("visibilitychange", visible);
+      ops.stop(); setDenOpsBanner(null);
       following.dispose();
       if (lightingBrainRef.current === following) lightingBrainRef.current = null;
     };
@@ -10491,7 +10501,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
             canSetup={apartmentPlacementControlsEnabled}
             deskControls={<section aria-label="Desk target" className="apt-ui-channel">
-              {window.HomeLightingBrainPanel && <window.HomeLightingBrainPanel brain={lightingBrain}
+              {window.HomeLightingBrainPanel && <window.HomeLightingBrainPanel brain={lightingBrain} ops={denOpsBanner}
                 labels={Object.fromEntries(virtualFixtureItems.map((fixture) => [fixture.fixture_id, fixture.label]))}
                 onReturnToAuto={(id) => lightingBrainRef.current?.follower.returnToAuto(id)} />}
               <button type="button" className="apt-ui-button" disabled={!virtualSpotlightsVisible} onClick={() => { setTargetMarkKind("desk"); startDeskTargetSelection("desk"); }}>Select desk surface</button>
@@ -10545,7 +10555,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           <div style={{ marginTop: 5, opacity: .7, fontSize: 10 }}>
             {virtualFixtureItems.length} fixtures · 6 radial + down + robotic spot each
           </div>
-          {window.HomeLightingBrainPanel && <window.HomeLightingBrainPanel brain={lightingBrain}
+          {window.HomeLightingBrainPanel && <window.HomeLightingBrainPanel brain={lightingBrain} ops={denOpsBanner}
             labels={Object.fromEntries(virtualFixtureItems.map((fixture) => [fixture.fixture_id, fixture.label]))}
             onReturnToAuto={(id) => lightingBrainRef.current?.follower.returnToAuto(id)} />}
           {virtualSpotlightsVisible && (

@@ -317,7 +317,7 @@ async function panel(brain, onReturnToAuto = () => {}) {
   w.React = React;
   vm.runInContext(Babel.transform(fs.readFileSync(path.join(SRC, 'home-lighting-brain-panel.jsx'), 'utf8'), { presets: ['react'] }).code, dom.getInternalVMContext());
   const { createRoot } = require('react-dom/client'), root = createRoot(w.document.getElementById('root'));
-  const render = async value => { await React.act(async () => { root.render(React.createElement(w.HomeLightingBrainPanel, { brain: value, onReturnToAuto,
+  const render = async (value, ops = null) => { await React.act(async () => { root.render(React.createElement(w.HomeLightingBrainPanel, { brain: value, ops, onReturnToAuto,
     labels: { [F1]: 'Mount 1', [F2]: 'Mount 2', [F3]: 'Mount 3', [F4]: 'Mount 4' } })); await pause(); }); };
   await render(brain);
   return { w, render, React, cleanup: async () => {
@@ -348,6 +348,81 @@ test('the why line, brain status, Auto/Paused markers and the last-20 decision l
     await f.t.advance(Client.HEARTBEAT_MS + 10); await p.render(f.view());
     assert.match(doc.querySelector('[data-lighting-brain-online]').textContent, /Brain offline · holding the last state/);
     assert.equal(doc.querySelector('[data-lighting-brain-why]').textContent, 'Reading at sofa · spotlight on');
+  } finally { await p.cleanup(); f.wired.dispose(); }
+});
+
+/* ---------- AL-5 always-on monitor banner ---------- */
+function opsStatus({ level = 0, banner = null, stale = false } = {}) {
+  return { schema: 'den-ops-banner-1', generated_at: 1800000000, level, step: ['normal', 'cadence_reduced', 'deep_stack_paused', 'loop_stopped'][level],
+    banner, hosts: [{ host: 'la-host', level, stale }] };
+}
+function opsServer() {
+  const server = { doc: opsStatus(), status: 200, calls: [] };
+  server.fetch = async (url, options = {}) => {
+    server.calls.push({ url, method: options.method || 'GET' });
+    if (server.status === 0) throw Error('network');
+    return { ok: server.status === 200, status: server.status, text: async () => typeof server.doc === 'string' ? server.doc : JSON.stringify(server.doc) };
+  };
+  return server;
+}
+
+test('the monitor banner shows warn and alert levels and a silent monitor, and shows nothing for ok, notices or failures', async () => {
+  const t = clock(), server = opsServer(), seen = [];
+  let hidden = false;
+  const poller = Client.createOpsStatusPoller({ fetch: server.fetch, setTimeout: t.setTimeout, clearTimeout: t.clearTimeout,
+    isHidden: () => hidden, onChange: value => seen.push(value) });
+  poller.start(); await pause();
+  assert.deepEqual(server.calls, [{ url: '/api/den-ops/v1/status', method: 'GET' }]);
+  assert.equal(poller.readback(), null, 'level ok shows no banner');
+
+  server.doc = opsStatus({ level: 1, banner: { severity: 'warn', host: 'la-host', text: 'LA GPU hot · JEV cadence reduced' } });
+  await t.advance(Client.OPS_POLL_MS); assert.equal(server.calls.length, 2, 'polls every 30 s');
+  assert.deepEqual(poller.readback(), { severity: 'warn', host: 'la-host', text: 'LA GPU hot · JEV cadence reduced', level: 1, step: 'cadence_reduced' });
+
+  server.doc = opsStatus({ level: 3, banner: { severity: 'alert', host: 'victoria-jetson', text: 'Activity loop stopped on victoria-jetson' } });
+  await t.advance(Client.OPS_POLL_MS); assert.equal(poller.readback().severity, 'alert');
+
+  server.doc = opsStatus({ level: 0, stale: true, banner: { severity: 'warn', host: 'victoria-jetson', text: 'Ops monitor silent on victoria-jetson' } });
+  await t.advance(Client.OPS_POLL_MS); assert.equal(poller.readback().text, 'Ops monitor silent on victoria-jetson', 'a silent monitor counts');
+
+  server.doc = opsStatus({ level: 0, banner: { severity: 'notice', host: 'la-host', text: 'Back to normal' } });
+  await t.advance(Client.OPS_POLL_MS); assert.equal(poller.readback(), null, 'a notice at level ok is not a banner');
+
+  for (const failure of [() => { server.status = 503; }, () => { server.status = 0; }, () => { server.status = 200; server.doc = '{oops'; },
+    () => { server.doc = { ...opsStatus({ level: 2, banner: { severity: 'alert', host: 'la-host', text: 'x' } }), schema: 'other' }; }]) {
+    server.status = 200; server.doc = opsStatus({ level: 1, banner: { severity: 'warn', host: 'la-host', text: 'Memory high' } });
+    await t.advance(Client.OPS_POLL_MS); assert.equal(poller.readback().text, 'Memory high');
+    failure(); await t.advance(Client.OPS_POLL_MS); assert.equal(poller.readback(), null, 'a failed read shows nothing, not an error');
+  }
+
+  // Hidden tab: no polling; becoming visible polls at once.
+  server.status = 200; server.doc = opsStatus({ level: 1, banner: { severity: 'warn', host: 'la-host', text: 'Memory high' } });
+  hidden = true; const before = server.calls.length;
+  await t.advance(Client.OPS_POLL_MS * 4); assert.equal(server.calls.length, before);
+  hidden = false; poller.wake(); await pause(); await pause();
+  assert.equal(server.calls.length, before + 1); assert.equal(poller.readback().text, 'Memory high');
+  poller.stop(); assert.equal(t.size(), 0); assert.equal(poller.readback(), null);
+  assert.ok(seen.length >= 6);
+});
+
+test('the Victoria panel shows the monitor banner beside the why line', async () => {
+  const f = await following(brainState({ mode: 'reading', why: 'Reading at sofa · spotlight on', fixtures: { [F3]: READING } }));
+  const p = await panel(f.view());
+  try {
+    const doc = p.w.document;
+    assert.equal(doc.querySelector('[data-den-ops-banner]'), null, 'no banner while the monitor is ok');
+    const render = ops => p.render(f.view(), ops);
+    await render({ severity: 'alert', host: 'la-host', text: 'Deep stack paused: LA GPU at 88 °C', level: 2, step: 'deep_stack_paused' });
+    const banner = doc.querySelector('[data-den-ops-banner]');
+    assert.equal(banner.getAttribute('data-den-ops-banner'), 'alert');
+    assert.equal(banner.textContent, 'Deep stack paused: LA GPU at 88 °C · la-host');
+    assert.equal(banner.nextElementSibling.getAttribute('data-lighting-brain-why'), '1', 'banner sits next to the why line');
+    await render({ severity: 'warn', host: 'victoria-jetson', text: 'Ops monitor silent on victoria-jetson', level: 0, step: 'normal' });
+    assert.equal(doc.querySelector('[data-den-ops-banner]').textContent, 'Ops monitor silent on victoria-jetson');
+    await render(null); assert.equal(doc.querySelector('[data-den-ops-banner]'), null);
+    const apartment = fs.readFileSync(path.join(SRC, 'home-apartment.jsx'), 'utf8');
+    assert.match(apartment, /Client\.createOpsStatusPoller\(\{[\s\S]{0,300}isHidden: \(\) => document\.hidden === true, onChange: setDenOpsBanner \}\)/);
+    assert.match(apartment, /<window\.HomeLightingBrainPanel brain=\{lightingBrain\} ops=\{denOpsBanner\}/);
   } finally { await p.cleanup(); f.wired.dispose(); }
 });
 
@@ -481,11 +556,14 @@ test('Victoria view wires the brain, the hand-change seam and the sofa mark; the
   const perception = fs.readFileSync(path.join(SRC, 'home-apartment-den-perception.jsx'), 'utf8');
   const loader = fs.readFileSync(path.join(SRC, 'home-feature-loader.js'), 'utf8');
   const body = name => { const start = apartment.indexOf(`const ${name} = `); assert.ok(start > 0, name); return apartment.slice(start, start + 1600); };
-  assert.match(body('changeVirtualFixture'), /releaseFixtureForHandChange\((?:selectedVirtualFixture\.fixture_id|fixtureId), \{ reason: "change" \}\);\s*const result = engine\.overlay\.setVirtualFixtureState/);
-  assert.match(body('restoreVirtualAimHistory'), /releaseFixtureForHandChange\(entry\.fixture_id, \{ reason: direction \}\);\s*const result = engine\?\.overlay\.restoreVirtualFixtureAim/);
-  assert.match(apartment, /previewTarget: \(id, target, before\) => \{\s*releaseFixtureForHandChange\(id, \{ reason: "aim" \}\);/);
+  // Main's single hand-change seam: every hand path calls it first, and Den
+  // binds it to the desk-preview takeover and the brain's handChange.
+  assert.match(body('releaseFixtureForHandChange'), /lightingBrainRef\.current\?\.follower\.handChange\(fixtureId, \{ reason: reason \|\| "change" \}\)/);
+  assert.match(body('changeVirtualFixtureByHand'), /releaseFixtureForHandChange\(fixtureId, \{ reason: "change" \}\);\s*return changeVirtualFixture\(/);
+  assert.match(body('applyAimHistoryState'), /releaseFixtureForHandChange\(id, \{ reason \}\);/);
+  assert.match(apartment, /releaseFixtureForHandChange\(id, \{ reason: "aim" \}\);/);
   assert.match(apartment, /Follower\.createBrainFollowing\(/);
-  assert.match(apartment, /<window\.HomeLightingBrainPanel brain=\{lightingBrain\}/);
+  assert.match(apartment, /<window\.HomeLightingBrainPanel brain=\{lightingBrain\} ops=\{denOpsBanner\}/);
   assert.match(apartment, /onClick=\{\(\) => \{ setTargetMarkKind\("sofa"\); startDeskTargetSelection\("sofa"\); \}\}/);
   assert.match(apartment, /"victoria-den-sofa-target\.json"/);
   assert.doesNotMatch(apartment, /legacyDeskAimPreview/);

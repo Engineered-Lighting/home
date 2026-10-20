@@ -160,6 +160,49 @@
     };
   }
 
+  // AL-5's always-on monitor (den-ops-banner-1). Only a warn or alert banner
+  // is shown (a silent monitor reports as warn); anything unreadable shows nothing.
+  const OPS_URL = '/api/den-ops/v1/status', OPS_POLL_MS = 30000;
+  function opsBanner(doc) {
+    const b = object(doc) && doc.schema === 'den-ops-banner-1' ? doc.banner : null;
+    if (!object(b) || !['warn', 'alert'].includes(b.severity) || !text(b.text, 240) || !b.text
+        || !(b.host == null || text(b.host, 64))) return null;
+    return { severity: b.severity, host: b.host || null, text: b.text,
+      level: Number.isInteger(doc.level) ? doc.level : null, step: text(doc.step, 40) ? doc.step : null };
+  }
+  function createOpsStatusPoller({ url = OPS_URL, fetch: fetchFn, setTimeout: later, clearTimeout: cancel,
+    isHidden = () => false, intervalMs = OPS_POLL_MS, onChange = () => {} } = {}) {
+    if (typeof fetchFn !== 'function' || typeof later !== 'function' || typeof cancel !== 'function')
+      throw TypeError('ops_status_poller_dependencies_required');
+    let timer = null, epoch = 0, running = false, banner = null;
+    const publish = next => {
+      if (JSON.stringify(next) === JSON.stringify(banner)) return;
+      banner = next; try { onChange(banner); } catch (_) { /* view failure never stops polling */ }
+    };
+    const schedule = () => { if (running) timer = later(tick, intervalMs); };
+    async function tick() {
+      timer = null;
+      if (!running) return;
+      // A hidden tab does not poll; wake() resumes at once when it is shown.
+      if (isHidden()) { schedule(); return; }
+      const token = epoch;
+      let next = null;
+      try {
+        const response = await fetchFn(url, { cache: 'no-store', credentials: 'same-origin', redirect: 'error',
+          headers: { Accept: 'application/json' } });
+        if (response.ok) { const raw = await response.text(); next = raw.length <= MAX_BYTES ? opsBanner(JSON.parse(raw)) : null; }
+      } catch (_) { next = null; }
+      if (token !== epoch || !running) return;
+      publish(next); schedule();
+    }
+    return {
+      readback: () => banner,
+      start() { if (!running) { running = true; epoch++; tick(); } },
+      wake() { if (running && !isHidden()) { if (timer !== null) cancel(timer); epoch++; tick(); } },
+      stop() { running = false; epoch++; if (timer !== null) cancel(timer); timer = null; publish(null); },
+    };
+  }
+
   return Object.freeze({ SCHEMA, OVERRIDE_SCHEMA, BASE, FIXTURE_IDS, MODES, OVERRIDE_REASONS, HEARTBEAT_MS,
-    validateState, parse, createBrainClient });
+    OPS_URL, OPS_POLL_MS, validateState, parse, createBrainClient, opsBanner, createOpsStatusPoller });
 });

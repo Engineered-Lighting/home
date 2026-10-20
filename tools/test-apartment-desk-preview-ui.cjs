@@ -144,27 +144,22 @@ test('actual parent manual controls/history/gesture/desk selection take over bef
     const c=Controller.create({overlay:f.overlay,solveAim:Aiming.solveAim,getContext:()=>({active:true,hidden:false,committedOwnerActive:false,identity}),
       nowMs:()=>0,setTimeout:fn=>{timers.set(++seq,fn);return seq;},clearTimeout:id=>timers.delete(id)});
     c.setEnabled(true);c.update(preview());assert.equal(c.readback().active,true);log.length=0;
-    const ref={current:{manualTakeover(reason){log.push('takeover:'+reason);return c.manualTakeover(reason);}}};
+    const ref={current:{readback:()=>c.readback(),manualTakeover(reason){log.push('takeover:'+reason);return c.manualTakeover(reason);}}};
     const ctx={engineRef:{current:engine},denDeskAimPreviewRef:ref,virtualFixtureDocument:{binding,revision:2,digest:hash('e')},
       selectedVirtualFixture:{fixture_id:'fixture-0'},virtualFixtureItems:[{fixture_id:'fixture-0'}],directionalViewRef:{current:null},phase:'ready',workspaceAuthorityRef:{current:{key:'authority'}},apartmentAuthorityKey:'authority',
       syncVirtualFixturePreview:()=>log.push('sync'),setVirtualAimNotice:()=>{},releaseFixtureForHandChange:(id,{reason})=>log.push('release:'+reason),setVirtualFixtureId:()=>{},setVirtualAimHistoryVersion:()=>{},
       virtualFixtureBindingKey:'fixture-binding',virtualAimHistoryRef:{current:{undo:[{binding:'fixture-binding',fixture_id:'fixture-0',before:copy(f.before[0]),after:copy(f.before[0])}],redo:[]}}};
     try{
-      if(kind==='control'){
-        extracted('changeVirtualFixture',ctx)({pan_deg:12});
-        assert.ok(log.indexOf('takeover:manual_fixture_control')<log.indexOf('restore'));
-        assert.ok(log.indexOf('restore')<log.indexOf('set_state'));assert.equal(f.descriptors()[0].state.pan_deg,12);
-        log.length=0;ctx.phase='loading';extracted('changeVirtualFixture',ctx)({pan_deg:99});assert.deepEqual(log,[]);
-      }
-      if(kind==='undo'){
-        extracted('restoreVirtualAimHistory',ctx)('undo');assert.equal(log[0],'takeover:manual_aim_history');
-        assert.equal(log.filter(v=>v==='restore').length,2);assert.equal(ctx.virtualAimHistoryRef.current.undo.length,0);
-        assert.equal(ctx.virtualAimHistoryRef.current.redo.length,1);assert.deepEqual(f.descriptors(),f.before);
-      }
-      if(kind==='gesture'){
-        ctx.overlay=f.overlay;const captured=extracted('captureSnapshot',ctx)('fixture-0');
-        assert.equal(log[0],'takeover:manual_aim_gesture');assert.ok(log.includes('restore'));
-        assert.deepEqual(captured,f.before[0],'gesture captures restored pre-preview original');
+      // Main routes every hand change through the one seam (W2); Den binds it
+      // to the takeover, which must restore the fixture before anything else.
+      if(kind!=='desk'){
+        Object.assign(ctx,{lightingBrainRef:{current:{follower:{handChange:(id,{reason})=>log.push('brain:'+id+':'+reason)}}}});
+        const reason={control:'change',undo:'undo',gesture:'aim'}[kind];
+        const answer=extracted('releaseFixtureForHandChange',ctx)('fixture-0',{reason});
+        assert.equal(log[0],'takeover:'+{control:'manual_fixture_control',undo:'manual_aim_history',gesture:'manual_aim_gesture'}[kind]);
+        assert.ok(log.indexOf('restore')>0&&log.indexOf('restore')<log.indexOf('brain:fixture-0:'+reason));
+        assert.deepEqual(JSON.parse(JSON.stringify(answer)),{released:true,restored:false,excluded:false});
+        assert.deepEqual(f.descriptors(),f.before,'the takeover restores the pre-preview original');
       }
       if(kind==='desk'){
         Object.assign(ctx,{open:true,editing:false,calibCam:false,liveOn:false,virtualSpotlightsVisible:true,spatialScale:'apartment',rehearsalIsolated:false,

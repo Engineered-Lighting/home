@@ -1,0 +1,154 @@
+{
+  "schema": "activity-lighting-state-1",
+  "synthetic": true,
+  "home": "victoria",
+  "room": "den",
+  "generated_at": 1800000000,
+  "brain": "online",
+  "mode": "reading",
+  "why": "Reading at sofa · spotlight on",
+  "occupancy": {
+    "present": true,
+    "people_count": 1,
+    "zones": {
+      "sofa": true,
+      "desk": false
+    }
+  },
+  "activity": {
+    "label": "reading",
+    "confidence": 0.8,
+    "age_s": 1.2,
+    "source": "jev"
+  },
+  "fixtures": [
+    {
+      "fixture_id": "victoria-den-proposed-fixture-01",
+      "ambient": {
+        "radial_level": 0,
+        "down_level": 0,
+        "cct_k": 2700,
+        "fade_s": 3
+      },
+      "spot": {
+        "on": false,
+        "level": 0,
+        "cct_k": 3500,
+        "target_m": null,
+        "fade_s": 1.5
+      },
+      "paused_until": null,
+      "pause_reason": null
+    },
+    {
+      "fixture_id": "victoria-den-proposed-fixture-02",
+      "ambient": {
+        "radial_level": 0.3,
+        "down_level": 0.3,
+        "cct_k": 2700,
+        "fade_s": 2
+      },
+      "spot": {
+        "on": false,
+        "level": 0,
+        "cct_k": 3500,
+        "target_m": null,
+        "fade_s": 1.5
+      },
+      "paused_until": 1800001800,
+      "pause_reason": "aim"
+    },
+    {
+      "fixture_id": "victoria-den-mount-03-virtual-fixture",
+      "ambient": {
+        "radial_level": 0.3,
+        "down_level": 0.3,
+        "cct_k": 2700,
+        "fade_s": 2
+      },
+      "spot": {
+        "on": true,
+        "level": 0.8,
+        "cct_k": 3500,
+        "target_m": [
+          1.8,
+          3.9,
+          0.7
+        ],
+        "fade_s": 1.5
+      },
+      "paused_until": null,
+      "pause_reason": null
+    },
+    {
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "ambient": {
+        "radial_level": 0,
+        "down_level": 0,
+        "cct_k": 2700,
+        "fade_s": 3
+      },
+      "spot": {
+        "on": false,
+        "level": 0,
+        "cct_k": 3500,
+        "target_m": null,
+        "fade_s": 1.5
+      },
+      "paused_until": null,
+      "pause_reason": null
+    }
+  ],
+  "decisions": [
+    {
+      "at": 1800000000,
+      "rule": "reading_spot_on",
+      "why": "Reading held 3 s at sofa",
+      "inputs": {
+        "activity": "reading",
+        "zone": "sofa"
+      },
+      "change": "mount 3 spot on"
+    },
+    {
+      "at": 1799999980,
+      "rule": "manual_pause",
+      "why": "Paused after a manual change",
+      "inputs": {
+        "fixture": "victoria-den-proposed-fixture-02"
+      },
+      "change": null
+    },
+    {
+      "at": 1799999960,
+      "rule": "zone_ambient",
+      "why": "Sofa occupied · ambient",
+      "inputs": {
+        "zone": "sofa"
+      },
+      "change": "mounts 2 and 3 ambient"
+    },
+    {
+      "at": 1799999600,
+      "rule": "room_off",
+      "why": "Room empty · all off",
+      "inputs": {},
+      "change": "all off"
+    }
+  ],
+  "cost": {
+    "jev_calls_last_hour": 120,
+    "est_usd_last_hour": null
+  },
+  "inputs": {
+    "occupancy_age_s": 2,
+    "activity_age_s": 1.2,
+    "pose_age_s": 0.8,
+    "health": {
+      "jev": true,
+      "deep_stack": true,
+      "frigate": true
+    }
+  },
+  "settings_version": "v1"
+}

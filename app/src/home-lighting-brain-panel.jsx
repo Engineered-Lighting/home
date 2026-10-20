@@ -15,11 +15,21 @@
   const chip = auto => ({ fontSize: 10, padding: '1px 6px', border: '1px solid', borderRadius: 3,
     color: auto ? '#b8d8ff' : '#e9bd7e', borderColor: auto ? 'rgba(184,216,255,.35)' : '#8d6d39' });
 
-  function HomeLightingBrainPanel({ brain, labels = {}, onReturnToAuto }) {
+  function OpsBanner({ ops }) {
+    if (!ops) return null;
+    const alert = ops.severity === 'alert';
+    return <div role="status" data-den-ops-banner={ops.severity} style={{ marginBottom: 6, padding: '4px 7px', fontSize: 11, lineHeight: 1.4,
+      border: `1px solid ${alert ? '#a5524a' : '#8d6d39'}`, color: alert ? '#f0a49b' : '#e9bd7e', background: 'rgba(9,16,23,.6)' }}>
+      {ops.text}{ops.host && !ops.text.includes(ops.host) ? ` · ${ops.host}` : ''}
+    </div>;
+  }
+
+  function HomeLightingBrainPanel({ brain, ops = null, labels = {}, onReturnToAuto }) {
     if (!brain) return null;
     const fixtures = brain.fixtures || [], decisions = brain.decisions || [];
     return <section aria-label="Lighting brain" data-lighting-brain="1" data-lighting-brain-status={brain.status}
       style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(184,216,255,.18)' }}>
+      <OpsBanner ops={ops} />
       <div role="status" aria-live="polite" data-lighting-brain-why="1" style={{ fontSize: 12, lineHeight: 1.4 }}>
         {brain.why || (brain.online ? 'Following the lighting brain' : 'No lighting decision yet')}
       </div>

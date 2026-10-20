@@ -10,4 +10,6 @@ A manual change, aim, undo or redo pauses only that fixture and sends the brain 
 
 The owner can mark the sofa once, with the same selector used for the desk target. The mark is saved privately beside the desk target, and `tools/den-room/brain-targets.mjs` writes the one private `lighting-brain-geometry-1` file the brain reads: the four fixtures from the equipment registration, the camera position, and the sofa and desk zones.
 
+When the always-on den monitor reports a warning, an alert or a silent host, a compact banner with its text and host appears beside the why line. Home polls it about every 30 s while the tab is visible and shows nothing if the status cannot be read.
+
 The fixed-desk aim preview in the Den perception panel is retired in favour of the brain. Virtual fixtures only; physical output stays disabled.

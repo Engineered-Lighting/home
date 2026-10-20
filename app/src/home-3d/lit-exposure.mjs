@@ -152,6 +152,8 @@ const AGX_INSET = [[0.856627153315983, 0.137318972929847, 0.11189821299995], [0.
 const AGX_OUTSET = [[1.1271005818144368, -0.1413297634984383, -0.14132976349843826], [-0.11060664309660323, 1.157823702216272, -0.11060664309660294],
     [-0.016493938717834573, -0.016493938717834257, 1.2519364065950405]];
 const clamp01 = value => Math.min(1, Math.max(0, value));
+// As columns (GLSL mat3 order), shared with the camera passes in lit-basis-blend.mjs.
+export const LIT_AGX_MATRICES = Object.freeze({ srgbToRec2020: SRGB_TO_REC2020, inset: AGX_INSET, outset: AGX_OUTSET, rec2020ToSrgb: REC2020_TO_SRGB });
 export const LIT_TONE_CPU = Object.freeze({
     linear: rgb => rgb.map(clamp01),
     reinhard: rgb => rgb.map(value => clamp01(value / (1 + value))),
@@ -227,4 +229,92 @@ export function litExposureDisclosure({ adaptive, designEv100 }) {
     return adaptive
         ? `Fixed design-night exposure (EV100 ${designEv100.toFixed(2)}) with partial night adaptation: presentation, not lux. ${floor}`
         : `Fixed night exposure; this renderer has no night adaptation, so the ambient is shown night-adapted. ${floor}`;
+}
+
+/* ---- The camera look ------------------------------------------------------------
+ * ("Night relighting realism" research, shortlist #2.) L2's chain above is an
+ * EYE model: partial adaptation to the mid-tones, a lifted toe and the
+ * Purkinje blue shift. People judge "photoreal" against photos, and a night
+ * photo does the opposite (Liba et al. 2019, Night Sight: more contrast,
+ * shadows crushed to black, light sources kept from blowing out). The camera
+ * look is presentation too, never lux:
+ *   exposure  metered toward the highlights: the log-average of the 90th-99th
+ *             percentile of what is in view is moved toward display 0.8, by
+ *             L2's partial adaptation (about 60 % of the way);
+ *   toe       none, and no mesopic shift (a camera has no rods);
+ *   tone      AgX with Blender's Punchy look (CDL power 1.35 in AgX space);
+ *   colour    a camera white balance toward the lit fixtures: von Kries in
+ *             CAT16 cone space at incomplete adaptation D = 0.75, so a 4100 K
+ *             ambient reads cool beside 3000 K pools, as in a real photo. */
+export const LIT_CAMERA_LOOK = Object.freeze({
+    name: 'camera', meter: Object.freeze({ low: 0.9, high: 0.99 }), highlightDisplay: 0.8, minEv: -4, maxEv: 5.5,
+    // L2's approved partial adaptation (about 60 %), so dimming still reads as dimmer.
+    fraction: 0.6,
+    agxPower: 1.35, whiteBalanceD: 0.75, presentation: true, measured: false,
+});
+// Spike-3/L2 eye look, for comparison and for the Mesh view.
+export const LIT_EYE_LOOK = Object.freeze({ name: 'eye', presentation: true, measured: false });
+
+// IEC 61966-2-1 linear sRGB <-> XYZ (D65), and CAT16 (Li et al. 2017).
+const SRGB_TO_XYZ = [[0.4124564, 0.3575761, 0.1804375], [0.2126729, 0.7151522, 0.0721750], [0.0193339, 0.1191920, 0.9503041]];
+const XYZ_TO_SRGB_M = [[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]];
+const CAT16 = [[0.401288, 0.650173, -0.051461], [-0.250268, 1.204414, 0.045854], [-0.002079, 0.048952, 0.953127]];
+const mat = (a, b) => a.map(row => b[0].map((_, j) => row.reduce((sum, value, k) => sum + value * b[k][j], 0)));
+const apply = (m, v) => m.map(row => row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
+function invert3(m) {
+    const [[a, b, c], [d, e, f], [g, h, i]] = m, A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+    const det = a * A + b * B + c * C;
+    return [[A / det, -(b * i - c * h) / det, (b * f - c * e) / det], [B / det, (a * i - c * g) / det, -(a * f - c * d) / det],
+        [C / det, -(a * h - b * g) / det, (a * e - b * d) / det]];
+}
+const CAT16_INV = invert3(CAT16);
+/* The 3 x 3 white balance (linear sRGB rows) that adapts `sourceWhiteRgb`
+ * (linear sRGB, any luminance) toward D65 white at degree D. Identity at D = 0. */
+export function whiteBalanceMatrix(sourceWhiteRgb, D = LIT_CAMERA_LOOK.whiteBalanceD) {
+    const source = apply(CAT16, apply(SRGB_TO_XYZ, sourceWhiteRgb.map(v => v / Math.max(1e-9, lumaOf(sourceWhiteRgb)))));
+    const target = apply(CAT16, apply(SRGB_TO_XYZ, [1, 1, 1]));
+    const gains = [0, 1, 2].map(i => D * target[i] / Math.max(1e-9, source[i]) + (1 - D));
+    const diag = [[gains[0], 0, 0], [0, gains[1], 0], [0, 0, gains[2]]];
+    const m = mat(XYZ_TO_SRGB_M, mat(CAT16_INV, mat(diag, mat(CAT16, SRGB_TO_XYZ))));
+    // Keep the source white's luminance: a white balance moves colour, not exposure.
+    const scale = lumaOf(sourceWhiteRgb) / Math.max(1e-9, lumaOf(apply(m, sourceWhiteRgb)));
+    return m.map(row => row.map(v => v * scale));
+}
+/* AgX with the Punchy look's CDL power, as the GLSL and TSL camera passes do. */
+export function agxPunchy(rgb, power = LIT_CAMERA_LOOK.agxPower) {
+    let c = col(AGX_INSET, col(SRGB_TO_REC2020, rgb));
+    c = c.map(value => clamp01((Math.log2(Math.max(value, 1e-10)) + 12.47393) / (4.026069 + 12.47393)));
+    c = c.map(x => { const x2 = x * x, x4 = x2 * x2; return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232; });
+    c = c.map(value => Math.max(0, value) ** power);
+    c = col(AGX_OUTSET, c).map(value => Math.max(0, value) ** 2.2);
+    return col(REC2020_TO_SRGB, c).map(clamp01);
+}
+/* One pre-exposed pixel through the camera look: display-linear rgb (0..1). */
+export function litCameraPixel(rgb, { gain = 1, whiteBalance = null, look = LIT_CAMERA_LOOK } = {}) {
+    let c = rgb.map(value => Math.max(0, value) * gain);
+    if (whiteBalance) c = apply(whiteBalance, c).map(value => Math.max(0, value));
+    return agxPunchy(c, look.agxPower);
+}
+// The pre-exposed grey whose camera-look display value (sRGB-encoded) is 0.8.
+let highlightLinear = null;
+export function cameraHighlightLinear(look = LIT_CAMERA_LOOK) {
+    if (highlightLinear !== null && look === LIT_CAMERA_LOOK) return highlightLinear;
+    let lo = 1e-6, hi = 1e3;
+    for (let i = 0; i < 80; i++) {
+        const mid = Math.sqrt(lo * hi);
+        if (srgbEncode(agxPunchy([mid, mid, mid], look.agxPower)[1]) < look.highlightDisplay) lo = mid; else hi = mid;
+    }
+    const value = Math.sqrt(lo * hi);
+    if (look === LIT_CAMERA_LOOK) highlightLinear = value;
+    return value;
+}
+/* The camera's exposure in EV above the design night: the metered highlight
+ * luminance (cd/m², 90th-99th percentile band) placed at display 0.8. */
+export function cameraAdaptationFromLuminance(highlightCdM2, preExposure, look = LIT_CAMERA_LOOK) {
+    if (!(highlightCdM2 > 0) || !(preExposure > 0)) return { dropEv: 0, adaptEv: 0 };
+    const ev = Math.log2(cameraHighlightLinear(look) / (highlightCdM2 * preExposure));
+    return { dropEv: Math.max(0, ev), adaptEv: Math.min(look.maxEv, Math.max(look.minEv, look.fraction * ev)) };
+}
+export function litCameraDisclosure({ kelvin }) {
+    return `Camera look: exposure set for the highlights, white balance toward about ${Math.round(kelvin / 100) * 100} K: presentation, not lux.`;
 }

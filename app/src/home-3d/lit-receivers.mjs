@@ -1,10 +1,10 @@
 /* home-3d/lit-receivers.mjs — L4: lit splats and points, the scene glue for
  * lit-basis-blend.mjs ("Hyperreal browser room lighting" L4).
  *
- * Behind the opt-in flag (?lit-splats=1) and disclosed as simulated, Lit can
- * relight Photo (the splats) and Cloud (the point cloud) from L3's additive
- * lighting layer. Nothing here loads unless the flag is on, and every change
- * is reversed exactly on exit:
+ * Disclosed as simulated, Lighting relights Photo (the splats) and Cloud
+ * (the point cloud) from L3's additive lighting layer. Nothing here loads
+ * until Lighting is turned on, and every change is reversed exactly when it
+ * is turned off or the view changes:
  *
  *   WebGL (r180, the default)   the blend is a GPGPU pass into an RGBA8
  *       target; Spark reads it through an object modifier (by splat index,
@@ -27,15 +27,9 @@ const Blend = await import(`./lit-basis-blend.mjs${search}`);
 const Loader = await import(`./lit-layer-loader.mjs${search}`);
 const Exposure = await import(`./lit-exposure.mjs${search}`);
 
-export const LIT_RECEIVERS_FLAG = 'lit-splats';
 // Meter samples: a fixed spread of receivers, kept when they are in view.
 const METER_SAMPLES = 4096;
 const W = Blend.LIT_TEXTURE_WIDTH;
-
-/* The flag: ?lit-splats=1 on the page, this session only (never stored). */
-export function litReceiversOptedIn(location = globalThis.location) {
-    try { return new URLSearchParams(location?.search || '').get(LIT_RECEIVERS_FLAG) === '1'; } catch (_) { return false; }
-}
 
 /* Why this renderer cannot light receivers, or null: the node renderer's
  * WebGL2 backend has no compute (the splat colour hook says the same). */
@@ -77,18 +71,40 @@ function receiverPositions(kind, object) {
 /* A lit receiver controller for one loaded object ('splat' or 'points').
  * Resolves with { available: false, reason } when this renderer, asset or
  * layer cannot be lit. */
-export async function createLitReceivers({ renderer, kind, object, layer, whenIdle = () => Promise.resolve() } = {}) {
+export async function createLitReceivers({ renderer, kind, object, layer, look = 'camera', whenIdle = () => Promise.resolve() } = {}) {
     if (kind !== 'splat' && kind !== 'points') throw fail('lit_receivers_kind_unknown');
     const node = !!renderer?.isWebGPURenderer, unsupported = litReceiversUnsupported(renderer);
     if (unsupported) return { available: false, reason: unsupported };
     const { count, positions } = receiverPositions(kind, object);
     if (!layer || layer.count !== count) return { available: false, reason: 'lighting_layer_count_mismatch' };
-    const packed = Blend.packReceiverSet(layer);
+    // The point cloud stays monochrome (owner, 2026-10-20): grey surfaces, coloured light.
+    const monochrome = kind === 'points';
+    const packed = Blend.packReceiverSet(monochrome ? { ...layer, albedo: Blend.greyAlbedo(layer.albedo) } : layer);
+    // The window column is blended on its own (capped); the camera look uses it.
+    packed.windowSlot = layer.columnsMeta.findIndex(column => column.kind === 'window');
     const spots = new Uint32Array(count * Blend.LIT_SPOT_WORDS);
     const weights = new Float32Array(Blend.LIT_WEIGHT_VEC4S * 4);
     const spotSlots = new Map(), spotVersions = new Map();
     let operator = Exposure.LIT_TONE.view, signature = '', dirty = true, spotsDirty = false, attached = false, disposed = false;
-    let blends = 0, lastBlendMs = null, matched = [], unbaked = [];
+    let blends = 0, lastBlendMs = null, matched = [], unbaked = [], whiteKelvin = null;
+    if (!Blend.LIT_LOOKS.includes(look)) throw fail('lit_look_unknown');
+    /* The window column's median over the room's interior receivers
+     * (capture-relative): the night ambient through the windows is scaled
+     * to it (lit-basis-blend.mjs LIT_WINDOW_AMBIENT). */
+    const windowMedian = (() => {
+        const k = layer.columnsMeta.findIndex(column => column.kind === 'window');
+        if (k < 0) return null;
+        const half = h => { const e = (h >>> 10) & 31, m = h & 1023; return e === 0 ? m * 2 ** -24 : e === 31 ? Infinity : (1 + m / 1024) * 2 ** (e - 15); };
+        const values = [], step = Math.max(1, Math.floor(count / 20000));
+        for (let i = 0; i < count; i += step) {
+            if (layer.flags[i] & Blend.LIT_RECEIVER_FLAGS.emitter) continue;
+            const u = layer.basis[i * layer.columns + k] / 255;
+            values.push(u * u * half(layer.scale[i]) * layer.columnScale[k]);
+        }
+        values.sort((a, b) => a - b);
+        const median = values[values.length >> 1];
+        return median > 0 ? median : null;
+    })();
 
     // Receivers in the world for the bake and the meter (rigid registration).
     object.updateWorldMatrix?.(true, false);
@@ -135,7 +151,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
             ...Object.fromEntries(Object.entries(maps).map(([name, map]) => [name, { value: map }])) };
         const quadScene = new THREE.Scene(), camera = new THREE.Camera();
         const material = new THREE.ShaderMaterial({ name: 'lit-receivers-blend', uniforms,
-            vertexShader: Blend.LIT_BLEND_VERTEX_GLSL, fragmentShader: Blend.litBlendFragmentGlsl({ operator }),
+            vertexShader: Blend.LIT_BLEND_VERTEX_GLSL, fragmentShader: Blend.litBlendFragmentGlsl({ operator, look, windowSlot: packed.windowSlot }),
             depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
         const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
         quad.frustumCulled = false;
@@ -143,7 +159,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
         let restore = null;
         return {
             backend: 'webgl-gpgpu',
-            retone() { material.fragmentShader = Blend.litBlendFragmentGlsl({ operator }); material.needsUpdate = true; },
+            retone() { material.fragmentShader = Blend.litBlendFragmentGlsl({ operator, look, windowSlot: packed.windowSlot }); material.needsUpdate = true; },
             uploadSpots() {
                 for (const [name, offset] of [['uSpotA', 0], ['uSpotB', 4]]) {
                     const data = maps[name].image.data;
@@ -247,7 +263,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
             write = (i, rgb) => store.element(i).assign(T.vec4(rgb, 1));
         }
         let compute = null;
-        const build = () => { compute = Blend.litBlendComputeNode(T, { count, ...buffers, operator, write }); };
+        const build = () => { compute = Blend.litBlendComputeNode(T, { count, ...buffers, operator, look, windowSlot: packed.windowSlot, write }); };
         build();
         let restore = null;
         return {
@@ -329,8 +345,8 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
         sync({ lights = [], gain = 1, operator: next = operator } = {}) {
             if (disposed) return false;
             if (next !== operator) { operator = next; gpu.retone(); dirty = true; }
-            const result = Blend.blendWeights({ lights, columns: layer.columnsMeta, columnScale: layer.columnScale, spotSlots, gain }, weights);
-            matched = result.matched; unbaked = result.unbaked;
+            const result = Blend.blendWeights({ lights, columns: layer.columnsMeta, columnScale: layer.columnScale, spotSlots, gain, look, windowMedian, monochrome }, weights);
+            matched = result.matched; unbaked = result.unbaked; whiteKelvin = result.whiteKelvin;
             const next2 = Array.from(weights, value => value.toPrecision(7)).join(',');
             if (next2 !== signature) { signature = next2; dirty = true; }
             return dirty;
@@ -348,7 +364,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
          * the GPU wrote them, and the CPU twin's for the same weights. */
         async readback(n = Math.min(count, 64)) {
             const gpuRows = await gpu.readback(Math.min(n, count));
-            const cpu = gpuRows.map((_, i) => Blend.blendReceiverDisplay(packed, i, weights, spots, { operator }));
+            const cpu = gpuRows.map((_, i) => Blend.blendReceiverDisplay(packed, i, weights, spots, { operator, look }));
             return { gpu: gpuRows, cpu };
         },
         /* Proofs: the blend pass timed `iterations` times (ms, sorted). */
@@ -369,15 +385,30 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
                 if (v.z >= 0 || (camera.isPerspectiveCamera && -v.z < camera.near)) continue;
                 v.applyMatrix4(camera.projectionMatrix);
                 if (Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue;
+                // The night exterior beyond the glass never sets the exposure.
+                if (layer.flags[sampleIndex[s]] & Blend.LIT_RECEIVER_FLAGS.emitter) continue;
                 samples.push(Blend.receiverLuminance(packed, sampleIndex[s], weights, spots));
             }
-            return Exposure.meterLuminance(samples);
+            // The camera meters toward the highlights; the eye, the mid-tones.
+            return Exposure.meterLuminance(samples, look === 'camera' && operator === 'agx' ? Exposure.LIT_CAMERA_LOOK.meter : Exposure.LIT_METER);
+        },
+        /* The exposure the look asks for (EV above the design night) from the
+         * metered luminance: the camera places the highlights at display 0.8;
+         * the eye recovers 60 % of the drop (L2). */
+        adaptationFrom(metered, designEv100) {
+            return look === 'camera' && operator === 'agx'
+                ? Exposure.cameraAdaptationFromLuminance(metered, 1 / (1.2 * 2 ** designEv100))
+                : Exposure.adaptationFromLuminance(metered, designEv100);
         },
         state() {
             return Object.freeze({ available: true, kind, set: layer.set, source: layer.source, count, backend: gpu.backend, attached,
                 operator, blends, lastBlendMs, columns: layer.columns, matched: matched.length, unbaked: Object.freeze(unbaked.slice()),
                 liveSpots: spotSlots.size, gpuBytes: gpu.memoryBytes, layerBytes: layer.bytes, binding: 'sha256-verified',
-                provenance: layer.provenance, simulated: true, measured: false, disclosure: Blend.LIT_RECEIVERS_DISCLOSURE, limit: Blend.LIT_RECEIVERS_LIMIT });
+                provenance: layer.provenance, simulated: true, measured: false, look: look === 'camera' && operator === 'agx' ? 'camera' : 'eye',
+                whiteKelvin: whiteKelvin && Math.round(whiteKelvin), windowAmbient: windowMedian !== null && !monochrome, monochrome,
+                disclosure: Blend.LIT_RECEIVERS_DISCLOSURE + (monochrome ? ' Cloud stays monochrome: grey surfaces lit only by the fixtures, in their own colour.'
+                    : look === 'camera' && operator === 'agx' && whiteKelvin ? ' ' + Exposure.litCameraDisclosure({ kelvin: whiteKelvin }) : ''),
+                limit: Blend.LIT_RECEIVERS_LIMIT });
         },
     };
 }

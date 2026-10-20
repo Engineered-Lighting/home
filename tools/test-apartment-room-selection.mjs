@@ -220,7 +220,11 @@ function fixture(actual, { site = 'victoria' } = {}) {
     callSvc: (...args) => state.services.push(copy(args)),
     onShowShellControls: () => state.shellReveals++,
     setVirtualFixtureId: id => { state.selectedId = id; values.virtualFixtureId = id; state.calls.push(['id', id]); },
-    setVirtualFixtureControlsOpen: value => { state.open = value; values.virtualFixtureControlsOpen = value; state.calls.push(['open', value]); },
+    setVirtualFixtureControlsOpen: value => { state.open = value; values.virtualFixtureControlsOpen = value;
+      values.virtualFixtureControlsOpenRef.current = value; state.calls.push(['open', value]); },
+    // Selecting from nothing opens Light, whose room tool is Zones (APT-R01).
+    virtualFixtureControlsOpenRef: { current: false }, fixtureInteractionModeRef: { current: 'spot' },
+    setFixtureInteractionMode: value => { state.calls.push(['tool', value]); }, setVirtualInspectorTab: value => { state.tab = value; state.calls.push(['tab', value]); },
     setVirtualFixtureChannel: value => { state.channel = value; }, setVirtualAimNotice: value => { state.notice = value; },
     setVirtualFixturePreview: value => { state.preview = value; }, setVirtualAimHistoryVersion() {},
     setHoverId() {}, setCardId: id => state.calls.push(['card', id]), setAimFixtureId() {}, setAimDestination() {}, setAimMode() {},
@@ -372,11 +376,24 @@ test('candidate: an owned empty click clears, while an empty drag and canceled p
   assert.deepEqual(f.state.services, []); f.dispose();
 });
 
+test('selecting from nothing opens Light with the Zones tool; a later selection keeps its tab', () => {
+  const f = fixture(current); f.select(f.ids[0]);
+  assert.equal(f.state.tab, 'light'); assert.deepEqual(f.state.calls.filter(call => call[0] === 'tool'), [['tool', 'zones']]);
+  f.state.tab = 'retained'; f.state.calls.length = 0; f.select(f.ids[1]);
+  assert.equal(f.state.selectedId, f.ids[1]); assert.equal(f.state.tab, 'retained');
+  assert.deepEqual(f.state.calls.filter(call => call[0] === 'tool' || call[0] === 'tab'), []); f.dispose();
+});
+
 test('candidate: explicit post-aim compatibility click never clears selection or its retained target/history', () => {
   const f = fixture(current); f.mountPointer(); f.state.hit = f.ids[0];
+  const untouched = f.fingerprint();
   emit(f.canvas, 'pointerdown'); emit(f.canvas, 'pointermove', { clientX: 135 }); emit(f.canvas, 'pointerup', { clientX: 135 });
   const before = f.fingerprint(), undo = copy(f.values.virtualAimHistoryRef.current.undo);
-  assert.equal(f.state.open, true); assert.ok(undo.length > 0, 'real gesture commit callback must have run');
+  // W2: only the reticle aims (APT-A01). The real gesture owner still owns
+  // this fixture-body drag and selects, but it previews and commits nothing.
+  assert.equal(f.state.open, true); assert.equal(f.state.selectedId, f.ids[0], 'the body press selected its fixture');
+  assert.equal(before, untouched, 'a fixture-body drag never moves an aim');
+  assert.deepEqual(undo, [], 'a fixture-body drag records no aim history');
   emit(f.canvas, 'click', { clientX: 135 });
   assert.equal(f.state.open, true); assert.equal(f.state.selectedId, f.ids[0]);
   assert.equal(f.fingerprint(), before); assert.deepEqual(copy(f.values.virtualAimHistoryRef.current.undo), undo);

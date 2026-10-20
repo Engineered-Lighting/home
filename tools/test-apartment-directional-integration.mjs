@@ -286,7 +286,9 @@ function fixture({ mode = 'zones' } = {}) {
     virtualFixtureBindingKey: JSON.stringify(binding), hoverId: null, cardId: null, semanticDevicesForRoom: [],
     setVirtualFixturePreview: value => { state.previewPublications++; values.virtualFixtureItems = value.fixtures; },
     setVirtualFixtureId: value => { values.virtualFixtureId = value; state.calls.push(['fixture', value]); },
-    setVirtualFixtureControlsOpen: value => { values.virtualFixtureControlsOpen = value; state.calls.push(['open', value]); },
+    setVirtualFixtureControlsOpen: value => { values.virtualFixtureControlsOpen = value; values.virtualFixtureControlsOpenRef.current = value; state.calls.push(['open', value]); },
+    // The render-time mirror the first-selection rule reads.
+    virtualFixtureControlsOpenRef: { current: true },
     setFixtureInteractionMode: value => { values.fixtureInteractionMode = value; values.fixtureInteractionModeRef.current = value; state.calls.push(['mode', value]); },
     setVirtualInspectorTab: value => { values.virtualInspectorTab = value; state.calls.push(['tab', value]); },
     setRadialReadout: value => { state.readout = value; values.radialReadout = value; },
@@ -303,7 +305,9 @@ function fixture({ mode = 'zones' } = {}) {
   };
   const context = vm.createContext(values), cleanups = [];
   for (const name of ['selectionEngine', 'selectionLifecycle']) context[name] = actual.initializer(name, context);
-  for (const name of ['getDirectionalSnapshot', 'isDirectionalProjectionCurrent', 'projectDirectionalFixture', 'changeFixtureInteractionMode', 'changeVirtualInspectorTab', 'selectVirtualFixture', 'changeVirtualFixture']) actual.install(name, context);
+  for (const name of ['getDirectionalSnapshot', 'isDirectionalProjectionCurrent', 'projectDirectionalFixture', 'changeFixtureInteractionMode', 'changeVirtualInspectorTab', 'selectVirtualFixture', 'changeVirtualFixture',
+    // Radial painting is a hand change: it reaches changeVirtualFixture through the one switch point.
+    'changeVirtualFixtureByHand']) actual.install(name, context);
   values.directionalProjectRef.current = context.projectDirectionalFixture;
   actual.assignment('publishVirtualFixturePreviewRef', context);
   const mount = signature => {

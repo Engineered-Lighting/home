@@ -3,7 +3,8 @@
  * module reads no household data, starts no session and sends no command.
  *
  * Keys: KEY_MAP lists what the room actually binds. The room handler in
- * home-apartment.jsx owns every "room" key, HomeOverlay owns Escape and this
+ * home-apartment.jsx owns every "room" key, its aim key handler owns the
+ * "aim" keys (with A/Z's "z"), HomeOverlay owns Escape and this
  * module owns "?". tools/test-apartment-room-guide.cjs compares KEY_MAP with
  * the bound handler in both directions, so help can only list working keys.
  *
@@ -27,16 +28,20 @@
     { id: "cycle", owner: "room", keys: ["n", "p"], label: "N / P", action: "Select the next or previous light or device" },
     { id: "aim-mode", owner: "room", keys: ["a", "z"], label: "A / Z", homes: ["victoria"],
       action: "Spot aiming or radial zones for the selected light", when: "With a modeled light selected" },
+    { id: "aim-set", owner: "aim", keys: ["Enter"], label: "Enter", homes: ["victoria"],
+      action: "Set the proposed aim", when: "With a proposal waiting and no control focused" },
+    { id: "aim-history", owner: "aim", keys: ["Z"], label: "⌘Z / Ctrl+Z, with Shift to redo", homes: ["victoria"],
+      action: "Undo or redo the selected light's aim, or bring back a discarded proposal", when: "With a modeled light selected" },
     { id: "escape", owner: "overlay", keys: ["Escape"], label: "Esc",
       action: "Cancel the current step, then close the open card or clear the selection" },
     { id: "help", owner: "guide", keys: ["?"], label: "?", action: "Show these gestures and keys" },
   ].map(Object.freeze));
 
-  /* Pointer input in home-3d/rig.js and the room's pick and aim handlers:
-   * exactly what is bound, nothing more (the test checks both directions). */
+  /* Pointer input in home-3d/rig.js and the room's pick and aim handlers.
+   * Pan and pinch are listed because rig.js binds them (APT-R01, APT-S04). */
   const GESTURES = Object.freeze([
     { id: "drag-orbit", label: "Drag empty space", action: "Orbit the room; one finger on touch" },
-    { id: "pan", label: "Shift-drag or right-drag", action: "Pan across the floor; at the full-room view it springs back" },
+    { id: "pan", label: "Shift-drag or right-drag", action: "Pan the room" },
     { id: "wheel-zoom", label: "Scroll wheel", action: "Zoom" },
     { id: "pinch-zoom", label: "Pinch with two fingers", action: "Zoom one step at a time" },
     { id: "select", label: "Click a light", action: "Select it and open its controls" },
@@ -252,7 +257,7 @@
   const ABOUT_GROUPS = [["live", "Live"], ["modeled", "Modeled"], ["authored", "Authored"], ["recorded", "Recorded"], ["unavailable", "Not available here"]];
 
   function aboutFacts({ homeId, source = {}, revision = null, liveShadow = false, simActive = false,
-    trackerStatus = null, hasVirtualFixtures = false, fixtureCount = 0, hasPerception = false } = {}) {
+    trackerStatus = null, hasVirtualFixtures = false, fixtureCount = 0, hasPerception = false, cameraViews = null } = {}) {
     const facts = [];
     const add = (group, id, title, detail) => facts.push({ group, id, title, detail });
     const rev = Number.isInteger(revision) ? ` · rev ${revision}` : "";
@@ -274,6 +279,10 @@
         "Exact analyzed frames with approximate room placement. Start and stop sessions in Camera · JEV.");
       else add("unavailable", "perception", "Body and camera results", "Need pose data");
     }
+    // Camera views are room poses. A home without a calibrated pose says why instead of guessing one.
+    if (cameraViews?.available) add("authored", "camera-views", "Camera views",
+      "Open a camera's card and choose fly to view. Return to room leaves it.");
+    else if (cameraViews) add("unavailable", "camera-views", "Camera views", cameraViews.reason || "No camera pose here");
     return facts;
   }
 

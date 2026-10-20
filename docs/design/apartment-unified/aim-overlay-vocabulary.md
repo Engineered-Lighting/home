@@ -7,8 +7,11 @@ vocabulary, taken from SPEC.md › Gestures, › Aim lifecycle and › Spot or z
 before any code. The product exports it as `AIM_OVERLAY_VOCABULARY`; both test
 suites keep their own literal copy and fail if either side changes alone.
 
-Neither module is loaded or mounted yet. Host wiring waits for Den's
-hand-change switch point (`aimPreview.releaseForManual`).
+`app/src/home-apartment.jsx` mounts the overlay in the room view and loads the
+presentation through the engine's `loadAimPresentation()`. Every fixture change
+it makes for a person first calls the one hand-change switch point,
+`releaseFixtureForHandChange(fixtureId, { reason })`. That call does nothing on
+the UI line until Den binds it (`tools/test-apartment-manual-intent-contract.mjs`).
 
 ## Elements
 
@@ -46,7 +49,13 @@ hand-change switch point (`aimPreview.releaseForManual`).
 | Reticle or bar | Enter | Set aim, only for a valid proposal |
 | Reticle | Arrows / Shift+Arrows | Nudge the proposal 10 px / 40 px in screen space |
 
-The global Escape ladder (camera view, selection, nothing) stays with the host.
+The global Escape ladder stays with the host: reticle drag, tap to aim, camera
+view, the selected light's proposal (Cmd/Ctrl+Z restores it), selection, then
+nothing. The host also answers Enter (Set aim) when focus is on no control, and
+Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z for the selected light's 30-step aim history.
+
+The fixture label buttons, and the Spot button while an aim waits, carry an
+`aria-label`, so their names never come from hidden text.
 
 ## Truth rules the chip keeps
 

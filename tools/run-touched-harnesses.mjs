@@ -77,8 +77,8 @@ const MAP = [
   [/^(?:app\/src\/(?:home-3d\/(?:lit-(?:view|model)\.mjs|engine\.js)|home-apartment\.jsx)|tools\/test-apartment-lit-(?:view|browser)\.mjs)$/, ["test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   // L2: Lit's exposure and tone policy, and Lit on the WebGPU path (?renderer=webgpu-webgl).
-  [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs"]],
-  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/test-apartment-lit-webgpu-browser\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"]],
+  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part2)?|fixtures\/apartment-lit-webgpu-browser-proof)\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
   [/^app\/src\/home-ai-stack\.jsx$/, ["run-ai-stack-card-tests"]],
@@ -172,7 +172,7 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * rounded up, and the composer-comfort suite's first hosted run 39307352122.
  * The two directional parts are that run's setup plus their own stages.
  * test-precompiled-jsx.mjs is twice its 45 s local run until hosted-measured.
- * test-apartment-lit-webgpu-browser.mjs is four times its 30 s local run until hosted-measured.
+ * The two WebGPU Lit parts are their hosted stage times (run 39349207506) rounded up.
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
@@ -189,7 +189,8 @@ const SHARD_WEIGHT_S = {
   "test-apartment-m2-links-browser.mjs": 110,
   "test-apartment-m2-shell-browser.mjs": 80,
   "test-apartment-lit-browser.mjs": 90,
-  "test-apartment-lit-webgpu-browser.mjs": 120,
+  "test-apartment-lit-webgpu-browser.mjs": 135,
+  "test-apartment-lit-webgpu-browser-part2.mjs": 130,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-rig-fit-browser.mjs": 45,
   "test-apartment-aim-theme-browser.mjs": 8,
@@ -217,7 +218,8 @@ function shardWeight(name) {
  * worker's items keep the unsharded plan order. */
 // Parts of one split suite run on different workers whenever there are at
 // least as many workers as parts, so no worker carries the whole suite.
-const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]];
+const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
+  ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"]];
 function partitionPlan(plan, count) {
   const loads = Array(count).fill(0), owner = new Map();
   const order = [...plan].sort((a, b) => shardWeight(b) - shardWeight(a) || (a < b ? -1 : a > b ? 1 : 0));

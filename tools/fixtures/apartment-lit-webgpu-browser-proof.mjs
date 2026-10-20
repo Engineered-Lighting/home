@@ -85,12 +85,12 @@ function browserOptions(backend) {
   return { headless: true, args, ...(channel ? { channel } : process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-export async function runLitWebgpuBrowserProof({ part }) {
+export async function runLitWebgpuBrowserProof({ part, signal }) {
   assert.ok(part === 1 || part === 2 || part === 3, 'part 1, 2 or 3');
-  for (const backend of backends) await proveOn(backend, part);
+  for (const backend of backends) { signal?.throwIfAborted(); await proveOn(backend, part, signal); }
 }
 
-async function proveOn(backend, part) {
+async function proveOn(backend, part, signal) {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'this proof uses only current worktree source');
   const run = path.join(ROOT, '.tmp/apartment-lit-webgpu-browser', backend + '-part' + part + '-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -105,6 +105,8 @@ async function proveOn(backend, part) {
   const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
   // The browser deadline remains 145 s, inside the runner's 180 s file bound.
   let server, browser, page, origin, handler, timer, stage = 'boot';
+  const abort = () => { browser?.close().catch(() => {}); server?.closeAllConnections(); };
+  signal?.addEventListener('abort', abort, { once: true });
   const started = Date.now(), at = name => { stage = name; receipt.stages = { ...receipt.stages, [name]: Date.now() - started }; };
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
     browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s lit webgpu browser deadline at stage ' + stage + ' ' + JSON.stringify(receipt.stages || {})));
@@ -430,6 +432,7 @@ async function proveOn(backend, part) {
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nLit WebGPU failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });
   } finally {
+    signal?.removeEventListener('abort', abort);
     clearTimeout(timer); await browser?.close();
     if (server) await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
   }

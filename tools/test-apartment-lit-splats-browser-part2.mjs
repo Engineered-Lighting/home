@@ -6,5 +6,5 @@
 import test from 'node:test';
 import { runLitSplatsBrowserProof } from './fixtures/apartment-lit-splats-browser-proof.mjs';
 
-test('L4 part 2: Cloud relit and restored; the WebGL2 backend declares lit receivers unavailable', { timeout: 180000 },
-  () => runLitSplatsBrowserProof({ part: 2 }));
+test('L4 part 2: Cloud relit and restored; the WebGL2 backend declares lit receivers unavailable', { timeout: 145000 },
+  t => runLitSplatsBrowserProof({ part: 2, signal: t.signal }));

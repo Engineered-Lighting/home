@@ -41,7 +41,7 @@ const REPO = path.resolve(TOOLS, "..");
 const MAP = [
   [/^tools\/(?:bench-lit-receivers-browser|lib\/lit-webgpu-timestamp-benchmark|test-lit-webgpu-timestamp-benchmark)\.mjs$/, ["test-lit-webgpu-timestamp-benchmark.mjs"]],
   [/^tools\/(?:fixtures\/apartment-lit-layer-fixtures|test-lit-layer-fixture-memoization)\.mjs$/, ["test-lit-layer-fixture-memoization.mjs"]],
-  [/^app\/src\/(?:home-apartment\.jsx|home-3d\/markers\.js)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"]],
+  [/^app\/src\/(?:home-apartment\.jsx|home-3d\/markers\.js)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app\.jsx|home-metrics(?:-lab)?\.jsx)|tools\/test-home-full-ui-metrics-browser\.mjs)$/, ["test-home-full-ui-metrics-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-people)\.jsx|tools\/test-home-full-ui-people-browser\.mjs)$/, ["test-home-full-ui-people-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-intelligence)\.jsx|tools\/test-home-full-ui-intelligence-browser\.mjs)$/, ["test-home-full-ui-intelligence-browser.mjs"]],
@@ -159,7 +159,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
-  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|photo)-browser\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"]],
+  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"]],
   // The WebGPU splat pipeline (Photo on ?renderer=webgpu) and the Spark cutaway it mirrors.
   [/^(?:app\/src\/home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|modes\.js|adaptive-performance\.mjs)|tools\/test-apartment-gaussian-splat\.mjs)$/, ["test-apartment-gaussian-splat.mjs"]],
   [/^(?:app\/src\/(?:vendor\/(?:three-0\.186\.1|spark-2\.1\.0)\/.+|home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/test-apartment-webgpu-splat-browser\.mjs)$/, ["test-apartment-webgpu-splat-browser.mjs"]],
@@ -262,6 +262,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-aim-wiring-room-browser.mjs": 110,
   "test-apartment-aim-wiring-drag-browser.mjs": 105,
   "test-apartment-webgpu-renderer-browser.mjs": 100,
+  "test-apartment-webgpu-mesh-browser.mjs": 100,
   "test-apartment-shell-audit-browser.mjs": 70,
   "test-apartment-chat-room-browser.mjs": 66,
   "test-apartment-aim-wiring-browser.mjs": 63,
@@ -304,6 +305,7 @@ function shardWeight(name) {
 // Parts of one split suite run on different workers whenever there are at
 // least as many workers as parts, so no worker carries the whole suite.
 const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
+  ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"],
   ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs"],
   ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];

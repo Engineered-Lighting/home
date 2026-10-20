@@ -300,21 +300,25 @@ async function runInPage(browser, origin, kind, fn, options) {
   return { ...result, errors };
 }
 
-test('the WebGPU splat pipeline matches Spark and the CPU twins', { timeout: 900000 }, async () => {
+test('the WebGPU splat pipeline matches Spark and the CPU twins', { timeout: 145000 }, async t => {
+  const browsers = new Set();
+  t.after(async () => { await Promise.allSettled([...browsers].map(browser => browser.close())); });
   const server = await serve();
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
     const reference = await (async () => {
       const browser = await chromium.launch(browserOptions(false));
-      try { return await runInPage(browser, origin, 'spark', sparkFrames, { splats: SPLATS }); } finally { await browser.close(); }
+      browsers.add(browser);
+      try { return await runInPage(browser, origin, 'spark', sparkFrames, { splats: SPLATS }); } finally { await browser.close(); browsers.delete(browser); }
     })();
     assert.deepEqual(reference.errors, [], 'Spark page errors');
     assert.equal(reference.frames.length, 4);
     for (const backend of backends) {
       const browser = await chromium.launch(browserOptions(backend === 'webgpu'));
+      browsers.add(browser);
       let result;
       try { result = await runInPage(browser, origin, 'node', nodeProof, { splats: SPLATS, forceWebGL: backend !== 'webgpu' }); }
-      finally { await browser.close(); }
+      finally { await browser.close(); browsers.delete(browser); }
       assert.deepEqual(result.errors, [], backend + ' page errors');
       assert.equal(result.backend, backend === 'webgpu' ? 'webgpu' : 'webgl2', 'the requested backend ran');
 

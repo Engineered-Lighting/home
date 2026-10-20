@@ -65,7 +65,7 @@ function browserOptions() {
 }
 const RENDERER_QUERY = RENDERER === 'webgpu' ? '&renderer=webgpu' : '';
 
-export async function runLitSplatsBrowserProof({ part }) {
+export async function runLitSplatsBrowserProof({ part, signal }) {
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
   const run = path.join(ROOT, '.tmp/apartment-lit-splats-browser', 'part' + part + '-run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -82,6 +82,8 @@ export async function runLitSplatsBrowserProof({ part }) {
   // Opt-in stills of the authored room for local review; never part of the pass criteria.
   const still = async (page, name) => { if (process.env.HOME_LIT_SPLATS_STILLS === '1') await page.screenshot({ path: path.join(run, name + '.png') }); };
   let server, browser, origin, handler, timer;
+  const abort = () => { browser?.close().catch(() => {}); server?.closeAllConnections(); };
+  signal?.addEventListener('abort', abort, { once: true });
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
     browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s lit splats browser deadline'));
   }, 145000); });
@@ -395,6 +397,7 @@ export async function runLitSplatsBrowserProof({ part }) {
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nLit splats failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });
   } finally {
+    signal?.removeEventListener('abort', abort);
     clearTimeout(timer); await browser?.close();
     if (server) await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
   }

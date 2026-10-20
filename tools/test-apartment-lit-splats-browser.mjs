@@ -6,5 +6,5 @@
 import test from 'node:test';
 import { runLitSplatsBrowserProof } from './fixtures/apartment-lit-splats-browser-proof.mjs';
 
-test('L4 part 1: flag off is the identical frame; Photo relit from the bound layer and restored exactly', { timeout: 180000 },
-  () => runLitSplatsBrowserProof({ part: 1 }));
+test('L4 part 1: flag off is the identical frame; Photo relit from the bound layer and restored exactly', { timeout: 145000 },
+  t => runLitSplatsBrowserProof({ part: 1, signal: t.signal }));

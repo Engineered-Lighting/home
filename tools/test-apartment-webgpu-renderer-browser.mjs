@@ -41,10 +41,10 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const candidates = (process.env.HOME_WEBGPU_PROOF_BACKENDS || 'webgpu-webgl').split(',').map(value => value.trim()).filter(Boolean);
 assert.ok(candidates.every(value => ['webgpu', 'webgpu-webgl'].includes(value)), 'backends are webgpu and/or webgpu-webgl');
 const imageDir = process.env.HOME_WEBGPU_PROOF_IMAGES || null;
-/* Scan modes compared at the fixed poses. Cloud and Mesh by default; Photo
- * has its own harness (test-apartment-webgpu-photo-browser.mjs), so each run
- * fits the touched-harness deadline on SwiftShader. */
-const proofModes = globalThis.__HOME_WEBGPU_PROOF_MODES || ['points', 'mesh'];
+/* Each scan mode has a separate entry point, with the same backends, poses,
+ * contracts and thresholds. This entry point covers Cloud; Mesh and Photo
+ * import it with their mode selected, within the 145 s software-GL budget. */
+const proofModes = globalThis.__HOME_WEBGPU_PROOF_MODES || ['points'];
 const modeNames = { points: 'Cloud', mesh: 'Mesh', splat: 'Photo' };
 const viewport = { width: 960, height: 600 };
 

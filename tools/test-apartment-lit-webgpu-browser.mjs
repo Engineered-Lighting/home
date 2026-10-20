@@ -3,5 +3,5 @@
 import test from 'node:test';
 import { runLitWebgpuBrowserProof } from './fixtures/apartment-lit-webgpu-browser-proof.mjs';
 
-test('Lit on the WebGPU path keeps Tier-0 and the bright ladder reads naturally (part 1)', { timeout: 175000 },
-  () => runLitWebgpuBrowserProof({ part: 1 }));
+test('Lit on the WebGPU path keeps Tier-0 and the bright ladder reads naturally (part 1)', { timeout: 145000 },
+  t => runLitWebgpuBrowserProof({ part: 1, signal: t.signal }));

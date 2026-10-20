@@ -69,6 +69,8 @@
         ["home-apartment-desk-preview.js", false],
         ["home-apartment-perception-player.js", false],
         ["home-apartment-desk-aim-preview.js", false],
+        ["home-den-reason-vocabulary.js", false],
+        ["home-apartment-perception-dock-model.js", false],
         ["home-apartment-den-perception.jsx", true],
         ["home-lighting-brain-client.js", false],
         ["home-lighting-brain-follower.js", false],

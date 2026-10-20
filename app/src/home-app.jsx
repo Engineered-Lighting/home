@@ -5553,6 +5553,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   // underlying chat feed while the overlay is open.
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
+  const [perceptionLabIntent, setPerceptionLabIntent] = useState(null);
   const [perceptionLabOpen, setPerceptionLabOpen] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("perceptionLabDemo") === "1"; } catch (_) { return false; }
   });
@@ -11814,6 +11815,12 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const openPeopleFeature = (source) => openSurface("people", srcOf(source));
   const openIntelligenceFeature = (source) => openSurface("intel", srcOf(source));
   const openPerceptionLabFeature = (source) => openSurface("perceptionLab", srcOf(source));
+  /* APT-P06: the camera dock's Open in Lab carries the session and the frame's
+   * time; Lab opens that session when it can and says when it cannot. */
+  const openPerceptionLabFromDock = (intent) => {
+    setPerceptionLabIntent(intent && typeof intent.session_id === "string" ? { ...intent, seq: Date.now() } : null);
+    openPerceptionLabFeature("apartment-dock");
+  };
   const openVideoLabelerFeature = (source) => {
     if (!videoLabelerAvailable) {
       addEvent({
@@ -11923,6 +11930,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
             onShellState={setShellState}
             onShowShellControls={showShellControls}
             onShowShellAim={showShellAim}
+            onOpenPerceptionLab={openPerceptionLabFromDock}
           />
           {!unifiedHome && <SpatialModeRail
             active={spatialActiveSurface}
@@ -12106,7 +12114,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           spatialMode={isSpatialWide}
         />
       )}
-      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={isSpatialWide} />}
+      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={isSpatialWide}
+        intent={perceptionLabIntent} />}
       {window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
       {perceptionLabOpen && !window.HomePerceptionLab && <FeatureLoadingSurface open={perceptionLabOpen} title="Perception Lab" status={featureStatusFor("perceptionLab")} error={featureLoadErrors.perceptionLab} onClose={() => setPerceptionLabOpen(false)} onRetry={() => ensureFeature("perceptionLab", "Perception Lab", "retry")} mobile={mobile} />}
       {intelligenceOpen && !window.HomeIntelligenceOverlay && (

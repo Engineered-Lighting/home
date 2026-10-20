@@ -17,7 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TOOLS = [['sockets', 'Devices and sockets'], ['names', 'Names'], ['targets', 'Named aims'], ['zones', 'Zones'],
   ['position', 'Fixture position'], ['links', 'Home Assistant'], ['cameras', 'Cameras and sensors']];
 
-test('Setup rail opens every existing tool in both homes and leaves the room exactly as it was', { timeout: 200000 }, async () => {
+test('Setup rail opens every existing tool in both homes and leaves the room exactly as it was', { timeout: 145000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-setup-rail-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const rooms = installSetupRooms(run), packHashes = rooms.packHashes(), registration = hash(fs.readFileSync(rooms.registrationFile));
   const receipt = { schema: 'home-apartment-setup-rail-browser-1', authored_room: true, household_data: false, screenshots: false,
@@ -25,8 +25,8 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   let server, browser, timer;
   const started = Date.now();
-  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('170s Setup rail browser deadline at: '
-    + receipt.current_stage + ' · ' + JSON.stringify(receipt.checks.map(item => item.seconds)))); }, 170000); });
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('140s Setup rail browser deadline at: '
+    + receipt.current_stage + ' · ' + JSON.stringify(receipt.checks.map(item => item.seconds)))); }, 140000); });
   const check = async (name, operation) => {
     receipt.current_stage = name; save(); const begun = Date.now();
     receipt.checks.push({ name, ...(await operation()), seconds: Math.round((Date.now() - begun) / 100) / 10 }); save();

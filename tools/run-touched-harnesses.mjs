@@ -461,7 +461,9 @@ for (const name of shardPlan.filter(item => item !== "check-jsx.js")) {
     record(name, "ok", started);
   } else {
     console.log("FAIL");
-    const tail = `${res.stdout || ""}\n${res.stderr || ""}`.trim().split(/\r?\n/).slice(-15).join("\n");
+    // Preserve the assertion and its call log as well as the final TAP counts.
+    // Fifteen lines retained only the stack tail for browser failures.
+    const tail = `${res.stdout || ""}\n${res.stderr || ""}`.trim().split(/\r?\n/).slice(-80).join("\n");
     console.log(tail.replace(/^/gm, "       "));
     record(name, "fail", started);
   }

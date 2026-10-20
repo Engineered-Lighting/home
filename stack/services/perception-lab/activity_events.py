@@ -9,7 +9,7 @@ import re
 
 SCHEMA = 'activity-lighting-events-1'
 COMMON = ('type', 'home', 'room', 'source', 'observed_at', 'sent_at', 'ttl_s')
-TTL_S = {'activity': 12., 'person_pose': 10., 'health': 150., 'cost': 300., 'person_position': 3.}
+TTL_S = {'activity': 12., 'person_pose': 10., 'health': 150., 'cost': 300., 'person_position': 10.}
 LABELS = ('reading', 'computer_work', 'phone_use', 'resting', 'transition', 'other', 'insufficient_evidence')
 ZONES = ('desk', 'sofa')
 COMPONENTS = ('jev', 'deep_stack', 'frigate', 'camera')

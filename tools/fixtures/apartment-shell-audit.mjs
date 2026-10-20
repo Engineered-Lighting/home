@@ -210,13 +210,17 @@ test(PARTS[part], { timeout: 160000 }, async () => {
         if (dialog && !await page.getByRole('dialog', { name: dialog, exact: true }).isVisible()) findings.push({ message: dialog + ' opens · ' + profile.name });
         await page.keyboard.press('Escape'); await settle();
       }
-      const setup = page.locator('.apt-home-topbar').getByRole('button', { name: 'Setup', exact: true });
-      if (await setup.isVisible() && await setup.isEnabled()) {
+      // Setup is in the Home menu; the top bar says whether it is on.
+      const homeMenu = page.getByRole('button', { name: 'Home menu', exact: true });
+      const setup = page.getByRole('menu', { name: 'Home features', exact: true }).getByRole('menuitemcheckbox', { name: 'Setup', exact: true });
+      const setupOn = async () => await page.locator('.apt-home-topbar .apt-home-menu').getAttribute('data-setup') === 'on';
+      await homeMenu.click(); await settle();
+      if (await setup.isVisible() && await setup.getAttribute('aria-disabled') !== 'true') {
         await setup.click(); await settle();
         await audit(profile, site, theme, 'setup');
-        if (await setup.getAttribute('aria-pressed') === 'true') { await setup.click(); await settle(); }
-        if (await setup.getAttribute('aria-pressed') === 'true') { await page.keyboard.press('Escape'); await settle(); }
-      }
+        if (await setupOn()) { await homeMenu.click(); await setup.click(); await settle(); }
+        if (await setupOn()) { await page.keyboard.press('Escape'); await settle(); }
+      } else if (await homeMenu.getAttribute('aria-expanded') === 'true') { await page.keyboard.press('Escape'); await settle(); }
     }
     if (await tab('Camera · JEV')) await audit(profile, site, theme, 'camera');
     if (site === 'echo' && await tab('Chat')) await audit(profile, site, theme, 'chat');

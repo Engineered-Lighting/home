@@ -1,7 +1,8 @@
-// L2 browser proof, shared by tools/test-apartment-lit-webgpu-browser.mjs (part 1:
-// Tier-0 on node materials and the lights-off ladder) and its -part2 twin (part 2:
-// the moonlit tone views, the adaptation ease, timing and the exact restore), so
-// neither part nears the touched-harness runner's 180 s limit on software GL.
+// L2 browser proof, shared by three browser files: part 1 checks Tier-0 and the
+// bright half of the lights-off ladder; part 3 checks its overlapping dim half;
+// part 2 checks moonlit tone views, adaptation, timing and exact restoration.
+// The overlapping one-spot rung retains every adjacent ladder comparison while
+// retaining each proof's original 145 s browser deadline on software GL.
 // Tier-0 Lit on the WebGPU path (?renderer=webgpu-webgl in CI,
 // the node renderer on its WebGL2 backend) with the scene-referred exposure and
 // tone pipeline. Tier-0's behaviour holds on node materials; a scripted
@@ -85,12 +86,12 @@ function browserOptions(backend) {
   return { headless: true, args, ...(channel ? { channel } : process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-export async function runLitWebgpuBrowserProof({ part }) {
-  assert.ok(part === 1 || part === 2, 'part 1 or 2');
-  for (const backend of backends) await proveOn(backend, part);
+export async function runLitWebgpuBrowserProof({ part, signal }) {
+  assert.ok(part === 1 || part === 2 || part === 3, 'part 1, 2 or 3');
+  for (const backend of backends) { signal?.throwIfAborted(); await proveOn(backend, part, signal); }
 }
 
-async function proveOn(backend, part) {
+async function proveOn(backend, part, signal) {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'this proof uses only current worktree source');
   const run = path.join(ROOT, '.tmp/apartment-lit-webgpu-browser', backend + '-part' + part + '-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -103,12 +104,14 @@ async function proveOn(backend, part) {
   const sources = publicSources(SRC), receipt = { schema: 'home-apartment-lit-webgpu-authored-browser-1', backend, part, authored_room: true, real_renderer: true,
     household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], served: {} };
   const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
-  // The touched-harness runner stops a suite at 180 s; this deadline lands first and names the stage.
+  // The browser deadline remains 145 s, inside the runner's 180 s file bound.
   let server, browser, page, origin, handler, timer, stage = 'boot';
+  const abort = () => { browser?.close().catch(() => {}); server?.closeAllConnections(); };
+  signal?.addEventListener('abort', abort, { once: true });
   const started = Date.now(), at = name => { stage = name; receipt.stages = { ...receipt.stages, [name]: Date.now() - started }; };
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
-    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('165s lit webgpu browser deadline at stage ' + stage + ' ' + JSON.stringify(receipt.stages || {})));
-  }, 165000); });
+    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s lit webgpu browser deadline at stage ' + stage + ' ' + JSON.stringify(receipt.stages || {})));
+  }, 145000); });
 
   async function proof() {
     server = http.createServer((req, res) => {
@@ -250,7 +253,7 @@ async function proveOn(backend, part) {
     at('lit_on');
     await litButton.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: LIT_WAIT_MS });
-    await frames(6); await settled();
+    await settled();
     await page.waitForFunction(() => document.querySelector('[aria-label="Lighting"]')?.getAttribute('aria-pressed') === 'true'
       && document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: LIT_WAIT_MS });
     const note = page.locator('[data-apt-lit-disclosure]');
@@ -333,12 +336,15 @@ async function proveOn(backend, part) {
       const result = await page.evaluate(({ ids, patches }) => ids.map((id, index) => window.__APT_ENGINE.overlay.setVirtualFixtureState(id, patches[index]).ok),
         { ids, patches: ids.map((_, index) => rung[name](index)) });
       assert.ok(result.every(Boolean), 'ladder rung applied: ' + name);
-      await frames(3); await settled(); await frames(3);
+      // Two fresh meter results plus completed easing/baking fence the state;
+      // captureFrame renders that settled state without six extra idle frames.
+      await settled();
     };
     const ladder = {}, frameOf = {};
     if (part === 2) await apply('off_moon');
-    if (part === 1) {
-    for (const name of LADDER) {
+    if (part === 1 || part === 3) {
+    const rungs = part === 1 ? LADDER.slice(0, 3) : LADDER.slice(2);
+    for (const name of rungs) {
       await apply(name);
       const frame = await capture(), scene = await sceneLuminance();
       const state = await page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { adaptationEv: s.adaptationEv, dropEv: s.adaptationDropEv, ev100: s.ev100, meteredCdM2: s.meteredCdM2 }; });
@@ -348,13 +354,16 @@ async function proveOn(backend, part) {
       if (process.env.HOME_LIT_WEBGPU_STILLS === '1') await page.screenshot({ path: path.join(run, 'ladder-' + LADDER.indexOf(name) + '-' + name + '.png') });
       ladder[name] = { mean_display_luminance: frame.meanY, near_black_pct: frame.nearBlackPct, scene_mean_cd_m2: scene.meanCdM2, ...state };
     }
-    for (let i = 1; i < LADDER.length; i++) {
-      assert.ok(ladder[LADDER[i]].mean_display_luminance < ladder[LADDER[i - 1]].mean_display_luminance,
-        `mean display luminance strictly decreases: ${LADDER[i - 1]} ${ladder[LADDER[i - 1]].mean_display_luminance} -> ${LADDER[i]} ${ladder[LADDER[i]].mean_display_luminance}`);
-      assert.ok(ladder[LADDER[i]].scene_mean_cd_m2 < ladder[LADDER[i - 1]].scene_mean_cd_m2, 'and so does the scene-referred luminance: ' + LADDER[i]);
-      assert.ok(ladder[LADDER[i]].adaptationEv >= ladder[LADDER[i - 1]].adaptationEv, 'adaptation only grows down the ladder');
+    for (let i = 1; i < rungs.length; i++) {
+      assert.ok(ladder[rungs[i]].mean_display_luminance < ladder[rungs[i - 1]].mean_display_luminance,
+        `mean display luminance strictly decreases: ${rungs[i - 1]} ${ladder[rungs[i - 1]].mean_display_luminance} -> ${rungs[i]} ${ladder[rungs[i]].mean_display_luminance}`);
+      assert.ok(ladder[rungs[i]].scene_mean_cd_m2 < ladder[rungs[i - 1]].scene_mean_cd_m2, 'and so does the scene-referred luminance: ' + rungs[i]);
+      assert.ok(ladder[rungs[i]].adaptationEv >= ladder[rungs[i - 1]].adaptationEv, 'adaptation only grows down the ladder');
     }
+    if (part === 1) {
     assert.ok(ladder.all_on.adaptationEv < 0.5, 'the all-on room meters near the design night and barely adapts: ' + ladder.all_on.adaptationEv);
+    }
+    if (part === 3) {
     assert.ok(ladder.off_moon.adaptationEv <= 5.5 + 1e-9 && ladder.off_moon.adaptationEv > 4, 'moonlight adapts, bounded at +5.5 EV');
     assert.ok(ladder.off_moon.near_black_pct <= 60, 'moonlight is at most 60 % near-black: ' + ladder.off_moon.near_black_pct);
     assert.ok(ladder.off_moon.scene_mean_cd_m2 < 0.5, 'and the moonlit room is truly dim in scene terms (cd/m², modeled): ' + ladder.off_moon.scene_mean_cd_m2);
@@ -369,6 +378,7 @@ async function proveOn(backend, part) {
     assert.ok(poolWarmth > 1.15, 'the 5 % spot pool keeps a warm hue (R/B ' + poolWarmth + ')');
     assert.ok(poolWarmth > moonWarmth, 'and is warmer than the mesopic moonlit room (' + poolWarmth + ' vs ' + moonWarmth + ')');
     ladder.spot_5.pool_r_over_b = poolWarmth; ladder.off_moon.room_r_over_b = moonWarmth;
+    }
     check('lights_off_ladder', { ladder, levels: { output_30: LEVEL_30, spot_5: LEVEL_5 } });
     receipt.ladder = ladder;
     // The camera look: the same ladder still reads strictly darker, step by step.
@@ -450,7 +460,7 @@ async function proveOn(backend, part) {
     receipt.ok = true;
     fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     process.stdout.write('Authored Lit WebGPU browser evidence: ' + path.join(run, 'receipt.json') + '\n'
-      + (part === 1 ? 'ladder ' + JSON.stringify(Object.fromEntries(LADDER.map(name => [name, [ladder[name].mean_display_luminance, ladder[name].near_black_pct, ladder[name].adaptationEv]]))) + '\n' : ''));
+      + (part !== 2 ? 'ladder ' + JSON.stringify(Object.fromEntries(Object.entries(ladder).map(([name, rung]) => [name, [rung.mean_display_luminance, rung.near_black_pct, rung.adaptationEv]]))) + '\n' : ''));
   }
   try { await Promise.race([proof(), deadline]); }
   catch (error) {
@@ -459,6 +469,7 @@ async function proveOn(backend, part) {
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nLit WebGPU failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });
   } finally {
+    signal?.removeEventListener('abort', abort);
     clearTimeout(timer); await browser?.close();
     if (server) await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
   }

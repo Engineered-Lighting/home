@@ -5324,8 +5324,14 @@ function apartmentChatAboutReply(text, about, current) {
 function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const firstItemRef = useRef(null);
+  // Setup lives in the Home menu, and is never a dead item: when the home
+  // can't open it, a press says why and the menu stays open.
+  const [setupWhy, setSetupWhy] = useState(false);
+  const setupBlocked = state?.canSetup === false && !state?.setupActive;
+  useEffect(() => { if (!setupBlocked || !menuOpen) setSetupWhy(false); }, [setupBlocked, menuOpen, state?.siteId]);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
-    rootRef: menuRef, trap: false, initialFocus: "first", onEscape: () => setMenuOpen(false) });
+    rootRef: menuRef, trap: false, initialFocus: firstItemRef, onEscape: () => setMenuOpen(false) });
   const run = action => { setMenuOpen(false); action?.(); };
   // APT-S02: every home that holds unsaved work keeps its mark, viewed or not.
   const parkedUnsaved = window.HomeApartmentData?.dirtySites?.() || [];
@@ -5355,28 +5361,37 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
         : <div role="status"><p>{state?.sourceLabel || "Loading room"}</p></div>}
     </details>
     <div className="apt-home-top-actions">
-    {state?.openSetup && <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
-      onClick={state.openSetup}>Setup</button>}
-    <button type="button" className="apt-home-travel" onClick={() => onFeature("lights")}>Lights / Travel Mode</button>
-    <div className="apt-home-menu" ref={menuRef}>
+    <div className="apt-home-menu" ref={menuRef}
+      data-setup={state?.openSetup ? state.setupActive ? "on" : setupBlocked ? "unavailable" : "off" : undefined}>
       <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"
         onClick={() => setMenuOpen(value => !value)}>Menu</button>
       {menuOpen && <><button className="apt-home-menu-dismiss" aria-label="Close Home menu" onClick={() => setMenuOpen(false)} />
         <div role="menu" aria-label="Home features" onKeyDown={event => {
           if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
           event.preventDefault();
-          const items = Array.from(event.currentTarget.querySelectorAll('[role="menuitem"]'));
+          const items = Array.from(event.currentTarget.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]'));
           const index = items.indexOf(document.activeElement);
           const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
             : (index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
           items[next]?.focus();
         }}>
+          {state?.openSetup && <>
+            <button type="button" role="menuitemcheckbox" className="apt-home-setup" ref={firstItemRef}
+              aria-checked={state.setupActive ? "true" : "false"} aria-disabled={setupBlocked ? "true" : undefined}
+              aria-describedby={setupWhy ? "apt-home-setup-why" : undefined}
+              onClick={() => { if (setupBlocked) { setSetupWhy(true); return; } run(state.openSetup); }}>
+              Setup<span className="apt-home-menu-check" aria-hidden="true">{state.setupActive ? "On" : ""}</span>
+            </button>
+            {setupWhy && <p id="apt-home-setup-why" role="status" className="apt-home-menu-note" data-apt-setup-unavailable="1">
+              {state.setupUnavailableReason || "Setup isn't available for this home here."}</p>}
+          </>}
           {[["perceptionLab", "Perception Lab"], ["metrics", "Metrics"], ["people", "People"],
             ["intel", "Intelligence"], ["labeler", "Video labeler"], ["lights", "Lights / Travel Mode"],
             ["preferences", "Preferences / connection"],
             // As in the classic menu: simulation controls exist only inside simulation (/simulation starts it).
-            ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label]) =>
-            <button type="button" role="menuitem" key={key} onClick={() => run(() => onFeature(key))}>{label}</button>)}
+            ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label], index) =>
+            <button type="button" role="menuitem" key={key} ref={index === 0 && !state?.openSetup ? firstItemRef : undefined}
+              onClick={() => run(() => onFeature(key))}>{label}</button>)}
           <button type="button" role="menuitem" onClick={() => run(onTheme)}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
           <button type="button" role="menuitem" onClick={() => run(onPreviousHome)}>Previous Home</button>
         </div></>}
@@ -5823,7 +5838,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   // of authoritative Apartment model reads and writes. While Apartment owns
   // the web surface, pause and abort only those optional HTTP/SSE consumers;
   // the HA and tracker WebSockets remain connected for live model data.
-  const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);
+  const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout) && !shellMetricsOpen;
   const [spatialOpsDockOpen, setSpatialOpsDockOpen] = useState(true);
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -11725,6 +11740,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     : typeof navigator.clipboard?.writeText !== "function" ? "Clipboard access is unavailable in this browser." : undefined;
 
   const isSpatialWide = unifiedHome || spatialLayout && wideMode;
+  // The unified room stays mounted on phones, but its menu overlays must not
+  // reserve the desktop chat rail inside a phone-sized viewport.
+  const spatialOverlayMode = isSpatialWide && wideMode;
   const spatialRailWidth = wideMode ? SPATIAL_CHAT_RAIL_WIDTH : "100%";
   const spatialStageRight = wideMode ? spatialRailWidth : 0;
   if (typeof window !== "undefined") window.__HOME_SPATIAL_MODE = isSpatialWide;
@@ -12088,7 +12106,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           client={haClientRef.current}
           connection={connection}
           sim={sim}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
         />
       )}
       {peopleOpen && !window.HomePeopleOverlay && (
@@ -12111,10 +12129,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           onClose={() => setIntelligenceOpen(false)}
           metricsBase={metricsBase}
           endpoint={endpoint}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
         />
       )}
-      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={isSpatialWide}
+      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={spatialOverlayMode}
         intent={perceptionLabIntent} />}
       {window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
       {perceptionLabOpen && !window.HomePerceptionLab && <FeatureLoadingSurface open={perceptionLabOpen} title="Perception Lab" status={featureStatusFor("perceptionLab")} error={featureLoadErrors.perceptionLab} onClose={() => setPerceptionLabOpen(false)} onRetry={() => ensureFeature("perceptionLab", "Perception Lab", "retry")} mobile={mobile} />}
@@ -12137,7 +12155,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           open={videoLabelerOpen}
           onClose={() => setVideoLabelerOpen(false)}
           sim={sim}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
         />
       )}
       {videoLabelerAvailable && videoLabelerOpen && !window.HomeVideoLabelerOverlay && (
@@ -12169,7 +12187,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           client={haClientRef.current}
           connection={connection}
           sim={sim}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
           askExternal={(payload) => {
             // Pre-fill the chat input with a structured `/ask`-prefixed
             // message containing full layer context + the user's intent.

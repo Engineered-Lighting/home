@@ -2731,7 +2731,9 @@
           fetchJson(`${base}/api/intelligence/qwen-labels/prompt-gate`).catch(() => null),
           fetchJson(`${base}/api/intelligence/training-clips/manifests?limit=10`).catch(() => ({ manifests: [] })),
           fetchJson(`${base}/api/intelligence/lighting-activity?hours=24&limit=80`).catch(() => null),
-          fetchJson(`${base}/api/intelligence/observation-packets?limit=80`).catch(() => ({ observation_packets: [] })),
+          // A failed primary read is unavailable, not an empty observation
+          // history. Keep the last successful view and expose retry feedback.
+          fetchJson(`${base}/api/intelligence/observation-packets?limit=80`),
           fetchJson(`${base}/api/intelligence/observation-packets/map?limit=300`).catch(() => ({ points: [] })),
         ]);
         setToday(t);

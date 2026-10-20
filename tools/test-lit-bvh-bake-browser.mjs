@@ -114,7 +114,7 @@ function browserOptions() {
   return { headless: true, args, ...(channel ? { channel } : {}) };
 }
 
-test('the bounce bake runs on WebGPU in a worker: zero leak, the CPU twin agrees, and scan-size timing', { timeout: 600000 }, async () => {
+test('the bounce bake runs on WebGPU in a worker: zero leak, the CPU twin agrees, and scan-size timing', { timeout: 145000 }, async t => {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(PAGE); return; }
@@ -124,6 +124,7 @@ test('the bounce bake runs on WebGPU in a worker: zero leak, the CPU twin agrees
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const browser = await chromium.launch(browserOptions());
+  t.after(async () => { await browser.close(); server.closeAllConnections(); });
   try {
     const page = await browser.newPage(), errors = [];
     page.on('pageerror', error => errors.push(error.message));

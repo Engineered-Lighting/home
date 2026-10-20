@@ -37,7 +37,7 @@ const shellPartCommands = ['node --test tools/test-apartment-home-shell-browser-
   'node --test tools/test-apartment-home-shell-browser-part3.mjs'];
 const runs = entries => entries.filter(entry => /^        run:/m.test(entry)).map(entry => field(entry, 'run', 8));
 // One worker count names every shard, receipt, artifact and the aggregate's union check.
-const SHARDS = 6, shardList = Array.from({ length: SHARDS }, (_, index) => index + 1);
+const SHARDS = 8, shardList = Array.from({ length: SHARDS }, (_, index) => index + 1);
 const receiptDir = '.tmp/touched-harnesses', receiptPath = receiptDir + '/shard-${{ matrix.shard }}-of-' + SHARDS + '.json';
 const shardedCommand = originalCommands[5] + ' --shard "${{ matrix.shard }}/' + SHARDS + '" --receipt "' + receiptPath + '"';
 const verifyCommand = originalCommands[5] + ' --verify-receipts ' + receiptDir + ' --shards ' + SHARDS;
@@ -131,7 +131,7 @@ test('all original diagnostics and every worker receipt upload exactly once unde
     assert.deepEqual([...entry.matchAll(/^            (\S.*)$/gm)].map(match => match[1]), shellPaths);
   }
   assert.deepEqual(paths.sort(), [...shellPaths, ...shellPaths,
-    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme', 'aim-wiring', 'aim-library-shell', 'composer-comfort'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
+    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme', 'aim-wiring', 'aim-library-shell', 'composer-comfort', 'setup-rail'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
     '.tmp/apartment-aim-theme-browser/run-*/*.png'].sort());
 });
 

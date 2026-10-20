@@ -189,7 +189,7 @@ export function cameraWhiteBalance({ lights = [], lumens = Model.LIT_ASSUMED_LUM
         if (!(flux > 0)) continue;
         weight += flux; mireds += flux * 1e6 / (Number.isFinite(light.kelvin) ? light.kelvin : 3000);
     }
-    const whiteKelvin = weight > 0 ? 1e6 / (mireds / weight) : ambient.kelvin;
+    const whiteKelvin = weight > 0 && mireds > 0 ? 1e6 / (mireds / weight) : ambient.kelvin;
     const matrix = look === 'camera' && !monochrome ? Exposure.whiteBalanceMatrix(Model.cctToLinearRgb(whiteKelvin)) : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
     return { whiteKelvin, matrix };
 }

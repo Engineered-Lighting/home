@@ -56,7 +56,7 @@ function browserOptions() {
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-test('Lit relights the mesh with assumed output, keeps the orbs legible, discloses it and restores exactly', { timeout: 180000 }, async () => {
+test('Lit relights the mesh with assumed output, keeps the orbs legible, discloses it and restores exactly', { timeout: 145000 }, async t => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'this proof uses only current worktree source');
   const run = path.join(ROOT, '.tmp/apartment-lit-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -70,9 +70,10 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], served: {} };
   const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
   let server, browser, page, origin, handler, timer;
+  t.after(async () => { await browser?.close(); server?.closeAllConnections(); });
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
-    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('170s lit browser deadline'));
-  }, 170000); });
+    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s lit browser deadline'));
+  }, 145000); });
 
   async function proof() {
     server = http.createServer((req, res) => {

@@ -233,7 +233,9 @@ async function proofInPage(modes) {
   return result;
 }
 
-test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mode => modeNames[mode]).join(' and ')}`, { timeout: 600000 }, async () => {
+test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mode => modeNames[mode]).join(' and ')}`, { timeout: 145000 }, async t => {
+  const browsers = new Set();
+  t.after(async () => { await Promise.allSettled([...browsers].map(browser => browser.close())); });
   const run = fs.mkdtempSync(path.join(os.tmpdir(), 'home-webgpu-proof-'));
   const privateRoot = path.join(run, 'private');
   let packs, echo, victoria;
@@ -295,6 +297,7 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
 
   async function boot(backend) {
     const browser = await chromium.launch(browserOptions(backend));
+    browsers.add(browser);
     try {
       const context = await browser.newContext({ viewport, deviceScaleFactor: 1, serviceWorkers: 'block' });
       await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
@@ -318,7 +321,7 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       await page.waitForFunction(() => window.__APT_ENGINE?.overlay?.virtualFixturesReadback?.().fixture_count > 0);
       const result = await page.evaluate(proofInPage, proofModes);
       return { ...result, pageErrors, warnings };
-    } finally { await browser.close(); }
+    } finally { await browser.close(); browsers.delete(browser); }
   }
 
   try {

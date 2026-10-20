@@ -67,9 +67,10 @@ function browserOptions(precision) {
 }
 const RENDERER_QUERY = RENDERER === 'webgpu' ? '&renderer=webgpu' : '';
 
-export async function runLitSplatsBrowserProof({ part, signal, precision='exact' }) {
+export async function runLitSplatsBrowserProof({ part, signal, precision='exact', phase='all' }) {
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
   assert.ok(['exact','native'].includes(precision),'known frame precision contract');
+  assert.ok(['all','frames','controls'].includes(phase)&&(phase==='all'||precision==='native'&&part===1),'known proof phase');
   const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
   const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -81,7 +82,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
   const protectedFiles = [echo, victoria].flatMap(item => Object.keys(item.files).map(name => path.join(packs, item.site, item.revision, name)));
   const protectedHashes = Object.fromEntries(protectedFiles.map(file => [file, hash(fs.readFileSync(file))]));
   const sources = publicSources(SRC), receipt = { schema: 'home-apartment-lit-splats-authored-browser-1', authored_room: true, authored_layer: true,
-    real_renderer: true, frame_precision:precision, household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], requests: [] };
+    real_renderer: true, frame_precision:precision, proof_phase:phase, household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], requests: [] };
   const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
   // Opt-in stills of the authored room for local review; never part of the pass criteria.
   const still = async (page, name) => { if (process.env.HOME_LIT_SPLATS_STILLS === '1') await page.screenshot({ path: path.join(run, name + '.png') }); };
@@ -265,14 +266,18 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     let offDiff;
     if (nativeWebgl) {
       measuredNoise = {mean:0,max:0};
-      for(let sample=0;sample<12;sample++) {
+      // The frames phase retains all twelve original calibration samples.
+      // The additional controls phase checks its own reference without
+      // duplicating that full calibration on a second software-rendered boot.
+      const calibrationSamples=phase==='controls'?1:12;
+      for(let sample=0;sample<calibrationSamples;sample++) {
         await frames(page,4);await capture(page,'photo:noise');
         const noise=await frameDiff(page,'photo:noise','photo:unlit');
         assert.ok(noise.max<=NATIVE_QUANTIZATION.max&&noise.mean<=NATIVE_QUANTIZATION.mean,
           'unlit native precision stays inside one RGBA8 level: '+JSON.stringify(noise));
         measuredNoise.mean=Math.max(measuredNoise.mean,noise.mean);measuredNoise.max=Math.max(measuredNoise.max,noise.max);
       }
-      check('native_unlit_calibration',{samples:12,measuredNoise,bounds:NATIVE_QUANTIZATION});
+      check('native_unlit_calibration',{samples:calibrationSamples,measuredNoise,bounds:NATIVE_QUANTIZATION});
       offDiff=await assertSameFrame(page,'photo:unlit2','photo:unlit','Lighting off matches calibrated native precision');
     } else offDiff = RENDERER === 'webgl' ? await assertSameFrame(page, 'photo:unlit2', 'photo:unlit', 'Lighting off: the identical frame')
       : (measuredNoise = await frameDiff(page, 'photo:unlit2', 'photo:unlit'));
@@ -313,6 +318,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     check('photo_relit', { luma: { unlit: unlit.luma, lit: relit.luma }, blends: litState.receivers.blends, twin_max_rel: worst,
       adaptation_ev: litState.adaptationEv, metered_cd_m2: litState.meteredCdM2, frame: litState.frame });
 
+    if(phase!=='controls'){
     // The frame's own passes on this renderer: an authored HDR frame through
     // the real bloom and display passes equals their CPU twins; dimming every
     // light at once darkens the display monotonically at a fixed exposure.
@@ -350,6 +356,8 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     assert.equal(linearCamera.measured, false);
     check('linear_readback_presentation_free', linearCamera);
 
+    }
+    if(phase!=='frames'){
     // Live spots: L5's bake posts each spot's column for the splats; re-aiming
     // one re-bakes only that column and the blend follows.
     await page.waitForFunction(() => window.__APT_ENGINE.litState().receivers?.liveSpots === 4, null, { timeout: WAIT_MS });
@@ -397,6 +405,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     await frames(page, 3); await settled(page);
     await page.evaluate(() => window.__APT_ENGINE.setLitTone('agx'));
 
+    }
     // Lighting off restores the exact Photo frame.
     await lighting.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false, null, { timeout: WAIT_MS });

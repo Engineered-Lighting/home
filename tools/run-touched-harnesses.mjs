@@ -40,7 +40,7 @@ const REPO = path.resolve(TOOLS, "..");
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
   [/^(?:app\/src\/(?:home-app|home-lights)\.jsx|tools\/test-home-full-ui-lights-browser\.mjs)$/, ["test-home-full-ui-lights-browser.mjs"]],
-  [/^tools\/fixtures\/home-full-ui-harness\.mjs$/, ["test-home-full-ui-lights-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs", "test-home-full-ui-connection-browser.mjs", "test-home-full-ui-simulation-browser.mjs", "test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
+  [/^(?:tools\/fixtures\/home-full-ui-harness\.mjs|app\/src\/home-overlay\.js)$/, ["test-home-full-ui-lights-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs", "test-home-full-ui-connection-browser.mjs", "test-home-full-ui-simulation-browser.mjs", "test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
   [/^(?:app\/src\/home-app\.jsx|tools\/test-home-full-ui-connection-browser\.mjs)$/, ["test-home-full-ui-connection-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|simulation)\.jsx|app\/src\/simulation\/|tools\/test-home-full-ui-simulation-browser\.mjs)/, ["test-home-full-ui-simulation-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-video-labeler(?:-timeline)?)\.jsx|app\/src\/home-video-labeler-data\.js|tools\/(?:fixtures\/home-video-labeler-harness|test-home-full-ui-labeler(?:-editor)?-browser)\.mjs)$/, ["test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
@@ -105,7 +105,7 @@ const MAP = [
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view|frame|display|basis-blend)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part[2345])?|fixtures\/(?:apartment-lit-webgpu-browser-proof|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"]],
   // L4: lit splats and points (lit-receivers.mjs, lit-basis-blend.mjs, lit-layer-loader.mjs).
   [/^(?:app\/src\/home-3d\/lit-(?:basis-blend|layer-loader|bvh-bake|model|exposure)\.mjs|tools\/(?:test-lit-basis-blend|fixtures\/apartment-lit-layer-fixtures)\.mjs)$/, ["test-lit-basis-blend.mjs"]],
-  [/^(?:app\/src\/(?:home-3d\/(?:lit-[\w-]+\.mjs|engine\.js|modes\.js|pointcloud\.js|webgpu-material-ports\.mjs|gaussian-splat-webgpu\.mjs)|home-apartment\.jsx)|tools\/(?:test-apartment-lit-splats-(?:native-)?browser(?:-part2)?|fixtures\/(?:apartment-lit-(?:splats-browser-proof|layer-fixtures)|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs"]],
+  [/^(?:app\/src\/(?:home-3d\/(?:lit-[\w-]+\.mjs|engine\.js|modes\.js|pointcloud\.js|webgpu-material-ports\.mjs|gaussian-splat-webgpu\.mjs)|home-apartment\.jsx)|tools\/(?:test-apartment-lit-splats-(?:native-)?browser(?:-part[23])?|fixtures\/(?:apartment-lit-(?:splats-browser-proof|layer-fixtures)|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs", "test-apartment-lit-splats-native-browser-part3.mjs"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
   [/^app\/src\/home-ai-stack\.jsx$/, ["run-ai-stack-card-tests"]],
@@ -241,6 +241,7 @@ const SHARD_WEIGHT_S = {
   "run-people-bridge-ui-tests.cjs": 45,
   "test-apartment-lit-splats-native-browser.mjs": 90,
   "test-apartment-lit-splats-native-browser-part2.mjs": 70,
+  "test-apartment-lit-splats-native-browser-part3.mjs": 100,
   "test-home-full-ui-connection-browser.mjs": 35,
   "test-home-full-ui-simulation-browser.mjs": 60,
   "test-home-full-ui-labeler-browser.mjs": 45,
@@ -342,7 +343,7 @@ const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-
   ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"],
   ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
   ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"],
-  ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs"],
+  ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs", "test-apartment-lit-splats-native-browser-part3.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];
 function partitionPlan(plan, count) {
   const loads = Array(count).fill(0), owner = new Map();

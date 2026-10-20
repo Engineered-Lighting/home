@@ -155,13 +155,17 @@
 
   function _moveFocusIn(layer) {
     if (!HAS_DOM || layer.initialFocus === "none") return;
+    var root = _rootOf(layer);
+    // Focus may already have moved into the panel before its deferred mount
+    // callback runs. Preserve that choice instead of retargeting the next key.
+    var active = document.activeElement;
+    if (root && active !== root && root.contains && root.contains(active) && _canFocus(active)) return;
     var target = null;
     try {
       if (layer.initialFocus && typeof layer.initialFocus === "object" && "current" in layer.initialFocus) {
         target = layer.initialFocus.current;
       }
     } catch (e) { /* ignore */ }
-    var root = _rootOf(layer);
     if (_tryFocus(target)) return;
     if ((target || layer.initialFocus === "first") && root && _tryFocus(_focusables(root)[0])) return;
     if (root) {

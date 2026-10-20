@@ -204,6 +204,21 @@ process.stdout.write("\noverlay_focus_in_test\n");
 
 process.stdout.write("\noverlay_subscribe_test\n");
 {
+  const queued = [], originalRaf = ctx.window.requestAnimationFrame;
+  ctx.window.requestAnimationFrame = fn => queued.push(fn);
+  const root = stubEl("deferred-root"), first = stubEl("legend"), chosen = stubEl("virtual-layer");
+  first.tagName = chosen.tagName = "INPUT";
+  root.children.push(first, chosen);
+  ctx.document.activeElement = null;
+  const h = O.push({ key: "deferred-focus", getRoot: () => root, initialFocus: "first" });
+  chosen.focus(); // A keyboard user has already moved into the newly opened panel.
+  queued.shift()();
+  assert("deferred initial focus preserves the control already chosen inside the panel",
+    ctx.document.activeElement === chosen && first.focusedCount === 0);
+  h.pop();
+  ctx.window.requestAnimationFrame = originalRaf;
+}
+{
   const seen = [];
   const un = O.subscribe((size, key) => seen.push([size, key]));
   const h = O.push({ key: "sub", onEscape: () => {} });

@@ -148,6 +148,7 @@ jobs:
           path: |
             .tmp/apartment-lit-webgpu-browser/*/receipt.json
             .tmp/apartment-lit-webgpu-browser/*/failure-receipt.json
+            .tmp/apartment-lit-splats-browser/*/*receipt.json
             .tmp/apartment-overlay-bridge-browser/run-*/receipt.json
             .tmp/apartment-room-selection-browser/run-*/receipt.json
             .tmp/apartment-room-inspector-browser/run-*/receipt.json

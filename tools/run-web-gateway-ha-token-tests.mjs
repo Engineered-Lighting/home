@@ -32,7 +32,7 @@ const freePort = () => new Promise((resolve, reject) => {
   probe.listen(0, "127.0.0.1", () => { const { port } = probe.address(); probe.close(() => resolve(port)); });
 });
 
-function request(port, urlPath, { method = "GET", headers = {}, body } = {}) {
+function request(port, urlPath, { method = "GET", headers = {}, body, timeoutMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: "127.0.0.1", port, path: urlPath, method, headers }, (res) => {
       let text = "";
@@ -41,6 +41,7 @@ function request(port, urlPath, { method = "GET", headers = {}, body } = {}) {
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: text }));
     });
     req.once("error", reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error("authored gateway request timed out")));
     if (body) req.write(body);
     req.end();
   });
@@ -175,10 +176,11 @@ async function startGateway(env) {
     cwd: REPO, env: { ...process.env, HOME_WEB_HOST: "127.0.0.1", HOME_WEB_PORT: String(port), ...env },
     stdio: ["ignore", "ignore", "pipe"],
   });
-  for (let i = 0; i < 80; i += 1) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
     if (child.exitCode != null) throw new Error(`gateway exited early with ${child.exitCode}`);
     try {
-      const res = await request(port, "/healthz");
+      const res = await request(port, "/healthz", { timeoutMs: Math.min(1000, Math.max(1, deadline - Date.now())) });
       if (res.status === 200) return { port, child, health: JSON.parse(res.body) };
     } catch { /* keep polling */ }
     await sleep(100);

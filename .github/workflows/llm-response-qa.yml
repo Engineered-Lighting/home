@@ -155,6 +155,7 @@ jobs:
             .tmp/apartment-aim-wiring-browser/run-*/receipt.json
             .tmp/apartment-aim-library-shell-browser/run-*/receipt.json
             .tmp/apartment-composer-comfort-browser/run-*/receipt.json
+            .tmp/apartment-setup-rail-browser/run-*/receipt.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7

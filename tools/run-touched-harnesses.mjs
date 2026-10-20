@@ -129,7 +129,7 @@ const MAP = [
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
-  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-rail-browser.mjs"]],
+  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser(?:-part[23])?|fixtures\/apartment-setup-(?:fixtures|rail-proof))\.mjs)$/, ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"]],
   [/^(?:app\/src\/(?:home-apartment-(?:setup|edit)\.jsx|home-apartment-data\.js|home-equipment-registration\.js)|web-gateway\/equipment-registration\.mjs|tools\/(?:test-apartment-setup-saves-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-saves-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-setup|-edit)?\.jsx|home-app\.jsx|home-equipment-registration\.js|home-overlay\.js|home-tokens\.css)|tools\/(?:test-apartment-setup-read-only-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-read-only-browser.mjs"]],
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
@@ -288,7 +288,9 @@ const SHARD_WEIGHT_S = {
   "test-apartment-aim-wiring-phone-browser.mjs": 76,
   "test-apartment-room-selection-browser.mjs": 134,
   "test-apartment-overlay-bridge-browser.mjs": 103,
-  "test-apartment-setup-rail-browser.mjs": 95,
+  "test-apartment-setup-rail-browser.mjs": 70,
+  "test-apartment-setup-rail-browser-part2.mjs": 130,
+  "test-apartment-setup-rail-browser-part3.mjs": 45,
   "test-apartment-aim-wiring-room-browser.mjs": 113,
   "test-apartment-aim-wiring-drag-browser.mjs": 109,
 };
@@ -306,6 +308,7 @@ function shardWeight(name) {
 // Parts of one split suite run on different workers whenever there are at
 // least as many workers as parts, so no worker carries the whole suite.
 const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
+  ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"],
   ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
   ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs"],
   ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs"],
@@ -461,7 +464,9 @@ for (const name of shardPlan.filter(item => item !== "check-jsx.js")) {
     record(name, "ok", started);
   } else {
     console.log("FAIL");
-    const tail = `${res.stdout || ""}\n${res.stderr || ""}`.trim().split(/\r?\n/).slice(-15).join("\n");
+    // Preserve the assertion and its call log as well as the final TAP counts.
+    // Fifteen lines retained only the stack tail for browser failures.
+    const tail = `${res.stdout || ""}\n${res.stderr || ""}`.trim().split(/\r?\n/).slice(-80).join("\n");
     console.log(tail.replace(/^/gm, "       "));
     record(name, "fail", started);
   }

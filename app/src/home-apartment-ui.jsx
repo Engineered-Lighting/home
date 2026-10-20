@@ -11,6 +11,9 @@
     recorded: ["Recorded", "ring", "neutral"], replay: ["Replay", "ring", "neutral"],
     authored: ["Authored", "diamond", "neutral"], simulated: ["Simulated", "diamond", "neutral"],
     held: ["Held", "diamond", "attn"], stale: ["Stale", "diamond", "attn"],
+    // Owner decision 2026-10-19: the approximate virtual preview may hold its
+    // last aim for a producer-measured bound. Only the producer reports it.
+    holding: ["Holding", "hold", "attn"],
     unsaved: ["Unsaved", "diamond", "attn"], changed: ["Changed", "diamond", "attn"],
     disconnected: ["Disconnected", "diamond", "attn"], blocked: ["Blocked", "bar", "blocked"],
     conflict: ["Conflict", "bar", "blocked"], invalid: ["Invalid", "bar", "blocked"],
@@ -25,6 +28,14 @@
       <span className="apt-ui-badge-marker" data-shape={shape} aria-hidden="true" />
       <span>{children == null ? label : children}</span>
     </span>;
+  }
+
+  /* Formats the producer's own last-seen age for the Holding badge. It never
+   * reads a clock: a missing or invalid age shows "Holding" alone, and the
+   * caller re-renders only when the producer reports again. */
+  function holdingLabel(lastSeenSeconds) {
+    const age = Number(lastSeenSeconds);
+    return Number.isFinite(age) && age >= 0 ? `Holding · last seen ${Math.round(age)}s ago` : "Holding";
   }
 
   /* Consume before calling user code, including throwing or asynchronous code.
@@ -126,5 +137,36 @@
     </div>;
   }
 
-  window.HomeApartmentUI = Object.freeze({ Badge, Toast, createToastAction });
+  /* The one top-centre hint for room sub-modes (camera view now, tap-to-aim
+   * next, decision D11). The host decides which single hint is current. An
+   * action that Escape also performs carries the dimmable `esc` hint. */
+  function HintBar({ kind, icon = null, children, detail, actions = [], ...attributes }) {
+    // Extra attributes (for example a suite's data-* hook) land on the bar itself.
+    return <div {...attributes} className="apt-ui-hint" data-apt-hint={kind || "hint"} role="status" aria-live="polite">
+      {icon && <span className="apt-ui-hint-icon" aria-hidden="true">{icon}</span>}
+      <span className="apt-ui-hint-text">{children}{detail && <span className="apt-ui-hint-detail"> · {detail}</span>}</span>
+      {actions.filter(Boolean).map((action) => <button type="button" key={action.label}
+        className={`apt-ui-button is-small${action.primary ? " is-primary" : ""}`} disabled={!!action.disabled}
+        title={action.title} onClick={action.onClick}>
+        {action.label}{action.escape && <span className="apt-ui-kbd hg-esc-hint" aria-hidden="true">esc</span>}
+      </button>)}
+    </div>;
+  }
+
+  /* Centre notice for an asset or renderer that is loading or unavailable.
+   * It never switches homes: every action is one the person chooses. */
+  function Notice({ kind, title, percent = null, children, actions = [], label }) {
+    const known = Number.isFinite(percent);
+    return <div className="apt-ui-notice" data-apt-notice={kind || "notice"} role="group" aria-label={label || title}>
+      <div role="status"><h3 className="apt-ui-notice-title">{known ? `${title} · ${Math.round(percent)}%` : title}</h3></div>
+      {known && <div className="apt-ui-progress" role="progressbar" aria-label={title} aria-valuemin={0} aria-valuemax={100}
+        aria-valuenow={Math.round(percent)}><i style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} /></div>}
+      {children}
+      {actions.filter(Boolean).length > 0 && <div className="apt-ui-notice-actions">{actions.filter(Boolean).map((action) =>
+        <button type="button" key={action.label} className={`apt-ui-button is-small${action.primary ? " is-primary" : ""}`}
+          aria-label={action.ariaLabel} disabled={!!action.disabled} title={action.title} onClick={action.onClick}>{action.label}</button>)}</div>}
+    </div>;
+  }
+
+  window.HomeApartmentUI = Object.freeze({ Badge, Toast, createToastAction, holdingLabel, HintBar, Notice });
 })();

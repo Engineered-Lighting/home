@@ -87,11 +87,13 @@ export function validateSceneFrame(frame, { siteId = null } = {}) {
 }
 
 /** Own network cancellation; Spark's decoder itself has no AbortSignal API. */
-export async function loadSplatAsset({ url, signal, siteId = null, contentRevision = null }) {
+export async function loadSplatAsset({ url, signal, siteId = null, contentRevision = null, onProgress = null }) {
     assertLiveSignal(signal);
-    const { SplatMesh } = await import('@sparkjsdev/spark');
-    assertLiveSignal(signal);
-    const fileBytes = await fetchApartmentAssetBytes({ url, siteId, contentRevision, signal });
+    // The download starts with the decoder import, so its progress shows at once.
+    const [{ SplatMesh }, fileBytes] = await Promise.all([
+        import('@sparkjsdev/spark'),
+        fetchApartmentAssetBytes({ url, siteId, contentRevision, signal, onProgress }),
+    ]);
     assertLiveSignal(signal);
     const splat = new SplatMesh({ fileBytes, fileName: new URL(url, window.location.href).pathname });
     try {
@@ -105,11 +107,11 @@ export async function loadSplatAsset({ url, signal, siteId = null, contentRevisi
 }
 
 /** Qualified GLBs are self-contained, so all network IO belongs to this fetch. */
-export async function loadGlbAsset({ url, signal, siteId = null, contentRevision = null }) {
+export async function loadGlbAsset({ url, signal, siteId = null, contentRevision = null, onProgress = null }) {
     assertLiveSignal(signal);
     const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
     assertLiveSignal(signal);
-    const bytes = await fetchApartmentAssetBytes({ url, siteId, contentRevision, signal });
+    const bytes = await fetchApartmentAssetBytes({ url, siteId, contentRevision, signal, onProgress });
     assertLiveSignal(signal);
     // Do not let parseAsync start uncancellable external texture/buffer fetches.
     const view = new DataView(bytes);
@@ -251,6 +253,13 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             throw error;
         }
     }
+    const progressListeners = [];
+    // Byte progress for the toolbar's loading notice; it never affects loading.
+    function emitLoadProgress(kind, { loaded, total } = {}) {
+        if (!Number.isFinite(loaded)) return;
+        const event = Object.freeze({ kind, loaded, total: Number.isFinite(total) && total > 0 ? total : null });
+        progressListeners.slice().forEach((cb) => { try { cb(event); } catch (_) {} });
+    }
     function runAssetLoad(kind, url, adapter, timeoutMs) {
         assertLive();
         // A timed-out decoder may still own buffers. Never pile a retry or
@@ -289,7 +298,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             if (lifetime.signal.aborted) onAbort();
             Promise.resolve().then(() => {
                 assertLiveSignal(controller.signal);
-                return adapter({ url, signal: controller.signal, siteId, contentRevision });
+                return adapter({ url, signal: controller.signal, siteId, contentRevision,
+                    onProgress: (p) => { if (!settled && !controller.signal.aborted) emitLoadProgress(kind, p); } });
             }).then((value) => {
                 if (activeDecodes.get(kind) === record) activeDecodes.delete(kind);
                 loadCounts.decoders -= 1;
@@ -672,6 +682,14 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             return () => {
                 const i = listeners.indexOf(cb);
                 if (i >= 0) listeners.splice(i, 1);
+            };
+        },
+
+        onLoadProgress(cb) {
+            progressListeners.push(cb);
+            return () => {
+                const i = progressListeners.indexOf(cb);
+                if (i >= 0) progressListeners.splice(i, 1);
             };
         },
 

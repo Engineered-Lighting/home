@@ -53,6 +53,14 @@ export async function warmApartmentAssetBytes(options) {
 export async function loadDirectionalPresentation() {
     return sib('apartment-directional-presentation.mjs');
 }
+export async function loadAimPresentation() {
+    return sib('apartment-aim-presentation.mjs');
+}
+
+/* Beams and pools (APT-L02) use the same lazy, cache-busted ESM boundary. */
+export async function loadLightPools() {
+    return sib('apartment-light-pools.mjs');
+}
 
 /* Optional display evidence beside the unchanged marker API. All binding
  * checks are synchronous; no pending digest or private document survives reset. */
@@ -167,7 +175,8 @@ export async function preloadModules({ includeRenderers = true } = {}) {
     ];
     if (includeRenderers) {
         jobs.push(import('three/addons/loaders/GLTFLoader.js'));
-        jobs.push(import('@sparkjsdev/spark'));
+        // Spark is WebGL-only; the ?renderer=webgpu build never loads it.
+        if (typeof THREE.WebGPURenderer !== 'function') jobs.push(import('@sparkjsdev/spark'));
     }
     const results = await Promise.allSettled(jobs);
     return {
@@ -257,7 +266,15 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     });
     const performanceSamplingSource = Symbol('apartment-renderer');
 
-    const renderer = new THREE.WebGLRenderer({
+    /* ?renderer=webgpu (index.html) maps 'three' to the r186 WebGPU build and
+     * this seam replaces WebGLRenderer with webgpu-renderer.mjs. With the flag
+     * off THREE has no WebGPURenderer and nothing below changes. */
+    const nodeRendererM = typeof THREE.WebGPURenderer === 'function' && window.HomeRendererFlag?.backend === 'webgpu'
+        ? await sib('webgpu-renderer.mjs') : null;
+    let emitNodeLoss = null;
+    const nodeRenderer = nodeRendererM && await nodeRendererM.createNodeRenderer({ canvas,
+        forceWebGL: window.HomeRendererFlag.forceWebGL === true, onLost: (info) => emitNodeLoss?.(info) });
+    const renderer = nodeRenderer ? nodeRenderer.renderer : new THREE.WebGLRenderer({
         canvas, antialias: true, alpha: true, powerPreference: 'high-performance',
     });
     renderer.setPixelRatio(Math.min(
@@ -270,6 +287,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     scene.background = null;
 
     const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 200);
+    if (nodeRenderer) {
+        // WebGPU clip z is 0..1. Set before the first render so every
+        // projection built from here on (rig, intrinsics) uses it.
+        camera.coordinateSystem = renderer.coordinateSystem;
+        camera.updateProjectionMatrix();
+    }
 
     // THE coordinate conversion: apartment frame is Z-up, three is Y-up.
     const apartmentRoot = new THREE.Group();
@@ -298,8 +321,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             ?? await readScenePlaceholder())?.pointsOnly === true,
         dollhouseCutaway: cutawayEligible,
         photoFloorSupport: cutawayEligible,
+        ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
     const overlay = markersM.createOverlay(apartmentRoot);
+    let litView = null, litUnsubscribe = () => {};
     const picking = pickingM.createPicking(camera, hostEl);
     let disposed = false, disposing = false;
     const uiLayers = new Set();
@@ -325,7 +350,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
 
     // GPU identity — the WebView2 dual-GPU gate (plan §12 / spike S1)
     let gpuName = 'unknown';
-    try {
+    if (nodeRenderer) gpuName = nodeRenderer.gpu;
+    else try {
         const gl = renderer.getContext();
         const ext = gl.getExtension('WEBGL_debug_renderer_info');
         if (ext) gpuName = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
@@ -349,6 +375,11 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     };
     canvas.addEventListener('webglcontextlost', onApartmentContextLost);
     canvas.addEventListener('webglcontextrestored', onApartmentContextRestored);
+    // WebGPU device loss has no restore: the engine must be recreated. The
+    // WebGL2 fallback's context loss reaches the canvas listeners above.
+    emitNodeLoss = (info) => {
+        if (info.api === 'WebGPU') emit('contextlost', { backend: 'webgpu', reason: info.reason, message: info.message });
+    };
 
     // ---- point cloud (progressive) ----
     let points = null;
@@ -476,11 +507,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             new THREE.Vector3(lastFitBox.max.x, lastFitBox.max.y, lastFitBox.max.z),
         ];
         camera.updateMatrixWorld(true);
+        const clipNear = camera.coordinateSystem === THREE.WebGPUCoordinateSystem ? 0 : -1;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         let outOfDepth = false;
         for (const corner of corners) {
             const p = corner.clone().project(camera);
-            if (p.z < -1 || p.z > 1) outOfDepth = true;
+            if (p.z < clipNear || p.z > 1) outOfDepth = true;
             const x = (p.x * 0.5 + 0.5) * canvasWidth;
             const y = (-p.y * 0.5 + 0.5) * canvasHeight;
             minX = Math.min(minX, x);
@@ -580,10 +612,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         const oy = frame ? frame.offsetY : 0;
         const n = camera.near;
         const f = camera.far;
+        // Clip z: OpenGL's -1..1, or WebGPU's 0..1 on the WebGPU backend.
+        const webgpuClip = camera.coordinateSystem === THREE.WebGPUCoordinateSystem;
         return new THREE.Matrix4().set(
             sx * (2 * fx / p.w), 0, sx * (1 - 2 * cx / p.w) - ox, 0,
             0, sy * (2 * fy / p.h), sy * (2 * cy / p.h - 1) - oy, 0,
-            0, 0, -(f + n) / (f - n), -(2 * f * n) / (f - n),
+            0, 0, webgpuClip ? -f / (f - n) : -(f + n) / (f - n), webgpuClip ? -(f * n) / (f - n) : -(2 * f * n) / (f - n),
             0, 0, -1, 0,
         );
     }
@@ -626,6 +660,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             return result.points;
         }
         points = result.points;
+        nodeRenderer?.adoptPoints(points);
         apartmentRoot.add(points);
         fitNow();
         emit('loaded', { total: result.total });
@@ -776,6 +811,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         scene, camera, renderer, rig, modes, overlay, picking, apartmentRoot,
         pointsMaterial, pointsPromise,
         gpu: gpuName,
+        /* 'webgl', or 'webgpu' / 'webgpu-webgl2' behind ?renderer=webgpu. */
+        rendererBackend: nodeRenderer ? (nodeRenderer.backend === 'webgpu' ? 'webgpu' : 'webgpu-webgl2') : 'webgl',
+        webgpuReadback: () => nodeRenderer ? { backend: nodeRenderer.backend, gpu: nodeRenderer.gpu,
+            adapter: nodeRenderer.adapter, lost: nodeRenderer.lostInfo(), ports: nodeRenderer.ports.readback() } : null,
         siteId,
         contentRevision,
         sceneIdentity,
@@ -804,6 +843,38 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         traceBeam(originValue, pointValue) {
             return pickingM.aimChipBlocker(engine.beamPath(originValue, pointValue));
         },
+        /* Tier-0 Lit (lit-view.mjs): the scan mesh relit with simulated light
+         * from the virtual fixtures, disclosed as simulated, not photometric
+         * and with assumed output. Mesh only: it needs Mesh to be the current
+         * mode and turns itself off when the mode changes. Emits 'lit' with
+         * the state on every change, including a declared reduced quality. */
+        async setLit(on) {
+            if (!on) {
+                if (litView?.state().active) { litView.disable(); litUnsubscribe(); emit('lit', litView.state()); }
+                return litView ? litView.state() : null;
+            }
+            if (disposed || modes.mode !== 'mesh' || !modes.getMesh?.()) return litView ? litView.state() : null;
+            if (!litView) {
+                const litM = await sib('lit-view.mjs');
+                if (disposed) return null;
+                litView ||= litM.createLitView({ scene, renderer,
+                    getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
+                    getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
+                    getCollision: () => modes.getCollision?.() || null,
+                    spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
+            }
+            if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
+            litView.enable();
+            const offMode = modes.onChange(next => { if (next !== 'mesh') void engine.setLit(false); });
+            const offStats = engine.on('stats', stats => {
+                const before = litView.state().quality, after = litView.observeFrameRate(stats?.fps).quality;
+                if (after !== before) emit('lit', litView.state());
+            });
+            litUnsubscribe = () => { offMode(); offStats(); litUnsubscribe = () => {}; };
+            emit('lit', litView.state());
+            return litView.state();
+        },
+        litState() { return litView ? litView.state() : null; },
         async createUiOverlayLayer(options = {}) {
             const { host, isCurrent, signal: layerSignal, onPresentationFrame, onPresentationDispose } = options || {};
             if (typeof isCurrent !== 'function' || typeof layerSignal?.aborted !== 'boolean'
@@ -872,6 +943,13 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         scenePlaceholderPromise,
         get scenePlaceholder() { return scenePlaceholder; },
         async captureFrame({ scale = 0.25, signal } = {}) {
+            if (nodeRenderer) {
+                if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
+                await pointsPromise;
+                if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
+                const frame = await nodeRenderer.capture({ scene, camera, scale, signal });
+                return disposed || signal?.aborted ? null : frame;
+            }
             if (disposed || signal?.aborted || renderer.getContext().isContextLost()) return null;
             await pointsPromise;
             /* Before the render: the render and the read must share a task.

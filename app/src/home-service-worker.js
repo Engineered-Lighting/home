@@ -41,6 +41,7 @@ const FRESH_APARTMENT_MODULES = new Set([
   "/home-3d/markers.js",
   "/home-3d/apartment-directional-presentation.mjs",
   "/home-3d/apartment-aim-presentation.mjs",
+  "/home-3d/apartment-light-pools.mjs",
 ]);
 const HEAVY_APARTMENT_ASSET = /^\/assets\/apartment\/.*\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i;
 const NEVER_CACHE_PREFIXES = [

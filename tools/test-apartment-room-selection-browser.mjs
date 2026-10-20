@@ -229,10 +229,10 @@ test('real authored room selection keeps native input ownership and never dispat
       && document.querySelector('[data-apt-semantic-device-select="1"]')?.disabled === false);
     await check('Echo N/P reaches the actual unpositioned semantic device without output', async () => {
       assert.equal(echo.seed.devices[0].pos, null); await blur(); await page.keyboard.press('n');
-      await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
       assert.match(await page.locator('.apt-home-controls').innerText(), /Authored Echo light/);
-      await page.keyboard.press('p'); await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
-      await page.getByRole('button', { name: 'close card', exact: true }).click();
+      await page.keyboard.press('p'); await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Close light', exact: true }).click();
       return { id: echo.seed.devices[0].id, unpositioned: true };
     });
     await selectHome('victoria');
@@ -242,7 +242,7 @@ test('real authored room selection keeps native input ownership and never dispat
     assert.equal(inventory.visible, true); assert.equal(inventory.status, 'ready');
     const fixtures = inventory.fixtures;
     await page.evaluate(() => {
-      window.__roomSelectionNativeClicks = []; window.__roomSelectionNativeEvents = [];
+      window.__roomSelectionNativeClicks = []; window.__roomSelectionNativeEvents = []; window.__roomSelectionNativeReticleClicks = [];
       for (const type of ['pointerdown', 'pointerup', 'lostpointercapture', 'click']) document.addEventListener(type, event => {
         const engine = window.__APT_ENGINE, canvas = engine?.renderer.domElement, host = engine?.picking.getHost();
         if (!host?.contains(event.target)) return;
@@ -252,6 +252,8 @@ test('real authored room selection keeps native input ownership and never dispat
         window.__roomSelectionNativeEvents.push(row);
         queueMicrotask(() => { row.defaultPreventedAfterDispatch = event.defaultPrevented; });
         if (type === 'click' && event.target === canvas) window.__roomSelectionNativeClicks.push(row);
+        // A reticle drag holds pointer capture, so its compatibility click lands on the reticle.
+        if (type === 'click' && event.target.closest?.('[data-apt-aim-reticle]')) window.__roomSelectionNativeReticleClicks.push(row);
       }, true);
     });
     await check('native list and keyboard select the same registered fixture and retain the inspector tab', async () => {
@@ -287,23 +289,48 @@ test('real authored room selection keeps native input ownership and never dispat
       return { camera_changed: true, orbit_preserved: true, click_cleared: true };
     });
     await page.getByRole('button', { name: 'Select ' + fixtures[0].label, exact: true }).click(); await expectSelected(fixtures[0]);
+    // Only the reticle starts an aim (APT-A01); it shows on the Spot tool, which the Aim tab selects.
+    const showReticle = async () => {
+      await fixtureInspector().getByRole('tab', { name: 'Aim', exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('[data-apt-aim-reticle]')?.hidden === false);
+    };
+    const reticlePoint = () => page.evaluate(() => {
+      const node = document.querySelector('[data-apt-aim-reticle]'), rect = node && !node.hidden ? node.getBoundingClientRect() : null;
+      return rect && rect.width > 0 ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+    });
+    const barShown = () => page.evaluate(() => document.querySelector('[data-apt-aim-bar]')?.hidden === false);
+    await showReticle();
     const beforeAim = await descriptor(fixtures[0].fixture_id);
+    // The native fixture-body drag (selects; no aim, orbit or proposal) runs in
+    // test-apartment-aim-wiring-browser.mjs, so this proof keeps its 145 s budget.
     await check('Escape cancels an actual active aim before the next Escape clears selection', async () => {
-      const start = await canvasPoint('fixture', fixtures[0].fixture_id), end = await canvasPoint('surface', null, start); assert.ok(start && end);
+      const start = await reticlePoint(), end = await canvasPoint('surface', null, start); assert.ok(start && end);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 });
-      await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).target !== null, fixtures[0].fixture_id);
+      // The active drag shows its live chip; the aim itself never previews before Set.
+      await page.waitForFunction(() => document.querySelector('[data-apt-aim-chip]')?.hidden === false);
+      assert.deepEqual(await descriptor(fixtures[0].fixture_id), beforeAim, 'an active reticle drag leaves the aim exactly in place');
       await page.keyboard.press('Escape'); assert.deepEqual(await descriptor(fixtures[0].fixture_id), beforeAim); await expectSelected(fixtures[0]);
-      await page.mouse.up(); await expectSelected(fixtures[0]); await blur(); await page.keyboard.press('Escape');
+      await page.mouse.up(); await expectSelected(fixtures[0]);
+      assert.equal(await barShown(), false, 'the canceled drag proposes nothing at release');
+      await blur(); await page.keyboard.press('Escape');
       assert.deepEqual((await observeInspector()).selected, []);
       return { canceled_snapshot_exact: true, first_escape_preserved_selection: true, second_escape_cleared: true };
     });
     await check('a real browser click after aim release preserves selection and Undo restores the exact preview', async () => {
-      const start = await canvasPoint('fixture', fixtures[0].fixture_id), end = await canvasPoint('surface', null, start); assert.ok(start && end);
-      const clickCount = await page.evaluate(() => window.__roomSelectionNativeClicks.length);
+      await page.getByRole('button', { name: 'Select ' + fixtures[0].label, exact: true }).click(); await expectSelected(fixtures[0]);
+      await showReticle();
+      const start = await reticlePoint(), end = await canvasPoint('surface', null, start); assert.ok(start && end);
+      const clickCount = await page.evaluate(() => [window.__roomSelectionNativeClicks.length, window.__roomSelectionNativeReticleClicks.length]);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up();
+      await expectSelected(fixtures[0]);
+      // The release proposes; the explicit Set is Enter on the reticle, which kept focus.
+      await page.waitForFunction(() => document.querySelector('[data-apt-aim-bar]')?.hidden === false);
+      assert.deepEqual(await descriptor(fixtures[0].fixture_id), beforeAim, 'the release leaves the current aim until Set aim');
+      await page.keyboard.press('Enter');
       await expectSelected(fixtures[0]); await fixtureInspector().getByRole('button', { name: 'Undo aim', exact: true }).waitFor();
       const released = await page.evaluate(({ id, offset }) => ({ descriptor: window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),
-        clicks: window.__roomSelectionNativeClicks.slice(offset) }), { id: fixtures[0].fixture_id, offset: clickCount });
+        clicks: [...window.__roomSelectionNativeClicks.slice(offset[0]), ...window.__roomSelectionNativeReticleClicks.slice(offset[1])] }),
+      { id: fixtures[0].fixture_id, offset: clickCount });
       const after = released.descriptor, clicks = released.clicks; assert.notDeepEqual(after.target, beforeAim.target);
       assert.ok(clicks.some(event => event.isTrusted && Math.hypot(event.x - end.x, event.y - end.y) <= 2),
         'actual browser compatibility click at the aim release, not a synthetic dispatch, was observed');
@@ -319,7 +346,7 @@ test('real authored room selection keeps native input ownership and never dispat
     assert.deepEqual(restoredInventory.fixtures, inventory.fixtures);
     assert.equal(restoredInventory.visible, true);
     await selectHome('echo'); await page.getByRole('button', { name: 'Authored Echo light Unavailable', exact: true }).click();
-    await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
     await check('native Echo list uses the same semantic device after a home change', async () => {
       assert.match(await page.locator('.apt-home-controls').innerText(), /Authored Echo light/); return { id: echo.seed.devices[0].id };
     });

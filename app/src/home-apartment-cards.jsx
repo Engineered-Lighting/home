@@ -285,7 +285,7 @@ function aptRoomLightGroups({ rooms = [], lights = [] } = {}) {
   });
 }
 
-function AptRoomLightGroups({ groups = [], onSelect, onPower, disabledReason = "" }) {
+function AptRoomLightGroups({ groups = [], onSelect, onPower, disabledReason = "", onHover }) {
   return <>{groups.map(group => {
     const reason = disabledReason || (group.power === "unknown" ? "Light state unavailable" : "");
     return <section className="apt-ui-section" key={group.id ?? "unassigned"} aria-label={`${group.label} lights`}>
@@ -299,9 +299,12 @@ function AptRoomLightGroups({ groups = [], onSelect, onPower, disabledReason = "
       {reason && <p className="apt-ui-meta">{reason}</p>}
       <ul className="apt-ui-list">{group.lights.map(light => <li key={light.id}>
         <button type="button" className="apt-ui-list-button" aria-label={light.ariaLabel}
-          aria-current={light.selected ? "true" : undefined} onClick={() => onSelect(light.id)}>
+          aria-current={light.selected ? "true" : undefined} onClick={() => onSelect(light.id)}
+          onMouseEnter={onHover && (() => onHover(light.id))} onMouseLeave={onHover && (() => onHover(null))}
+          onFocus={onHover && (() => onHover(light.id))} onBlur={onHover && (() => onHover(null))}>
           <span className={`apt-ui-lamp${light.power === "on" ? " is-on" : ""}`} aria-hidden="true" />
-          <span className="nm">{light.label || light.id}</span><span className="vl">{light.power === "on" ? "On" : light.power === "off" ? "Off" : "Unavailable"}</span>
+          <span className="nm">{light.label || light.id}</span><span className="vl">{light.summary
+            || (light.power === "on" ? "On" : light.power === "off" ? "Off" : "Unavailable")}</span>
         </button></li>)}</ul>
     </section>;
   })}</>;
@@ -383,7 +386,7 @@ function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, p
 const aptDirectionalEmptySnapshot = Object.freeze({ descriptor: null, mode: "spot", active: false, readout: null });
 const aptDirectionalEmptySubscribe = () => () => {};
 
-function AptDirectionalComposer({ view, onMode }) {
+function AptDirectionalComposer({ view, onMode, spotBadge = null, spotName = null }) {
   const rootRef = useRef(null), pillRef = useRef(null), readoutRef = useRef(null);
   const snapshot = React.useSyncExternalStore(view?.subscribe || aptDirectionalEmptySubscribe,
     view?.getSnapshot || (() => aptDirectionalEmptySnapshot), view?.getSnapshot || (() => aptDirectionalEmptySnapshot));
@@ -395,8 +398,9 @@ function AptDirectionalComposer({ view, onMode }) {
   if (!descriptor) return null;
   const pillButton = (value, label, key) => <button type="button" className="hg-focusable"
     data-apt-directional-mode={value} aria-keyshortcuts={key} aria-pressed={snapshot.mode === value}
+    aria-label={value === "spot" && spotName || undefined}
     title={value === "zones" ? "Drag around the light to set its radial zones (Z)" : "Drag the reticle to aim the spot (A)"}
-    onClick={() => onMode?.(value)}>{label}</button>;
+    onClick={() => onMode?.(value)}>{label}{value === "spot" && spotBadge}</button>;
   return <div ref={rootRef} hidden data-apt-directional-composer="1"
     style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 4 }}>
     <style>{`

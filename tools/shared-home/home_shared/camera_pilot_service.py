@@ -60,7 +60,10 @@ finally:connection.close()
 '''
 
 
-_KERNEL_BASELINE = '2026-09-26 23:07:00 UTC'
+# Moved past the inspected 2026-10-20 01:35 UTC download-container OOM (the
+# Qwen3.6 model fetch, not a host fault); host release
+# release-speed-82aef18471685737-kb20261020 carries the same value.
+_KERNEL_BASELINE = '2026-10-20 01:36:00 UTC'
 _KERNEL_FAULTS = 'invoked oom-killer|Out of memory: Killed|kernel panic|soft lockup|hard LOCKUP|Hardware Error|I/O error|segfault|Machine check|thermal throttling'
 _KERNEL_CLEAN = {'until': None}
 _KERNEL_LOCK = threading.Lock()

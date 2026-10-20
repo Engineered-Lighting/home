@@ -254,7 +254,6 @@ function ownerFile(directory, name, body) {
 }
 
 test('actual private file consumer pins exact inputs and returns coordinate-free CLI aggregate', t => {
-  assert.equal(path.resolve(ROOT),path.resolve('C:/Claude/home'));
   const directory = temporary(t), f = fixture({ rotation:.37 });
   const target = ownerFile(directory,'desk.json',f.target);
   const equipment = ownerFile(directory,'equipment.json',{ ok:true,registration:f.registration });

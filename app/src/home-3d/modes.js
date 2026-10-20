@@ -338,12 +338,23 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         }
     }
 
-    // The EL cloud writes depth by design (self-occlusion). Once a fade ends
-    // the points object must be HIDDEN in splat/mesh mode — uOpacity=0 alone
-    // leaves an invisible depth wall that occludes the alpha-blended splat.
+    // Opaque Cloud keeps its self-occlusion. During a Cloud/Photo fade the
+    // cloud is transparent: its depth must fade out too, or almost invisible
+    // points punch black bands through Photo. Include the node renderer's
+    // drawing children; the retained Points material alone does not draw there.
+    // Once a fade ends, hide the points in Photo/Mesh and restore Cloud depth.
     function setPointsVisible(v) {
+        const depthWrite = !state.fading;
+        pointsMaterial.depthWrite = depthWrite;
         const pts = getPoints && getPoints();
-        if (pts) pts.visible = v;
+        if (pts) {
+            pts.visible = v;
+            pts.traverse?.((object) => {
+                for (const material of Array.isArray(object.material) ? object.material : object.material ? [object.material] : []) {
+                    material.depthWrite = depthWrite;
+                }
+            });
+        }
     }
 
     function applyRegistration(obj, frame) {
@@ -1017,6 +1028,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         update(dt) {
             if (disposed) return;
             if (!state.fading) return;
+            // A loaded/replaced node drawing material must join the same fade.
+            setPointsVisible(true);
             const f = state.fading;
             f.t += dt * 1000;
             const k = easeInOutCubic(Math.min(1, f.t / f.duration));

@@ -26,6 +26,7 @@ import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding
 import { installPack, authoredDocument } from './apartment-home-shell-fixtures.mjs';
 import { authoredLightingLayer } from './apartment-lit-layer-fixtures.mjs';
 import { authoredHdrFrame, compareFramePasses, PROOF_PARAMS, PROOF_SIZE } from './lit-frame-proof.mjs';
+import { nativeRgbaReference } from './native-rgba-reference.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'), SRC = path.join(ROOT, 'app/src');
@@ -70,7 +71,7 @@ const RENDERER_QUERY = RENDERER === 'webgpu' ? '&renderer=webgpu' : '';
 export async function runLitSplatsBrowserProof({ part, signal, precision='exact', phase='all' }) {
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
   assert.ok(['exact','native'].includes(precision),'known frame precision contract');
-  assert.ok(['all','frames','controls'].includes(phase)&&(phase==='all'||precision==='native'&&part===1),'known proof phase');
+  assert.ok(['all','frames','controls','calibration'].includes(phase)&&(phase==='all'||precision==='native'&&part===1),'known proof phase');
   const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
   const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -105,9 +106,13 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       && window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.length === 4, null, { timeout: WAIT_MS });
     const backend=await page.evaluate(()=>{
       const gl=window.__APT_ENGINE.renderer.getContext?.(),extension=gl?.getExtension?.('WEBGL_debug_renderer_info');
-      return {renderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):gl?.getParameter?.(gl.RENDERER)||'unknown',unmasked:!!extension};
+      return {renderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):gl?.getParameter?.(gl.RENDERER)||'unknown',unmasked:!!extension,
+        samples:gl?.getParameter?.(gl.SAMPLES)||0};
     });
     backend.software=/swiftshader|llvmpipe|software|Microsoft Basic/i.test(backend.renderer);
+    // CI's software renderer is already deterministic. Sampling it three
+    // times adds cost without exercising the native-MSAA coverage variation.
+    await page.evaluate(enabled=>{window.__nativeMsaaReference=enabled},nativeWebgl&&!backend.software&&backend.samples>0);
     (receipt.renderer_backends||=[]).push({query,...backend});
     if(RENDERER==='webgl'&&query===RENDERER_QUERY&&process.platform==='win32'){
       assert.equal(backend.unmasked,true,'the selected graphics backend is observable');
@@ -119,9 +124,22 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
   /* A frame's size, mean luma and digest; frames are kept in the page by
    * name so two can be compared pixel by pixel (WebGPU's per-frame GPU sort
    * is not bit-reproducible, so that path compares within a noise floor). */
-  const capture = (page, name = 'last') => page.evaluate(async name => {
-    const opacityAtCapture=window.__APT_ENGINE.pointsMaterial.uniforms.uOpacity.value;
-    const frame = await window.__APT_ENGINE.captureFrame({ scale: .25 });
+  const capture = (page, name = 'last') => page.evaluate(async ({name,native}) => {
+    const engine=window.__APT_ENGINE;
+    const opacityAtCapture=engine.pointsMaterial.uniforms.uOpacity.value;
+    const captureOne=async()=>{
+      const frame=await engine.captureFrame({scale:.25});
+      if(!frame)throw Error('native reference capture unavailable');
+      return {...frame,stateKey:JSON.stringify([engine.camera.matrixWorld.toArray(),engine.camera.projectionMatrix.toArray(),engine.modes.mode,engine.pointsMaterial.uniforms.uOpacity.value])};
+    };
+    let frame;
+    if(native&&window.__nativeMsaaReference){
+      const samples=[];for(let i=0;i<3;i++)samples.push(await captureOne());
+      frame=window.__nativeRgbaReference(samples);
+      const stats=window.__nativeReferenceStats||={references:0,rawFrames:0,colorMax:0,alphaMax:0,meanMax:0};
+      stats.references++;stats.rawFrames+=samples.length;
+      for(const raw of frame.raw){stats.colorMax=Math.max(stats.colorMax,raw.colorMax);stats.alphaMax=Math.max(stats.alphaMax,raw.alphaMax);stats.meanMax=Math.max(stats.meanMax,raw.mean)}
+    }else frame=await captureOne();
     let sum = 0; const n = frame.width * frame.height;
     for (let i = 0; i < n; i++) sum += .2126 * frame.pixels[i * 4] + .7152 * frame.pixels[i * 4 + 1] + .0722 * frame.pixels[i * 4 + 2];
     let h = 0; for (let i = 0; i < frame.pixels.length; i++) h = (Math.imul(h, 31) + frame.pixels[i]) | 0;
@@ -129,7 +147,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     (window.__litFrameMeta ||= {})[name] = {width:frame.width,height:frame.height,
       camera:window.__APT_ENGINE.camera.matrixWorld.toArray(),projection:window.__APT_ENGINE.camera.projectionMatrix.toArray(),pointsOpacity:opacityAtCapture};
     return { width: frame.width, height: frame.height, luma: sum / n, digest: h };
-  }, name);
+  }, {name,native:nativeWebgl});
   const frameDiff = (page, a, b) => page.evaluate(([a, b]) => {
     const x = window.__litFrames[a], y = window.__litFrames[b];
     let total = 0, max = 0, over = 0; const samples=[];
@@ -141,9 +159,10 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       dimensions:[ma.width,ma.height,mb.width,mb.height],pointsOpacity:[ma.pointsOpacity,mb.pointsOpacity] };
   }, [a, b]);
   // Preserve the bit-exact WebGL proof on deterministic software rendering.
-  // Native WebGL has measured one-level RGBA8 variation even with Lighting
-  // unloaded, identical camera/projection and Cloud opacity zero. It gets an
-  // additional proof with a calibrated, tightly bounded quantization envelope.
+  // Native MSAA occasionally varies an isolated alpha edge by 2-4 levels.
+  // Compare stationary three-frame references, guarding every raw sample too.
+  // The one-level restoration/calibration limit remains unchanged. Neither
+  // software's byte equality nor WebGPU's independent noise gate is changed.
   const NOISE = { mean: 0.05, over8: 0.001 };
   const NATIVE_QUANTIZATION = { max: 1, mean: 0.001 };
   let measuredNoise = null;
@@ -164,21 +183,30 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     return diff;
   }
   async function stable(page, name = 'stable') {
-    let previous = await capture(page, name + ':a');
+    let previous;
     for (let i = 0; i < 40; i++) {
-      await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
-      const next = await capture(page, name);
-      const diff = await frameDiff(page, name, name + ':a');
-      const equal = nativeWebgl ? diff.max <= NATIVE_QUANTIZATION.max && diff.mean <= NATIVE_QUANTIZATION.mean
-        : RENDERER === 'webgl' ? diff.max === 0 : diff.mean <= NOISE.mean && diff.over8 <= NOISE.over8;
-      if (equal) return next;
-      previous = await capture(page, name + ':a');
+      try {
+        previous = await capture(page, name + ':a');
+        await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
+        const next = await capture(page, name);
+        const diff = await frameDiff(page, name, name + ':a');
+        const equal = nativeWebgl ? diff.max <= NATIVE_QUANTIZATION.max && diff.mean <= NATIVE_QUANTIZATION.mean
+          : RENDERER === 'webgl' ? diff.max === 0 : diff.mean <= NOISE.mean && diff.over8 <= NOISE.over8;
+        if (equal) return next;
+      } catch (error) {
+        // A three-frame reference can straddle the Lighting-off restoration.
+        // Reject that sample while this existing bounded loop waits for rest.
+        // Calibration and all subsequent comparisons still reject raw faults.
+        if (!nativeWebgl || !/native reference (?:unstable raw frame|changed scene or dimensions)/.test(error.message)) throw error;
+        receipt.native_settling_rejections = (receipt.native_settling_rejections || 0) + 1;
+      }
     }
     throw new Error('the frame never settled: ' + JSON.stringify(previous));
   }
   async function enterMode(page, label, mode) {
     await page.getByRole('button', { name: label, exact: true }).click();
     await page.waitForFunction(m => window.__APT_ENGINE.modes.mode === m, mode, { timeout: WAIT_MS });
+    await page.waitForFunction(m => window.__APT_ENGINE.pointsMaterial.uniforms.uOpacity.value === (m==='points'?1:0), mode, { timeout: WAIT_MS });
     await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
     await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle());
     await frames(page, 12);
@@ -233,6 +261,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     await context.addInitScript(() => {
       localStorage.setItem('apartment3d.site', 'victoria'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true;
     });
+    if(nativeWebgl)await context.addInitScript({content:'window.__nativeRgbaReference = '+nativeRgbaReference.toString()+';'});
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
       if (['data:', 'blob:'].includes(url.protocol)) return route.continue();
@@ -266,10 +295,10 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     let offDiff;
     if (nativeWebgl) {
       measuredNoise = {mean:0,max:0};
-      // The frames phase retains all twelve original calibration samples.
-      // The additional controls phase checks its own reference without
-      // duplicating that full calibration on a second software-rendered boot.
-      const calibrationSamples=phase==='controls'?1:12;
+      // A dedicated phase retains all twelve original samples. The HDR and
+      // controls phases each calibrate their own reference too; no worker
+      // carries calibration and HDR shader compilation past its 145s limit.
+      const calibrationSamples=phase==='calibration'?12:1;
       for(let sample=0;sample<calibrationSamples;sample++) {
         await frames(page,4);await capture(page,'photo:noise');
         const noise=await frameDiff(page,'photo:noise','photo:unlit');
@@ -277,13 +306,15 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
           'unlit native precision stays inside one RGBA8 level: '+JSON.stringify(noise));
         measuredNoise.mean=Math.max(measuredNoise.mean,noise.mean);measuredNoise.max=Math.max(measuredNoise.max,noise.max);
       }
-      check('native_unlit_calibration',{samples:calibrationSamples,measuredNoise,bounds:NATIVE_QUANTIZATION});
+      check('native_unlit_calibration',{samples:calibrationSamples,measuredNoise,bounds:NATIVE_QUANTIZATION,
+        referenceSampling:await page.evaluate(()=>window.__nativeReferenceStats)});
       offDiff=await assertSameFrame(page,'photo:unlit2','photo:unlit','Lighting off matches calibrated native precision');
     } else offDiff = RENDERER === 'webgl' ? await assertSameFrame(page, 'photo:unlit2', 'photo:unlit', 'Lighting off: the identical frame')
       : (measuredNoise = await frameDiff(page, 'photo:unlit2', 'photo:unlit'));
     assert.deepEqual(on.requested.filter(pathname => LIT_MODULES.test(pathname)), [], 'Lighting off: no lit receiver module or layer is requested');
     check(nativeWebgl?'lighting_off_native_precision':'lighting_off_identical', { frame: unlit, diff: offDiff });
 
+    if(phase!=='calibration'){
     await lighting.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: WAIT_MS });
     assert.equal(await page.evaluate(() => window.__APT_ENGINE.modes.mode), 'splat', 'Photo stays the view, now lit');
@@ -416,6 +447,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       ?'leaving Lit restores the Photo frame within calibrated native precision':'leaving Lit restores the identical Photo frame');
     check('photo_restored', { frame: restored, diff: restoreDiff,precision });
 
+    }
     await page.close();
     } else {
     // ---- Lighting follows the view: Photo lit, then Cloud and Mesh lit in turn

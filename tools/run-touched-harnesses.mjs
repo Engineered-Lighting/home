@@ -106,7 +106,8 @@ const MAP = [
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view|frame|display|basis-blend)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part[2345])?|fixtures\/(?:apartment-lit-webgpu-browser-proof|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"]],
   // L4: lit splats and points (lit-receivers.mjs, lit-basis-blend.mjs, lit-layer-loader.mjs).
   [/^(?:app\/src\/home-3d\/lit-(?:basis-blend|layer-loader|bvh-bake|model|exposure)\.mjs|tools\/(?:test-lit-basis-blend|fixtures\/apartment-lit-layer-fixtures)\.mjs)$/, ["test-lit-basis-blend.mjs"]],
-  [/^(?:app\/src\/(?:home-3d\/(?:lit-[\w-]+\.mjs|engine\.js|modes\.js|pointcloud\.js|webgpu-material-ports\.mjs|gaussian-splat-webgpu\.mjs)|home-apartment\.jsx)|tools\/(?:test-apartment-lit-splats-(?:native-)?browser(?:-part[23])?|fixtures\/(?:apartment-lit-(?:splats-browser-proof|layer-fixtures)|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs", "test-apartment-lit-splats-native-browser-part3.mjs"]],
+  [/^(?:app\/src\/(?:home-3d\/(?:lit-[\w-]+\.mjs|engine\.js|modes\.js|pointcloud\.js|webgpu-material-ports\.mjs|gaussian-splat-webgpu\.mjs)|home-apartment\.jsx)|tools\/(?:test-apartment-lit-splats-(?:native-)?browser(?:-part[234])?|fixtures\/(?:apartment-lit-(?:splats-browser-proof|layer-fixtures)|lit-frame-proof|native-rgba-reference))\.mjs)$/, ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs", "test-apartment-lit-splats-native-browser-part3.mjs", "test-apartment-lit-splats-native-browser-part4.mjs"]],
+  [/^tools\/(?:test-native-rgba-reference|fixtures\/(?:native-rgba-reference|apartment-lit-splats-browser-proof))\.mjs$/, ["test-native-rgba-reference.mjs"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
   [/^app\/src\/home-ai-stack\.jsx$/, ["run-ai-stack-card-tests"]],
@@ -176,6 +177,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser(?:-part2)?\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
   // The WebGPU splat pipeline (Photo on ?renderer=webgpu) and the Spark cutaway it mirrors.
+  [/^(?:app\/src\/home-3d\/(?:modes\.js|pointcloud\.js|webgpu-renderer\.mjs|webgpu-material-ports\.mjs)|tools\/test-apartment-photo-crossfade-browser\.mjs)$/, ["test-apartment-photo-crossfade-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|modes\.js|adaptive-performance\.mjs)|tools\/test-apartment-gaussian-splat\.mjs)$/, ["test-apartment-gaussian-splat.mjs"]],
   [/^(?:app\/src\/(?:vendor\/(?:three-0\.186\.1|spark-2\.1\.0)\/.+|home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/test-apartment-webgpu-splat-browser\.mjs)$/, ["test-apartment-webgpu-splat-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:splat-cutaway\.js|splat-exterior-cleanup\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
@@ -243,6 +245,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-lit-splats-native-browser.mjs": 90,
   "test-apartment-lit-splats-native-browser-part2.mjs": 70,
   "test-apartment-lit-splats-native-browser-part3.mjs": 100,
+  "test-apartment-lit-splats-native-browser-part4.mjs": 60,
   "test-home-full-ui-connection-browser.mjs": 35,
   "test-home-full-ui-simulation-browser.mjs": 60,
   "test-home-full-ui-labeler-browser.mjs": 45,
@@ -307,6 +310,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-lit-splats-browser.mjs": 125,
   "test-apartment-lit-splats-browser-part2.mjs": 90,
   "test-apartment-webgpu-photo-browser.mjs": 125,
+  "test-apartment-photo-crossfade-browser.mjs": 30,
   "test-apartment-webgpu-photo-browser-part2.mjs": 110,
   "test-apartment-composer-comfort-browser.mjs": 115,
   "test-apartment-aim-wiring-keys-browser.mjs": 96,
@@ -345,7 +349,7 @@ const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-
   ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"],
   ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
   ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"],
-  ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs", "test-apartment-lit-splats-native-browser-part3.mjs"],
+  ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs", "test-apartment-lit-splats-native-browser-part3.mjs", "test-apartment-lit-splats-native-browser-part4.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];
 function partitionPlan(plan, count) {
   const loads = Array(count).fill(0), owner = new Map();

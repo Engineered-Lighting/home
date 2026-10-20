@@ -74,7 +74,7 @@ function harness({ input, siteId = "victoria", chip = true, api = loadApi(), bri
     input, canonicalChatText: value => value.toLowerCase(), lastSubmittedTextRef: { current: { text: "", ts: 0 } }, window,
     handleCommand: spy("slash"), setInput: () => {}, chatAboutRef: { current: about }, addEvent: event => events.push(event),
     apartmentChatAboutReply: reply, chatRoomRef: { current: { room, bridge } }, haClientRef: { current: client },
-    cameraQueryGenerationRef: { current: 1 }, homeChoiceRef: { current: "auto" }, sim: { active: false }, clearPrivateCameraContext: () => {},
+    cameraQueryGenerationRef: { current: 1 }, homeChoiceRef: { current: "auto" }, viewSiteRef: { current: siteId || null }, sim: { active: false }, clearPrivateCameraContext: () => {},
     answerDirectLightStateQuestion: spy("direct"), runNaturalDeepLook: spy("natural"),
     localStorage: { getItem: () => "on" }, dispatchExternal: spy("external"), sendToHA: spy("sendToHA"),
   });

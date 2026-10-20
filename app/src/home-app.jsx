@@ -5802,6 +5802,12 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const chatAbout = chatSelection && !chatAboutRemoved ? { ...chatSelection, siteId: chatRoom.siteId, key: chatRoom.key } : null;
   const chatAboutRef = useRef(null);
   chatAboutRef.current = chatAbout;
+  // The home on screen, for Chat's "Auto" home: an attached About chip's home,
+  // else the Apartment's selected home while the unified Home shell is open.
+  const viewSite = chatAbout?.siteId
+    || (unifiedHome && ["echo", "victoria"].includes(shellState?.siteId) ? shellState.siteId : null);
+  const viewSiteRef = useRef(null);
+  viewSiteRef.current = viewSite;
   const chatRoomRef = useRef(null);
   chatRoomRef.current = { room: chatRoom, bridge: chatRoomBridge };
   const chatBindingsRef = useRef(new Map());
@@ -9737,9 +9743,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     window.HomeCameraQuery?.reset();
     window.HomeSpatialViewport?.selectSite?.(next);
   }, []);
-  // "auto": a command naming no home goes to the home you are in (device
-  // network, then phone zone), else the last home acted on. A hand-picked home
-  // lasts for this tab only.
+  // "auto": a command naming no home goes to the home you are viewing (an
+  // attached chip's home, else the Apartment's home), else the home you are in
+  // (device network, then phone zone), else the last home acted on. A
+  // hand-picked home wins over the view and lasts for this tab only.
   const [homeChoice, setHomeChoice] = useState('auto');
   const homeChoiceRef = useRef('auto');
   const [autoHome, setAutoHome] = useState(null);
@@ -9754,7 +9761,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     let live = true;
     const refresh = () => {
       if (homeChoiceRef.current !== 'auto') return;
-      window.HomeLightingControl.resolveHome('auto').then(home => {
+      window.HomeLightingControl.resolveHome('auto', { viewSite: viewSiteRef.current }).then(home => {
         if (!live || homeChoiceRef.current !== 'auto') return;
         setAutoHome(home);
       }).catch(() => {});
@@ -9763,7 +9770,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     const timer = setInterval(refresh, 60000);
     window.addEventListener('focus', refresh);
     return () => { live = false; clearInterval(timer); window.removeEventListener('focus', refresh); };
-  }, [homeChoice]);
+  }, [homeChoice, viewSite]);
   const cameraEndpointRef = useRef(endpoint);
   useEffect(() => {
     const clear = () => {
@@ -9878,7 +9885,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     }
     // Cross-home lighting: commands that name a home, or name none while the
     // default home is Victoria, are handled here; the rest continue below.
-    if (await window.HomeLightingControl?.run(text, {addEvent, homeChoice: homeChoiceRef.current,
+    if (await window.HomeLightingControl?.run(text, {addEvent, homeChoice: homeChoiceRef.current, viewSite: viewSiteRef.current,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
     })) {
       window.HomeCameraQuery?.reset();

@@ -28,6 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import Core from '../../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './apartment-home-shell-fixtures.mjs';
+import { authoredHdrFrame, compareFramePasses, PROOF_PARAMS, PROOF_SIZE } from './lit-frame-proof.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'), SRC = path.join(ROOT, 'app/src');
@@ -297,6 +298,27 @@ async function proveOn(backend, part) {
     assert.deepEqual(lit.orbs, before.orbs, 'orbs and beams keep the same untone-mapped materials and are never drawn by the tone pass');
     assert.deepEqual(lit.ports.problems, [], 'no unported or drifted material on the WebGPU path');
     check('tier0_on_node_materials', { lights: lit.state.lights, shadow_lights: lit.state.shadowLights, cutaway: lit.state.cutaway, pipeline: lit.state.pipeline });
+    // One HDR frame for Mesh too: the camera look by default, the fixture faces and bloom.
+    assert.equal(lit.state.look, 'camera', 'Mesh gets the camera look'); assert.equal(lit.state.frame.format, 'RGBA16F');
+    assert.equal(lit.state.frame.bloom, true); assert.ok(lit.state.frame.emitters >= 4, 'the lit fixtures show their faces');
+    assert.match(title, /Camera look: exposure set for the highlights/, 'the camera look is disclosed for Mesh');
+    if (part === 1) {
+      // The frame's TSL passes on this backend equal their CPU twins.
+      const runFrame = scale => page.evaluate(async ({ image, size, params }) => {
+        const result = await window.__APT_ENGINE.litFrameProof(Float32Array.from(image), size.width, size.height, params);
+        return { ...result, frame: Array.from(result.frame), mip: { ...result.mip, data: Array.from(result.mip.data) }, display: Array.from(result.display) };
+      }, { image: Array.from(authoredHdrFrame({ scale })), size: PROOF_SIZE, params: PROOF_PARAMS });
+      const framedRaw = await runFrame(1);
+      fs.writeFileSync(path.join(run, 'frame-proof.json'), JSON.stringify(framedRaw));
+      const framed = compareFramePasses(framedRaw);
+      assert.ok(framed.mip_rel <= 6e-3, 'the TSL bloom passes equal their CPU twin: ' + JSON.stringify(framed));
+      assert.ok(framed.display_max <= 2, 'the TSL display pass equals its CPU twin within 8-bit rounding: ' + JSON.stringify(framed));
+      const dimmed = [framed, compareFramePasses(await runFrame(0.5)), compareFramePasses(await runFrame(0.25))].map(row => row.mean_display_luma);
+      for (let i = 1; i < dimmed.length; i++) assert.ok(dimmed[i] < dimmed[i - 1], 'dimming darkens the display: ' + dimmed.join(' > '));
+      check('tsl_frame_passes_equal_cpu_twin', { ...framed, dimmed_display_luma: dimmed });
+    }
+    // L2's eye gates below are the eye look's; the camera look's ladder follows.
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('eye'));
 
     // The lights-off ladder.
     at('ladder');
@@ -349,6 +371,21 @@ async function proveOn(backend, part) {
     ladder.spot_5.pool_r_over_b = poolWarmth; ladder.off_moon.room_r_over_b = moonWarmth;
     check('lights_off_ladder', { ladder, levels: { output_30: LEVEL_30, spot_5: LEVEL_5 } });
     receipt.ladder = ladder;
+    // The camera look: the same ladder still reads strictly darker, step by step.
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('camera'));
+    const camera = {};
+    for (const name of LADDER) {
+      await apply(name);
+      const frame = await capture();
+      const state = await page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { adaptationEv: s.adaptationEv, look: s.look, emitters: s.frame.emitters }; });
+      assert.equal(state.look, 'camera');
+      camera[name] = { mean_display_luminance: frame.meanY, near_black_pct: frame.nearBlackPct, ...state };
+    }
+    for (let i = 1; i < LADDER.length; i++) assert.ok(camera[LADDER[i]].mean_display_luminance < camera[LADDER[i - 1]].mean_display_luminance,
+      `camera look: mean display luminance strictly decreases: ${LADDER[i - 1]} -> ${LADDER[i]} ` + JSON.stringify(camera));
+    assert.equal(camera.off_moon.emitters, 0, 'no fixture face shows with every channel off');
+    check('camera_look_ladder', camera);
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('eye'));
     }
 
     if (part === 2) {

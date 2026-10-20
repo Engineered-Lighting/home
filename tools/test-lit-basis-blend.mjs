@@ -143,9 +143,11 @@ test('the blend matches the layer contract decode and L2\'s display chain', asyn
         const chain = Exposure.litDisplayPixel(expected, { preExposure: Model.LIT_EXPOSURE, gain: 4 }).map(Exposure.srgbEncode);
         display.forEach((value, c) => assert.ok(Math.abs(value - chain[c]) < 1e-6));
     }
-    // The GLSL pass compiles from the same constants for every operator.
-    for (const operator of Exposure.LIT_TONE_OPERATORS) assert.match(Blend.litBlendFragmentGlsl({ operator }), /gl_FragColor = vec4\(srgbEncode\(c\), 1\.0\)/);
-    assert.throws(() => Blend.litBlendFragmentGlsl({ operator: 'aces' }), /lit_tone_operator_unknown/);
+    // The GLSL pass stores the scene-referred radiance (half float): no tone,
+    // gain or encode per receiver; the look runs once per pixel in the frame.
+    const glsl = Blend.litBlendFragmentGlsl({ windowSlot: 28 });
+    assert.match(glsl, /gl_FragColor = vec4\(c, 1\.0\);/);
+    assert.doesNotMatch(glsl, /agx|srgbEncode|mesopic/i, 'no display chain in the blend');
 });
 
 test('a live spot\'s receiver column: shadowed direct light plus its bounce, linear in candela, zero when off', async () => {

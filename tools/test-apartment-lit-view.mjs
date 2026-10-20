@@ -32,6 +32,12 @@ let litSource = replaceOne(fs.readFileSync(sourceFile('lit-view.mjs'), 'utf8'), 
 litSource = replaceOne(litSource, 'import(`./lit-model.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-model.mjs')).href) + ')');
 litSource = replaceOne(litSource, 'import(`./lit-exposure.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-exposure.mjs')).href) + ')');
 litSource = replaceOne(litSource, 'import(`./lit-bvh-bake.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-bvh-bake.mjs')).href) + ')');
+// Lighting's HDR frame: lit-frame.mjs imports 'three' too, so it is mapped like lit-view.
+const fileImport = name => 'import(' + JSON.stringify(pathToFileURL(sourceFile(name)).href) + ')';
+let frameSource = replaceOne(fs.readFileSync(sourceFile('lit-frame.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL));
+for (const name of ['lit-display.mjs', 'lit-model.mjs', 'lit-exposure.mjs']) frameSource = replaceOne(frameSource, 'import(`./' + name + '${search}`)', fileImport(name));
+litSource = replaceOne(litSource, 'import(`./lit-frame.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(dataModule(frameSource)) + ')');
+for (const name of ['lit-display.mjs', 'lit-basis-blend.mjs']) litSource = replaceOne(litSource, 'import(`./' + name + '${new URL(import.meta.url).search}`)', fileImport(name));
 const Bake = await import(pathToFileURL(sourceFile('lit-bvh-bake.mjs')).href);
 const { roomBox } = await import('./fixtures/lit-bake-scenes.mjs');
 const Lit = await import(dataModule(litSource));
@@ -377,7 +383,9 @@ test('L4 receivers mode (Photo/Cloud): no lights, shadow maps or scene hook; the
   const fixtures = createEquipmentVirtualFixtures(root, { binding });
   assert.equal(fixtures.setDocument(authoredDocument(binding, Core)).status, 'ready');
   const scan = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({ color: 0x808080 })); root.add(scan);
-  const renderer = { shadowMap: { enabled: false, type: THREE.BasicShadowMap, autoUpdate: true, needsUpdate: false }, toneMapping: THREE.NoToneMapping };
+  const engineRender = function render() {};
+  const renderer = { shadowMap: { enabled: false, type: THREE.BasicShadowMap, autoUpdate: true, needsUpdate: false }, toneMapping: THREE.NoToneMapping,
+    render: engineRender };
   const synced = [], bakeReceivers = [];
   let flushes = 0;
   const receivers = {
@@ -396,7 +404,10 @@ test('L4 receivers mode (Photo/Cloud): no lights, shadow maps or scene hook; the
   t.after(() => { lit.disable(); fixtures.dispose(); });
   const material = scan.material, geometry = scan.geometry, hook = scene.onBeforeRender;
   const state = lit.enable();
-  assert.equal(state.active, true); assert.equal(state.pipeline, 'per-receiver-display');
+  assert.equal(state.active, true); assert.equal(state.pipeline, 'scene-referred-half-float', 'one HDR frame, the display pass per pixel');
+  assert.notEqual(renderer.render, engineRender, 'the frame wraps the engine render while lit');
+  assert.equal(state.look, 'camera'); assert.equal(state.frame.format, 'RGBA16F'); assert.equal(state.frame.measured, false);
+  assert.match(state.disclosureDetail, /Camera glare \(presentation\)/, 'the glare, faces and noise are disclosed as presentation');
   assert.equal(state.lights, 0, 'no three lights in Photo or Cloud'); assert.equal(state.meshSwapped, 0);
   assert.equal(renderer.shadowMap.enabled, false, 'no shadow maps'); assert.equal(renderer.shadowMap.autoUpdate, true);
   assert.equal(scene.onBeforeRender, hook, 'no scene hook: Lit steps from the splat tick');
@@ -421,5 +432,7 @@ test('L4 receivers mode (Photo/Cloud): no lights, shadow maps or scene hook; the
   const off = lit.disable();
   assert.equal(off.active, false); assert.equal(off.receivers, null);
   assert.equal(renderer.shadowMap.enabled, false); assert.equal(scene.onBeforeRender, hook);
+  assert.equal(renderer.render, engineRender, 'the engine render is its own again');
+  assert.equal(scene.getObjectByName('lit-frame'), undefined, 'the frame left the scene');
   assert.equal(lit.tickReceivers(camera), false, 'inactive');
 });

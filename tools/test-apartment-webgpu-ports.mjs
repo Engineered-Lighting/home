@@ -145,7 +145,13 @@ test('no other module in home-3d builds a GLSL material', () => {
     'apartment-directional-presentation.mjs', 'dollhouse-cutaway-material.js', 'photo-floor-support.js',
     'webgpu-port-fingerprints.mjs', 'webgpu-material-ports.mjs', 'webgpu-renderer.mjs', 'splat-cutaway.js',
     // L4: its ShaderMaterial is the WebGL GPGPU blend; the WebGPU twin is the TSL compute in lit-basis-blend.mjs.
-    'lit-receivers.mjs']);
+    'lit-receivers.mjs',
+    // Lighting's HDR frame: its ShaderMaterials are the WebGL bloom, display and fixture-face passes; the
+    // WebGPU twins are the TSL nodes in lit-display.mjs, built by the same module on the node renderer.
+    'lit-frame.mjs',
+    // The WebGL occluder reuses the scan display's own onBeforeCompile (its cut); the WebGPU path's occluder is a
+    // MeshBasicNodeMaterial with the shared TSL cut mask, built beside it.
+    'lit-view.mjs']);
   for (const name of fs.readdirSync(path.join(SRC, 'home-3d'))) {
     if (!/\.(?:m?js)$/.test(name) || known.has(name)) continue;
     const text = fs.readFileSync(path.join(SRC, 'home-3d', name), 'utf8');

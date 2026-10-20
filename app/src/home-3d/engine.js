@@ -343,6 +343,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     async function prepareLitReceivers(mode) {
         const receiversM = await sib('lit-receivers.mjs');
         if (disposed) return 'engine_disposed';
+        const unsupported = receiversM.litReceiversUnsupported(renderer);
+        if (unsupported) return unsupported;
         const kind = mode === 'splat' ? 'splat' : 'points';
         const object = kind === 'splat' ? modes.getSplat?.() : points;
         const set = receiversM.receiverSetFor(kind, kind === 'splat' ? modes.splatSourceName?.() : 'points.ply');

@@ -37,6 +37,12 @@ export function litReceiversOptedIn(location = globalThis.location) {
     try { return new URLSearchParams(location?.search || '').get(LIT_RECEIVERS_FLAG) === '1'; } catch (_) { return false; }
 }
 
+/* Why this renderer cannot light receivers, or null: the node renderer's
+ * WebGL2 backend has no compute (the splat colour hook says the same). */
+export function litReceiversUnsupported(renderer) {
+    return renderer?.isWebGPURenderer && !renderer.backend?.isWebGPUBackend ? 'lit_receivers_unavailable_on_webgl2_backend' : null;
+}
+
 /* The layer receiver set for a loaded asset: Photo's PLY or the cloud. */
 export function receiverSetFor(kind, sourceName) {
     if (kind === 'points') return 'points';
@@ -73,8 +79,8 @@ function receiverPositions(kind, object) {
  * layer cannot be lit. */
 export async function createLitReceivers({ renderer, kind, object, layer, whenIdle = () => Promise.resolve() } = {}) {
     if (kind !== 'splat' && kind !== 'points') throw fail('lit_receivers_kind_unknown');
-    const node = !!renderer?.isWebGPURenderer;
-    if (node && !renderer.backend?.isWebGPUBackend) return { available: false, reason: 'lit_receivers_unavailable_on_webgl2_backend' };
+    const node = !!renderer?.isWebGPURenderer, unsupported = litReceiversUnsupported(renderer);
+    if (unsupported) return { available: false, reason: unsupported };
     const { count, positions } = receiverPositions(kind, object);
     if (!layer || layer.count !== count) return { available: false, reason: 'lighting_layer_count_mismatch' };
     const packed = Blend.packReceiverSet(layer);

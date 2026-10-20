@@ -80,7 +80,7 @@ function browserOptions(backend) {
   return { headless: true, args, ...(channel ? { channel } : process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-0 kept, the lights-off ladder reads naturally, orbs untouched`, { timeout: 240000 }, async () => {
+for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-0 kept, the lights-off ladder reads naturally, orbs untouched`, { timeout: 175000 }, async () => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'this proof uses only current worktree source');
   const run = path.join(ROOT, '.tmp/apartment-lit-webgpu-browser', backend + '-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -93,10 +93,12 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
   const sources = publicSources(SRC), receipt = { schema: 'home-apartment-lit-webgpu-authored-browser-1', backend, authored_room: true, real_renderer: true,
     household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], served: {} };
   const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
-  let server, browser, page, origin, handler, timer;
+  // The touched-harness runner stops a suite at 180 s; this deadline lands first and names the stage.
+  let server, browser, page, origin, handler, timer, stage = 'boot';
+  const started = Date.now(), at = name => { stage = name; receipt.stages = { ...receipt.stages, [name]: Date.now() - started }; };
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
-    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('230s lit webgpu browser deadline'));
-  }, 230000); });
+    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('165s lit webgpu browser deadline at stage ' + stage));
+  }, 165000); });
 
   async function proof() {
     server = http.createServer((req, res) => {
@@ -198,7 +200,7 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
       let last = null, count = 0;
       const step = now => {
         if (last != null) intervals.push(now - last); last = now;
-        if (++count < 121) requestAnimationFrame(step);
+        if (++count < 61) requestAnimationFrame(step);
         else { renderer.render = original; const p = (a, q) => [...a].sort((x, y) => x - y)[Math.floor(a.length * q)];
           resolve({ frames: intervals.length, fps_p50: 1000 / p(intervals, .5), frame_p50_ms: p(intervals, .5), frame_p95_ms: p(intervals, .95),
             render_p50_ms: p(renders, .5), render_p95_ms: p(renders, .95) }); }
@@ -233,6 +235,7 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
     assert.ok(before.orbs.length > 0 && before.orbs.some(row => row[2] === false), 'the orbs draw untone-mapped');
 
     // Lit on: Tier-0's behaviour on node materials.
+    at('lit_on');
     await litButton.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: LIT_WAIT_MS });
     await frames(6); await settled();
@@ -284,6 +287,7 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
     check('tier0_on_node_materials', { lights: lit.state.lights, shadow_lights: lit.state.shadowLights, cutaway: lit.state.cutaway, pipeline: lit.state.pipeline });
 
     // The lights-off ladder.
+    at('ladder');
     const ids = await page.evaluate(() => window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.map(item => item.fixture_id));
     assert.equal(ids.length, 4);
     const every = (on, brightness) => ({ spotlight: { on, brightness }, downward: { on, brightness },
@@ -329,6 +333,7 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
     check('lights_off_ladder', { ladder, levels: { output_30: LEVEL_30, spot_5: LEVEL_5 } });
     receipt.ladder = ladder;
 
+    at('tone_views');
     // Comparison views: no presentation effects, so moonlight is the design exposure's near-black.
     const compare = {};
     for (const operator of ['linear', 'neutral', 'reinhard', 'agx']) {
@@ -342,28 +347,32 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
     check('tone_views_at_moonlight', compare);
 
     // The adaptation eases: slowly as the room darkens, quickly as it brightens.
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    at('adaptation_eases');
+    // The room is settled in moonlight after the ladder: brighten first, then darken from the bright room.
     const all = async on => page.evaluate(({ ids, patch }) => ids.forEach(id => window.__APT_ENGINE.overlay.setVirtualFixtureState(id, patch)), { ids, patch: every(on, 1) });
-    await all(true); await page.emulateMedia({ reducedMotion: 'reduce' }); await frames(3); await settled(); await page.emulateMedia({ reducedMotion: 'no-preference' });
     const after = async ms => { await page.waitForTimeout(ms); await frames(2); return page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { ev: s.adaptationEv, target: s.adaptationTargetEv, adapting: s.adapting }; }); };
-    await all(false); await frames(2);
-    const darkening = await after(1000);
-    assert.ok(darkening.adapting && darkening.ev > 0 && darkening.ev < darkening.target * 0.6, 'darkening adapts slowly (tau 3 s): ' + JSON.stringify(darkening));
-    await page.emulateMedia({ reducedMotion: 'reduce' }); await frames(3); await settled(); await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.evaluate(() => window.__APT_ENGINE.setLitTone('agx'));
     const fromEv = (await page.evaluate(() => window.__APT_ENGINE.litState().adaptationEv));
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await all(true); await frames(2);
     const brightening = await after(1000);
     assert.ok(brightening.ev < fromEv * 0.45, 'brightening adapts fast (tau 0.75 s): ' + JSON.stringify({ fromEv, ...brightening }));
+    await page.emulateMedia({ reducedMotion: 'reduce' }); await frames(3); await settled(); await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await all(false); await frames(2);
+    const darkening = await after(1000);
+    assert.ok(darkening.adapting && darkening.ev > 0 && darkening.ev < darkening.target * 0.6, 'darkening adapts slowly (tau 3 s): ' + JSON.stringify(darkening));
     check('adaptation_eases', { darkening, brightening, from_ev: fromEv });
-    await page.emulateMedia({ reducedMotion: 'reduce' }); await frames(3); await settled();
+    await page.emulateMedia({ reducedMotion: 'reduce' }); await all(true); await frames(3); await settled();
 
     // Performance in Lit, all on (descriptive on CI; gated on the owner's GPU).
+    at('performance');
     const litTiming = await timing();
     receipt.performance = { note: 'descriptive unless HOME_LIT_WEBGPU_FPS_GATE=1; headless software GL is not the owner GPU', lit: litTiming,
       quality: await page.evaluate(() => window.__APT_ENGINE.litState().quality) };
     if (process.env.HOME_LIT_WEBGPU_FPS_GATE === '1') assert.ok(litTiming.fps_p50 >= 60, 'Lit holds 60 fps: ' + JSON.stringify(litTiming));
 
     // Leaving Lit restores the mesh, the renderer and the camera exactly.
+    at('restore');
     await page.getByRole('button', { name: 'Cloud view', exact: true }).click();
     await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'points' && window.__APT_ENGINE.litState().active === false, null, { timeout: LIT_WAIT_MS });
     const restored = await snapshot();

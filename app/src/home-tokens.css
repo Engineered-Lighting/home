@@ -422,10 +422,12 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-badge[data-tone="blocked"] { color: var(--apt-blocked); }
 .apt-home-shell .apt-ui-badge:is([data-tone="neutral"], [data-tone="muted"]) { color: var(--hg-fg-3); }
 .apt-home-shell .apt-ui-badge:is([data-state="authored"], [data-state="simulated"]) { border-style: dashed; }
-.apt-ui-toast { position: absolute; bottom: 74px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--hg-border-strong); border-radius: 9px; background: var(--hg-bg-2); color: var(--hg-fg-1); font: 400 12px/1.4 'Geist', sans-serif; }
+.apt-ui-toast { position: absolute; bottom: 76px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; padding: 8px 10px 8px 14px; border: 1px solid var(--hg-border); border-radius: 10px; background: var(--apt-glass, rgba(8,9,11,.78)); color: var(--hg-fg-1); font: 400 12.5px/1.4 'Geist', sans-serif; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .apt-ui-toast-message { min-width: 0; overflow-wrap: anywhere; }
 .apt-ui-toast .apt-ui-button { min-height: 36px; padding: 5px 9px; border: 1px solid var(--hg-border-strong); border-radius: 6px; background: var(--hg-bg-3); color: var(--hg-fg-1); cursor: pointer; }
-@media (pointer: coarse) { .apt-ui-toast .apt-ui-button { min-width: 44px; min-height: 44px; } }
+/* On touch the room toolbar's targets grow to 44 px; the notice keeps the
+ * prototype's 12 px gap above it. */
+@media (pointer: coarse) { .apt-ui-toast { bottom: 88px; } .apt-ui-toast .apt-ui-button { min-width: 44px; min-height: 44px; } }
 
 .apt-home-shell {
   --apt-column-width: 360px;

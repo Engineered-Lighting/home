@@ -70,7 +70,7 @@ directories are 0700.
 | LA | `<gateway user config>/web-gateway.env` | gateway user | add `HOME_WEB_DEN_OPS_TOKENS_FILE=<…>/den-ops-monitors.json` |
 | LA | `<monitor private dir>/{monitor.json, fault-baseline.json, den-ops-monitor.token, ha-notify.token, den-ops-monitor.env}` | `<monitor user>` | from `monitor/config/*.example.json`. The env file holds `DEN_OPS_MONITOR_CONFIG=<…>/monitor.json`. |
 | Jetson | `<bridge private dir>/{bridge.json, brain-producer.token, mqtt-password, ha-token, victoria-ha-bridge.env}` | `<bridge user>` | AL-2 `bridge.example.json` keys. The env file holds `BRIDGE_CONFIG=<…>/bridge.json`. |
-| Jetson | `<lab private dir>/{activity-loop.json, brain-producer.token, activity-loop.env}` | `<perception-lab user>` | AL-3 config (hand-over keys). The env file holds `PERCEPTION_LAB_ACTIVITY_LOOP_CONFIG=<…>/activity-loop.json`. |
+| Jetson | `<lab private dir>/{activity-loop.json, brain-producer.token, activity-loop.env}` | `<perception-lab user>` | AL-3 config (hand-over keys). The env file holds `PERCEPTION_LAB_ACTIVITY_LOOP_CONFIG=<…>/activity-loop.json` and `JETSON_HOME=<…>` (J0). |
 | Jetson | `<monitor private dir>/{monitor.json, fault-baseline.json, den-ops-monitor.token, lab-monitor.token, ha-notify.token, den-ops-monitor.env}` | `<perception-lab user>` | as LA, plus O7's Lab token and the Lab CA |
 | both | `<private>/values.json` | the deployer | `units/values.example.json` filled in |
 
@@ -129,6 +129,60 @@ sudo systemctl daemon-reload && sudo systemctl enable --now den-ops-monitor.time
 ```
 
 ### Victoria Jetson
+
+**J0. `JETSON_HOME` and `JETSON_USER` first, before any Jetson code update.**
+
+The Den backend code reads the Jetson home directory from `JETSON_HOME`
+instead of a hard-coded username. When `JETSON_HOME` is unset, every path
+falls back to the repo placeholder `/home/jetson-user`, which does not exist
+on the Jetson. So set the real values before any new perception-lab or
+`home_shared` code lands on the Jetson. That includes J2's restart and any
+unrelated release.
+
+1. **Find every unit that runs that code.** That includes:
+   - the existing private `perception-lab-managed.service` user unit;
+   - any system or user unit whose `ExecStart` or `WorkingDirectory` points
+     into a perception-lab or `home_shared` release.
+
+   ```bash
+   systemctl --user list-unit-files --no-pager | grep -E 'perception-lab|victoria'
+   systemctl list-unit-files --no-pager | grep -E 'perception-lab|victoria'
+   systemctl --user cat perception-lab-managed.service | grep -E 'ExecStart|WorkingDirectory|EnvironmentFile'
+   ```
+
+2. **Set the values in each unit, privately.** They are private and never go
+   in the repo.
+   - Preferred: add `JETSON_HOME=<home of the perception-lab user>` to the
+     unit's existing private `EnvironmentFile`, or to a new one (0600, owned
+     by that user).
+   - Alternatively, add an `Environment=JETSON_HOME=<…>` line in a private
+     drop-in.
+   - For `perception-lab-managed.service`, the AL-3 drop-in's `@ENV_FILE@`
+     (J2) is the place. Until J2 is installed, use the unit's current
+     private environment.
+   - `activate-victoria-recording.sh` also needs `JETSON_USER=<perception-lab
+     user>`. Set it in the environment of the unit or shell that runs the
+     script.
+
+3. **Reload and verify each unit before restarting it.**
+
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user show perception-lab-managed.service -p Environment -p EnvironmentFiles
+   ```
+
+   - `-p Environment` lists only `Environment=` lines.
+   - When the value comes from an `EnvironmentFile`, the files are listed
+     under `EnvironmentFiles`. Check that the file holds the value, and
+     after the restart, check the running process:
+
+     ```bash
+     tr '\0' '\n' < /proc/$(systemctl --user show -p MainPID --value perception-lab-managed.service)/environ | grep -E '^JETSON_(HOME|USER)='
+     ```
+
+   - Use `sudo systemctl show …` for system units.
+   - The value must be the real home directory (`test -d "$JETSON_HOME"`),
+     never `/home/jetson-user`.
 
 **J1. Bridge (AL-2).**
 
@@ -193,6 +247,7 @@ the owner checklist on LA, then `soak combine`. Record
 | Gateway routes | `GET /healthz` on the gateway | `/api/lighting-brain` route; `denOpsStatus.enabled: true, monitors: 2` |
 | Producers reach the brain | brain `state.inputs` | `occupancy_age_s` < 30, `health.frigate` true; when occupied, `activity_age_s` < 15 and `jev`/`deep_stack` true |
 | Producer auth | the bridge and loop logs | no 401/403 from the gateway or the brain |
+| `JETSON_HOME` in every Jetson unit that runs perception-lab/`home_shared` code (J0), including `perception-lab-managed.service` with the AL-3 drop-in | `systemctl --user show perception-lab-managed.service -p Environment -p EnvironmentFiles`, then `tr '\0' '\n' < /proc/<MainPID>/environ \| grep -E '^JETSON_(HOME\|USER)='` | `JETSON_HOME` is the real home of the perception-lab user, never `/home/jetson-user`; `JETSON_USER` is set wherever `activate-victoria-recording.sh` runs; the drop-in's env file is listed under `EnvironmentFiles` |
 | Banner | `GET /api/den-ops/v1/status` with the session | `level: 0`, both hosts listed and not stale |
 | HA notify | the HA notifications panel | test once: run `den_ops check` on a host with a temporary rule set low, or wait for the first notice |
 | Monitor timers | `systemctl list-timers den-ops-monitor.timer` (LA), and `systemctl --user list-timers` (Jetson) | firing every minute |

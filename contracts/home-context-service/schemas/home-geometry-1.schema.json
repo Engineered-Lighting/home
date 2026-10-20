@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-geometry-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-geometry-1"
+    },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "site_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "room_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "frame": {
+      "const": "z_up_metric_floor0"
+    },
+    "units": {
+      "const": "m"
+    },
+    "geometry_revision": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "registration_ref": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "registry_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "observed_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "available_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "valid_until": {
+      "type": "number",
+      "minimum": 0
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "commissioned",
+            "unverified"
+          ]
+        },
+        "mapping_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "uncertainty_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "original_unit": {
+          "enum": [
+            "utc_epoch_s",
+            "utc_epoch_ms",
+            "utc_epoch_ns",
+            "device_relative_s",
+            "session_offset_s"
+          ]
+        },
+        "original_value": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "status",
+        "mapping_id",
+        "uncertainty_s",
+        "original_unit",
+        "original_value"
+      ]
+    },
+    "coverage_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "person_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "room_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "track_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "track_epoch",
+        "pid"
+      ]
+    },
+    "association_ref": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "authorized_geometry": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "frame",
+    "units",
+    "geometry_revision",
+    "registration_ref",
+    "registry_digest",
+    "observed_at",
+    "available_at",
+    "valid_until",
+    "clock",
+    "coverage_refs",
+    "person_ref",
+    "association_ref",
+    "authorized_geometry"
+  ]
+}

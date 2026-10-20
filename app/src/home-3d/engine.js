@@ -874,7 +874,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 litView ||= litM.createLitView({ scene, renderer,
                     getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
                     getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
-                    getCollision: () => modes.getCollision?.() || null,
+                    // Named aims for the modeled lux readout, in their own frame.
+                    getNamedAims: () => [...(overlay.targetsById?.values() || [])].map(item => ({ id: item.target?.id,
+                        label: item.target?.name || item.target?.id, point: item.target?.pos, normal: item.target?.normal, frame: item.group?.parent })),
+                    isPresentationActive: () => overlay.virtualFixturesPresentationActive?.() === true,
+                    onStateChange: state => { if (state.active) emit('lit', state); },
+                    signal: lifetimeController.signal,
                     spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
             }
             if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
@@ -961,6 +966,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
                 await pointsPromise;
                 if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
+                // The same per-frame splat work as frame(): sort for this camera.
+                modes.tickSplat?.(camera, performance.now() / 1000);
                 const frame = await nodeRenderer.capture({ scene, camera, scale, signal });
                 return disposed || signal?.aborted ? null : frame;
             }

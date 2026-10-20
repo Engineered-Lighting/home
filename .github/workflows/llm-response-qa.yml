@@ -153,6 +153,7 @@ jobs:
             .tmp/apartment-aim-theme-browser/run-*/receipt.json
             .tmp/apartment-aim-theme-browser/run-*/*.png
             .tmp/apartment-aim-wiring-browser/run-*/receipt.json
+            .tmp/apartment-aim-library-shell-browser/run-*/receipt.json
             .tmp/apartment-composer-comfort-browser/run-*/receipt.json
           if-no-files-found: ignore
           include-hidden-files: true

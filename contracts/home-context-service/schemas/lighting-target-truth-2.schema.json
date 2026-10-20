@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lighting-target-truth-2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "lighting-target-truth-2"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "kind": {
+      "enum": [
+        "context",
+        "outcome",
+        "delivery"
+      ]
+    },
+    "story": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "sample_class": {
+      "enum": [
+        "positive",
+        "confuser"
+      ]
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "day_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "episode_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "start_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "end_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "split": {
+      "enum": [
+        "dev",
+        "calibration",
+        "untouched"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "const": "human"
+        },
+        "reviewed": {
+          "type": "boolean"
+        },
+        "reviewer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "blind": {
+          "type": "boolean"
+        },
+        "shown_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "derived_from_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "origin",
+        "reviewed",
+        "reviewer_id",
+        "blind",
+        "shown_evidence",
+        "derived_from_ids"
+      ]
+    },
+    "value": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "kind",
+    "session_id",
+    "day_id",
+    "episode_id",
+    "start_at",
+    "end_at",
+    "split",
+    "provenance",
+    "value"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "context"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "person_ref": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "site_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "room_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "session_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "domain_epoch": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "track_epoch": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "pid": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "site_id",
+                  "room_id",
+                  "session_id",
+                  "domain_epoch",
+                  "track_epoch",
+                  "pid"
+                ]
+              },
+              "pid": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  }
+                ]
+              },
+              "surface_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "engaged": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "person_ref",
+              "surface_id",
+              "engaged"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "outcome"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "person_ref": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "site_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "room_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "session_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "domain_epoch": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "track_epoch": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "pid": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "site_id",
+                      "room_id",
+                      "session_id",
+                      "domain_epoch",
+                      "track_epoch",
+                      "pid"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pid": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  }
+                ]
+              },
+              "wanted": {
+                "type": "boolean"
+              },
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "surface_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "region_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "zone_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "resolution": {
+                    "enum": [
+                      "fixed_region",
+                      "whole_surface",
+                      "zone"
+                    ]
+                  }
+                },
+                "required": []
+              },
+              "acceptable_targets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "surface_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "region_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "zone_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "resolution": {
+                      "enum": [
+                        "fixed_region",
+                        "whole_surface",
+                        "zone"
+                      ]
+                    }
+                  },
+                  "required": []
+                },
+                "maxItems": 128
+              },
+              "purpose": {
+                "enum": [
+                  "task",
+                  "ambient",
+                  "accent"
+                ]
+              },
+              "requirements": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "level_min": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "level_max": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cct_min_k": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cct_max_k": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "desired_lux_min": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "desired_lux_max": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": []
+              }
+            },
+            "required": [
+              "wanted"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "delivery"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "person_ref": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "site_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "room_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "session_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "domain_epoch": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "track_epoch": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                      },
+                      "pid": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "site_id",
+                      "room_id",
+                      "session_id",
+                      "domain_epoch",
+                      "track_epoch",
+                      "pid"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pid": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  }
+                ]
+              },
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "surface_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "region_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "zone_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "resolution": {
+                    "enum": [
+                      "fixed_region",
+                      "whole_surface",
+                      "zone"
+                    ]
+                  }
+                },
+                "required": []
+              },
+              "feasible": {
+                "type": "boolean"
+              },
+              "method": {
+                "enum": [
+                  "survey",
+                  "independent_simulation",
+                  "measurement"
+                ]
+              },
+              "requirements": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "level_min": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "level_max": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cct_min_k": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cct_max_k": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "coverage_min": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "lux_min": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": []
+              }
+            },
+            "required": [
+              "target",
+              "feasible",
+              "method"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

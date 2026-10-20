@@ -56,8 +56,62 @@ image digest, StartedAt, `artifact_sha256`). Recreating `hav-vllm`, for the
 swap and for a rollback, changes that identity. Camera chat continues after a
 re-pin. The live consumer stays closed (`engine_changed`) until
 `live-scene.json` and Victoria's `runtime_revision` name the new epoch.
-Agree that re-pin with the activity-lighting planning session before the
-window. Until it is done, JEV runs on its ambient fallback.
+The re-pin is part of the window (procedure below). Until it is done, the
+always-on activity loop gets no Qwen facts and JEV runs on its ambient
+fallback.
+
+### Re-pin method (from the 2026-09-27 live-scene provisioning)
+
+| Field | Where | Value |
+| --- | --- | --- |
+| `artifact_sha256` | LA `private/model-pin.json`, LA `private/live-scene.json`, Victoria `managed-live.json` `qwen_live` | The **vLLM image digest**, without the `sha256:` prefix (`70a098d9…`). It is not a model hash. The swap keeps the image, so the value **does not change**, and nobody hand-edits it. |
+| `engine_epoch` | pin (written by auto re-pin), `live-scene.json` | `hav-vllm-<container id[:12]>-<StartedAt without - and :>`, logged by the pilot as `engine re-pinned ... engine_epoch=<new>` |
+| `runtime_revision` | Victoria `managed-live.json` `qwen_live` | `vllm-0.20.2-<engine_epoch>` |
+
+The ledger label `MODEL_REVISION` (`qwen3-vl-30b-f579e204-20260920`) is
+deliberately frozen: it is a label, not the engine identity. Since the alias
+`qwen3-vl-30b` now serves Qwen3.6, neither field tells the models apart; the
+compose override's pinned `--revision` is the record of which model ran.
+
+The swap keeps the container name (`hav-vllm`) and the image digest. The
+deployed `auto_repin: true` therefore accepts the new incarnation on its own,
+and camera chat continues. To reopen live facts (procedure from
+`LA-SPEED-OPERATIONS-RUNBOOK.md`, "Re-pin after a vLLM restart"):
+
+1. **Before the window, back up** these files:
+   - On LA: `~/home-camera-pilot/private/{model-pin,live-scene,pilot-runtime}.json`.
+   - On Victoria: `~/perception-lab/private/managed-live.json`.
+
+   Save each as `*.before-qwen36-<UTC>`.
+2. **After vLLM is healthy, read the new epoch** on LA:
+
+   ```sh
+   journalctl --user -u victoria-camera-pilot --since -15min | grep -E 'engine re-pinned|refusing'
+   ```
+
+3. **Update the two files:**
+   - LA `live-scene.json`: set `engine_epoch` to that value.
+   - Victoria `managed-live.json`: set `qwen_live.runtime_revision` to `vllm-0.20.2-<engine_epoch>`.
+
+   Leave `artifact_sha256` unchanged everywhere.
+4. **Check before restarting** (it runs every check, never re-pins and never
+   sends to the model). Run it on LA, from the release directory, as the
+   service user:
+
+   ```sh
+   python3 -c 'from home_shared.camera_pilot_service import model_health; model_health()'
+   ```
+
+5. **Restart at idle:**
+   - LA: `systemctl --user restart victoria-camera-pilot.service`.
+   - Victoria: `systemctl --user restart perception-lab-managed.service`, with no recording running.
+6. **Verify:**
+   - the LA log shows `live scene consumer enabled: ... epoch=<new>`;
+   - live facts flow again at the 4 s cadence.
+
+A rollback recreates the container too. Repeat steps 2–6 with the rollback
+container's new epoch. Restore the `.before-qwen36` copies only if an edit
+itself went wrong.
 
 The live facts' hard-coded `model_version`
 (`Qwen/Qwen3-VL-30B-A3B-Instruct-FP8`) will mislabel records after the swap.

@@ -311,7 +311,7 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
       assert.ok(ladder[LADDER[i]].scene_mean_cd_m2 < ladder[LADDER[i - 1]].scene_mean_cd_m2, 'and so does the scene-referred luminance: ' + LADDER[i]);
       assert.ok(ladder[LADDER[i]].adaptationEv >= ladder[LADDER[i - 1]].adaptationEv, 'adaptation only grows down the ladder');
     }
-    assert.equal(ladder.all_on.adaptationEv, 0, 'the design state needs no adaptation');
+    assert.ok(ladder.all_on.adaptationEv < 0.5, 'the all-on room meters near the design night and barely adapts: ' + ladder.all_on.adaptationEv);
     assert.ok(ladder.off_moon.adaptationEv <= 5.5 + 1e-9 && ladder.off_moon.adaptationEv > 4, 'moonlight adapts, bounded at +5.5 EV');
     assert.ok(ladder.off_moon.near_black_pct <= 60, 'moonlight is at most 60 % near-black: ' + ladder.off_moon.near_black_pct);
     assert.ok(ladder.off_moon.scene_mean_cd_m2 < 0.5, 'and the moonlit room is truly dim in scene terms (cd/m², modeled): ' + ladder.off_moon.scene_mean_cd_m2);

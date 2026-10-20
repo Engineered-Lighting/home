@@ -1,0 +1,164 @@
+{
+  "absence_authority": false,
+  "approximate_pose": {
+    "anchor_joint_id": null,
+    "edges": [],
+    "error_bound_m": null,
+    "frame_id": "synthetic-camera-epoch-bundle-rgb-13",
+    "instance_index": 0,
+    "instance_ref": "object-0",
+    "joints": [
+      {
+        "camera_xyz_m": [
+          0.03839111111111111,
+          -0.07404,
+          1.234
+        ],
+        "depth_spread_m": 0.009887222830939034,
+        "depth_support": 41,
+        "error_bound_m": null,
+        "id": 0,
+        "pixel": [
+          320.0,
+          150.0
+        ],
+        "position_m": [
+          0.4383911111111111,
+          0.12596000000000002,
+          1.334
+        ],
+        "visible": true
+      }
+    ],
+    "label": "Approximate room placement",
+    "omitted_joint_ids": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "person_ref": null,
+    "provenance": {
+      "calibration_content_id": "14f7ee28a297d9eb5ffe8d4c49b201176d0fb235637788e88d8b1818d1239cb0",
+      "frame_media_id": "c327ffe20d894a98833c61a84eebc476",
+      "frame_media_sha256": "1572829a463f327904645b393e27eda8b8712b678b09d2c038f7cb4d1d2ada0e",
+      "input_family": "home-apartment-viewing-metric-attempt-1",
+      "media_generation": 0,
+      "model_generation": 1,
+      "original_event_sha256": "35e009ef2112464b21bebb3ed508b3aa069f365b4f551b104474ed95b2f31c20",
+      "ram_originals": {
+        "anchor_a": {
+          "sha256": "9618590a22ea38dc2b97682ca696fa499c30e15ea6887d4afb31634be5bcfc02",
+          "size": 4309
+        },
+        "anchor_b": {
+          "sha256": "9618590a22ea38dc2b97682ca696fa499c30e15ea6887d4afb31634be5bcfc02",
+          "size": 4309
+        },
+        "calibration": {
+          "sha256": "f6f666c5e11c80d9525c77441b6beb6865475fc78a4d7ce0c7d5f56bd58b08e9",
+          "size": 522
+        },
+        "npz": {
+          "sha256": "0b3e7f4fa2b5092adb060f3de1d24f40397070bdbb2b413f169ac2d6b5091d47",
+          "size": 2781
+        }
+      },
+      "source_event_id": 15
+    },
+    "qualification": "approximate_visual_alignment",
+    "registration": {
+      "alignment_digest": "642420655f359292bcc719b243cf0a89c8ff2a13726d2cac883c8c08c98ebc5a",
+      "camera_id": "den",
+      "camera_to_room_digest": "086a3b0a6e88d3622b7f0a6c801f69925cdeed97309b1c7f382ca75d62cd6b50",
+      "canonical_collision_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "metric_error_bound_m": null,
+      "mount_movement_detection": {
+        "changed_cells": 0,
+        "compared_cells": 64,
+        "physical_movement_error_bound_m": null,
+        "result": "unchanged",
+        "status": "unvalidated_coarse_scene_check"
+      },
+      "mount_revision": "authored-static-mount",
+      "review_digest": "a56c399553c3f216379b976350f5abb580bb55d48dc832850d540369d6834235",
+      "source_fit_digest": "940915f4be3731cac1ea217ae9aad3120c96ccd9a5f107718095f885ee0ba7ef",
+      "source_fit_status": "refused",
+      "status": "approximate_visual_alignment"
+    },
+    "scope": {
+      "cameraId": "den",
+      "contentRevision": "authored-revision",
+      "frameDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "generation": 0,
+      "registrationVersion": 1,
+      "sessionId": "e9aa36cd675d40ed840caa2bdf85b39c",
+      "siteId": "victoria"
+    },
+    "source_epoch": "synthetic-camera-epoch",
+    "source_times": {
+      "available_at": 1800000000.59,
+      "observed_at": 1800000000.0899994,
+      "valid_until": 1800000001.0
+    },
+    "subject_ref": null
+  },
+  "beam_authority": false,
+  "engagement_authority": false,
+  "follow_allowed": false,
+  "frame": {
+    "camera_id": "den",
+    "frame_id": "synthetic-camera-epoch-bundle-rgb-13",
+    "generation": 0,
+    "height": 360,
+    "media_id": "c327ffe20d894a98833c61a84eebc476",
+    "media_sha256": "1572829a463f327904645b393e27eda8b8712b678b09d2c038f7cb4d1d2ada0e",
+    "original_times": {
+      "available_at": 1800000000.59,
+      "observed_at": 1800000000.0899994,
+      "valid_until": 1800000001.0
+    },
+    "site_id": "victoria",
+    "source_epoch": "synthetic-camera-epoch",
+    "width": 640
+  },
+  "geometry_authority": false,
+  "identity_authority": false,
+  "label": "Approximate room placement",
+  "lighting_authority": false,
+  "operational_geometry": false,
+  "physical_permission": false,
+  "protection_authority": false,
+  "reason": null,
+  "renderable": true,
+  "room_pose": null,
+  "schema": "home-apartment-approximate-room-pose-1",
+  "session_state": "recording",
+  "status": "approximate",
+  "timing": {
+    "clock_qualification": "unavailable",
+    "exposure_error_bound_s": null,
+    "original_depth_clock": {
+      "exposure_error_bound_s": null,
+      "mapping": null,
+      "status": "unassessed"
+    },
+    "projection_qualification": "unqualified_nominal_eeprom",
+    "receipt_age_s": 0.09999999999999964,
+    "receipt_semantics": "display_retirement_only_not_exposure_freshness",
+    "remaining_receipt_hold_s": 1.9000000000000004,
+    "status": "unverified"
+  }
+}

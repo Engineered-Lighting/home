@@ -330,6 +330,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         apartmentRoot, modes, picking, sceneIdentity,
         getManifest: () => window.HomeContentPacks?.get?.(siteId, contentRevision)?.manifest,
         digest: value => window.HomeEquipmentRegistration?.digest?.(value),
+        dollhouseKeep: cutawayM.dollhouseKeep,
     });
     let disposed = false, disposing = false;
     const uiLayers = new Set();

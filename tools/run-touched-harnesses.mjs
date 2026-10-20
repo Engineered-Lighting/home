@@ -39,6 +39,12 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^(?:app\/src\/(?:home-app\.jsx|home-metrics(?:-lab)?\.jsx)|tools\/test-home-full-ui-metrics-browser\.mjs)$/, ["test-home-full-ui-metrics-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-app|home-people)\.jsx|tools\/test-home-full-ui-people-browser\.mjs)$/, ["test-home-full-ui-people-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-app|home-intelligence)\.jsx|tools\/test-home-full-ui-intelligence-browser\.mjs)$/, ["test-home-full-ui-intelligence-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-app|home-perception-lab)\.jsx|tools\/test-home-full-ui-lab-browser\.mjs)$/, ["test-home-full-ui-lab-browser.mjs"]],
+  [/^tools\/fixtures\/home-full-ui-harness\.mjs$/, ["test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-lab-browser.mjs"]],
+  [/^(?:web-gateway\/(?:server|content-pack-route|equipment-registration|lighting-layer)\.mjs|tools\/test-web-gateway-(?:content-pack-route|installed-content|lighting-layer)\.mjs)$/, ["test-web-gateway-content-pack-route.mjs", "test-web-gateway-installed-content.mjs", "test-web-gateway-lighting-layer.mjs"]],
   [/^app\/src\/(?:home-app\.jsx|home-apartment-data\.js)$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs", "run-control-card-tests.js", "run-simulation-control-tests.js"]],
   [/^tools\/test-chat-(?:output-refusal|service-envelope)\.cjs$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs"]],
   [/^app\/src\/(?:home-apartment-aim\.jsx|home-tokens\.css)$/, ["test-apartment-aim-theme-browser.mjs"]],

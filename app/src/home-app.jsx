@@ -5838,7 +5838,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   // of authoritative Apartment model reads and writes. While Apartment owns
   // the web surface, pause and abort only those optional HTTP/SSE consumers;
   // the HA and tracker WebSockets remain connected for live model data.
-  const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);
+  const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout) && !shellMetricsOpen;
   const [spatialOpsDockOpen, setSpatialOpsDockOpen] = useState(true);
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -11740,6 +11740,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     : typeof navigator.clipboard?.writeText !== "function" ? "Clipboard access is unavailable in this browser." : undefined;
 
   const isSpatialWide = unifiedHome || spatialLayout && wideMode;
+  // The unified room stays mounted on phones, but its menu overlays must not
+  // reserve the desktop chat rail inside a phone-sized viewport.
+  const spatialOverlayMode = isSpatialWide && wideMode;
   const spatialRailWidth = wideMode ? SPATIAL_CHAT_RAIL_WIDTH : "100%";
   const spatialStageRight = wideMode ? spatialRailWidth : 0;
   if (typeof window !== "undefined") window.__HOME_SPATIAL_MODE = isSpatialWide;
@@ -12103,7 +12106,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           client={haClientRef.current}
           connection={connection}
           sim={sim}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
         />
       )}
       {peopleOpen && !window.HomePeopleOverlay && (
@@ -12126,10 +12129,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           onClose={() => setIntelligenceOpen(false)}
           metricsBase={metricsBase}
           endpoint={endpoint}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
         />
       )}
-      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={isSpatialWide}
+      {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={spatialOverlayMode}
         intent={perceptionLabIntent} />}
       {window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
       {perceptionLabOpen && !window.HomePerceptionLab && <FeatureLoadingSurface open={perceptionLabOpen} title="Perception Lab" status={featureStatusFor("perceptionLab")} error={featureLoadErrors.perceptionLab} onClose={() => setPerceptionLabOpen(false)} onRetry={() => ensureFeature("perceptionLab", "Perception Lab", "retry")} mobile={mobile} />}
@@ -12152,7 +12155,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           open={videoLabelerOpen}
           onClose={() => setVideoLabelerOpen(false)}
           sim={sim}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
         />
       )}
       {videoLabelerAvailable && videoLabelerOpen && !window.HomeVideoLabelerOverlay && (
@@ -12184,7 +12187,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           client={haClientRef.current}
           connection={connection}
           sim={sim}
-          spatialMode={isSpatialWide}
+          spatialMode={spatialOverlayMode}
           askExternal={(payload) => {
             // Pre-fill the chat input with a structured `/ask`-prefixed
             // message containing full layer context + the user's intent.

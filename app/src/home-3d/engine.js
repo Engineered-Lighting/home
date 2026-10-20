@@ -324,6 +324,17 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
     const overlay = markersM.createOverlay(apartmentRoot);
+    /* The collision proxy's scanned floor and ceiling heights (not its
+     * bounding box, which stray triangles stretch), once per collision
+     * object, for the cut-away pick filters. */
+    let cutawayFilterCache = null;
+    function collisionCutawayFilters(collision) {
+        if (cutawayFilterCache?.collision === collision) return cutawayFilterCache.filters;
+        const heights = pickingM.horizontalSurfaceHeights(collision, apartmentRoot);
+        const filters = heights ? pickingM.cutawayPickFilters(heights) : null;
+        cutawayFilterCache = { collision, filters };
+        return filters;
+    }
     let litView = null, litUnsubscribe = () => {};
     /* Lighting is a property of the room, not a view (owner, 2026-10-20):
      * once on, Cloud, Photo and Mesh are all shown lit, and switching views
@@ -945,12 +956,20 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         deskTargetSurfaceHit(clientX, clientY, binding) {
             return deskSurfacePicking.surfaceHit(clientX, clientY, binding);
         },
+        /* Under the dollhouse cut-away the viewer looks down into the room, so
+         * a tap on visible floor must not land on the collision ceiling above
+         * it, and hairline floor cracks must not read as "no surface"
+         * (picking.cutawayPickFilters). Without the cut-away the pick is
+         * exactly the first accepted hit, as before. */
         displaySurfaceHit(clientX, clientY) {
             const collision = modes.getCollision?.();
             if (!collision) return null;
             const policy = modes.debugInfo?.().dollhouseCutaway;
-            return picking.surfaceHit(apartmentRoot, [collision], clientX, clientY, {
-                acceptPoint: point => cutawayM.dollhouseKeep(point, policy) > .05,
+            const acceptPoint = point => cutawayM.dollhouseKeep(point, policy) > .05;
+            const filters = policy?.enabled ? collisionCutawayFilters(collision) : null;
+            if (!filters) return picking.surfaceHit(apartmentRoot, [collision], clientX, clientY, { acceptPoint });
+            return picking.surfaceHitUnderCutaway(apartmentRoot, [collision], clientX, clientY, {
+                acceptPoint, rejectHit: filters.rejectHit, floorGap: filters.floorGap,
             });
         },
         /* The aim chip's ray from a light to an aim point (picking.beamPath),

@@ -113,10 +113,19 @@ test('no surface, blocked, grazing, too close and a missing origin each say why'
   assert.deepEqual(traces, [[[0, 0, 2], [1, 1, 0]]]);
   const thrown = A.describeAimHit({ descriptor: descriptor(), limits: VIRTUAL_LIMITS, hit: floor([1, 1, 0]), traceBeam: () => { throw Error('authored'); } });
   assert.equal(thrown.valid, true, 'a failing trace never invents a blocker');
-  // A wall almost parallel to the beam: allowed, with the note.
+  // A surface almost parallel to the beam: allowed, with the note. Picking
+  // turns normals toward the viewer, so the visible side here faces up.
   const grazing = A.describeAimHit({ descriptor: descriptor(), limits: VIRTUAL_LIMITS,
-    hit: { point: [2, 0, 1.75], normal: [0, 0, -1], surfaceName: 'Shelf underside' } });
+    hit: { point: [2, 0, 1.75], normal: [0, 0, 1], surfaceName: 'Shelf top' } });
   assert.equal(grazing.valid, true); assert.equal(grazing.note, 'the pool will be long and dim');
+  // The viewer sees a side the light can't reach (a shelf's underside below a
+  // light above it, or a ceiling's top seen from a dollhouse view): no spot.
+  const unlit = A.describeAimHit({ descriptor: descriptor(), limits: VIRTUAL_LIMITS,
+    hit: { point: [2, 0, 1.75], normal: [0, 0, -1], surfaceName: 'Shelf underside' } });
+  assert.deepEqual([unlit.valid, unlit.reason, unlit.unlit_side, unlit.point_m], [false, 'no_surface', true, null]);
+  const ceilingTop = A.describeAimHit({ descriptor: descriptor(), limits: VIRTUAL_LIMITS,
+    hit: { point: [1, 1, 2.4], normal: [0, 0, 1], surfaceName: 'Ceiling' } });
+  assert.deepEqual([ceilingTop.valid, ceilingTop.unlit_side], [false, true], 'the top of a ceiling above the light is not aimable');
   const head = A.describeAimHit({ descriptor: descriptor(), limits: VIRTUAL_LIMITS, hit: floor([0.1, 0, 0]) });
   assert.equal(head.note, null);
   const close = A.describeAimHit({ descriptor: descriptor(), limits: VIRTUAL_LIMITS, hit: floor([0, 0, 1.99]) });
@@ -310,6 +319,22 @@ test('the controller refuses missing dependencies and retires on its owner predi
   assert.equal(view.dispose(), false, 'dispose is idempotent');
   assert.equal(view.sync({}), false); assert.equal(view.beginDrag({ pointerId: 1, clientX: 1, clientY: 1 }), false);
   assert.equal(retired, 1);
+});
+
+test('a drag sample on a ceiling seen from above keeps the last floor spot instead of jumping', { timeout: DEADLINE_MS.unit }, () => {
+  const layer = fakeLayer(), hits = [{ point: [1, 0, 0], normal: [0, 0, 1], surfaceName: 'Floor' },
+    { point: [1.2, 0, 2.4], normal: [0, 0, 1], surfaceName: 'Ceiling' }, { point: [1.4, 0, 0], normal: [0, 0, 1], surfaceName: 'Floor' }];
+  layer.pick = () => hits.shift();
+  const view = A.createAimPresentation({ layer, host: fakeHost(), isCurrent: () => true });
+  view.sync({ fixtures: [], selectedId: 'authored-spot', aim: { descriptor: descriptor(), limits: VIRTUAL_LIMITS, namedAims: [] } });
+  view.beginDrag({ pointerId: 1, clientX: 10, clientY: 10 });
+  const floor = view.moveDrag({ pointerId: 1, clientX: 30, clientY: 30 });
+  assert.deepEqual([floor.valid, floor.point_m], [true, [1, 0, 0]]);
+  assert.equal(view.moveDrag({ pointerId: 1, clientX: 40, clientY: 40 }), floor, 'the ceiling sample keeps the floor spot');
+  const next = view.moveDrag({ pointerId: 1, clientX: 50, clientY: 50 });
+  assert.deepEqual(next.point_m, [1.4, 0, 0], 'the next floor sample moves on');
+  assert.deepEqual(A.proposalTargetFromModel(view.endDrag({ pointerId: 1 })).point_m, [1.4, 0, 0]);
+  view.dispose();
 });
 
 test('a throwing owner predicate retires rather than revives', { timeout: DEADLINE_MS.unit }, () => {

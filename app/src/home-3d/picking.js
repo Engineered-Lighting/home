@@ -44,13 +44,145 @@ export function aimChipBlocker(path) {
     });
 }
 
+/* Pick filters for the dollhouse cut-away (the owner looks down into a room
+ * whose near walls and ceiling are opened up).
+ *
+ * The collision proxy keeps its ceiling, so a ray toward floor the viewer can
+ * see first meets the ceiling from above. `rejectHit` skips an up-facing
+ * (toward the viewer) horizontal hit in the ceiling band, seen from above,
+ * and the pick takes the next surface: floor, wall or furniture. The band is
+ * the top `ceilingBandM` of the collision bounds and never below
+ * `minCeilingHeightM` over the floor, so desks, shelves and other furniture
+ * tops stay pickable.
+ *
+ * `floorGap` bridges hairline cracks in the scanned floor: when nothing is
+ * accepted, the nearest floor hit within `toleranceM` of where the ray meets
+ * the floor plane is used, at the ray's own floor point. Collision bytes are
+ * never changed. Heights are Apartment-local Z-up metres.
+ *
+ * `floorZ` and `ceilingZ` are the scanned floor and ceiling surfaces (see
+ * horizontalSurfaceHeights), not bounding-box extremes: a real scan proxy
+ * has stray triangles well below the floor and above the ceiling. The band
+ * starts `ceilingBandM` under the ceiling surface and never lower than
+ * `minCeilingHeightM` over the floor; inside it any upward-tilted hit seen
+ * from above (normal z >= `ceilingSlopeNz`) is ceiling, since scanned
+ * ceilings are often sloped where they meet walls. */
+export function cutawayPickFilters({ floorZ, ceilingZ, ceilingBandM = 0.2, minCeilingHeightM = 1.8, ceilingSlopeNz = 0.2, gapToleranceM = 0.06 } = {}) {
+    if (!Number.isFinite(floorZ) || !Number.isFinite(ceilingZ) || !(ceilingZ - floorZ >= minCeilingHeightM)) return null;
+    const bandZ = Math.max(floorZ + minCeilingHeightM, ceilingZ - ceilingBandM);
+    return Object.freeze({
+        floorZ, ceilingZ, bandZ,
+        rejectHit: ({ point, normal, eye }) => normal[2] >= ceilingSlopeNz && point[2] >= bandZ && eye[2] > point[2],
+        floorGap: Object.freeze({ floorZ, toleranceM: gapToleranceM }),
+    });
+}
+
+/* The scanned floor and ceiling heights of a mesh in the Apartment frame:
+ * area-weighted modes (2 cm bins) of near-horizontal triangles (|normal z|
+ * >= 0.9, either winding) in the lower and upper thirds of the mesh's height.
+ * Stray triangles barely move a mode, unlike min and max. Null when either
+ * surface is missing. */
+export function horizontalSurfaceHeights(object, apartmentRoot, { binM = 0.02 } = {}) {
+    if (!object?.isObject3D || !apartmentRoot?.isObject3D) return null;
+    apartmentRoot.updateMatrixWorld(true); object.updateMatrixWorld(true);
+    const toLocal = new THREE.Matrix4().copy(apartmentRoot.matrixWorld).invert();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), ab = new THREE.Vector3(), ac = new THREE.Vector3();
+    const samples = [];
+    let low = Infinity, high = -Infinity;
+    object.traverse(node => {
+        const geometry = node.isMesh ? node.geometry : null, position = geometry?.attributes?.position;
+        if (!position) return;
+        const matrix = new THREE.Matrix4().multiplyMatrices(toLocal, node.matrixWorld), index = geometry.index;
+        const count = index ? index.count : position.count;
+        for (let i = 0; i + 2 < count; i += 3) {
+            const at = k => (index ? index.getX(i + k) : i + k);
+            a.fromBufferAttribute(position, at(0)).applyMatrix4(matrix);
+            b.fromBufferAttribute(position, at(1)).applyMatrix4(matrix);
+            c.fromBufferAttribute(position, at(2)).applyMatrix4(matrix);
+            const cross = ab.subVectors(b, a).cross(ac.subVectors(c, a)), doubleArea = cross.length();
+            if (!(doubleArea > 1e-12)) continue;
+            const z = (a.z + b.z + c.z) / 3;
+            low = Math.min(low, z); high = Math.max(high, z);
+            if (Math.abs(cross.z) / doubleArea >= 0.9) samples.push([z, doubleArea / 2]);
+        }
+    });
+    if (!samples.length || !(high > low)) return null;
+    const third = (high - low) / 3;
+    const mode = (from, to) => {
+        const bins = new Map();
+        for (const [z, area] of samples) if (z >= from && z <= to) {
+            const key = Math.round(z / binM);
+            bins.set(key, (bins.get(key) || 0) + area);
+        }
+        let best = null;
+        for (const [key, area] of bins) if (!best || area > best.area) best = { key, area };
+        if (!best) return null;
+        // The area-weighted mean inside the winning bin and its neighbours.
+        let sum = 0, weight = 0;
+        for (const [z, area] of samples) if (Math.abs(z / binM - best.key) <= 1.5) { sum += z * area; weight += area; }
+        return weight > 0 ? sum / weight : best.key * binM;
+    };
+    const floorZ = mode(low, low + third), ceilingZ = mode(high - third, high);
+    return floorZ == null || ceilingZ == null ? null : Object.freeze({ floorZ, ceilingZ });
+}
+
+const GAP_RINGS = [0.01, 0.02, 0.03, 0.04, 0.06, 0.08];
+const GAP_SPOKES = 8;
+
 export function createPicking(camera, hostEl) {
     const raycaster = new THREE.Raycaster();
     // beamPath has its own raycaster, so it can never change pick() bounds.
     const pathRaycaster = new THREE.Raycaster();
+    // The floor-gap fallback casts its own rays too.
+    const gapRaycaster = new THREE.Raycaster();
     const v = new THREE.Vector3();
     let host = hostEl;   // re-homed on every view mount — the engine outlives
                          // the React tree, so the boot-time host div goes stale
+
+    /* A hairline crack lets the ray fall through the floor. Find where the
+     * ray meets the floor plane and look for the nearest floor hit in rings
+     * up to `toleranceM` around it; answer at the ray's own floor point with
+     * that floor's height and normal. */
+    function floorGapHit(apartmentRoot, objects, ray, { floorZ, toleranceM = 0.04 }, firstAccepted, doubleSided) {
+        const originLocal = apartmentRoot.worldToLocal(ray.origin.clone());
+        const ahead = apartmentRoot.worldToLocal(ray.origin.clone().add(ray.direction));
+        const directionLocal = ahead.sub(originLocal);
+        if (!(directionLocal.z < -1e-6)) return null;
+        const t = (floorZ - originLocal.z) / directionLocal.z;
+        if (!(t > 0)) return null;
+        const onPlane = originLocal.clone().addScaledVector(directionLocal, t);
+        const sides = new Map();
+        try {
+            if (doubleSided === true) for (const object of objects) object.traverse(node => {
+                if (!node.isMesh) return;
+                for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+                    if (material && !sides.has(material)) { sides.set(material, material.side); material.side = THREE.DoubleSide; }
+                }
+            });
+            for (const radius of GAP_RINGS) {
+                if (radius > toleranceM + 1e-9) break;
+                let best = null;
+                for (let i = 0; i < GAP_SPOKES; i++) {
+                    const angle = (i / GAP_SPOKES) * Math.PI * 2;
+                    const targetLocal = onPlane.clone().add(new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, 0));
+                    const direction = apartmentRoot.localToWorld(targetLocal).sub(ray.origin).normalize();
+                    gapRaycaster.set(ray.origin, direction); gapRaycaster.near = 0; gapRaycaster.far = Infinity;
+                    const hit = firstAccepted(gapRaycaster.intersectObjects(objects, true), direction);
+                    // Only the floor itself bridges a crack.
+                    if (!hit || hit.normal[2] < 0.7 || hit.point[2] > floorZ + 0.1) continue;
+                    const offset = Math.hypot(hit.point[0] - onPlane.x, hit.point[1] - onPlane.y);
+                    if (!best || offset < best.offset) best = { ...hit, offset };
+                }
+                if (best) {
+                    // The ray's own floor point, at the found floor's height.
+                    const z = best.point[2], s = (z - originLocal.z) / directionLocal.z;
+                    const at = originLocal.clone().addScaledVector(directionLocal, s);
+                    return { point: [at.x, at.y, z], normal: best.normal, object: best.object };
+                }
+            }
+            return null;
+        } finally { for (const [material, side] of sides) material.side = side; }
+    }
 
     return {
         raycaster,
@@ -128,6 +260,45 @@ export function createPicking(camera, hostEl) {
                 normal: [normal.x, normal.y, normal.z],
                 object: hit.object,
             };
+        },
+
+        /* surfaceHit under the dollhouse cut-away, with the filters from
+         * cutawayPickFilters: `rejectHit({ point, normal, eye }, candidate)`
+         * skips hits the viewer cannot see (the ceiling from above) and
+         * `floorGap` bridges hairline floor cracks. The result has the same
+         * { point, normal, object } shape as surfaceHit. */
+        surfaceHitUnderCutaway(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false, rejectHit = null, floorGap = null } = {}) {
+            const hits = this.pick(objects || [], clientX, clientY, { doubleSided });
+            apartmentRoot.updateMatrixWorld(true);
+            const rootQInverse = apartmentRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
+            const eyeLocal = apartmentRoot.worldToLocal(raycaster.ray.origin.clone());
+            const eye = [eyeLocal.x, eyeLocal.y, eyeLocal.z];
+            // The face normal in the Apartment frame, facing the viewing ray.
+            const normalOf = (candidate, rayDirection) => {
+                const normal = new THREE.Vector3(0, 0, 1);
+                if (candidate.face?.normal) {
+                    candidate.object.updateMatrixWorld(true);
+                    normal.copy(candidate.face.normal).transformDirection(candidate.object.matrixWorld);
+                    if (normal.dot(rayDirection) > 0) normal.negate();
+                    normal.applyQuaternion(rootQInverse).normalize();
+                }
+                return [normal.x, normal.y, normal.z];
+            };
+            const firstAccepted = (candidates, rayDirection) => {
+                for (const candidate of candidates) {
+                    if (!candidate.point) continue;
+                    const local = apartmentRoot.worldToLocal(candidate.point.clone());
+                    const point = [local.x, local.y, local.z];
+                    if (acceptPoint && !acceptPoint(point, candidate)) continue;
+                    const normal = normalOf(candidate, rayDirection);
+                    if (rejectHit && rejectHit({ point, normal, eye }, candidate)) continue;
+                    return { point, normal, object: candidate.object };
+                }
+                return null;
+            };
+            const found = firstAccepted(hits, raycaster.ray.direction);
+            if (found || !floorGap) return found;
+            return floorGapHit(apartmentRoot, objects || [], raycaster.ray, floorGap, firstAccepted, doubleSided);
         },
 
         /* Apartment-local beam ray sampling against the dedicated collision

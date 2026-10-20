@@ -167,23 +167,59 @@ class ManagedDeepStack:
             self.wanted = False
             self._close(reason)
 
-    def set_cadence(self, factor):
-        """Scale the runtime's live JEV cadence (read on every reasoning tick)
-        from its configured values: factor 1 restores them, 2 doubles the
-        offer interval, debounce, keepalive and answer hold within bounds."""
+    def _inner(self, sid=None):
+        """The ServiceRuntime serving the loop's recording. On the managed
+        controller, controller.runtime is a ManagedPair that builds one inner
+        runtime per recording (managed_pair.py); its own object has no viewing
+        sources, reasoning errors or cadence. None until that recording's inner
+        runtime exists (while its workers prepare)."""
         runtime = self.runtime
+        if runtime is None or hasattr(runtime, 'apartment_viewing_sessions') or hasattr(runtime, 'reasoning_cadence'):
+            return runtime
+        sid = self.sid if sid is None else sid
+        lock = getattr(runtime, 'lock', None)
+        if lock is not None:
+            with lock:
+                item = getattr(runtime, 'current', None)
+        else:
+            item = getattr(runtime, 'current', None)
+        if isinstance(item, dict) and sid is not None and (item.get('session') or {}).get('id') == sid:
+            return item.get('inner')
+        return None
+
+    def set_cadence(self, factor):
+        """Scale the live JEV cadence (read on every reasoning tick) of the
+        runtime serving the recording, from its configured values: factor 1
+        restores them, 2 doubles the offer interval, debounce, keepalive and
+        answer hold within bounds. Each rolled recording gets a fresh inner
+        runtime, so the factor is reapplied to it as soon as it exists."""
+        with self.lock:
+            self.cadence_factor = factor
+            self._apply_cadence()
+
+    def _apply_cadence(self):
+        runtime = self._inner()
+        factor = getattr(self, 'cadence_factor', 1)
         if runtime is None or not hasattr(runtime, 'reasoning_cadence'):
             return
-        with self.lock:
-            if getattr(self, 'base_cadence', None) is None:
-                self.base_cadence = (dict(runtime.reasoning_cadence), runtime.reasoning_min_offer_interval_s)
-            cadence, interval = self.base_cadence
-            caps = {'keepalive_s': 60., 'debounce_s': 10., 'hold_max_s': 30., 'gate_keepalive_s': 60.}
-            runtime.reasoning_cadence = {**cadence, **{k: min(caps[k], cadence[k] * factor) for k in caps if k in cadence}}
-            runtime.reasoning_min_offer_interval_s = min(10., interval * factor)
+        applied = getattr(self, 'cadence_applied', None)
+        if applied is None or applied[0] is not runtime:
+            if factor == 1 and applied is None:
+                return             # nothing to scale or restore yet
+            # A runtime not yet scaled by this stack still holds its configured values.
+            base = (dict(runtime.reasoning_cadence), runtime.reasoning_min_offer_interval_s)
+        else:
+            base = applied[1]
+            if applied[2] == factor:
+                return
+        cadence, interval = base
+        caps = {'keepalive_s': 60., 'debounce_s': 10., 'hold_max_s': 30., 'gate_keepalive_s': 60.}
+        runtime.reasoning_cadence = {**cadence, **{k: min(caps[k], cadence[k] * factor) for k in caps if k in cadence}}
+        runtime.reasoning_min_offer_interval_s = min(10., interval * factor)
+        self.cadence_applied = (runtime, base, factor)
 
     def cadence_status(self):
-        runtime = self.runtime
+        runtime = self._inner()
         if runtime is None or not hasattr(runtime, 'reasoning_cadence'):
             return None
         cadence = runtime.reasoning_cadence
@@ -280,7 +316,8 @@ class ManagedDeepStack:
             jev = {'completed': (True, None), 'failed': (False, 'jev_failed'),
                    'indeterminate': (False, 'jev_egress_blocked_indeterminate')}.get(delivery.get('state'),
                                                                                      (False, 'jev_' + str(delivery.get('state'))))
-        error = (getattr(self.runtime, 'reasoning_errors', {}) or {}).get(session['id'])
+        inner = self._inner(session['id'])
+        error = (getattr(inner, 'reasoning_errors', {}) or {}).get(session['id'])
         if error:
             jev = (False, error)
         if self.release.blocking():
@@ -294,7 +331,7 @@ class ManagedDeepStack:
             deep = (False, 'deep_stack_no_recent_output')
         else:
             deep = (True, None)
-        source = getattr(self.runtime, 'apartment_viewing_sessions', {}).get(session['id'])
+        source = (getattr(inner, 'apartment_viewing_sessions', None) or {}).get(session['id'])
         camera = (False, 'camera_no_viewing_source') if source is None else (
             (True, None) if source.status().get('accepted_frames', 0) > 0 else (False, 'camera_no_frames_yet'))
         return {'jev': jev, 'deep_stack': deep, 'camera': camera}
@@ -320,7 +357,8 @@ class ManagedDeepStack:
                     'confidence': judgment.get('probability', judgment.get('confidence')),
                     'model': judgment.get('model_version'), 'facts_key': answer.get('facts_key') or (judgment.get('diagnostics') or {}).get('facts_key'),
                     'observed_at': start + answer['source_end_s'] if isinstance(answer.get('source_end_s'), (int, float)) else now}
-            source = getattr(self.runtime, 'apartment_viewing_sessions', {}).get(sid)
+            self._apply_cadence()
+            source = (getattr(self._inner(sid), 'apartment_viewing_sessions', None) or {}).get(sid)
             metric = getattr(source, 'metric', None)
             placement = metric.snapshot() if metric is not None else None
             people = activity_pose.positions(placement)

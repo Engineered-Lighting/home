@@ -1,6 +1,8 @@
-// L2 browser proof, shared by three browser files: part 1 checks Tier-0 and the
+// L2 browser proof, shared by four browser files: part 1 checks Tier-0 and the
 // bright half of the lights-off ladder; part 3 checks its overlapping dim half;
 // part 2 checks moonlit tone views, adaptation, timing and exact restoration.
+// Part 4 checks the complete camera-look ladder once. It formerly ran twice,
+// inside both eye-ladder parts, exhausting their software-rendering deadline.
 // The overlapping one-spot rung retains every adjacent ladder comparison while
 // retaining each proof's original 145 s browser deadline on software GL.
 // Tier-0 Lit on the WebGPU path (?renderer=webgpu-webgl in CI,
@@ -87,7 +89,7 @@ function browserOptions(backend) {
 }
 
 export async function runLitWebgpuBrowserProof({ part, signal }) {
-  assert.ok(part === 1 || part === 2 || part === 3, 'part 1, 2 or 3');
+  assert.ok([1,2,3,4].includes(part), 'part 1, 2, 3 or 4');
   for (const backend of backends) { signal?.throwIfAborted(); await proveOn(backend, part, signal); }
 }
 
@@ -381,6 +383,8 @@ async function proveOn(backend, part, signal) {
     }
     check('lights_off_ladder', { ladder, levels: { output_30: LEVEL_30, spot_5: LEVEL_5 } });
     receipt.ladder = ladder;
+    }
+    if (part === 4) {
     // The camera look: the same ladder still reads strictly darker, step by step.
     await page.evaluate(() => window.__APT_ENGINE.setLitLook('camera'));
     const camera = {};
@@ -395,6 +399,7 @@ async function proveOn(backend, part, signal) {
       `camera look: mean display luminance strictly decreases: ${LADDER[i - 1]} -> ${LADDER[i]} ` + JSON.stringify(camera));
     assert.equal(camera.off_moon.emitters, 0, 'no fixture face shows with every channel off');
     check('camera_look_ladder', camera);
+    receipt.camera_ladder = camera;
     await page.evaluate(() => window.__APT_ENGINE.setLitLook('eye'));
     }
 

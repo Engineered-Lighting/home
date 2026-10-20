@@ -91,8 +91,8 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:bvh-bake|bvh-worker|view)\.mjs|tools\/(?:test-lit-bvh-bake(?:-browser)?\.mjs|fixtures\/lit-bake-scenes\.mjs))$/, ["test-lit-bvh-bake.mjs", "test-lit-bvh-bake-browser.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   // L2: Lit's exposure and tone policy, and Lit on the WebGPU path (?renderer=webgpu-webgl).
-  [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs"]],
-  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view|frame|display|basis-blend)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part[23])?|fixtures\/(?:apartment-lit-webgpu-browser-proof|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs"]],
+  [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs"]],
+  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view|frame|display|basis-blend)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part[234])?|fixtures\/(?:apartment-lit-webgpu-browser-proof|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs"]],
   // L4: lit splats and points (lit-receivers.mjs, lit-basis-blend.mjs, lit-layer-loader.mjs).
   [/^(?:app\/src\/home-3d\/lit-(?:basis-blend|layer-loader|bvh-bake|model|exposure)\.mjs|tools\/(?:test-lit-basis-blend|fixtures\/apartment-lit-layer-fixtures)\.mjs)$/, ["test-lit-basis-blend.mjs"]],
   [/^(?:app\/src\/(?:home-3d\/(?:lit-[\w-]+\.mjs|engine\.js|modes\.js|pointcloud\.js|webgpu-material-ports\.mjs|gaussian-splat-webgpu\.mjs)|home-apartment\.jsx)|tools\/(?:test-apartment-lit-splats-browser(?:-part2)?|fixtures\/(?:apartment-lit-(?:splats-browser-proof|layer-fixtures)|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs"]],
@@ -226,6 +226,7 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
  * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
 const SHARD_WEIGHT_S = {
+  "test-apartment-lit-webgpu-browser-part4.mjs": 130,
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
   "test-precompiled-jsx.mjs": 90,
@@ -313,7 +314,7 @@ function shardWeight(name) {
 const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
   ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"],
   ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
-  ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs"],
+  ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs"],
   ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];
 function partitionPlan(plan, count) {

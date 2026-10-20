@@ -1,0 +1,49 @@
+{
+  "schema": "den-ops-monitor-1",
+  "_note": "Victoria Jetson. Copy to a private path and replace every <placeholder>. This monitor acts on the activity loop and takes the LA host's level from the gateway. The thresholds are the existing Jetson limits (README: Limits). cadence stays empty until AL-3 has a cadence route.",
+  "host": "victoria-jetson",
+  "role": "jetson",
+  "policy": {"escalate_checks": 2, "recover_after_s": 600, "fault_hold_s": 1800},
+  "sources": {
+    "thermal_zones": {"root": "/sys/class/thermal", "exclude_types": []},
+    "hwmon": null,
+    "meminfo": "/proc/meminfo",
+    "nvidia_smi": false,
+    "tegrastats": true,
+    "disks": {"recordings": "<perception-lab data dir>"},
+    "failed_units": {"scopes": ["system", "user"], "baseline": "<private dir>/failed-units-baseline.json"},
+    "faults": {"baseline": "<private dir>/fault-baseline.json", "levels": {}}
+  },
+  "rules": [
+    {"id": "soc.temp", "signal": "temp.zone_max", "op": ">=", "levels": [75, 78, 80], "clear_margin": 5, "label": "Jetson max zone", "unit": "°C"},
+    {"id": "mem.available", "signal": "mem.available_mib", "op": "<=", "levels": [4096, 3584, 3072], "clear_margin": 512, "label": "RAM available", "unit": " MiB"},
+    {"id": "swap.used", "signal": "swap.used_pct", "op": ">=", "levels": [40, 60, 80], "clear_margin": 10, "label": "Swap used", "unit": "%"},
+    {"id": "disk.recordings", "signal": "disk.recordings.free_gib", "op": "<=", "levels": [30, 25, 20], "clear_margin": 5, "label": "Recording disk free", "unit": " GiB"}
+  ],
+  "loop": {
+    "status_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop",
+    "stop_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop/stop",
+    "resume_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop/resume",
+    "token_file": "<private dir>/lab-monitor.token",
+    "ca_file": "<private dir>/lab-ca.pem",
+    "timeout_s": 10
+  },
+  "cadence": {"reduce": [], "restore": []},
+  "remote": {
+    "url": "https://<gateway origin>/api/den-ops/v1/status",
+    "token_file": "<private dir>/den-ops-monitor.token",
+    "ca_file": null
+  },
+  "gateway": {
+    "status_url": "https://<gateway origin>/api/den-ops/v1/hosts/victoria-jetson/status",
+    "token_file": "<private dir>/den-ops-monitor.token",
+    "ca_file": null
+  },
+  "home_assistant": {
+    "url": "https://<victoria home assistant>",
+    "notify_service": "persistent_notification",
+    "token_file": "<private dir>/ha-notify.token",
+    "ca_file": null,
+    "min_interval_s": 900
+  }
+}

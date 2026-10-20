@@ -129,8 +129,9 @@ const MAP = [
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
-    "run-native-agent-security-tests",
+    "run-native-agent-security-tests", "run-web-gateway-lighting-brain-tests.mjs",
   ]],
+  [/^tools\/run-web-gateway-lighting-brain-tests\.mjs$/, ["run-web-gateway-lighting-brain-tests.mjs"]],
   // Ahead-of-time JSX: the loaders, the build, the gateway's verified
   // manifest and the hooks that run the build on deploy and installer builds.
   [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],

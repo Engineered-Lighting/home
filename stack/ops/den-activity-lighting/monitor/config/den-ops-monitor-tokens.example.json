@@ -1,0 +1,8 @@
+{
+  "schema": "den-ops-monitor-tokens-1",
+  "_note": "Gateway side (HOME_WEB_DEN_OPS_TOKENS_FILE, mode 0600, owned by the gateway user). Only SHA-256 digests live here; each monitor keeps its own token in a 0600 file. RUNBOOK step L4 shows how to make a token and its digest.",
+  "monitors": [
+    {"host": "la-host", "token_sha256": "<64 hex digits>"},
+    {"host": "victoria-jetson", "token_sha256": "<64 hex digits>"}
+  ]
+}

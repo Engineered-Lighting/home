@@ -34,7 +34,7 @@ import {
     positionView, normalViewGeometry, modelViewMatrix, modelWorldMatrix, cameraProjectionMatrix,
     screenUV, screenSize, getViewPosition, instancedBufferAttribute, context, sRGBTransferOETF,
     smoothstep, mix, step, sin, cos, fract, dot, length, max, min, clamp, abs, exp, pow, normalize,
-    cross, dFdx, dFdy,
+    cross, dFdx, dFdy, instanceIndex,
 } from 'three/tsl';
 
 const cb = new URL(import.meta.url).search;
@@ -133,7 +133,7 @@ function refreshEveryDraw(nodeMaterial) {
  * this sprite child draws it. Same law as the GLSL: gl_PointSize in device
  * pixels, never below the 1 px every GL implementation rasterises.
  */
-export function createPointSpriteMaterial(glMaterial, { positions, intensity }) {
+export function createPointSpriteMaterial(glMaterial, { positions, intensity, litColor = null }) {
     const u = (name, type) => reference('value', type, glMaterial.uniforms[name]);
     const position = instancedBufferAttribute(positions, 'vec3');
     const random = varying(fract(sin(dot(position.xy, vec2(12.9898, 78.233))).mul(43758.5453)), 'vRandom');
@@ -156,6 +156,8 @@ export function createPointSpriteMaterial(glMaterial, { positions, intensity }) 
     const clip = cameraProjectionMatrix.mul(mvPosition);
     const offset = positionGeometry.xy.mul(pointSize).mul(2).div(screenSize).mul(clip.w);
     const vIntensity = varying(instancedBufferAttribute(intensity, 'float'), 'vIntensity');
+    // L4 lit points (lit-receivers.mjs): the relit, display-encoded colour per point.
+    const vLitColor = litColor ? varying(litColor.element(instanceIndex).rgb, 'vLitColor') : null;
 
     const material = new THREE.NodeMaterial();
     material.name = 'apartment-points-webgpu';
@@ -172,6 +174,7 @@ export function createPointSpriteMaterial(glMaterial, { positions, intensity }) 
         const glow = float(1).sub(smoothstep(0.25, 0.5, dist));
         const brightness = depthFactor.mul(0.75).add(0.25).mul(random.mul(0.15).add(0.85))
             .mul(vIntensity.mul(0.45).add(0.55));
+        if (vLitColor) return vec4(vLitColor, glow.mul(u('uOpacity', 'float')).mul(keep));
         return vec4(u('uGlowColor', 'color').mul(brightness), glow.mul(u('uOpacity', 'float')).mul(keep));
     })();
     return material;

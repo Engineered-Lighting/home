@@ -371,3 +371,55 @@ test('litState records the assumed lumen set with its source, under the unchange
   const color = Lit.kelvinColor(2700);
   assert.deepEqual([color.r, color.g, color.b], Model.cctToLinearRgb(2700), 'Lit light colour is the constant-luminance CCT in the linear working space');
 });
+
+test('L4 receivers mode (Photo/Cloud): no lights, shadow maps or scene hook; the eased lights and adaptation go to the receivers', async t => {
+  const scene = new THREE.Scene(), root = new THREE.Group(); root.rotation.x = -Math.PI / 2; scene.add(root);
+  const fixtures = createEquipmentVirtualFixtures(root, { binding });
+  assert.equal(fixtures.setDocument(authoredDocument(binding, Core)).status, 'ready');
+  const scan = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({ color: 0x808080 })); root.add(scan);
+  const renderer = { shadowMap: { enabled: false, type: THREE.BasicShadowMap, autoUpdate: true, needsUpdate: false }, toneMapping: THREE.NoToneMapping };
+  const synced = [], bakeReceivers = [];
+  let flushes = 0;
+  const receivers = {
+    sync(options) { synced.push(options); return true; },
+    flush() { flushes++; return true; },
+    meter: () => 2.5,
+    bakeReceivers() { bakeReceivers.push(true); return { set: 'splat', positions: new Float32Array([1, 1, 0]), normals: new Float32Array([0, 0, 1]) }; },
+    setSpotColumn: () => true,
+    state: () => Object.freeze({ available: true, kind: 'splat', simulated: true, measured: false, disclosure: 'receivers disclosure' }),
+  };
+  const posted = [];
+  const endpoint = () => { const inner = Bake.createLocalBakeEndpoint({ gpu: null });
+    return { ...inner, postMessage(data, transfer) { posted.push(data); inner.postMessage(data, transfer); } }; };
+  const lit = Lit.createLitView({ scene, renderer, getMesh: () => null, getBakeMesh: () => scan, getReceivers: () => receivers,
+    getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20, now: settledClock(), createBakeEndpoint: endpoint });
+  t.after(() => { lit.disable(); fixtures.dispose(); });
+  const material = scan.material, geometry = scan.geometry, hook = scene.onBeforeRender;
+  const state = lit.enable();
+  assert.equal(state.active, true); assert.equal(state.pipeline, 'per-receiver-display');
+  assert.equal(state.lights, 0, 'no three lights in Photo or Cloud'); assert.equal(state.meshSwapped, 0);
+  assert.equal(renderer.shadowMap.enabled, false, 'no shadow maps'); assert.equal(renderer.shadowMap.autoUpdate, true);
+  assert.equal(scene.onBeforeRender, hook, 'no scene hook: Lit steps from the splat tick');
+  assert.equal(scan.material, material); assert.equal(scan.geometry, geometry, 'the scan only feeds the bake');
+  assert.equal(state.disclosure, Lit.LIT_DISCLOSURE, 'the pinned disclosure');
+  assert.match(state.disclosureDetail, /receivers disclosure/);
+  assert.equal(state.nightAdaptation, true, 'adaptation on both renderers');
+  assert.equal(bakeReceivers.length, 1, 'the receivers are registered with the bake');
+  const camera = new THREE.PerspectiveCamera();
+  assert.equal(lit.tickReceivers(camera), true); assert.equal(flushes, 1);
+  const last = synced.at(-1);
+  assert.equal(last.lights.length, 4 * 8, 'every spot, down and radial zone, eased');
+  assert.equal(last.operator, 'agx');
+  assert.ok(last.gain >= 1);
+  assert.ok(lit.state().meterSerial >= 1 && lit.state().meteredCdM2 === 2.5, 'metered from the receivers in view');
+  for (let i = 0; i < 300 && !posted.some(message => message.type === 'lights'); i++) { await new Promise(resolve => setTimeout(resolve, 10)); lit.tickReceivers(camera); }
+  const update = posted.find(message => message.type === 'lights');
+  assert.ok(update, 'the bake is asked for the lights');
+  assert.ok(update.lights.length > 0 && update.lights.every(light => light.mode === 'vpl'), 'only the live spots are baked');
+  assert.equal(update.luxLights.some(light => light.mode === 'sky'), true, 'the lux readout keeps every light');
+  assert.equal(lit.setTone('reinhard').tone.operator, 'reinhard'); assert.equal(synced.at(-1).operator, 'reinhard');
+  const off = lit.disable();
+  assert.equal(off.active, false); assert.equal(off.receivers, null);
+  assert.equal(renderer.shadowMap.enabled, false); assert.equal(scene.onBeforeRender, hook);
+  assert.equal(lit.tickReceivers(camera), false, 'inactive');
+});

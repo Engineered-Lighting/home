@@ -336,6 +336,51 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         return filters;
     }
     let litView = null, litUnsubscribe = () => {};
+    /* L4 lit splats and points (lit-receivers.mjs): opt-in with ?lit-splats=1
+     * for this page only, never stored. With the flag off nothing below loads
+     * and Lit stays Mesh only, exactly as before. */
+    const litReceiversFlag = (() => { try { return new URLSearchParams(window.location.search).get('lit-splats') === '1'; } catch (_) { return false; } })();
+    let litReceivers = null, litReceiversRefusal = null;
+    const litLayers = new Map();
+    async function releaseLitReceivers() {
+        const current = litReceivers;
+        litReceivers = null;
+        modes.setLitTick?.(null);
+        if (!current) return;
+        try { await current.detach(); } finally { current.dispose(); modes.setPhotoFloorSuppressed?.(false); }
+    }
+    /* Photo (the splats) or Cloud (the points) relit from the active pack's
+     * verified lighting layer. Resolves to null when ready, else the reason. */
+    async function prepareLitReceivers(mode) {
+        const receiversM = await sib('lit-receivers.mjs');
+        if (disposed) return 'engine_disposed';
+        const unsupported = receiversM.litReceiversUnsupported(renderer);
+        if (unsupported) return unsupported;
+        const kind = mode === 'splat' ? 'splat' : 'points';
+        const object = kind === 'splat' ? modes.getSplat?.() : points;
+        const set = receiversM.receiverSetFor(kind, kind === 'splat' ? modes.splatSourceName?.() : 'points.ply');
+        if (!object) return 'lit_receivers_target_unavailable';
+        if (!set) return 'lighting_layer_no_set_for_asset';
+        let layer = litLayers.get(set);
+        if (!layer) {
+            try {
+                layer = await receiversM.loadReceiverLayer({ pack: window.HomeContentPacks?.get?.(siteId, contentRevision), set,
+                    digest: window.HomeEquipmentRegistration?.digest, signal: lifetimeController.signal });
+            } catch (error) { return String(error?.reason || error?.message || error); }
+            litLayers.set(set, layer);
+        }
+        // The live spots' shadows and bounce trace the scan mesh (L5's bake).
+        await modes.preload(['mesh']).catch(() => null);
+        if (disposed) return 'engine_disposed';
+        const controller = await receiversM.createLitReceivers({ renderer, kind, object, layer, whenIdle: () => modes.whenSparkIdle() });
+        if (!controller.available) return controller.reason;
+        await controller.attach();
+        if (disposed || modes.mode !== mode) { await controller.detach(); controller.dispose(); return 'lit_receivers_mode_changed'; }
+        litReceivers = controller;
+        if (kind === 'splat') modes.setPhotoFloorSuppressed?.(true);
+        return null;
+    }
+    lifetimeController.signal.addEventListener('abort', () => { void releaseLitReceivers(); }, { once: true });
     const picking = pickingM.createPicking(camera, hostEl);
     const deskSurfacePicking = pickingM.createRegisteredDeskSurfacePicker({
         apartmentRoot, modes, picking, sceneIdentity,
@@ -883,10 +928,16 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
          * the state on every change, including a declared reduced quality. */
         async setLit(on) {
             if (!on) {
-                if (litView?.state().active) { litView.disable(); litUnsubscribe(); emit('lit', litView.state()); }
+                if (litView?.state().active) {
+                    litView.disable(); litUnsubscribe();
+                    if (litReceivers) await releaseLitReceivers();
+                    emit('lit', litView.state());
+                }
                 return litView ? litView.state() : null;
             }
-            if (disposed || modes.mode !== 'mesh' || !modes.getMesh?.()) return litView ? litView.state() : null;
+            // L4 (flag only): Photo and Cloud relight the splats or points.
+            const receiverMode = litReceiversFlag && (modes.mode === 'splat' || modes.mode === 'points') ? modes.mode : null;
+            if (disposed || (!receiverMode && (modes.mode !== 'mesh' || !modes.getMesh?.()))) return litView ? litView.state() : null;
             if (!litView) {
                 const litM = await sib('lit-view.mjs');
                 if (disposed) return null;
@@ -899,11 +950,24 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                     isPresentationActive: () => overlay.virtualFixturesPresentationActive?.() === true,
                     onStateChange: state => { if (state.active) emit('lit', state); },
                     signal: lifetimeController.signal,
-                    spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
+                    spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg,
+                    // L4: in Photo/Cloud the scan only feeds the bake; the receivers are relit.
+                    getBakeMesh: () => modes.getMesh?.() ?? null, getReceivers: () => litReceivers });
             }
-            if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
+            if (receiverMode) {
+                if (litView.state().active) return litView.state();
+                litReceiversRefusal = litReceivers ? null : await prepareLitReceivers(receiverMode);
+                if (litReceiversRefusal || modes.mode !== receiverMode || litView.state().active) {
+                    const refused = Object.freeze({ ...litView.state(), receiversRefused: litReceiversRefusal || 'lit_receivers_mode_changed' });
+                    if (!litReceiversRefusal) await releaseLitReceivers();
+                    emit('lit', refused);
+                    return refused;
+                }
+            } else if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
+            const litMode = modes.mode;
             litView.enable();
-            const offMode = modes.onChange(next => { if (next !== 'mesh') void engine.setLit(false); });
+            if (receiverMode) modes.setLitTick?.(camera => litView.tickReceivers(camera));
+            const offMode = modes.onChange(next => { if (next !== litMode) void engine.setLit(false); });
             const offStats = engine.on('stats', stats => {
                 const before = litView.state().quality, after = litView.observeFrameRate(stats?.fps).quality;
                 if (after !== before) emit('lit', litView.state());
@@ -913,6 +977,11 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             return litView.state();
         },
         litState() { return litView ? litView.state() : null; },
+        /* L4: whether Lit can relight this mode (Photo/Cloud need ?lit-splats=1). */
+        litAvailableIn(mode) { return mode === 'mesh' || (litReceiversFlag && (mode === 'splat' || mode === 'points')); },
+        /* L4 proofs: the relit receivers as the GPU wrote them beside the CPU twin. */
+        litReceiversReadback(n) { return litReceiversFlag && litReceivers ? litReceivers.readback(n) : Promise.resolve(null); },
+        litReceiversBenchmark(iterations) { return litReceiversFlag && litReceivers ? litReceivers.benchmark(iterations) : Promise.resolve(null); },
         /* L2 (WebGPU path): the view operator ('agx', Reinhard as the
          * fallback) or a comparison view ('neutral', 'linear') without the
          * presentation effects. The WebGL path stays 'linear'. */

@@ -143,7 +143,9 @@ test('no other module in home-3d builds a GLSL material', () => {
   // A new ShaderMaterial or onBeforeCompile site needs a port before it ships.
   const known = new Set(['pointcloud.js', 'modes.js', 'equipment-spotlight-visual.mjs', 'equipment-virtual-fixtures.mjs',
     'apartment-directional-presentation.mjs', 'dollhouse-cutaway-material.js', 'photo-floor-support.js',
-    'webgpu-port-fingerprints.mjs', 'webgpu-material-ports.mjs', 'webgpu-renderer.mjs', 'splat-cutaway.js']);
+    'webgpu-port-fingerprints.mjs', 'webgpu-material-ports.mjs', 'webgpu-renderer.mjs', 'splat-cutaway.js',
+    // L4: its ShaderMaterial is the WebGL GPGPU blend; the WebGPU twin is the TSL compute in lit-basis-blend.mjs.
+    'lit-receivers.mjs']);
   for (const name of fs.readdirSync(path.join(SRC, 'home-3d'))) {
     if (!/\.(?:m?js)$/.test(name) || known.has(name)) continue;
     const text = fs.readFileSync(path.join(SRC, 'home-3d', name), 'utf8');

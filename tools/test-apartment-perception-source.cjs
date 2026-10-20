@@ -6,6 +6,71 @@ const SRC=process.env.HOME_APARTMENT_SOURCE_TEST_ROOT
   ?path.resolve(process.env.HOME_APARTMENT_SOURCE_TEST_ROOT):path.resolve(__dirname,'../app/src');
 const OBSERVATION_FIXTURE=path.resolve(__dirname,'../tools/fixtures/apartment-live-repair-20261018/observation-seam-01/authored-asgi-race-fixture.json');
 const clone=x=>JSON.parse(JSON.stringify(x)),settle=async()=>{for(let i=0;i<150;i++)await Promise.resolve();};
+
+test('activity-loop viewing follows exact session and producer rolls with read-only generation-zero bindings',async()=>{
+  let status={schema:'perception-lab-activity-loop-1',state:'running',deep_stack:{session_id:'loop-one',producer_epoch:'a'.repeat(32),wanted:true,rolls:0}};
+  let generation=0; const observed=[],beforeSession=[];
+  const f=fixture({onFetch:({url,options})=>{
+    assert.equal(options.method,'GET');
+    if(url.pathname.endsWith('/activity-loop'))return Response.json(status);
+    if(/\/sessions\/loop-/.test(url.pathname)){
+      beforeSession.push(observed.at(-1)?.status);
+      return Response.json({session:{id:status.deep_stack.session_id,site_id:'victoria',camera_id:'den',state:'recording',generation}});
+    }
+  }});
+  const stop=f.w.HomeApartmentPerceptionSource.watchActivityLoop({identity:f.scope,generation:1,isCurrent:()=>true,onChange:x=>observed.push(x)});
+  try{
+    await settle();assert.equal(observed.at(-1).session.generation,0,'media generation zero is valid');
+    assert.equal(observed.at(-1).producerEpoch,'a'.repeat(32));
+    status={...status,deep_stack:{...status.deep_stack,session_id:'loop-two',rolls:1}};generation=3;
+    await f.timer.advance(1000);
+    assert.equal(observed.at(-1).session.id,'loop-two');assert.equal(observed.at(-1).session.generation,3);
+    assert.deepEqual(beforeSession,['connecting','connecting'],'old geometry is retired before resolving each new session');
+    status={...status,deep_stack:{...status.deep_stack,producer_epoch:'b'.repeat(32)}};
+    await f.timer.advance(1000);assert.equal(observed.at(-2).session,null,'same session with a new producer still retires the old binding');
+    assert.equal(observed.at(-1).producerEpoch,'b'.repeat(32));
+    assert.ok(f.calls.every(call=>call.options.method==='GET'));
+  }finally{stop();}
+  assert.equal(f.timer.size(),0);
+});
+
+test('activity-loop pause, stop, null, malformed, failed read and recovery cannot retain a current session',async()=>{
+  const running={schema:'perception-lab-activity-loop-1',state:'running',deep_stack:{session_id:'loop-one',producer_epoch:'a'.repeat(32),wanted:true,rolls:0}};
+  let status=running,failed=false;const observed=[];
+  const f=fixture({onFetch:({url})=>{
+    if(url.pathname.endsWith('/activity-loop'))return failed?Response.json({error:'unavailable'},{status:503}):Response.json(status);
+    if(url.pathname.endsWith('/sessions/loop-one'))return Response.json({session:{id:'loop-one',site_id:'victoria',camera_id:'den',state:'recording',generation:0}});
+  }});
+  const stop=f.w.HomeApartmentPerceptionSource.watchActivityLoop({identity:f.scope,generation:1,isCurrent:()=>true,onChange:x=>observed.push(x)});
+  try{
+    await settle();assert.equal(observed.at(-1).status,'running');
+    for(const next of [{...running,state:'paused'},{...running,state:'stopped',stopped_reason:'pressure'},
+      {...running,deep_stack:{...running.deep_stack,session_id:null}},
+      {...running,deep_stack:{...running.deep_stack,producer_epoch:null}}, {...running,schema:'wrong'}]){
+      status=next;await f.timer.advance(1000);assert.equal(observed.at(-1).session,null,JSON.stringify(next));
+    }
+    failed=true;await f.timer.advance(1000);assert.equal(observed.at(-1).status,'unavailable');assert.equal(observed.at(-1).session,null);
+    failed=false;status=running;await f.timer.advance(1000);assert.equal(observed.at(-1).status,'running');
+  }finally{stop();}
+  assert.equal(f.timer.size(),0);
+});
+
+test('activity-loop late session resolution is aborted and cannot publish after logout or disposal',async()=>{
+  for(const logout of [false,true]){
+    let finish,signal;const observed=[];
+    const f=fixture({onFetch:({url,options})=>{
+      if(url.pathname.endsWith('/activity-loop'))return Response.json({schema:'perception-lab-activity-loop-1',state:'running',
+        deep_stack:{session_id:'loop-one',producer_epoch:'a'.repeat(32),wanted:true,rolls:0}});
+      if(url.pathname.endsWith('/sessions/loop-one')){signal=options.signal;return new Promise(resolve=>{finish=()=>resolve(Response.json({session:{
+        id:'loop-one',site_id:'victoria',camera_id:'den',state:'recording',generation:0}}));});}
+    }});
+    const stop=f.w.HomeApartmentPerceptionSource.watchActivityLoop({identity:f.scope,generation:1,isCurrent:()=>true,onChange:x=>observed.push(x)});
+    await settle();assert.equal(observed.at(-1).status,'connecting');assert.equal(typeof finish,'function');
+    if(logout)f.w.fire('home:logout');else stop();
+    assert.equal(signal.aborted,true);finish();await settle();await f.timer.advance(3000);
+    assert.equal(observed.length,1);assert.equal(f.timer.size(),0);stop();
+  }
+});
 function events(){const all=new Map();return {addEventListener(k,f){if(!all.has(k))all.set(k,new Set());all.get(k).add(f);},
   removeEventListener(k,f){all.get(k)?.delete(f);},fire(k,e={}){for(const f of all.get(k)||[])f(e);}};}
 function clock(){let now=0,id=0;const q=new Map();return {setTimeout(f,ms){const k=++id;q.set(k,{f,at:now+ms});return k;},clearTimeout:k=>q.delete(k),now:()=>now,

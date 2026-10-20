@@ -50,7 +50,7 @@ function browserOptions() {
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-test('the engine traces real reticle picks for the aim chip: clear paths end on the surface, blocked paths name a blocker', { timeout: 180000 }, async () => {
+test('the engine traces real reticle picks for the aim chip: clear paths end on the surface, blocked paths name a blocker', { timeout: 145000 }, async () => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'this proof uses only current worktree source');
   const run = path.join(ROOT, '.tmp/apartment-beam-path-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');

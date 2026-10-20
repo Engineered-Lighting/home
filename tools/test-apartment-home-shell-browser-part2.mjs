@@ -4,5 +4,5 @@
 import test from 'node:test';
 import { runShellBrowserProof } from './fixtures/apartment-home-shell-browser-proof.mjs';
 
-test('unified shell keeps the real room, private controls and one chat controller through responsive navigation (part 2)', { timeout: 180000 },
+test('unified shell keeps the real room, private controls and one chat controller through responsive navigation (part 2)', { timeout: 145000 },
   () => runShellBrowserProof({ part: 2 }));

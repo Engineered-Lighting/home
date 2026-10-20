@@ -24,7 +24,7 @@ const calibratedEcho = seed => {
   return model;
 };
 
-test('proposed Setup fields stay behind the flag; with it, labels, hand placement and mmWave save without touching calibration', { timeout: 200000 }, async () => {
+test('proposed Setup fields stay behind the flag; with it, labels, hand placement and mmWave save without touching calibration', { timeout: 145000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-setup-proposal-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const glb = deskRoomGlb();
   const rooms = installSetupRooms(run, { echoModel: calibratedEcho, echoOverrides: { 'mesh.glb': glb, 'collision.glb': glb } });
@@ -32,7 +32,7 @@ test('proposed Setup fields stay behind the flag; with it, labels, hand placemen
     physical_commands: 0, proposed_fields_pending_owner: true, checks: [], browser: browserOptions() };
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   let server, browser, timer;
-  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('170s proposal browser deadline at: ' + receipt.current_stage)); }, 170000); });
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('145s proposal browser deadline at: ' + receipt.current_stage)); }, 145000); });
   const check = async (name, operation) => { receipt.current_stage = name; save(); receipt.checks.push({ name, ...(await operation()) }); save(); };
   async function proof() {
     server = await startSetupServer(rooms);

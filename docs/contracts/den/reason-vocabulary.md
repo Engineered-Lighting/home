@@ -56,8 +56,11 @@ their own wording for a listed code.
   with a `warn` banner reading "Ops monitor silent on <host>". It is listed as
   `monitor_silent` so that rows can refer to it. A status row shows the
   banner's own text.
-- **Brain refusals are not outages.** A refused state document keeps the last
-  good state. Show it in Details, not as Offline.
+- **Malformed documents do not refresh authority.** Most schema refusals retain
+  the last valid decision only until its original deadline. Expired evidence or
+  unbound reading evidence stops automatic following: automatic spots are
+  disabled, ambient is held, and manual pauses are preserved. Show the retained
+  decision as requested state, rather than describing it as applied output.
 - **Aim refusals arrive inside a decision's `why` text.** The brain does not
   send them as separate fields today. The codes are listed so that a later
   structured field can reuse them.

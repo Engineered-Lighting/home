@@ -3,6 +3,33 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 const source = fs.readFileSync(new URL('../app/src/home-perception-lab-transport.js', import.meta.url), 'utf8');
+
+test('read-only browser access stays separate from upstream readiness and refuses writes before fetch',async()=>{
+  const f=fixture({fetch:async()=>Response.json({recording_allowed:true},{headers:{'X-Home-Lab-Access':'read-only'}})});
+  const caps=await f.transport.request('capabilities.get',{siteId:'victoria'});
+  assert.equal(caps.recording_allowed,true,'runtime readiness is unchanged');
+  assert.equal(caps.browser_access.write,false);
+  for(const operation of ['sessions.start','sessions.stop','jobs.create'])
+    await assert.rejects(f.transport.request(operation,{siteId:'victoria',sessionId:'s1'}),{code:'lab_browser_read_only',status:403});
+  assert.equal(f.calls.length,1,'no forbidden browser write reaches the gateway');
+});
+
+test('activity-loop status is an exact Victoria GET, bounded and unavailable to native authority', async () => {
+  const f=fixture({fetch:async()=>Response.json({schema:'perception-lab-activity-loop-1',state:'paused'})});
+  await f.transport.request('activityLoop.get',{siteId:'victoria'});
+  assert.equal(f.calls[0][0],'/api/perception-lab/v1/activity-loop');
+  assert.equal(f.calls[0][1].method,'GET'); assert.equal(f.calls[0][1].credentials,'same-origin');
+  assert.equal(f.calls[0][1].headers['X-Home-Lab-Site'],'victoria');
+  assert.equal(f.calls[0][1].headers['X-Home-Lab-CSRF'],undefined);
+  for(const args of [{siteId:'echo'},{siteId:'victoria',body:{}},{siteId:'victoria',path:'/resume'}])
+    await assert.rejects(f.transport.request('activityLoop.get',args));
+  const large=fixture({fetch:async()=>Response.json({padding:'x'.repeat(65536)})});
+  await assert.rejects(large.transport.request('activityLoop.get',{siteId:'victoria'}),{code:'lab_response_too_large'});
+  const invoked=[];
+  const native=fixture({window:{__TAURI__:{core:{invoke:async(...args)=>invoked.push(args)}}}});
+  await assert.rejects(native.transport.request('activityLoop.get',{siteId:'victoria'}),{code:'lab_native_activity_loop_not_available'});
+  assert.equal(invoked.length,0); assert.equal(native.calls.length,0);
+});
 test('structured camera context is a fixed bounded browser-only read',async()=>{
   const f=fixture({fetch:async()=>Response.json({schema:'home-camera-structured-context-1'})});
   const args={siteId:'victoria',cameraId:'den'};

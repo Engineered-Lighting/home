@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import * as THREE from '../app/src/vendor/three-0.180.0/three.module.js';
 import { createApartmentUiOverlayLayer } from '../app/src/home-3d/apartment-ui-overlay-bridge.mjs';
+import { createLightingRenderEvidence } from '../app/src/home-3d/lighting-render-evidence.mjs';
 
 const vendor = new URL('../app/src/vendor/three-0.180.0/three.module.js', import.meta.url).href;
 const pickingSource = fs.readFileSync(new URL('../app/src/home-3d/picking.js', import.meta.url), 'utf8');
@@ -461,6 +462,8 @@ function engineFixture() {
   const manifest = { revision: 'authored-r1', registrationVersion: 1,
     assets: { 'frame.json': { sha256: 'a'.repeat(64) }, 'collision.glb': { sha256: 'b'.repeat(64) } } };
   const lifetimeController = new AbortController();
+  const renderer = { render: () => state.renders++, dispose: () => state.terminal.push('renderer'), forceContextLoss: () => state.terminal.push('context') };
+  const lightingRenderEvidence = createLightingRenderEvidence({ renderer, nowMs: () => state.clock });
   const context = vm.createContext({ THREE, AbortController, EventTarget, CustomEvent, scene, canvas, sceneIdentity,
     siteId: 'victoria', contentRevision: 'authored-r1', uiCollisionDigest: 'b'.repeat(64),
     disposed: false, disposing: false, running: false, rafId: 0, last: 1000, statsAt: 1000, frameTimes: [], renderTimes: [],
@@ -480,7 +483,7 @@ function engineFixture() {
     equipmentCutaway: { getShell: () => null, dispose: () => state.terminal.push('cutaway') },
     cutawayEligible: false, scenePlaceholder: null, dollhouseContext: {},
     modes: { update() {}, setDollhouseCutaway() {}, debugInfo: () => ({}), dispose: () => state.terminal.push('modes') },
-    renderer: { render: () => state.renders++, dispose: () => state.terminal.push('renderer'), forceContextLoss: () => state.terminal.push('context') },
+    renderer, lightingRenderEvidence,
     gpuName: 'authored', pointTotal: 0, signal: undefined, onExternalAbort() {},
     unsubscribePerformanceBudget: () => state.terminal.push('budget'), onApartmentContextLost() {}, onApartmentContextRestored() {},
   });

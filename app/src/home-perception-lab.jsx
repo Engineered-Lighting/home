@@ -25,15 +25,23 @@
     useEffect(() => C.subscribe(set), []);
     return state;
   }
+  const READ_ONLY_REASON = 'This browser connection is read-only. Recording, model changes and saved edits are unavailable.';
+  const isReadOnlyConnection = () => {
+    const state = C.getSnapshot();
+    return state.mode === 'real' && state.capabilities?.browser_access?.write === false;
+  };
   function Button({
     children,
     primary,
     onClick,
     disabled,
+    requiresWrite = false,
     className = '',
     ...props
   }) {
-    return <button type="button" className={'pl-button ' + (primary ? 'pl-primary ' : '') + className} disabled={disabled} onClick={onClick} {...props}>{children}</button>;
+    const blocked = requiresWrite && isReadOnlyConnection();
+    return <button type="button" className={'pl-button ' + (primary ? 'pl-primary ' : '') + className} disabled={disabled || blocked} onClick={onClick} {...props}
+      title={blocked ? READ_ONLY_REASON : props.title} aria-describedby={blocked ? 'pl-browser-read-only' : props['aria-describedby']}>{children}</button>;
   }
   function Badge({
     children,
@@ -46,7 +54,7 @@
     const active=useRef(null),mounted=useRef(true);
     useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;active.current?.abort();};},[]);
     const native=!!(global.__TAURI__||global.__TAURI_INTERNALS__);
-    const reason=mode!=='real'?'Media export requires a recorded real-mode session.':
+    const reason=isReadOnlyConnection()?'Archive export is unavailable through this read-only connection.':mode!=='real'?'Media export requires a recorded real-mode session.':
       !native&&typeof global.showSaveFilePicker!=='function'?'Streaming file save requires a supported browser.':
       !['stopped','interrupted','failed'].includes(session?.state)?'Stop and finalize the session before exporting.':'';
     async function save(){
@@ -87,9 +95,9 @@
   // tag. The tag word is the bookmark's label; labelling from cues reads it.
   function BookmarkBar({onMark}) {
     return <div className="pl-bookmark-bar pl-inline" role="group" aria-label="Bookmark this moment" style={{flexWrap: 'wrap', gap: 6, margin: '6px 0'}}>
-      <Button primary className="pl-bookmark-now" title="Mark this moment to label it later (B)" onClick={() => onMark()}>Bookmark · B</Button>
+      <Button requiresWrite primary className="pl-bookmark-now" title="Mark this moment to label it later (B)" onClick={() => onMark()}>Bookmark · B</Button>
       <span className="pl-muted">or bookmark as</span>
-      {BOOKMARK_TAGS.map(([tag, name]) => <Button key={tag} className="pl-bookmark-tag" data-tag={tag} title={'Bookmark this moment as ' + tag} onClick={() => onMark(tag)}>{name}</Button>)}
+      {BOOKMARK_TAGS.map(([tag, name]) => <Button requiresWrite key={tag} className="pl-bookmark-tag" data-tag={tag} title={'Bookmark this moment as ' + tag} onClick={() => onMark(tag)}>{name}</Button>)}
     </div>;
   }
   function Empty({
@@ -814,7 +822,7 @@
                 const a = x.a ? stageValue(key, x.a[key]) : x.arms?.A?.[key] || (i === 0 ? x.arms?.A?.name : 'Manifest required');
                 const b = x.b ? stageValue(key, x.b[key]) : x.arms?.B?.[key] || (i === 0 ? x.arms?.B?.name : 'Manifest required');
                 return <tr key={stage} className={a !== b ? 'pl-changed' : ''}><th>{stage}</th><td>{a}</td><td>{b}</td></tr>;
-              })}</tbody></table>{x.lever?.note && <><h3>Lever · the only difference between A and B</h3><p>{x.lever.note}</p></>}<h3>Held constant</h3><p>{x.isolation || x.held_constant}</p><h3>Try this</h3><div className="pl-chips">{x.try_this?.map(t => <span key={t}>{t}</span>)}</div>{x.revision && <><h3>Recipe revision</h3><p className="pl-muted">{x.revision}</p></>}</details><div className="pl-actions"><Button primary disabled={later || saved && recording || view.group === 'recording'} onClick={() => onSelect(x)}>{later ? 'Coming later · not startable' : view.group === 'recording' ? view.label + ' now' : saved ? 'Use with a saved session' : recording ? 'Switch to this setup' : 'Use this setup'}</Button><span className="pl-muted">{later ? 'Coming-later setups are listed so their requirements are visible.' : saved ? recording ? 'Stop the recording first; a saved-session setup never joins a live comparison.' : 'Opens saved-session review; nothing is recorded.' : view.group === 'blocked' ? 'You can choose it; Start stays disabled until the reasons above clear.' : 'Next: enable reasoning if you want it, then record.'}</span></div></article></div></Modal>;
+              })}</tbody></table>{x.lever?.note && <><h3>Lever · the only difference between A and B</h3><p>{x.lever.note}</p></>}<h3>Held constant</h3><p>{x.isolation || x.held_constant}</p><h3>Try this</h3><div className="pl-chips">{x.try_this?.map(t => <span key={t}>{t}</span>)}</div>{x.revision && <><h3>Recipe revision</h3><p className="pl-muted">{x.revision}</p></>}</details><div className="pl-actions"><Button requiresWrite={recording && !saved} primary disabled={later || saved && recording || view.group === 'recording'} onClick={() => onSelect(x)}>{later ? 'Coming later · not startable' : view.group === 'recording' ? view.label + ' now' : saved ? 'Use with a saved session' : recording ? 'Switch to this setup' : 'Use this setup'}</Button><span className="pl-muted">{later ? 'Coming-later setups are listed so their requirements are visible.' : saved ? recording ? 'Stop the recording first; a saved-session setup never joins a live comparison.' : 'Opens saved-session review; nothing is recorded.' : view.group === 'blocked' ? 'You can choose it; Start stays disabled until the reasons above clear.' : 'Next: enable reasoning if you want it, then record.'}</span></div></article></div></Modal>;
   }
   function Library({
     caps,
@@ -822,15 +830,16 @@
     onPrepare,
     pending
   }) {
+    const readOnly = isReadOnlyConnection();
     const [picked, setPicked] = useState([]),
       [keepReady, setKeepReady] = useState(false);
-    return <Modal title="Experiment library" wide onClose={onClose}><div className="pl-library"><p className="pl-muted">Stored artifacts and resident models are different. Production services are never unloaded by this tool.</p><div className="pl-device-grid">{(caps?.devices || []).map(d => <section className="pl-panel" key={d.id}><h3>{d.name || d.id}</h3><p>{d.budget_status || 'Approved memory budget not supplied'}</p><span className="pl-muted">{d.reserved?.join?.(' · ') || 'Protected workloads supplied by the runtime admission service'}</span></section>)}</div><table><thead><tr><th>Select</th><th>Artifact</th><th>Device</th><th>State</th><th>Version</th></tr></thead><tbody>{(caps?.artifacts || []).map(a => <tr key={a.id}><td><input type="checkbox" aria-label={'Select ' + (a.name || a.id)} checked={picked.includes(a.id)} onChange={e => setPicked(e.target.checked ? [...picked, a.id] : picked.filter(id => id !== a.id))} /></td><td>{a.name || a.model || a.id}</td><td>{a.device || a.device_id || 'Unknown'}</td><td>{a.state || 'Unverified'}</td><td><details><summary>Artifacts</summary><pre>{JSON.stringify({
+    return <Modal title="Experiment library" wide onClose={onClose}><div className="pl-library"><p className="pl-muted">Stored artifacts and resident models are different. Production services are never unloaded by this tool.</p><div className="pl-device-grid">{(caps?.devices || []).map(d => <section className="pl-panel" key={d.id}><h3>{d.name || d.id}</h3><p>{d.budget_status || 'Approved memory budget not supplied'}</p><span className="pl-muted">{d.reserved?.join?.(' · ') || 'Protected workloads supplied by the runtime admission service'}</span></section>)}</div><table><thead><tr><th>Select</th><th>Artifact</th><th>Device</th><th>State</th><th>Version</th></tr></thead><tbody>{(caps?.artifacts || []).map(a => <tr key={a.id}><td><input type="checkbox" aria-label={'Select ' + (a.name || a.id)} disabled={readOnly} title={readOnly ? READ_ONLY_REASON : undefined} checked={picked.includes(a.id)} onChange={e => setPicked(e.target.checked ? [...picked, a.id] : picked.filter(id => id !== a.id))} /></td><td>{a.name || a.model || a.id}</td><td>{a.device || a.device_id || 'Unknown'}</td><td>{a.state || 'Unverified'}</td><td><details><summary>Artifacts</summary><pre>{JSON.stringify({
                       checkpoint: a.checkpoint,
                       sha256: a.sha256,
                       runtime: a.runtime,
                       precision: a.precision,
                       startup: a.measured_startup_s
-                    }, null, 2)}</pre></details></td></tr>)}</tbody></table>{!caps?.artifacts?.length && <Empty title="No artifact registry supplied">Connect an admitted Lab service to prepare exact model builds.</Empty>}<label className="pl-check"><input type="checkbox" disabled={caps?.keep_ready_allowed !== true} checked={keepReady && caps?.keep_ready_allowed === true} onChange={e => setKeepReady(e.target.checked)} />Keep selected models ready <small>{caps?.keep_ready_allowed === true ? 'Subject to admission; residency is reported by the runtime' : 'Runtime residency control is not available'}</small></label><div className="pl-actions"><Button primary disabled={!picked.length || pending} onClick={() => onPrepare(picked, keepReady)}>Prepare selected ({picked.length})</Button><span className="pl-muted">A preparation request can be denied. No models load merely by opening this drawer.</span></div></div></Modal>;
+                    }, null, 2)}</pre></details></td></tr>)}</tbody></table>{!caps?.artifacts?.length && <Empty title="No artifact registry supplied">Connect an admitted Lab service to prepare exact model builds.</Empty>}<label className="pl-check"><input type="checkbox" disabled={readOnly || caps?.keep_ready_allowed !== true} checked={keepReady && caps?.keep_ready_allowed === true} onChange={e => setKeepReady(e.target.checked)} />Keep selected models ready <small>{caps?.keep_ready_allowed === true ? 'Subject to admission; residency is reported by the runtime' : 'Runtime residency control is not available'}</small></label><div className="pl-actions"><Button requiresWrite primary disabled={!picked.length || pending} onClick={() => onPrepare(picked, keepReady)}>Prepare selected ({picked.length})</Button><span className="pl-muted">A preparation request can be denied. No models load merely by opening this drawer.</span></div></div></Modal>;
   }
   // ---- Recorded session review (v9) ----
   // Labels live on the session clock: the clock of the sensor/model timeline
@@ -1127,7 +1136,7 @@
         <div className="pl-sv-title"><h2>{session.name || 'Session'}</h2><span className="pl-mono pl-muted">{meta}</span></div>
         <div className="pl-sv-tabs" role="tablist" aria-label="Session views">{tabs.map(([k, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setPlaying(false); }}>{label}</button>)}</div>
         <span className="pl-flex" />
-        <span className={'pl-sv-save' + (failed.length ? ' pl-sv-save-failed' : '')} role="status" aria-live="polite">{saveSum}{failed.length > 0 && <Button className="pl-mini-retry" onClick={() => failed.forEach(([id]) => store.retry(id))}>Retry</Button>}</span>
+        <span className={'pl-sv-save' + (failed.length ? ' pl-sv-save-failed' : '')} role="status" aria-live="polite">{saveSum}{failed.length > 0 && <Button requiresWrite className="pl-mini-retry" onClick={() => failed.forEach(([id]) => store.retry(id))}>Retry</Button>}</span>
         <div className="pl-sv-prog"><span className="pl-sv-cells" aria-hidden="true">{L.slice(0, 12).map(l => <i key={l.id} className={l.reviewed ? 'pl-on' : ''} />)}</span><span>{L.length ? reviewed + ' of ' + L.length + ' reviewed' + (unscorable ? ' · not scorable' : '') : 'No labels'}</span></div>
         {canScore && <Button primary onClick={score}>Score this session</Button>}
       </div>
@@ -1141,6 +1150,7 @@
 
   function LabelTab({C, session, store, sel, setSel, t, onSeek, playing, setPlaying, speed, setSpeed, duration, labelEnd, cues, hidePred, setHidePred, videoMedia, clockVerified, flash, hiddenDoc, demo}) {
     const sid = session.id, lab = useLab(), L = store.labels, axis = Math.max(1, labelEnd);
+    const readOnly = lab.mode === 'real' && lab.capabilities?.browser_access?.write === false;
     const [zoom, setZoom] = usePref('zoom', 'fit');
     const [v0, setV0] = useState(0), [drag, setDrag] = useState(null), [markIn, setMarkIn] = useState(null);
     const [confirmDel, setConfirmDel] = useState(null), [syncOpen, setSyncOpen] = useState(false), [startHelp, setStartHelp] = useState(false);
@@ -1148,6 +1158,7 @@
     const [ask, setAsk] = useState([]);
     const [vstatus, setVstatus] = useState({state: 'loading'});
     const track = useRef(null), ruler = useRef(null), dragRef = useRef(null), scrubRef = useRef(false);
+    useEffect(() => { if (readOnly) { dragRef.current = null; setDrag(null); setMarkIn(null); setConfirmDel(null); } }, [readOnly]);
     const span = zoom === 'fit' ? axis : Math.min(axis, zoom === '60' ? 60 : 20);
     const view0 = clamp(v0, 0, Math.max(0, axis - span));
     const P = x => (x - view0) / span * 100;
@@ -1172,6 +1183,7 @@
     const select = (id, noSeek) => { const l = store.byId(id); if (!l) return; setSel(id); setConfirmDel(null); if (!noSeek) seek(l.start_s); };
     const cueBefore = s => [...cues].filter(c => c.t_s <= s + 2).pop();
     const create = (a, b) => {
+      if (readOnly) return;
       a = round1(a); b = round1(b);
       if (L.some(l => a >= l.start_s && a < l.end_s)) { flash('Labels can’t overlap. Start outside an existing label.'); return; }
       const next = L.find(l => l.start_s >= a);
@@ -1183,13 +1195,15 @@
       store.add([label]); setSel(label.id); setMarkIn(null); setStartHelp(false);
       flash('Label created · choose its activity, then mark it reviewed');
     };
-    const doMarkIn = () => { const v = round1(t); setMarkIn(v); flash('In at ' + mss1(v) + ' · press O at the end of the activity'); };
+    const doMarkIn = () => { if (readOnly) return; const v = round1(t); setMarkIn(v); flash('In at ' + mss1(v) + ' · press O at the end of the activity'); };
     const doMarkOut = () => {
+      if (readOnly) return;
       if (markIn == null) { flash('Press I (Mark in) first'); return; }
       if (t <= markIn + MIN_LABEL_S) { flash('Mark out must be at least 0.5 s after mark in'); return; }
       create(markIn, t);
     };
     const review = (id, value) => {
+      if (readOnly) return;
       store.edit(id, {reviewed: value}, 0);
       if (!value) return;
       const i = L.findIndex(l => l.id === id);
@@ -1198,11 +1212,12 @@
       else { setSel(null); flash(L.every(l => (l.time_basis || 'session') === 'session') ? 'All labels reviewed. You can score this session now.' : 'All labels reviewed.'); }
     };
     const moveEdge = (id, edge, value, commitDelay) => {
+      if (readOnly) return null;
       const v = store.moveEdge(id, edge, value);
       if (v != null) { seek(v); if (commitDelay != null) store.commit(id, commitDelay); }
       return v;
     };
-    const del = async id => { setConfirmDel(null); const ok = await store.remove(id); if (ok) { setSel(s => s === id ? null : s); flash('Label deleted'); } };
+    const del = async id => { if (readOnly) return; setConfirmDel(null); const ok = await store.remove(id); if (ok) { setSel(s => s === id ? null : s); flash('Label deleted'); } };
     const cycle = step => {
       if (!L.length) return;
       const i = L.findIndex(l => l.id === sel), j = i < 0 ? (step > 0 ? 0 : L.length - 1) : (i + step + L.length) % L.length;
@@ -1211,6 +1226,7 @@
     // A cue tagged or named with an activity becomes a label at once; a cue
     // with no activity word waits in `ask` until the owner picks one.
     const fromCues = () => {
+      if (readOnly) return;
       const made = cueLabels(cues, round1(axis)).map(({cue_t_s, cue_label, ...l}) => ({label: l, cue: {t_s: cue_t_s, label: cue_label}}));
       if (!made.length) { flash('The cues are too close together to make labels.'); return; }
       const known = made.filter(x => x.label.activity).map(x => x.label), unknown = made.filter(x => !x.label.activity);
@@ -1222,6 +1238,7 @@
         (unknown.length ? ' · choose the activity for ' + unknown.length + (unknown.length === 1 ? ' more cue' : ' more cues') : ' · check each one'));
     };
     const answerAsk = activity => {
+      if (readOnly) return;
       const [first, ...rest] = ask;
       if (!first) return;
       if (activity) { const label = {...first.label, activity}; store.add([label]); if (!rest.length) setTimeout(() => { setSel(label.id); seek(label.start_s); }, 50); }
@@ -1230,6 +1247,7 @@
       else if (!activity) flash('Cue skipped');
     };
     const convert = () => {
+      if (readOnly) return;
       const moved = L.filter(l => (l.time_basis || 'session') !== 'session');
       for (const l of moved) store.edit(l.id, {time_basis: 'session', reviewed: false, start_s: clamp(l.start_s, 0, axis), end_s: clamp(l.end_s, 0, axis)}, 0);
       flash('Converted to session clock · check each label and mark it reviewed');
@@ -1243,6 +1261,7 @@
         if (target?.closest?.('.pl-modal')) return;
         const control = !!target?.closest?.('button,a,summary,[role=slider]') && !target.closest('[data-lbl-nav]');
         const k = e.key;
+        if (readOnly && ['i', 'I', 'o', 'O', 'Enter', 'Delete', 'Backspace'].includes(k)) return;
         if (k === ' ') { e.preventDefault(); if (control) target.blur?.(); togglePlay(); }
         else if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); seek(t + (k === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 5 : .1)); }
         else if (k === 'i' || k === 'I') doMarkIn();
@@ -1260,6 +1279,11 @@
     const onTrackDown = e => {
       if (e.button != null && e.button !== 0) return;
       const el = track.current, {x, w, t: t0} = xOf(el, e), px = v => (v - view0) / span * w;
+      if (readOnly) {
+        const label = L.find(l => t0 >= l.start_s && t0 < l.end_s);
+        if (label) select(label.id); else seek(t0);
+        return;
+      }
       const order = selected ? [selected, ...L.filter(l => l !== selected)] : L;
       let hit = null;
       for (const l of order) {
@@ -1277,6 +1301,7 @@
     };
     const onTrackMove = e => {
       const d = dragRef.current, el = track.current;
+      if (readOnly) { el.style.cursor = 'pointer'; return; }
       if (!d) {
         const {x, w} = xOf(el, e), px = v => (v - view0) / span * w;
         el.style.cursor = L.some(l => Math.abs(x - px(l.start_s)) <= 6 || Math.abs(x - px(l.end_s)) <= 6) ? 'ew-resize' : L.some(l => x > px(l.start_s) && x < px(l.end_s)) ? 'pointer' : 'crosshair';
@@ -1288,7 +1313,7 @@
     };
     const onTrackUp = () => {
       const d = dragRef.current; dragRef.current = null; setDrag(null);
-      if (!d) return;
+      if (!d || readOnly) return;
       if (d.mode === 'edge') { store.commit(d.id, 0); return; }
       if (!d.moved) { seek(d.a); return; }
       create(Math.min(d.a, d.b), Math.max(d.a, d.b));
@@ -1315,15 +1340,15 @@
       'Times are on the session clock, the clock of the sensor and model timeline. Labels made here are scored against each arm’s answers on the same clock, from the time each answer arrived.' :
       'Times are on the session clock, the clock of the sensor and model timeline. Labels made here are scored against each arm’s answers on the same clock, from the time each answer arrived. For this session the video is placed on that clock second-for-second (video second = session second), the same approximation as Pipeline detail; the measured offset is under about a second, so an edge can look up to about a second off. That affects where the frame appears, not whether a reviewed label is scored.';
     return <div className="pl-lv" role="tabpanel" aria-label="Label review">
-      <p className="pl-lv-howto pl-label-howto">{LABEL_HOWTO}</p>
+      <p className="pl-lv-howto pl-label-howto">{readOnly ? 'Read-only label review. Playback, timeline navigation and existing labels remain available.' : LABEL_HOWTO}</p>
       {unscorable.length > 0 && <div className="pl-lv-unscorable" role="note"><div><strong>These labels can’t be scored yet</strong>
         <p>{unscorable.length === 1 ? 'One label was' : unscorable.length + ' labels were'} made on the video clock, before labels were saved on the session clock. Scoring counts only session-clock labels. Converting keeps each time as it is (the video is placed on the session clock second-for-second, within about a second) and marks every converted label for review again so you can check it.</p></div>
-        <Button primary onClick={convert}>Convert to session clock</Button></div>}
+        <Button requiresWrite primary onClick={convert}>Convert to session clock</Button></div>}
       <div className="pl-lv-grid">
         <div className="pl-lv-main">
           <div className={'pl-lv-video' + (hasVideo ? '' : ' pl-lv-novideo')} onClick={e => { if (!e.target.closest('button')) togglePlay(); }}>
             {hasVideo ? <VideoSource media={videoMedia} session={session} t={t} playing={playing && !hiddenDoc} speed={speed} review bare onStatus={setVstatus} /> :
-              <div className="pl-lv-msg">No recorded video covers this session. Labels can still be edited on the timeline.</div>}
+              <div className="pl-lv-msg">No recorded video covers this session. {readOnly ? 'Existing labels remain visible on the timeline.' : 'Labels can still be edited on the timeline.'}</div>}
             {at && <span className={'pl-lv-tag ' + activityClass(at.activity)}>{(at.reviewed ? '✓ ' : '') + actName(at.activity) + (at.note ? ' · ' + at.note : '') + (at.reviewed ? '' : ' · needs review')}</span>}
             {hasVideo && !hiddenDoc && vstatus.state !== 'ready' && <div className="pl-lv-overlay pl-lv-opening" role="status">{vstatus.state === 'loading' ? <><i className="pl-spinner" aria-hidden="true" />{vstatus.reason && vstatus.reason !== 'Video opens when this tab is visible' ? vstatus.reason : 'Opening video track · ' + (session.camera_id || 'camera') + ' · ' + mmss(duration)}</> : vstatus.reason || 'Video unavailable at this time'}</div>}
             {hiddenDoc && <div className="pl-lv-overlay pl-lv-hidden" role="status">This tab is hidden: video opens when visible.</div>}
@@ -1336,8 +1361,8 @@
             <span className="pl-lv-group" role="group" aria-label="Playback speed">{[.5, 1, 2].map(v => <button key={v} type="button" aria-pressed={speed === v} onClick={() => setSpeed(v)}>{v}×</button>)}</span>
             <span className="pl-flex" />
             {markIn != null && <span className="pl-lv-markin pl-mono">in {mss1(markIn)}</span>}
-            <button type="button" className="pl-lv-mark" onClick={doMarkIn}>Mark in <kbd>I</kbd></button>
-            <button type="button" className="pl-lv-mark" onClick={doMarkOut}>Mark out <kbd>O</kbd></button>
+            <button type="button" className="pl-lv-mark" disabled={readOnly} title={readOnly ? READ_ONLY_REASON : undefined} onClick={doMarkIn}>Mark in <kbd>I</kbd></button>
+            <button type="button" className="pl-lv-mark" disabled={readOnly} title={readOnly ? READ_ONLY_REASON : undefined} onClick={doMarkOut}>Mark out <kbd>O</kbd></button>
           </div>
           {syncOpen && <p className="pl-lv-sync pl-lbl-clock" role="note">{clockText}</p>}
           <div className="pl-lv-timeline">
@@ -1354,12 +1379,12 @@
               </div>
               <span className="pl-lv-rowname pl-lv-rowname-main">LABELS</span>
               <div ref={track} className="pl-lv-track pl-lbl-track" role="group" aria-label="Label track" onPointerDown={onTrackDown} onPointerMove={onTrackMove} onPointerUp={onTrackUp} onPointerCancel={() => { dragRef.current = null; setDrag(null); }}>
-                {!L.length && <span className="pl-lv-trackhint">Drag here to create a label, or press I then O while the video plays</span>}
+                {!L.length && <span className="pl-lv-trackhint">{readOnly ? 'No labels supplied for this session' : 'Drag here to create a label, or press I then O while the video plays'}</span>}
                 {L.filter(l => inView(l.start_s, l.end_s)).map(l => <div key={l.id} data-label-id={l.id} title={actName(l.activity) + ' · ' + mss1(l.start_s) + '–' + mss1(l.end_s) + ' · ' + (l.reviewed ? 'reviewed' : 'needs review') + ((l.time_basis || 'session') !== 'session' ? ' · video clock' : '')}
                   className={'pl-lb ' + swatchClass(l.activity, l.reviewed) + (l.reviewed ? ' pl-lb-reviewed' : '') + (l.id === sel ? ' pl-lb-selected' : '') + ((l.time_basis || 'session') !== 'session' ? ' pl-lb-video' : '')}
                   style={{left: P(l.start_s) + '%', width: Math.max(.2, (l.end_s - l.start_s) / span * 100) + '%'}}>
                   <span className="pl-lb-text">{(l.reviewed ? '✓ ' : '') + actName(l.activity) + (l.note ? ' · ' + l.note : '')}</span>
-                  {l.id === sel && <><i className="pl-lb-edge pl-lb-edge-start" data-edge="start" /><i className="pl-lb-edge pl-lb-edge-end" data-edge="end" /></>}</div>)}
+                  {l.id === sel && !readOnly && <><i className="pl-lb-edge pl-lb-edge-start" data-edge="start" /><i className="pl-lb-edge pl-lb-edge-end" data-edge="end" /></>}</div>)}
                 {ghost && inView(ghost.a, ghost.b) && <div className="pl-lv-ghost" style={{left: P(ghost.a) + '%', width: (ghost.b - ghost.a) / span * 100 + '%'}} />}
                 {phOn && <i className="pl-lv-ph" style={{left: P(t) + '%'}} />}
               </div>
@@ -1378,7 +1403,7 @@
             <div className="pl-lv-readout" aria-live="off"><span className="pl-mono">{tenths(t)}</span>
               <span>· Label <b className={at ? activityClass(at.activity) : 'pl-ans-none'}>{at ? actName(at.activity) + (at.reviewed ? '' : ' (needs review)') : 'none'}</b></span>
               {!hidePred && ['A', 'B'].map(arm => { const [text, cls] = answer(arm); return <span key={arm}>· Arm {arm} <b className={cls}>{text}</b></span>; })}</div>
-            <p className="pl-lv-keys pl-mono">Space play · ←/→ 0.1 s · Shift ←/→ 5 s · I / O mark in / out · Enter reviewed · Tab next label · Delete remove · Esc deselect</p>
+            <p className="pl-lv-keys pl-mono">Space play · ←/→ 0.1 s · Shift ←/→ 5 s · Tab next label · Esc deselect{!readOnly && ' · I / O mark in / out · Enter reviewed · Delete remove'}</p>
           </div>
         </div>
         <aside className="pl-lv-aside">
@@ -1386,31 +1411,31 @@
             return <section className="pl-insp pl-lv-ask" aria-label="Choose the activity for a cue">
               <div className="pl-insp-head"><span className="pl-label">Cue activity</span><span className="pl-flex" /><span className="pl-mono pl-muted">{ask.length} left</span></div>
               <p>{plain ? 'Your bookmark' : 'Your cue “' + cue.label + '”'} at {mmss(cue.t_s)} names no activity. What were you doing from {mss1(label.start_s)} to {mss1(label.end_s)}?</p>
-              <div className="pl-insp-acts" role="group" aria-label="Activity for this cue">{LABEL_ACTIVITIES.map(a => <button key={a} type="button" onClick={() => answerAsk(a)}><i className={swatchClass(a, true)} />{actName(a)}</button>)}</div>
+              <div className="pl-insp-acts" role="group" aria-label="Activity for this cue">{LABEL_ACTIVITIES.map(a => <button key={a} type="button" disabled={readOnly} onClick={() => answerAsk(a)}><i className={swatchClass(a, true)} />{actName(a)}</button>)}</div>
               <button type="button" className="pl-insp-delete" onClick={() => answerAsk(null)}>Skip this cue</button></section>; })()}
           {selected && <section className="pl-insp pl-lbl-edit" aria-label="Selected label">
             <div className="pl-insp-head"><i className={swatchClass(selected.activity, true)} /><span className="pl-label">Label {index + 1} of {L.length}</span><span className="pl-flex" />
-              <span className={'pl-insp-save' + (save?.state === 'failed' ? ' pl-warn-text' : '')} role="status" aria-live="polite">{saveText(save)}{save?.state === 'failed' && <Button className="pl-mini-retry" onClick={() => store.retry(selected.id)}>Retry</Button>}</span>
+              <span className={'pl-insp-save' + (save?.state === 'failed' ? ' pl-warn-text' : '')} role="status" aria-live="polite">{saveText(save)}{save?.state === 'failed' && <Button requiresWrite className="pl-mini-retry" onClick={() => store.retry(selected.id)}>Retry</Button>}</span>
               <button type="button" className="pl-insp-close" aria-label="Close label" onClick={() => { setSel(null); setConfirmDel(null); }}>×</button></div>
             {save?.state === 'failed' && save.error && <p className="pl-insp-error">{save.error}</p>}
             <div className="pl-insp-block"><span className="pl-insp-k">Activity</span>
-              <div className="pl-insp-acts" role="group" aria-label="Activity">{LABEL_ACTIVITIES.map(a => <button key={a} type="button" aria-pressed={selected.activity === a} onClick={() => store.edit(selected.id, {activity: a}, 0)}><i className={swatchClass(a, true)} />{actName(a)}</button>)}</div>
+              <div className="pl-insp-acts" role="group" aria-label="Activity">{LABEL_ACTIVITIES.map(a => <button key={a} type="button" disabled={readOnly} aria-pressed={selected.activity === a} onClick={() => store.edit(selected.id, {activity: a}, 0)}><i className={swatchClass(a, true)} />{actName(a)}</button>)}</div>
               {!LABEL_ACTIVITIES.includes(selected.activity) && <small>Saved as “{actName(selected.activity)}”. Choose one of the activities above.</small>}</div>
             {[['Start', 'start', 'start_s'], ['End', 'end', 'end_s']].map(([name, edge, field]) => <div key={edge} className="pl-insp-edge"><div><span className="pl-insp-k">{name}</span><span className="pl-insp-v">{tenths(selected[field])}</span></div>
-              <div className="pl-insp-row"><button type="button" aria-label={name + ' −0.1 s'} onClick={() => moveEdge(selected.id, edge, selected[field] - .1, 400)}>−0.1 s</button><button type="button" aria-label={name + ' +0.1 s'} onClick={() => moveEdge(selected.id, edge, selected[field] + .1, 400)}>+0.1 s</button>
-                <button type="button" className="pl-insp-grow" onClick={() => moveEdge(selected.id, edge, t, 0)}>Set {edge} to playhead</button><button type="button" title="Jump video here" aria-label={'Go to ' + edge} onClick={() => seek(selected[field])}>Go</button></div></div>)}
+              <div className="pl-insp-row"><button type="button" disabled={readOnly} aria-label={name + ' −0.1 s'} onClick={() => moveEdge(selected.id, edge, selected[field] - .1, 400)}>−0.1 s</button><button type="button" disabled={readOnly} aria-label={name + ' +0.1 s'} onClick={() => moveEdge(selected.id, edge, selected[field] + .1, 400)}>+0.1 s</button>
+                <button type="button" className="pl-insp-grow" disabled={readOnly} onClick={() => moveEdge(selected.id, edge, t, 0)}>Set {edge} to playhead</button><button type="button" title="Jump video here" aria-label={'Go to ' + edge} onClick={() => seek(selected[field])}>Go</button></div></div>)}
             <span className="pl-mono pl-muted">Length {(selected.end_s - selected.start_s).toFixed(1)} s · {(selected.time_basis || 'session') === 'session' ? 'session clock' : 'video clock · not scored'}</span>
-            {(selected.time_basis || 'session') !== 'session' && <p className="pl-lbl-clock">This older label uses the video clock, so the findings do not score it. <Button onClick={() => store.edit(selected.id, {time_basis: 'session', reviewed: false}, 0)}>Use the session clock so it is scored</Button></p>}
+            {(selected.time_basis || 'session') !== 'session' && <p className="pl-lbl-clock">This older label uses the video clock, so the findings do not score it. <Button requiresWrite onClick={() => store.edit(selected.id, {time_basis: 'session', reviewed: false}, 0)}>Use the session clock so it is scored</Button></p>}
             {(() => { const c = cueNear(selected.start_s); return c ? <span className="pl-insp-cue">Your cue: “{c.label || 'bookmark'}” at {mmss(c.t_s)}</span> : null; })()}
-            <label className="pl-insp-note"><span className="pl-insp-k">Note (optional)</span><input aria-label="Note" value={selected.note || ''} maxLength={1000} placeholder="e.g. closed book" onChange={e => store.edit(selected.id, {note: e.target.value})} onBlur={() => store.commit(selected.id, 0)} /></label>
-            {selected.reviewed ? <div className="pl-insp-reviewed"><span>✓ Reviewed</span><span className="pl-flex" /><button type="button" onClick={() => review(selected.id, false)}>Mark as needs review</button></div> :
-              <button type="button" className="pl-insp-review" onClick={() => review(selected.id, true)}>Mark reviewed <kbd>Enter</kbd></button>}
-            {confirmDel === selected.id ? <div className="pl-insp-confirm" role="alertdialog" aria-label="Delete this label?"><span>Delete this label?</span><Button primary onClick={() => del(selected.id)}>Delete</Button><Button onClick={() => setConfirmDel(null)}>Cancel</Button></div> :
-              <button type="button" className="pl-insp-delete" onClick={() => setConfirmDel(selected.id)}>Delete label</button>}
+            <label className="pl-insp-note"><span className="pl-insp-k">Note (optional)</span><input aria-label="Note" disabled={readOnly} title={readOnly ? READ_ONLY_REASON : undefined} value={selected.note || ''} maxLength={1000} placeholder="e.g. closed book" onChange={e => store.edit(selected.id, {note: e.target.value})} onBlur={() => { if (!readOnly) store.commit(selected.id, 0); }} /></label>
+            {selected.reviewed ? <div className="pl-insp-reviewed"><span>✓ Reviewed</span><span className="pl-flex" /><button type="button" disabled={readOnly} onClick={() => review(selected.id, false)}>Mark as needs review</button></div> :
+              <button type="button" className="pl-insp-review" disabled={readOnly} onClick={() => review(selected.id, true)}>Mark reviewed <kbd>Enter</kbd></button>}
+            {confirmDel === selected.id ? <div className="pl-insp-confirm" role="alertdialog" aria-label="Delete this label?"><span>Delete this label?</span><Button requiresWrite primary onClick={() => del(selected.id)}>Delete</Button><Button onClick={() => setConfirmDel(null)}>Cancel</Button></div> :
+              <button type="button" className="pl-insp-delete" disabled={readOnly} onClick={() => setConfirmDel(selected.id)}>Delete label</button>}
           </section>}
           {!L.length && !ask.length && <section className="pl-insp pl-lv-empty"><strong>No labels yet</strong><p className="pl-muted">{cues.length ? 'You added ' + cues.length + (cues.length === 1 ? ' cue' : ' cues') + ' while recording. Start from them and adjust each edge, or label from scratch.' : 'Play the video and mark each activity as you see it.'}</p>
-            {cues.length > 0 && <Button primary onClick={fromCues}>Create labels from cues ({cues.length})</Button>}
-            <Button onClick={() => setStartHelp(true)}>Start labelling</Button>
+            {cues.length > 0 && <Button requiresWrite primary onClick={fromCues}>Create labels from cues ({cues.length})</Button>}
+            <Button requiresWrite onClick={() => setStartHelp(true)}>Start labelling</Button>
             {startHelp && <p className="pl-lv-help">Press Space to play. Press I when an activity starts and O when it stops, or drag across the label track.</p>}</section>}
           {L.length > 0 && <section className="pl-lv-list" aria-label="All labels"><div className="pl-lv-listhead"><span className="pl-label">All labels</span><span className="pl-mono pl-muted">{L.length}</span></div>
             <ol className="pl-lbl-list">{L.map(l => { const s = store.saves[l.id]; const st = s?.state === 'failed' || s?.state === 'saving' || s?.state === 'deleting' ? saveText(s) : l.reviewed ? '✓ Reviewed' : 'Needs review';
@@ -1635,6 +1660,7 @@
     // optional activity tag word as the free-text label.
     const bookmarkAt = review ? t : duration;
     const bookmark = useCallback(tag => {
+      if (isReadOnlyConnection()) { flash(READ_ONLY_REASON); return; }
       if (!session?.id) return;
       const sid = session.id, at = bookmarkAt, label = typeof tag === 'string' ? tag : undefined;
       marks.current = marks.current.then(async () => {
@@ -1734,6 +1760,7 @@
     }, [open, intent?.seq, intent?.session_id, intent?.t_s, !!openSessionRef.current]);
     if (!open) return null;
     const selectExperiment = async x => {
+      if (recording && isReadOnlyConnection()) { flash(READ_ONLY_REASON); return; }
       if (recording) {
         const r = await action('sessions.switch', {
           session_id: session.id,
@@ -1792,6 +1819,7 @@
     };
     openSessionRef.current = openSession;
     const openingName = opening ? (state.sessions.find(s => s.id === opening.id)?.name || opening.id) : '';
+    const browserReadOnly = state.mode === 'real' && caps?.browser_access?.write === false;
     const liveAllowed = state.mode === 'demo' || caps?.recording_allowed === true;
     const expView = statusView(exp, session);
     // The latest start that never reached recording, with its plain reason.
@@ -1799,7 +1827,7 @@
       D.startFailure({session, events: detail.events, caps}) : null;
     const reasoningOn = caps?.reasoning?.available === true;
     // Start is disabled with the explicit reason; the service still runs every gate.
-    const startWhy = D.startBlockedReason ? D.startBlockedReason({connected: state.status === 'ready', recordingAllowed: liveAllowed, experiment: exp, modalities}) :
+    const startWhy = browserReadOnly ? 'This browser connection is read-only. View existing analysis in Apartment.' : D.startBlockedReason ? D.startBlockedReason({connected: state.status === 'ready', recordingAllowed: liveAllowed, experiment: exp, modalities}) :
       state.status !== 'ready' || !liveAllowed || exp.saved_only || exp.status === 'blocked' || exp.needs_depth && !modalities.includes('depth') ? 'Inputs and admission must be ready' : '';
     const annotations = detail.annotations || [],
       events = detail.events || [];
@@ -1818,7 +1846,7 @@
     // and in a recorded session the Pipeline detail tab.
     const graphEl = Graph ? <><Graph.GraphHost C={C} lab={state} mode={review ? 'replay' : 'live'} session={graphSession} cameraId={graphCamera} siteId={state.siteId} caps={caps} parts={graphParts}
         t={review ? t : duration} duration={duration} playing={review && playing} speed={speed} onTogglePlay={() => setPlaying(x => !x)} onSeek={x => setT(Math.max(0, Math.min(duration, x)))}
-        detailArms={graphArms} videoMedia={videoMedia} setupTitle={setupName(graphExp)} hidePredictions={hidden} onBookmark={!review && recording ? bookmark : null} />
+        detailArms={graphArms} videoMedia={videoMedia} setupTitle={setupName(graphExp)} hidePredictions={hidden} onBookmark={!browserReadOnly && !review && recording ? bookmark : null} />
         <div className="pl-classic-toggle"><Button aria-expanded={classic} onClick={() => setClassic(!classic)}>{classic ? 'Hide' : 'Show'} source, room and per-arm panels</Button><span className="pl-muted">Depth and stereo planes, the room map, per-arm cards and pose evidence. {review ? 'Opening them adds the full detail read at the cursor.' : 'Opening them starts a second live video reader.'}</span></div></> : null;
     const panelsEl = panels && <div className="pl-workspace"><section className="pl-panel"><div className="pl-panel-heading"><span>{review ? 'Recorded source' : 'Camera source'}</span><div className="pl-inline"><select aria-label="Camera visualization" value={source} onChange={e => setSource(e.target.value)}>{[['rgb', 'RGB'], ['depth', 'Depth · metric color'], ['validity', 'Depth validity'], ['left', 'Left · rectified'], ['right', 'Right · rectified'], ['disparity', 'Disparity'], ['confidence', 'Stereo confidence']].map(([v, l]) => <option key={v} value={v} disabled={v !== 'rgb' && !(v === 'validity' ? modalities.includes('depth') : modalities.includes(v))}>{l}</option>)}</select><label><input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} />Split</label><Badge>{review ? 'Recorded ' + D.formatTime(t) : state.mode === 'demo' ? 'Synthetic' : 'Live'}</Badge></div></div><div className={split ? 'pl-split' : ''}>{split && !(state.mode === 'real' && mode === 'live' && source === 'rgb') && <Scene frame={detail.frame} source="rgb" sessionId={session?.id} {...replayScene} />} {state.mode === 'real' && mode === 'live' && source === 'rgb' ? (open && <div key={state.siteId + ':' + camera}><LiveCameraVideo siteId={state.siteId} cameraId={camera} available={!!caps?.live_videos?.[camera]} snapshotAvailable={!!caps?.live_previews?.[camera]} /><SharedCameraContext siteId={state.siteId} cameraId={camera} /></div>) : state.mode === 'real' && mode === 'live' && ['depth','validity','left','right'].includes(source) ? (open && <LivePlanePreview siteId={state.siteId} cameraId={camera} mode={source} range={range}/>) : state.mode === 'real' && source === 'rgb' && global.HomePerceptionLabMedia.videoItems(videoMedia).length ? <VideoSource media={videoMedia} session={session} t={t} playing={playing} speed={speed} review={review} /> : state.mode === 'real' && ['depth', 'validity'].includes(source) && depthFrame ? <DepthSource frame={depthFrame} session={session} range={range} mode={source} /> : <Scene frame={source === 'rgb' || state.mode === 'demo' ? detail.frame : sourceFrame} source={source} sessionId={session?.id} {...replayScene} />}</div>{split && <p className="pl-muted pl-split-note">Each view retains its source time. Synchronization is shown only when capture identity is verified.</p>}{source !== 'rgb' && <div className="pl-depth-tools"><span>Display range only · camera settings unchanged</span><input aria-label="Depth near display range" type="range" min="0.2" max="3" step=".1" value={range[0]} onChange={e => setRange([Number(e.target.value), Math.max(range[1], Number(e.target.value))])} /><input aria-label="Depth far display range" type="range" min="3" max="10" step=".1" value={range[1]} onChange={e => setRange([range[0], Number(e.target.value)])} /><span>{range[0]}–{range[1]} m</span><p>Depth is aligned to rectified left, not RGB. Invalid pixels are unknown.</p>{(depthFrame?.metadata?.timeline_basis === 'controller_receipt' || sourceFrame?.metadata?.timeline_basis === 'controller_receipt') && <p role="status">Sampled archive shown by receipt time. Exposure timing and RGB synchronization are unverified.</p>}</div>}<div className="pl-frame-caption"><span>{state.mode === 'real' && mode === 'live' && source === 'rgb' ? 'Independent RGB preview' : detail.frame?.id || 'No source frame'}</span><span>{detail.frame?.synthetic ? 'Synthetic demonstration' : 'Capture timestamps come from the source'}</span></div></section><Room room={detail.room?.site_id === session?.site_id ? detail.room : null} selected={selected} onSelect={setSelected} /></div>;
     const comparisonsEl = !panels ? null : !hidden ? <div className="pl-comparisons">{['A', 'B'].map((id, i) => {
@@ -1831,7 +1859,7 @@
             })}</div> : <Empty title="Model predictions hidden">Use the source recording to label independently. Show predictions when you are ready to compare.</Empty>;
     // Pipeline detail: the engineering view of the same session.
     const pipelineTab = review && session ? <>
-      <div className="pl-pipe-top"><p>Engineering view of the same session. Nothing here is needed for labelling.</p><span className="pl-flex" /><div className="pl-inline pl-pipe-actions"><Button onClick={async () => {
+      <div className="pl-pipe-top"><p>Engineering view of the same session. Nothing here is needed for labelling.</p><span className="pl-flex" /><div className="pl-inline pl-pipe-actions"><Button disabled={browserReadOnly} title={browserReadOnly ? 'Metadata export is unavailable through this read-only connection.' : undefined} onClick={async () => {
               const r = await action('sessions.export', {
                 session_id: session.id
               });
@@ -1845,8 +1873,8 @@
                 a.click();
                 URL.revokeObjectURL(u);
               }
-            }}>Export metadata manifest</Button><ArchiveExport key={state.siteId+':'+session?.id} session={session} siteId={state.siteId} mode={state.mode} /><Button primary onClick={() => setAnalyze(true)}>Analyze session</Button><Button onClick={() => { C.invalidateProjections?.(session.id); C.open(session.id, undefined, {keepCursor: true}).catch(() => {}); }}>Refresh results</Button><Button disabled={recording} onClick={() => { setEraseRecords(false); setDeleteMedia(true); }}>Delete recording or session</Button></div></div>
-      {detail.jobs?.length > 0 && <div className="pl-analysis-strip">{detail.jobs.map(job => <span key={job.id}>{job.kind}<Badge>{job.state}</Badge>{job.error&&<small>{job.error}</small>}{['requested', 'queued', 'running'].includes(job.state) && <Button disabled={state.pending} onClick={() => action('jobs.cancel', {
+            }}>Export metadata manifest</Button><ArchiveExport key={state.siteId+':'+session?.id} session={session} siteId={state.siteId} mode={state.mode} /><Button requiresWrite primary onClick={() => setAnalyze(true)}>Analyze session</Button><Button onClick={() => { C.invalidateProjections?.(session.id); C.open(session.id, undefined, {keepCursor: true}).catch(() => {}); }}>Refresh results</Button><Button requiresWrite disabled={recording} onClick={() => { setEraseRecords(false); setDeleteMedia(true); }}>Delete recording or session</Button></div></div>
+      {detail.jobs?.length > 0 && <div className="pl-analysis-strip">{detail.jobs.map(job => <span key={job.id}>{job.kind}<Badge>{job.state}</Badge>{job.error&&<small>{job.error}</small>}{['requested', 'queued', 'running'].includes(job.state) && <Button requiresWrite disabled={state.pending} onClick={() => action('jobs.cancel', {
                 job_id: job.id,
                 session_id: session.id
               })}>Cancel</Button>}</span>)}</div>}{detail.runs?.length > 0 && <div className="pl-analysis-strip">{Array.from(new Set(detail.runs.map(r => r.run_id || r.id))).slice(0, 4).map(id => <span key={id}>{COLUMNS.find(c => c[0] === id)?.[1] || id}<Badge>{detail.runs.find(r => (r.run_id || r.id) === id)?.status || 'Unknown'}</Badge></span>)}</div>}
@@ -1873,6 +1901,7 @@
           if (state.error) C.refresh();
         }}>{state.error ? 'Retry' : 'Dismiss'}</Button></div>}
       {opening?.error && <div className="pl-message pl-view-error" role="alert"><span>Could not open “{openingName}”: {opening.error}. Nothing was changed; the recording is still stored.</span><div className="pl-inline"><Button primary onClick={() => openSession(opening.id)}>Try again</Button><Button onClick={() => setOpening(null)}>Dismiss</Button></div></div>}
+      {browserReadOnly&&<p role="status" className="pl-message" id="pl-browser-read-only" data-lab-browser-access="read-only">Read-only browser access · view existing sessions, camera and model results. Recording, model changes and saved edits are unavailable through this connection.</p>}
       {state.status === 'blocked' && <div className="pl-blocked"><b>Live experiment service unavailable</b><p>Configure a provisioned Lab connection to record or run models. The catalog remains available; the developer demo is an explicit separate mode.</p><Button onClick={() => setCatalog(true)}>Browse experiment catalog</Button></div>}
       {state.mode === 'real' && caps && caps.recording_allowed !== true && <details className="pl-readiness"><summary>{recording ? 'New recordings are blocked; the existing session remains visible' : 'Recording is blocked until capture and admission are verified'}</summary>{(Array.isArray(caps.gates) ? caps.gates : []).map(g => <p key={g.id}><b>{g.id}</b>: {g.state} {g.reason || ''}</p>)}<p>Browsing this workspace does not start a model or capture process.</p></details>}
       <div className="pl-scroll">
@@ -1880,7 +1909,7 @@
           <div className="pl-inline"><Button primary disabled={!!startWhy || state.pending} onClick={() => { setFailureSeen(failure.session_id); begin(); }}>Try again</Button><Button onClick={() => setFailureSeen(failure.session_id)}>Dismiss</Button></div></section> :
         mode === 'live' && !D.startFailure && ['worker_busy','worker_preparation_failed','worker_preparation_timeout','worker_preparation_uncertain','insufficient_worker_lease','paired_start_failed'].includes(session?.reason) && <section className="pl-message" role="alert">Comparison could not start: {session.reason.replaceAll('_', ' ')}. Review the session status before starting again.</section>}
       {mode === 'live' && caps?.worker_mode === 'on_demand_bounded' && <section className="pl-source-health" role="status"><div><strong>On-demand paired experiment · up to {caps.storage?.max_session_seconds} seconds</strong><p>Start prepares Jetson and LA, then records both. Stop saves the session and releases the workers. Other experiments remain unavailable until commissioned.</p>{session?.state === 'starting' && <p>Preparing comparison — recording has not started.</p>}</div></section>}
-      {mode === 'live' && <><section className="pl-record-bar" aria-label="Choose a setup, enable reasoning, record"><div className="pl-step pl-step-setup"><span className="pl-label">1 · Setup</span><button className="pl-setup-pick" onClick={() => setCatalog(true)} aria-label={'Setup ' + setupName(exp) + ' · choose a setup'}>{setupName(exp)}<span>⌄</span></button><span className={'pl-setup-state pl-setup-' + expView.group}><Badge warn={!['ready', 'recording'].includes(expView.group)}>{expView.label}</Badge> {recording ? 'Switching appends a comparison segment' : expView.summary}</span><small>Question · {exp.question}</small>{!recording && expView.group === 'blocked' && state.mode === 'real' && <Button onClick={() => C.refresh()}>Check again</Button>}</div><div className="pl-step" aria-label="Live reasoning setting"><span className="pl-label">2 · Reasoning</span><label className="pl-check"><input type="checkbox" checked={recording ? session.reasoning_enabled === true : liveReasoning === true && reasoningOn} disabled={state.pending || !reasoningOn} onChange={e => recording ? action('sessions.switch', {session_id:session.id, reasoning_enabled:e.target.checked, expected_reasoning_revision:session.reasoning_revision}) : setLiveReasoning(e.target.checked)} />Live JEV reasoning</label><span className="pl-muted">{caps?.reasoning?.available ? 'Independent A/B histories. Sends permitted structured evidence only. Turning this off leaves perception and recording running.' : caps?.reasoning?.reason || 'Lab household JEV policy and provider are not provisioned.'}</span></div><div className="pl-step pl-record-action"><span className="pl-label">{recording ? '3 · ' + D.recordingLabel(session) : '3 · Record'}</span>{recording ? <><div className="pl-record-time"><i className="pl-rec-dot" />{D.formatTime(duration)}</div>
+      {mode === 'live' && <><section className="pl-record-bar" aria-label="Choose a setup, enable reasoning, record"><div className="pl-step pl-step-setup"><span className="pl-label">1 · Setup</span><button className="pl-setup-pick" onClick={() => setCatalog(true)} aria-label={'Setup ' + setupName(exp) + ' · choose a setup'}>{setupName(exp)}<span>⌄</span></button><span className={'pl-setup-state pl-setup-' + expView.group}><Badge warn={!['ready', 'recording'].includes(expView.group)}>{expView.label}</Badge> {recording ? 'Switching appends a comparison segment' : expView.summary}</span><small>Question · {exp.question}</small>{!recording && expView.group === 'blocked' && state.mode === 'real' && <Button onClick={() => C.refresh()}>Check again</Button>}</div><div className="pl-step" aria-label="Live reasoning setting"><span className="pl-label">2 · Reasoning</span><label className="pl-check"><input type="checkbox" checked={recording ? session.reasoning_enabled === true : liveReasoning === true && reasoningOn} disabled={browserReadOnly || state.pending || !reasoningOn} onChange={e => recording ? action('sessions.switch', {session_id:session.id, reasoning_enabled:e.target.checked, expected_reasoning_revision:session.reasoning_revision}) : setLiveReasoning(e.target.checked)} />Live JEV reasoning</label><span className="pl-muted">{caps?.reasoning?.available ? 'Independent A/B histories. Sends permitted structured evidence only. Turning this off leaves perception and recording running.' : caps?.reasoning?.reason || 'Lab household JEV policy and provider are not provisioned.'}</span></div><div className="pl-step pl-record-action"><span className="pl-label">{recording ? '3 · ' + D.recordingLabel(session) : '3 · Record'}</span>{recording ? <><div className="pl-record-time"><i className="pl-rec-dot" />{D.formatTime(duration)}</div>
                 {session.reasoning_enabled !== true && <span className="pl-pill pl-pill-warn pl-reasoning-off" role="status">JEV reasoning: off</span>}
                 <BookmarkBar onMark={bookmark} /></> : <div className="pl-inline"><select aria-label="Camera" value={camera} onChange={e => {
                 setCamera(e.target.value);
@@ -1888,7 +1917,7 @@
               }}>{(caps?.cameras || [{
                   id: 'unavailable',
                   name: 'No camera provisioned'
-                }]).map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}</select><input aria-label="Session name" value={name} onChange={e => setName(e.target.value)} placeholder="Optional session name" /></div>}<span className="pl-muted">{recording ? 'Capture continues independently of model inference' : modalities.includes('depth') ? 'OAK-D Pro · stereo depth' : 'RGB · depth not supplied'}</span>{recording ? <Button primary disabled={state.pending} onClick={() => action('sessions.stop', {
+                }]).map(c => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}</select><input aria-label="Session name" value={name} onChange={e => setName(e.target.value)} placeholder="Optional session name" /></div>}<span className="pl-muted">{recording ? 'Capture continues independently of model inference' : modalities.includes('depth') ? 'OAK-D Pro · stereo depth' : 'RGB · depth not supplied'}</span>{recording ? <Button requiresWrite primary disabled={state.pending} onClick={() => action('sessions.stop', {
                 session_id: session.id,
                 expected_revision: session.revision
               })}>Stop & save</Button> : <Button primary disabled={!!startWhy || state.pending} aria-describedby="pl-start-reason" onClick={begin}>Start & record session</Button>}<span className="pl-muted" id="pl-start-reason" role="status">{!recording && startWhy ? startWhy : 'Overlays are not burned in'}</span>{['saved', 'stopped', 'interrupted'].includes(session?.state) && <Button onClick={() => openSession(session.id)}>Open saved session</Button>}</div></section><div className="pl-try"><span className="pl-label">Try this</span>{exp.try_this?.map(task => <label key={task}><input type="checkbox" />{task}</label>)}<span className="pl-muted">or just explore{recording ? ' · bookmark each change with B or the Bookmark button beside the timer' : ''}</span></div><details className="pl-confusers"><summary>Confusing alternatives</summary><div>{D.ALTERNATIVES.map(a => <p key={a}>{a}</p>)}<p>Insufficient evidence is a valid answer when the available signals cannot distinguish these.</p></div></details></>}
@@ -1912,7 +1941,7 @@
         });
         if (r) setNotice(r.error||r.job?.error||'Preparation request accepted. Readiness is reported by the service.');
       }} />}
-      {deleteMedia && <Modal title={eraseRecords ? "Delete this session?" : "Delete recording media?"} onClose={() => setDeleteMedia(false)}><div className="pl-dialog-body"><label className="pl-check"><input type="checkbox" checked={eraseRecords} onChange={e => setEraseRecords(e.target.checked)} />Also delete labels, observations and analysis results</label><p>{eraseRecords ? 'Delete this local session and its recorded evidence, labels and results. A minimal deletion record remains. Sessions with external inference copies are blocked until deletion propagation is available. Exported copies and backups are not recalled.' : 'Delete the stored video, images, and numerical bundles for this session. Labels, results, and audit records remain.'} This cannot be undone.</p><Button primary disabled={state.pending} onClick={async () => {
+      {deleteMedia && <Modal title={eraseRecords ? "Delete this session?" : "Delete recording media?"} onClose={() => setDeleteMedia(false)}><div className="pl-dialog-body"><label className="pl-check"><input type="checkbox" checked={eraseRecords} onChange={e => setEraseRecords(e.target.checked)} />Also delete labels, observations and analysis results</label><p>{eraseRecords ? 'Delete this local session and its recorded evidence, labels and results. A minimal deletion record remains. Sessions with external inference copies are blocked until deletion propagation is available. Exported copies and backups are not recalled.' : 'Delete the stored video, images, and numerical bundles for this session. Labels, results, and audit records remain.'} This cannot be undone.</p><Button requiresWrite primary disabled={state.pending} onClick={async () => {
             const r = await action('sessions.delete', {
               session_id: session.id,
               expected_revision: session.revision,
@@ -1924,7 +1953,7 @@
               setNotice(eraseRecords ? 'Local session deleted. External exports and backups are not recalled.' : 'Recorded media deleted. Labels and audit history are retained.');
             }
           }}>{eraseRecords ? 'Delete session and records' : 'Delete recorded media'}</Button><Button onClick={() => setDeleteMedia(false)}>Keep recording</Button></div></Modal>}
-      {analyze && <Modal title="Analyze session" onClose={() => setAnalyze(false)}><div className="pl-dialog-body"><p>Qwen runs sequentially. Recorded live results remain unchanged.</p>{COLUMNS.slice(2, 5).map(([id, label]) => <div className="pl-analysis-option" key={id}>{label}<small>{id === 'qBase' ? 'Sampled RGB + as-of HA state' : 'Same inputs plus recorded perception evidence'}</small></div>)}<label className="pl-check" title="Qwen-assisted JEV not implemented yet"><input type="checkbox" checked={false} disabled aria-describedby="pl-qjev-reason" />Also run Qwen-assisted JEV <small id="pl-qjev-reason">Qwen-assisted JEV not implemented yet; the service would reject the whole analysis job.</small></label><label className="pl-check"><input type="radio" name="pl-analysis-mode" checked={!retro} onChange={() => setRetro(false)} />As the session unfolded</label><label className="pl-check"><input type="radio" name="pl-analysis-mode" checked={retro} onChange={() => setRetro(true)} />Retrospective · may use future evidence</label><p className="pl-muted">Human labels are excluded. Replay itself never runs inference.</p><Button primary disabled={state.pending} onClick={async () => {
+      {analyze && <Modal title="Analyze session" onClose={() => setAnalyze(false)}><div className="pl-dialog-body"><p>Qwen runs sequentially. Recorded live results remain unchanged.</p>{COLUMNS.slice(2, 5).map(([id, label]) => <div className="pl-analysis-option" key={id}>{label}<small>{id === 'qBase' ? 'Sampled RGB + as-of HA state' : 'Same inputs plus recorded perception evidence'}</small></div>)}<label className="pl-check" title="Qwen-assisted JEV not implemented yet"><input type="checkbox" checked={false} disabled aria-describedby="pl-qjev-reason" />Also run Qwen-assisted JEV <small id="pl-qjev-reason">Qwen-assisted JEV not implemented yet; the service would reject the whole analysis job.</small></label><label className="pl-check"><input type="radio" name="pl-analysis-mode" checked={!retro} onChange={() => setRetro(false)} />As the session unfolded</label><label className="pl-check"><input type="radio" name="pl-analysis-mode" checked={retro} onChange={() => setRetro(true)} />Retrospective · may use future evidence</label><p className="pl-muted">Human labels are excluded. Replay itself never runs inference.</p><Button requiresWrite primary disabled={state.pending} onClick={async () => {
             const r = await action('jobs.create', {
               kind: 'analysis',
               session_id: session.id,
@@ -1936,7 +1965,7 @@
       {diagnose && <Modal title="Diagnose this moment" onClose={() => {
         setDiagnose(false);
         setDiagnostic(null);
-      }}><div className="pl-dialog-body"><Badge warn>Diagnostic · excluded from scores</Badge><p>Correct one observed fact in a copy of the original packet. The original result and labels remain unchanged.</p><label>Corrected fact<textarea value={fact} onChange={e => setFact(e.target.value)} placeholder="For example: the object near the hands is a phone." /></label><Button primary disabled={!fact.trim() || state.pending} onClick={async () => {
+      }}><div className="pl-dialog-body"><Badge warn>Diagnostic · excluded from scores</Badge><p>Correct one observed fact in a copy of the original packet. The original result and labels remain unchanged.</p><label>Corrected fact<textarea value={fact} onChange={e => setFact(e.target.value)} placeholder="For example: the object near the hands is a phone." /></label><Button requiresWrite primary disabled={!fact.trim() || state.pending} onClick={async () => {
             const r = await action('diagnostics.create', {
               session_id: session.id,
               t_s: t,
@@ -1949,11 +1978,19 @@
   }
   function RecordingBanner({
     onOpen,
-    labOpen
+    labOpen,
+    inline = false
   }) {
     const s = useLab(),
       rec = s.sessions.find(D.isRecording) || (D.isRecording(s.detail?.session) ? s.detail.session : null);
     if (!rec || labOpen) return null;
+    if (inline) {
+      const label = (s.mode === 'demo' ? 'Demo ' : '') + D.recordingLabel(rec) + ' ' + D.formatTime(D.seconds(rec));
+      return <div className="pl-inline-recording"><button type="button" className="apt-ui-button" onClick={onOpen}
+        aria-label={'Open Perception Lab · ' + label} title={label + ' · continues while you use Home'}>
+        <i className="pl-rec-dot" aria-hidden="true" /><span>Lab</span><span className="pl-inline-recording-detail">{label}</span>
+      </button></div>;
+    }
     return <div className="pl-global-recording"><i className="pl-rec-dot" /><strong>{s.mode === 'demo' ? 'Demo ' + D.recordingLabel(rec).toLowerCase() : D.recordingLabel(rec)} {D.formatTime(D.seconds(rec))}</strong><span>Perception Lab continues while you use Home.</span><Button onClick={onOpen}>Back to Perception Lab</Button></div>;
   }
   // Internal components for contract tests only; not a public surface.

@@ -49,7 +49,7 @@ function browserOptions() {
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-test('real authored room inspector preserves named aims and modeled channel bindings without output', { timeout: 180000 }, async () => {
+test('real authored room inspector preserves named aims and modeled channel bindings without output', { timeout: 145000 }, async () => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'proof serves only this worktree');
   const run = path.join(ROOT, '.tmp/apartment-room-inspector-browser', 'run-' + Date.now());
   fs.mkdirSync(run, { recursive: true });

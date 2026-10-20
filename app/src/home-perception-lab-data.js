@@ -2578,6 +2578,10 @@
       return entry.done;
     }
     async function action(op, args = {}) {
+      if (state.mode === 'real' && state.capabilities?.browser_access?.write === false && op !== 'sessions.export') {
+        patch({error:'This browser connection is read-only. Existing sessions and results remain available.'});
+        throw Error('lab_browser_read_only');
+      }
       if (state.pending) throw Error("Another operation is pending");
       const generation = state.generation;
       patch({

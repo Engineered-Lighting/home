@@ -22,6 +22,7 @@ import { createPrecompiledManifestVerifier } from "./precompiled-jsx.mjs";
 import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
+import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -1821,6 +1822,52 @@ const equipmentRegistrationHandler = createEquipmentRegistrationGateway({
   env: { ...process.env, HOME_CONTENT_PACKS_DIR: CONTENT_PACKS_DIR }, authenticate: req => hasValidAuth(req).ok, readOnly: true,
 });
 
+// Explicit, server-only Victoria read configuration. Never inherit the stack
+// or record/admin token. Pin the CA at startup; reread only the bounded private
+// read grant so a reviewed credential rotation does not enter renderer assets.
+function readLabConfigFile(filename, maximum, secret = false) {
+  if (!path.isAbsolute(filename || "")) throw new Error("lab_file_unavailable");
+  let cursor = path.parse(filename).root;
+  for (const part of filename.slice(cursor.length).split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error("lab_file_unavailable");
+  }
+  const fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile() || before.nlink !== 1 || before.size < 1 || before.size > maximum
+      || process.platform !== "win32" && ((before.mode & (secret ? 0o077 : 0o022)) !== 0
+        || before.uid !== process.getuid() && (secret || before.uid !== 0))) throw new Error("lab_file_unavailable");
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (!read) throw new Error("lab_file_unavailable");
+      offset += read;
+    }
+    const after = fs.fstatSync(fd);
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || after.nlink !== 1)
+      throw new Error("lab_file_unavailable");
+    return bytes;
+  } finally { fs.closeSync(fd); }
+}
+let denLabCa = null;
+try { denLabCa = readLabConfigFile(process.env.HOME_WEB_DEN_LAB_CA_FILE, 65536); } catch { /* Missing configuration refuses at the route. */ }
+const perceptionLabReadHandler = createPerceptionLabReadHandler({
+  origin: process.env.HOME_WEB_DEN_LAB_ORIGIN, ca: denLabCa,
+  credential: () => readLabConfigFile(process.env.HOME_WEB_DEN_LAB_READ_TOKEN_FILE, 1024, true).toString("utf8").trim(),
+  authenticate: req => hasValidAuth(req).ok, timeoutMs: 5000, maxConcurrent: 4,
+});
+function labReadOriginAllowed(req) {
+  if (["same-site", "cross-site"].includes(req.headers["sec-fetch-site"])) return false;
+  if (!req.headers.origin) return true;
+  try {
+    const origin = new URL(req.headers.origin);
+    return ["http:", "https:"].includes(origin.protocol) && origin.origin === req.headers.origin
+      && origin.host === String(req.headers.host || "").toLowerCase();
+  } catch { return false; }
+}
+
 if (process.argv.includes("--check")) {
   process.exit(checkConfig() ? 0 : 1);
 }
@@ -1917,6 +1964,11 @@ const server = http.createServer({
   }
 
   if (!requireAuth(req, res)) return;
+  if ((parsed.pathname === PERCEPTION_LAB_PREFIX || parsed.pathname.startsWith(PERCEPTION_LAB_PREFIX + "/"))
+    && !labReadOriginAllowed(req)) {
+    sendJson(res, 403, { error: { code: "lab_origin_denied" } }); return;
+  }
+  if (perceptionLabReadHandler(req, res)) return;
   if (lightingLayerHandler(req, res) || contentPackHandler(req, res)) return;
   if (await equipmentRegistrationHandler(req, res)) return;
   if (parsed.pathname === "/api/home/location") {

@@ -4,6 +4,31 @@
   "home": "victoria",
   "room": "den",
   "generated_at": 1800000000,
+  "state_revision": 7,
+  "decision_id": "synthetic-brain:3",
+  "reading_evidence": {
+    "bound": true,
+    "activity_valid_until": 1800000010,
+    "pose_valid_until": 1800000010,
+    "activity": {
+      "schema": "den-sole-reader-source-1", "status": "available", "reason": null,
+      "session_id": "synthetic-recording", "generation": 1,
+      "capture_epoch": "synthetic-camera", "engine_epoch": "synthetic-engine",
+      "reader_epoch": "synthetic-reader", "interval_start": 1799999900,
+      "instance_id": "synthetic-person", "source_frame_id": "synthetic-frame",
+      "source_request_id": "synthetic-request", "source_event_id": 101,
+      "observed_at": 1799999998.8, "available_at": 1799999999, "valid_until": 1800000010
+    },
+    "pose": {
+      "schema": "den-sole-reader-source-1", "status": "available", "reason": null,
+      "session_id": "synthetic-recording", "generation": 1,
+      "capture_epoch": "synthetic-camera", "engine_epoch": "synthetic-engine",
+      "reader_epoch": "synthetic-reader", "interval_start": 1799999900,
+      "instance_id": "synthetic-person", "source_frame_id": "synthetic-frame",
+      "source_request_id": "synthetic-request", "source_event_id": 101,
+      "observed_at": 1799999998.8, "available_at": 1799999999, "valid_until": 1800000010
+    }
+  },
   "brain": "online",
   "mode": "reading",
   "why": "Reading at sofa · spotlight on",

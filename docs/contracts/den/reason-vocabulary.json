@@ -35,11 +35,14 @@
       "codes": [
         {"code": "online", "text": "Brain online"},
         {"code": "connecting", "text": "Connecting to the lighting brain"},
-        {"code": "offline", "text": "Brain offline · holding the last state", "severity": "warn"},
+        {"code": "offline", "text": "Brain offline · automatic following stopped", "severity": "warn"},
         {"code": "stopped", "text": "Brain not connected"},
         {"code": "heartbeat_missed", "text": "No update from the brain for 15 s", "severity": "warn"},
         {"code": "state_unreachable", "text": "Brain unreachable", "severity": "warn"},
         {"code": "stream_unavailable", "text": "Live updates unavailable", "severity": "warn"},
+        {"code": "stream_disconnected", "text": "Live updates disconnected", "severity": "warn"},
+        {"code": "state_expired", "text": "Brain or source evidence expired", "severity": "warn"},
+        {"code": "state_reading_evidence_unbound", "text": "Reading evidence unavailable", "severity": "warn"},
         {"pattern": "state_http_{n}", "text": "Brain answered with an error", "severity": "warn"},
         {"pattern": "brain_{state}", "text": "Brain reports it is not online", "severity": "warn"}
       ]
@@ -54,6 +57,10 @@
         {"code": "state_schema_unsupported", "text": "Brain state version not supported"},
         {"code": "state_scope_mismatch", "text": "Brain state is for another room"},
         {"code": "state_generated_at_invalid", "text": "Brain state has no valid time"},
+        {"code": "state_revision_invalid", "text": "Brain state revision invalid"},
+        {"code": "state_decision_id_invalid", "text": "Brain decision identity invalid"},
+        {"code": "state_reading_evidence_unbound", "text": "Reading evidence unavailable"},
+        {"code": "state_expired", "text": "Brain or source evidence expired"},
         {"code": "state_header_invalid", "text": "Brain state header invalid"},
         {"code": "state_fixtures_incomplete", "text": "Brain state is missing fixtures"},
         {"code": "state_fixtures_duplicate", "text": "Brain state repeats a fixture"},
@@ -104,7 +111,7 @@
     },
     {
       "id": "activity_loop.health",
-      "source": "activity loop (AL-3) `health` event `detail`, per component (jev, deep_stack, camera)",
+      "source": "activity loop (AL-3) `health` event `detail`, per component (jev, deep_stack, camera, position)",
       "codes": [
         {"code": "jev_starting", "component": "jev", "text": "JEV starting"},
         {"code": "jev_failed", "component": "jev", "text": "JEV request failed", "severity": "warn"},
@@ -116,6 +123,8 @@
         {"code": "deep_stack_no_recent_output", "component": "deep_stack", "text": "Deep sensing has no recent output", "severity": "warn"},
         {"code": "camera_no_viewing_source", "component": "camera", "text": "Den camera not connected", "severity": "warn"},
         {"code": "camera_no_frames_yet", "component": "camera", "text": "Waiting for the first camera frame"},
+        {"code": "position_not_started", "component": "position", "text": "Position sensing has not started"},
+        {"code": "position_disabled", "component": "position", "text": "Position sensing is disabled"},
         {"code": "not_reported", "text": "Not reported yet"},
         {"code": "paused_room_empty", "text": "Paused while the room is empty"},
         {"code": "stopped_operator_stop", "text": "Stopped by the operator"},

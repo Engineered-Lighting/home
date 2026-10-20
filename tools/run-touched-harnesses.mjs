@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* ===================================================================== * run-touched-harnesses.mjs â€” run the test harnesses that guard the files
+/* ===================================================================== * run-touched-harnesses.mjs — run the test harnesses that guard the files
  * touched by a diff.
  *
  * The tools/run-*.js harnesses and explicitly mapped Node test suites guard
@@ -35,10 +35,15 @@ import { fileURLToPath } from "node:url";
 const TOOLS = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(TOOLS, "..");
 
-/* file-pattern â†’ harnesses that pin or exercise it. Patterns are tested with
+/* file-pattern → harnesses that pin or exercise it. Patterns are tested with
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^(?:app\/src\/(?:home-apartment\.jsx|home-3d\/(?:engine\.js|equipment-virtual-fixtures\.mjs|lighting-render-evidence\.mjs))|docs\/contracts\/den\/fixtures\/brain-state-reading\.json|tools\/test-den-lighting-render-evidence\.mjs)$/, ["test-den-lighting-render-evidence.mjs", "test-apartment-lighting-brain.mjs", "test-apartment-connected-view-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-app\.jsx|home-tokens\.css|home-apartment(?:\.jsx|-den-perception\.jsx|-camera\.jsx|-camera-source\.js|-perception-(?:source|player|view|dock-model)\.js)|home-den-lab-stream\.js|home-feature-loader\.js|home-perception-lab(?:\.jsx|-graph\.jsx|-data\.js|-transport\.js)|home-lighting-brain-(?:client|follower)\.js|home-3d\/apartment-perception-layer\.mjs)|tools\/(?:test-apartment-connected-view-browser\.mjs|fixtures\/apartment-connected-view\.json))$/, ["test-apartment-connected-view-browser.mjs"]],
+  [/^(?:app\/src\/home-apartment-perception-view\.js|tools\/test-home-apartment-perception-view\.cjs)$/, ["test-home-apartment-perception-view.cjs"]],
+  [/^(?:web-gateway\/(?:server|perception-lab-route)\.mjs|tools\/test-web-gateway-(?:perception-lab|lab-mounted)\.mjs)$/, ["test-web-gateway-perception-lab.mjs", "test-web-gateway-lab-mounted.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment-perception-source|home-perception-lab-transport)\.js|tools\/test-(?:apartment-perception-source\.cjs|perception-lab-transport\.mjs))$/, ["test-apartment-perception-source.cjs", "test-perception-lab-transport.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:frame|display)\.mjs|tools\/test-lit-frame-lifecycle\.mjs)$/, ["test-lit-frame-lifecycle.mjs"]],
   [/^tools\/(?:bench-lit-receivers-browser|lib\/lit-webgpu-timestamp-benchmark|test-lit-webgpu-timestamp-benchmark)\.mjs$/, ["test-lit-webgpu-timestamp-benchmark.mjs"]],
   [/^tools\/(?:fixtures\/apartment-lit-layer-fixtures|test-lit-layer-fixture-memoization)\.mjs$/, ["test-lit-layer-fixture-memoization.mjs"]],
@@ -47,7 +52,7 @@ const MAP = [
   [/^(?:app\/src\/(?:home-app|home-people)\.jsx|tools\/test-home-full-ui-people-browser\.mjs)$/, ["test-home-full-ui-people-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-intelligence)\.jsx|tools\/test-home-full-ui-intelligence-browser\.mjs)$/, ["test-home-full-ui-intelligence-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-perception-lab)\.jsx|tools\/test-home-full-ui-lab-browser\.mjs)$/, ["test-home-full-ui-lab-browser.mjs"]],
-  [/^tools\/fixtures\/home-full-ui-harness\.mjs$/, ["test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-lab-browser.mjs"]],
+  [/^tools\/fixtures\/home-full-ui-harness\.mjs$/, ["test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs"]],
   [/^(?:web-gateway\/(?:server|content-pack-route|equipment-registration|lighting-layer)\.mjs|tools\/test-web-gateway-(?:content-pack-route|installed-content|lighting-layer)\.mjs)$/, ["test-web-gateway-content-pack-route.mjs", "test-web-gateway-installed-content.mjs", "test-web-gateway-lighting-layer.mjs"]],
   [/^app\/src\/(?:home-app\.jsx|home-apartment-data\.js)$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs", "run-control-card-tests.js", "run-simulation-control-tests.js"]],
   [/^tools\/test-chat-(?:output-refusal|service-envelope)\.cjs$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs"]],
@@ -227,6 +232,11 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
  * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
 const SHARD_WEIGHT_S = {
+  "test-apartment-connected-view-browser.mjs": 90,
+  "test-home-full-ui-people-browser.mjs": 35,
+  "test-home-full-ui-intelligence-browser.mjs": 35,
+  "test-home-full-ui-metrics-browser.mjs": 35,
+  "test-home-full-ui-lab-browser.mjs": 35,
   "test-apartment-lit-webgpu-browser-part4.mjs": 130,
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
@@ -419,14 +429,14 @@ const source = {
   changed_files: files.map((f) => f.replace(/\\/g, "/")).sort(),
 };
 
-console.log(`[touched-harnesses] ${args.all ? "(--all)" : files.length + " changed files"} â†’ ${list.length} harnesses${touchedAppSrc ? " + check-jsx" : ""}`);
+console.log(`[touched-harnesses] ${args.all ? "(--all)" : files.length + " changed files"} → ${list.length} harnesses${touchedAppSrc ? " + check-jsx" : ""}`);
 
 if (args.verifyReceipts) process.exit(verifyReceipts(args.verifyReceipts, args.shards));
 
 const shardPlan = args.shard ? partitionPlan(plan, args.shard.count)[args.shard.index - 1] : plan;
 if (args.shard) {
   const weight = items => items.reduce((sum, name) => sum + shardWeight(name), 0);
-  console.log(`[touched-harnesses] shard ${args.shard.index}/${args.shard.count} â†’ ${shardPlan.length} of ${plan.length} plan items (~${weight(shardPlan)}s of ~${weight(plan)}s measured)`);
+  console.log(`[touched-harnesses] shard ${args.shard.index}/${args.shard.count} → ${shardPlan.length} of ${plan.length} plan items (~${weight(shardPlan)}s of ~${weight(plan)}s measured)`);
 }
 const results = [];
 function finish(code) {
@@ -441,11 +451,11 @@ function finish(code) {
 }
 
 if (!plan.length) {
-  console.log("[touched-harnesses] nothing mapped â€” done");
+  console.log("[touched-harnesses] nothing mapped — done");
   finish(0);
 }
 if (!shardPlan.length) {
-  console.log("[touched-harnesses] this shard has no plan items â€” done");
+  console.log("[touched-harnesses] this shard has no plan items — done");
   finish(0);
 }
 
@@ -493,7 +503,7 @@ if (runCheckJsx && !args.list) {
     status = "fail";
   }
 
-  // home-3d/ and home-agent/ are real ES modules â€” check-jsx's Function-based
+  // home-3d/ and home-agent/ are real ES modules — check-jsx's Function-based
   // parse can't read them; node --check can.
   const esmFiles = files
     .map((f) => f.replace(/\\/g, "/"))

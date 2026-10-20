@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runFullUiShell } from './fixtures/home-full-ui-harness.mjs';
 
-test('full Home: Metrics reads populated service data while the room stays mounted, on desktop and phone', { timeout: 180000 }, async () => {
+test('full Home: Metrics reads populated service data while the room stays mounted, on desktop and phone', { timeout: 145000 }, async () => {
   await runFullUiShell('home-full-ui-metrics-browser', async ({ page, openShell, menu, state, calls, sockets, checks, viewports, inViewport }) => {
     await openShell();
     for (const viewport of viewports) {

@@ -14,7 +14,7 @@ import { installSetupRooms, startSetupServer, openSetupContext, browserOptions, 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-test('Map a named aim on Echo: fit the desk, check, reach, preview, handles, save, edit, Escape and delete', { timeout: 200000 }, async () => {
+test('Map a named aim on Echo: fit the desk, check, reach, preview, handles, save, edit, Escape and delete', { timeout: 145000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-named-aims-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const glb = deskRoomGlb();
   const rooms = installSetupRooms(run, { echoModel: deskEchoModel, echoOverrides: { 'mesh.glb': glb, 'collision.glb': glb } });
@@ -23,7 +23,7 @@ test('Map a named aim on Echo: fit the desk, check, reach, preview, handles, sav
     physical_commands: 0, checks: [], browser: browserOptions() };
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   let server, browser, timer;
-  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('170s named-aim browser deadline')); }, 170000); });
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('145s named-aim browser deadline')); }, 145000); });
   const check = async (name, operation) => { receipt.current_stage = name; save(); receipt.checks.push({ name, ...(await operation()) }); save(); };
   async function proof() {
     server = await startSetupServer(rooms);

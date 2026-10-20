@@ -5326,19 +5326,28 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     virtualFixtureBindingKey, virtualSpotlightsVisible, editing, calibCam, liveOn, spatialScale]);
 
   // Always on while the Victoria view shows the registered fixtures. Brain
-  // offline holds the last applied state; physical output is never involved.
+  // offline preserves ambient and disables automatic spots. Physical output
+  // is never involved. Timing diagnostics are explicit and stay off normally.
   useEffect(() => {
     const engine = engineRef.current, Follower = window.HomeLightingBrainFollower, Client = window.HomeLightingBrainClient;
     if (!open || phase !== "ready" || !virtualFixtureBindingKey || rehearsalIsolated || !Follower || !Client
         || !engine?.overlay?.setVirtualFixtureState || typeof window.fetch !== "function") {
       setLightingBrain(null); return undefined;
     }
+    const lightingDiagnostics = new URLSearchParams(window.location.search).get("den-lighting-evidence") === "1";
     const following = Follower.createBrainFollowing({ Client, fetch: window.fetch.bind(window), EventSource: window.EventSource,
       setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id),
       getOverlay: () => engineRef.current === engine ? engine.overlay : null,
+      diagnostics: lightingDiagnostics,
+      requestRenderEvidence: context => engine.requestLightingRenderEvidence?.(context),
       onChange: setLightingBrain,
       onApplied: () => { if (engineRef.current === engine) syncVirtualFixturePreview(engine); } });
     lightingBrainRef.current = following;
+    const diagnosticApi = lightingDiagnostics ? Object.freeze({
+      readback: () => following.follower.diagnosticReadback(),
+      annotate: annotation => following.follower.annotateActivity(annotation),
+    }) : null;
+    if (diagnosticApi) window.HomeDenLightingEvidence = diagnosticApi;
     // AL-5 monitor banner: polled while visible; a failed read shows nothing.
     const ops = Client.createOpsStatusPoller({ fetch: window.fetch.bind(window),
       setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id),
@@ -5350,6 +5359,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       document.removeEventListener("visibilitychange", visible);
       ops.stop(); setDenOpsBanner(null);
       following.dispose();
+      if (window.HomeDenLightingEvidence === diagnosticApi) delete window.HomeDenLightingEvidence;
       if (lightingBrainRef.current === following) lightingBrainRef.current = null;
     };
   }, [open, phase, virtualFixtureBindingKey, rehearsalIsolated]);

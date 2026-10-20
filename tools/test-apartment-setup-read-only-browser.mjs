@@ -19,14 +19,14 @@ const require = createRequire(import.meta.url), { chromium } = require('playwrig
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTRATION = '**/api/apartment/v1/sites/victoria/maps/victoria-den/rooms/den/registration';
 
-test('Setup opens read-only on a read-only home, explains itself where it cannot open, and Escape closes the Home menu', { timeout: 200000 }, async () => {
+test('Setup opens read-only on a read-only home, explains itself where it cannot open, and Escape closes the Home menu', { timeout: 145000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-setup-read-only-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const rooms = installSetupRooms(run), registration = hash(fs.readFileSync(rooms.registrationFile));
   const receipt = { schema: 'home-apartment-setup-read-only-browser-1', authored_room: true, household_data: false, screenshots: false,
     saves: 0, physical_commands: 0, checks: [], browser: browserOptions() };
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   let server, browser, timer;
-  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('170s read-only Setup deadline at: ' + receipt.current_stage)); }, 170000); });
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('145s read-only Setup deadline at: ' + receipt.current_stage)); }, 145000); });
   const check = async (name, operation) => { receipt.current_stage = name; save(); receipt.checks.push({ name, ...(await operation()) }); save(); };
   async function proof() {
     server = await startSetupServer(rooms);

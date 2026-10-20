@@ -281,7 +281,7 @@ function fixture({ mode = 'zones' } = {}) {
     directionalView: null, directionalViewRef: { current: null }, directionalProjectRef: { current: null },
     virtualFixturePreviewDirtyRef: { current: false }, publishVirtualFixturePreviewRef: { current: null },
     radialReadout: null, radialGestureActive: false, anchors: {},
-    virtualFixtureStatesRef: { current: { states: new Map(), targets: new Map() } }, denDeskAimPreviewRef: { current: null },
+    virtualFixtureStatesRef: { current: { states: new Map(), targets: new Map() } }, denDeskAimPreviewRef: { current: null }, lightingBrainRef: { current: null }, releaseFixtureForHandChange: () => {},
     virtualAimHistoryRef: { current: { undo: [{ authored: 'previous aim' }], redo: [] } },
     virtualFixtureBindingKey: JSON.stringify(binding), hoverId: null, cardId: null, semanticDevicesForRoom: [],
     setVirtualFixturePreview: value => { state.previewPublications++; values.virtualFixtureItems = value.fixtures; },

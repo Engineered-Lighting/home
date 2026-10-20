@@ -73,7 +73,7 @@ check("without the filters, visible-floor taps land on the ceiling", onCeiling >
 check("without the filters, taps along the crack find no surface", missed > 0, String(missed));
 
 /* ---- the fix ------------------------------------------------------------------ */
-const fixed = floorTaps.map(tap => ({ tap, hit: picking.surfaceHit(root, [collision], tap.x, tap.y, { rejectHit: filters.rejectHit, floorGap: filters.floorGap }) }));
+const fixed = floorTaps.map(tap => ({ tap, hit: picking.surfaceHitUnderCutaway(root, [collision], tap.x, tap.y, { rejectHit: filters.rejectHit, floorGap: filters.floorGap }) }));
 const wrong = fixed.filter(({ hit }) => !hit || Math.abs(hit.point[2]) > 0.02 || hit.normal[2] < 0.7);
 check("100% of visible-floor taps resolve to the floor under the cut-away", wrong.length === 0,
   `${wrong.length}/${fixed.length} wrong, e.g. ${JSON.stringify(wrong.slice(0, 2).map(({ tap, hit }) => [tap.x, tap.y, hit?.point]))}`);
@@ -83,40 +83,28 @@ const bridged = fixed.filter((_, index) => !plain[index]);
 check("every tap that fell through the crack now resolves to the floor", bridged.length === missed && bridged.every(({ hit }) => hit && Math.abs(hit.point[2]) < .02),
   `${bridged.length} of ${missed}`);
 
-const allFiltered = grid.map(([x, y]) => picking.surfaceHit(root, [collision], x, y, { rejectHit: filters.rejectHit, floorGap: filters.floorGap }));
+const allFiltered = grid.map(([x, y]) => picking.surfaceHitUnderCutaway(root, [collision], x, y, { rejectHit: filters.rejectHit, floorGap: filters.floorGap }));
 check("the ceiling is ignored under the cut-away (walls may still reach the band)", allFiltered.every(hit => !hit || hit.point[2] < filters.ceilingZ || Math.abs(hit.normal[2]) < .1)
   && allFiltered.some(hit => hit && hit.point[2] >= filters.ceilingZ));
 const deskTop = (() => {
   const p = root.localToWorld(new THREE.Vector3(3.5, 1.5, 0.75)).project(camera);
   return [Math.round((p.x + 1) * 400), Math.round((1 - p.y) * 300)];
 })();
-const deskHit = picking.surfaceHit(root, [collision], ...deskTop, { rejectHit: filters.rejectHit, floorGap: filters.floorGap });
+const deskHit = picking.surfaceHitUnderCutaway(root, [collision], ...deskTop, { rejectHit: filters.rejectHit, floorGap: filters.floorGap });
 check("furniture tops stay pickable", deskHit && Math.abs(deskHit.point[2] - 0.75) < 1e-6, JSON.stringify(deskHit?.point));
 const wallPoint = root.localToWorld(new THREE.Vector3(1.5, 4, 1.4)).project(camera);
-const wallHit = picking.surfaceHit(root, [collision], Math.round((wallPoint.x + 1) * 400), Math.round((1 - wallPoint.y) * 300),
+const wallHit = picking.surfaceHitUnderCutaway(root, [collision], Math.round((wallPoint.x + 1) * 400), Math.round((1 - wallPoint.y) * 300),
   { rejectHit: filters.rejectHit, floorGap: filters.floorGap });
 check("kept walls stay pickable", wallHit && Math.abs(wallHit.point[1] - 4) < 1e-6 && Math.abs(wallHit.normal[2]) < .1, JSON.stringify(wallHit?.point));
 
 /* ---- without the cut-away: unchanged ------------------------------------------ */
-// The previous algorithm: the first accepted hit, normal facing the ray.
-function previousSurfaceHit(x, y, acceptPoint = null) {
-  const hits = picking.pick([collision], x, y);
-  for (const candidate of hits) {
-    if (!candidate.point) continue;
-    const local = root.worldToLocal(candidate.point.clone());
-    if (acceptPoint && !acceptPoint([local.x, local.y, local.z])) continue;
-    const normal = candidate.face.normal.clone().transformDirection(candidate.object.matrixWorld);
-    if (normal.dot(picking.raycaster.ray.direction) > 0) normal.negate();
-    normal.applyQuaternion(root.getWorldQuaternion(new THREE.Quaternion()).invert()).normalize();
-    return { point: [local.x, local.y, local.z], normal: [normal.x, normal.y, normal.z], object: candidate.object };
-  }
-  return null;
-}
 const strip = hit => hit && { point: hit.point, normal: hit.normal, object: hit.object.uuid };
 const keepFront = point => point[1] > 0.5;
-const same = grid.every(([x, y]) => JSON.stringify(strip(picking.surfaceHit(root, [collision], x, y))) === JSON.stringify(strip(previousSurfaceHit(x, y)))
-  && JSON.stringify(strip(picking.surfaceHit(root, [collision], x, y, { acceptPoint: keepFront }))) === JSON.stringify(strip(previousSurfaceHit(x, y, keepFront))));
-check("without the cut-away filters every pick is exactly the previous result", same);
+const same = grid.every(([x, y]) => JSON.stringify(strip(picking.surfaceHitUnderCutaway(root, [collision], x, y))) === JSON.stringify(strip(picking.surfaceHit(root, [collision], x, y)))
+  && JSON.stringify(strip(picking.surfaceHitUnderCutaway(root, [collision], x, y, { acceptPoint: keepFront }))) === JSON.stringify(strip(picking.surfaceHit(root, [collision], x, y, { acceptPoint: keepFront }))));
+check("with no filters the cut-away pick equals surfaceHit exactly", same);
+const pickingSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../app/src/home-3d/picking.js"), "utf8");
+check("surfaceHit itself is unchanged", pickingSource.includes("surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false } = {}) {" + String.fromCharCode(10) + "            const hits = this.pick(objects || [], clientX, clientY, { doubleSided });"));
 check("pick() bounds are untouched by the gap search", picking.raycaster.near === 0 && picking.raycaster.far === Infinity);
 
 /* ---- filter rules ---------------------------------------------------------------- */
@@ -130,9 +118,10 @@ check("unusable bounds give no filters", cutawayPickFilters({ floorZ: 0, topZ: 0
 const engineSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../app/src/home-3d/engine.js"), "utf8");
 const method = engineSource.slice(engineSource.indexOf("        displaySurfaceHit(clientX, clientY) {"));
 const body = method.slice(0, method.indexOf("\n        },") + 10);
-check("the engine applies the filters only while the cut-away is enabled",
-  /const filters = policy\?\.enabled \? collisionCutawayFilters\(collision\) : null;/.test(body)
-  && /\.\.\.\(filters \? \{ rejectHit: filters\.rejectHit, floorGap: filters\.floorGap \} : \{\}\)/.test(body)
-  && /acceptPoint: point => cutawayM\.dollhouseKeep\(point, policy\) > \.05/.test(body));
+check("the engine uses the cut-away pick only while the cut-away is enabled, else plain surfaceHit",
+  body.includes("const filters = policy?.enabled ? collisionCutawayFilters(collision) : null;")
+  && body.includes("if (!filters) return picking.surfaceHit(apartmentRoot, [collision], clientX, clientY, { acceptPoint });")
+  && body.includes("return picking.surfaceHitUnderCutaway(apartmentRoot, [collision], clientX, clientY, {")
+  && body.includes("const acceptPoint = point => cutawayM.dollhouseKeep(point, policy) > .05;"));
 
 process.stdout.write(`\n${passed} passed\n`);

@@ -866,10 +866,11 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             const collision = modes.getCollision?.();
             if (!collision) return null;
             const policy = modes.debugInfo?.().dollhouseCutaway;
+            const acceptPoint = point => cutawayM.dollhouseKeep(point, policy) > .05;
             const filters = policy?.enabled ? collisionCutawayFilters(collision) : null;
-            return picking.surfaceHit(apartmentRoot, [collision], clientX, clientY, {
-                acceptPoint: point => cutawayM.dollhouseKeep(point, policy) > .05,
-                ...(filters ? { rejectHit: filters.rejectHit, floorGap: filters.floorGap } : {}),
+            if (!filters) return picking.surfaceHit(apartmentRoot, [collision], clientX, clientY, { acceptPoint });
+            return picking.surfaceHitUnderCutaway(apartmentRoot, [collision], clientX, clientY, {
+                acceptPoint, rejectHit: filters.rejectHit, floorGap: filters.floorGap,
             });
         },
         /* The aim chip's ray from a light to an aim point (picking.beamPath),

@@ -174,10 +174,43 @@ export function createPicking(camera, hostEl) {
          * normal are both converted back into the shared Z-up apartment
          * frame, so edit tools can place horizontal work surfaces and
          * vertical art/custom aim planes directly on the runtime mesh. */
-        /* `rejectHit({ point, normal, eye }, candidate)` and `floorGap` are
-         * opt-in (see cutawayPickFilters); without them the result is exactly
-         * the first accepted hit, as before. */
-        surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false, rejectHit = null, floorGap = null } = {}) {
+        surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false } = {}) {
+            const hits = this.pick(objects || [], clientX, clientY, { doubleSided });
+            apartmentRoot.updateMatrixWorld(true);
+            // Presentation filtering chooses a visible deeper face without
+            // modifying the collision mesh used for independent world queries.
+            let hit = null, point = null;
+            for (const candidate of hits) {
+                if (!candidate.point) continue;
+                const local = apartmentRoot.worldToLocal(candidate.point.clone());
+                if (acceptPoint && !acceptPoint([local.x, local.y, local.z], candidate)) continue;
+                hit = candidate; point = local; break;
+            }
+            if (!hit) return null;
+            hit.object.updateMatrixWorld(true);
+            let normal = new THREE.Vector3(0, 0, 1);
+            if (hit.face?.normal) {
+                normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+                // Double-sided scan triangles have mixed winding. Use the
+                // geometric normal facing the viewing ray, as Three does.
+                if (normal.dot(raycaster.ray.direction) > 0) normal.negate();
+                const rootQ = new THREE.Quaternion();
+                apartmentRoot.getWorldQuaternion(rootQ);
+                normal.applyQuaternion(rootQ.invert()).normalize();
+            }
+            return {
+                point: [point.x, point.y, point.z],
+                normal: [normal.x, normal.y, normal.z],
+                object: hit.object,
+            };
+        },
+
+        /* surfaceHit under the dollhouse cut-away, with the filters from
+         * cutawayPickFilters: `rejectHit({ point, normal, eye }, candidate)`
+         * skips hits the viewer cannot see (the ceiling from above) and
+         * `floorGap` bridges hairline floor cracks. The result has the same
+         * { point, normal, object } shape as surfaceHit. */
+        surfaceHitUnderCutaway(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false, rejectHit = null, floorGap = null } = {}) {
             const hits = this.pick(objects || [], clientX, clientY, { doubleSided });
             apartmentRoot.updateMatrixWorld(true);
             const rootQInverse = apartmentRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
@@ -189,27 +222,20 @@ export function createPicking(camera, hostEl) {
                 if (candidate.face?.normal) {
                     candidate.object.updateMatrixWorld(true);
                     normal.copy(candidate.face.normal).transformDirection(candidate.object.matrixWorld);
-                    // Double-sided scan triangles have mixed winding. Use the
-                    // geometric normal facing the viewing ray, as Three does.
                     if (normal.dot(rayDirection) > 0) normal.negate();
                     normal.applyQuaternion(rootQInverse).normalize();
                 }
                 return [normal.x, normal.y, normal.z];
             };
-            // Presentation filtering chooses a visible deeper face without
-            // modifying the collision mesh used for independent world queries.
             const firstAccepted = (candidates, rayDirection) => {
                 for (const candidate of candidates) {
                     if (!candidate.point) continue;
                     const local = apartmentRoot.worldToLocal(candidate.point.clone());
                     const point = [local.x, local.y, local.z];
                     if (acceptPoint && !acceptPoint(point, candidate)) continue;
-                    if (rejectHit) {
-                        const normal = normalOf(candidate, rayDirection);
-                        if (rejectHit({ point, normal, eye }, candidate)) continue;
-                        return { point, normal, object: candidate.object };
-                    }
-                    return { point, normal: normalOf(candidate, rayDirection), object: candidate.object };
+                    const normal = normalOf(candidate, rayDirection);
+                    if (rejectHit && rejectHit({ point, normal, eye }, candidate)) continue;
+                    return { point, normal, object: candidate.object };
                 }
                 return null;
             };

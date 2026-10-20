@@ -238,6 +238,9 @@
     }, []);
     const deactivate = React.useCallback(() => {
       stopTimelines();
+      // A scenario's synthetic "online" state cannot admit live effects
+      // before the real HA client has reconnected. Batch both state changes.
+      setters.setConnection?.("offline");
       setState({ active: false, scenario: null });
       window.__SIM_ACTIVE = false;
       // Clear URL params so a reload doesn't auto-reactivate sim mode.

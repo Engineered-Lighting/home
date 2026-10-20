@@ -1438,6 +1438,7 @@ function SimulationControlsDialog({ open, sim, onClose }) {
     else sim.activate?.(id);
   };
   const scenarioButton = (active) => ({
+    minHeight: 44,
     display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
     width: "100%",
     border: `1px solid ${active ? "var(--hg-warn)" : "var(--hg-border)"}`,
@@ -1452,6 +1453,8 @@ function SimulationControlsDialog({ open, sim, onClose }) {
     textAlign: "left",
   });
   const actionButton = {
+    minHeight: 44,
+    minWidth: 44,
     border: "1px solid var(--hg-border)",
     background: "transparent",
     color: "var(--hg-fg-1)",
@@ -1519,6 +1522,7 @@ function SimulationControlsDialog({ open, sim, onClose }) {
             value={hasCurrent ? current : ""}
             onChange={(e) => switchScenario(e.target.value)}
             style={{
+              minHeight: 44,
               minWidth: 0,
               background: "var(--hg-bg-0)",
               color: "var(--hg-fg-0)",
@@ -3471,7 +3475,7 @@ function RemoteProfileDialog({
     fontSize: mobile ? 9 : 10,
     letterSpacing: mobile ? "0.07em" : "0.08em",
     textTransform: "uppercase",
-    minHeight: mobile ? 34 : "auto",
+    minHeight: mobile ? 44 : "auto",
     boxSizing: "border-box",
     lineHeight: 1.15,
   };
@@ -3535,8 +3539,8 @@ function RemoteProfileDialog({
             cursor: "pointer",
             fontFamily: "'Geist Mono', monospace",
             fontSize: 18,
-            minWidth: mobile ? 40 : "auto",
-            minHeight: mobile ? 40 : "auto",
+            minWidth: mobile ? 44 : "auto",
+            minHeight: mobile ? 44 : "auto",
             lineHeight: 1,
           }}>x</button>
         </div>
@@ -5321,7 +5325,7 @@ function apartmentChatAboutReply(text, about, current) {
     : { kind: "assistant", text: result.text, chatContext: result.outcome };
 }
 
-function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false, recordingBanner = null }) {
+function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false, recordingBanner = null, videoLabelerAvailable = true }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const firstItemRef = useRef(null);
@@ -5362,6 +5366,11 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
     </details>
     <div className="apt-home-top-actions">
     {recordingBanner}
+    {simulationActive && <button type="button" className="apt-home-simulation"
+      aria-label="Simulation active — open controls" title="Simulation: authored data, not live observations"
+      onClick={() => run(() => onFeature?.("simulation"))}>
+      <span className="apt-home-simulation-label">Simulation</span><span className="apt-home-simulation-short" aria-hidden="true">Sim</span>
+    </button>}
     <div className="apt-home-menu" ref={menuRef}
       data-setup={state?.openSetup ? state.setupActive ? "on" : setupBlocked ? "unavailable" : "off" : undefined}>
       <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"
@@ -5387,7 +5396,7 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
               {state.setupUnavailableReason || "Setup isn't available for this home here."}</p>}
           </>}
           {[["perceptionLab", "Perception Lab"], ["metrics", "Metrics"], ["people", "People"],
-            ["intel", "Intelligence"], ["labeler", "Video labeler"], ["lights", "Lights / Travel Mode"],
+            ["intel", "Intelligence"], ...(videoLabelerAvailable ? [["labeler", "Video labeler"]] : []), ["lights", "Lights / Travel Mode"],
             ["preferences", "Preferences / connection"],
             // As in the classic menu: simulation controls exist only inside simulation (/simulation starts it).
             ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label], index) =>
@@ -11914,7 +11923,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       paddingBottom: 0,
     }}>
       {unifiedHome && <>
-        <ApartmentHomeBar state={shellState} theme={theme} simulationActive={!!sim.active} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+        <ApartmentHomeBar state={shellState} theme={theme} simulationActive={!!sim.active} videoLabelerAvailable={videoLabelerAvailable} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
           recordingBanner={window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner inline labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
           onPreviousHome={() => chooseHomeLayout("classic")} onFeature={key => {
             if (key === "metrics") { setShellMetricsOpen(true); return; }

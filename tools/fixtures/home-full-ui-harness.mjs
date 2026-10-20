@@ -21,7 +21,8 @@ export async function runFullUiShell(name, steps) {
     const state = { people: 'populated', intelligence: 'populated', metrics: 'populated', lab: 'populated', detailError: false };
     const calls = [], writes = [], sockets = [];
     const sourceFiles = ['home-app.jsx', 'home-lights.jsx', 'home-video-labeler.jsx', 'home-people.jsx', 'home-intelligence.jsx', 'home-perception-lab.jsx',
-      'home-perception-lab-data.js', 'home-perception-lab-transport.js', 'home-tokens.css',
+      'home-perception-lab-data.js', 'home-perception-lab-transport.js', 'home-tokens.css', 'simulation.jsx',
+      'home-video-labeler-data.js', 'home-video-labeler-timeline.jsx',
       'home-apartment-camera.jsx', 'home-apartment-camera-source.js', 'home-apartment-den-perception.jsx',
       'home-apartment-perception-source.js', 'home-apartment-perception-player.js', 'home-apartment-perception-view.js',
       'home-apartment-perception-dock-model.js', 'home-den-lab-stream.js', 'home-lighting-brain-client.js', 'home-lighting-brain-follower.js'];

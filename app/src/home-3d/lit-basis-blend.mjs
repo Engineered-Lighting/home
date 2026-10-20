@@ -25,13 +25,13 @@
  *   splats flagged as exterior (seen through the glass) get an assumed dark,
  *   warm night exterior instead of being relit as interior surfaces.
  *
- * L is pre-exposed and scene-referred; each receiver then goes through the
- * camera look (lit-exposure.mjs LIT_CAMERA_LOOK: exposure for the
- * highlights, a white balance toward the fixtures, AgX Punchy, no toe lift and
- * no mesopic shift), or L2's eye chain on request, and is stored
- * display-encoded, the convention splat and point colours already use. The blend runs only when a weight, the adaptation or the tone
- * operator changes.
- *
+ * L is pre-exposed and scene-referred, and that is what the blend stores
+ * (half float), so splat and point colours stay linear HDR through Spark's
+ * fp16 accumulator or the WebGPU colour hook. The camera look, bloom, noise and
+ * the sRGB encode run once per pixel over the composited frame
+ * (lit-display.mjs, lit-frame.mjs), never per receiver. The blend runs only
+ * when a weight changes.
+
  * Three implementations of one formula: the CPU twin below (tests and the
  * adaptation meter), a GLSL GPGPU pass for the default WebGL renderer
  * (Spark's splats read it through a dyno modifier, the GL points through
@@ -171,8 +171,18 @@ into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
     }
     const night = Model.cctToLinearRgb(exterior.kelvin);
     for (let c = 0; c < 3; c++) into[EXTERIOR_SLOT * 4 + c] = exterior.cdM2 * night[c] * exposure;
-    // The camera's white balance: toward the flux-weighted (in mireds) colour
-    // of what is lit, the ambient counted as a dim source.
+    const { whiteKelvin, matrix: balance } = cameraWhiteBalance({ lights, lumens, ambient, look, monochrome });
+    balance.forEach((row, r) => { for (let c = 0; c < 3; c++) into[(WB_SLOT + r) * 4 + c] = row[c]; });
+    into[PARAMS_SLOT * 4] = exposure; into[PARAMS_SLOT * 4 + 1] = gain;
+    into[PARAMS_SLOT * 4 + 2] = look === 'camera' ? Exposure.LIT_CAMERA_LOOK.agxPower : 1;
+    return { weights: into, matched, unbaked, whiteKelvin };
+}
+
+/* The camera's white balance (lit-display.mjs applies it per pixel): toward
+ * the flux-weighted (in mireds) colour of what is lit, the ambient counted as
+ * a dim source. Identity for the eye look and for the monochrome cloud. */
+export function cameraWhiteBalance({ lights = [], lumens = Model.LIT_ASSUMED_LUMENS, ambient = Exposure.LIT_AMBIENT_FLOOR,
+    look = 'camera', monochrome = false } = {}) {
     let weight = ambient.lux * 10, mireds = ambient.lux * 10 * 1e6 / ambient.kelvin;
     for (const light of lights) {
         const flux = (lumens[light.kind] || 0) * (Number.isFinite(light.fluxFraction) ? light.fluxFraction : 0);
@@ -180,11 +190,13 @@ into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
         weight += flux; mireds += flux * 1e6 / (Number.isFinite(light.kelvin) ? light.kelvin : 3000);
     }
     const whiteKelvin = weight > 0 && mireds > 0 ? 1e6 / (mireds / weight) : ambient.kelvin;
-    const balance = look === 'camera' && !monochrome ? Exposure.whiteBalanceMatrix(Model.cctToLinearRgb(whiteKelvin)) : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-    balance.forEach((row, r) => { for (let c = 0; c < 3; c++) into[(WB_SLOT + r) * 4 + c] = row[c]; });
-    into[PARAMS_SLOT * 4] = exposure; into[PARAMS_SLOT * 4 + 1] = gain;
-    into[PARAMS_SLOT * 4 + 2] = look === 'camera' ? Exposure.LIT_CAMERA_LOOK.agxPower : 1;
-    return { weights: into, matched, unbaked, whiteKelvin };
+    const matrix = look === 'camera' && !monochrome ? Exposure.whiteBalanceMatrix(Model.cctToLinearRgb(whiteKelvin)) : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    return { whiteKelvin, matrix };
+}
+/* The display-pass parameters the weights carry: the white balance rows and
+ * the AgX power, for lit-frame.mjs. */
+export function displayParams(weights) {
+    return { whiteBalance: [0, 1, 2].map(r => [0, 1, 2].map(c => weights[(WB_SLOT + r) * 4 + c])), agxPower: weights[PARAMS_SLOT * 4 + 2] };
 }
 
 /* ---- Spot columns ------------------------------------------------------------
@@ -274,16 +286,11 @@ export function receiverLuminance(set, i, weights, spots = null) {
 }
 
 /* ---- GLSL (WebGL2 GPGPU, the default renderer) ---------------------------------
- * One fragment per receiver into an RGBA8 target LIT_TEXTURE_WIDTH wide.
- * Integer textures hold the packed words; weights are a uniform array. The
- * display chain is lit-exposure.mjs's CPU twin, line for line. */
+ * One fragment per receiver into an RGBA16F target LIT_TEXTURE_WIDTH wide:
+ * pre-exposed, scene-referred radiance, blendReceiver() line for line.
+ * Integer textures hold the packed words; weights are a uniform array. */
 const glslVec3 = v => `vec3(${v.map(x => Number(x).toPrecision(9)).join(', ')})`;
-const glslMat3 = rows => `mat3(${rows.map(glslVec3).join(', ')})`;
-export function litBlendFragmentGlsl({ operator = Exposure.LIT_TONE.view, spots = true, look = 'eye', windowSlot = -1 } = {}) {
-    if (!Exposure.LIT_TONE_OPERATORS.includes(operator)) throw new RangeError('lit_tone_operator_unknown');
-    if (!LIT_LOOKS.includes(look)) throw new RangeError('lit_look_unknown');
-    const camera = look === 'camera' && operator === 'agx', X = Exposure.LIT_AGX_MATRICES;
-    const mesopic = Exposure.LIT_MESOPIC, toe = Exposure.LIT_TONE.toe, presentation = Exposure.litTonePresentation(operator) && !camera;
+export function litBlendFragmentGlsl({ spots = true, windowSlot = -1 } = {}) {
     return `precision highp float;
 precision highp int;
 precision highp usampler2D;
@@ -311,41 +318,6 @@ vec3 spotPair(uvec4 words, int slot) {
   return vec3(a, unpackHalf2x16(words.y).x) * uWeights[${LIT_BASIS_SLOTS} + slot].rgb
        + vec3(b, unpackHalf2x16(words.w).x) * uWeights[${LIT_BASIS_SLOTS} + slot + 1].rgb;
 }
-vec3 agx(vec3 color) {
-  color = ${glslMat3([[0.6274, 0.0691, 0.0164], [0.3293, 0.9195, 0.0880], [0.0433, 0.0113, 0.8956]])} * color;
-  color = ${glslMat3([[0.856627153315983, 0.137318972929847, 0.11189821299995], [0.0951212405381588, 0.761241990602591, 0.0767994186031903],
-        [0.0482516061458583, 0.101439036467562, 0.811302368396859]])} * color;
-  color = clamp((log2(max(color, 1e-10)) + 12.47393) / (4.026069 + 12.47393), 0.0, 1.0);
-  vec3 x2 = color * color, x4 = x2 * x2;
-  color = 15.5 * x4 * x2 - 40.14 * x4 * color + 31.96 * x4 - 6.868 * x2 * color + 0.4298 * x2 + 0.1191 * color - 0.00232;
-  color = ${glslMat3([[1.1271005818144368, -0.1413297634984383, -0.14132976349843826], [-0.11060664309660323, 1.157823702216272, -0.11060664309660294],
-        [-0.016493938717834573, -0.016493938717834257, 1.2519364065950405]])} * color;
-  color = pow(max(vec3(0.0), color), vec3(2.2));
-  return clamp(${glslMat3([[1.6605, -0.1246, -0.0182], [-0.5876, 1.1329, -0.1006], [-0.0728, -0.0083, 1.1187]])} * color, 0.0, 1.0);
-}
-vec3 agxPunchy(vec3 color, float power) {
-  color = ${glslMat3(X.srgbToRec2020)} * color;
-  color = ${glslMat3(X.inset)} * color;
-  color = clamp((log2(max(color, 1e-10)) + 12.47393) / (4.026069 + 12.47393), 0.0, 1.0);
-  vec3 x2 = color * color, x4 = x2 * x2;
-  color = 15.5 * x4 * x2 - 40.14 * x4 * color + 31.96 * x4 - 6.868 * x2 * color + 0.4298 * x2 + 0.1191 * color - 0.00232;
-  color = pow(max(color, vec3(0.0)), vec3(power));
-  color = ${glslMat3(X.outset)} * color;
-  color = pow(max(vec3(0.0), color), vec3(2.2));
-  return clamp(${glslMat3(X.rec2020ToSrgb)} * color, 0.0, 1.0);
-}
-vec3 neutral(vec3 color) {
-  float x = min(color.r, min(color.g, color.b));
-  float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
-  color -= offset;
-  float peak = max(color.r, max(color.g, color.b));
-  if (peak < 0.76) return clamp(color, 0.0, 1.0);
-  float d = 0.24, newPeak = 1.0 - d * d / (peak + d - 0.76);
-  color *= newPeak / peak;
-  float g = 1.0 - 1.0 / (0.15 * (peak - newPeak) + 1.0);
-  return clamp(mix(color, vec3(newPeak), g), 0.0, 1.0);
-}
-vec3 srgbEncode(vec3 v) { return mix(12.92 * v, 1.055 * pow(max(v, vec3(0.0031308)), vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), v)); }
 void main() {
   ivec2 at = ivec2(gl_FragCoord.xy);
   int index = at.y * ${LIT_TEXTURE_WIDTH} + at.x;
@@ -370,20 +342,7 @@ ${windowSlot >= 0 ? `  float uw = float((${windowSlot < 16 ? 'basisA' : 'basisB'
     vec3 lin = mix(a / 12.92, pow((a + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), a));
     c = uWeights[${EXTERIOR_SLOT}].rgb * (0.5 + dot(lin, LUMA));
   }
-  float preExposure = uWeights[${PARAMS_SLOT}].x, gain = uWeights[${PARAMS_SLOT}].y;
-${presentation ? `  float Y = dot(c, LUMA);
-  float L = max(Y / preExposure, 1e-6);
-  float x = clamp((${mesopic.photopicLog10.toFixed(6)} - log(L) / ${Math.LN10.toPrecision(9)}) / ${mesopic.spanLog10.toFixed(6)}, 0.0, 1.0);
-  float s = x * x * (3.0 - 2.0 * x) * ${mesopic.strength.toFixed(6)};
-  c = mix(c, ${glslVec3(mesopic.tint)} * Y, s) * gain;` : ''}
-${camera ? `  c *= gain;
-  c = max(vec3(dot(uWeights[${WB_SLOT}].xyz, c), dot(uWeights[${WB_SLOT + 1}].xyz, c), dot(uWeights[${WB_SLOT + 2}].xyz, c)), vec3(0.0));
-  c = agxPunchy(c, uWeights[${PARAMS_SLOT}].z);` : operator === 'agx' ? `  float Ya = dot(c, LUMA);
-  float lifted = Ya + Ya * ${toe.lift.toFixed(6)} / (Ya / ${toe.knee.toFixed(6)} + 1.0);
-  c *= lifted / max(Ya, 1e-10);
-  c = agx(c);` : operator === 'reinhard' ? '  c = clamp(c / (1.0 + c), 0.0, 1.0);'
-        : operator === 'neutral' ? '  c = neutral(c);' : '  c = clamp(c, 0.0, 1.0);'}
-  gl_FragColor = vec4(srgbEncode(c), 1.0);
+  gl_FragColor = vec4(c, 1.0);
 }
 `;
 }
@@ -392,10 +351,10 @@ export const LIT_BLEND_VERTEX_GLSL = 'void main() { gl_Position = vec4(position.
 /* ---- TSL (WebGPU compute) -------------------------------------------------------
  * `T` is the 'three/tsl' namespace (as lit-exposure.mjs's litDisplayNode).
  * meta/basis/spots are read-only uvec4 storage nodes, weights a read-only
- * vec4 storage node, `write(index, rgb)` returns the store node. */
-export function litBlendComputeNode(T, { count, meta, basis, spots = null, weights, operator = Exposure.LIT_TONE.view, look = 'eye', windowSlot = -1, write, workgroup = 64 }) {
-    const { Fn, If, float, vec3, vec4, instanceIndex, unpackUnorm4x8, unpackHalf2x16, dot, max, select } = T;
-    const camera = look === 'camera' && operator === 'agx';
+ * vec4 storage node, `write(index, rgb)` returns the store node; rgb is the
+ * receiver's pre-exposed linear radiance, as the GLSL pass writes it. */
+export function litBlendComputeNode(T, { count, meta, basis, spots = null, weights, windowSlot = -1, write, workgroup = 64 }) {
+    const { Fn, If, float, vec3, instanceIndex, unpackUnorm4x8, unpackHalf2x16, dot, max, select } = T;
     const LUMA = vec3(...LIT_LAYER_LUMA), LANES = ['x', 'y', 'z', 'w'];
     return Fn(() => {
         const i = instanceIndex;
@@ -433,26 +392,7 @@ export function litBlendComputeNode(T, { count, meta, basis, spots = null, weigh
             const exterior = m.x.shiftRight(24).bitAnd(LIT_RECEIVER_FLAGS.emitter).greaterThan(0);
             const radiance = select(exterior, weights.element(EXTERIOR_SLOT).xyz.mul(dot(linearAlbedo, vec3(0.2126729, 0.7151522, 0.0721750)).add(0.5)),
                 linearAlbedo.div(Math.PI).mul(e)).toVar('litRadiance');
-            const params = weights.element(PARAMS_SLOT);
-            if (camera) write(i, cameraDisplayNode(T, radiance, params, [0, 1, 2].map(r => weights.element(WB_SLOT + r).xyz)));
-            else write(i, Exposure.litDisplayNode(T, { color: vec4(radiance, 1), preExposure: params.x, gain: params.y, operator }).rgb);
+            write(i, max(radiance, vec3(0)));
         });
     })().compute(count, [workgroup]);
-}
-
-/* The camera look in TSL (the CPU twin is lit-exposure.mjs litCameraPixel):
- * gain, the white balance rows, AgX with the Punchy power, sRGB encode. */
-function cameraDisplayNode(T, radiance, params, balance) {
-    const { vec3, max, clamp, log2, pow, float, dot } = T, X = Exposure.LIT_AGX_MATRICES;
-    // Columns as in GLSL: out_i = sum_j cols[j][i] * v_j.
-    const byColumns = (cols, v) => vec3(...[0, 1, 2].map(i => v.x.mul(cols[0][i]).add(v.y.mul(cols[1][i])).add(v.z.mul(cols[2][i]))));
-    let c = max(radiance.mul(params.y), vec3(0));
-    c = max(vec3(dot(balance[0], c), dot(balance[1], c), dot(balance[2], c)), vec3(0));
-    c = byColumns(X.inset, byColumns(X.srgbToRec2020, c));
-    c = clamp(log2(max(c, vec3(1e-10))).add(12.47393).div(4.026069 + 12.47393), 0, 1).toVar('litAgx');
-    const x2 = c.mul(c), x4 = x2.mul(x2);
-    c = x4.mul(x2).mul(15.5).sub(x4.mul(c).mul(40.14)).add(x4.mul(31.96)).sub(x2.mul(c).mul(6.868)).add(x2.mul(0.4298)).add(c.mul(0.1191)).sub(0.00232);
-    c = pow(max(c, vec3(0)), vec3(params.z));
-    c = pow(max(byColumns(X.outset, c), vec3(0)), vec3(2.2));
-    return T.sRGBTransferOETF(clamp(byColumns(X.rec2020ToSrgb, c), 0, 1));
 }

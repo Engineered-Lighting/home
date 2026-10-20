@@ -298,7 +298,8 @@ export class HomeGaussianSplat extends Mesh {
             const det = a.mul(c).sub(bCov.mul(bCov)).toVar('det');
             const blurAdjust = sqrt(max(aBase.mul(cBase).sub(bCov.mul(bCov)).div(max(det, 1e-6)), 0));
             const finalAlpha = alpha.mul(blurAdjust).toVar('finalAlpha');
-            splatColor.assign(vec4(rgb.clamp(0, 1), finalAlpha));
+            // Relit colour (L4 + lit-frame.mjs) is scene-referred HDR: kept above 1.
+            splatColor.assign(vec4(relit ? select(this._colorSource.greaterThan(0.5), max(rgb, 0), rgb.clamp(0, 1)) : rgb.clamp(0, 1), finalAlpha));
 
             const mid = a.add(c).mul(0.5).toVar('mid');
             const delta = sqrt(max(mid.mul(mid).sub(det), 0)).toVar('delta');
@@ -330,7 +331,8 @@ export class HomeGaussianSplat extends Mesh {
 
     /**
      * L4 hook: one vec4 per splat (file order). rgb replaces the capture
-     * colour in the same display-encoded space, before SH; w scales the
+     * colour, before SH: pre-exposed linear radiance, unclamped above 1, for
+     * Lighting's HDR frame (lit-frame.mjs); w scales the
      * capture's view-dependent SH residual (1 keeps it, 0 drops it). A
      * compute pass writes it through `write`; setActive(true) draws from it.
      * WebGPU only: the WebGL2 fallback declares relit splats unavailable.
@@ -355,7 +357,7 @@ export class HomeGaussianSplat extends Mesh {
         return {
             available: true,
             count: this.numSplats,
-            layout: 'vec4<f32> per splat, file order: rgb display-encoded colour, w = SH residual weight',
+            layout: 'vec4<f32> per splat, file order: rgb pre-exposed linear radiance, w = SH residual weight',
             attribute: this._relit.attribute,
             write: this._relit.write,
             captureColor: this._buffers.color,

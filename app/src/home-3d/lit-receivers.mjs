@@ -6,18 +6,21 @@
  * until Lighting is turned on, and every change is reversed exactly when it
  * is turned off or the view changes:
  *
- *   WebGL (r180, the default)   the blend is a GPGPU pass into an RGBA8
- *       target; Spark reads it through an object modifier (by splat index,
- *       capture alpha kept, SH off while lit), the GL points through a lit
+ *   WebGL (r180, the default)   the blend is a GPGPU pass into an RGBA16F
+ *       target of pre-exposed linear radiance; Spark reads it through an
+ *       object modifier (by splat index, capture alpha kept, SH off while
+ *       lit) into an fp16 accumulator (a SparkRenderer built with
+ *       accumExtSplats, swapped in while lit), the GL points through a lit
  *       copy of their ShaderMaterial that shares every uniform.
  *   WebGPU (?renderer=webgpu)   the blend is a compute pass into the splat
  *       fork's colour hook (gaussian-splat-webgpu.mjs colorHook) and into a
  *       storage buffer the point sprites read. The WebGL2 backend of the node
  *       renderer declares lit receivers unavailable, as the hook does.
  *
+ * Splat and point colours stay scene-referred HDR; lit-frame.mjs composites
+ * them into one half-float frame and runs the camera look once per pixel.
  * The pass runs in modes.js's splat tick, before renderer.render() and never
- * inside it, and only when a weight, the adaptation gain or the operator has
- * changed. The four live spots' columns arrive from L5's bake worker each time
+ * inside it, and only when a weight has changed. The four live spots' columns arrive from L5's bake worker each time
  * a spot moves.
  */
 import * as THREE from 'three';
@@ -71,7 +74,11 @@ function receiverPositions(kind, object) {
 /* A lit receiver controller for one loaded object ('splat' or 'points').
  * Resolves with { available: false, reason } when this renderer, asset or
  * layer cannot be lit. */
-export async function createLitReceivers({ renderer, kind, object, layer, look = 'camera', whenIdle = () => Promise.resolve() } = {}) {
+/* `drawables()` lists what the frame draws for this object (Spark's renderer
+ * for the WebGL splat); `setSplatHdr(on)` swaps Spark's fp16 renderer in and
+ * out (modes.js), awaited inside the idle window. */
+export async function createLitReceivers({ renderer, kind, object, layer, look = 'camera', whenIdle = () => Promise.resolve(),
+    drawables = () => [object], setSplatHdr = null } = {}) {
     if (kind !== 'splat' && kind !== 'points') throw fail('lit_receivers_kind_unknown');
     const node = !!renderer?.isWebGPURenderer, unsupported = litReceiversUnsupported(renderer);
     if (unsupported) return { available: false, reason: unsupported };
@@ -85,7 +92,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
     const spots = new Uint32Array(count * Blend.LIT_SPOT_WORDS);
     const weights = new Float32Array(Blend.LIT_WEIGHT_VEC4S * 4);
     const spotSlots = new Map(), spotVersions = new Map();
-    let operator = Exposure.LIT_TONE.view, signature = '', dirty = true, spotsDirty = false, attached = false, disposed = false;
+    let operator = Exposure.LIT_TONE.view, signature = '', dirty = true, spotsDirty = false, attached = false, disposed = false, hdrSwapped = false;
     let blends = 0, lastBlendMs = null, matched = [], unbaked = [], whiteKelvin = null;
     if (!Blend.LIT_LOOKS.includes(look)) throw fail('lit_look_unknown');
     /* The window column's median over the room's interior receivers
@@ -129,7 +136,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
     const gpu = node ? await createNodeBlend() : await createGlBlend();
     if (gpu.available === false) return gpu;
 
-    // ---- WebGL: GPGPU into an RGBA8 target ----------------------------------
+    // ---- WebGL: GPGPU into an RGBA16F target ---------------------------------
     async function createGlBlend() {
         const height = Math.ceil(count / W);
         const texture = (words, offset, stride) => {
@@ -143,7 +150,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
         };
         const maps = { uMeta: texture(packed.meta, 0, 4), uBasisA: texture(packed.basis, 0, 8), uBasisB: texture(packed.basis, 4, 8),
             uSpotA: texture(spots, 0, 8), uSpotB: texture(spots, 4, 8) };
-        const target = new THREE.WebGLRenderTarget(W, height, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType, depthBuffer: false,
+        const target = new THREE.WebGLRenderTarget(W, height, { format: THREE.RGBAFormat, type: THREE.HalfFloatType, depthBuffer: false,
             stencilBuffer: false, generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
         target.texture.name = 'lit-receivers-relit';
         const weightValues = Array.from({ length: Blend.LIT_WEIGHT_VEC4S }, () => new THREE.Vector4());
@@ -151,7 +158,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             ...Object.fromEntries(Object.entries(maps).map(([name, map]) => [name, { value: map }])) };
         const quadScene = new THREE.Scene(), camera = new THREE.Camera();
         const material = new THREE.ShaderMaterial({ name: 'lit-receivers-blend', uniforms,
-            vertexShader: Blend.LIT_BLEND_VERTEX_GLSL, fragmentShader: Blend.litBlendFragmentGlsl({ operator, look, windowSlot: packed.windowSlot }),
+            vertexShader: Blend.LIT_BLEND_VERTEX_GLSL, fragmentShader: Blend.litBlendFragmentGlsl({ windowSlot: packed.windowSlot }),
             depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
         const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
         quad.frustumCulled = false;
@@ -159,7 +166,8 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
         let restore = null;
         return {
             backend: 'webgl-gpgpu',
-            retone() { material.fragmentShader = Blend.litBlendFragmentGlsl({ operator, look, windowSlot: packed.windowSlot }); material.needsUpdate = true; },
+            // The blend is scene-referred: the look and operator live in the frame.
+            retone() {},
             uploadSpots() {
                 for (const [name, offset] of [['uSpotA', 0], ['uSpotB', 4]]) {
                     const data = maps[name].image.data;
@@ -202,6 +210,8 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
                     return { gsplat: dyno.combineGsplat({ gsplat, rgba: lit }) };
                 });
                 await whenIdle();
+                // Splat colour stays fp16 through Spark (accumExtSplats).
+                if (setSplatHdr) { await setSplatHdr(true); hdrSwapped = true; }
                 const saved = { modifiers: object.objectModifiers, own: Object.hasOwn(object, 'objectModifiers'), maxSh: object.maxSh };
                 object.objectModifiers = [...(object.objectModifiers || []), graph];
                 // The capture's view-dependent residual is its daylight sheen.
@@ -214,6 +224,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
                     object.maxSh = saved.maxSh;
                     object.updateGenerator();
                     object.needsUpdate = true;
+                    if (hdrSwapped) { hdrSwapped = false; await setSplatHdr(false); }
                 };
             },
             async detach() { const undo = restore; restore = null; await undo?.(); },
@@ -228,19 +239,19 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
                 return (performance.now() - t0) / batch;
             },
             async readback(n) {
-                const rows = Math.ceil(n / W), out = new Uint8Array(W * rows * 4), gl = renderer.getContext();
+                const rows = Math.ceil(n / W), out = new Uint16Array(W * rows * 4), gl = renderer.getContext();
                 // The async frame readback may leave a pixel-pack buffer bound;
                 // a synchronous read needs none (else INVALID_OPERATION).
                 const pack = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING);
                 gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
                 try { renderer.readRenderTargetPixels(target, 0, 0, W, rows, out); } finally { gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack); }
-                return Array.from({ length: n }, (_, i) => [out[i * 4], out[i * 4 + 1], out[i * 4 + 2]].map(v => v / 255));
+                return Array.from({ length: n }, (_, i) => [out[i * 4], out[i * 4 + 1], out[i * 4 + 2]].map(v => THREE.DataUtils.fromHalfFloat(v)));
             },
             dispose() {
                 target.dispose(); material.dispose(); quad.geometry.dispose();
                 for (const map of Object.values(maps)) map.dispose();
             },
-            memoryBytes: W * height * 4 * 4 * 5 + W * height * 4,
+            memoryBytes: W * height * 4 * 4 * 5 + W * height * 8,
         };
     }
 
@@ -263,12 +274,12 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             write = (i, rgb) => store.element(i).assign(T.vec4(rgb, 1));
         }
         let compute = null;
-        const build = () => { compute = Blend.litBlendComputeNode(T, { count, ...buffers, operator, look, windowSlot: packed.windowSlot, write }); };
+        const build = () => { compute = Blend.litBlendComputeNode(T, { count, ...buffers, windowSlot: packed.windowSlot, write }); };
         build();
         let restore = null;
         return {
             backend: 'webgpu-compute',
-            retone: build,
+            retone() {},
             uploadSpots() { spotAttr.needsUpdate = true; },
             run() { weightAttr.needsUpdate = true; renderer.compute(compute); },
             async attach() {
@@ -340,11 +351,14 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             spotsDirty = true; dirty = true; signature = '';
             return true;
         },
-        /* Follow the eased lights, the adaptation gain and the operator.
-         * Cheap when nothing changed; returns whether a blend is due. */
-        sync({ lights = [], gain = 1, operator: next = operator } = {}) {
+        /* Follow the eased lights, the adaptation gain, the operator and the
+         * look (the meter and the white balance follow them; the blend itself
+         * is scene-referred). Cheap when nothing changed; returns whether a
+         * blend is due. */
+        sync({ lights = [], gain = 1, operator: next = operator, look: nextLook = look } = {}) {
             if (disposed) return false;
-            if (next !== operator) { operator = next; gpu.retone(); dirty = true; }
+            if (next !== operator) { operator = next; gpu.retone(); }
+            if (Blend.LIT_LOOKS.includes(nextLook)) look = nextLook;
             const result = Blend.blendWeights({ lights, columns: layer.columnsMeta, columnScale: layer.columnScale, spotSlots, gain, look, windowMedian, monochrome }, weights);
             matched = result.matched; unbaked = result.unbaked; whiteKelvin = result.whiteKelvin;
             const next2 = Array.from(weights, value => value.toPrecision(7)).join(',');
@@ -360,13 +374,17 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             dirty = false; blends++; lastBlendMs = performance.now() - t0;
             return true;
         },
-        /* Proofs only: the first n receivers' blended display colours as
-         * the GPU wrote them, and the CPU twin's for the same weights. */
+        /* Proofs only: the first n receivers' pre-exposed linear radiance as
+         * the GPU wrote it (half float), and the CPU twin's for the same weights. */
         async readback(n = Math.min(count, 64)) {
             const gpuRows = await gpu.readback(Math.min(n, count));
-            const cpu = gpuRows.map((_, i) => Blend.blendReceiverDisplay(packed, i, weights, spots, { operator, look }));
-            return { gpu: gpuRows, cpu };
+            const cpu = gpuRows.map((_, i) => Blend.blendReceiver(packed, i, weights, spots).map(value => Math.max(0, value)));
+            return { gpu: gpuRows, cpu, unit: 'pre-exposed linear radiance', preExposure: weights[(Blend.LIT_BASIS_SLOTS + Blend.LIT_SPOT_SLOTS + 1) * 4] };
         },
+        /* What lit-frame.mjs draws in its scene-referred pass for this object. */
+        drawables() { return (drawables() || []).filter(Boolean); },
+        /* The display pass's white balance and AgX power for this look. */
+        displayParams() { return Blend.displayParams(weights); },
         /* Proofs: the blend pass timed `iterations` times (ms, sorted). */
         async benchmark(iterations = 20) {
             if (!attached || disposed) return null;

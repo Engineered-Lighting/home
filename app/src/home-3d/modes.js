@@ -169,6 +169,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     // L4 lit receivers (lit-receivers.mjs): Lighting's step
     // before each render, and the Photo floor backing hidden while relit.
     let litTick = null, photoFloorSuppressed = false;
+    // Lighting's HDR frame: the fp16 SparkRenderer swapped in while lit, and the default it replaced.
+    let sparkHdr = null;
     const sparkUpdateCounts = { started: 0, completed: 0, failed: 0, coalescedTicks: 0 };
     const lifetime = new AbortController();
     const resourcesDisposed = new WeakSet();
@@ -191,11 +193,12 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             const { createSplatCutawayModifier } = await import(`./splat-cutaway.js${new URL(import.meta.url).search}`);
             return createSplatCutawayModifier(splat);
         },
-        createSparkRenderer: async ({ renderer: rendererRef }) => {
+        createSparkRenderer: async ({ renderer: rendererRef, hdr = false }) => {
             const { SparkRenderer } = await import('@sparkjsdev/spark');
             // Home owns the update lifetime. Spark's onBeforeRender must not
             // start a second unowned update beside our explicit frame tick.
-            return new SparkRenderer({ renderer: rendererRef, autoUpdate: false });
+            // Lighting (hdr): splat colour as fp16 (ExtSplats), already linear.
+            return new SparkRenderer({ renderer: rendererRef, autoUpdate: false, ...(hdr ? { accumExtSplats: true, encodeLinear: false } : {}) });
         },
         ...loadAdapters,
     };
@@ -858,6 +861,39 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             photoFloorSuppressed = !!on;
             visibleFor(state.mode);
         },
+        /* Lighting's HDR frame (lit-frame.mjs): while the splats are relit,
+         * Spark is a renderer built with accumExtSplats, so the relit colour
+         * stays fp16 (the default packs 8 bits in 0..1). It takes the default
+         * renderer's place and gives it back on exit, untouched, so with
+         * Lighting off nothing changes. Call inside the idle window. */
+        async setSparkHdr(on) {
+            if (disposed) return false;
+            if (!!on === !!sparkHdr) return true;
+            if (on) {
+                const base = state.sparkRenderer;
+                if (!base || !adapters.createSparkRenderer) return false;
+                const hdr = await adapters.createSparkRenderer({ renderer, hdr: true });
+                if (!hdr || disposed || state.sparkRenderer !== base) { releaseAsset(hdr); return false; }
+                hdr.autoUpdate = false;
+                hdr.frustumCulled = false;
+                hdr.traverse((o) => { o.frustumCulled = false; });
+                hdr.visible = base.visible;
+                (base.parent || scene).add(hdr);
+                base.removeFromParent();
+                sparkHdr = { base, hdr };
+                state.sparkRenderer = hdr;
+                return true;
+            }
+            const { base, hdr } = sparkHdr;
+            sparkHdr = null;
+            base.visible = hdr.visible;
+            (hdr.parent || scene).add(base);
+            hdr.removeFromParent();
+            state.sparkRenderer = base;
+            releaseAsset(hdr);
+            return true;
+        },
+        getSparkRenderer() { return state.sparkRenderer; },
 
         getMesh() { return state.mesh; },
         getCollision() { return state.collision; },
@@ -959,6 +995,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             const spark = state.sparkRenderer;
             const splat = state.splat;
             const cutaway = state.splatCutaway;
+            // The default Spark renderer waiting behind Lighting's HDR one.
+            if (sparkHdr) { releaseAsset(sparkHdr.base); sparkHdr = null; }
             // Immediate detachment keeps the engine's synchronous scene walk
             // from disposing a resource still used by the owned async update.
             spark?.removeFromParent?.();

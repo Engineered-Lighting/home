@@ -173,14 +173,14 @@ test('the two directional browser parts are both planned together and run on dif
   }
 });
 
-test('all three WebGPU lighting proof parts are planned together and use separate workers', () => {
+test('all five WebGPU lighting proof parts are planned together and use separate workers', () => {
   const parts = ['test-apartment-lit-webgpu-browser.mjs', 'test-apartment-lit-webgpu-browser-part2.mjs',
-    'test-apartment-lit-webgpu-browser-part3.mjs'];
+    'test-apartment-lit-webgpu-browser-part3.mjs', 'test-apartment-lit-webgpu-browser-part4.mjs', 'test-apartment-lit-webgpu-browser-part5.mjs'];
   for (const file of ['app/src/home-3d/lit-exposure.mjs', 'tools/fixtures/apartment-lit-webgpu-browser-proof.mjs',
-    'tools/test-apartment-lit-webgpu-browser-part3.mjs']) {
+    'tools/test-apartment-lit-webgpu-browser-part3.mjs', 'tools/test-apartment-lit-webgpu-browser-part5.mjs']) {
     const argv = ['--files', file], full = planOf(argv);
     assert.ok(parts.every(name => full.includes(name)), 'the complete lighting proof guards ' + file);
-    for (const count of [3, 6, 8]) {
+    for (const count of [5, 6, 8]) {
       const shards = Array.from({ length: count }, (_, index) => planOf([...argv, '--shard', `${index + 1}/${count}`]));
       const owners = parts.map(name => shards.flatMap((plan, index) => plan.includes(name) ? [index] : []));
       assert.ok(owners.every(list => list.length === 1), 'each proof part has exactly one worker');
@@ -191,6 +191,7 @@ test('all three WebGPU lighting proof parts are planned together and use separat
 
 test('renderer parity always selects Cloud, Mesh and Photo on separate workers', () => {
   const formats = ['test-apartment-webgpu-renderer-browser.mjs', 'test-apartment-webgpu-mesh-browser.mjs',
+    'test-apartment-webgpu-mesh-browser-part2.mjs',
     'test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
   for (const file of ['app/src/home-apartment.jsx', 'app/src/home-3d/markers.js', 'app/src/home-3d/engine.js',
     ...formats.map(name => 'tools/' + name)]) {
@@ -217,13 +218,13 @@ test('all Setup rail phases are selected together and distributed across workers
   }
 });
 
-test('the two Photo parity parts retain frames and contracts without dropping either phase', () => {
-  const files = ['test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
+for (const [format, mode] of [['photo', 'splat'], ['mesh', 'mesh']]) test(`the two ${format} parity parts retain frames and contracts without dropping either phase`, () => {
+  const files = [`test-apartment-webgpu-${format}-browser.mjs`, `test-apartment-webgpu-${format}-browser-part2.mjs`];
   const phases = files.map(file => {
     const source = fs.readFileSync(path.join(root, 'tools', file), 'utf8');
-    assert.match(source, /__HOME_WEBGPU_PROOF_MODES = \['splat'\]/);
+    assert.ok(source.includes(`__HOME_WEBGPU_PROOF_MODES = ['${mode}']`));
     const match = /__HOME_WEBGPU_PROOF_PHASE = '(frames|contracts)'/.exec(source);
-    assert.ok(match, file + ' selects its Photo phase');
+    assert.ok(match, file + ' selects its parity phase');
     return match[1];
   });
   assert.deepEqual(phases.sort(), ['contracts', 'frames']);

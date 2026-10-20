@@ -141,16 +141,18 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
       for (let i = 0; i < n; i++) sum += .2126 * frame.pixels[i * 4] + .7152 * frame.pixels[i * 4 + 1] + .0722 * frame.pixels[i * 4 + 2];
       return sum / n;
     });
-    // CPU submission time of renderer.render and rAF intervals (descriptive only).
+    // Descriptive CPU/rAF sampling, like the node-renderer proof: retain60
+    // intervals on a fast renderer, bound software rendering to five seconds.
+    // The independent real-GPU frame-rate gate keeps its own assertions.
     const timing = () => page.evaluate(() => new Promise(resolve => {
       const engine = window.__APT_ENGINE, renderer = engine.renderer, original = renderer.render, renders = [], intervals = [];
       renderer.render = function (...args) { const t0 = performance.now(); try { return original.apply(this, args); } finally { renders.push(performance.now() - t0); } };
-      let last = null, count = 0;
+      let last = null, count = 0; const started = performance.now();
       const step = now => {
         if (last != null) intervals.push(now - last); last = now;
-        if (++count < 61) requestAnimationFrame(step);
+        if (++count < 61 && (now - started < 5000 || intervals.length < 2)) requestAnimationFrame(step);
         else { renderer.render = original; const p = (a, q) => [...a].sort((x, y) => x - y)[Math.floor(a.length * q)];
-          resolve({ frames: intervals.length, frame_p50_ms: p(intervals, .5), frame_p95_ms: p(intervals, .95), render_p50_ms: p(renders, .5), render_p95_ms: p(renders, .95) }); }
+          resolve({ frames: intervals.length, sample_window_ms: now-started, bounded_by:'60 intervals or 5 seconds', frame_p50_ms: p(intervals, .5), frame_p95_ms: p(intervals, .95), render_p50_ms: p(renders, .5), render_p95_ms: p(renders, .95) }); }
       };
       requestAnimationFrame(step);
     }));

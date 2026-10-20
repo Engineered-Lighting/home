@@ -16,8 +16,18 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'app/src');
 const fileUrl = relative => pathToFileURL(path.join(SRC, relative)).href;
 const threeURL = fileUrl('vendor/three-0.180.0/three.module.js');
+// Constructor double only: exercise modes' actual default adapter and its
+// renderer swap without requiring a WebGL context or replacing that adapter.
+const sparkURL = 'data:text/javascript,' + encodeURIComponent(`
+  import { Object3D } from 'three';
+  export class SparkRenderer extends Object3D {
+    constructor(options) { super(); this.options = options; this.disposed = false; }
+    dispose() { this.disposed = true; }
+  }
+`);
 register('data:text/javascript,' + encodeURIComponent(`export async function resolve(specifier, context, next) {
   if (specifier === 'three') return { url: ${JSON.stringify(threeURL)}, shortCircuit: true };
+  if (specifier === '@sparkjsdev/spark') return { url: ${JSON.stringify(sparkURL)}, shortCircuit: true };
   return next(specifier, context);
 }`));
 
@@ -272,5 +282,32 @@ test('modes: the splat tick drives the node renderer\'s splat; Spark stays the W
   // The flag-off engine still builds Photo from Spark.
   const source = fs.readFileSync(path.join(SRC, 'home-3d/modes.js'), 'utf8');
   assert.match(source, /export async function loadSplatAsset[\s\S]*?import\('@sparkjsdev\/spark'\)[\s\S]*?new SplatMesh\(/, 'the default splat adapter builds a Spark SplatMesh');
-  assert.ok(source.includes('new SparkRenderer({ renderer: rendererRef, autoUpdate: false })'), 'the default adapter builds a SparkRenderer');
+});
+
+test('the default Spark adapter keeps unlit options and restores the same renderer after HDR', async () => {
+  globalThis.window ??= {};
+  const THREE = await import(threeURL);
+  const { createModes } = await import(fileUrl('home-3d/modes.js'));
+  const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(), renderer = { id: 'authored-renderer' };
+  const modes = createModes({ apartmentRoot: new THREE.Group(), pointsMaterial: { uniforms: { uOpacity: { value: 1 } } },
+    sim: false, assetCandidates: name => ['memory://' + name], getPoints: () => null,
+    fetchFrame: async () => ({ frame: 'z_up_metric_floor0', extents_m: [4, 4, 2.5], splat_baked: true, site: 'echo' }),
+    scene, renderer, camera, siteId: 'echo', contentRevision: 'r1', requireRegistration: true,
+    loadAdapters: { loadSplat: async () => Object.assign(new THREE.Object3D(), { numSplats: 3, opacity: 0 }) } });
+  try {
+    await modes.setMode('splat', { duration: 0 });
+    const base = modes.getSparkRenderer();
+    assert.deepEqual(base.options, { renderer, autoUpdate: false }, 'unlit Spark uses its existing color defaults and Home owns updates');
+    assert.equal(base.parent, camera);
+    assert.equal(await modes.setSparkHdr(true), true);
+    const hdr = modes.getSparkRenderer();
+    assert.notEqual(hdr, base);
+    assert.deepEqual(hdr.options, { renderer, autoUpdate: false, accumExtSplats: true, encodeLinear: false },
+      'HDR retains linear fp16 splat color and keeps updates under Home ownership');
+    assert.equal(hdr.parent, camera); assert.equal(base.parent, null); assert.equal(hdr.visible, base.visible);
+    assert.equal(await modes.setSparkHdr(true), true); assert.equal(modes.getSparkRenderer(), hdr, 'repeated enable reuses the owned HDR renderer');
+    assert.equal(await modes.setSparkHdr(false), true);
+    assert.equal(modes.getSparkRenderer(), base, 'disable restores the original object, including its color defaults');
+    assert.equal(base.parent, camera); assert.equal(base.disposed, false); assert.equal(hdr.parent, null); assert.equal(hdr.disposed, true);
+  } finally { modes.dispose(); }
 });

@@ -25,6 +25,7 @@ import Core from '../../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './apartment-home-shell-fixtures.mjs';
 import { authoredLightingLayer } from './apartment-lit-layer-fixtures.mjs';
+import { authoredHdrFrame, compareFramePasses, PROOF_PARAMS, PROOF_SIZE } from './lit-frame-proof.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'), SRC = path.join(ROOT, 'app/src');
@@ -242,7 +243,10 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     await settled(page);
     await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 6);
     const litState = await page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { ...s, receivers: { ...s.receivers } }; });
-    assert.equal(litState.pipeline, 'per-receiver-display');
+    assert.equal(litState.pipeline, 'scene-referred-half-float', 'one HDR frame; the look runs once per pixel');
+    assert.equal(litState.frame.format, 'RGBA16F'); assert.equal(litState.frame.bloom, true); assert.equal(litState.look, 'camera');
+    assert.ok(litState.frame.emitters >= 4, 'the lit fixtures show their faces: ' + litState.frame.emitters);
+    assert.ok(litState.frame.emittersClamped >= 1, 'a spot lens is beyond half float once pre-exposed: stored clamped and tagged');
     assert.equal(litState.receivers.kind, 'splat'); assert.equal(litState.receivers.set, 'splat');
     assert.equal(litState.receivers.backend, RENDERER === 'webgpu' ? 'webgpu-compute' : 'webgl-gpgpu');
     assert.equal(litState.receivers.binding, 'sha256-verified'); assert.equal(litState.receivers.measured, false); assert.equal(litState.receivers.simulated, true);
@@ -260,10 +264,48 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     assert.ok(relitDiff.mean > 1, 'Photo is relit: ' + JSON.stringify(relitDiff));
     const twin = await page.evaluate(() => window.__APT_ENGINE.litReceiversReadback(256));
     assert.ok(twin, 'the receivers expose a proof readback');
-    const worst = Math.max(...twin.gpu.flatMap((row, i) => row.map((value, c) => Math.abs(value - twin.cpu[i][c]))));
-    assert.ok(worst <= 2.5 / 255, 'the GPU blend equals its CPU twin within 8-bit rounding: ' + worst + ' ' + JSON.stringify([0, 1, 100, 200, 255].map(i => [twin.gpu[i], twin.cpu[i]])));
-    check('photo_relit', { luma: { unlit: unlit.luma, lit: relit.luma }, blends: litState.receivers.blends, twin_max_abs: worst,
-      adaptation_ev: litState.adaptationEv, metered_cd_m2: litState.meteredCdM2 });
+    // Scene-referred radiance in half float: relative error within fp16 rounding.
+    const worst = Math.max(...twin.gpu.flatMap((row, i) => row.map((value, c) => Math.abs(value - twin.cpu[i][c]) / (Math.abs(twin.cpu[i][c]) + 1e-4))));
+    assert.ok(worst <= 2e-3, 'the GPU blend equals its CPU twin within half-float rounding: ' + worst + ' ' + JSON.stringify([0, 1, 100, 200, 255].map(i => [twin.gpu[i], twin.cpu[i]])));
+    check('photo_relit', { luma: { unlit: unlit.luma, lit: relit.luma }, blends: litState.receivers.blends, twin_max_rel: worst,
+      adaptation_ev: litState.adaptationEv, metered_cd_m2: litState.meteredCdM2, frame: litState.frame });
+
+    // The frame's own passes on this renderer: an authored HDR frame through
+    // the real bloom and display passes equals their CPU twins; dimming every
+    // light at once darkens the display monotonically at a fixed exposure.
+    const runFrame = scale => page.evaluate(async ({ image, size, params }) => {
+      const result = await window.__APT_ENGINE.litFrameProof(Float32Array.from(image), size.width, size.height, params);
+      return { ...result, frame: Array.from(result.frame), mip: { ...result.mip, data: Array.from(result.mip.data) }, display: Array.from(result.display) };
+    }, { image: Array.from(authoredHdrFrame({ scale })), size: PROOF_SIZE, params: PROOF_PARAMS });
+    const framedRaw = await runFrame(1);
+    fs.writeFileSync(path.join(run, 'frame-proof.json'), JSON.stringify(framedRaw));
+    const framed = compareFramePasses(framedRaw);
+    assert.ok(framed.mip_rel <= 6e-3, 'the bloom passes equal their CPU twin: ' + JSON.stringify(framed));
+    assert.ok(framed.display_max <= 2, 'the display pass equals its CPU twin within 8-bit rounding: ' + JSON.stringify(framed));
+    const dimmed = [framed, compareFramePasses(await runFrame(0.5)), compareFramePasses(await runFrame(0.25))].map(row => row.mean_display_luma);
+    for (let i = 1; i < dimmed.length; i++) assert.ok(dimmed[i] < dimmed[i - 1], 'dimming darkens the display: ' + dimmed.join(' > '));
+    check('frame_passes_equal_cpu_twin', { ...framed, dimmed_display_luma: dimmed });
+
+    // Presentation never enters the linear readback: the look, glare and noise change, the luminance does not.
+    const linearDigest = () => page.evaluate(async () => {
+      const read = await window.__APT_ENGINE.litLinearReadback({ scale: 0.125 });
+      let h = 0, sum = 0; for (let i = 0; i < read.luminance.length; i++) { h = (Math.imul(h, 31) + Math.round(read.luminance[i] * 1e4)) | 0; sum += read.luminance[i]; }
+      return { h, mean: sum / read.luminance.length, n: read.luminance.length, measured: read.measured };
+    });
+    await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
+    const linearCamera = await linearDigest();
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('eye')); await frames(page, 4);
+    const linearEye = await linearDigest();
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('camera')); await frames(page, 4);
+    // WebGL: bit-identical. WebGPU's per-frame sort is not bit-reproducible: the same mean within its own noise.
+    if (RENDERER === 'webgl') assert.deepEqual(linearEye, linearCamera, 'the linear readback is free of the look, glare and noise');
+    else {
+      const again = await linearDigest(), noise = Math.abs(again.mean - linearCamera.mean);
+      assert.ok(Math.abs(linearEye.mean - linearCamera.mean) <= Math.max(2 * noise, 2e-3 * linearCamera.mean),
+        'the linear readback is free of the look, glare and noise ' + JSON.stringify({ linearCamera, linearEye, again }));
+    }
+    assert.equal(linearCamera.measured, false);
+    check('linear_readback_presentation_free', linearCamera);
 
     // Live spots: L5's bake posts each spot's column for the splats; re-aiming
     // one re-bakes only that column and the blend follows.

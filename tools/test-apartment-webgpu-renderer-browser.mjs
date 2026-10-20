@@ -45,6 +45,8 @@ const imageDir = process.env.HOME_WEBGPU_PROOF_IMAGES || null;
  * contracts and thresholds. This entry point covers Cloud; Mesh and Photo
  * import it with their mode selected, within the 145 s software-GL budget. */
 const proofModes = globalThis.__HOME_WEBGPU_PROOF_MODES || ['points'];
+const proofPhase = globalThis.__HOME_WEBGPU_PROOF_PHASE || 'all';
+assert.ok(['all', 'frames', 'contracts'].includes(proofPhase));
 const modeNames = { points: 'Cloud', mesh: 'Mesh', splat: 'Photo' };
 const viewport = { width: 960, height: 600 };
 
@@ -143,7 +145,7 @@ function png(frame) {
 
 // In the page: fixed poses, both scan modes, and every renderer-independent
 // contract the WebGPU seam must leave untouched.
-async function proofInPage(modes) {
+async function proofInPage({modes, phase}) {
   const e = window.__APT_ENGINE, overlay = e.overlay;
   const frames = n => new Promise(resolve => { let left = n; const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick)); requestAnimationFrame(tick); });
   // Steady state: the rig's tween, then eased presentation (fixture visuals,
@@ -182,13 +184,15 @@ async function proofInPage(modes) {
     ['zoom+2', () => { e.rig.stepZoom(1, 0); e.rig.stepZoom(1, 0); }]];
   // Photo is Spark on WebGL and Home's splat renderer on the node renderer;
   // on Victoria it carries the dollhouse cut, exterior cleanup and photo floor.
-  for (const mode of modes) {
+  if (phase !== 'contracts') for (const mode of modes) {
     await e.modes.setMode(mode, { duration: 0 });
     for (const [name, apply] of poses) {
+      console.info('renderer-proof:' + mode + ':' + name);
       e.rig.snapHome(0); await settle(); apply(); await settle();
       result.poses.push({ mode, pose: name, frame: await capture() });
     }
   }
+  if (phase === 'frames') { result.webgpu = e.webgpuReadback(); return result; }
   // Picking and projection: CPU paths, identical on both backends.
   await e.modes.setMode('mesh', { duration: 0 });
   e.rig.snapHome(0); await settle();
@@ -233,8 +237,12 @@ async function proofInPage(modes) {
   return result;
 }
 
-test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mode => modeNames[mode]).join(' and ')}`, { timeout: 145000 }, async t => {
+test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mode => modeNames[mode]).join(' and ')} (${proofPhase})`, { timeout: 145000 }, async t => {
   const browsers = new Set();
+  let stage = 'setup', completed = false;
+  const started = Date.now(), stages = {};
+  const at = name => { stage = name; stages[name] = Date.now() - started; };
+  process.on('exit', () => { if (!completed && t.signal.aborted) console.error('Renderer proof incomplete: ' + stage + ' ' + JSON.stringify(stages)); });
   t.after(async () => { await Promise.allSettled([...browsers].map(browser => browser.close())); });
   const run = fs.mkdtempSync(path.join(os.tmpdir(), 'home-webgpu-proof-'));
   const privateRoot = path.join(run, 'private');
@@ -296,6 +304,7 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
   }
 
   async function boot(backend) {
+    at(backend + ':launch');
     const browser = await chromium.launch(browserOptions(backend));
     browsers.add(browser);
     try {
@@ -312,14 +321,20 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       const page = await context.newPage(), pageErrors = [], warnings = [];
       page.setDefaultTimeout(30000);
       page.on('pageerror', error => pageErrors.push(error.message));
-      page.on('console', message => { if (/WebGPU|home-3d\] renderer/.test(message.text())) warnings.push(message.text()); });
+      page.on('console', message => {
+        if (/WebGPU|home-3d\] renderer/.test(message.text())) warnings.push(message.text());
+        if (message.text().startsWith('renderer-proof:')) at(backend + ':' + message.text());
+      });
+      at(backend + ':boot');
       await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off' + (backend === 'webgl' ? '' : '&renderer=' + backend), { waitUntil: 'domcontentloaded' });
       await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 60000 });
       await page.waitForFunction(() => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === 'echo', null, { timeout: 60000 });
       await page.getByRole('group', { name: 'Home', exact: true }).getByRole('button', { name: 'Victoria', exact: true }).click();
+      at(backend + ':victoria');
       await page.waitForFunction(() => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === 'victoria', null, { timeout: 60000 });
       await page.waitForFunction(() => window.__APT_ENGINE?.overlay?.virtualFixturesReadback?.().fixture_count > 0);
-      const result = await page.evaluate(proofInPage, proofModes);
+      const result = await page.evaluate(proofInPage, {modes: proofModes, phase: proofPhase});
+      at(backend + ':complete');
       return { ...result, pageErrors, warnings };
     } finally { await browser.close(); browsers.delete(browser); }
   }
@@ -340,7 +355,9 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       }
       assert.equal(candidate.webgpu.lost, null);
       // Contracts the seam must not move.
-      const contracts = {
+      let contracts = null;
+      if (proofPhase !== 'frames') {
+      contracts = {
         picks: assertNumericallyEqual(candidate.picks, reference.picks, 'surface picks'),
         projections: assertNumericallyEqual(candidate.projections, reference.projections, 'overlay projection'),
         fit: assertNumericallyEqual(candidate.fit, reference.fit, 'fit bounds'),
@@ -350,6 +367,8 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       assert.equal(candidate.photo.ok, true, 'Photo loads on the node renderer: ' + candidate.photo.error);
       assert.ok(candidate.capture && candidate.capture.width > 0 && candidate.capture.length === candidate.capture.width * candidate.capture.height * 4,
         'captureFrame returns a frame');
+      }
+      assert.equal(reference.poses.length, proofPhase === 'contracts' ? 0 : proofModes.length * 3, 'every selected format retains all three original poses');
       const comparisons = [];
       for (const [index, shot] of reference.poses.entries()) {
         const other = candidate.poses[index];
@@ -377,13 +396,14 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
         assert.ok(row.over48 <= 0.01, `${row.mode} ${row.pose}: ${(row.over48 * 100).toFixed(2)}% of covered pixels differ by more than 48/255`);
         assert.ok(row.mean <= 4, `${row.mode} ${row.pose}: mean difference ${row.mean.toFixed(2)}/255`);
       }
-      if (process.env.HOME_WEBGPU_PROOF_FRAME_GATE === '1') {
+      if (proofPhase !== 'frames' && process.env.HOME_WEBGPU_PROOF_FRAME_GATE === '1') {
         assert.ok(candidate.frameTime.medianMs <= reference.frameTime.medianMs * 1.05 + 0.5,
           `frame time ${candidate.frameTime.medianMs} ms vs WebGL ${reference.frameTime.medianMs} ms`);
       }
     }
     console.log(JSON.stringify(report, null, 2));
     assert.deepEqual(forbidden, []); assert.deepEqual(missing, []);
+    completed = true;
   } finally {
     server.closeAllConnections(); server.close();
     fs.rmSync(run, { recursive: true, force: true });

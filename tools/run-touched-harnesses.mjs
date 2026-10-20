@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* ===================================================================== * run-touched-harnesses.mjs — run the test harnesses that guard the files
+/* ===================================================================== * run-touched-harnesses.mjs â€” run the test harnesses that guard the files
  * touched by a diff.
  *
  * The tools/run-*.js harnesses and explicitly mapped Node test suites guard
@@ -35,13 +35,13 @@ import { fileURLToPath } from "node:url";
 const TOOLS = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(TOOLS, "..");
 
-/* file-pattern → harnesses that pin or exercise it. Patterns are tested with
+/* file-pattern â†’ harnesses that pin or exercise it. Patterns are tested with
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
   [/^tools\/(?:bench-lit-receivers-browser|lib\/lit-webgpu-timestamp-benchmark|test-lit-webgpu-timestamp-benchmark)\.mjs$/, ["test-lit-webgpu-timestamp-benchmark.mjs"]],
   [/^tools\/(?:fixtures\/apartment-lit-layer-fixtures|test-lit-layer-fixture-memoization)\.mjs$/, ["test-lit-layer-fixture-memoization.mjs"]],
-  [/^app\/src\/(?:home-apartment\.jsx|home-3d\/markers\.js)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"]],
+  [/^app\/src\/(?:home-apartment\.jsx|home-3d\/markers\.js)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
   [/^(?:app\/src\/(?:home-app\.jsx|home-metrics(?:-lab)?\.jsx)|tools\/test-home-full-ui-metrics-browser\.mjs)$/, ["test-home-full-ui-metrics-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-people)\.jsx|tools\/test-home-full-ui-people-browser\.mjs)$/, ["test-home-full-ui-people-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-intelligence)\.jsx|tools\/test-home-full-ui-intelligence-browser\.mjs)$/, ["test-home-full-ui-intelligence-browser.mjs"]],
@@ -159,7 +159,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
-  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"]],
+  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser(?:-part2)?\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
   // The WebGPU splat pipeline (Photo on ?renderer=webgpu) and the Spark cutaway it mirrors.
   [/^(?:app\/src\/home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|modes\.js|adaptive-performance\.mjs)|tools\/test-apartment-gaussian-splat\.mjs)$/, ["test-apartment-gaussian-splat.mjs"]],
   [/^(?:app\/src\/(?:vendor\/(?:three-0\.186\.1|spark-2\.1\.0)\/.+|home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/test-apartment-webgpu-splat-browser\.mjs)$/, ["test-apartment-webgpu-splat-browser.mjs"]],
@@ -272,7 +272,8 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-guide-browser.mjs": 8,
   "test-apartment-lit-splats-browser.mjs": 125,
   "test-apartment-lit-splats-browser-part2.mjs": 90,
-  "test-apartment-webgpu-photo-browser.mjs": 140,
+  "test-apartment-webgpu-photo-browser.mjs": 125,
+  "test-apartment-webgpu-photo-browser-part2.mjs": 110,
   "test-apartment-composer-comfort-browser.mjs": 115,
   "test-apartment-aim-wiring-keys-browser.mjs": 96,
   "test-apartment-aim-reticle-drag-browser.mjs": 95,
@@ -305,7 +306,7 @@ function shardWeight(name) {
 // Parts of one split suite run on different workers whenever there are at
 // least as many workers as parts, so no worker carries the whole suite.
 const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
-  ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"],
+  ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
   ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs"],
   ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];
@@ -409,14 +410,14 @@ const source = {
   changed_files: files.map((f) => f.replace(/\\/g, "/")).sort(),
 };
 
-console.log(`[touched-harnesses] ${args.all ? "(--all)" : files.length + " changed files"} → ${list.length} harnesses${touchedAppSrc ? " + check-jsx" : ""}`);
+console.log(`[touched-harnesses] ${args.all ? "(--all)" : files.length + " changed files"} â†’ ${list.length} harnesses${touchedAppSrc ? " + check-jsx" : ""}`);
 
 if (args.verifyReceipts) process.exit(verifyReceipts(args.verifyReceipts, args.shards));
 
 const shardPlan = args.shard ? partitionPlan(plan, args.shard.count)[args.shard.index - 1] : plan;
 if (args.shard) {
   const weight = items => items.reduce((sum, name) => sum + shardWeight(name), 0);
-  console.log(`[touched-harnesses] shard ${args.shard.index}/${args.shard.count} → ${shardPlan.length} of ${plan.length} plan items (~${weight(shardPlan)}s of ~${weight(plan)}s measured)`);
+  console.log(`[touched-harnesses] shard ${args.shard.index}/${args.shard.count} â†’ ${shardPlan.length} of ${plan.length} plan items (~${weight(shardPlan)}s of ~${weight(plan)}s measured)`);
 }
 const results = [];
 function finish(code) {
@@ -431,11 +432,11 @@ function finish(code) {
 }
 
 if (!plan.length) {
-  console.log("[touched-harnesses] nothing mapped — done");
+  console.log("[touched-harnesses] nothing mapped â€” done");
   finish(0);
 }
 if (!shardPlan.length) {
-  console.log("[touched-harnesses] this shard has no plan items — done");
+  console.log("[touched-harnesses] this shard has no plan items â€” done");
   finish(0);
 }
 
@@ -481,7 +482,7 @@ if (runCheckJsx && !args.list) {
     status = "fail";
   }
 
-  // home-3d/ and home-agent/ are real ES modules — check-jsx's Function-based
+  // home-3d/ and home-agent/ are real ES modules â€” check-jsx's Function-based
   // parse can't read them; node --check can.
   const esmFiles = files
     .map((f) => f.replace(/\\/g, "/"))

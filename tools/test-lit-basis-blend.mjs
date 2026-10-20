@@ -283,3 +283,19 @@ test('the night ambient follows the window column; exterior splats get the assum
     assert.deepEqual(Blend.blendReceiverDisplay(set, 5, on, null, { look: 'camera', operator: 'linear' }), Blend.blendReceiverDisplay(set, 5, on, null, { operator: 'linear' }),
         'the linear comparison view carries no look');
 });
+
+test('the point cloud stays monochrome: grey surfaces, the fixtures\' own colour, black where they do not reach', async () => {
+    const layer = await load(authoredLightingLayer(victoria).files, 'points');
+    const grey = Blend.greyAlbedo(layer.albedo);
+    for (let i = 0; i < grey.length; i += 3) assert.ok(grey[i] === grey[i + 1] && grey[i + 1] === grey[i + 2], 'no capture colour');
+    const set = Blend.packReceiverSet({ ...layer, albedo: grey });
+    const at = (level, kelvin) => Blend.blendWeights({ lights: lights({ down: level, zone: level, kelvin }), columns: layer.columnsMeta,
+        columnScale: layer.columnScale, look: 'camera', windowMedian: 0.5, monochrome: true }).weights;
+    // All off: black (no ambient, no exterior).
+    const off = at(0, 3000);
+    for (let i = 0; i < set.count; i += 41) assert.deepEqual(Blend.blendReceiver(set, i, off), [0, 0, 0]);
+    // A warm light reads warm and a cool one cooler: no white balance on the cloud.
+    const warm = Blend.blendReceiverDisplay(set, 5, at(0.75, 2700), null, { look: 'camera' });
+    const cool = Blend.blendReceiverDisplay(set, 5, at(0.75, 5000), null, { look: 'camera' });
+    assert.ok(warm[0] / warm[2] > cool[0] / cool[2] && warm[0] > warm[2], 'the colour temperature shows');
+});

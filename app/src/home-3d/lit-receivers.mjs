@@ -77,7 +77,9 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
     if (unsupported) return { available: false, reason: unsupported };
     const { count, positions } = receiverPositions(kind, object);
     if (!layer || layer.count !== count) return { available: false, reason: 'lighting_layer_count_mismatch' };
-    const packed = Blend.packReceiverSet(layer);
+    // The point cloud stays monochrome (owner, 2026-10-20): grey surfaces, coloured light.
+    const monochrome = kind === 'points';
+    const packed = Blend.packReceiverSet(monochrome ? { ...layer, albedo: Blend.greyAlbedo(layer.albedo) } : layer);
     // The window column is blended on its own (capped); the camera look uses it.
     packed.windowSlot = layer.columnsMeta.findIndex(column => column.kind === 'window');
     const spots = new Uint32Array(count * Blend.LIT_SPOT_WORDS);
@@ -343,7 +345,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
         sync({ lights = [], gain = 1, operator: next = operator } = {}) {
             if (disposed) return false;
             if (next !== operator) { operator = next; gpu.retone(); dirty = true; }
-            const result = Blend.blendWeights({ lights, columns: layer.columnsMeta, columnScale: layer.columnScale, spotSlots, gain, look, windowMedian }, weights);
+            const result = Blend.blendWeights({ lights, columns: layer.columnsMeta, columnScale: layer.columnScale, spotSlots, gain, look, windowMedian, monochrome }, weights);
             matched = result.matched; unbaked = result.unbaked; whiteKelvin = result.whiteKelvin;
             const next2 = Array.from(weights, value => value.toPrecision(7)).join(',');
             if (next2 !== signature) { signature = next2; dirty = true; }
@@ -403,8 +405,9 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
                 operator, blends, lastBlendMs, columns: layer.columns, matched: matched.length, unbaked: Object.freeze(unbaked.slice()),
                 liveSpots: spotSlots.size, gpuBytes: gpu.memoryBytes, layerBytes: layer.bytes, binding: 'sha256-verified',
                 provenance: layer.provenance, simulated: true, measured: false, look: look === 'camera' && operator === 'agx' ? 'camera' : 'eye',
-                whiteKelvin: whiteKelvin && Math.round(whiteKelvin), windowAmbient: windowMedian !== null,
-                disclosure: Blend.LIT_RECEIVERS_DISCLOSURE + (look === 'camera' && operator === 'agx' && whiteKelvin ? ' ' + Exposure.litCameraDisclosure({ kelvin: whiteKelvin }) : ''),
+                whiteKelvin: whiteKelvin && Math.round(whiteKelvin), windowAmbient: windowMedian !== null && !monochrome, monochrome,
+                disclosure: Blend.LIT_RECEIVERS_DISCLOSURE + (monochrome ? ' Cloud stays monochrome: grey surfaces lit only by the fixtures, in their own colour.'
+                    : look === 'camera' && operator === 'agx' && whiteKelvin ? ' ' + Exposure.litCameraDisclosure({ kelvin: whiteKelvin }) : ''),
                 limit: Blend.LIT_RECEIVERS_LIMIT });
         },
     };

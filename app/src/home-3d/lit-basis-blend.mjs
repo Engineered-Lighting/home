@@ -78,6 +78,19 @@ export const LIT_RECEIVERS_DISCLOSURE = 'Photo and Cloud are relit by simulation
     + 'de-lit layer, then the fixtures\' assumed output is added from a precomputed light basis. Modeled, not measured; '
     + 'the capture\'s view-dependent sheen is dropped while lit. ' + LIT_WINDOW_AMBIENT.source + ' ' + LIT_NIGHT_EXTERIOR.source;
 
+/* The point cloud stays monochrome: each receiver's de-lit albedo becomes a
+ * grey of the same lightness (sRGB8), so the cloud shows the fixtures' light
+ * and colour on neutral surfaces, never the capture's colours. */
+export function greyAlbedo(albedo) {
+    const out = new Uint8Array(albedo.length), lin = v => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    const enc = v => (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
+    for (let i = 0; i < albedo.length; i += 3) {
+        const y = 0.2126729 * lin(albedo[i] / 255) + 0.7151522 * lin(albedo[i + 1] / 255) + 0.0721750 * lin(albedo[i + 2] / 255);
+        out[i] = out[i + 1] = out[i + 2] = Math.round(Math.min(1, Math.max(0, enc(y))) * 255);
+    }
+    return out;
+}
+
 /* ---- Packing ---------------------------------------------------------------
  * One receiver set from the layer's per-field arrays into GPU words:
  *   meta  x albedo sRGB r | g << 8 | b << 16 | flags << 24
@@ -117,7 +130,7 @@ export const lightKey = light => `${light.fixtureId ?? ''}:${light.kind}:${light
  * entries in the world (eased); `spotSlots` maps a spot's key to its slot. */
 export function blendWeights({ lights = [], columns = [], columnScale = [], spotSlots = new Map(), gain = 1,
     exposure = Model.LIT_EXPOSURE, lumens = Model.LIT_ASSUMED_LUMENS, ambient = Exposure.LIT_AMBIENT_FLOOR,
-    look = 'eye', windowMedian = null, exterior = LIT_NIGHT_EXTERIOR, windowAmbient = LIT_WINDOW_AMBIENT } = {},
+    look = 'eye', windowMedian = null, exterior = LIT_NIGHT_EXTERIOR, windowAmbient = LIT_WINDOW_AMBIENT, monochrome = false } = {},
 into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
     if (!LIT_LOOKS.includes(look)) throw new RangeError('lit_look_unknown');
     into.fill(0);
@@ -142,6 +155,11 @@ into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
     }
     // The night ambient: mostly through the window column, scaled so its
     // median over the room is that share of the assumed floor.
+    /* Monochrome (the point cloud, owner 2026-10-20): only the fixtures light
+     * it, so whatever they do not reach falls to black; no ambient, no night
+     * exterior, and no white balance, so each light's colour temperature reads
+     * as it is. */
+    if (monochrome) { ambient = { ...ambient, lux: 0 }; exterior = { ...exterior, cdM2: 0 }; }
     const floor = Model.cctToLinearRgb(ambient.kelvin), window = columns.findIndex(column => column?.kind === 'window');
     const throughWindow = window >= 0 && window < LIT_BASIS_SLOTS && windowMedian > 0 ? windowAmbient.share : 0;
     for (let c = 0; c < 3; c++) into[AMBIENT_SLOT * 4 + c] = ambient.lux * (1 - throughWindow) * floor[c] * exposure;
@@ -162,7 +180,7 @@ into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
         weight += flux; mireds += flux * 1e6 / (Number.isFinite(light.kelvin) ? light.kelvin : 3000);
     }
     const whiteKelvin = 1e6 / (mireds / weight);
-    const balance = look === 'camera' ? Exposure.whiteBalanceMatrix(Model.cctToLinearRgb(whiteKelvin)) : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const balance = look === 'camera' && !monochrome ? Exposure.whiteBalanceMatrix(Model.cctToLinearRgb(whiteKelvin)) : [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
     balance.forEach((row, r) => { for (let c = 0; c < 3; c++) into[(WB_SLOT + r) * 4 + c] = row[c]; });
     into[PARAMS_SLOT * 4] = exposure; into[PARAMS_SLOT * 4 + 1] = gain;
     into[PARAMS_SLOT * 4 + 2] = look === 'camera' ? Exposure.LIT_CAMERA_LOOK.agxPower : 1;

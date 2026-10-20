@@ -297,6 +297,83 @@ class EgressReleaseTests(unittest.TestCase):
         self.assertEqual(self.state('r2'), 'abandoned')
 
 
+class CadenceTests(unittest.TestCase):
+    def test_reduced_doubles_the_live_jev_cadence_within_bounds_and_normal_restores_it(self):
+        from service_runtime import REASONING_CADENCE_DEFAULTS, cadence_settings, offer_interval
+        runtime = SimpleNamespace(reasoning_cadence=cadence_settings(None), reasoning_min_offer_interval_s=offer_interval(None))
+        base = (dict(runtime.reasoning_cadence), runtime.reasoning_min_offer_interval_s)
+        store = SimpleNamespace(clock=lambda: 0., settings=None)
+        deep = ManagedDeepStack(SimpleNamespace(store=store, runtime=runtime))
+        loop = activity_loop.ActivityLoop(deep=deep, occupancy=lambda: 'off', clock=lambda: 0.,
+            publisher=BrainPublisher(origin='https://brain.invalid', home='victoria', token=lambda: 't' * 40,
+                                     post=lambda body: 200))
+        jev = loop.set_cadence('reduced')['jev']
+        self.assertEqual(jev['min_offer_interval_s'], min(10., 2 * base[1]))
+        for key in ('debounce_s', 'keepalive_s', 'hold_max_s'):
+            self.assertEqual(jev[key], 2 * REASONING_CADENCE_DEFAULTS[key])
+        self.assertEqual(cadence_settings(runtime.reasoning_cadence), runtime.reasoning_cadence, 'still a valid cadence')
+        loop.set_cadence('normal')
+        self.assertEqual((runtime.reasoning_cadence, runtime.reasoning_min_offer_interval_s), base)
+        loop.set_cadence('reduced'); loop.shutdown()
+        self.assertEqual(runtime.reasoning_cadence, base[0], 'shutdown restores the configured cadence')
+
+
+class VjepaOffTests(unittest.TestCase):
+    """MVP: the always-on loop runs fully without V-JEPA (owner, 2026-10-19)."""
+    def config(self, **extra):
+        return {'schema': activity_loop.SCHEMA, 'enabled': True, 'home': 'victoria', 'room': 'den', 'camera_id': 'den',
+                'experiment_id': 'apartment-viewing', 'brain': {'origin': 'https://la.example', 'token_file': '/p/t',
+                'ca_file': None}, 'timings': {}, 'pricing': {}, 'zones': None, **extra}
+
+    def controller(self):
+        return SimpleNamespace(store=SimpleNamespace(clock=lambda: 0., settings=None), runtime=None)
+
+    def build(self, config, **kw):
+        from activity_loop_runtime import build
+        return build(activity_loop.check_config(config), controller=self.controller(), occupancy=lambda: 'off',
+                     read_token=lambda p: 't' * 40, **kw)
+
+    def test_vjepa_is_off_by_default_and_true_is_refused_for_the_mvp(self):
+        self.build(self.config()); self.build(self.config(vjepa=False))
+        with self.assertRaisesRegex(ValueError, 'not provisioned'):
+            self.build(self.config(vjepa=True))
+        with self.assertRaises(ValueError):
+            activity_loop.check_config(self.config(vjepa='off'))
+
+    def test_the_recipe_grants_no_vjepa_and_a_granting_recipe_is_refused(self):
+        from activity_loop_runtime import recipe_vjepa_arms
+        self.assertEqual(recipe_vjepa_arms('apartment-viewing'), set())
+        self.assertTrue(recipe_vjepa_arms('vjepa-onoff'), 'the lever recipe does grant it')
+        catalog = json.loads(Path(__file__).with_name('experiments.json').read_text(encoding='utf-8'))
+        lever = next(r for r in catalog['experiments'] if r['id'] == 'vjepa-onoff')
+        catalog['experiments'] = [dict(lever, id='apartment-viewing') if r['id'] == 'apartment-viewing' else r
+                                  for r in catalog['experiments']]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'experiments.json'; path.write_text(json.dumps(catalog), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'grants V-JEPA'):
+                self.build(self.config(), catalog_path=path)
+
+    def test_recordings_start_no_vjepa_pump_or_lease_and_jev_sees_pose_and_qwen_only(self):
+        from evidence_policy import recipe_grants, source_policy
+        from service_runtime import ServiceRuntime
+        catalog = json.loads(Path(__file__).with_name('experiments.json').read_text(encoding='utf-8'))
+        recipe = next(r for r in catalog['experiments'] if r['id'] == 'apartment-viewing')
+        defaults = {k: v['default'] for k, v in catalog['baseline']['families'].items()}
+        runner = SimpleNamespace(closed=False, source_policy=recipe_grants(recipe, defaults),
+                                 ha_evidence={'a': True, 'b': True}, caption_evidence={'a': False, 'b': False})
+        started = []
+        fake = SimpleNamespace(vjepa_live=object(), vjepa_live_pumps={}, vjepa_live_errors={}, runners={'s': runner},
+                               _vjepa_arms=ServiceRuntime._vjepa_arms,
+                               _start_live_pump=lambda *a, **k: started.append(a))
+        ServiceRuntime._start_vjepa_live(fake, {'id': 's'})
+        self.assertEqual(started, [], 'no V-JEPA pump, so no LA V-JEPA lease')
+        self.assertEqual(fake.vjepa_live_errors['s'], 'temporal_encoder_not_in_recipe')
+        grants = source_policy(runner.source_policy, ha=runner.ha_evidence, caption=runner.caption_evidence)
+        self.assertNotIn('granted', grants['temporal_encoder'].values())
+        self.assertEqual(grants['qwen_scene'], {'a': 'granted', 'b': 'granted'})
+        # deep_stack health reads only the detector output (see the observe test: ok with no V-JEPA).
+
+
 class QwenInJevInputTests(unittest.TestCase):
     """Qwen facts reach JEV again through the always-on perceiver's receipts."""
     def setUp(self):

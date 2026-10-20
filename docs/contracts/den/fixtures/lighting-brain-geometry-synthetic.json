@@ -1,0 +1,207 @@
+{
+  "schema": "lighting-brain-geometry-1",
+  "home": "victoria",
+  "room": "den",
+  "frame": "victoria-den",
+  "camera_m": [
+    2,
+    0.1,
+    2
+  ],
+  "fixtures": [
+    {
+      "fixture_id": "victoria-den-proposed-fixture-01",
+      "aim_origin_m": [
+        1,
+        1,
+        2.26
+      ],
+      "horizontal_world_reference": [
+        0.5547001962252291,
+        0.8320502943378437,
+        0
+      ],
+      "limits": {
+        "pan_min_deg": -180,
+        "pan_max_deg": 180,
+        "tilt_min_deg": -90,
+        "tilt_max_deg": 90
+      }
+    },
+    {
+      "fixture_id": "victoria-den-proposed-fixture-02",
+      "aim_origin_m": [
+        2,
+        1,
+        2.26
+      ],
+      "horizontal_world_reference": [
+        0,
+        1,
+        0
+      ],
+      "limits": {
+        "pan_min_deg": -180,
+        "pan_max_deg": 180,
+        "tilt_min_deg": -90,
+        "tilt_max_deg": 90
+      }
+    },
+    {
+      "fixture_id": "victoria-den-mount-03-virtual-fixture",
+      "aim_origin_m": [
+        3,
+        3,
+        2.26
+      ],
+      "horizontal_world_reference": [
+        -0.8944271909999159,
+        -0.4472135954999579,
+        0
+      ],
+      "limits": {
+        "pan_min_deg": -180,
+        "pan_max_deg": 180,
+        "tilt_min_deg": -90,
+        "tilt_max_deg": 90
+      }
+    },
+    {
+      "fixture_id": "victoria-den-mount-04-virtual-fixture",
+      "aim_origin_m": [
+        3,
+        4,
+        2.26
+      ],
+      "horizontal_world_reference": [
+        -0.5547001962252291,
+        -0.8320502943378437,
+        0
+      ],
+      "limits": {
+        "pan_min_deg": -180,
+        "pan_max_deg": 180,
+        "tilt_min_deg": -90,
+        "tilt_max_deg": 90
+      }
+    }
+  ],
+  "zones": {
+    "sofa": {
+      "seat_m": [
+        1.8,
+        4,
+        0.45
+      ],
+      "near_fixtures": [
+        "victoria-den-proposed-fixture-02",
+        "victoria-den-mount-03-virtual-fixture"
+      ],
+      "seat_method": "zone_centre",
+      "zone_vertices_m": [
+        [
+          1,
+          3.6,
+          0.45
+        ],
+        [
+          2.6,
+          3.6,
+          0.45
+        ],
+        [
+          2.6,
+          4.4,
+          0.45
+        ],
+        [
+          1,
+          4.4,
+          0.45
+        ]
+      ],
+      "zone_centre_m": [
+        1.8,
+        4,
+        0.45
+      ],
+      "zone_normal_unit": [
+        0,
+        0,
+        1
+      ]
+    },
+    "desk": {
+      "seat_m": [
+        3.3,
+        0.6,
+        0.75
+      ],
+      "near_fixtures": [
+        "victoria-den-proposed-fixture-01",
+        "victoria-den-mount-04-virtual-fixture"
+      ],
+      "seat_method": "desk_centre",
+      "zone_vertices_m": [
+        [
+          2.8,
+          0.3,
+          0.75
+        ],
+        [
+          3.8,
+          0.3,
+          0.75
+        ],
+        [
+          3.8,
+          0.9,
+          0.75
+        ],
+        [
+          2.8,
+          0.9,
+          0.75
+        ]
+      ],
+      "zone_centre_m": [
+        3.3,
+        0.6,
+        0.75
+      ],
+      "zone_normal_unit": [
+        0,
+        0,
+        1
+      ]
+    }
+  },
+  "frame_convention": "z_up_metric_floor0",
+  "unit": "m",
+  "binding": {
+    "canonical_collision_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_revision": "synthetic-den-r1",
+    "frame_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "manifest_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "registration_version": 1
+  },
+  "equipment_ref": {
+    "revision": 2,
+    "digest": "e185dd0a860ea645ca07cc97dbea73a7d12a6d58fbb243b9d7f1751410f467a7"
+  },
+  "generated_at": 1800000000,
+  "sources": {
+    "sofa": {
+      "schema": "home-registered-sofa-target-1",
+      "digest": "cff81c731daa2fb74645e8fbb7cefb79df3345c40fcd89ad51f44960e3ad9bc7"
+    },
+    "desk": {
+      "schema": "home-registered-desk-target-1",
+      "digest": "67f696ce81de29783b8d4dd10ccc93ecffe36a089f1649fcfbad9d5dcdf48c4a"
+    }
+  },
+  "truth_role": "owner_marked_targets_and_virtual_fixture_model",
+  "physical_commands": false,
+  "digest": "39d795c73fbfbfcb7553be3430ce63094726dd0392cfbfd5b9b508f339d3f14d",
+  "synthetic": true
+}

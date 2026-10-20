@@ -22,6 +22,14 @@ import activity_pose
 
 SCHEMA = 'perception-lab-activity-loop-1'
 SOURCE = 'perception-lab/activity-loop'
+STOP_REASONS = ('operator_stop', 'monitor_backoff')
+# Cadence levels for the AL-5 monitor's step-1 back-off: reduced doubles the JEV
+# interval and halves the pose rate. Recovery returns to normal.
+CADENCE = {'normal': 1, 'reduced': 2}
+
+
+class ResumeRefused(ValueError):
+    """A conditional resume that does not match why the loop stopped."""
 COMPONENTS = ('jev', 'deep_stack', 'camera')
 
 
@@ -42,6 +50,7 @@ class ActivityLoop:
         self.scope = dict(home=home, room=room, source=source)
         self.clock = clock
         self.vacancy_pause_s, self.pose_interval_s = float(vacancy_pause_s), float(pose_interval_s)
+        self.base_pose_interval_s, self.cadence = self.pose_interval_s, 'normal'
         self.health_heartbeat_s, self.cost_interval_s, self.jev_stale_s = health_heartbeat_s, cost_interval_s, jev_stale_s
         self.pricing = dict(pricing or {})
         self.zones = activity_pose.check_zones(zones, home=home, room=room)
@@ -68,10 +77,32 @@ class ActivityLoop:
                 self.running = False
         return self.snapshot()
 
-    def resume(self):
+    def resume(self, only_reason=None):
+        """Clear a Stop. With only_reason (the monitor's 'monitor_backoff'), only
+        a Stop for that reason is cleared: the owner's operator_stop stays."""
         with self.lock:
+            if only_reason is not None and self.stopped is not None and self.stopped != only_reason:
+                raise ResumeRefused('activity_loop_stopped_by_' + self.stopped)
             self.stopped = None
         return self.snapshot()
+
+    def set_cadence(self, level):
+        """'normal' or 'reduced' (JEV interval x2, pose rate halved)."""
+        if level not in CADENCE:
+            raise ValueError('activity-loop cadence must be normal or reduced')
+        with self.lock:
+            factor = CADENCE[level]
+            self.cadence, self.pose_interval_s = level, self.base_pose_interval_s * factor
+            scale = getattr(self.deep, 'set_cadence', None)
+            if scale is not None:
+                scale(factor)
+        return self.cadence_status()
+
+    def cadence_status(self):
+        with self.lock:
+            jev = getattr(self.deep, 'cadence_status', None)
+            return {'level': self.cadence, 'factor': CADENCE[self.cadence], 'pose_interval_s': self.pose_interval_s,
+                    'jev': jev() if jev is not None else None}
 
     # --- one step ----------------------------------------------------------
     def _reading(self):
@@ -206,6 +237,10 @@ class ActivityLoop:
         self.halt.set()
         if self.thread is not None:
             self.thread.join(timeout_s)
+        try:
+            self.set_cadence('normal')  # hand the runtime back at its configured cadence
+        except Exception:
+            pass
         with self.lock:
             if self.running:
                 self.deep.stop('activity_loop_shutdown')
@@ -216,7 +251,7 @@ class ActivityLoop:
         with self.lock:
             now = self.clock()
             return dict(schema=SCHEMA, state='stopped' if self.stopped else 'running' if self.running else 'paused',
-                stopped_reason=self.stopped, running_for_s=None if not self.running else now - self.started_at,
+                stopped_reason=self.stopped, cadence=self.cadence, running_for_s=None if not self.running else now - self.started_at,
                 last_occupied_age_s=None if self.last_occupied is None else now - self.last_occupied,
                 vacancy_pause_s=self.vacancy_pause_s, counts=dict(self.counts),
                 health={k: {'ok': v[0], 'detail': v[1]} for k, v in self.health_sent.items()},
@@ -237,9 +272,11 @@ def read_config(path, *, read_private):
 
 def check_config(value):
     keys = {'schema', 'enabled', 'home', 'room', 'camera_id', 'experiment_id', 'brain', 'timings', 'pricing', 'zones'}
-    if (not isinstance(value, dict) or not keys <= set(value) <= keys | {'jev_release'} or value['schema'] != SCHEMA
+    if (not isinstance(value, dict) or not keys <= set(value) <= keys | {'jev_release', 'vjepa'} or value['schema'] != SCHEMA
             or type(value['enabled']) is not bool):
         raise ValueError('exact activity-loop config required')
+    if type(value.get('vjepa', False)) is not bool:
+        raise ValueError('activity-loop vjepa must be true or false (off for the MVP)')
     release = value.get('jev_release')
     # The bounded JEV egress release is on unless this says enabled:false.
     if release is not None and (not isinstance(release, dict) or not set(release) <= {'enabled', 'abandon_after_s', 'backoff_max_s'}
@@ -265,7 +302,7 @@ def check_config(value):
         raise ValueError('activity-loop pricing must be non-negative numbers or null')
     zones = value['zones']
     if isinstance(zones, str):
-        # The path of AL-4's private lighting-brain-targets-1 export, read at build.
+        # The path of the private lighting-brain-geometry-1 file, read at build.
         if not (zones.startswith('/') or (len(zones) > 2 and zones[1] == ':')):
             raise ValueError('the activity-loop zones file must be an absolute path')
     else:

@@ -185,6 +185,23 @@ class LoopTests(unittest.TestCase):
             self.clock.now += seconds
             self.loop.tick()
 
+    def test_reduced_cadence_halves_the_pose_rate_and_normal_restores_it(self):
+        self.occupied = 'on'
+        def poses(seconds):
+            before = len(self.brain.events('person_pose'))
+            for i in range(int(seconds / .5)):
+                self.deep.seen = {'running': True, 'health': healthy(),
+                                  'pose': {'key': self.clock.now, 'people': [person()], 'observed_at': self.clock.now + .5}}
+                self.step()
+            return len(self.brain.events('person_pose')) - before
+        self.assertEqual(poses(20), 20)
+        self.assertEqual(self.loop.set_cadence('reduced')['pose_interval_s'], 2.)
+        self.assertEqual(poses(20), 10)
+        self.loop.set_cadence('normal')
+        self.assertEqual(poses(20), 20)
+        with self.assertRaises(ValueError):
+            self.loop.set_cadence('slow')
+
     def test_occupancy_gates_start_and_pauses_two_minutes_after_the_room_empties(self):
         self.step(n=4); self.assertNotIn('start', self.deep.calls)
         self.occupied = 'unknown'; self.step(); self.assertNotIn('start', self.deep.calls, 'unknown never wakes it')
@@ -297,49 +314,63 @@ class PoseTests(unittest.TestCase):
         self.assertEqual(activity_pose.zone_hint(entry, zones), 'sofa')
         self.assertIsNone(activity_pose.zone_hint(entry, {}))
 
-    def test_zone_hint_reads_al4s_targets_export_in_any_up_axis(self):
-        # AL-4's lighting-brain-targets-1 export: 3D seat vertices and the seat
-        # normal. Here the room frame is y-up; the test projects along the normal.
-        export = {'schema': 'lighting-brain-targets-1', 'version': 1, 'home': 'victoria', 'room': 'den',
-                  'targets': {'sofa': {'zone_vertices_m': [[0, .45, 0], [2, .45, 0], [2, .45, .9], [0, .45, .9]],
-                                       'zone_centre_m': [1, .45, .45], 'zone_normal_unit': [0, 1, 0], 'seat_m': [1, .45, .45]},
-                              'desk': {'zone_vertices_m': [[3, .75, 0], [4.5, .75, 0], [4.5, .75, .7]],
-                                       'zone_centre_m': [4, .75, .2], 'zone_normal_unit': [0, 1, 0]}}}
-        zones = activity_pose.check_zones(deepcopy(export), home='victoria', room='den')
-        seated = {'shoulders_m': {'left': [.8, 1.05, .5], 'right': [1.2, 1.05, .5]}, 'head_m': [1, 1.3, .5]}
+    def geometry(self):
+        # AL-4's contract fixture: the single private lighting-brain-geometry-1 file.
+        path = Path(__file__).resolve().parents[3] / 'docs/contracts/den/fixtures/lighting-brain-geometry-synthetic.json'
+        return json.loads(path.read_text(encoding='utf-8'))
+
+    def test_zone_hint_reads_the_geometry_file_zones(self):
+        geometry = self.geometry()
+        self.assertEqual(geometry['schema'], 'lighting-brain-geometry-1')
+        zones = activity_pose.check_zones(deepcopy(geometry), home='victoria', room='den')
+        self.assertEqual(set(zones), {'sofa', 'desk'})
+        seated = {'shoulders_m': {'left': [1.6, 4.0, 1.0], 'right': [2.0, 4.0, 1.0]}, 'head_m': [1.8, 4.0, 1.25]}
         self.assertEqual(activity_pose.zone_hint(seated, zones), 'sofa')
-        self.assertIsNone(activity_pose.zone_hint(dict(seated, shoulders_m={'left': [2.4, 1.1, .5], 'right': [2.8, 1.1, .5]}), zones))
-        self.assertEqual(activity_pose.zone_hint({'shoulders_m': {'left': None, 'right': None}, 'head_m': [4, 1.2, .2]}, zones), 'desk')
-        for change in (lambda e: e.update(home='other'), lambda e: e['targets']['sofa'].update(zone_normal_unit=[0, 2, 0]),
-                       lambda e: e['targets'].update(kitchen={}), lambda e: e.update(version=2)):
-            value = deepcopy(export); change(value)
+        self.assertIsNone(activity_pose.zone_hint(dict(seated, shoulders_m={'left': [.2, 2., 1.], 'right': [.6, 2., 1.]}), zones))
+        self.assertEqual(activity_pose.zone_hint({'shoulders_m': {'left': None, 'right': None}, 'head_m': [3.3, .6, 1.2]}, zones), 'desk')
+        for change in (lambda e: e.update(home='other'), lambda e: e['zones']['sofa'].update(zone_normal_unit=[0, 0, 2]),
+                       lambda e: e['zones'].update(kitchen={}), lambda e: e.pop('zones'),
+                       lambda e: e['zones']['desk'].update(zone_vertices_m=[[0, 0, 0], [1, 0, 0]])):
+            value = deepcopy(geometry); change(value)
             with self.subTest(change=change), self.assertRaises(ValueError):
                 activity_pose.check_zones(value, home='victoria', room='den')
+
+    def test_zones_project_along_the_normal_in_any_up_axis(self):
+        # The same sofa in a y-up frame: x, y, z -> x, z, y.
+        geometry = self.geometry()
+        swap = lambda v: [v[0], v[2], v[1]]
+        for zone in geometry['zones'].values():
+            zone['zone_vertices_m'] = [swap(v) for v in zone['zone_vertices_m']]
+            zone['zone_normal_unit'] = swap(zone['zone_normal_unit'])
+        zones = activity_pose.check_zones(geometry, home='victoria', room='den')
+        seated = {'shoulders_m': {'left': [1.6, 1.0, 4.0], 'right': [2.0, 1.0, 4.0]}, 'head_m': None}
+        self.assertEqual(activity_pose.zone_hint(seated, zones), 'sofa')
+
+    def test_the_retired_targets_export_is_refused_with_a_clear_error(self):
+        geometry = self.geometry()
+        retired = {'schema': 'lighting-brain-targets-1', 'version': 1, 'home': 'victoria', 'room': 'den',
+                   'targets': geometry['zones']}
+        with self.assertRaisesRegex(ValueError, 'lighting-brain-targets-1 is retired.*lighting-brain-geometry-1'):
+            activity_pose.check_zones(retired, home='victoria', room='den')
+        with self.assertRaises(ValueError):
+            activity_loop.check_config({'schema': activity_loop.SCHEMA, 'enabled': True, 'home': 'victoria', 'room': 'den',
+                'camera_id': 'den', 'experiment_id': 'apartment-viewing', 'brain': {'origin': 'https://la.example',
+                'token_file': '/p/t', 'ca_file': None}, 'timings': {}, 'pricing': {}, 'zones': retired})
 
     def test_a_zones_path_is_read_at_build_from_the_private_reader(self):
         from activity_loop_runtime import build
         config = {'schema': activity_loop.SCHEMA, 'enabled': True, 'home': 'victoria', 'room': 'den', 'camera_id': 'den',
                   'experiment_id': 'apartment-viewing', 'brain': {'origin': 'https://la.example', 'token_file': '/p/t',
-                  'ca_file': None}, 'timings': {}, 'pricing': {}, 'zones': '/private/lighting-brain-targets.json'}
+                  'ca_file': None}, 'timings': {}, 'pricing': {}, 'zones': '/private/lighting-brain-geometry.json'}
         activity_loop.check_config(config)
         with self.assertRaises(ValueError):
-            activity_loop.check_config(dict(config, zones='relative/targets.json'))
-        export = {'schema': 'lighting-brain-targets-1', 'version': 1, 'home': 'victoria', 'room': 'den',
-                  'targets': {'sofa': {'zone_vertices_m': [[0, 0, .45], [2, 0, .45], [2, .9, .45]], 'zone_normal_unit': [0, 0, 1]}}}
+            activity_loop.check_config(dict(config, zones='relative/geometry.json'))
         read = []
-        loop = build(config, controller=SimpleNamespace(store=SimpleNamespace(clock=lambda: 0., settings=None), runtime=None), occupancy=lambda: 'off', read_token=lambda path: 't' * 40,
-                     post=lambda body: 200, read_json=lambda path: read.append(path) or export)
-        self.assertEqual(read, ['/private/lighting-brain-targets.json'])
-        self.assertEqual(set(loop.zones), {'sofa'})
-
-    def test_person_count_uses_the_duplicate_merge(self):
-        box = dict(label='person', x=260., y=80., w=120., h=260.)
-        result = {'objects': [{'label': 'person', 'instance_id': 'p', 'confidence': .9},
-                              {'label': 'person', 'instance_id': 'd', 'confidence': .3}],
-                  'boxes': [dict(box, instance_id='p', confidence=.9), dict(box, instance_id='d', confidence=.3, x=261.)]}
-        self.assertEqual(activity_pose.person_count(result), 1)
-        result['objects'][1]['confidence'] = result['boxes'][1]['confidence'] = .8
-        self.assertEqual(activity_pose.person_count(result), 2)
+        controller = SimpleNamespace(store=SimpleNamespace(clock=lambda: 0., settings=None), runtime=None)
+        loop = build(config, controller=controller, occupancy=lambda: 'off', read_token=lambda path: 't' * 40,
+                     post=lambda body: 200, read_json=lambda path: read.append(path) or self.geometry())
+        self.assertEqual(read, ['/private/lighting-brain-geometry.json'])
+        self.assertEqual(set(loop.zones), {'sofa', 'desk'})
 
 
 class RouteTests(unittest.TestCase):
@@ -355,7 +386,7 @@ class RouteTests(unittest.TestCase):
             def start_thread(self): calls.append('start_thread')
             def shutdown(self): calls.append('shutdown')
             def stop(self, reason): calls.append('stop:' + reason)
-            def resume(self): calls.append('resume')
+            def resume(self, reason=None): calls.append('resume')
             def snapshot(self): return {'state': 'running', 'commands_lights': False}
         app = FastAPI()
         @app.middleware('http')
@@ -374,6 +405,54 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(client.post('/api/perception-lab/v1/activity-loop/stop', headers={'x-caps': 'record'}).status_code, 200)
             client.post('/api/perception-lab/v1/activity-loop/resume', headers={'x-caps': 'record'})
         self.assertEqual(calls, ['start_thread', 'stop:operator_stop', 'resume', 'shutdown'])
+
+    def test_stop_reasons_the_monitors_resume_and_the_cadence_routes(self):
+        from fastapi import FastAPI, Request
+        from fastapi.responses import JSONResponse
+        from fastapi.testclient import TestClient
+        from auth import AuthorizationError, Principal
+        from activity_loop_runtime import install
+        clock, deep = Clock(), FakeDeep()
+        loop = activity_loop.ActivityLoop(deep=deep, occupancy=lambda: 'on', clock=clock,
+            publisher=BrainPublisher(origin='https://brain.invalid', home='victoria', token=lambda: 't' * 40,
+                                     post=Brain(), clock=clock, monotonic=clock))
+        loop.start_thread = lambda: None
+        app = FastAPI()
+        @app.middleware('http')
+        async def principal(request: Request, call_next):
+            request.state.principal = Principal('t', 'victoria', frozenset(request.headers.get('x-caps', '').split(',')))
+            try:
+                return await call_next(request)
+            except AuthorizationError:
+                return JSONResponse({'error': 'unauthorized'}, status_code=401)
+        install(app, loop)
+        base, record, read = '/api/perception-lab/v1/activity-loop', {'x-caps': 'record'}, {'x-caps': 'read'}
+        with TestClient(app) as client:
+            loop.tick()
+            status = lambda: client.get(base, headers=read).json()
+            self.assertEqual(client.post(base + '/stop', json={'reason': 'whim'}, headers=record).status_code, 422)
+            # The owner's Stop (the default) cannot be undone by the monitor.
+            self.assertEqual(client.post(base + '/stop', headers=record).json()['stopped_reason'], 'operator_stop')
+            refused = client.post(base + '/resume', json={'reason': 'monitor_backoff'}, headers=record)
+            self.assertEqual((refused.status_code, refused.json()['detail']), (409, 'activity_loop_stopped_by_operator_stop'))
+            self.assertEqual(status()['state'], 'stopped')
+            self.assertIsNone(client.post(base + '/resume', headers=record).json()['stopped_reason'], 'the owner resumes')
+            # The monitor's own back-off Stop is the only one it may resume.
+            client.post(base + '/stop', json={'reason': 'monitor_backoff'}, headers=record)
+            self.assertEqual((status()['state'], status()['stopped_reason']), ('stopped', 'monitor_backoff'))
+            self.assertEqual(client.post(base + '/resume', json={'reason': 'monitor_backoff'}, headers=record).status_code, 200)
+            self.assertIsNone(status()['stopped_reason'])
+            # Cadence: the monitor's step-1 back-off and recovery.
+            self.assertEqual(client.get(base + '/cadence', headers=read).json()['level'], 'normal')
+            self.assertEqual(client.post(base + '/cadence', json={'level': 'reduced'}, headers=read).status_code, 401)
+            for bad in ({}, {'level': 'fast'}, {'level': 'reduced', 'x': 1}):
+                self.assertEqual(client.post(base + '/cadence', json=bad, headers=record).status_code, 422)
+            reduced = client.post(base + '/cadence', json={'level': 'reduced'}, headers=record).json()
+            self.assertEqual((reduced['level'], reduced['factor'], reduced['pose_interval_s']), ('reduced', 2, 2.))
+            self.assertEqual(status()['cadence'], 'reduced')
+            self.assertEqual(client.post(base + '/cadence', json={'level': 'normal'}, headers=record).json()['pose_interval_s'], 1.)
+            client.post(base + '/cadence', json={'level': 'reduced'}, headers=record)
+        self.assertEqual(loop.cadence, 'normal', 'shutdown hands the runtime back at normal cadence')
 
 
 if __name__ == '__main__':

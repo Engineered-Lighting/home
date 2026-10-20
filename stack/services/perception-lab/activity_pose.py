@@ -112,21 +112,26 @@ def _plane_zone(vertices, normal):
     return zone
 
 
-EXPORT_SCHEMA = 'lighting-brain-targets-1'  # AL-4's private sofa/desk mark export
+EXPORT_SCHEMA = 'lighting-brain-geometry-1'  # the single private geometry file shared with the brain (AL-4)
+RETIRED_SCHEMAS = ('lighting-brain-targets-1',)
 
 
 def check_zones(value, *, home=None, room=None):
-    """Checked zones from AL-4's private lighting-brain-targets-1 export (3D zone
-    vertices and normal in the room frame), or the inline form
-    {'sofa'|'desk': [[x, y], ...]} on the z-up floor plane. None means no zones."""
+    """Checked zones from the private lighting-brain-geometry-1 file (zones.sofa
+    and zones.desk: 3D zone vertices and normal in the room frame), or the
+    inline form {'sofa'|'desk': [[x, y], ...]} on the z-up floor plane. None
+    means no zones. The retired lighting-brain-targets-1 export is refused."""
     if value is None:
         return {}
-    bad = ValueError('activity loop zones must be the lighting-brain-targets-1 export or sofa/desk polygons')
+    bad = ValueError('activity loop zones must be the lighting-brain-geometry-1 file or sofa/desk polygons')
     if not isinstance(value, dict):
         raise bad
     if 'schema' in value:
-        targets = value.get('targets')
-        if (value['schema'] != EXPORT_SCHEMA or value.get('version') != 1 or not isinstance(targets, dict)
+        if value['schema'] in RETIRED_SCHEMAS:
+            raise ValueError('activity loop zones: %s is retired; point zones at the lighting-brain-geometry-1 file'
+                             % value['schema'])
+        targets = value.get('zones')
+        if (value['schema'] != EXPORT_SCHEMA or not isinstance(targets, dict)
                 or not set(targets) <= {'sofa', 'desk'} or (home is not None and value.get('home') != home)
                 or (room is not None and value.get('room') != room)):
             raise bad

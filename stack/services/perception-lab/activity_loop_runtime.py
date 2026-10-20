@@ -167,6 +167,29 @@ class ManagedDeepStack:
             self.wanted = False
             self._close(reason)
 
+    def set_cadence(self, factor):
+        """Scale the runtime's live JEV cadence (read on every reasoning tick)
+        from its configured values: factor 1 restores them, 2 doubles the
+        offer interval, debounce, keepalive and answer hold within bounds."""
+        runtime = self.runtime
+        if runtime is None or not hasattr(runtime, 'reasoning_cadence'):
+            return
+        with self.lock:
+            if getattr(self, 'base_cadence', None) is None:
+                self.base_cadence = (dict(runtime.reasoning_cadence), runtime.reasoning_min_offer_interval_s)
+            cadence, interval = self.base_cadence
+            caps = {'keepalive_s': 60., 'debounce_s': 10., 'hold_max_s': 30., 'gate_keepalive_s': 60.}
+            runtime.reasoning_cadence = {**cadence, **{k: min(caps[k], cadence[k] * factor) for k in caps if k in cadence}}
+            runtime.reasoning_min_offer_interval_s = min(10., interval * factor)
+
+    def cadence_status(self):
+        runtime = self.runtime
+        if runtime is None or not hasattr(runtime, 'reasoning_cadence'):
+            return None
+        cadence = runtime.reasoning_cadence
+        return {'min_offer_interval_s': runtime.reasoning_min_offer_interval_s,
+                **{k: cadence.get(k) for k in ('debounce_s', 'keepalive_s', 'hold_max_s', 'gate_keepalive_s')}}
+
     def maintain(self):
         """Every loop tick, running or paused: the bounded egress release."""
         with self.lock:
@@ -320,11 +343,30 @@ class ManagedDeepStack:
                         roll_margin_s=self.roll_margin_s, jev_release=self.release.snapshot())
 
 
-def build(config, *, controller, occupancy, read_token, post=None, read_json=None):
+def recipe_vjepa_arms(experiment_id, catalog_path=None):
+    """Arms of a catalog recipe granted the temporal_encoder (V-JEPA) family."""
+    from pathlib import Path
+    from evidence_policy import recipe_grants
+    path = Path(catalog_path) if catalog_path else Path(__file__).with_name('experiments.json')
+    catalog = json.loads(path.read_text(encoding='utf-8'))
+    recipe = next(r for r in catalog['experiments'] if r['id'] == experiment_id)
+    defaults = {k: v['default'] for k, v in catalog['baseline']['families'].items()}
+    grants = recipe_grants(recipe, defaults)
+    return {arm for arm in ('a', 'b') if grants['temporal_encoder'][arm] == 'granted'}
+
+
+def build(config, *, controller, occupancy, read_token, post=None, read_json=None, catalog_path=None):
     """An ActivityLoop for the managed controller from a checked private config.
-    A string `zones` is the path of AL-4's private export, read with read_json."""
+    A string `zones` is the path of the private lighting-brain-geometry-1 file, read with read_json."""
     from activity_loop import ActivityLoop, SOURCE
     from brain_publisher import BrainPublisher
+    # MVP (owner, 2026-10-19): the loop runs without V-JEPA and folds it in later.
+    # Its recipe must grant no temporal_encoder, so no recording starts a V-JEPA
+    # pump or waits on an LA V-JEPA lease, and JEV sees pose plus Qwen facts only.
+    if config.get('vjepa', False):
+        raise ValueError('V-JEPA is not provisioned for the always-on loop yet; set vjepa false')
+    if recipe_vjepa_arms(config['experiment_id'], catalog_path):
+        raise ValueError('the activity loop recipe grants V-JEPA while the loop runs with vjepa off')
     timings = dict(config['timings'])
     release = EgressRelease(controller.store, **{'enabled': True, **(config.get('jev_release') or {})})
     deep = ManagedDeepStack(controller, camera_id=config['camera_id'], experiment_id=config['experiment_id'],
@@ -346,7 +388,8 @@ def install(app, loop, *, prefix='/api/perception-lab/v1'):
     shutdown stops recordings) and add the status/stop/resume routes."""
     import asyncio
     import contextlib
-    from fastapi import Request
+    from fastapi import HTTPException, Request
+    from activity_loop import CADENCE, STOP_REASONS, ResumeRefused
     original = app.router.lifespan_context
 
     @contextlib.asynccontextmanager
@@ -370,16 +413,52 @@ def install(app, loop, *, prefix='/api/perception-lab/v1'):
         request.state.principal.require('read')
         return await asyncio.to_thread(view)
 
+    async def body(request, keys, required=()):
+        raw = await request.body()
+        try:
+            value = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            value = None
+        if not isinstance(value, dict) or not set(value) <= set(keys) or not set(required) <= set(value):
+            raise HTTPException(422, 'activity_loop_body_invalid')
+        return value
+
     @app.post(prefix + '/activity-loop/stop')
     async def activity_loop_stop(request: Request):
+        # reason: 'operator_stop' (default, the owner) or 'monitor_backoff' (AL-5).
         request.state.principal.require('record')
-        await asyncio.to_thread(loop.stop, 'operator_stop')
+        reason = (await body(request, ('reason',))).get('reason', 'operator_stop')
+        if reason not in STOP_REASONS:
+            raise HTTPException(422, 'activity_loop_stop_reason_invalid')
+        await asyncio.to_thread(loop.stop, reason)
         return await asyncio.to_thread(view)
 
     @app.post(prefix + '/activity-loop/resume')
     async def activity_loop_resume(request: Request):
+        # {"reason": "monitor_backoff"} resumes only the monitor's own Stop and
+        # refuses the owner's operator_stop (409). No body: the owner resumes.
         request.state.principal.require('record')
-        await asyncio.to_thread(loop.resume)
+        reason = (await body(request, ('reason',))).get('reason')
+        if reason is not None and reason not in STOP_REASONS:
+            raise HTTPException(422, 'activity_loop_stop_reason_invalid')
+        try:
+            await asyncio.to_thread(loop.resume, reason)
+        except ResumeRefused as refused:
+            raise HTTPException(409, str(refused))
         return await asyncio.to_thread(view)
+
+    @app.get(prefix + '/activity-loop/cadence')
+    async def activity_loop_cadence_status(request: Request):
+        request.state.principal.require('read')
+        return await asyncio.to_thread(loop.cadence_status)
+
+    @app.post(prefix + '/activity-loop/cadence')
+    async def activity_loop_cadence(request: Request):
+        # {"level": "normal" | "reduced"}: the AL-5 monitor's step-1 back-off and its recovery.
+        request.state.principal.require('record')
+        level = (await body(request, ('level',), ('level',)))['level']
+        if level not in CADENCE:
+            raise HTTPException(422, 'activity_loop_cadence_level_invalid')
+        return await asyncio.to_thread(loop.set_cadence, level)
     app.state.activity_loop = loop
     return app

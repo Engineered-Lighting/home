@@ -190,7 +190,8 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     assert.ok((await note.textContent()).trim().startsWith('Simulated · not photometric · assumed output'
       + (shownQuality === 'reduced' ? ' · reduced quality for speed' : '')), 'the note states the disclosure and any declared reduced quality');
     assert.equal(await note.getAttribute('data-apt-lit-disclosure'), shownQuality);
-    assert.equal(await page.locator('[data-apt-lit-bounce-limit]').count(), 0, "#319's leak line left with its instant radiosity");
+    assert.equal((await page.locator('[data-apt-lit-bounce-limit]').textContent()).trim(),
+      'One bounce, shadowed · per-vertex detail · assumed albedos · radial zones cast no direct shadows', 'the bake states its limits; no leak line');
     assert.match(await note.getAttribute('title'), /Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm/);
     const lit = await page.evaluate(() => {
       const engine = window.__APT_ENGINE, state = engine.litState(), lights = [];

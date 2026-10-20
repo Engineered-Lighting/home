@@ -38,7 +38,7 @@ import * as THREE from 'three';
 const Model = await import(`./lit-model.mjs${new URL(import.meta.url).search}`);
 const Bake = await import(`./lit-bvh-bake.mjs${new URL(import.meta.url).search}`);
 export const { LIT_ASSUMED_LUMENS, LIT_ASSUMPTION_SOURCE, LIT_DISCLOSURE, LIT_DISCLOSURE_DETAIL, LIT_EXPOSURE, LIT_TARGET_FPS,
-    candelaFromLumens, litDimmingFraction } = Model;
+    LIT_BOUNCE_LIMIT, LIT_BOUNCE_ALBEDO, candelaFromLumens, litDimmingFraction } = Model;
 // Cached shadow maps by softness: 4 spots at 2048, 4 downs at 1024 (halved when reduced).
 export const LIT_SHADOW_MAP_SIZES = Object.freeze({ crisp: 2048, soft: 1024 });
 export const LIT_LUX_LABEL = 'Modeled lux';
@@ -434,6 +434,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             meshSwapped: swapped.length, exposure: LIT_EXPOSURE,
             easing, easeTauMs: Model.LIT_EASE_TAU_MS, dimmingCurve: Model.LIT_DIMMING_CURVE.name,
             bounce: Object.freeze({ ...bounce, lastBake: bounce.lastBake ? Object.freeze({ ...bounce.lastBake }) : null }),
+            bounceLimit: LIT_BOUNCE_LIMIT, assumedAlbedos: LIT_BOUNCE_ALBEDO,
             lux: Object.freeze(lux.slice()), luxLabel: LIT_LUX_LABEL,
             assumedLumens: LIT_ASSUMED_LUMENS, assumptionSource: LIT_ASSUMPTION_SOURCE, measured: false,
             disclosure: LIT_DISCLOSURE, disclosureDetail: LIT_DISCLOSURE_DETAIL });

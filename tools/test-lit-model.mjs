@@ -157,7 +157,9 @@ test('fixture lights use the dimmed flux, never the raw slider level', () => {
   assert.equal(lights[2].candela, 0, 'an off zone adds no light');
   // L5 retired #319's instant radiosity: the bounce is traced in lit-bvh-bake.mjs,
   // weighted by each light's dimmed candela.
-  assert.equal(M.bouncePatches, undefined); assert.equal(M.LIT_BOUNCE_LIMIT, undefined);
+  assert.equal(M.bouncePatches, undefined);
+  assert.doesNotMatch(M.LIT_BOUNCE_LIMIT, /leak/, 'the bounce is shadowed now');
+  assert.match(M.LIT_BOUNCE_LIMIT, /assumed albedos/); assert.equal(M.LIT_BOUNCE_ALBEDO.measured, false);
 });
 
 test('easeLights steps fixture lights toward their set level and Kelvin, snapping when asked', () => {

@@ -113,7 +113,9 @@ test('enable relights the mesh from the four fixtures with crisp spot, soft down
   }
   assert.deepEqual({ ...state.shadowMapSizes }, { crisp: 2048, soft: 1024 });
   assert.equal(all.filter(light => light.userData.lit_source === 'bounce').length, 0, "#319's instant-radiosity bounce lights are retired");
-  assert.equal(state.bounceLimit, undefined, 'and so is their leak line');
+  assert.equal(state.bounceLimit, 'One bounce, shadowed · per-vertex detail · assumed albedos · radial zones cast no direct shadows',
+    'the leak line is gone; the new limits are stated');
+  assert.equal(state.assumedAlbedos.measured, false); assert.equal(state.assumedAlbedos.source, 'scan colours x 0.8');
   for (const light of zones) {
     assert.equal(light.castShadow, false, 'each radial zone is its own unshadowed lobe');
     assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(120, .95) * Model.litDimmingFraction(.75) * EXPOSURE) < 1e-9);

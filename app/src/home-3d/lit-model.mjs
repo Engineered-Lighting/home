@@ -39,6 +39,12 @@ export const LIT_DISCLOSURE = 'Simulated · not photometric · assumed output';
 export const LIT_DISCLOSURE_DETAIL = 'Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm. '
     + 'Fixed night exposure. Materials are assumed from the scan colours. One bounce, ray traced against the scan mesh '
     + 'with assumed albedos; lux at named aims is modeled.';
+/* L5's bounce (lit-bvh-bake.mjs) traces and shadows every path, so it no
+ * longer leaks through walls; what it still does not do is stated with the
+ * view. Albedos are assumed: the scan colours x 0.8 (sRGB to linear,
+ * clamped), the untinted material's grey where a mesh has no colour. */
+export const LIT_BOUNCE_LIMIT = 'One bounce, shadowed · per-vertex detail · assumed albedos · radial zones cast no direct shadows';
+export const LIT_BOUNCE_ALBEDO = Object.freeze({ source: 'scan colours x 0.8', clamp: Object.freeze([0.02, 0.9]), untinted: '#9ea4aa', measured: false });
 /* The fixed night exposure (prototype scene.js _litApply). It scales every
  * simulated light's candela into display intensity, so a narrow spot reads
  * brighter than a wide wash of the same output, as it does in the room. */

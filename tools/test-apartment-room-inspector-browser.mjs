@@ -183,8 +183,11 @@ test('real authored room inspector preserves named aims and modeled channel bind
       assert.equal(await saveButton.count(), 1, 'existing editor save control is mounted');
       assert.equal(await saveButton.isDisabled(), true, 'opening an editor must not create a dirty draft');
       assert.equal(await page.getByRole('button', { name: 'Finish placement', exact: true }).count(), 0);
-      assert.equal(await page.locator('[data-apt-edit-ui="targets-and-palette"]')
-        .getByRole('button', { name: 'Cancel', exact: true }).count(), 0);
+      // A placement in progress shows Cancel; the Setup named-aim editor's own
+      // Cancel (close without saving) is not a placement.
+      assert.equal(await page.locator('[data-apt-edit-ui="targets-and-palette"]').getByRole('button', { name: 'Cancel', exact: true }).count()
+        - await page.locator('[data-named-aims="editing"]').getByRole('button', { name: 'Cancel', exact: true }).count(), 0);
+      assert.equal(await page.locator('[data-named-aims="placing"]').count(), 0);
       assert.equal(await page.getByRole('button', { name: /click destination/ }).count(), 0);
     };
     await waitSite('echo');
@@ -227,13 +230,11 @@ test('real authored room inspector preserves named aims and modeled channel bind
     await check('named aim Edit opens the existing target selected without placement, dirty state or a save', async () => {
       await page.getByRole('region', { name: 'Named aims', exact: true })
         .getByRole('button', { name: 'Edit Authored reading point', exact: true }).click();
-      await editorInspector().getByRole('spinbutton', { name: 'target x', exact: true }).waitFor();
-      assert.equal(await editorInspector().locator('input:not([type])').inputValue(), echo.seed.targets[0].name);
-      for (const [index, axis] of ['x', 'y', 'z'].entries()) assert.equal(
-        Number(await editorInspector().getByRole('spinbutton', { name: 'target ' + axis, exact: true }).inputValue()), echo.seed.targets[0].pos[index]);
-      assert.match(await page.locator('[data-apt-edit-ui="targets-and-palette"]').innerText(), /ADD TARGET · STEP 1 OF 2/);
-      assert.equal(await page.locator('[data-apt-edit-ui="targets-and-palette"]')
-        .getByRole('button', { name: '· ' + echo.seed.targets[0].name, exact: true }).count(), 1);
+      // Setup › Named aims opens the existing aim in its editor (APT-U04).
+      const mapper = page.locator('[data-named-aims="editing"]'); await mapper.waitFor();
+      assert.equal(await mapper.getByRole('textbox', { name: 'Named aim name', exact: true }).inputValue(), echo.seed.targets[0].name);
+      assert.match(await mapper.innerText(), /Edit named aim/);
+      assert.ok((await mapper.innerText()).includes('Position · 5 cm steps · ' + echo.seed.targets[0].pos.map(value => value.toFixed(2)).join(', ') + ' m'));
       await expectCleanEditor();
       assert.equal(await page.evaluate(() => localStorage.getItem('apartment3d.modelDraft')), originalDraft);
       await editorToolbar().getByRole('button', { name: 'done', exact: true }).click(); await group('Authored study').waitFor();

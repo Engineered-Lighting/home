@@ -37,7 +37,7 @@ const shellPartCommands = ['node --test tools/test-apartment-home-shell-browser-
   'node --test tools/test-apartment-home-shell-browser-part3.mjs'];
 const runs = entries => entries.filter(entry => /^        run:/m.test(entry)).map(entry => field(entry, 'run', 8));
 // One worker count names every shard, receipt, artifact and the aggregate's union check.
-const SHARDS = 4, shardList = Array.from({ length: SHARDS }, (_, index) => index + 1);
+const SHARDS = 5, shardList = Array.from({ length: SHARDS }, (_, index) => index + 1);
 const receiptDir = '.tmp/touched-harnesses', receiptPath = receiptDir + '/shard-${{ matrix.shard }}-of-' + SHARDS + '.json';
 const shardedCommand = originalCommands[5] + ' --shard "${{ matrix.shard }}/' + SHARDS + '" --receipt "' + receiptPath + '"';
 const verifyCommand = originalCommands[5] + ' --verify-receipts ' + receiptDir + ' --shards ' + SHARDS;

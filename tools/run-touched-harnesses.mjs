@@ -14,9 +14,9 @@
  *   node tools/run-touched-harnesses.mjs --all
  *   node tools/run-touched-harnesses.mjs --all --list
  *   node tools/run-touched-harnesses.mjs --base origin/main --shard 2/3 \
- *     --receipt .tmp/touched-harnesses/shard-2-of-4.json
+ *     --receipt .tmp/touched-harnesses/shard-2-of-3.json
  *   node tools/run-touched-harnesses.mjs --base origin/main \
- *     --verify-receipts .tmp/touched-harnesses --shards 4
+ *     --verify-receipts .tmp/touched-harnesses --shards 3
  *
  * --shard i/n runs only the plan items a deterministic partition assigns to
  * worker i. Every worker computes the same full plan first, so the n shards
@@ -112,6 +112,8 @@ const MAP = [
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
+  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-rail-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment-(?:setup|edit)\.jsx|home-apartment-data\.js|home-equipment-registration\.js)|web-gateway\/equipment-registration\.mjs|tools\/(?:test-apartment-setup-saves-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-saves-browser.mjs"]],
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
@@ -156,6 +158,11 @@ const MAP = [
     ["test-apartment-chat-context.cjs", "test-apartment-chat-dispatch.cjs", "test-apartment-chat-chips-browser.mjs", "test-apartment-chat-room-browser.mjs"]],
   [/^tools\/test-apartment-unread-(?:state\.cjs|integration\.mjs)$/, ["test-apartment-unread-state.cjs", "test-apartment-unread-integration.mjs"]],
   [/^tools\/test-apartment-travel-guard\.cjs$/, ["test-apartment-travel-guard.cjs"]],
+  [/^(?:app\/src\/(?:home-apartment-setup-links|home-apartment-data)\.js|tools\/test-apartment-setup-links\.cjs)$/, ["test-apartment-setup-links.cjs"]],
+  [/^(?:app\/src\/home-apartment-(?:named-aims\.(?:js|jsx)|aiming\.js)|tools\/test-apartment-named-aims\.cjs)$/, ["test-apartment-named-aims.cjs"]],
+  [/^(?:app\/src\/home-apartment-setup-devices\.js|tools\/test-apartment-setup-devices\.cjs)$/, ["test-apartment-setup-devices.cjs"]],
+  [/^(?:app\/src\/home-apartment-(?:setup-devices\.(?:js|jsx)|setup\.jsx|edit\.jsx)|tools\/(?:test-apartment-setup-proposal-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-proposal-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment-named-aims\.(?:js|jsx)|home-apartment-(?:setup|edit)\.jsx|home-3d\/(?:picking\.js|apartment-ui-overlay-bridge\.mjs|markers\.js))|tools\/(?:test-apartment-named-aims-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-named-aims-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-aim|-command-ladder)?\.jsx|home-apartment-aiming\.js|index\.html|home-feature-loader\.js|home-service-worker\.js)|ha-config\/packages\/living_lights_manual_detection\.yaml)$/, ["run-apartment-command-ladder-tests.mjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
@@ -188,6 +195,10 @@ const SHARD_WEIGHT_S = {
   "test-apartment-lit-browser.mjs": 120,
   "test-lit-bvh-bake-browser.mjs": 20,
   "test-apartment-composer-comfort-browser.mjs": 55,
+  "test-apartment-setup-saves-browser.mjs": 110,
+  "test-apartment-setup-rail-browser.mjs": 70,
+  "test-apartment-named-aims-browser.mjs": 45,
+  "test-apartment-setup-proposal-browser.mjs": 80,
   "test-apartment-rig-fit-browser.mjs": 45,
   "test-apartment-aim-theme-browser.mjs": 8,
   "test-apartment-photo-recovery-browser.mjs": 8,

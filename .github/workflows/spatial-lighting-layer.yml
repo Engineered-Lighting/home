@@ -1,0 +1,44 @@
+name: spatial lighting layer (synthetic)
+
+# Public gate for the L3 lighting-layer tool. Synthetic data only: the spike-1
+# room and a procedural box pack. No Den data, imagery or coordinates. The real
+# bake runs on the workstation RTX 4090, never here and never on the servers.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/spatial-lighting-layer.yml"
+      - "tools/spatial-pipeline/lightbake/**"
+      - "tools/spatial-pipeline/90_delight_layer.py"
+      - "tools/spatial-pipeline/91_bake_light_basis.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/spatial-lighting-layer.yml"
+      - "tools/spatial-pipeline/lightbake/**"
+      - "tools/spatial-pipeline/90_delight_layer.py"
+      - "tools/spatial-pipeline/91_bake_light_basis.py"
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install numpy, scipy, pillow and NVIDIA Warp (CPU backend)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/lightbake"
+          "$RUNNER_TEMP/lightbake/bin/pip" install --disable-pip-version-check \
+            numpy==2.4.4 scipy==1.17.1 pillow==12.2.0 warp-lang==1.18.0
+
+      - name: Spike-1 reproduction, encoding, tracer and end-to-end synthetic pack
+        working-directory: tools/spatial-pipeline
+        env:
+          LIGHTBAKE_DEVICE: cpu
+          LIGHTBAKE_REPORT: "1"
+        run: |
+          "$RUNNER_TEMP/lightbake/bin/python" -m unittest discover -s lightbake/tests -t . -v

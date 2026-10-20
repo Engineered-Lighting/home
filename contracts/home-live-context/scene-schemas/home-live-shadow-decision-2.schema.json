@@ -1,0 +1,852 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-live-shadow-decision-2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-live-shadow-decision-2"
+    },
+    "version": {
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "site_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "room_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "manifest_ref": {
+      "$ref": "#/$defs/pin"
+    },
+    "worker_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "semantic_seq": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "t": {
+      "type": "number",
+      "minimum": 0
+    },
+    "input_cut": {
+      "$ref": "#/$defs/input_cut"
+    },
+    "engagement_ref": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/publication_ref"
+            },
+            {
+              "$ref": "#/$defs/commit_output_ref"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scene": {
+      "$ref": "#/$defs/scene"
+    },
+    "goal": {
+      "$ref": "#/$defs/goal"
+    },
+    "allocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "unavailable"
+        },
+        "reason": {
+          "const": "not_implemented"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "unavailable"
+        },
+        "reason": {
+          "const": "not_implemented"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ]
+    },
+    "pending": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "intent_results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/settlement"
+      },
+      "maxItems": 128
+    },
+    "input_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "disposition": {
+            "enum": [
+              "accepted",
+              "rejected"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          }
+        },
+        "required": [
+          "id",
+          "disposition",
+          "reason"
+        ]
+      },
+      "maxItems": 128
+    },
+    "display_lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "withdrawn"
+        },
+        "sample_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "valid_until": {
+          "type": "number",
+          "minimum": 0
+        },
+        "geometry_refs": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "protection_refs": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "authority_generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "const": "not_implemented"
+        }
+      },
+      "required": [
+        "status",
+        "sample_at",
+        "valid_until",
+        "geometry_refs",
+        "protection_refs",
+        "authority_generation",
+        "reason"
+      ]
+    },
+    "actuated": {
+      "const": false
+    },
+    "acceptance_eligible": {
+      "const": false
+    },
+    "background": {
+      "$ref": "#/$defs/background"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "manifest_ref",
+    "worker_id",
+    "seq",
+    "semantic_seq",
+    "t",
+    "input_cut",
+    "engagement_ref",
+    "scene",
+    "goal",
+    "allocation",
+    "execution",
+    "pending",
+    "intent_results",
+    "input_results",
+    "display_lease",
+    "actuated",
+    "acceptance_eligible",
+    "background"
+  ],
+  "$defs": {
+    "background": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "requested"
+            },
+            "goal_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "kind": {
+              "const": "illuminate_presence"
+            },
+            "approval_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "requirements_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "nominal": {
+              "$ref": "#/$defs/nominal"
+            },
+            "fade_in_s": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 30
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/publication_ref"
+              },
+              "maxItems": 128,
+              "uniqueItems": true
+            },
+            "valid_until": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "status",
+            "goal_id",
+            "kind",
+            "approval_ref",
+            "requirements_ref",
+            "nominal",
+            "fade_in_s",
+            "evidence_refs",
+            "valid_until"
+          ]
+        }
+      ]
+    },
+    "commit_output_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commit_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "producer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "commit_id",
+        "producer_id",
+        "id",
+        "payload_digest"
+      ]
+    },
+    "goal": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "requested"
+            },
+            "goal_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "kind": {
+              "const": "illuminate_work"
+            },
+            "person_ref": {
+              "$ref": "#/$defs/person"
+            },
+            "subject_ref": {
+              "$ref": "#/$defs/subject"
+            },
+            "episode_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "scene_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "geometry_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/publication_ref"
+              },
+              "maxItems": 128,
+              "uniqueItems": true
+            },
+            "requirements_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "nominal": {
+              "$ref": "#/$defs/nominal"
+            },
+            "valid_until": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "status",
+            "goal_id",
+            "kind",
+            "person_ref",
+            "subject_ref",
+            "episode_id",
+            "scene_id",
+            "geometry_refs",
+            "requirements_ref",
+            "nominal",
+            "valid_until"
+          ]
+        }
+      ]
+    },
+    "input_cut": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stream_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "input_cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revocation_generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "input_receipts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/receipt"
+          },
+          "maxItems": 256
+        },
+        "geometry_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/publication_ref"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "cut_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "stream_epoch",
+        "input_cursor",
+        "revocation_generation",
+        "input_receipts",
+        "geometry_refs",
+        "cut_digest"
+      ]
+    },
+    "nominal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brightness_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "cct_kelvin": {
+          "type": "number",
+          "minimum": 1500,
+          "maximum": 6500
+        },
+        "fixture_family_ref": {
+          "$ref": "#/$defs/pin"
+        }
+      },
+      "required": [
+        "brightness_fraction",
+        "cct_kelvin",
+        "fixture_family_ref"
+      ]
+    },
+    "person": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "track_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "track_epoch",
+        "pid"
+      ]
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "publication_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stream_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "producer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "component_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "stream_epoch",
+        "cursor",
+        "producer_id",
+        "id",
+        "payload_digest",
+        "component_id"
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "producer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "committed_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "received_at": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "cursor",
+        "id",
+        "producer_id",
+        "payload_digest",
+        "committed_at",
+        "received_at"
+      ]
+    },
+    "scene": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        },
+        {
+          "$ref": "#/$defs/selected_scene"
+        }
+      ]
+    },
+    "selected_scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "selected"
+        },
+        "scene_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "episode_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "person_ref": {
+          "$ref": "#/$defs/person"
+        },
+        "subject_ref": {
+          "$ref": "#/$defs/subject"
+        },
+        "profile_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "example_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "selected_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "nominal": {
+          "$ref": "#/$defs/nominal"
+        },
+        "correction_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "valid_until": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status",
+        "scene_id",
+        "episode_id",
+        "person_ref",
+        "subject_ref",
+        "profile_ref",
+        "example_ref",
+        "selected_at",
+        "nominal",
+        "correction_refs",
+        "valid_until"
+      ]
+    },
+    "settlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "rejected"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "decision_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "reason",
+        "decision_ref"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "subject_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "subject_id",
+        "subject_epoch"
+      ]
+    }
+  }
+}

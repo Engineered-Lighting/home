@@ -76,6 +76,7 @@ const MAP = [
   [/^app\/src\/home-3d\//, ["run-apartment-3d-contract-tests"]],
   [/^(?:app\/src\/(?:home-3d\/(?:lit-(?:view|model)\.mjs|engine\.js)|home-apartment\.jsx)|tools\/test-apartment-lit-(?:view|browser)\.mjs)$/, ["test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/lit-(?:bvh-bake|bvh-worker|view)\.mjs|tools\/(?:test-lit-bvh-bake(?:-browser)?\.mjs|fixtures\/lit-bake-scenes\.mjs))$/, ["test-lit-bvh-bake.mjs", "test-lit-bvh-bake-browser.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   // L2: Lit's exposure and tone policy, and Lit on the WebGPU path (?renderer=webgpu-webgl).
   [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"]],
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part2)?|fixtures\/apartment-lit-webgpu-browser-proof)\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"]],
@@ -132,10 +133,17 @@ const MAP = [
     ["test-apartment-aim-wiring-browser.mjs", "test-apartment-aim-wiring-drag-browser.mjs", "test-apartment-aim-wiring-keys-browser.mjs",
       "test-apartment-aim-wiring-room-browser.mjs", "test-apartment-aim-wiring-phone-browser.mjs", "test-apartment-manual-intent-contract.mjs",
       "run-apartment-aim-presentation-tests.mjs", "run-apartment-aim-lifecycle-browser.mjs", "run-apartment-aim-proposals-tests.mjs"]],
+  // Named aims (aim library) and Echo's engineered aim on the shared proposal path.
+  [/^(?:app\/src\/(?:home-apartment(?:-aim-library|-echo-aim|-chat-aim|-aim-proposals)\.js|home-apartment(?:-aim-library|-room-overlay|-aim)?\.jsx|home-app\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-(?:aim-library(?:-browser|-shell-browser)?|chat-aim)\.mjs)$/,
+    ["test-apartment-aim-library.mjs", "test-apartment-aim-library-browser.mjs", "test-apartment-aim-library-shell-browser.mjs", "test-apartment-chat-aim.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
-  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-renderer-browser\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs"]],
+  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|photo)-browser\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-photo-browser.mjs"]],
+  // The WebGPU splat pipeline (Photo on ?renderer=webgpu) and the Spark cutaway it mirrors.
+  [/^(?:app\/src\/home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|modes\.js|adaptive-performance\.mjs)|tools\/test-apartment-gaussian-splat\.mjs)$/, ["test-apartment-gaussian-splat.mjs"]],
+  [/^(?:app\/src\/(?:vendor\/(?:three-0\.186\.1|spark-2\.1\.0)\/.+|home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/test-apartment-webgpu-splat-browser\.mjs)$/, ["test-apartment-webgpu-splat-browser.mjs"]],
+  [/^app\/src\/home-3d\/(?:splat-cutaway\.js|splat-exterior-cleanup\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
   [/^tools\/(?:run-overlay-stack-tests\.js|test-apartment-escape-(?:stack\.cjs|browser\.mjs))$/, ["run-overlay-stack-tests", "test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^(?:app\/src\/home-apartment-room-guide\.jsx|tools\/test-apartment-room-guide(?:\.cjs|-browser\.mjs))$/, ["test-apartment-room-guide.cjs", "test-apartment-room-guide-browser.mjs"]],
   [/^app\/src\/(?:home-apartment\.jsx|index\.html|home-feature-loader\.js|home-3d\/(?:rig\.js|markers\.js|equipment-virtual-fixtures\.mjs|apartment-perception-layer\.mjs|registered-desk-target\.mjs))$/, ["test-apartment-room-guide.cjs"]],
@@ -186,9 +194,9 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * The two WebGPU Lit parts are their hosted stage times (run 39349207506) rounded up.
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
- * harness; they only decide which worker runs it. */
-// The two M2 shell suites are unmeasured on hosted CI: local runs of 54 s
-// (links) and 38 s (shell), doubled for the software renderer.
+ * harness; they only decide which worker runs it. The aim-wiring, chat,
+ * shell-audit, room-guide, WebGPU-renderer, Lit and M2 browser weights are
+ * hosted times from run 39350126935 (L5, #347), rounded up. */
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
@@ -196,10 +204,11 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-selection-browser.mjs": 111,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-beam-path-browser.mjs": 40,
-  "test-apartment-room-inspector-browser.mjs": 62,
-  "test-apartment-m2-links-browser.mjs": 110,
-  "test-apartment-m2-shell-browser.mjs": 80,
-  "test-apartment-lit-browser.mjs": 90,
+  "test-apartment-room-inspector-browser.mjs": 80,
+  "test-apartment-m2-links-browser.mjs": 90,
+  "test-apartment-m2-shell-browser.mjs": 38,
+  "test-apartment-lit-browser.mjs": 120,
+  "test-lit-bvh-bake-browser.mjs": 20,
   "test-apartment-lit-webgpu-browser.mjs": 135,
   "test-apartment-lit-webgpu-browser-part2.mjs": 130,
   "test-apartment-composer-comfort-browser.mjs": 55,
@@ -212,6 +221,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-shell-audit-echo-browser.mjs": 68,
   "test-apartment-shell-audit-behaviour-browser.mjs": 66,
   "test-apartment-aim-theme-browser.mjs": 8,
+  "test-apartment-aim-library-browser.mjs": 10,
   "test-apartment-photo-recovery-browser.mjs": 8,
   "test-apartment-ui-browser.mjs": 6,
   "test-apartment-chat-header-browser.mjs": 5,
@@ -222,6 +232,16 @@ const SHARD_WEIGHT_S = {
   "check-jsx.js": 4,
   "run-resilience-tests.js": 3,
   "test-apartment-escape-stack.cjs": 3,
+  "test-apartment-aim-wiring-room-browser.mjs": 110,
+  "test-apartment-aim-wiring-drag-browser.mjs": 105,
+  "test-apartment-webgpu-renderer-browser.mjs": 100,
+  "test-apartment-shell-audit-browser.mjs": 70,
+  "test-apartment-chat-room-browser.mjs": 66,
+  "test-apartment-aim-wiring-browser.mjs": 63,
+  "test-apartment-aim-wiring-keys-browser.mjs": 56,
+  "test-apartment-aim-wiring-phone-browser.mjs": 48,
+  "test-apartment-chat-chips-browser.mjs": 7,
+  "test-apartment-room-guide-browser.mjs": 8,
 };
 const MAX_SHARDS = 32;
 const RECEIPT_SCHEMA = "touched-harness-shard-receipt/v1";

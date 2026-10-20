@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-context-publication-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-context-publication-1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "producer_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "stream_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "cursor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "context_seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "committed_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "payload_type": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "payload_version": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "payload_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "producer_id",
+    "stream_epoch",
+    "cursor",
+    "context_seq",
+    "committed_at",
+    "payload_type",
+    "payload_version",
+    "payload_digest",
+    "payload"
+  ]
+}

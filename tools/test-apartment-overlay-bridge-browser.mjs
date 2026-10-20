@@ -360,7 +360,7 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
       const result=await page.evaluate(async()=>{
         const p=window.__overlayBridgeProof;await p.engine.modes.preload(['collision']);const controller=new AbortController();
         const layer=await p.engine.createUiOverlayLayer({host:p.host,signal:controller.signal,isCurrent:()=>true}),rect=p.host.getBoundingClientRect();
-        let result=null;for(const point of [[2,2,0],[0,2,1],[2,4,1]]){const screen=layer.project(point);if(!screen)continue;const x=rect.left+screen.x*rect.width/p.host.clientWidth,y=rect.top+screen.y*rect.height/p.host.clientHeight,expected=p.engine.displaySurfaceHit(x,y),actual=layer.pick(x,y);if(expected&&actual){result={expected:{point:expected.point,normal:expected.normal,surfaceName:expected.object.name?.trim()||'Scan surface'},actual};break;}}controller.abort();return result;
+        let result=null;for(const point of [[2,2,0],[0,2,1],[2,4,1]]){const screen=layer.project(point);if(!screen)continue;const x=rect.left+screen.x*rect.width/p.host.clientWidth,y=rect.top+screen.y*rect.height/p.host.clientHeight,expected=p.engine.displaySurfaceHit(x,y),actual=layer.pick(x,y);if(expected&&actual){result={expected:{point:expected.point,normal:expected.normal,surfaceName:(name=>name&&!/^(?:geometry|mesh|node|object|primitive|scene|group)?[\s._-]*\d*$/i.test(name)?name:'Scan surface')(expected.object.name?.trim())},actual};break;}}controller.abort();return result;
       });assert.ok(result);assert.deepEqual(result.actual,result.expected);return result;
     });
     await check('paused consumer abort detaches synchronously; host replacement retires without retarget',async()=>{

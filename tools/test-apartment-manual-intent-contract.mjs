@@ -61,15 +61,23 @@ function sites() {
   return rows;
 }
 
-test('the switch point is one owner-level function that does nothing on the UI line and never throws', () => {
+test('the switch point is one owner-level function bound to the Den takeover and never throws', () => {
   const hook = declarations.get(HOOK);
   assert.ok(hook && hook.type === 'ArrowFunctionExpression', 'one actual ' + HOOK);
-  assert.equal(hook.body.type, 'ObjectExpression', 'it only answers; it has no statements, writes or calls');
-  const call = vm.runInNewContext('(' + text(hook) + ')', {});
+  // Den binds the seam to the desk-preview takeover and the brain's handChange.
+  const log = [], refs = (preview, follower) => ({ denDeskAimPreviewRef: { current: preview }, lightingBrainRef: { current: follower } });
+  const idle = vm.runInNewContext('(' + text(hook) + ')', refs(null, null));
   for (const args of [['fixture-a', { reason: 'change' }], ['fixture-a'], [undefined, undefined], [null, {}]])
-    assert.deepEqual(plain(call(...args)), { released: false, restored: false, excluded: false });
-  // Den's proposed contract answers {released, restored, excluded}.
-  assert.deepEqual(Object.keys(call('fixture-a', { reason: 'aim' })), ['released', 'restored', 'excluded']);
+    assert.deepEqual(plain(idle(...args)), { released: false, restored: false, excluded: false });
+  assert.deepEqual(Object.keys(idle('fixture-a', { reason: 'aim' })), ['released', 'restored', 'excluded']);
+  const preview = { readback: () => ({ active: true, fixtureId: 'fixture-a' }), manualTakeover: reason => log.push(reason) };
+  const follower = { follower: { handChange: (id, { reason }) => log.push(id + ':' + reason) } };
+  const bound = vm.runInNewContext('(' + text(hook) + ')', refs(preview, follower));
+  assert.deepEqual(plain(bound('fixture-a', { reason: 'aim' })), { released: true, restored: false, excluded: false });
+  assert.deepEqual(plain(bound('fixture-b', { reason: 'undo' })), { released: false, restored: false, excluded: false });
+  assert.deepEqual(log, ['manual_aim_gesture', 'fixture-a:aim', 'manual_aim_history', 'fixture-b:undo']);
+  const throwing = vm.runInNewContext('(' + text(hook) + ')', refs({ readback() { throw Error('x'); } }, { follower: { handChange() { throw Error('y'); } } }));
+  assert.deepEqual(plain(throwing('fixture-a', { reason: 'change' })), { released: false, restored: false, excluded: false });
 });
 
 test('every UI-originated fixture write passes the switch point first, in the same function', () => {

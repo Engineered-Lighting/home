@@ -201,7 +201,8 @@ async function proveOn(backend, part) {
     const settled = async () => {
       const serial = await page.evaluate(() => window.__APT_ENGINE.litState().meterSerial);
       await page.waitForFunction(serial => { const state = window.__APT_ENGINE.litState();
-        return state.easing === false && state.adapting === false && state.meterSerial >= serial + 2; }, serial, { timeout: LIT_WAIT_MS });
+        return state.easing === false && state.adapting === false && ['ready', 'error'].includes(state.bounce.status)
+          && state.meterSerial >= serial + 2; }, serial, { timeout: LIT_WAIT_MS });
     };
     const timing = () => page.evaluate(() => new Promise(resolve => {
       const engine = window.__APT_ENGINE, renderer = engine.renderer, original = renderer.render, renders = [], intervals = [];
@@ -272,7 +273,8 @@ async function proveOn(backend, part) {
     assert.equal(lit.state.active, true); assert.equal(lit.state.measured, false); assert.equal(lit.disclosure, 'Simulated · not photometric · assumed output');
     assert.equal(lit.state.lights, 32); assert.equal(lit.state.shadowLights, 8);
     assert.deepEqual(lit.state.assumedLumens, { spot: 450, down: 350, zone: 120 });
-    assert.equal(lit.state.bounceLights, 8); assert.ok(lit.state.bounceSources > 0, 'lit patches become bounce lights');
+    assert.equal(lit.state.bounceLimit, 'One bounce, shadowed · per-vertex detail · assumed albedos · radial zones cast no direct shadows');
+    assert.equal(lit.state.bounce.status, 'ready', 'the L5 bounce bake landed in the lightmap on node materials: ' + JSON.stringify(lit.state.bounce));
     assert.equal(lit.state.exposure, .038, 'lights stay pre-exposed at the design night');
     assert.equal(lit.state.pipeline, 'scene-referred-half-float'); assert.equal(lit.state.nightAdaptation, true);
     assert.ok(Math.abs(lit.state.designEv100 - Math.log2(1 / (1.2 * .038))) < 1e-9, 'the design night is EV100 4.45');
@@ -286,7 +288,7 @@ async function proveOn(backend, part) {
     assert.ok(spots.length === 4 && spots.every(light => light.castShadow && light.radius === 2.5 && light.intensity > 0 && light.autoUpdate === false));
     assert.ok(downs.length === 4 && downs.every(light => light.castShadow && light.radius === 6 && light.intensity > 0));
     assert.ok(lit.lights.filter(light => light.kind === 'zone').every(light => !light.castShadow));
-    assert.ok(lit.lights.filter(light => light.kind === 'bounce').every(light => !light.castShadow));
+    assert.deepEqual([...new Set(lit.lights.map(light => light.kind))].sort(), ['ambient_floor', 'down', 'spot', 'zone'], 'bounce is the lightmap, not lights');
     const floor = lit.lights.filter(light => light.kind === 'ambient_floor');
     assert.equal(floor.length, 1); assert.equal(floor[0].type, 'HemisphereLight');
     assert.ok(Math.abs(floor[0].intensity - 0.2 * .038) < 1e-12, 'the floor is its assumed lux at the design pre-exposure; adaptation is in the tone pass');

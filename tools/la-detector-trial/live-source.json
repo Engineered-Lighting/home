@@ -1,0 +1,23 @@
+{
+  "files": {
+    "config.py": "3dd776ac4d386e3b7c036bd9440fa41da05970633758919aa3b50ababd671944",
+    "keypoint_loader.py": "d43aabbfbf1af47a89929d5d6a774be35048f067ac5825344528cb3da596207c",
+    "keypoint_reference.py": "dabe7b0e247eeef3f5118382f304c4f3514f2ebd9ec545389ba52f2ce9f6f0ae",
+    "keypoint_worker.py": "e4fceb80622a724657f7933c08ec60ec0631fbba63e8f559109e6f2eddc0df89",
+    "la_detector_app.py": "9364fc7803d36768c4199e22ce5791eb701b8812b8aee90146d64ed29e0b1c98",
+    "ownership.py": "53c145e695738a7d1d5588c154ffb4a69b7bc653a393a49a9aab519e5dbaa8af",
+    "reasoning.py": "3ba23c1fe2f18bd7e760e3b02436cef7f8c97097e2c4563746a95cbffa3941c8",
+    "remote_crops.py": "203371684f2ab4517761751ea2effecf6722e7696c493fa7ceb82b6a63fcda74",
+    "remote_http.py": "d00525e977d72a722e744903dc15f79b4c2b39f5060c4e7f25391197713a532f",
+    "remote_receiver.py": "a1b3cabcd6c8640220fe75e8d77dbb6db642cc09571f4be22408d0b7a64637b8",
+    "rtmpose_worker.py": "1a8685cd53b582d86e87ddbfcf4f8b546c4bd94088513aa43b69bf58bfd7760f",
+    "store.py": "89d7a75d74b2ad6ec2f0c7e87d969eab1d7e6d82e15a4b1ee3f9947b7be49105",
+    "ultralytics_worker.py": "2b271052f3df8712bfdb9d6083d2e7ef5ade9917800e5cbae9a076849c793b5c",
+    "worker_artifacts.py": "16a112834fdf413f5554168cb7e86b6e4794c909df30abb4e32477d9c0c39b4d",
+    "yolox_loader.py": "9142bce061758639c361b64f06aa2924cfe583269a0c453eeb443970e538a324",
+    "yolox_worker.py": "6bb89b6e6288d49e20537f017d2f702a88d387a1d30c16a770a90cdb23776740"
+  },
+  "base_runtime_lock_sha256": "b88cb2d0674f447b9c8488f52c982cbd20555033d3d9397483a7d870e8694a0d",
+  "http_lock_sha256": "d1634fad9fa3d60bc193970cc91873c6693bda9a76915efc130e6c33b9347eb6",
+  "runtime_revision": "la-live-0c41bff61ca9bb8e9c7348e7fcfc699d5b4519b89feb92a8895d7699afbce8fc"
+}

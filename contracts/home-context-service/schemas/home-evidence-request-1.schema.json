@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-evidence-request-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-evidence-request-1"
+    },
+    "version": {
+      "const": 1
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "correlation_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "consumer_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "site_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "room_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "person_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "room_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "track_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "track_epoch",
+        "pid"
+      ]
+    },
+    "surface_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "region_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "geometry_revision": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "existing_evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "distinction": {
+      "enum": [
+        "manipulation_vs_proximity",
+        "material_use_vs_visible",
+        "person_association",
+        "attributed_pc_vs_active",
+        "continued_engagement"
+      ]
+    },
+    "permitted_precision": {
+      "enum": [
+        "registered_surface",
+        "registered_region"
+      ]
+    },
+    "max_observation_age_s": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "deadline": {
+      "type": "number",
+      "minimum": 0
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "model_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "wall_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3
+        }
+      },
+      "required": [
+        "frames",
+        "model_calls",
+        "wall_s"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "request_id",
+    "correlation_id",
+    "consumer_id",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "surface_id",
+    "region_id",
+    "geometry_revision",
+    "existing_evidence_refs",
+    "distinction",
+    "permitted_precision",
+    "max_observation_age_s",
+    "deadline",
+    "budget"
+  ]
+}

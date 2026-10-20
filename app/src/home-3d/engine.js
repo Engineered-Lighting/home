@@ -376,7 +376,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         // The live spots' shadows and bounce trace the scan mesh (L5's bake).
         await modes.preload(['mesh']).catch(() => null);
         if (disposed) return 'engine_disposed';
-        const controller = await receiversM.createLitReceivers({ renderer, kind, object, layer, whenIdle: () => modes.whenSparkIdle() });
+        // The frame draws Spark's renderer for the WebGL splat (an fp16 one while lit), else the object itself.
+        const controller = await receiversM.createLitReceivers({ renderer, kind, object, layer, whenIdle: () => modes.whenSparkIdle(),
+            drawables: () => [kind === 'splat' ? modes.getSparkRenderer?.() || object : object],
+            setSplatHdr: kind === 'splat' && !renderer.isWebGPURenderer && modes.setSparkHdr ? on => modes.setSparkHdr(on) : null });
         if (!controller.available) return controller.reason;
         await controller.attach();
         if (disposed || modes.mode !== mode) { await controller.detach(); controller.dispose(); return 'lit_receivers_mode_changed'; }
@@ -1016,17 +1019,28 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         /* L4 proofs: the relit receivers as the GPU wrote them beside the CPU twin. */
         litReceiversReadback(n) { return litReceivers ? litReceivers.readback(n) : Promise.resolve(null); },
         litReceiversBenchmark(iterations) { return litReceivers ? litReceivers.benchmark(iterations) : Promise.resolve(null); },
-        /* L2 (WebGPU path): the view operator ('agx', Reinhard as the
-         * fallback) or a comparison view ('neutral', 'linear') without the
-         * presentation effects. The WebGL path stays 'linear'. */
+        /* L2: the view operator ('agx', Reinhard as the fallback) or a
+         * comparison view ('neutral', 'linear') without the presentation
+         * effects, on both renderers (lit-frame.mjs's display pass). */
         setLitTone(operator) {
             if (!litView?.state().active) return litSnapshot();
             litView.setTone(operator);
             return emitLit();
         },
-        /* L2 (WebGPU path): the lit mesh's scene-referred luminance in cd/m²,
-         * modeled from assumed output, for calibration; null elsewhere. */
+        /* The look for every view: 'camera' (the default) or L2's 'eye'. */
+        setLitLook(look) {
+            if (!litView) return litSnapshot();
+            litView.setLook(look);
+            return emitLit();
+        },
+        /* L2: the lit content's scene-referred luminance in cd/m², modeled
+         * from assumed output, for calibration: no look, glare, noise or
+         * fixture faces. */
         litLinearReadback(options) { return litView?.state().active ? litView.readLinear(options) : Promise.resolve(null); },
+        /* Proofs: an authored HDR frame through the real bloom and display
+         * passes (for the CPU twins), and the cost of those passes. */
+        litFrameProof(image, width, height, params) { return litView?.state().active ? litView.proofFrame(image, width, height, params) : Promise.resolve(null); },
+        litFrameTime(batch) { return litView?.state().active ? litView.timeFrame(batch) : Promise.resolve(null); },
         async createUiOverlayLayer(options = {}) {
             const { host, isCurrent, signal: layerSignal, onPresentationFrame, onPresentationDispose } = options || {};
             if (typeof isCurrent !== 'function' || typeof layerSignal?.aborted !== 'boolean'

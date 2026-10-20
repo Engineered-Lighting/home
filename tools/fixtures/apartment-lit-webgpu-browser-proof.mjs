@@ -1,6 +1,8 @@
-// L2 browser proof, shared by three browser files: part 1 checks Tier-0 and the
+// L2 browser proof, shared by four browser files: part 1 checks Tier-0 and the
 // bright half of the lights-off ladder; part 3 checks its overlapping dim half;
 // part 2 checks moonlit tone views, adaptation, timing and exact restoration.
+// Part 4 checks the complete camera-look ladder once. It formerly ran twice,
+// inside both eye-ladder parts, exhausting their software-rendering deadline.
 // The overlapping one-spot rung retains every adjacent ladder comparison while
 // retaining each proof's original 145 s browser deadline on software GL.
 // Tier-0 Lit on the WebGPU path (?renderer=webgpu-webgl in CI,
@@ -29,6 +31,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import Core from '../../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './apartment-home-shell-fixtures.mjs';
+import { authoredHdrFrame, compareFramePasses, PROOF_PARAMS, PROOF_SIZE } from './lit-frame-proof.mjs';
+import { easeAdaptation, LIT_ADAPTATION } from '../../app/src/home-3d/lit-exposure.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'), SRC = path.join(ROOT, 'app/src');
@@ -79,14 +83,15 @@ function browserOptions(backend) {
   assert.ok(installed || process.platform === 'win32', 'pinned Chromium must exist on Linux');
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
   if (backend === 'webgpu') args.push('--enable-unsafe-webgpu', '--ignore-gpu-blocklist');
-  if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
-  else if (process.platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  if (process.platform === 'linux' || process.env.HOME_LIT_WEBGPU_SOFTWARE === '1')
+    args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  else if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
   const channel = process.env.HOME_LIT_WEBGPU_CHANNEL || null;
   return { headless: true, args, ...(channel ? { channel } : process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
 export async function runLitWebgpuBrowserProof({ part, signal }) {
-  assert.ok(part === 1 || part === 2 || part === 3, 'part 1, 2 or 3');
+  assert.ok([1,2,3,4,5].includes(part), 'part 1, 2, 3, 4 or 5');
   for (const backend of backends) { signal?.throwIfAborted(); await proveOn(backend, part, signal); }
 }
 
@@ -300,6 +305,27 @@ async function proveOn(backend, part, signal) {
     assert.deepEqual(lit.orbs, before.orbs, 'orbs and beams keep the same untone-mapped materials and are never drawn by the tone pass');
     assert.deepEqual(lit.ports.problems, [], 'no unported or drifted material on the WebGPU path');
     check('tier0_on_node_materials', { lights: lit.state.lights, shadow_lights: lit.state.shadowLights, cutaway: lit.state.cutaway, pipeline: lit.state.pipeline });
+    // One HDR frame for Mesh too: the camera look by default, the fixture faces and bloom.
+    assert.equal(lit.state.look, 'camera', 'Mesh gets the camera look'); assert.equal(lit.state.frame.format, 'RGBA16F');
+    assert.equal(lit.state.frame.bloom, true); assert.ok(lit.state.frame.emitters >= 4, 'the lit fixtures show their faces');
+    assert.match(title, /Camera look: exposure set for the highlights/, 'the camera look is disclosed for Mesh');
+    if (part === 1) {
+      // The frame's TSL passes on this backend equal their CPU twins.
+      const runFrame = scale => page.evaluate(async ({ image, size, params }) => {
+        const result = await window.__APT_ENGINE.litFrameProof(Float32Array.from(image), size.width, size.height, params);
+        return { ...result, frame: Array.from(result.frame), mip: { ...result.mip, data: Array.from(result.mip.data) }, display: Array.from(result.display) };
+      }, { image: Array.from(authoredHdrFrame({ scale })), size: PROOF_SIZE, params: PROOF_PARAMS });
+      const framedRaw = await runFrame(1);
+      fs.writeFileSync(path.join(run, 'frame-proof.json'), JSON.stringify(framedRaw));
+      const framed = compareFramePasses(framedRaw);
+      assert.ok(framed.mip_rel <= 6e-3, 'the TSL bloom passes equal their CPU twin: ' + JSON.stringify(framed));
+      assert.ok(framed.display_max <= 2, 'the TSL display pass equals its CPU twin within 8-bit rounding: ' + JSON.stringify(framed));
+      const dimmed = [framed, compareFramePasses(await runFrame(0.5)), compareFramePasses(await runFrame(0.25))].map(row => row.mean_display_luma);
+      for (let i = 1; i < dimmed.length; i++) assert.ok(dimmed[i] < dimmed[i - 1], 'dimming darkens the display: ' + dimmed.join(' > '));
+      check('tsl_frame_passes_equal_cpu_twin', { ...framed, dimmed_display_luma: dimmed });
+    }
+    // L2's eye gates below are the eye look's; the camera look's ladder follows.
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('eye'));
 
     // The lights-off ladder.
     at('ladder');
@@ -319,7 +345,7 @@ async function proveOn(backend, part, signal) {
       await settled();
     };
     const ladder = {}, frameOf = {};
-    if (part === 2) await apply('off_moon');
+    if (part === 2 || part === 5) await apply('off_moon');
     if (part === 1 || part === 3) {
     const rungs = part === 1 ? LADDER.slice(0, 3) : LADDER.slice(2);
     for (const name of rungs) {
@@ -360,6 +386,24 @@ async function proveOn(backend, part, signal) {
     check('lights_off_ladder', { ladder, levels: { output_30: LEVEL_30, spot_5: LEVEL_5 } });
     receipt.ladder = ladder;
     }
+    if (part === 4) {
+    // The camera look: the same ladder still reads strictly darker, step by step.
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('camera'));
+    const camera = {};
+    for (const name of LADDER) {
+      await apply(name);
+      const frame = await capture();
+      const state = await page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { adaptationEv: s.adaptationEv, look: s.look, emitters: s.frame.emitters }; });
+      assert.equal(state.look, 'camera');
+      camera[name] = { mean_display_luminance: frame.meanY, near_black_pct: frame.nearBlackPct, ...state };
+    }
+    for (let i = 1; i < LADDER.length; i++) assert.ok(camera[LADDER[i]].mean_display_luminance < camera[LADDER[i - 1]].mean_display_luminance,
+      `camera look: mean display luminance strictly decreases: ${LADDER[i - 1]} -> ${LADDER[i]} ` + JSON.stringify(camera));
+    assert.equal(camera.off_moon.emitters, 0, 'no fixture face shows with every channel off');
+    check('camera_look_ladder', camera);
+    receipt.camera_ladder = camera;
+    await page.evaluate(() => window.__APT_ENGINE.setLitLook('eye'));
+    }
 
     if (part === 2) {
     at('tone_views');
@@ -378,25 +422,51 @@ async function proveOn(backend, part, signal) {
     assert.ok(compare.linear.mean_display_luminance < compare.agx.mean_display_luminance, 'the linear comparison view shows no night adaptation');
     if (compare.reinhard) assert.ok(compare.reinhard.near_black_pct <= 60, 'the Reinhard fallback also passes the moonlight gate: ' + compare.reinhard.near_black_pct);
     check('tone_views_at_moonlight', compare);
+    }
 
+    if (part === 5) {
     // The adaptation eases: slowly as the room darkens, quickly as it brightens.
     at('adaptation_eases');
     // The room is settled in moonlight after the ladder: brighten first, then darken from the bright room.
     const all = async on => page.evaluate(({ ids, patch }) => ids.forEach(id => window.__APT_ENGINE.overlay.setVirtualFixtureState(id, patch)), { ids, patch: every(on, 1) });
-    const after = async ms => { await page.waitForTimeout(ms); await frames(2); return page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { ev: s.adaptationEv, target: s.adaptationTargetEv, adapting: s.adapting }; }); };
+    const sampleAdaptation = () => page.evaluate(() => { const s=window.__APT_ENGINE.litState();
+      return {ev:s.adaptationEv,target:s.adaptationTargetEv,adapting:s.adapting,updatedAtMs:s.adaptationUpdatedAtMs}; });
+    const after = async ms => { await page.waitForTimeout(ms); await frames(2); return sampleAdaptation(); };
     await page.evaluate(() => window.__APT_ENGINE.setLitTone('agx'));
-    const fromEv = (await page.evaluate(() => window.__APT_ENGINE.litState().adaptationEv));
+    const beforeBright = await sampleAdaptation(), fromEv = beforeBright.ev;
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await all(true); await frames(2);
+    // The authored all-on scene need not meter at exactly zero EV on every
+    // backend. Require a newly sampled target below the unchanged brightening
+    // assertion, rather than assuming a particular meter calibration.
+    await page.waitForFunction(({ev,updatedAtMs})=>{const s=window.__APT_ENGINE.litState();
+      return s.adaptationUpdatedAtMs>updatedAtMs&&s.adaptationTargetEv<ev*.45;},beforeBright);
+    const brightFrom=await sampleAdaptation();
     const brightening = await after(1000);
     assert.ok(brightening.ev < fromEv * 0.45, 'brightening adapts fast (tau 0.75 s): ' + JSON.stringify({ fromEv, ...brightening }));
+    const brightElapsed=brightening.updatedAtMs-brightFrom.updatedAtMs;
+    assert.ok(Number.isFinite(brightElapsed)&&brightElapsed>0,'adaptation compares original renderer sample clocks');
+    const brightUpper=easeAdaptation(brightFrom.ev,Math.max(brightFrom.target,brightening.target,LIT_ADAPTATION.settledEv),brightElapsed).ev;
+    assert.ok(brightening.ev<=brightUpper+LIT_ADAPTATION.settledEv,'brightening follows its sampled 0.75s bound: '+JSON.stringify({brightFrom,brightening,brightElapsed,brightUpper}));
     await page.emulateMedia({ reducedMotion: 'reduce' }); await frames(3); await settled(); await page.emulateMedia({ reducedMotion: 'no-preference' });
     await all(false); await frames(2);
+    await page.waitForFunction(()=>window.__APT_ENGINE.litState().adaptationTargetEv>0);
+    const darkFrom=await sampleAdaptation();
     const darkening = await after(1000);
-    assert.ok(darkening.adapting && darkening.ev > 0 && darkening.ev < darkening.target * 0.6, 'darkening adapts slowly (tau 3 s): ' + JSON.stringify(darkening));
-    check('adaptation_eases', { darkening, brightening, from_ev: fromEv });
+    const darkElapsed=darkening.updatedAtMs-darkFrom.updatedAtMs;
+    assert.ok(Number.isFinite(darkElapsed)&&darkElapsed>0,'darkening sample clocks advance');
+    // Rendering two frames can itself take seconds on software GL. The
+    // original capped 3s exponential supplies a conservative bound even
+    // while asynchronous meter results change the target within its cap.
+    const darkUpper=easeAdaptation(darkFrom.ev,LIT_ADAPTATION.capEv,darkElapsed).ev;
+    assert.ok(darkening.adapting && darkening.ev>0 && darkening.ev<=darkUpper+LIT_ADAPTATION.settledEv,
+      'darkening follows its sampled 3s bound: '+JSON.stringify({darkFrom,darkening,darkElapsed,darkUpper}));
+    check('adaptation_eases', { darkening, brightening, from_ev: fromEv,brightFrom,brightElapsed,brightUpper,darkFrom,darkElapsed,darkUpper });
     await page.emulateMedia({ reducedMotion: 'reduce' }); await all(true); await frames(3); await settled();
+    }
 
+    if (part === 2) {
+    await apply('all_on');
     // Performance in Lit, all on (descriptive on CI; gated on the owner's GPU).
     at('performance');
     const litTiming = await timing();
@@ -429,6 +499,12 @@ async function proveOn(backend, part, signal) {
   catch (error) {
     failureSummary = (String(error.message) + ' | stack ' + String(error.stack || '').split(String.fromCharCode(10)).find(line => /lit-webgpu-browser(?:-proof)?\.mjs:\d+/.test(line))).replace(/\s+/g, ' ').slice(0, 1400);
     receipt.failure = error.message;
+    receipt.failure_state = await page?.evaluate(() => {
+      const s=window.__APT_ENGINE?.litState?.();
+      return s && {active:s.active,status:s.status,adaptationEv:s.adaptationEv,target:s.adaptationTargetEv,
+        updatedAtMs:s.adaptationUpdatedAtMs,meterSerial:s.meterSerial,meteredCdM2:s.meteredCdM2,
+        adapting:s.adapting,look:s.look,tone:s.tone,frame:s.frame};
+    }).catch(()=>null);
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nLit WebGPU failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });
   } finally {

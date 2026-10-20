@@ -8,6 +8,7 @@
 //   lit steady  the same with Lit on and nothing changing (the blend is idle)
 //   lit moving  the same while one light's level changes every frame (a blend
 //               every frame: the worst case, e.g. dragging a slider)
+//   frame       the HDR frame's bloom + display passes alone, waited on
 //   blend       the blend pass alone, waited on: gl.finish (WebGL) or
 //               queue.onSubmittedWorkDone (WebGPU); an upper bound on GPU time
 //   spot column the worker time to re-bake one spot's receiver column
@@ -188,6 +189,10 @@ try {
     if (!TIMESTAMP_ONLY) {
       entry.lit_steady = await timing();
       entry.lit_moving = await timing(120, 'dim');
+      // HDR bloom + display: wall time after waiting for GPU completion,
+      // separate from the comparable GPU timestamp blend budget below.
+      entry.frame_passes_ms = await page.evaluate(async () => { const t = []; for (let i = 0; i < 10; i++) t.push(await window.__APT_ENGINE.litFrameTime(20)); t.sort((a, b) => a - b); return { method: 'wall-upper-bound', p50: t[5], min: t[0] }; });
+      entry.frame = await page.evaluate(() => { const f = window.__APT_ENGINE.litState().frame; return { width: f.width, height: f.height, emitters: f.emitters, clamped: f.emittersClamped }; });
       entry.blend_ms = await page.evaluate(async () => { const times = await window.__APT_ENGINE.litReceiversBenchmark(30); const p = q => times[Math.floor((times.length - 1) * q)]; return { method: 'wall-upper-bound', p50: p(.5), p95: p(.95), min: times[0] }; });
     }
     if (GPU_TIMESTAMPS) {

@@ -3,5 +3,5 @@
 import test from 'node:test';
 import { runLitWebgpuBrowserProof } from './fixtures/apartment-lit-webgpu-browser-proof.mjs';
 
-test('Lit on the WebGPU path: comparison views, night adaptation ease and exact restore (part 2)', { timeout: 145000 },
+test('Lit on the WebGPU path: comparison views, timing and exact restore (part 2)', { timeout: 145000 },
   t => runLitWebgpuBrowserProof({ part: 2, signal: t.signal }));

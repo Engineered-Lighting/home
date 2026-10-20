@@ -29,14 +29,17 @@ start)
   echo "free on $root: ${avail}G (need ${NEED_GB}G)"
   [ "$avail" -ge "$NEED_GB" ] || { echo "not enough disk; stopping"; exit 1; }
   docker rm "$NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$NAME" --cpus 2 --memory 4g --pids-limit 256 \
+  # hf's default of 8 parallel files outgrew a 4g cap and was OOM-killed
+  # (exit 137) on 2026-10-20; 2 workers under 8g stays bounded.
+  docker run -d --name "$NAME" --cpus 2 --memory 8g --pids-limit 256 \
     --security-opt no-new-privileges:true \
     -v "$VOL":/root/.cache/huggingface -e HF_HUB_DISABLE_TELEMETRY=1 \
-    --entrypoint hf "$IMAGE" download "$REPO" --revision "$REV"
+    --entrypoint hf "$IMAGE" download "$REPO" --revision "$REV" --max-workers 2
   echo "started; check with: status"
   ;;
 status)
   docker ps -a --filter "name=^${NAME}$" --format '{{.Names}} {{.Status}}'
+  docker inspect -f 'oom_killed={{.State.OOMKilled}} exit={{.State.ExitCode}}' "$NAME" 2>/dev/null || true
   docker logs --tail 5 "$NAME" 2>&1 | tr '\r' '\n' | tail -n 5 || true
   docker run --rm --network none -v "$VOL":/hf:ro --entrypoint sh "$IMAGE" -c \
     "du -sh /hf/$DIR 2>/dev/null; ls /hf/$DIR/snapshots/$REV 2>/dev/null | wc -l | sed 's/^/snapshot files: /'; ls /hf/$DIR/blobs 2>/dev/null | grep -c '\.incomplete$' | sed 's/^/incomplete: /'"

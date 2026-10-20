@@ -83,8 +83,8 @@ export async function runLitSplatsBrowserProof({ part }) {
   const still = async (page, name) => { if (process.env.HOME_LIT_SPLATS_STILLS === '1') await page.screenshot({ path: path.join(run, name + '.png') }); };
   let server, browser, origin, handler, timer;
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
-    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('170s lit splats browser deadline'));
-  }, 170000); });
+    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s lit splats browser deadline'));
+  }, 145000); });
 
   async function openPage(context, query) {
     const page = await context.newPage(); page.setDefaultTimeout(15000);

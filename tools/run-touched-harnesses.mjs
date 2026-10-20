@@ -118,7 +118,7 @@ const MAP = [
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-rail-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment-(?:setup|edit)\.jsx|home-apartment-data\.js|home-equipment-registration\.js)|web-gateway\/equipment-registration\.mjs|tools\/(?:test-apartment-setup-saves-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-saves-browser.mjs"]],
-  [/^(?:app\/src\/(?:home-apartment(?:-setup|-edit)?\.jsx|home-app\.jsx|home-equipment-registration\.js|home-overlay\.js)|tools\/(?:test-apartment-setup-read-only-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-read-only-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-setup|-edit)?\.jsx|home-app\.jsx|home-equipment-registration\.js|home-overlay\.js|home-tokens\.css)|tools\/(?:test-apartment-setup-read-only-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-read-only-browser.mjs"]],
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],

@@ -5324,17 +5324,14 @@ function apartmentChatAboutReply(text, about, current) {
 function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
-  // Setup is never a dead control: when the home can't open it, a press says why.
+  const firstItemRef = useRef(null);
+  // Setup lives in the Home menu, and is never a dead item: when the home
+  // can't open it, a press says why and the menu stays open.
   const [setupWhy, setSetupWhy] = useState(false);
   const setupBlocked = state?.canSetup === false && !state?.setupActive;
-  useEffect(() => { if (!setupBlocked) setSetupWhy(false); }, [setupBlocked, state?.siteId]);
-  useEffect(() => {
-    if (!setupWhy) return undefined;
-    const timer = setTimeout(() => setSetupWhy(false), 8000);
-    return () => clearTimeout(timer);
-  }, [setupWhy]);
+  useEffect(() => { if (!setupBlocked || !menuOpen) setSetupWhy(false); }, [setupBlocked, menuOpen, state?.siteId]);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
-    rootRef: menuRef, trap: false, initialFocus: "first", onEscape: () => setMenuOpen(false) });
+    rootRef: menuRef, trap: false, initialFocus: firstItemRef, onEscape: () => setMenuOpen(false) });
   const run = action => { setMenuOpen(false); action?.(); };
   // APT-S02: every home that holds unsaved work keeps its mark, viewed or not.
   const parkedUnsaved = window.HomeApartmentData?.dirtySites?.() || [];
@@ -5363,37 +5360,38 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
       {window.HomeApartmentStatusRows ? <window.HomeApartmentStatusRows state={state} />
         : <div role="status"><p>{state?.sourceLabel || "Loading room"}</p></div>}
     </details>
-    <div className="apt-home-top-actions" style={{ position: "relative" }}>
-    {state?.openSetup && <>
-      <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
-        aria-disabled={setupBlocked ? "true" : undefined} aria-describedby={setupWhy ? "apt-home-setup-why" : undefined}
-        style={setupBlocked ? { opacity: .6 } : undefined}
-        onClick={() => { if (setupBlocked) { setSetupWhy(true); return; } setSetupWhy(false); state.openSetup(); }}>Setup</button>
-      {setupWhy && <span id="apt-home-setup-why" role="status" data-apt-setup-unavailable="1" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0,
-        zIndex: 31, width: "max-content", maxWidth: 280, padding: "8px 10px", border: "1px solid var(--hg-border-strong)", borderRadius: 8,
-        background: "var(--apt-surface-raised, var(--hg-bg-2))", color: "var(--apt-text, var(--hg-fg-1))", fontSize: 12.5, lineHeight: 1.45,
-        whiteSpace: "normal" }}>{state.setupUnavailableReason || "Setup isn't available for this home here."}</span>}
-    </>}
-    <button type="button" className="apt-home-travel" onClick={() => onFeature("lights")}>Lights / Travel Mode</button>
-    <div className="apt-home-menu" ref={menuRef}>
+    <div className="apt-home-top-actions">
+    <div className="apt-home-menu" ref={menuRef}
+      data-setup={state?.openSetup ? state.setupActive ? "on" : setupBlocked ? "unavailable" : "off" : undefined}>
       <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"
         onClick={() => setMenuOpen(value => !value)}>Menu</button>
       {menuOpen && <><button className="apt-home-menu-dismiss" aria-label="Close Home menu" onClick={() => setMenuOpen(false)} />
         <div role="menu" aria-label="Home features" onKeyDown={event => {
           if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
           event.preventDefault();
-          const items = Array.from(event.currentTarget.querySelectorAll('[role="menuitem"]'));
+          const items = Array.from(event.currentTarget.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]'));
           const index = items.indexOf(document.activeElement);
           const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
             : (index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
           items[next]?.focus();
         }}>
+          {state?.openSetup && <>
+            <button type="button" role="menuitemcheckbox" className="apt-home-setup" ref={firstItemRef}
+              aria-checked={state.setupActive ? "true" : "false"} aria-disabled={setupBlocked ? "true" : undefined}
+              aria-describedby={setupWhy ? "apt-home-setup-why" : undefined}
+              onClick={() => { if (setupBlocked) { setSetupWhy(true); return; } run(state.openSetup); }}>
+              Setup<span className="apt-home-menu-check" aria-hidden="true">{state.setupActive ? "On" : ""}</span>
+            </button>
+            {setupWhy && <p id="apt-home-setup-why" role="status" className="apt-home-menu-note" data-apt-setup-unavailable="1">
+              {state.setupUnavailableReason || "Setup isn't available for this home here."}</p>}
+          </>}
           {[["perceptionLab", "Perception Lab"], ["metrics", "Metrics"], ["people", "People"],
             ["intel", "Intelligence"], ["labeler", "Video labeler"], ["lights", "Lights / Travel Mode"],
             ["preferences", "Preferences / connection"],
             // As in the classic menu: simulation controls exist only inside simulation (/simulation starts it).
-            ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label]) =>
-            <button type="button" role="menuitem" key={key} onClick={() => run(() => onFeature(key))}>{label}</button>)}
+            ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label], index) =>
+            <button type="button" role="menuitem" key={key} ref={index === 0 && !state?.openSetup ? firstItemRef : undefined}
+              onClick={() => run(() => onFeature(key))}>{label}</button>)}
           <button type="button" role="menuitem" onClick={() => run(onTheme)}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
           <button type="button" role="menuitem" onClick={() => run(onPreviousHome)}>Previous Home</button>
         </div></>}

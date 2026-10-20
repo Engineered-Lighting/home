@@ -50,9 +50,14 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
     const saveButton = () => page.locator('[data-apt-edit-ui="toolbar"] button[title*="Home Assistant"]');
 
     await check('Setup opens one rail and its inspector in the right column; tabs, chat and dock are hidden', async () => {
-      assert.equal(await shell.setupButton().getAttribute('aria-pressed'), 'false');
-      await shell.openSetup();
-      await page.waitForFunction(() => document.querySelector('.apt-home-topbar .apt-home-setup')?.getAttribute('aria-pressed') === 'true');
+      assert.equal(await shell.setupState(), 'off');
+      assert.equal(await page.locator('.apt-home-topbar > .apt-home-top-actions > button').count(), 0, 'the top bar holds only Menu');
+      assert.equal(await (await shell.openMenu()).getAttribute('aria-checked'), 'false');
+      await shell.openSetup(); await shell.waitSetupState('on');
+      assert.equal(await shell.homeMenu().count(), 0, 'choosing Setup closes the menu');
+      assert.equal(await (await shell.openMenu()).getAttribute('aria-checked'), 'true', 'Setup reads as on in the menu');
+      await page.keyboard.press('Escape'); await shell.homeMenu().waitFor({ state: 'detached' });
+      assert.equal(await shell.inspector().count(), 1, 'Escape closed only the menu');
       const labels = await shell.rail().locator('button').evaluateAll(nodes => nodes.map(node => [node.dataset.setupTool, node.querySelector('.apt-setup-rail-label').firstChild.textContent]));
       assert.deepEqual(labels, TOOLS);
       assert.equal(await shell.header().innerText(), 'Devices and sockets');
@@ -91,8 +96,8 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
     });
 
     await check('Setup is a pressed toggle: pressing it again leaves like Done and brings the column back', async () => {
-      await shell.setupButton().click(); await shell.rail().waitFor({ state: 'detached' });
-      await page.waitForFunction(() => document.querySelector('.apt-home-topbar .apt-home-setup')?.getAttribute('aria-pressed') === 'false');
+      await shell.pressSetup(); await shell.rail().waitFor({ state: 'detached' });
+      await shell.waitSetupState('off');
       assert.equal(await shell.inspector().count(), 0);
       assert.equal(await visible('.apt-home-tabs'), true);
       await shell.openSetup(); await page.locator('[data-apt-setup-inspector] .apt-setup-done').click(); await shell.rail().waitFor({ state: 'detached' });
@@ -106,7 +111,7 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => document.querySelector('[data-apt-setup-inspector] .apt-ui-title')?.textContent === 'Devices and sockets');
       await page.keyboard.press('Escape'); await shell.rail().waitFor({ state: 'detached' });
-      await page.waitForFunction(() => document.querySelector('.apt-home-topbar .apt-home-setup')?.getAttribute('aria-pressed') === 'false');
+      await shell.waitSetupState('off');
       assert.equal(await draft(), originalDraft);
       return { first: 'tool', second: 'setup' };
     });
@@ -200,7 +205,7 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
         await shell.openSetup();
         assert.equal(await visible('.apt-home-camera'), false); assert.deepEqual((await dockState()).dock, before.dock);
         await page.locator('[data-apt-setup-inspector] .apt-setup-done').click(); await shell.rail().waitFor({ state: 'detached' });
-        await page.waitForFunction(() => document.querySelector('.apt-home-topbar .apt-home-setup')?.getAttribute('aria-pressed') === 'false');
+        await shell.waitSetupState('off');
         assert.deepEqual(await dockState(), before); assert.equal(await visible('.apt-home-camera'), true);
         states.push(before.dock);
       }

@@ -918,9 +918,9 @@ button.hg-no-press:active {
 .apt-home-shell input[type="range"].apt-ui-range::-webkit-slider-thumb { transition: transform 120ms ease; }
 .apt-home-shell input[type="range"].apt-ui-range:active::-webkit-slider-thumb { transform: scale(1.18); }
 
-/* In-room labels sit under the room's popovers and dialogs (the prototype's
+/* In-room labels sit under the room's popovers, the status popover and dialogs (the prototype's
  * scrim): while one is open they are drawn but take no pointer. */
-.apt-home-shell:has(.apt-ui-room-toolbar [role="dialog"], .apt-room-guide-dialog) .apt-room-overlay .apt-room-label { pointer-events: none; }
+.apt-home-shell:has(.apt-ui-room-toolbar [role="dialog"], .apt-room-guide-dialog, .apt-home-status[open]) .apt-room-overlay .apt-room-label { pointer-events: none; }
 
 /* Coarse pointers: every shell target is at least 44 px (SPEC › Layout,
  * HANDOFF › Phone). Visuals stay the design's; only hit areas grow. */

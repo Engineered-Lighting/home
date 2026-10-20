@@ -41,6 +41,11 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const candidates = (process.env.HOME_WEBGPU_PROOF_BACKENDS || 'webgpu-webgl').split(',').map(value => value.trim()).filter(Boolean);
 assert.ok(candidates.every(value => ['webgpu', 'webgpu-webgl'].includes(value)), 'backends are webgpu and/or webgpu-webgl');
 const imageDir = process.env.HOME_WEBGPU_PROOF_IMAGES || null;
+/* Scan modes compared at the fixed poses. Cloud and Mesh by default; Photo
+ * has its own harness (test-apartment-webgpu-photo-browser.mjs), so each run
+ * fits the touched-harness deadline on SwiftShader. */
+const proofModes = globalThis.__HOME_WEBGPU_PROOF_MODES || ['points', 'mesh'];
+const modeNames = { points: 'Cloud', mesh: 'Mesh', splat: 'Photo' };
 const viewport = { width: 960, height: 600 };
 
 // Same fenced inventory policy as the overlay bridge proof.
@@ -138,7 +143,7 @@ function png(frame) {
 
 // In the page: fixed poses, both scan modes, and every renderer-independent
 // contract the WebGPU seam must leave untouched.
-async function proofInPage() {
+async function proofInPage(modes) {
   const e = window.__APT_ENGINE, overlay = e.overlay;
   const frames = n => new Promise(resolve => { let left = n; const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick)); requestAnimationFrame(tick); });
   // Steady state: the rig's tween, then eased presentation (fixture visuals,
@@ -177,7 +182,7 @@ async function proofInPage() {
     ['zoom+2', () => { e.rig.stepZoom(1, 0); e.rig.stepZoom(1, 0); }]];
   // Photo is Spark on WebGL and Home's splat renderer on the node renderer;
   // on Victoria it carries the dollhouse cut, exterior cleanup and photo floor.
-  for (const mode of ['points', 'mesh', 'splat']) {
+  for (const mode of modes) {
     await e.modes.setMode(mode, { duration: 0 });
     for (const [name, apply] of poses) {
       e.rig.snapHome(0); await settle(); apply(); await settle();
@@ -228,7 +233,7 @@ async function proofInPage() {
   return result;
 }
 
-test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { timeout: 600000 }, async () => {
+test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mode => modeNames[mode]).join(' and ')}`, { timeout: 600000 }, async () => {
   const run = fs.mkdtempSync(path.join(os.tmpdir(), 'home-webgpu-proof-'));
   const privateRoot = path.join(run, 'private');
   let packs, echo, victoria;
@@ -311,7 +316,7 @@ test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { 
       await page.getByRole('group', { name: 'Home', exact: true }).getByRole('button', { name: 'Victoria', exact: true }).click();
       await page.waitForFunction(() => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === 'victoria', null, { timeout: 60000 });
       await page.waitForFunction(() => window.__APT_ENGINE?.overlay?.virtualFixturesReadback?.().fixture_count > 0);
-      const result = await page.evaluate(proofInPage);
+      const result = await page.evaluate(proofInPage, proofModes);
       return { ...result, pageErrors, warnings };
     } finally { await browser.close(); }
   }

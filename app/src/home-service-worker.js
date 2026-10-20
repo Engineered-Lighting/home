@@ -34,6 +34,7 @@ const FRESH_APARTMENT_MODULES = new Set([
   "/home-apartment-room-overlay.jsx",
   "/home-apartment-aim-library.js",
   "/home-apartment-echo-aim.js",
+  "/home-apartment-chat-aim.js",
   "/home-apartment-aim-library.jsx",
   "/home-apartment-gimbal-telemetry.js",
   "/home-apartment-aim.jsx",

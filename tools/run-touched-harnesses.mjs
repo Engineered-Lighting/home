@@ -130,8 +130,8 @@ const MAP = [
       "test-apartment-aim-wiring-room-browser.mjs", "test-apartment-aim-wiring-phone-browser.mjs", "test-apartment-manual-intent-contract.mjs",
       "run-apartment-aim-presentation-tests.mjs", "run-apartment-aim-lifecycle-browser.mjs", "run-apartment-aim-proposals-tests.mjs"]],
   // Named aims (aim library) and Echo's engineered aim on the shared proposal path.
-  [/^(?:app\/src\/(?:home-apartment(?:-aim-library|-echo-aim|-aim-proposals)\.js|home-apartment(?:-aim-library|-room-overlay|-aim)?\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-aim-library(?:-browser|-shell-browser)?\.mjs)$/,
-    ["test-apartment-aim-library.mjs", "test-apartment-aim-library-browser.mjs", "test-apartment-aim-library-shell-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-aim-library|-echo-aim|-chat-aim|-aim-proposals)\.js|home-apartment(?:-aim-library|-room-overlay|-aim)?\.jsx|home-app\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-(?:aim-library(?:-browser|-shell-browser)?|chat-aim)\.mjs)$/,
+    ["test-apartment-aim-library.mjs", "test-apartment-aim-library-browser.mjs", "test-apartment-aim-library-shell-browser.mjs", "test-apartment-chat-aim.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],

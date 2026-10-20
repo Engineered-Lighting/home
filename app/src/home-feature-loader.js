@@ -76,6 +76,7 @@
         ["home-apartment-room-overlay.jsx", true],
         ["home-apartment-aim-library.js", false],
         ["home-apartment-echo-aim.js", false],
+        ["home-apartment-chat-aim.js", false],
         ["home-apartment-aim-library.jsx", true],
         ["home-apartment-cards.jsx", true],
         ["home-apartment-command-ladder.jsx", true],

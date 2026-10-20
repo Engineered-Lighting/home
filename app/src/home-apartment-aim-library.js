@@ -60,6 +60,7 @@
       deskReadOnly: 'The configured desk is read only. Keep both saves this aim under another name.',
     }),
     echoUnavailable: 'Saving needs an editable Echo model.',
+    chatPhysical: 'Chat can aim this light only in Simulation Mode. It is a physical light, and Chat never moves physical lights.',
     // The same suggestions the room chip gives with an invalid spot.
     suggest: Object.freeze({
       no_surface: 'Drag onto a wall, furniture or the floor.',

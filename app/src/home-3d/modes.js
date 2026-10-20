@@ -166,6 +166,9 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     let sparkUpdateJob = null;
     let sparkIdlePromise = Promise.resolve(null);
     let lastSparkError = null;
+    // L4 lit receivers (lit-receivers.mjs, ?lit-splats=1 only): Lit's step
+    // before each render, and the Photo floor backing hidden while relit.
+    let litTick = null, photoFloorSuppressed = false;
     const sparkUpdateCounts = { started: 0, completed: 0, failed: 0, coalescedTicks: 0 };
     const lifetime = new AbortController();
     const resourcesDisposed = new WeakSet();
@@ -656,7 +659,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
     function visibleFor(mode) {
         const splatActive = mode === 'splat' || !!state.fading;
-        const floorOnly = usePhotoFloor && splatActive;
+        const floorOnly = usePhotoFloor && splatActive && !photoFloorSuppressed;
         photoFloorUniforms.uPhotoFloorOnly.value = floorOnly ? 1 : 0;
         if (state.splat) {
             state.splat.visible = splatActive;
@@ -781,6 +784,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
          * and sort (gaussian-splat-webgpu.mjs update()). */
         tickSplat(cam, time) {
             if (disposed) return null;
+            if (litTick) { try { litTick(cam); } catch (_) { /* the frame still renders */ } }
             const splatActive = !!state.fading || state.mode === 'splat' || state.targetMode === 'splat';
             if (state.splat?.isHomeGaussianSplat) return splatActive ? tickNodeSplat(cam) : null;
             if (!state.sparkRenderer || !splatActive || (!state.splat && !state.fading)) return null;
@@ -837,6 +841,23 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
          * a node-renderer splat. See HomeGaussianSplat.colorHook().
          */
         splatColorHook() { return state.splat?.colorHook?.() ?? null; },
+
+        /* L4 lit receivers (lit-receivers.mjs, behind ?lit-splats=1): the
+         * loaded splat and its pack asset name, Lit's step run first in the
+         * splat tick (before renderer.render, never inside it), and the
+         * Photo floor backing, which shows the capture's daylight colours,
+         * hidden while the splats are relit. */
+        getSplat() { return state.splat; },
+        splatSourceName() {
+            if (!state.splatSource) return null;
+            try { return decodeURIComponent(new URL(state.splatSource, 'http://local/').pathname.split('/').pop()); } catch (_) { return null; }
+        },
+        setLitTick(fn) { litTick = typeof fn === 'function' ? fn : null; },
+        setPhotoFloorSuppressed(on) {
+            if (disposed || photoFloorSuppressed === !!on) return;
+            photoFloorSuppressed = !!on;
+            visibleFor(state.mode);
+        },
 
         getMesh() { return state.mesh; },
         getCollision() { return state.collision; },

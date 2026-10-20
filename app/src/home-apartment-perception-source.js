@@ -15,11 +15,13 @@
   }
   const same=(a,b)=>KEYS.every(k=>a?.[k]===b?.[k]);
   const SCENE=['siteId','contentRevision','frameDigest','registrationVersion'],TERMINAL=new Set(['stopped','failed','interrupted','blocked']);
+  const OPERATOR_MS=90000,CLEANUP_MS=30000;
   const analysisListeners=new Set();let ownedAnalysis=null,lastAnalysis={status:'idle',reason:null,requestId:null,session:null};
   function analysisState(){
     const value=ownedAnalysis;
     return copy(value?{owned:true,status:value.status,reason:value.reason,requestId:value.requestId,session:value.session,
-      identity:value.identity,generation:value.generation,cancelRequested:value.cancelRequested,sessionSeconds:300}:{...lastAnalysis,owned:false});
+      identity:value.identity,generation:value.generation,cancelRequested:value.cancelRequested,sessionSeconds:300,
+      operatorSeconds:OPERATOR_MS/1000,cleanupSeconds:CLEANUP_MS/1000}:{...lastAnalysis,owned:false});
   }
   function publishAnalysis(){const value=analysisState();for(const fn of analysisListeners)fn(copy(value));}
   function watchAnalysis(fn){if(typeof fn!=='function')fail('apartment_analysis_callback_required');analysisListeners.add(fn);fn(analysisState());return()=>analysisListeners.delete(fn);}
@@ -55,28 +57,31 @@
   }
   function finishAnalysis(owner,status,reason=null){
     if(ownedAnalysis!==owner)return;
-    root.clearTimeout(owner.deadline);root.clearTimeout(owner.pollTimer);owner.unsubscribe?.();
+    root.clearTimeout(owner.deadline);root.clearTimeout(owner.cleanupDeadline);root.clearTimeout(owner.pollTimer);owner.unsubscribe?.();
     lastAnalysis={status,reason,requestId:owner.requestId,session:owner.session,sessionSeconds:300};ownedAnalysis=null;publishAnalysis();
   }
   function acceptAnalysisSession(owner,row){
     if(ownedAnalysis!==owner)fail('apartment_analysis_owner_retired');
     owner.session=analysisSession(row,owner);
     if(TERMINAL.has(owner.session.state)){finishAnalysis(owner,owner.session.state==='stopped'?'stopped':'failed',owner.session.reason||owner.session.state);return;}
+    if(owner.cleanupExpired){owner.status='stop_failed';owner.reason='cleanup_unconfirmed';publishAnalysis();return;}
     if(owner.status!=='stop_failed'){owner.status=owner.cancelRequested?'stopping':owner.session.state;owner.reason=null;}
     publishAnalysis();
   }
   function analysisError(owner,error,status){
-    if(ownedAnalysis===owner){owner.status=status;owner.reason=error.code||error.message||'apartment_analysis_unavailable';publishAnalysis();}
+    if(ownedAnalysis===owner){owner.status=owner.cleanupExpired?'stop_failed':status;
+      owner.reason=owner.cleanupExpired?'cleanup_unconfirmed':error.code||error.message||'apartment_analysis_unavailable';publishAnalysis();}
   }
-  // This poll only reads the session we created. Its independent five-minute
-  // timer stops that exact session; neither path starts or renews analysis.
+  // This poll only reads the session we created. The operator deadline stops
+  // that exact session; the unchanged service ceiling remains a backstop.
   function pollAnalysis(owner){
-    if(ownedAnalysis!==owner||owner.pollTimer)return;
+    if(ownedAnalysis!==owner||owner.pollTimer||owner.cleanupExpired)return;
     owner.pollTimer=root.setTimeout(async()=>{
       owner.pollTimer=null;if(ownedAnalysis!==owner||!owner.session)return;
       try{
         const response=await root.HomePerceptionLabTransport.request('sessions.get',{siteId:'victoria',sessionId:owner.session.id});
         if(ownedAnalysis!==owner)return;acceptAnalysisSession(owner,response?.session||response);
+        if(ownedAnalysis===owner&&owner.cleanupExpired){owner.status='stop_failed';owner.reason='cleanup_unconfirmed';publishAnalysis();}
       }catch(error){analysisError(owner,error,owner.cancelRequested?'stop_failed':'unavailable');}
       if(ownedAnalysis===owner&&owner.polls++<165)pollAnalysis(owner);
       else if(ownedAnalysis===owner)analysisError(owner,Error('apartment_analysis_cleanup_confirmation_required'),'stop_failed');
@@ -95,7 +100,7 @@
     owner.cancelRequested=true;owner.reason=null;
     if(owner.status==='checking'){owner.status='stopping';publishAnalysis();return analysisState();}
     if(!owner.requestId){finishAnalysis(owner,'stopped');return analysisState();}
-    if(owner.status==='starting'&&!owner.session){owner.status='stopping';publishAnalysis();return analysisState();}
+    if(owner.status==='starting'&&!owner.session&&!owner.deadlineFired){owner.status='stopping';publishAnalysis();return analysisState();}
     if(owner.stopPromise)return owner.stopPromise;
     owner.status='stopping';publishAnalysis();
     owner.stopPromise=(async()=>{
@@ -133,7 +138,12 @@
       if(!availability.available)fail(availability.reason);
       if(owner.cancelRequested){finishAnalysis(owner,'stopped');return {session:null,adoptable:false};}
       owner.requestId=uuid();owner.status='starting';publishAnalysis();
-      owner.deadline=root.setTimeout(()=>{if(ownedAnalysis===owner)stopAnalysis().catch(()=>{});},300000);
+      owner.deadline=root.setTimeout(()=>{if(ownedAnalysis===owner){owner.deadlineFired=true;stopAnalysis().catch(()=>{});}},OPERATOR_MS);
+      owner.cleanupDeadline=root.setTimeout(()=>{
+        if(ownedAnalysis!==owner)return;
+        owner.cleanupExpired=true;root.clearTimeout(owner.pollTimer);owner.pollTimer=null;
+        owner.status='stop_failed';owner.reason='cleanup_unconfirmed';publishAnalysis();
+      },OPERATOR_MS+CLEANUP_MS);
       owner.unsubscribe=root.HomeSpatialViewport?.subscribe?.(()=>{
         if(root.HomeSpatialViewport?.getSelectedSiteId?.()!=='victoria'&&ownedAnalysis===owner)stopAnalysis().catch(()=>{});
       });
@@ -143,7 +153,7 @@
       catch(error){
         // A failed acknowledgement is not proof the POST failed. Recover only
         // the original request via GET; never create another UUID or POST here.
-        owner.status='uncertain';owner.reason=error.code||error.message;publishAnalysis();
+        analysisError(owner,error,'uncertain');
         try{row=await resolveAnalysis(owner);reconciled=true;}
         catch(readError){
           if(Number.isSafeInteger(error.status)&&error.status>=400&&error.status<500&&readError.code==='apartment_analysis_acknowledgement_unresolved')finishAnalysis(owner,'failed',error.code||error.message);
@@ -164,13 +174,16 @@
     const owner=ownedAnalysis;
     if(owner&&owner.generation===generation&&SCENE.every(key=>owner.identity[key]===identity?.[key]))stopAnalysis().catch(()=>{});
   }
-  function subscribe({scope:value,arm='B',signal,onUpdate,onStatus}={}){
+  // previewArmed is a read-only getter for the desk-preview arm state; it only
+  // selects the observer cadence and the announced-frame prefetch.
+  function subscribe({scope:value,arm='B',signal,onUpdate,onStatus,previewArmed}={}){
     const selected=scope(value);if(typeof onUpdate!=='function'||typeof onStatus!=='function')fail('apartment_perception_callbacks_required');
     if(!['A','B'].includes(arm))fail('den_lab_arm_required');
     if(signal?.aborted){onStatus({status:'disconnected',reason:'subscription_aborted'});return()=>{};}
     if(active)active.close();const token=++epoch;
     const observer=root.HomeDenLabStream?.createObserver({siteId:'victoria',sessionId:selected.sessionId,generation:selected.generation,scope:selected,
-      arm,transport:root.HomePerceptionLabTransport,graphModel:root.HomePerceptionLabGraph?.model,env:root,onState:state=>{
+      arm,transport:root.HomePerceptionLabTransport,graphModel:root.HomePerceptionLabGraph?.model,env:root,
+      ...(typeof previewArmed==='function'?{previewArmed}:{}),onState:state=>{
         if(active?.token!==token)return;
         const statuses={idle:'connecting',connecting:'connecting',connected:'live',stopped:'stopped',paused:'unavailable',unavailable:'unavailable',disconnected:'disconnected'};
         const packet={...copy(state.perception),scope:copy(selected)};
@@ -207,6 +220,7 @@
   }
   const invalidate=()=>{epoch++;active?.close();if(ownedAnalysis)stopAnalysis().catch(()=>{});};
   root.addEventListener?.('home:logout',invalidate);root.addEventListener?.('pagehide',invalidate);
+  root.document?.addEventListener?.('visibilitychange',()=>{if(root.document.hidden)invalidate();});
   root.document?.addEventListener?.('click',e=>{if(e.target?.closest?.('#logout'))invalidate();},true);
   root.HomeApartmentPerceptionSource=Object.freeze({subscribe,sampleClock,readFrame,listSessions,
     analysisState,watchAnalysis,analysisAvailability,startAnalysis,reconcileAnalysis,stopAnalysis,releaseAnalysis});

@@ -2,7 +2,7 @@
 
 Authored software evidence only. These captures use the authored test room (two synthetic packs and an authored registration from `tools/fixtures/apartment-home-shell-fixtures.mjs`). They contain no household imagery, live camera, model session, physical command or private registration. Nothing here is actual-room, installed or physical acceptance.
 
-Source: `tools/test-apartment-shell-audit-browser.mjs`, which mounts the actual unified Home shell from this worktree in one Chromium page. It changes viewport and pointer in place (CDP touch emulation turns the pointer coarse).
+Source: `tools/fixtures/apartment-shell-audit.mjs`, which runs as three test files, each with its own page load and 145 s deadline: `test-apartment-shell-audit-echo-browser.mjs` (Echo surfaces), `test-apartment-shell-audit-browser.mjs` (Victoria surfaces, the Phone example and Tab order) and `test-apartment-shell-audit-behaviour-browser.mjs` (motion, status rows, unsaved-work isolation, the sheet handle). Each mounts the actual unified Home shell from this worktree in one Chromium page. It changes viewport and pointer in place (CDP touch emulation turns the pointer coarse).
 
 ## What the audit checks
 
@@ -32,7 +32,17 @@ Each state is checked for:
   - switch thumbs ease over 0.16 s and disclosure chevrons over 0.15 s;
   - the loading badge spins at 0.8 s and the live dot glows at 7 px;
   - under `prefers-reduced-motion: reduce`, all of it snaps (0.01 ms).
-- **Keyboard (APT-Q02):** every visible Tab stop shows the focus ring, and Tab reaches the header, the room toolbar and the inspector.
+- **Keyboard (APT-Q02):** every visible Tab stop shows the focus ring, and Tab moves header → room → inspector → dock (SPEC › Keyboard and touch).
+- **Non-drag room controls and collisions (APT-Q02, S05):** at every size, zoom in/out, orbit ‹ › and Fit are visible buttons. The toolbar, zoom pair, toasts, legend and the approximate-placement badge never overlap, and they stay on the stage.
+- **Status (APT-S02):** the status popover has rows for room, lights, saved work, camera and capabilities, all using the shared badge vocabulary.
+  - Echo names its Home Assistant connection.
+  - Victoria reads "No light entities for Den fixtures" and shows no Home Assistant state.
+  - Capability rows read "Not available yet" until the APT-F05 contract exists.
+- **Home isolation (APT-S02):**
+  - An authored Echo draft is parked at Echo's own scene scope and restored through the real path, so the active Echo segment shows its mark.
+  - Switching to Victoria toasts "Echo Park · your unsaved work here is kept".
+  - The Echo segment keeps its hollow mark while Victoria is shown, and Victoria shows none of Echo's state.
+- **Sheet (APT-S05):** on the phone, real touch drags on the handle move half → full → peek → half. Arrow keys and a tap reach every detent. The sheet eases over 0.22 s and sits on the bottom edge with its safe-area padding.
 - **HANDOFF › Acceptance examples › Phone:**
   - the sheet has a light/camera switch;
   - the room toolbar sits above the sheet;
@@ -44,9 +54,9 @@ Each state is checked for:
 | | Before (main `dfd6c613` tokens) | After |
 |---|---|---|
 | Findings | 133 | 0 |
-| States audited | | 60 |
-| Text runs checked | | 2,803 |
-| Coarse targets checked | | 952 |
+| States audited | | 64 |
+| Text runs checked | | 3,603 |
+| Coarse targets checked | | 1,134 |
 | Lowest text contrast, dark / light | | 5.20:1 / 4.85:1 |
 
 Before the fix, the main findings were:
@@ -61,13 +71,14 @@ Before the fix, the main findings were:
 ## Recorded, not gated (other lanes)
 
 - **Setup rail (APT-U01):** on the phone, the classic Setup editor renders in the stage under the sheet, so its fields are covered and Controls is empty. The audit records this under `known`; the Setup rail lane closes it when the editor moves into the column.
-- **Designed Tab order (APT-Q02):** today the order is header → tabs → inspector → dock → room. The stacked follow-up moves the room before the inspector.
 
 - **Label placement (APT-R01, deferred polish):** after #314, the in-room fixture labels and the composer's mode pill can overlap one another or the top bar on phone and tablet stages. Each label now has a 44 px touch area (`::after`) on coarse pointers, but overlapping labels still cover each other. The audit records these under `known` rather than gating them, until label collision stacking lands.
 
 ## Captures
 
-- `phone-390x844-victoria-dark.png`: HANDOFF "Phone" example. The sheet has a light/camera switch, the toolbar is above the sheet, and the targets are 44 px.
+- `phone-390x844-victoria-dark.png`: HANDOFF "Phone" example. The sheet has a light/camera switch, the toolbar is above the sheet, and the targets are 44 px. The toolbar's second row keeps ‹ › and Fit, and the zoom pair sits at the right edge.
+- `desktop-1366x768-victoria-dark-status.png`: Victoria's status rows. Lights reads "No light entities for Den fixtures", with no Home Assistant state.
+- `phone-390x844-echo-light-status.png`: Echo's status rows on a phone in light theme.
 - `phone-390x844-victoria-light-light.png`: light theme on a phone. The room stays dark, and the inspector's switches, sliders and buttons are touch-sized.
 - `phone-390x844-echo-dark-chat.png`: the Chat pane on a phone, with readable connection text and 44 px controls.
 - `desktop-1366x768-victoria-light-aim.png`: light theme on desktop. The toolbar, labels and zoom stay dark and readable on the stage.

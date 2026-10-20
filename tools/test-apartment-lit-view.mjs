@@ -1,8 +1,9 @@
 // Tier-0 Lit (APT-V01) on the real symbolic fixture factory and a resident
 // mesh, with no WebGL: candela from SPEC's assumed lumens by beam angle,
-// crisp spot and soft down shadows, unshadowed radial lobes, reversible mesh
-// materials, tone mapping confined to the lit mesh, disclosure, and the
-// declared reduced quality.
+// crisp spot and soft down shadows (cached per light), unshadowed radial
+// lobes, reversible mesh materials and geometry, tone mapping confined to the
+// lit mesh, disclosure, the declared reduced quality, and the L5 bounce bake
+// (its CPU twin in-thread) landing in a built-in lightMap with modeled lux.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -29,6 +30,10 @@ const { createEquipmentVirtualFixtures } = await import(dataModule(fixturesSourc
 const Model = await import(pathToFileURL(sourceFile('lit-model.mjs')).href);
 let litSource = replaceOne(fs.readFileSync(sourceFile('lit-view.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL));
 litSource = replaceOne(litSource, 'import(`./lit-model.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-model.mjs')).href) + ')');
+litSource = replaceOne(litSource, 'import(`./lit-exposure.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-exposure.mjs')).href) + ')');
+litSource = replaceOne(litSource, 'import(`./lit-bvh-bake.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-bvh-bake.mjs')).href) + ')');
+const Bake = await import(pathToFileURL(sourceFile('lit-bvh-bake.mjs')).href);
+const { roomBox } = await import('./fixtures/lit-bake-scenes.mjs');
 const Lit = await import(dataModule(litSource));
 const EXPOSURE = .038;
 // Every sync lands 10 s after the last, so the 160 ms ease has settled; the
@@ -45,12 +50,13 @@ function world(t) {
   const hook = shader => { shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\n// display-hook'); };
   const display = new THREE.MeshBasicMaterial({ map: new THREE.Texture(), toneMapped: false });
   display.onBeforeCompile = hook; display.customProgramCacheKey = () => 'home-scan-display-floor-0-1';
-  const mesh = new THREE.Group(), face = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), display); mesh.add(face); root.add(mesh);
+  const displayGeometry = new THREE.PlaneGeometry(8, 8);
+  const mesh = new THREE.Group(), face = new THREE.Mesh(displayGeometry, display); mesh.add(face); root.add(mesh);
   const renderer = { shadowMap: { enabled: false, type: THREE.BasicShadowMap, autoUpdate: true, needsUpdate: false }, toneMapping: THREE.NoToneMapping };
   let current = mesh;
   const lit = Lit.createLitView({ scene, renderer, getMesh: () => current, getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20, now: settledClock() });
   t.after(() => { lit.disable(); fixtures.dispose(); });
-  return { scene, root, fixtures, mesh, face, display, hook, renderer, lit, setMesh: next => { current = next; } };
+  return { scene, root, fixtures, mesh, face, display, displayGeometry, hook, renderer, lit, setMesh: next => { current = next; } };
 }
 const lights = w => w.lit.group.children.filter(node => node.isSpotLight);
 
@@ -98,12 +104,19 @@ test('enable relights the mesh from the four fixtures with crisp spot, soft down
     assert.ok(Math.abs(light.angle - theta) < 1e-12);
     assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(450, theta) * 1 * EXPOSURE) < 1e-9, 'spot at its restore-default brightness 1');
     assert.equal(light.castShadow, true); assert.equal(light.shadow.radius, 2.5, 'crisp');
-    assert.equal(light.shadow.mapSize.x, 1024); assert.equal(light.decay, 2);
+    assert.equal(light.shadow.mapSize.x, 2048, 'spot shadow maps are 2048'); assert.equal(light.decay, 2);
+    assert.equal(light.shadow.autoUpdate, false, 'cached: re-rendered only when this light moves');
   }
   for (const light of downs) {
     assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(350, 1) * Model.litDimmingFraction(.75) * EXPOSURE) < 1e-9);
     assert.equal(light.castShadow, true); assert.equal(light.shadow.radius, 6, 'soft');
+    assert.equal(light.shadow.mapSize.x, 1024, 'down shadow maps are 1024'); assert.equal(light.shadow.autoUpdate, false);
   }
+  assert.deepEqual({ ...state.shadowMapSizes }, { crisp: 2048, soft: 1024 });
+  assert.equal(all.filter(light => light.userData.lit_source === 'bounce').length, 0, "#319's instant-radiosity bounce lights are retired");
+  assert.equal(state.bounceLimit, 'One bounce, shadowed · per-vertex detail · assumed albedos · radial zones cast no direct shadows',
+    'the leak line is gone; the new limits are stated');
+  assert.equal(state.assumedAlbedos.measured, false); assert.equal(state.assumedAlbedos.source, 'scan colours x 0.8');
   for (const light of zones) {
     assert.equal(light.castShadow, false, 'each radial zone is its own unshadowed lobe');
     assert.ok(Math.abs(light.intensity - Lit.candelaFromLumens(120, .95) * Model.litDimmingFraction(.75) * EXPOSURE) < 1e-9);
@@ -119,9 +132,11 @@ test('the spot light follows the fixture exact aim, and its colour follows Kelvi
   const id = w.fixtures.readback().fixtures[0].fixture_id;
   assert.equal(w.fixtures.aimAtTarget(id, { point: [1.5, 2.5, 0], normal: [0, 0, 1], kind: 'authored_floor' }).ok, true);
   w.renderer.shadowMap.needsUpdate = false;
+  for (const light of lights(w)) if (light.castShadow) light.shadow.needsUpdate = false;
   assert.equal(w.lit.sync(), true, 'an aim change is picked up');
   assert.equal(w.renderer.shadowMap.needsUpdate, true, 'and re-renders the shadow maps once');
   const spot = lights(w).find(light => light.userData.lit_source === 'spot' && light.userData.fixture_id === id);
+  assert.deepEqual(lights(w).filter(light => light.castShadow && light.shadow.needsUpdate), [spot], 'only the moved spot re-renders its cached map');
   const target = w.root.localToWorld(new THREE.Vector3(1.5, 2.5, 0));
   const toTarget = target.clone().sub(spot.position).normalize(), aim = spot.target.position.clone().sub(spot.position).normalize();
   assert.ok(toTarget.dot(aim) > .99999, 'the light points at the set aim');
@@ -137,8 +152,13 @@ test('the spot light follows the fixture exact aim, and its colour follows Kelvi
 
 test('mesh materials are lit copies that keep the display hooks and confine tone mapping, and come back exactly', t => {
   const w = world(t); w.lit.enable();
-  const litMaterial = w.face.material;
+  const litMaterial = w.face.material, displayGeometry = w.displayGeometry;
   assert.ok(litMaterial.isMeshStandardMaterial); assert.equal(litMaterial.map, w.display.map, 'the scan colours stand in for albedo');
+  assert.ok(litMaterial.lightMap?.isDataTexture && litMaterial.lightMap.channel === 1 && litMaterial.lightMap.type === THREE.HalfFloatType,
+    'the bounce is a built-in half-float lightMap on uv1, no custom shader');
+  assert.notEqual(w.face.geometry, w.displayGeometry, 'Lit draws its own non-indexed copy');
+  assert.equal(w.face.geometry.index, null);
+  assert.equal(w.face.geometry.attributes.uv1.count, w.face.geometry.attributes.position.count, 'one lightmap cell corner per vertex');
   assert.equal(w.face.castShadow, true); assert.equal(w.face.receiveShadow, true);
   assert.equal(w.face.customDepthMaterial, undefined, 'default depth: the camera cutaway never changes world shadowing');
   assert.equal(litMaterial.onBeforeCompile, THREE.Material.prototype.onBeforeCompile, 'no custom shader: built-in material only, WebGPU-portable');
@@ -146,6 +166,7 @@ test('mesh materials are lit copies that keep the display hooks and confine tone
   const state = w.lit.disable();
   assert.equal(state.active, false);
   assert.equal(w.face.material, w.display, 'the exact display material returns');
+  assert.equal(w.face.geometry, displayGeometry, 'and the exact display geometry');
   assert.equal(w.face.castShadow, false); assert.equal(w.face.receiveShadow, false);
   assert.equal(w.renderer.shadowMap.enabled, false); assert.equal(w.renderer.shadowMap.type, THREE.BasicShadowMap); assert.equal(w.renderer.shadowMap.autoUpdate, true);
   assert.equal(w.lit.group.parent, null);
@@ -171,7 +192,9 @@ test('a sustained frame rate under 30 fps declares reduced quality: half-size sh
   for (let i = 0; i < 3; i++) w.lit.observeFrameRate(20);
   const state = w.lit.observeFrameRate(20);
   assert.equal(state.quality, 'reduced');
-  assert.ok(lights(w).filter(light => light.castShadow).every(light => light.shadow.mapSize.x === 512));
+  assert.ok(lights(w).filter(light => light.userData.lit_source === 'spot').every(light => light.shadow.mapSize.x === 1024), 'spot maps halve to 1024');
+  assert.ok(lights(w).filter(light => light.userData.lit_source === 'down').every(light => light.shadow.mapSize.x === 512), 'down maps halve to 512');
+  assert.ok(lights(w).filter(light => light.castShadow).every(light => light.shadow.needsUpdate), 'and each resized map re-renders once');
   assert.ok(lights(w).filter(light => light.userData.lit_source === 'zone').every(light => light.intensity === 0));
   assert.ok(lights(w).filter(light => light.userData.lit_source === 'spot').every(light => light.intensity > 0));
 });
@@ -181,9 +204,10 @@ test('a scan without normals gets them for Lit only', t => {
   bare.setAttribute('position', w.face.geometry.attributes.position.clone()); bare.setIndex(w.face.geometry.index.clone());
   const node = new THREE.Mesh(bare, new THREE.MeshBasicMaterial()); w.mesh.add(node);
   w.lit.enable();
-  assert.ok(bare.attributes.normal, 'lighting needs normals, so Lit derives them');
+  assert.ok(node.geometry.attributes.normal, 'lighting needs normals, so Lit derives them on its own copy');
+  assert.equal(bare.attributes.normal, undefined, 'the display geometry never gains them');
   w.lit.disable();
-  assert.equal(bare.attributes.normal, undefined, 'and removes them on exit');
+  assert.equal(node.geometry, bare); assert.equal(bare.attributes.normal, undefined);
   assert.ok(w.face.geometry.attributes.normal, 'normals the scan already had are kept');
 });
 
@@ -191,79 +215,96 @@ test('a replaced mesh is relit and the old one restored', t => {
   const w = world(t); w.lit.enable();
   const other = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial()), original = other.material;
   w.setMesh(other); w.lit.sync();
-  assert.equal(w.face.material, w.display); assert.ok(other.material.isMeshStandardMaterial);
+  assert.equal(w.face.material, w.display); assert.equal(w.face.geometry, w.displayGeometry); assert.ok(other.material.isMeshStandardMaterial);
   w.lit.disable(); assert.equal(other.material, original);
 });
 
-test('one bounce: the eight strongest lit patches become hemispherical bounce lights with assumed albedo', t => {
-  const w = world(t);
-  // A closed room for the rays: floor, four walls (the display face is the floor).
-  const room = new THREE.Group(), side = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), side); room.add(floor);
-  for (const [x, y, rz] of [[6, 0, Math.PI / 2], [-6, 0, Math.PI / 2], [0, 6, 0], [0, -6, 0]]) {
-    const wall = new THREE.Mesh(new THREE.PlaneGeometry(12, 4), side);
-    wall.rotation.set(Math.PI / 2, rz, 0, 'ZXY'); wall.position.set(x, y, 2); room.add(wall);
-  }
-  w.root.add(room); w.root.updateMatrixWorld(true);
+// A closed room around the four authored fixtures (root-local, Z up).
+function roomWorld(t, extra = () => ({})) {
+  const w = world(t), triangles = [], albedo = [];
+  roomBox(triangles, albedo, [-6, -6, 0], [10, 10, 3.2], { step: 1 });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(triangles), 3));
+  const room = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xb0b0b0 }));
+  const roomMesh = new THREE.Group(); roomMesh.add(room); w.root.add(roomMesh); w.root.updateMatrixWorld(true);
   w.lit.disable();
-  const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
-    getCollision: () => room, spotFwhmDeg: 20, now: settledClock() });
+  const messages = [];
+  const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => roomMesh, getFixtureRoots: () => w.fixtures.root.children,
+    spotFwhmDeg: 20, now: settledClock(),
+    createBakeEndpoint: () => {
+      const endpoint = Bake.createLocalBakeEndpoint({ gpu: null, yieldTask: () => new Promise(resolve => setImmediate(resolve)) });
+      const post = endpoint.postMessage.bind(endpoint);
+      endpoint.postMessage = (data, transfer) => { messages.push(data); post(data, transfer); };
+      return endpoint;
+    }, ...extra(w) });
   t.after(() => lit.disable());
-  const state = lit.enable();
-  assert.equal(state.bounceLights, 8, 'a fixed set of eight bounce lights');
-  assert.equal(state.bounceSources, 8, 'four fixtures give more than eight lit patches; the eight strongest are kept');
-  assert.equal(state.bounceRangeM, 4.5);
-  assert.deepEqual({ ...state.assumedAlbedos }, { spotFlat: .35, spotVertical: .6, down: .35, zoneWall: .65, zoneOther: .4 }, 'the assumed albedos are reported with the view');
-  assert.equal(state.bounceLimit, 'One bounce · casts no shadows · can leak up to 4.5 m through walls');
-  const bounce = lit.group.children.filter(node => node.isSpotLight && node.userData.lit_source === 'bounce');
-  assert.equal(bounce.length, 8);
-  for (const light of bounce) {
-    assert.equal(light.castShadow, false, 'bounce lights cast no shadows');
-    assert.equal(light.distance, 4.5); assert.ok(Math.abs(light.angle - 1.45) < 1e-12); assert.equal(light.penumbra, 1);
-    assert.ok(light.intensity > 0 && light.userData.patch.assumed === true && light.userData.measured === false);
-    assert.ok(Math.abs(light.intensity - light.userData.patch.reflected_lm / Math.PI * .9 * EXPOSURE) < 1e-9, 'intensity is reflected flux / pi x 0.9 x the night exposure');
-    const off = light.target.position.clone().sub(light.position);
-    assert.ok(Math.abs(off.length() - 1) < 1e-9, 'points along the patch normal');
-  }
-  const reflected = bounce.map(light => light.userData.patch.reflected_lm);
-  assert.deepEqual(reflected, [...reflected].sort((a, b) => b - a), 'strongest first');
-  // Spots: 450 x 1 x 0.8 x albedo; they outrank every zone patch.
-  assert.ok(bounce.slice(0, 4).every(light => light.userData.patch.kind === 'spot'));
-  for (const light of bounce.filter(item => item.userData.patch.kind === 'spot'))
-    assert.ok([.35, .6].includes(light.userData.patch.albedo) && Math.abs(light.userData.patch.reflected_lm - 450 * .8 * light.userData.patch.albedo) < 1e-9);
+  return { ...w, lit, room, roomMesh, messages };
+}
+async function until(lit, test, label) {
+  for (let i = 0; i < 4000; i++) { lit.sync(); if (test(lit.state())) return lit.state(); await new Promise(resolve => setImmediate(resolve)); }
+  assert.fail('timed out waiting for ' + label + ': ' + JSON.stringify(lit.state().bounce));
+}
+
+test('the bounce is traced through a BVH over the scan mesh into the lightMap, with modeled lux at named aims', async t => {
+  const changes = [];
+  const w = roomWorld(t, w => ({ getNamedAims: () => [{ id: 'desk', label: 'Desk', point: [1, 1, 0], normal: [0, 0, 1], frame: w.root }],
+    onStateChange: state => changes.push(state.bounce.status) }));
+  const lit = w.lit;
+  const first = lit.enable();
+  assert.equal(first.bounce.method, 'compute-bvh-one-bounce'); assert.equal(first.bounce.status, 'building');
+  const ready = await until(lit, state => state.bounce.status === 'ready' && state.lux.length === 1, 'the first bake and lux');
+  assert.equal(ready.bounce.backend, 'cpu', 'no WebGPU adapter here: the CPU twin');
+  assert.ok(ready.bounce.receivers > 100);
+  assert.ok(ready.bounce.lastBake.spots === 4 && ready.bounce.lastBake.staticMs >= 0, 'four spot layers and the static layers');
+  const node = w.roomMesh.children[0], map = node.material.lightMap, half = Bake.halfTableF32();
+  assert.ok(map.image.data.some(value => half[value] > 0 && value !== 0x3c00), 'bounce irradiance landed in the lightmap');
+  assert.ok(changes.includes('ready'), 'Lit reports the bake so the engine can emit lit');
+  const [row] = ready.lux;
+  assert.equal(row.id, 'desk'); assert.equal(row.modeled, true); assert.equal(row.measured, false);
+  assert.ok(row.lux > 0 && row.direct >= 0 && row.bounce > 0, 'direct plus bounce, in lux');
+  assert.equal(ready.luxLabel, 'Modeled lux');
+  assert.equal(ready.measured, false); assert.equal(ready.disclosure, 'Simulated · not photometric · assumed output');
+  lit.disable();
+  assert.equal(node.geometry.index === null && !node.geometry.attributes.uv1, true, 'the display geometry is back, without Lit\'s uv1');
 });
 
-test('bounce follows the channels and drops a patch whose light is off', t => {
-  const w = world(t);
-  const room = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-  w.root.add(room); w.root.updateMatrixWorld(true); w.lit.disable();
-  const lit = Lit.createLitView({ scene: w.scene, renderer: w.renderer, getMesh: () => w.mesh, getFixtureRoots: () => w.fixtures.root.children,
-    getCollision: () => room, spotFwhmDeg: 20, now: settledClock() });
-  t.after(() => lit.disable());
-  lit.enable();
-  const before = lit.state().bounceSources;
-  for (const item of w.fixtures.readback().fixtures) w.fixtures.setFixtureState(item.fixture_id, { spotlight: { on: false }, downward: { on: false },
-    radials: [1, 2, 3, 4, 5, 6].map(number => ({ number, on: false })) });
-  lit.sync();
-  assert.ok(before > 0); assert.equal(lit.state().bounceSources, 0, 'no lit patch, no bounce');
-  assert.ok(lit.group.children.filter(node => node.userData.lit_source === 'bounce').every(light => light.intensity === 0));
-});
-
-test('bouncePatches (pure model) uses the assumed albedos and ignores rays that find no surface (an opening)', () => {
-  const light = (kind, level = 1) => ({ kind, level, kelvin: 3000, number: null });
-  const lights = [light('spot'), light('spot'), light('down'), light('zone'), light('zone'), light('zone'), light('zone', 0)];
-  const hits = [{ point: [1, 0, 0], normal: [0, 1, 0] }, { point: [1, 0, 0], normal: [-1, 0, 0] }, { point: [0, 0, 0], normal: [0, 1, 0] },
-    { point: [1, 0, 0], normal: [-1, 0, 0] }, { point: [1, 0, 0], normal: [-.6, .8, 0] }, null, { point: [1, 0, 0], normal: [-1, 0, 0] }];
-  const patches = Model.bouncePatches(lights, hits, { up: [0, 1, 0] });
-  const by = kind => patches.filter(patch => patch.kind === kind).map(patch => patch.albedo).sort();
-  assert.deepEqual(by('spot'), [.35, .6]); assert.deepEqual(by('down'), [.35]); assert.deepEqual(by('zone'), [.4, .65]);
-  assert.equal(patches.length, 5, 'the zone with no surface and the zone that is off add nothing');
-  assert.ok(Math.abs(patches.find(patch => patch.kind === 'down').reflected - 350 * .8 * .35) < 1e-9);
-  assert.ok(Math.abs(patches.find(patch => patch.kind === 'zone' && patch.albedo === .65).reflected - 120 * .7 * .65) < 1e-9);
-  const strongest = patches[0];
-  assert.deepEqual(strongest.position, strongest.point.map((v, i) => v + strongest.normal[i] * .25), '0.25 m off the patch');
-  assert.ok(Math.abs(strongest.intensity - strongest.reflected / Math.PI * .9 * Model.LIT_EXPOSURE) < 1e-12);
-  assert.deepEqual({ ...Model.LIT_BOUNCE_ALBEDO }, { spotFlat: .35, spotVertical: .6, down: .35, zoneWall: .65, zoneOther: .4 });
+test('a slider only re-weights the bake; an aim re-bakes that spot, after the Set sweep lands', async t => {
+  let drawing = false, clock = 0;
+  const w = roomWorld(t, () => ({ isPresentationActive: () => drawing, now: () => (clock += 16) }));
+  w.lit.enable();
+  await until(w.lit, state => state.bounce.status === 'ready', 'the first bake');
+  const posts = () => w.messages.filter(message => message.type === 'lights');
+  const before = posts().length, id = w.fixtures.readback().fixtures[0].fixture_id;
+  // The real fixtures say when a Set sweep is drawing; the engine passes this to Lit.
+  assert.equal(w.fixtures.presentationActive(), false);
+  assert.equal(w.fixtures.aimAtTarget(id, { point: [2, 2, 0], normal: [0, 0, 1], kind: 'authored_floor' }, { sweep: true }).ok, true);
+  assert.equal(w.fixtures.presentationActive(), true, 'the 650 ms sweep is drawing');
+  w.fixtures.advancePresentation(performance.now() + 1000);
+  assert.equal(w.fixtures.presentationActive(), false, 'and lands');
+  await until(w.lit, state => state.bounce.status === 'ready', 'the swept aim re-bake');
+  const settled = posts().length;
+  w.fixtures.setFixtureState(id, { downward: { brightness: .3 } });
+  await until(w.lit, state => state.bounce.status === 'ready' && posts().length > settled, 'a re-weight');
+  const weighted = posts().at(-1), spotKey = Object.keys(weighted.weights).find(key => key.startsWith(id + ':spot'));
+  assert.deepEqual(posts().at(-2).lights, weighted.lights, 'a level change sends the same placements: nothing re-traces');
+  // Set with the sweep: the fixture is drawing, so the re-bake waits.
+  drawing = true;
+  assert.equal(w.fixtures.aimAtTarget(id, { point: [1.5, 2.5, 0], normal: [0, 0, 1], kind: 'authored_floor' }).ok, true);
+  const waiting = posts().length;
+  for (let i = 0; i < 20; i++) w.lit.sync();
+  assert.equal(posts().length, waiting, 'no re-bake while the 650 ms sweep draws');
+  drawing = false; w.lit.sync();
+  assert.equal(posts().length, waiting + 1, 'one re-bake once it lands');
+  const moved = posts().at(-1);
+  assert.notDeepEqual(moved.lights.find(light => light.key === spotKey).direction, weighted.lights.find(light => light.key === spotKey).direction);
+  const final = await until(w.lit, state => state.bounce.status === 'ready', 'the spot re-bake');
+  assert.equal(final.bounce.lastBake.spots, 1, 'only the aimed spot re-baked'); assert.equal(final.bounce.lastBake.staticMs, null);
+  // A sweep that never ends does not hold the bounce back forever.
+  drawing = true;
+  w.fixtures.aimAtTarget(id, { point: [2.5, 1.5, 0], normal: [0, 0, 1], kind: 'authored_floor' });
+  const held = posts().length;
+  for (let i = 0; i < 200 && posts().length === held; i++) w.lit.sync();
+  assert.equal(posts().length, held + 1, 'the re-bake goes ahead after 1.5 s');
 });
 
 test('Lit lights ease toward a new level on the 160 ms clock; the set level and the aim move at once', t => {

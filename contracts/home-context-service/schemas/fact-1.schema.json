@@ -1,0 +1,967 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fact-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "fact-1"
+    },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "producer_event_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "site_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "room_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "person_ref": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "site_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "room_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "session_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "domain_epoch": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "track_epoch": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "pid": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                }
+              ]
+            }
+          },
+          "required": [
+            "site_id",
+            "room_id",
+            "session_id",
+            "domain_epoch",
+            "track_epoch",
+            "pid"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "layer": {
+      "enum": [
+        "observation",
+        "interpretation"
+      ]
+    },
+    "kind": {
+      "enum": [
+        "surface_manipulation",
+        "hand_interaction",
+        "object_interaction",
+        "working_position",
+        "orientation",
+        "negative_engagement",
+        "pc_input",
+        "proximity",
+        "pass_by",
+        "object_visible",
+        "device_active",
+        "conflict",
+        "qualified_association",
+        "person_presence",
+        "reading_material",
+        "activity_mode",
+        "activity_proposal",
+        "model_cues"
+      ]
+    },
+    "status": {
+      "enum": [
+        "supplied",
+        "missing",
+        "stale",
+        "unobservable",
+        "conflict"
+      ]
+    },
+    "value": {},
+    "observed_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "available_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "valid_until": {
+      "type": "number",
+      "minimum": 0
+    },
+    "source_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "sensor_roots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "observation_roots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "parent_evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "commissioned",
+            "unverified"
+          ]
+        },
+        "mapping_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "uncertainty_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "original_unit": {
+          "enum": [
+            "utc_epoch_s",
+            "utc_epoch_ms",
+            "utc_epoch_ns",
+            "device_relative_s",
+            "session_offset_s"
+          ]
+        },
+        "original_value": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "status",
+        "mapping_id",
+        "uncertainty_s",
+        "original_unit",
+        "original_value"
+      ]
+    },
+    "qualification": {
+      "enum": [
+        "experimental_shadow",
+        "qualified_shadow"
+      ]
+    },
+    "probability": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "surface_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "region_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "association": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "unresolved",
+            "qualified"
+          ]
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "maxItems": 128
+        }
+      },
+      "required": [
+        "status",
+        "alternatives"
+      ]
+    },
+    "spatial": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "geometry_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "registration_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "coverage_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "association_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "registration_verified": {
+          "const": true
+        },
+        "coverage_status": {
+          "const": "observed"
+        },
+        "association_status": {
+          "const": "qualified"
+        },
+        "registry_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "geometry_revision",
+        "registration_ref",
+        "coverage_refs",
+        "association_ref",
+        "registration_verified",
+        "coverage_status",
+        "association_status"
+      ]
+    },
+    "attribution_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "config_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "config_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "calibration_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "source_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        }
+      },
+      "required": []
+    },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "uncalibrated",
+            "provisional",
+            "fitted"
+          ]
+        },
+        "calibrator_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "calibration_set_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "observation_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ]
+    },
+    "legacy_lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dialect": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "arm_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capture_epoch": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "rule": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "map": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "map_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "model_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "map_id",
+            "revision",
+            "model_sha256"
+          ]
+        },
+        "pairing_skew_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": []
+    },
+    "sensor_root_bindings": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "maxItems": 128,
+        "uniqueItems": true
+      }
+    },
+    "observation_root_times": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "producer_event_id",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "person_ref",
+    "layer",
+    "kind",
+    "status",
+    "value",
+    "observed_at",
+    "available_at",
+    "valid_until",
+    "source_id",
+    "sensor_roots",
+    "observation_roots",
+    "parent_evidence_ids",
+    "clock",
+    "qualification",
+    "probability"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "surface_manipulation"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "hand_interaction"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "object_interaction"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "working_position"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "orientation"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "negative_engagement"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "pc_input"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "proximity"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "pass_by"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "object_visible"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "device_active"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "conflict"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "qualified_association"
+          },
+          "status": {
+            "enum": [
+              "supplied",
+              "conflict"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "person_presence"
+          },
+          "status": {
+            "const": "supplied"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "track_status": {
+                "enum": [
+                  "tracked",
+                  "coasting",
+                  "not_observed"
+                ]
+              }
+            },
+            "required": [
+              "track_status"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "reading_material"
+          },
+          "status": {
+            "const": "supplied"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "enum": [
+                  "open",
+                  "closed",
+                  "unknown"
+                ]
+              },
+              "relation": {
+                "enum": [
+                  "person_using_material",
+                  "visible_unused",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "relation"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "activity_mode",
+              "activity_proposal"
+            ]
+          },
+          "status": {
+            "const": "supplied"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "enum": [
+              "computer_work",
+              "gaming",
+              "desk_hobby",
+              "reading",
+              "phone_use",
+              "listening",
+              "resting",
+              "sleeping_likely",
+              "cleaning",
+              "transition",
+              "other"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "model_cues"
+          },
+          "status": {
+            "const": "supplied"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "held_object": {
+                "enum": [
+                  "book",
+                  "phone",
+                  "keyboard",
+                  "mouse",
+                  "unknown",
+                  "none"
+                ]
+              },
+              "book_state": {
+                "enum": [
+                  "open",
+                  "closed",
+                  "unknown"
+                ]
+              },
+              "posture": {
+                "enum": [
+                  "sitting",
+                  "standing",
+                  "lying",
+                  "unknown"
+                ]
+              },
+              "activity_hypothesis": {
+                "enum": [
+                  "computer_work",
+                  "gaming",
+                  "desk_hobby",
+                  "reading",
+                  "phone_use",
+                  "listening",
+                  "resting",
+                  "sleeping_likely",
+                  "cleaning",
+                  "transition",
+                  "other",
+                  "unknown"
+                ]
+              }
+            },
+            "required": []
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "missing",
+              "stale",
+              "unobservable"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -29,6 +29,8 @@ class Element {
   setAttribute(key, value) { this.attributes[key] = String(value); }
   getAttribute(key) { return this.attributes[key] ?? null; }
   removeAttribute(key) { delete this.attributes[key]; }
+  addEventListener(type, listener) { (this.listeners ||= new Map()).set(type, [...(this.listeners.get(type) || []), listener]); }
+  removeEventListener(type, listener) { this.listeners?.set(type, (this.listeners.get(type) || []).filter(item => item !== listener)); }
   querySelectorAll(selector) {
     const match = /^\[([^=\]]+)(?:="([^"]+)")?\]$/.exec(selector); assert.ok(match, 'authored adapter only supports required attribute selectors');
     const found = [];
@@ -106,6 +108,33 @@ test('frame publishes only after native DOM hit paths and hub positions match it
     assert.match(f.elements.pill.style.transform, /^translate3d\(400px,274px,0\)/);
   } });
   api.attach(f.elements); assert.equal(api.frame({ nowMs: 100 }), true); assert.equal(publications, 1); api.dispose();
+});
+
+test('the mode pill stays inside the room with its coarse hit area, sized by an observer rather than a frame-loop layout read', () => {
+  const f = fixture(), observers = [];
+  f.document.defaultView = { ResizeObserver: class { constructor(callback) { this.callback = callback; observers.push(this); }
+    observe() {} disconnect() { this.disconnected = true; } } };
+  f.api.attach(f.elements);
+  Object.assign(f.elements.root, { clientWidth: 800, clientHeight: 600 }); Object.assign(f.elements.pill, { offsetWidth: 180, offsetHeight: 44 });
+  observers.at(-1).callback();
+  const project = f.frame.project;
+  f.frame.project = point => { const p = project(point); return { ...p, x: p.x - 395, y: p.y - 292 }; };
+  f.api.frame({ nowMs: 0 });
+  assert.match(f.elements.pill.style.transform, /^translate3d\(95px,49px,0\)/, 'clamped 5 px inside the top-left edge');
+  f.frame.project = point => { const p = project(point); return { ...p, x: p.x + 395, y: p.y + 330 }; };
+  f.api.frame({ nowMs: 16 });
+  assert.match(f.elements.pill.style.transform, /^translate3d\(705px,595px,0\)/, 'clamped 5 px inside the bottom-right edge');
+  f.frame.project = project; f.api.frame({ nowMs: 32 });
+  assert.match(f.elements.pill.style.transform, /^translate3d\(400px,274px,0\)/, 'an unclamped pill keeps the handoff position');
+  f.api.dispose(); assert.equal(observers.at(-1).disconnected, true, 'disposal disconnects the observer');
+});
+
+test('every radial hit shape answers taps, so touch adjustment never moves a lobe press onto the mode pill', () => {
+  const f = fixture(), hub = f.elements.root.querySelector('[data-apt-radial-hub="hit"]');
+  for (const node of [...f.paths, hub]) assert.equal(node.listeners?.get('click')?.length, 1, 'marked while attached');
+  f.detach();
+  for (const node of [...f.paths, hub]) assert.equal(node.listeners.get('click').length, 0, 'unmarked on detach');
+  f.api.dispose();
 });
 
 test('the handoff pill stays on whole pixels during fractional camera settling while the drawn input plane remains exact', () => {

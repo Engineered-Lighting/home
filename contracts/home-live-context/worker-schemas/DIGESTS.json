@@ -1,0 +1,25 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "engagement-worker-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "payload_versions": {
+    "home-live-engagement-state-1": 1,
+    "home-live-shadow-decision-1": 1,
+    "home-live-worker-checkpoint-1": 1,
+    "home-live-worker-commit-1": 1,
+    "home-live-input-cut-1": 1
+  },
+  "publication_families": [
+    "home-live-engagement-state-1",
+    "home-live-shadow-decision-1"
+  ],
+  "schemas": {
+    "home-live-engagement-state-1.schema.json": "3fe8e644c5387377ae59cd2f1fb5b707ddf502333f26f64dc7eec69ba04b412a",
+    "home-live-shadow-decision-1.schema.json": "bef7e15c116133aad1157d5c300c1eb8b67248860dc0fe31e5d82e301bee470c",
+    "home-live-worker-checkpoint-1.schema.json": "597be89900d81831f64a87a7c7f87add4e8003e3a2258a68c9759215ea265d21",
+    "home-live-worker-commit-1.schema.json": "03448cabb8a185aebee842d010878729fba967c833a937eec1ceab88c03d19b9",
+    "home-live-input-cut-1.schema.json": "740a65ba3f57b2a772be1e68a5f1d30575733d094682fbf866e537359cfef9b7"
+  }
+}

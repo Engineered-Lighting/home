@@ -8,8 +8,8 @@
   if (root.HomePerceptionLabTransport) return;
   const PREFIX = "/api/perception-lab/v1";
   const MAX_JSON = 4 * 1024 * 1024;
-  // Graph, timeline and replay projections are bounded to 1 MiB upstream.
-  const GRAPH_READS = new Set(["sessions.graph", "sessions.timeline", "sessions.replay"]), MAX_GRAPH_JSON = 1024 * 1024;
+  // Event pages and graph projections are bounded to 1 MiB upstream.
+  const GRAPH_READS = new Set(["sessions.graph", "sessions.timeline", "sessions.replay", "sessions.events"]), MAX_GRAPH_JSON = 1024 * 1024;
   const MAX_MEDIA = 4 * 1024 * 1024;
   const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
   let connectionEpoch = 0, nativeGeneration = null;
@@ -74,6 +74,11 @@
       case "sessions.list": path = "/sessions"; break;
       case "sessions.get": path = sessionPath() + (args.atMs===undefined?'':'?at_ms='+integer(args.atMs,0,1800000)); break;
       case "sessions.live": path = sessionPath() + "/live"; break;
+      case "sessions.events": {
+        if (Object.keys(args).some(key => !["siteId", "sessionId", "afterId", "limit"].includes(key))) fail("lab_invalid_arguments");
+        path = sessionPath() + "/events?after_id=" + integer(args.afterId ?? 0, 0, Number.MAX_SAFE_INTEGER) +
+          "&limit=" + integer(args.limit ?? 200, 1, 200); break;
+      }
       case "sessions.graph": path = sessionPath() + "/graph" + (args.atMs === undefined ? "" : "?at_ms=" + integer(args.atMs, 0, 1800000)); break;
       case "sessions.replay": path = sessionPath() + "/replay?at_ms=" + integer(args.atMs, 0, 1800000); break;
       case "sessions.timeline": {
@@ -197,6 +202,18 @@
     const candidate = payload?.error?.code || payload?.error || payload?.detail?.code || payload?.detail;
     return typeof candidate === "string" && /^[a-z][a-z0-9_]{0,100}$/.test(candidate) ? candidate : "lab_request_failed";
   }
+  function validateEventPage(args, payload) {
+    let cursor = args.afterId ?? 0;
+    if (!payload || !Array.isArray(payload.items) || payload.items.length > (args.limit ?? 200)) fail("lab_invalid_event_page");
+    payload.items.forEach(event => {
+      if (!event || event.session_id !== args.sessionId ||
+          !Number.isSafeInteger(event.id) || event.id <= cursor || typeof event.kind !== "string" ||
+          !Number.isFinite(event.created_at) || !event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) fail("lab_invalid_event_page");
+      if (event.payload.site_id !== undefined && event.payload.site_id !== args.siteId) fail("lab_site_mismatch");
+      cursor = event.id;
+    });
+    if (payload.after_id !== cursor) fail("lab_invalid_event_page");
+  }
   function validateMedia(data, contentType, contentRange, offset, length) {
     const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange || "");
     const values = match && match.slice(1).map(Number);
@@ -211,6 +228,8 @@
     const route = describe(operation, args);
     const epoch = connectionEpoch;
     if (nativeContext()) {
+      // The virtual-den event cursor is browser-only; no new native authority.
+      if (operation === "sessions.events") fail("lab_native_events_not_available");
       // Camera reads are typed native operations. Refresh has no native scope or
       // namespace, and never falls back to HTTP.
       if (operation === 'cameras.structuredContext' || operation === 'cameras.refresh' || operation === 'cameras.refreshStatus' || operation === 'cameras.refreshImage') fail('lab_native_preview_not_available');
@@ -246,6 +265,7 @@
     try { payload = JSON.parse(new TextDecoder().decode(bytes)); } catch (_) { fail("lab_invalid_response", response.status); }
     current(epoch);
     if (!response.ok) fail(decodedError(payload, response.status), response.status);
+    if (operation === "sessions.events") validateEventPage(args, payload);
     if (operation === "media.manifest") rememberManifest(args, payload);
     if (operation === "media.describe") rememberManifest(args, { generation: args.generation, items: [payload] });
     if (operation === "sessions.delete") manifests.delete(args.siteId + ":" + args.sessionId);

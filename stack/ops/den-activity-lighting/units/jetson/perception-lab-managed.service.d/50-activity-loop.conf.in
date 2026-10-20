@@ -1,0 +1,40 @@
+# Drop-in for the existing perception-lab-managed.service (systemd --user, as
+# @SERVICE_USER@): turns on the always-on activity loop (AL-3, #323).
+#
+# The loop runs inside this process on purpose: it needs the controller,
+# store, worker leases, JEV factory and la-live-perceiver, and a second
+# process would contend for the camera. So there is no new unit, only this
+# drop-in. Install as
+#   ~/.config/systemd/user/perception-lab-managed.service.d/50-activity-loop.conf
+#
+# @ENV_FILE@ (0600, owned by @SERVICE_USER@) holds the private values:
+#   PERCEPTION_LAB_ACTIVITY_LOOP_CONFIG=<absolute path to the loop config>
+#   JETSON_HOME=<home directory of @SERVICE_USER@>
+# Without JETSON_HOME the Den backend code falls back to the placeholder
+# /home/jetson-user (RUNBOOK J0). Verify after a restart with
+#   systemctl --user show perception-lab-managed.service -p Environment -p EnvironmentFiles
+# and the running process's /proc/<MainPID>/environ.
+# The config file itself must be 0600 and owned by @SERVICE_USER@
+# (private_json refuses anything else). Check it offline before a restart:
+# a malformed config stops the whole managed service, camera chat included.
+#   cd <release>/service && <venv>/bin/python -c "import json,activity_loop as a; a.check_config(json.load(open('<file>')))"
+# The durable off switch is "enabled": false in that file.
+[Unit]
+# Restart with back-off: at most 5 starts in 15 min, then the unit stays
+# failed and the den-ops monitor alerts on the new failed unit.
+StartLimitIntervalSec=900
+StartLimitBurst=5
+
+[Service]
+EnvironmentFile=@ENV_FILE@
+# Always-on: restart after a crash. An operator `systemctl --user stop` stays
+# stopped. If the base unit already restarts, this changes nothing.
+Restart=on-failure
+RestartSec=20
+# The loop lives inside the managed service's existing budget. Fill these with
+# the base unit's reviewed values, read on the host with
+#   systemctl --user show perception-lab-managed.service -p MemoryMax -p CPUQuotaPerSecUSec -p TasksMax
+# so they are explicit in one place. Raising them needs a new soak (SOAK.md).
+MemoryMax=@MEMORY_MAX@
+CPUQuota=@CPU_QUOTA@
+TasksMax=@TASKS_MAX@

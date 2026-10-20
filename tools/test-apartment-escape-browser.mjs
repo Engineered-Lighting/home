@@ -248,6 +248,8 @@ test('mounted production overlay respects editable ownership, one-layer Escape, 
           // The W2 reticle, design tap-to-aim and proposal owners are inactive in this proof.
           const aimPresentationRef=useRef(null),tapAim=null,setTapAim=()=>{throw Error('inactive tap owner called')},
             aimScopeFor=()=>null,discardAimProposal=()=>{throw Error('inactive proposal owner called')};
+          // Echo's named-aim owners (reticle drag, proposal, inspector) are inactive too.
+          const echoNamedAimsRef=useRef(null);
           const setAimDestination=value=>proof.calls.push('destination-clear');
           const cancelDeskTargetSelection=()=>{throw Error('inactive desk owner called')},cancelSpatialTravel=()=>{throw Error('inactive travel owner called')},
             exitCameraPose=()=>{throw Error('inactive camera owner called')},showToast=()=>{throw Error('inactive calibration owner called')},setToast=()=>{};

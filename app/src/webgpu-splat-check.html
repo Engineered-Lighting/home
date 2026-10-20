@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Splat device check</title>
+<style>
+  :root { color-scheme: dark; --bg: #0e0f11; --panel: #17191c; --text: #e8e6e1; --muted: #9a9890; --pass: #6fcf8b; --fail: #ef7b6c; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #panel { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); max-width: 520px;
+    background: color-mix(in srgb, var(--panel) 92%, transparent); border-radius: 14px; padding: 14px 16px; }
+  h1 { font-size: 16px; margin: 0 0 6px; }
+  #status { color: var(--muted); margin: 0 0 8px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  td { padding: 2px 0; } td:last-child { text-align: right; }
+  .pass { color: var(--pass); } .fail { color: var(--fail); }
+  button { margin-top: 10px; font: inherit; padding: 8px 14px; border-radius: 10px; border: 0; background: #2a2d31; color: var(--text); }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three-0.186.1/three.webgpu.js",
+  "three/webgpu": "./vendor/three-0.186.1/three.webgpu.js",
+  "three/tsl": "./vendor/three-0.186.1/three.tsl.js"
+} }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="panel">
+  <h1>Splat device check</h1>
+  <p id="status">Loading…</p>
+  <table id="results"></table>
+  <button id="again" hidden>Run again</button>
+</div>
+<script type="module">
+  const { runSplatCheck } = await import('./home-3d/gaussian-splat-device-check.mjs');
+  const status = document.getElementById('status'), table = document.getElementById('results');
+  const row = (label, value, ok = null) => {
+    const tr = table.insertRow();
+    tr.insertCell().textContent = label;
+    const cell = tr.insertCell();
+    cell.textContent = value ?? '—';
+    if (ok !== null) cell.className = ok ? 'pass' : 'fail';
+  };
+  try {
+    const r = await runSplatCheck({ canvas: document.getElementById('view'), onProgress: (text) => { status.textContent = text; } });
+    status.textContent = r.verdict.sixtyFps ? 'PASS: holds 60 fps' : 'FAIL: below 60 fps';
+    status.className = r.verdict.sixtyFps ? 'pass' : 'fail';
+    row('Backend', `${r.backend}${r.adapter?.description ? ' · ' + r.adapter.description : ''}`, r.backend === 'webgpu');
+    if (r.backend !== 'webgpu') {
+      row('Why not WebGPU', !r.secureContext ? 'open this page over https' : !r.webgpuAvailable ? 'this browser has no WebGPU (iOS/macOS 26+ needed)' : 'no adapter', false);
+    }
+    row('Splats', `${r.splats.toLocaleString()} (SH${r.fileShDegree}, ${r.keyBits}-bit sort)`);
+    row('Drawing buffer', `${r.drawingBuffer.join(' × ')} @ DPR ${r.dpr}`);
+    row('Frame p95', `${r.frameP95Ms} ms`, r.verdict.sixtyFps);
+    row('Frame median / fps', `${r.frameMedianMs} ms / ${r.fps}`);
+    row('GPU compute + render', r.gpuTotalMedianMs == null ? null : `${r.gpuComputeMedianMs} + ${r.gpuRenderMedianMs} ms`);
+    row('Sorted every frame', r.sortsPerFrame == null ? null : `${r.sortsPerFrame} sorts/frame`, r.verdict.sortedEveryFrame);
+    row('Sort order', r.verdict.sortOrder === null ? 'CPU (fallback)' : `${r.sortViolations} violations`, r.verdict.sortOrder);
+    row('Parse (worker)', `${r.parseMs} ms`);
+  } catch (error) {
+    status.textContent = 'Error: ' + (error?.message || error);
+    status.className = 'fail';
+    window.__splatCheck = { status: 'error', error: String(error?.message || error) };
+  }
+  const again = document.getElementById('again');
+  again.hidden = false;
+  again.onclick = () => location.reload();
+</script>
+</body>
+</html>

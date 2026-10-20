@@ -29,6 +29,7 @@ const { createEquipmentVirtualFixtures } = await import(dataModule(fixturesSourc
 const Model = await import(pathToFileURL(sourceFile('lit-model.mjs')).href);
 let litSource = replaceOne(fs.readFileSync(sourceFile('lit-view.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL));
 litSource = replaceOne(litSource, 'import(`./lit-model.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-model.mjs')).href) + ')');
+litSource = replaceOne(litSource, 'import(`./lit-exposure.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(pathToFileURL(sourceFile('lit-exposure.mjs')).href) + ')');
 const Lit = await import(dataModule(litSource));
 const EXPOSURE = .038;
 // Every sync lands 10 s after the last, so the 160 ms ease has settled; the

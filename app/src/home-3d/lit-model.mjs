@@ -37,8 +37,8 @@ export const LIT_ASSUMED_LUMENS = Object.freeze(Object.defineProperty({ spot: 45
 export const LIT_ASSUMPTION_SOURCE = LIT_LUMEN_SOURCE.summary;
 export const LIT_DISCLOSURE = 'Simulated · not photometric · assumed output';
 export const LIT_DISCLOSURE_DETAIL = 'Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm. '
-    + 'Fixed night exposure. Materials are assumed from the scan colours. One bounce from the eight strongest lit patches, '
-    + 'with assumed albedos.';
+    + 'Materials are assumed from the scan colours. One bounce from the eight strongest lit patches, with assumed albedos.';
+// The exposure sentence follows from lit-exposure.mjs, per renderer path.
 /* The fixed night exposure (prototype scene.js _litApply). It scales every
  * simulated light's candela into display intensity, so a narrow spot reads
  * brighter than a wide wash of the same output, as it does in the room. */

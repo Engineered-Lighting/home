@@ -283,7 +283,9 @@
       // rows are not model results and must not evict supplied inferences.
       if (!row || !(typeof row.model_id === 'string' && row.model_id.length
         || [row.observed_at, row.available_at, row.valid_until].some(finite))) return;
-      var snapshot = Object.assign({}, row); delete snapshot.age;
+      // Age and association belong to the current display, not the producer
+      // result. Retaining either would turn a frame/clock change into history.
+      var snapshot = Object.assign({}, row); delete snapshot.age; delete snapshot.association;
       var key = JSON.stringify(snapshot);
       if (!originals.has(key)) originals.set(key, { context: context, key: key, scope: Object.assign({}, view.scope), model: snapshot });
     });

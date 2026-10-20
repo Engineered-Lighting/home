@@ -140,10 +140,12 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     await qwen.getByRole('group',{name:'Recent Qwen updates',exact:true}).locator('summary').first().click();
     await qwen.locator('[data-qwen-update]').first().waitFor();
     assert.match(await qwen.innerText(),/Daily perceiver.*separate from Lab recordings/);
-    await dock.getByRole('region',{name:'Recent model updates',exact:true}).getByText(/jev.*recorded update.*completed/i).waitFor();
+    const jevHistory=dock.getByRole('region',{name:'Recent model updates',exact:true}).getByText(/jev.*recorded update.*completed/i);
+    await jevHistory.waitFor();assert.equal(await jevHistory.count(),1,'one supplied JEV result remains one history entry after the frame arrives');
     checks.push({stage:'actual_viewer_decodes_authored_camera_and_draws_supplied_body',bodyState});
     // The original approximate receipt retires even if the same live packet is polled again.
     await page.locator('[data-apartment-approximate-badge="1"]').waitFor({state:'hidden',timeout:5000});
+    assert.equal(await jevHistory.count(),1,'repeated polling and display expiry cannot invent producer updates');
     const readFixture = () => page.evaluate(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),ids[0]);
     await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.brightness===.25,ids[0]);
     const first = await readFixture();
@@ -157,10 +159,19 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.brightness===.6,ids[0]);
     const second = await readFixture();
     assert.notDeepEqual(second.target,first.target,'the actual follower changes virtual aim from coordinator messages');
+    // Observe the ordinary visible submission before starting an offscreen
+    // readback, which can temporarily occupy the renderer on software GL.
+    // A diagnostic capture must never substitute for this normal-frame proof.
+    try {
+      await page.waitForFunction(()=>window.HomeDenLightingEvidence?.readback().events.some(row=>row.stage==='gpu_completed_frame'&&row.decision_id==='authored-brain:1'));
+    } catch(error) {
+      receipt.connected.render_failure=await page.evaluate(()=>({evidence:window.HomeDenLightingEvidence?.readback(),
+        lighting:window.__APT_ENGINE?.litState?.()})).catch(()=>null);
+      throw error;
+    }
+    const renderEvidence = await page.evaluate(()=>window.HomeDenLightingEvidence.readback());
     const capture = await page.evaluate(async()=>{const frame=await window.__APT_ENGINE.captureFrame({scale:.25});return frame&&{width:frame.width,height:frame.height,bytes:frame.pixels.length};});
     assert.ok(capture?.width>0&&capture.bytes===capture.width*capture.height*4,'the real renderer completes a frame after coordinator application');
-    await page.waitForFunction(()=>window.HomeDenLightingEvidence?.readback().events.some(row=>row.stage==='gpu_completed_frame'&&row.decision_id==='authored-brain:1'));
-    const renderEvidence = await page.evaluate(()=>window.HomeDenLightingEvidence.readback());
     assert.ok(renderEvidence.events.filter(row=>row.stage==='gpu_completed_frame').every(row=>row.presentation_observed===false&&row.physical_commands===false));
     assert.equal(lighting.frame.format,'RGBA16F','the normal-frame receipt follows the actual composed HDR render');
     checks.push({stage:'authored_coordinator_updates_virtual_state_aim_and_completed_hdr_render',capture,renderEvidence,lighting});

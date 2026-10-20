@@ -129,15 +129,19 @@ test('viewing geometry omits hidden, missing or invalid positions without creati
   assert.equal(body.joints.some(joint=>[7,9,15].includes(joint.id)),false);
 });
 
-test('rolling model history deduplicates age ticks, stays bounded and clears foreign session/epoch context',()=>{
+test('rolling model history deduplicates age and frame-projection ticks, stays bounded and clears foreign session/epoch context',()=>{
   const scope={siteId:'victoria',sessionId:'loop-one',generation:0};
   const row={family:'Qwen',source_id:'source-one',model_id:'qwen-one',observed_at:99,available_at:100,valid_until:101,
-    frame_id:'f1',result:{activity:'reading'},status:'candidate',age:{status:'current',seconds:1}};
+    frame_id:'f1',association:'same-frame',result:{activity:'reading'},status:'candidate',age:{status:'current',seconds:1}};
   const view={status:'available',scope,sourceEpoch:'producer-one',models:[row]};
   let history=Dock.modelUpdates([],view);assert.equal(history.length,1);
   assert.equal(history[0].model.valid_until,101);assert.equal(history[0].model.age,undefined,'historical rows cannot retain a frozen current-age claim');
   const same=Dock.modelUpdates(history,{...view,models:[{...row,age:{status:'stale',seconds:10}}]});
   assert.equal(same,history,'clock ticks alone do not invent model results');
+  const otherFrame=Dock.modelUpdates(history,{...view,models:[{...row,association:'other-frame'}]});
+  assert.equal(otherFrame,history,'a different displayed frame does not invent a producer result');
+  assert.equal(history[0].model.association,undefined,'history cannot freeze a current-frame association');
+  assert.equal(row.association,'same-frame','the original display projection is unchanged');
   for(let i=0;i<25;i++)history=Dock.modelUpdates(history,{...view,models:[{...row,frame_id:'f'+(i+2),observed_at:100+i}]});
   assert.equal(history.length,20);assert.equal(history[0].model.frame_id,'f26');
   history=Dock.modelUpdates(history,{...view,scope:{...scope,sessionId:'loop-two'}});

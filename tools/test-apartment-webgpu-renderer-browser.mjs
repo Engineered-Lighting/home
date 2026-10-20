@@ -77,8 +77,8 @@ function browserOptions(backend) {
   const args = ['--disable-background-networking', '--renderer-process-limit=2'];
   const channel = process.env.HOME_WEBGPU_PROOF_CHANNEL || null;
   if (backend === 'webgpu') args.push('--enable-unsafe-webgpu', '--ignore-gpu-blocklist');
-  if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
-  else if (process.platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  if (process.env.HOME_WEBGPU_PROOF_SOFTWARE === '1' || process.platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  else if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
   return { headless: true, args, ...(channel ? { channel } : process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
@@ -197,6 +197,10 @@ async function proofInPage({modes, phase}) {
   await e.modes.setMode('mesh', { duration: 0 });
   e.rig.snapHome(0); await settle();
   const rect = e.renderer.domElement.getBoundingClientRect();
+  result.contractScene = { rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},
+    cameraPosition:e.camera.position.toArray(),cameraQuaternion:e.camera.quaternion.toArray(),
+    cameraWorld:e.camera.matrixWorld.toArray(),cameraProjection:e.camera.projectionMatrix.toArray(),
+    apartmentWorld:e.apartmentRoot.matrixWorld.toArray(),tweening:e.rig.isTweening() };
   // Off-centre grid: the home pose is symmetric, so a centred column runs
   // exactly along the room's corner seam, where the face a ray meets is a
   // rounding tie (the WebGPU projection rounds differently at ~1e-13).
@@ -357,6 +361,9 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       // Contracts the seam must not move.
       let contracts = null;
       if (proofPhase !== 'frames') {
+      console.log('Authored renderer contract context: ' + JSON.stringify({backend,reference:reference.contractScene,
+        candidate:candidate.contractScene,referenceFit:reference.fit,candidateFit:candidate.fit}));
+      assertNumericallyEqual(candidate.contractScene, reference.contractScene, 'camera and viewport');
       contracts = {
         picks: assertNumericallyEqual(candidate.picks, reference.picks, 'surface picks'),
         projections: assertNumericallyEqual(candidate.projections, reference.projections, 'overlay projection'),

@@ -209,10 +209,15 @@ export function createOverlay(apartmentRoot) {
         const glyph = createEchoGlyph(device);
         if (glyph) { core.visible = ghost.visible = false; glow.visible = false; group.add(glyph.root); }
 
+        let tag = null;
         if (equipment) {
             group.userData.equipmentKind = equipment.kind;
-            const tag = makeTagSprite(equipment.label, color, { compact: true });
+            tag = makeTagSprite(equipment.label, color, { compact: true });
+            tag.name = 'equipment-tag';
             tag.position.z = 0.18;
+            // A fixture the room's HTML label layer already names shows one
+            // label only; cameras, sensors and survey tags keep theirs.
+            tag.visible = !roomLabelledIds.has(device.id);
             group.add(tag);
             const direction = equipment.orientation?.direction_unit;
             if (equipment.kind === 'camera' && Array.isArray(direction) && direction.length === 3
@@ -253,7 +258,16 @@ export function createOverlay(apartmentRoot) {
             cone.name = 'legacy-camera-frustum';
             group.add(cone);
         }
-        return { group, core, ghost, glow, pick, device, state: null, glyph };
+        return { group, core, ghost, glow, pick, device, state: null, glyph, tag };
+    }
+
+    /* The in-room HTML labels (room overlay) name these equipment ids, so
+     * their canvas tag sprites stay hidden; an empty list shows every tag. */
+    let roomLabelledIds = new Set();
+    function setRoomLabelledEquipment(ids) {
+        roomLabelledIds = new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
+        for (const m of markersById.values()) if (m.tag) m.tag.visible = !roomLabelledIds.has(m.device.id);
+        return [...roomLabelledIds];
     }
 
     function setDevices(devices) {
@@ -1178,7 +1192,7 @@ export function createOverlay(apartmentRoot) {
         markersById, zonesById, setCalibMarkers, calibGroup, moveCalibMarker,
         targetsById, setTargets, setTargetHover, setFixtureCalibration, setAimBeam, setAimBeams,
         animateAimTransition, aimBeamGroup, aimTransitionGroup,
-        setDevices, setDeviceState, setZones, setZonesVisible, setZoneEdit,
+        setDevices, setDeviceState, setRoomLabelledEquipment, setZones, setZonesVisible, setZoneEdit,
         previewZone, setZoneDraft, setPerson,
         pickObjects() { return [...markersById.values()].map((m) => m.pick); },
         targetPickObjects() { return [...targetsById.values()].map((m) => m.pick); },

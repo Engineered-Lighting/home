@@ -1,6 +1,6 @@
 /* Den reason vocabulary (den-reason-vocabulary-1), copied verbatim from
  * docs/contracts/den/reason-vocabulary.json so the browser can show Den codes
- * with Den wording. tools/test-apartment-perception-dock.mjs fails if this copy
+ * with Den wording. tools/test-apartment-perception-dock.cjs fails if this copy
  * drifts from the contract. Lookup rules follow reason-vocabulary.md. */
 (function (root, factory) {
   "use strict";

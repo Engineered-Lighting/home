@@ -30,6 +30,9 @@ test('shared mounted UI and labeler fixtures select every affected browser consu
     'test-home-full-ui-connection-browser.mjs','test-home-full-ui-simulation-browser.mjs','test-home-full-ui-labeler-browser.mjs','test-home-full-ui-labeler-editor-browser.mjs'];
   for(const [file,expected] of [['tools/fixtures/home-full-ui-harness.mjs',fullUi],
     ['app/src/home-overlay.js',fullUi],
+    ...['web-gateway/server.mjs','app/src/index.html','app/src/home-3d/adaptive-performance.mjs',
+      'tools/fixtures/apartment-setup-fixtures.mjs','tools/test-web-gateway-apartment-browser.mjs']
+      .map(file=>[file,['test-web-gateway-apartment-browser.mjs']]),
     ['tools/fixtures/home-video-labeler-harness.mjs',fullUi.filter(name=>name.includes('labeler'))],
     ['app/src/home-video-labeler-data.js',fullUi.filter(name=>name.includes('labeler'))],
     ['app/src/simulation/scenarios.js',['test-home-full-ui-simulation-browser.mjs']]]){

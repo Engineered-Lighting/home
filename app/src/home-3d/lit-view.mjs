@@ -717,6 +717,8 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             pipeline: 'scene-referred-half-float', look: lookNow, looks: LIT_LOOKS, frame: frameState,
             designEv100: LIT_DESIGN_EV100, nightAdaptation: adaptive, adaptationEv: ev, adaptationTargetEv: adaptive ? adaptTarget.adaptEv : 0,
             adaptationDropEv: adaptive ? adaptTarget.dropEv : 0, adapting, ev100: LIT_DESIGN_EV100 - ev,
+            // Page-monotonic source sample time, not the later readback time.
+            adaptationUpdatedAtMs: adaptedAt,
             meteredCdM2: adaptive ? metered : null, meterSerial,
             tone: Object.freeze({ operator, available: LIT_TONE_OPERATORS, presentation: Exposure.litTonePresentation(operator) }),
             receivers: receivers ? receivers.state() : null,

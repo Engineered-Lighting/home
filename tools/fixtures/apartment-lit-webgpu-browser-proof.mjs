@@ -32,6 +32,7 @@ import Core from '../../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './apartment-home-shell-fixtures.mjs';
 import { authoredHdrFrame, compareFramePasses, PROOF_PARAMS, PROOF_SIZE } from './lit-frame-proof.mjs';
+import { easeAdaptation, LIT_ADAPTATION } from '../../app/src/home-3d/lit-exposure.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'), SRC = path.join(ROOT, 'app/src');
@@ -425,18 +426,35 @@ async function proveOn(backend, part, signal) {
     at('adaptation_eases');
     // The room is settled in moonlight after the ladder: brighten first, then darken from the bright room.
     const all = async on => page.evaluate(({ ids, patch }) => ids.forEach(id => window.__APT_ENGINE.overlay.setVirtualFixtureState(id, patch)), { ids, patch: every(on, 1) });
-    const after = async ms => { await page.waitForTimeout(ms); await frames(2); return page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { ev: s.adaptationEv, target: s.adaptationTargetEv, adapting: s.adapting }; }); };
+    const sampleAdaptation = () => page.evaluate(() => { const s=window.__APT_ENGINE.litState();
+      return {ev:s.adaptationEv,target:s.adaptationTargetEv,adapting:s.adapting,updatedAtMs:s.adaptationUpdatedAtMs}; });
+    const after = async ms => { await page.waitForTimeout(ms); await frames(2); return sampleAdaptation(); };
     await page.evaluate(() => window.__APT_ENGINE.setLitTone('agx'));
     const fromEv = (await page.evaluate(() => window.__APT_ENGINE.litState().adaptationEv));
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await all(true); await frames(2);
+    await page.waitForFunction(()=>window.__APT_ENGINE.litState().adaptationTargetEv<=.01);
+    const brightFrom=await sampleAdaptation();
     const brightening = await after(1000);
     assert.ok(brightening.ev < fromEv * 0.45, 'brightening adapts fast (tau 0.75 s): ' + JSON.stringify({ fromEv, ...brightening }));
+    const brightElapsed=brightening.updatedAtMs-brightFrom.updatedAtMs;
+    assert.ok(Number.isFinite(brightElapsed)&&brightElapsed>0,'adaptation compares original renderer sample clocks');
+    const brightUpper=easeAdaptation(brightFrom.ev,Math.max(brightFrom.target,brightening.target,LIT_ADAPTATION.settledEv),brightElapsed).ev;
+    assert.ok(brightening.ev<=brightUpper+LIT_ADAPTATION.settledEv,'brightening follows its sampled 0.75s bound: '+JSON.stringify({brightFrom,brightening,brightElapsed,brightUpper}));
     await page.emulateMedia({ reducedMotion: 'reduce' }); await frames(3); await settled(); await page.emulateMedia({ reducedMotion: 'no-preference' });
     await all(false); await frames(2);
+    await page.waitForFunction(()=>window.__APT_ENGINE.litState().adaptationTargetEv>0);
+    const darkFrom=await sampleAdaptation();
     const darkening = await after(1000);
-    assert.ok(darkening.adapting && darkening.ev > 0 && darkening.ev < darkening.target * 0.6, 'darkening adapts slowly (tau 3 s): ' + JSON.stringify(darkening));
-    check('adaptation_eases', { darkening, brightening, from_ev: fromEv });
+    const darkElapsed=darkening.updatedAtMs-darkFrom.updatedAtMs;
+    assert.ok(Number.isFinite(darkElapsed)&&darkElapsed>0,'darkening sample clocks advance');
+    // Rendering two frames can itself take seconds on software GL. The
+    // original capped 3s exponential supplies a conservative bound even
+    // while asynchronous meter results change the target within its cap.
+    const darkUpper=easeAdaptation(darkFrom.ev,LIT_ADAPTATION.capEv,darkElapsed).ev;
+    assert.ok(darkening.adapting && darkening.ev>0 && darkening.ev<=darkUpper+LIT_ADAPTATION.settledEv,
+      'darkening follows its sampled 3s bound: '+JSON.stringify({darkFrom,darkening,darkElapsed,darkUpper}));
+    check('adaptation_eases', { darkening, brightening, from_ev: fromEv,brightFrom,brightElapsed,brightUpper,darkFrom,darkElapsed,darkUpper });
     await page.emulateMedia({ reducedMotion: 'reduce' }); await all(true); await frames(3); await settled();
 
     // Performance in Lit, all on (descriptive on CI; gated on the owner's GPU).

@@ -6160,7 +6160,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const retire = owned => {
       if (!owned || owned.retired) return;
       owned.retired = true;
-      if (aimPresentationRef.current === owned.presentation) aimPresentationRef.current = null;
+      if (aimPresentationRef.current === owned.presentation) {
+        aimPresentationRef.current = null;
+        // The owned HTML labels retire synchronously. Restore their canvas
+        // fallback in the same operation, including paused/manual captures.
+        try { engine.overlay.setRoomLabelledEquipment?.([]); } catch (_) { /* engine disposed */ }
+      }
       try { owned.presentation?.dispose(); } finally {
         owned.controller.abort(); owned.layer?.dispose();
         setAimPresentation(previous => previous === owned.presentation ? null : previous);
@@ -6212,6 +6217,17 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         on: aptVirtualFixtureLit(item), display_anchor_m: descriptor.display_anchor_m };
     }).filter(Boolean);
   }, [aimPresentation, virtualFixturePreview]);
+  // One label per fixture: while the HTML labels are mounted, the canvas
+  // equipment tags of the mounts they name stay hidden.
+  const aimOverlayMountKey = useMemo(() => aimOverlayFixtures.map(item => (virtualFixturePreview?.fixtures || [])
+    .find(fixture => fixture.fixture_id === item.fixture_id)?.mount_id).filter(id => typeof id === "string").join("|"),
+  [aimOverlayFixtures, virtualFixturePreview]);
+  useEffect(() => {
+    const overlay = engineRef.current?.overlay;
+    if (typeof overlay?.setRoomLabelledEquipment !== "function") return undefined;
+    overlay.setRoomLabelledEquipment(aimOverlayMountKey ? aimOverlayMountKey.split("|") : []);
+    return () => { try { overlay.setRoomLabelledEquipment([]); } catch (_) { /* engine disposed */ } };
+  }, [aimPresentation, aimOverlayMountKey]);
   const aimSelectedDescriptor = useMemo(() => aimPresentation && virtualFixtureControlsOpen && virtualFixtureId
     ? engineRef.current?.overlay.virtualFixtureInteractionDescriptor?.(virtualFixtureId) || null : null,
   [aimPresentation, virtualFixtureControlsOpen, virtualFixtureId, virtualFixturePreview]);

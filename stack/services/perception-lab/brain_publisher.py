@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import activity_events
 
-PRODUCER_TYPES = ('activity', 'person_pose', 'health', 'cost')
+PRODUCER_TYPES = ('activity', 'person_pose', 'health', 'cost', 'person_position')
 ROUTE = '/api/lighting-brain/v1/homes/{home}/events'
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 

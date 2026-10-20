@@ -77,6 +77,9 @@ const MAP = [
   [/^(?:app\/src\/(?:home-3d\/(?:lit-(?:view|model)\.mjs|engine\.js)|home-apartment\.jsx)|tools\/test-apartment-lit-(?:view|browser)\.mjs)$/, ["test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:bvh-bake|bvh-worker|view)\.mjs|tools\/(?:test-lit-bvh-bake(?:-browser)?\.mjs|fixtures\/lit-bake-scenes\.mjs))$/, ["test-lit-bvh-bake.mjs", "test-lit-bvh-bake-browser.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
+  // L2: Lit's exposure and tone policy, and Lit on the WebGPU path (?renderer=webgpu-webgl).
+  [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"]],
+  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part2)?|fixtures\/apartment-lit-webgpu-browser-proof)\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
   [/^app\/src\/home-ai-stack\.jsx$/, ["run-ai-stack-card-tests"]],
@@ -93,6 +96,7 @@ const MAP = [
   [/^app\/src\/home-look\.jsx$/, ["run-look-tests"]],
   [/^app\/src\/home-natural-look\.js$/, ["run-natural-look-routing-tests"]],
   [/^app\/src\/home-lighting-intent\.js$/, ["run-lighting-intent-tests"]],
+  [/^(?:app\/src\/(?:home-lighting-control\.js|home-app\.jsx)|tools\/test-home-lighting-control\.cjs)$/, ["test-home-lighting-control.cjs"]],
   [/^app\/src\/home-worldstate/, ["run-worldstate-tests"]],
   [/^app\/src\/home-spatial/, ["run-spatial-tests"]],
   [/^app\/src\/home-s2s\.jsx$/, ["run-s2s-tests"]],
@@ -117,7 +121,12 @@ const MAP = [
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
+  // APT-F06/S02: the shared data states, the status rows that read them, and Quick, which delegates to them.
+  [/^(?:app\/src\/(?:home-apartment-(?:states\.js|status\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)|tools\/(?:test-apartment-states\.cjs|test-apartment-status-rows-browser\.mjs|fixtures\/den-contracts\/.+))$/,
+    ["test-apartment-states.cjs", "test-apartment-status-rows-browser.mjs"]],
+  [/^app\/src\/home-apartment-states\.js$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-light-pools\.mjs|tools\/test-apartment-light-pools\.mjs)$/, ["test-apartment-light-pools.mjs", "test-apartment-room-inspector-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:apartment-echo-glyphs\.mjs|apartment-light-pools\.mjs|markers\.js)|tools\/test-apartment-echo-glyphs\.mjs)$/, ["test-apartment-echo-glyphs.mjs"]],
   [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:test-apartment-directional(?:-integration|-browser(?:-part2)?)?\.mjs|fixtures\/apartment-directional-browser-proof\.mjs)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:fixtures\/apartment-directional-native-mouse|test-apartment-directional-native-mouse)\.mjs$/, ["test-apartment-directional-native-mouse.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
@@ -191,6 +200,7 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * each a page load plus its share (local 18-21 s, about 3.4x hosted).
  * The two directional parts are that run's setup plus their own stages.
  * test-precompiled-jsx.mjs is twice its 45 s local run until hosted-measured.
+ * The two WebGPU Lit parts are their hosted stage times (run 39349207506) rounded up.
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. The aim-wiring, chat,
@@ -208,6 +218,8 @@ const SHARD_WEIGHT_S = {
   "test-apartment-m2-shell-browser.mjs": 38,
   "test-apartment-lit-browser.mjs": 120,
   "test-lit-bvh-bake-browser.mjs": 20,
+  "test-apartment-lit-webgpu-browser.mjs": 135,
+  "test-apartment-lit-webgpu-browser-part2.mjs": 130,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-setup-saves-browser.mjs": 110,
   "test-apartment-setup-rail-browser.mjs": 70,
@@ -224,6 +236,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-chat-header-browser.mjs": 5,
   "test-apartment-unread-integration.mjs": 5,
   "test-apartment-escape-browser.mjs": 4,
+  "test-apartment-status-rows-browser.mjs": 6,
   "test-apartment-echo-inspector-browser.mjs": 4,
   "test-apartment-directional-integration.mjs": 4,
   "check-jsx.js": 4,
@@ -254,6 +267,7 @@ function shardWeight(name) {
 // Parts of one split suite run on different workers whenever there are at
 // least as many workers as parts, so no worker carries the whole suite.
 const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
+  ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];
 function partitionPlan(plan, count) {
   const loads = Array(count).fill(0), owner = new Map();

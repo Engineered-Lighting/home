@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 
 import pytest
 from conftest import (F01, F02, F03, F04, HEAD, LEFT, NOON, RIGHT, activity, cost, health, healthy, occupancy, person,
-                      pose, reading_scene, test_settings, zone)
+                      pose, position, reading_scene, test_settings, zone)
 
 from lighting_brain.inputs import Inputs
-from lighting_brain.rules import RULES, Override, evaluate, held_output
+from lighting_brain.rules import RULES, Override, evaluate, held_output, proximity_level
 
 S = test_settings()
 
@@ -27,11 +27,11 @@ def run(geometry, inputs, now, settings=S, overrides=None, previous=None):
 def reading_inputs(t0=NOON, t=NOON + 4):
     """Reading since t0, fresh at t."""
     inputs = feed(reading_scene(t0), t0)
-    return feed([activity(t), pose(t), zone(t), occupancy(t)], t, inputs=inputs)
+    return feed([activity(t), pose(t), occupancy(t)], t, inputs=inputs)
 
 
 def test_rules_table_is_complete_and_ordered():
-    assert [r.name for r in RULES] == ["room_off", "zone_ambient", "degraded_ambient", "reading_spot_on",
+    assert [r.name for r in RULES] == ["room_off", "proximity_ambient", "degraded_ambient", "reading_spot_on",
                                        "reading_spot_off", "manual_pause"]
     assert all(r.condition for r in RULES)
 
@@ -49,9 +49,10 @@ def test_room_off_when_never_occupied(geometry):
 
 
 def test_room_off_after_two_minutes_of_vacancy(geometry):
-    inputs = feed([occupancy(NOON), zone(NOON), *healthy(NOON)], NOON)
-    feed([occupancy(NOON + 10, present=False), zone(NOON + 10, present=False)], NOON + 10, inputs=inputs)
-    assert run(geometry, inputs, NOON + 129).mode == "ambient"  # holding until room_off
+    inputs = feed([occupancy(NOON), *healthy(NOON)], NOON)
+    feed([occupancy(NOON + 10, present=False)], NOON + 10, inputs=inputs)
+    held = run(geometry, inputs, NOON + 129)
+    assert held.mode == "ambient" and held.why == "Room just emptied · ambient until off"
     ev = run(geometry, inputs, NOON + 130)
     assert ev.mode == "off" and ev.mode_rule == "room_off"
     assert ev.why == "Room empty for 2 min · all off"
@@ -59,51 +60,91 @@ def test_room_off_after_two_minutes_of_vacancy(geometry):
 
 
 def test_bridge_silence_counts_from_last_present_heartbeat(geometry):
-    inputs = feed([occupancy(NOON), zone(NOON), *healthy(NOON)], NOON)
+    inputs = feed([occupancy(NOON), *healthy(NOON)], NOON)
     assert run(geometry, inputs, NOON + 100).mode == "ambient"  # expired at +90, vacant since NOON
     assert run(geometry, inputs, NOON + 120).mode == "off"
 
 
-# ------------------------------------------------------------------ zone_ambient
+# ------------------------------------------------------------------ proximity_ambient
 
 
-def test_zone_ambient_lights_nearby_fixtures(geometry):
-    ev = run(geometry, feed([occupancy(NOON), zone(NOON), *healthy(NOON)], NOON), NOON)
-    assert ev.mode == "ambient" and ev.mode_rule == "zone_ambient"
-    assert ev.why == "Sofa occupied · ambient"
-    by = {fo.fixture_id: fo for fo in ev.fixtures}
-    for fid in (F01, F02):
-        a = by[fid].ambient
-        assert (a.radial_level, a.down_level, a.cct_k, a.fade_s) == (0.30, 0.30, 2700, 2.0)
-    for fid in (F03, F04):
-        assert by[fid].ambient.radial_level == 0
+@pytest.mark.parametrize("distance,expected", [(5.0, 0.10), (3.0, 0.10), (2.0, 0.35), (1.5, 0.475),
+                                               (1.0, 0.60), (0.2, 0.60)])
+def test_proximity_level_is_linear_between_far_and_near(distance, expected):
+    assert proximity_level(distance, S) == pytest.approx(expected)
 
 
-def test_zone_ambient_desk_and_sofa(geometry):
-    inputs = feed([occupancy(NOON), zone(NOON), zone(NOON, "desk"), *healthy(NOON)], NOON)
-    ev = run(geometry, inputs, NOON)
-    assert all(fo.ambient.radial_level == 0.30 for fo in ev.fixtures)
-    assert ev.why == "Sofa and desk occupied · ambient"
-    feed([occupancy(NOON + 1, people=2)], NOON + 1, inputs=inputs)
-    assert run(geometry, inputs, NOON + 1).why == "2 people · ambient only"
-
-
-def test_zone_hold_while_room_occupied(geometry):
-    inputs = feed([occupancy(NOON), zone(NOON), *healthy(NOON)], NOON)
-    feed([zone(NOON + 5, present=False), zone(NOON + 5, "desk"), occupancy(NOON + 5)], NOON + 5, inputs=inputs)
-    for t in (NOON + 30, NOON + 60, NOON + 85):
-        feed([occupancy(t), zone(t, "desk"), zone(t, present=False)], t, inputs=inputs)
-    ev = run(geometry, inputs, NOON + 90)
-    assert ev.fixture(F01).ambient.radial_level == 0.30  # sofa still held
-    feed([occupancy(NOON + 115), zone(NOON + 115, "desk")], NOON + 115, inputs=inputs)
-    ev = run(geometry, inputs, NOON + 125)
-    assert ev.fixture(F01).ambient.radial_level == 0  # sofa hold (120 s) over
-    assert ev.fixture(F03).ambient.radial_level == 0.30
-
-
-def test_occupied_room_without_zone(geometry):
+def test_occupied_without_position_is_flat(geometry):
     ev = run(geometry, feed([occupancy(NOON), *healthy(NOON)], NOON), NOON)
-    assert ev.mode == "off" and ev.mode_rule == "zone_ambient" and ev.why == "Room occupied · no zone yet"
+    assert ev.mode == "ambient" and ev.mode_rule == "occupied_ambient"
+    assert ev.why == "Room occupied · ambient"
+    for fo in ev.fixtures:
+        a = fo.ambient
+        assert (a.radial_level, a.down_level, a.cct_k, a.fade_s) == (0.30, 0.30, 2700, 2.0)
+        assert fo.ambient_rule == "occupied_ambient"
+
+
+def test_proximity_per_fixture(geometry):
+    under_f01 = (0.2, 0.2, 1.26)  # exactly 1.0 m below the aim origin of fixture 01
+    ev = run(geometry, feed([occupancy(NOON), position(NOON, under_f01), *healthy(NOON)], NOON), NOON)
+    assert ev.mode_rule == "proximity_ambient" and ev.why == "Near fixture 01 · brighter"
+    assert ev.fixture(F01).ambient.radial_level == 0.60
+    assert ev.fixture(F01).ambient.fade_s == 0.8
+    for fid in (F02, F03, F04):
+        d = math.dist(under_f01, geometry.fixture(fid).aim_origin_m)
+        assert ev.fixture(fid).ambient.radial_level == pytest.approx(round(proximity_level(d, S), 3))
+
+
+def test_nearest_of_several_people_counts(geometry):
+    inputs = feed([occupancy(NOON, people=2), position(NOON, (0.2, 0.2, 1.26), (3.8, 3.4, 1.26)),
+                   *healthy(NOON)], NOON)
+    ev = run(geometry, inputs, NOON)
+    assert ev.fixture(F01).ambient.radial_level == ev.fixture(F03).ambient.radial_level == 0.60
+
+
+def test_pose_shoulders_also_give_a_position(geometry):
+    ev = run(geometry, feed([occupancy(NOON), pose(NOON), *healthy(NOON)], NOON), NOON)
+    assert len(ev.facts.positions) == 1 and ev.facts.positions[0] == pytest.approx((1.6, 0.75, 0.95))
+    assert ev.mode_rule == "proximity_ambient"
+
+
+def test_position_expires_after_three_seconds(geometry):
+    inputs = feed([occupancy(NOON), position(NOON, (0.2, 0.2, 1.26)), *healthy(NOON)], NOON)
+    assert run(geometry, inputs, NOON + 3).mode_rule == "proximity_ambient"
+    assert run(geometry, inputs, NOON + 3.1).mode_rule == "occupied_ambient"
+
+
+def test_deadband_holds_small_moves(geometry):
+    inputs = feed([occupancy(NOON), position(NOON, (1.0, 1.0, 1.3)), *healthy(NOON)], NOON)
+    first = run(geometry, inputs, NOON)
+    feed([position(NOON + 0.5, (1.03, 1.0, 1.3))], NOON + 0.5, inputs=inputs)  # under 0.05 of level
+    second = run(geometry, inputs, NOON + 0.5, previous=first)
+    assert [f.ambient for f in second.fixtures] == [f.ambient for f in first.fixtures]
+    feed([position(NOON + 1, (0.5, 0.5, 1.3))], NOON + 1, inputs=inputs)
+    third = run(geometry, inputs, NOON + 1, previous=second)
+    assert third.fixture(F01).ambient.radial_level - first.fixture(F01).ambient.radial_level >= 0.05
+
+
+def test_nearest_name_has_hysteresis(geometry):
+    # Halfway between fixtures 01 and 02 along the back wall.
+    inputs = feed([occupancy(NOON), position(NOON, (2.0, 0.6, 1.3)), *healthy(NOON)], NOON)
+    first = run(geometry, inputs, NOON)
+    named = first.nearest_fixture
+    nudge = 0.1 if named == F01 else -0.1  # 10 cm toward the other one: not enough to switch
+    feed([position(NOON + 1, (2.0 + nudge, 0.6, 1.3))], NOON + 1, inputs=inputs)
+    assert run(geometry, inputs, NOON + 1, previous=first).nearest_fixture == named
+    feed([position(NOON + 2, (2.0 + 8 * nudge, 0.6, 1.3))], NOON + 2, inputs=inputs)
+    assert run(geometry, inputs, NOON + 2, previous=first).nearest_fixture != named
+
+
+def test_zone_events_are_optional_but_still_presence(geometry):
+    ev = run(geometry, feed([zone(NOON), *healthy(NOON)], NOON), NOON)
+    assert ev.facts.room_present and ev.mode == "ambient"
+
+
+def test_two_people_why(geometry):
+    inputs = feed([occupancy(NOON, people=2), *healthy(NOON)], NOON)
+    assert run(geometry, inputs, NOON).why == "2 people · ambient only"
 
 
 # ------------------------------------------------------------------ night window
@@ -118,13 +159,19 @@ def at_utc(hour, minute=0):
 ])
 def test_night_window(geometry, hour, minute, night):
     t = at_utc(hour, minute)
-    ev = run(geometry, feed([occupancy(t), zone(t), *healthy(t)], t), t)
+    ev = run(geometry, feed([occupancy(t), *healthy(t)], t), t)
     a = ev.fixture(F01).ambient
     if night:
-        assert ev.mode == "night_ambient" and (a.radial_level, a.cct_k) == (0.10, 2200)
-        assert ev.why == "Night · sofa ambient"
+        assert ev.mode == "night_ambient" and (a.radial_level, a.cct_k) == (0.105, 2200)  # 0.30 x 0.35
+        assert ev.why == "Night · Room occupied · ambient"
     else:
         assert ev.mode == "ambient" and (a.radial_level, a.cct_k) == (0.30, 2700)
+
+
+def test_night_scales_proximity(geometry):
+    t = at_utc(23, 30)
+    ev = run(geometry, feed([occupancy(t), position(t, (0.2, 0.2, 1.26)), *healthy(t)], t), t)
+    assert ev.fixture(F01).ambient.radial_level == 0.21 and ev.why == "Night · Near fixture 01 · brighter"
 
 
 def test_night_window_uses_the_settings_timezone():
@@ -164,7 +211,7 @@ def test_degraded_ambient_when_unhealthy(geometry, component, why):
     ev = run(geometry, inputs, NOON + 4)
     assert ev.mode == "degraded_ambient" and ev.why == why
     assert not any(fo.spot.on for fo in ev.fixtures)
-    assert ev.fixture(F01).ambient.radial_level == 0.30
+    assert ev.fixture(F01).ambient.radial_level > 0 and ev.fixture(F01).ambient_rule == "proximity_ambient"
     assert ev.fixture(F01).spot_rule == "degraded_ambient"
 
 
@@ -196,7 +243,7 @@ def test_reading_spot_on(geometry):
     spot = ev.fixture(F01).spot
     assert spot.on and (spot.level, spot.cct_k, spot.fade_s) == (0.8, 3500, 1.5)
     assert spot.target_m == pytest.approx(ev.facts.reader.hand, abs=1e-3)
-    assert ev.fixture(F01).ambient.radial_level == 0.30  # ambient stays underneath
+    assert ev.fixture(F01).ambient.radial_level > 0  # ambient stays underneath
     assert not any(fo.spot.on for fo in ev.fixtures if fo.fixture_id != F01)
     assert ev.rule_whys["reading_spot_on"] == "Reading at sofa · spotlight on from fixture 01"
 
@@ -213,7 +260,8 @@ def test_reading_needs_three_seconds(geometry):
     (lambda t: [occupancy(t, people=2)], "2 people · ambient only"),
     (lambda t: [zone(t, people=2)], "2 people · ambient only"),
     (lambda t: [pose(t, people=[person(), person(track_id="t2")])], "2 people · ambient only"),
-    (lambda t: [zone(t, present=False)], "No one at sofa · no spotlight"),
+    (lambda t: [activity(t, zone_hint=None), pose(t, people=[person([3.0, 3.0, 0.95], [3.36, 3.0, 0.95], None)])],
+     "No one at sofa · no spotlight"),
     (lambda t: [activity(t, zone_hint="desk")], "Activity at desk · no spotlight"),
     (lambda t: [pose(t, people=[person(left=None)])], "Pose has no shoulders · no spotlight"),
     (lambda t: [pose(t, people=[person(left=[3.0, 3.0, 0.95], right=[3.36, 3.0, 0.95], head=None)])],
@@ -347,10 +395,13 @@ def test_evaluate_is_pure(geometry):
 
 
 def test_all_levels_and_timings_come_from_settings(geometry):
-    custom = test_settings(ambient_level=0.5, ambient_cct_k=3000, spot_level=0.6, spot_cct_k=4000,
-                           reading_hold_on_s=1.0, room_off_after_s=30.0)
+    custom = test_settings(prox_near_level=0.9, prox_near_m=2.5, ambient_cct_k=3000, spot_level=0.6,
+                           spot_cct_k=4000, reading_hold_on_s=1.0, room_off_after_s=30.0)
     inputs = feed(reading_scene(NOON), NOON, settings=custom)
     ev = run(geometry, inputs, NOON + 1, settings=custom)
-    assert ev.fixture(F01).ambient.radial_level == 0.5 and ev.fixture(F01).ambient.cct_k == 3000
+    assert ev.fixture(F01).ambient.radial_level == 0.9 and ev.fixture(F01).ambient.cct_k == 3000
+    flat = test_settings(occupied_level=0.45)
+    assert run(geometry, feed([occupancy(NOON), *healthy(NOON)], NOON, settings=flat), NOON,
+               settings=flat).fixture(F01).ambient.radial_level == 0.45
     assert (ev.fixture(F01).spot.level, ev.fixture(F01).spot.cct_k) == (0.6, 4000)
     assert math.isclose(ev.facts.vacant_for, 0.0)

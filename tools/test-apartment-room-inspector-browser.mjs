@@ -323,8 +323,16 @@ test('real authored room inspector preserves named aims and modeled channel bind
       }, fixtures[1].fixture_id, { timeout: 15000 });
       const drawn = await pools();
       assert.equal(drawn.truth_role, 'virtual_preview');
+      // DIRECTION › Light: a thin axis over the fixture's own faint modeled
+      // cone; no spokes or rim are drawn over it.
       assert.deepEqual(drawn.objects.filter(name => /^light-pools-(?:axis|cone|cone-rim):/.test(name)),
-        ['axis', 'cone', 'cone-rim'].map(kind => 'light-pools-' + kind + ':' + fixtures[1].fixture_id).sort(), 'beams: the selected light only');
+        ['light-pools-axis:' + fixtures[1].fixture_id], 'beams: the selected light only, as one axis');
+      const cone = await page.evaluate(id => {
+        const fixture = window.__APT_ENGINE.overlay.overlayRoot.getObjectByName('equipment-virtual-fixture:' + id);
+        let shown = false; fixture?.traverse(node => { if (node.name === 'modeled-aim-volume' && node.visible) shown = true; });
+        return shown;
+      }, fixtures[1].fixture_id);
+      assert.equal(cone, true, 'the selected light keeps its faint modeled cone');
       assert.deepEqual(drawn.objects.filter(name => name.startsWith('light-pools-down:')),
         fixtures.map(fixture => 'light-pools-down:' + fixture.fixture_id).sort(), 'every lit Down channel pools below its socket');
       assert.ok(drawn.labels.includes('Down · modeled') && drawn.labels.includes('Spot · modeled'), JSON.stringify(drawn.labels));

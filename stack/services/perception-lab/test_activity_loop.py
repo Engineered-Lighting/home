@@ -69,6 +69,8 @@ class EventContractTests(unittest.TestCase):
         self.assertIn('`{type, home, room, source, observed_at, sent_at, ttl_s}`', text)
         self.assertIn('"schema":"activity-lighting-events-1"', text)
         for kind, fields in events.EXTRA.items():
+            if kind == 'person_position':
+                continue  # the v1.1 amendment, checked below
             row = next(line for line in text.splitlines() if line.startswith('| `%s` |' % kind))
             tokens = set(re.findall(r'`([a-z_0-9]+)', row))
             with self.subTest(kind=kind):
@@ -76,6 +78,10 @@ class EventContractTests(unittest.TestCase):
                 self.assertEqual(float(re.search(r'ttl (\d+) s', row).group(1)), events.TTL_S[kind])
         activity_row = next(line for line in text.splitlines() if line.startswith('| `activity` |'))
         self.assertTrue(set(events.LABELS) <= set(re.findall(r'`([a-z_]+)`', activity_row)))
+        amendment = text[text.index('## v1.1 amendment'):]
+        for token in ('`person_position`', 'track_id', 'position_m:[x,y,z]', 'approximate:true', '`person_count`', 'ttl 3 s'):
+            self.assertIn(token, amendment)
+        self.assertEqual(events.TTL_S['person_position'], 3.)
         pose_row = next(line for line in text.splitlines() if line.startswith('| `person_pose` |'))
         self.assertTrue({'track_id', 'shoulders_m', 'head_m', 'head_pitch_deg', 'approximate'}
                         <= set(re.findall(r'([a-z_]+)', pose_row)))

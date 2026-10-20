@@ -32,13 +32,47 @@
  * with a uv1 atlas of 2 x 2 texels per triangle. A moved spot re-bakes only
  * its own layer, once the Set sweep lands; a slider only re-weights the
  * layers. The lux readout at named aims is modeled with the same tracer.
+ *
+ * L2's exposure and tone pipeline. Lights stay pre-exposed at the fixed
+ * design night (lit-model.mjs LIT_EXPOSURE, EV100 4.45) on both paths; the
+ * policy lives in lit-exposure.mjs.
+ *
+ *   WebGL (r180, the default)   MeshStandardMaterial, drawn straight to the
+ *       canvas with no tone pass. With no night adaptation here, the assumed
+ *       ambient floor is shown night-adapted.
+ *   WebGPU path (?renderer=webgpu, either backend)   MeshStandardNodeMaterial
+ *       with the shared TSL dollhouse cut (no GLSL patch anywhere). The lit
+ *       mesh renders scene-referred into a half-float target; one TSL pass
+ *       applies the mesopic shift, the metered partial night adaptation and
+ *       AgX with a lifted toe, then encodes for the canvas; everything else
+ *       (orbs, beams, overlays) draws on top over the mesh's depth, never tone
+ *       mapped. The frame loop is untouched: the passes run inside
+ *       renderer.render for the engine's own scene while Lit is on.
+ *
+ * Night adaptation is presentation, not lux.
  */
 import * as THREE from 'three';
 
 const Model = await import(`./lit-model.mjs${new URL(import.meta.url).search}`);
 const Bake = await import(`./lit-bvh-bake.mjs${new URL(import.meta.url).search}`);
+const Exposure = await import(`./lit-exposure.mjs${new URL(import.meta.url).search}`);
+/* The WebGPU path's pieces, loaded only when 'three' is the r186 WebGPU build
+ * (index.html's ?renderer=webgpu importmap); the WebGL path never loads TSL. */
+const NodePath = typeof THREE.WebGPURenderer === 'function' ? await loadNodePath() : null;
+async function loadNodePath() {
+    const search = new URL(import.meta.url).search;
+    const [tsl, cutaway, fingerprints] = await Promise.all([import('three/tsl'),
+        import(`./dollhouse-cutaway-tsl.mjs${search}`), import(`./webgpu-port-fingerprints.mjs${search}`)]);
+    return { tsl, homeDollhouseKeepNode: cutaway.homeDollhouseKeepNode, probeOnBeforeCompile: fingerprints.probeOnBeforeCompile };
+}
 export const { LIT_ASSUMED_LUMENS, LIT_ASSUMPTION_SOURCE, LIT_DISCLOSURE, LIT_DISCLOSURE_DETAIL, LIT_EXPOSURE, LIT_TARGET_FPS,
     LIT_BOUNCE_LIMIT, LIT_BOUNCE_ALBEDO, candelaFromLumens, litDimmingFraction } = Model;
+export const { LIT_ADAPTATION, LIT_AMBIENT_FLOOR, LIT_TONE, LIT_TONE_OPERATORS } = Exposure;
+/* WebGPU path: the layer the scene-referred pass draws (the lit mesh and its
+ * lights). The mesh keeps layer 0 too, so picking and readbacks are unchanged. */
+export const LIT_LAYER = 29;
+// Tier-0's pre-exposure is the fixed design night (EV100 4.45).
+export const LIT_DESIGN_EV100 = Exposure.ev100FromExposure(Model.LIT_EXPOSURE);
 // Cached shadow maps by softness: 4 spots at 2048, 4 downs at 1024 (halved when reduced).
 export const LIT_SHADOW_MAP_SIZES = Object.freeze({ crisp: 2048, soft: 1024 });
 export const LIT_LUX_LABEL = 'Modeled lux';
@@ -47,8 +81,6 @@ export const LIT_LUX_LABEL = 'Modeled lux';
 const LIT_SLOW_SAMPLES = 4;
 // Scan colours carry the capture's own lighting; scale them toward an albedo.
 const ASSUMED_ALBEDO_SCALE = 0.8;
-// A faint night fill so the unlit room stays navigable. Not a light source.
-const NIGHT_FILL = 0.35;
 // A spot aimed during the Set sweep re-bakes once the sweep lands, or after this.
 const SWEEP_DEFER_MAX_MS = 1500;
 const MAX_LUX_AIMS = 8;
@@ -153,21 +185,62 @@ function albedoSampler(material, geometry) {
     };
 }
 
+const UNIFORM_DEFAULTS = { float: () => 0, vec2: () => new THREE.Vector2(), vec3: () => new THREE.Vector3(),
+    vec4: () => new THREE.Vector4(), mat4: () => new THREE.Matrix4() };
+
+/* WebGPU path: the display mesh's cut (dollhouse shell plus the near-camera
+ * melt) as a TSL mask, reading the display material's own live uniforms. Its
+ * GLSL patch runs once on a probe to hand them over, as the
+ * foundation's material ports do; no GLSL is compiled. null when the display
+ * material carries no cut, and the lit mesh is then uncut. */
+function cutawayMask(display) {
+    if (!NodePath || !display) return null;
+    let uniforms = null;
+    try { uniforms = NodePath.probeOnBeforeCompile(display).uniforms; } catch (_) { return null; }
+    if (!uniforms?.uDollhouseConfig || !uniforms.uDollhouseWorldToLocal) return null;
+    const T = NodePath.tsl;
+    const live = (name, type) => T.uniform(UNIFORM_DEFAULTS[type]()).onRenderUpdate(() => uniforms[name]?.value);
+    const local = T.varying(live('uDollhouseWorldToLocal', 'mat4').mul(T.modelWorldMatrix).mul(T.vec4(T.positionLocal, 1)).xyz,
+        'vLitDollhouseLocal');
+    let keep = NodePath.homeDollhouseKeepNode(live, local).greaterThanEqual(0.5);
+    if (uniforms.uMeshNearCut) {
+        const nearCut = live('uMeshNearCut', 'float');
+        keep = keep.and(nearCut.lessThanEqual(0).or(T.positionView.z.negate().greaterThanEqual(nearCut)));
+    }
+    return keep;
+}
+
 export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotFwhmDeg = 20,
     getNamedAims = () => [], isPresentationActive = () => false, onStateChange = () => {}, createBakeEndpoint = defaultBakeEndpoint,
     bakeQuality = mobileGpu() ? 'progressive' : null, signal = null,
     now = () => performance.now(), reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)') } = {}) {
     if (!scene?.isScene || !renderer?.shadowMap || typeof getMesh !== 'function' || typeof getFixtureRoots !== 'function')
         throw new TypeError('lit_view_dependencies_required');
+    // The scene-referred pipeline needs the node renderer and the r186 build.
+    const nodePath = !!(NodePath && renderer.isWebGPURenderer);
     const group = new THREE.Group();
     group.name = 'lit-view-lights';
     group.userData = { presentation: 'modeled_lit_view', photometry: 'assumed_not_measured', physical_commands: false };
-    const fill = new THREE.HemisphereLight(0x9aa6b8, 0x2a2622, NIGHT_FILL);
-    fill.name = 'lit-night-fill';
-    group.add(fill);
+    /* The disclosed, assumed night ambient (lit-exposure.mjs) in place of
+     * Tier-0's undisclosed fill: lux x the design pre-exposure. The WebGL path
+     * has no adaptation stage, so it shows the floor already night-adapted
+     * (x 2^capEv), which keeps Tier-0's navigable night room. */
+    const floor = new THREE.HemisphereLight(0xffffff, 0xffffff,
+        LIT_AMBIENT_FLOOR.lux * Model.LIT_EXPOSURE * (nodePath ? 1 : Exposure.adaptationGain(LIT_ADAPTATION.capEv)));
+    floor.name = 'lit-ambient-floor';
+    floor.userData = { lit_source: 'ambient_floor', lux: LIT_AMBIENT_FLOOR.lux, kelvin: LIT_AMBIENT_FLOOR.kelvin,
+        status: LIT_AMBIENT_FLOOR.status, measured: false, night_adapted: !nodePath };
+    kelvinColor(LIT_AMBIENT_FLOOR.kelvin, floor.color);
+    floor.groundColor.copy(floor.color).multiplyScalar(LIT_AMBIENT_FLOOR.groundRatio);
+    group.add(floor);
     let active = false, quality = 'full', slow = 0, swapped = [], lights = [], signature = '', saved = null, mesh = null;
     // The 160 ms ease: what each light shows, and the clock of the last step.
     let placementSignature = '', shown = [], easedAt = null, easing = false;
+    // Partial night adaptation (WebGPU path): EV above the design night, toward
+    // the latest meter of the scene-referred target (null until the first).
+    let adaptEv = null, adaptTarget = { dropEv: 0, adaptEv: 0 }, adaptedAt = null, adapting = false, metered = null, meterSerial = 0;
+    let operator = nodePath ? LIT_TONE.view : 'linear';
+    if (nodePath) floor.layers.set(LIT_LAYER);
     // The bounce bake: one worker for Lit's lifetime, one scene per mesh.
     let baker = null, bakeScene = 0, bakeSignature = '', bakePlacement = '', deferredSince = null, lightmap = null, lux = [];
     const idleBounce = () => ({ method: Bake.LIT_BAKE_METHOD, status: 'idle', backend: null, receivers: 0, triangles: 0, lastBake: null, progress: null, error: null });
@@ -175,17 +248,170 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     const changed = () => { try { onStateChange(state()); } catch (_) { /* the view keeps going */ } };
     signal?.addEventListener?.('abort', () => { baker?.dispose(); baker = null; }, { once: true });
 
+    // ---- WebGPU path: the scene-referred pipeline ------------------------------
+    const pipeline = nodePath ? createScenePipeline() : null;
+    function createScenePipeline() {
+        const T = NodePath.tsl;
+        // Lit materials write scene-referred linear values: no display encode.
+        const sceneReferred = T.context({ getOutput: output => output });
+        const noShadowMask = T.bool(true);
+        const preExposure = T.uniform(Model.LIT_EXPOSURE), gain = T.uniform(1);
+        const size = new THREE.Vector2();
+        let target = null, display = null, readTarget = null, inner = null, wrapper = null, lastCamera = null;
+        let meterTarget = null, meterQuad = null, meterPending = false, meterRequestedAt = -Infinity, meterToken = 0;
+        function ensure(width, height) {
+            if (!target) {
+                target = new THREE.RenderTarget(width, height, { type: THREE.HalfFloatType, samples: renderer.samples,
+                    depthBuffer: true, generateMipmaps: false, colorSpace: THREE.LinearSRGBColorSpace });
+                target.texture.name = 'lit-scene-referred';
+                /* The display transform, drawn as a clip-space quad first in
+                 * the output pass (not a pass of its own: on the canvas the
+                 * multisampled colour is not kept between passes). */
+                const material = new THREE.NodeMaterial();
+                material.name = 'lit-display-transform';
+                material.depthTest = false; material.depthWrite = false; material.blending = THREE.NoBlending;
+                material.vertexNode = T.vec4(T.positionGeometry.xy, 0, 1);
+                display = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+                display.name = 'lit-display-transform';
+                display.frustumCulled = false; display.renderOrder = Number.MIN_SAFE_INTEGER; display.visible = false;
+                display.raycast = () => {};
+                display.userData = { presentation_only: true };
+                group.add(display);
+                toneNode();
+            } else if (target.width !== width || target.height !== height) target.setSize(width, height);
+        }
+        function toneNode() {
+            if (!display) return;
+            display.material.fragmentNode = Exposure.litDisplayNode(T, { color: T.texture(target.texture, T.screenUV), preExposure, gain, operator });
+            display.material.needsUpdate = true;
+        }
+        /* The meter (lit-exposure.mjs LIT_METER): a coarse copy of the
+         * scene-referred target, read back asynchronously; never more than one
+         * in flight and never more often than the period. */
+        function requestMeter() {
+            const at = now();
+            if (meterPending || at - meterRequestedAt < Exposure.LIT_METER.periodMs) return;
+            const { width, height } = Exposure.LIT_METER;
+            if (!meterTarget) {
+                meterTarget = new THREE.RenderTarget(width, height, { type: THREE.HalfFloatType, depthBuffer: false,
+                    generateMipmaps: false, colorSpace: THREE.LinearSRGBColorSpace });
+                const material = new THREE.NodeMaterial();
+                material.name = 'lit-meter';
+                material.fragmentNode = T.texture(target.texture, T.uv());
+                meterQuad = new THREE.QuadMesh(material);
+            }
+            meterPending = true; meterRequestedAt = at;
+            renderer.setRenderTarget(meterTarget);
+            meterQuad.render(renderer);
+            const token = meterToken;
+            Promise.resolve(renderer.readRenderTargetPixelsAsync(meterTarget, 0, 0, width, height)).then(data => {
+                if (token !== meterToken || !active || !data) return;
+                const values = unpadRows(data, width, height, 4), half = values instanceof Uint16Array;
+                const read = half ? index => THREE.DataUtils.fromHalfFloat(values[index]) : index => values[index];
+                const samples = new Float64Array(width * height);
+                for (let i = 0; i < width * height; i++) samples[i] = read(i * 4 + 3) > 0.5
+                    ? Exposure.lumaOf([read(i * 4), read(i * 4 + 1), read(i * 4 + 2)]) / Model.LIT_EXPOSURE : 0;
+                const luminance = Exposure.meterLuminance(samples);
+                if (luminance !== null) { metered = luminance; meterSerial++; }
+            }).catch(() => { /* the next period meters again */ }).finally(() => { if (token === meterToken) meterPending = false; });
+        }
+        /* One Lit frame into the current render target (the canvas, or the
+         * capture target): 1 the lit mesh scene-referred into the half-float
+         * target; 2 the output pass: the display transform as its background,
+         * the lit mesh's depth without colour, then everything else over it. */
+        function render(camera) {
+            const output = renderer.getRenderTarget(), face = renderer.getActiveCubeFace?.() ?? 0, mip = renderer.getActiveMipmapLevel?.() ?? 0;
+            if (output) size.set(output.width, output.height); else renderer.getDrawingBufferSize(size);
+            ensure(Math.max(1, Math.round(size.x)), Math.max(1, Math.round(size.y)));
+            lastCamera = camera;
+            const autoClear = renderer.autoClear, layers = camera.layers.mask;
+            try {
+                sync();
+                renderer.setRenderTarget(target); renderer.autoClear = true; camera.layers.set(LIT_LAYER);
+                inner.call(renderer, scene, camera);
+                camera.layers.mask = layers;
+                requestMeter();
+                renderer.setRenderTarget(output, face, mip);
+                display.visible = true;
+                for (const entry of swapped) entry.node.material = entry.depth;
+                inner.call(renderer, scene, camera);
+            } finally {
+                display.visible = false;
+                for (const entry of swapped) entry.node.material = entry.lit;
+                camera.layers.mask = layers; renderer.autoClear = autoClear;
+                if (renderer.getRenderTarget() !== output) renderer.setRenderTarget(output, face, mip);
+            }
+        }
+        return {
+            preExposure, gain,
+            materialFor(display, options) {
+                const material = new THREE.MeshStandardNodeMaterial(options);
+                material.contextNode = sceneReferred;
+                const depth = new THREE.MeshBasicNodeMaterial({ side: options.side, colorWrite: false });
+                depth.name = 'lit-view-depth';
+                const mask = cutawayMask(display);
+                if (mask) { material.maskNode = mask; material.maskShadowNode = noShadowMask; depth.maskNode = mask; }
+                return { material, depth, cut: !!mask };
+            },
+            install() {
+                if (wrapper) return;
+                inner = renderer.render;
+                wrapper = function litRender(target3d, camera) {
+                    if (!active || target3d !== scene || !camera?.isCamera || scene.overrideMaterial) return inner.apply(this, arguments);
+                    return render(camera);
+                };
+                renderer.render = wrapper;
+            },
+            uninstall() {
+                // A later wrapper (a test's timing probe) keeps ours as its inner; ours passes through once inactive.
+                if (wrapper && renderer.render === wrapper) renderer.render = inner;
+                wrapper = null;
+                if (display) { group.remove(display); display.geometry.dispose(); display.material.dispose(); }
+                target?.dispose(); readTarget?.dispose(); meterTarget?.dispose(); meterQuad?.material.dispose();
+                target = null; display = null; readTarget = null; lastCamera = null; meterTarget = null; meterQuad = null;
+                meterToken++; meterPending = false; meterRequestedAt = -Infinity;
+            },
+            retone: toneNode,
+            /* Linear readback for calibration: the lit mesh's scene-referred
+             * luminance (cd/m², modeled from assumed output), never tone mapped. */
+            async readLinear({ scale = 0.25 } = {}) {
+                if (!active || !lastCamera || !inner) return null;
+                renderer.getDrawingBufferSize(size);
+                const factor = Math.min(1, Math.max(0.01, Number(scale) || 0.25));
+                const width = Math.max(1, Math.round(size.x * factor)), height = Math.max(1, Math.round(size.y * factor));
+                if (!readTarget) readTarget = new THREE.RenderTarget(width, height, { type: THREE.HalfFloatType, depthBuffer: true,
+                    generateMipmaps: false, colorSpace: THREE.LinearSRGBColorSpace });
+                else if (readTarget.width !== width || readTarget.height !== height) readTarget.setSize(width, height);
+                const camera = lastCamera, previous = renderer.getRenderTarget(), layers = camera.layers.mask, autoClear = renderer.autoClear;
+                try {
+                    renderer.setRenderTarget(readTarget); renderer.autoClear = true; camera.layers.set(LIT_LAYER);
+                    inner.call(renderer, scene, camera);
+                } finally { camera.layers.mask = layers; renderer.autoClear = autoClear; renderer.setRenderTarget(previous); }
+                const data = await renderer.readRenderTargetPixelsAsync(readTarget, 0, 0, width, height);
+                if (!active || !data) return null;
+                const values = unpadRows(data, width, height, 4);
+                const half = values instanceof Uint16Array, luminance = new Float32Array(width * height), coverage = new Uint8Array(width * height);
+                const read = half ? index => THREE.DataUtils.fromHalfFloat(values[index]) : index => values[index];
+                for (let i = 0; i < width * height; i++) {
+                    const y = Exposure.lumaOf([read(i * 4), read(i * 4 + 1), read(i * 4 + 2)]);
+                    luminance[i] = y / Model.LIT_EXPOSURE; coverage[i] = read(i * 4 + 3) > 0.5 ? 1 : 0;
+                }
+                return { width, height, bottomUp: !renderer.backend?.isWebGPUBackend, unit: 'cd/m2', modeled: true, measured: false,
+                    preExposure: Model.LIT_EXPOSURE, luminance, coverage };
+            },
+        };
+    }
+
     function litMaterialFor(original) {
         const source = Array.isArray(original) ? original.find(Boolean) : original;
         const tinted = !!(source?.map || source?.vertexColors);
-        const material = new THREE.MeshStandardMaterial({
-            map: source?.map || null, vertexColors: !!source?.vertexColors,
+        const options = { map: source?.map || null, vertexColors: !!source?.vertexColors,
             color: tinted ? new THREE.Color(ASSUMED_ALBEDO_SCALE, ASSUMED_ALBEDO_SCALE, ASSUMED_ALBEDO_SCALE) : 0x9ea4aa,
             roughness: 0.88, metalness: 0, side: source?.side ?? THREE.FrontSide,
-            lightMap: lightmap, lightMapIntensity: 1,
-        });
-        material.name = 'lit-view-assumed-material';
-        return material;
+            lightMap: lightmap, lightMapIntensity: 1 };
+        const made = pipeline ? pipeline.materialFor(source, options) : { material: new THREE.MeshStandardMaterial(options), depth: null, cut: false };
+        made.material.name = 'lit-view-assumed-material';
+        return made;
     }
     /* Lit's mesh: a non-indexed copy of each scan geometry with derived
      * smooth normals (the unlit display never needed normals, and scan
@@ -224,10 +450,13 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
                 }
                 albedo.set(sample(t, geometry.attributes.uv), (first + t) * 3);
             }
-            swapped.push({ node, material: node.material, geometry: node.geometry, castShadow: node.castShadow, receiveShadow: node.receiveShadow });
+            const made = litMaterialFor(node.material);
+            swapped.push({ node, material: node.material, geometry: node.geometry, castShadow: node.castShadow, receiveShadow: node.receiveShadow,
+                lit: made.material, depth: made.depth, cut: made.cut, layerAdded: !!pipeline && !node.layers.isEnabled(LIT_LAYER) });
             node.geometry = geometry;
-            node.material = litMaterialFor(node.material);
+            node.material = made.material;
             node.castShadow = true; node.receiveShadow = true;
+            if (pipeline) node.layers.enable(LIT_LAYER);
             first += count;
         }
         bounce = { ...idleBounce(), status: total ? 'building' : 'idle', triangles: total };
@@ -239,8 +468,9 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     }
     function restoreMaterials() {
         for (const entry of swapped) {
-            entry.node.material.dispose?.();
+            entry.lit.dispose?.(); entry.depth?.dispose?.();
             entry.node.geometry.dispose?.();
+            if (entry.layerAdded) entry.node.layers.disable(LIT_LAYER);
             entry.node.material = entry.material;
             entry.node.geometry = entry.geometry;
             entry.node.castShadow = entry.castShadow; entry.node.receiveShadow = entry.receiveShadow;
@@ -323,6 +553,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             light.shadow.bias = -0.0004; light.shadow.normalBias = 0.02;
             light.shadow.radius = Model.SHADOW_RADIUS[source.shadow];
         }
+        if (pipeline) light.layers.set(LIT_LAYER);
         group.add(light, light.target);
         return light;
     }
@@ -339,6 +570,19 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             light.shadow.mapSize.set(size, size); light.shadow.map?.dispose?.(); light.shadow.map = null; light.shadow.needsUpdate = true;
         }
         renderer.shadowMap.needsUpdate = true;
+    }
+
+    /* Partial night adaptation toward the latest meter (WebGPU path), on its
+     * own clock: it keeps easing after the lights settle. Until the first
+     * meter the view shows the design night and reports itself adapting. */
+    function adapt(at) {
+        if (!pipeline) return;
+        if (metered === null) { adapting = true; return; }
+        adaptTarget = Exposure.adaptationFromLuminance(metered, LIT_DESIGN_EV100);
+        const elapsed = adaptedAt === null ? Infinity : at - adaptedAt;
+        const step = Exposure.easeAdaptation(adaptEv, adaptTarget.adaptEv, elapsed, { snap: adaptEv === null || !!reducedMotion?.matches });
+        adaptEv = step.ev; adapting = step.adapting; adaptedAt = at;
+        pipeline.gain.value = Exposure.adaptationGain(adaptEv);
     }
 
     /* Follow the fixtures' current exact state. Cheap when nothing changed. */
@@ -359,6 +603,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         const step = Model.easeLights(exact, shown, elapsed, { snap: elapsed === Infinity || !!reducedMotion?.matches });
         const sources = step.lights;
         easedAt = at; shown = step.shown; easing = step.easing;
+        adapt(at);
         const format = values => values.map(value => (typeof value === 'number' ? value.toFixed(5) : String(value))).join(':');
         // Shadow maps depend on where lights are, never on how bright: an
         // eased level re-renders the lights only.
@@ -393,24 +638,33 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         renderer.shadowMap.autoUpdate = false;
         scene.add(group);
         active = true; quality = 'full'; slow = 0; signature = ''; placementSignature = ''; shown = []; easedAt = null;
-        const previous = saved.onBeforeRender;
-        // Sync on the render that uses it, without touching the engine loop.
-        scene.onBeforeRender = function litBeforeRender(...args) {
-            try { sync(); } catch (_) { /* the frame still renders */ }
-            return previous.apply(this, args);
-        };
+        adaptEv = null; adaptedAt = null; adapting = false; metered = null; operator = pipeline ? LIT_TONE.view : 'linear';
+        if (pipeline) {
+            // The WebGPU path syncs inside its own render passes.
+            pipeline.install();
+        } else {
+            const previous = saved.onBeforeRender;
+            // Sync on the render that uses it, without touching the engine loop.
+            scene.onBeforeRender = function litBeforeRender(...args) {
+                try { sync(); } catch (_) { /* the frame still renders */ }
+                return previous.apply(this, args);
+            };
+        }
         sync();
         return state();
     }
     function disable() {
         if (!active) return state();
         active = false;
+        pipeline?.uninstall();
         restoreMaterials();
         for (const light of lights) { light.shadow?.map?.dispose?.(); light.dispose?.(); }
         group.remove(...lights.flatMap(light => [light, light.target]));
         lights = []; signature = ''; placementSignature = ''; shown = []; easedAt = null; easing = false;
         baker?.dispose(); baker = null; bakeScene = 0; lightmap?.dispose(); lightmap = null; lux = [];
         bakeSignature = ''; bakePlacement = ''; deferredSince = null; bounce = idleBounce();
+        adaptEv = null; adaptedAt = null; adapting = false; adaptTarget = { dropEv: 0, adaptEv: 0 }; metered = null;
+        if (pipeline) pipeline.gain.value = 1;
         scene.remove(group);
         renderer.shadowMap.enabled = saved.enabled;
         renderer.shadowMap.type = saved.type;
@@ -428,16 +682,44 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         if (slow >= LIT_SLOW_SAMPLES) { quality = 'reduced'; applyQuality(); signature = ''; sync(); }
         return state();
     }
+    /* The view operator, or a comparison view (lit-exposure.mjs). The WebGL
+     * path has no tone pass: it is always 'linear'. */
+    function setTone(next) {
+        if (!LIT_TONE_OPERATORS.includes(next)) throw new RangeError('lit_tone_operator_unknown');
+        if (pipeline && next !== operator) { operator = next; pipeline.retone(); }
+        return state();
+    }
+    const readLinear = options => (pipeline ? pipeline.readLinear(options) : Promise.resolve(null));
     function state() {
+        const ev = pipeline && adaptEv !== null ? adaptEv : 0;
         return Object.freeze({ active, quality, lights: lights.length,
             shadowLights: lights.filter(light => light.castShadow).length, shadowMapSizes: LIT_SHADOW_MAP_SIZES,
             meshSwapped: swapped.length, exposure: LIT_EXPOSURE,
             easing, easeTauMs: Model.LIT_EASE_TAU_MS, dimmingCurve: Model.LIT_DIMMING_CURVE.name,
+            pipeline: pipeline ? 'scene-referred-half-float' : 'display-direct',
+            designEv100: LIT_DESIGN_EV100, nightAdaptation: !!pipeline, adaptationEv: ev, adaptationTargetEv: pipeline ? adaptTarget.adaptEv : 0,
+            adaptationDropEv: pipeline ? adaptTarget.dropEv : 0, adapting, ev100: LIT_DESIGN_EV100 - ev,
+            meteredCdM2: pipeline ? metered : null, meterSerial,
+            tone: Object.freeze({ operator, available: pipeline ? LIT_TONE_OPERATORS : Object.freeze(['linear']),
+                presentation: !!pipeline && Exposure.litTonePresentation(operator) }),
+            cutaway: swapped.length > 0 && swapped.every(entry => entry.cut),
+            ambientFloor: LIT_AMBIENT_FLOOR,
             bounce: Object.freeze({ ...bounce, lastBake: bounce.lastBake ? Object.freeze({ ...bounce.lastBake }) : null }),
             bounceLimit: LIT_BOUNCE_LIMIT, assumedAlbedos: LIT_BOUNCE_ALBEDO,
             lux: Object.freeze(lux.slice()), luxLabel: LIT_LUX_LABEL,
             assumedLumens: LIT_ASSUMED_LUMENS, assumptionSource: LIT_ASSUMPTION_SOURCE, measured: false,
-            disclosure: LIT_DISCLOSURE, disclosureDetail: LIT_DISCLOSURE_DETAIL });
+            disclosure: LIT_DISCLOSURE,
+            disclosureDetail: LIT_DISCLOSURE_DETAIL + ' ' + Exposure.litExposureDisclosure({ adaptive: !!pipeline, designEv100: LIT_DESIGN_EV100 }) });
     }
-    return { enable, disable, sync, observeFrameRate, state, group };
+    return { enable, disable, sync, observeFrameRate, setTone, readLinear, state, group };
+}
+
+/* WebGPU buffer rows are padded to 256 bytes; `channels` values per pixel. */
+function unpadRows(data, width, height, channels) {
+    const row = width * channels;
+    if (data.length === row * height) return data;
+    const bytesPerValue = data.BYTES_PER_ELEMENT, padded = Math.ceil(row * bytesPerValue / 256) * 256 / bytesPerValue;
+    const out = new data.constructor(row * height);
+    for (let y = 0; y < height; y++) out.set(data.subarray(y * padded, y * padded + row), y * row);
+    return out;
 }

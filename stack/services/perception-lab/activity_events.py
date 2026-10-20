@@ -1,7 +1,7 @@
 """Lighting-brain events from the always-on activity loop (contract v1).
 
 docs/plans/den-activity-lighting/CONTRACT.md is the source of truth. This module
-only builds and checks the four AL-3 event types; it never carries an image, a
+only builds and checks the AL-3 event types (v1, plus v1.1 person_position); it never carries an image, a
 pixel, a person identity or a lighting command.
 """
 import math
@@ -9,7 +9,7 @@ import re
 
 SCHEMA = 'activity-lighting-events-1'
 COMMON = ('type', 'home', 'room', 'source', 'observed_at', 'sent_at', 'ttl_s')
-TTL_S = {'activity': 12., 'person_pose': 10., 'health': 150., 'cost': 300.}
+TTL_S = {'activity': 12., 'person_pose': 10., 'health': 150., 'cost': 300., 'person_position': 3.}
 LABELS = ('reading', 'computer_work', 'phone_use', 'resting', 'transition', 'other', 'insufficient_evidence')
 ZONES = ('desk', 'sofa')
 COMPONENTS = ('jev', 'deep_stack', 'frigate', 'camera')
@@ -18,8 +18,10 @@ EXTRA = {
     'person_pose': ('people', 'person_count'),
     'health': ('component', 'ok', 'detail'),
     'cost': ('component', 'calls', 'est_usd'),
+    'person_position': ('people', 'person_count'),  # v1.1 amendment
 }
 PERSON = ('track_id', 'shoulders_m', 'head_m', 'head_pitch_deg', 'approximate')
+POSITION = ('track_id', 'position_m', 'approximate')
 MAX_PEOPLE = 8
 _NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,63}')
 
@@ -62,6 +64,12 @@ def activity(*, home, room, source, observed_at, label, confidence, person_count
 
 def person_pose(*, home, room, source, observed_at, people, person_count):
     event = _common('person_pose', home=home, room=room, source=source, observed_at=observed_at)
+    event.update(people=people, person_count=person_count)
+    return check(event, sent=False)
+
+
+def person_position(*, home, room, source, observed_at, people, person_count):
+    event = _common('person_position', home=home, room=room, source=source, observed_at=observed_at)
     event.update(people=people, person_count=person_count)
     return check(event, sent=False)
 
@@ -111,6 +119,14 @@ def check(event, *, sent=True):
                   and (person['head_pitch_deg'] is None or (_finite(person['head_pitch_deg'])
                                                             and -90 <= person['head_pitch_deg'] <= 90))
                   and person['approximate'] is True, 'person_pose_person_invalid')
+    elif kind == 'person_position':
+        people = event['people']
+        _need(type(count) is int and 0 <= count <= 64, 'person_position_count_invalid')
+        _need(isinstance(people, list) and 1 <= len(people) <= MAX_PEOPLE, 'person_position_people_invalid')
+        for person in people:
+            _need(isinstance(person, dict) and set(person) == set(POSITION) and _text(person['track_id'], 64)
+                  and person['position_m'] is not None and _point(person['position_m'])
+                  and person['approximate'] is True, 'person_position_person_invalid')
     elif kind == 'health':
         _need(event['component'] in COMPONENTS and type(event['ok']) is bool
               and (event['detail'] is None or _text(event['detail'], 160)), 'health_event_invalid')

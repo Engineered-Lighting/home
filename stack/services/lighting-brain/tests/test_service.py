@@ -32,9 +32,9 @@ def test_state_matches_the_contract_shape(brain, clock):
                           "fixtures", "decisions", "cost", "inputs", "settings_version"}
     assert state["schema"] == "activity-lighting-state-1"
     assert (state["home"], state["room"], state["brain"]) == ("victoria", "den", "online")
-    assert state["generated_at"] == NOON + 4 and state["settings_version"] == "v1"
+    assert state["generated_at"] == NOON + 4 and state["settings_version"] == "v1.1"
     assert state["mode"] == "reading" and state["why"] == "Reading at sofa · spotlight on"
-    assert state["occupancy"] == {"present": True, "people_count": 1, "zones": {"sofa": True, "desk": False}}
+    assert state["occupancy"] == {"present": True, "people_count": 1, "zones": {"sofa": False, "desk": False}}
     assert state["activity"] == {"label": "reading", "confidence": 0.8, "age_s": 0.0, "source": "jev"}
     assert [f["fixture_id"] for f in state["fixtures"]] == [F01, F02, F03, F04]
     for f in state["fixtures"]:
@@ -44,9 +44,11 @@ def test_state_matches_the_contract_shape(brain, clock):
     lit = state["fixtures"][0]["spot"]
     assert lit["on"] and len(lit["target_m"]) == 3
     off = state["fixtures"][2]
-    assert off["ambient"]["radial_level"] == 0 and off["spot"]["on"] is False and off["spot"]["target_m"] is None
+    assert off["ambient"]["radial_level"] == 0.1  # far from fixture 03: the proximity floor
+    assert off["spot"]["on"] is False and off["spot"]["target_m"] is None
     assert state["cost"] == {"jev_calls_last_hour": 0, "est_usd_last_hour": None}
     assert state["inputs"] == {"occupancy_age_s": 4.0, "activity_age_s": 0.0, "pose_age_s": 4.0,
+                               "position_age_s": 4.0,
                                "health": {"jev": True, "deep_stack": True, "frigate": True, "camera": True}}
     json.dumps(state, allow_nan=False)
 
@@ -92,6 +94,7 @@ def test_stream_pushes_on_change_and_on_period(brain, clock):
     def fake_wait(version, timeout):  # no sleeping: record the wait, then return
         waits.append((version, timeout))
         if len(waits) == 1:
+            clock.tick(1)  # past the push interval
             brain.ingest("victoria", batch(occupancy(clock()), zone(clock())))  # a change
         return True
 
@@ -111,6 +114,7 @@ def test_stream_pushes_on_change_and_on_period(brain, clock):
 
 def test_wait_for_change_returns_at_once_after_a_change(brain, clock):
     version = brain.version
+    clock.tick(1)
     brain.ingest("victoria", batch(occupancy(clock()), zone(clock())))
     assert brain.wait_for_change(version, timeout=0) is True
     assert brain.wait_for_change(brain.version, timeout=0) is False
@@ -142,7 +146,7 @@ def test_example_files_parse():
     assert load_geometry(EXAMPLE_GEOMETRY).synthetic is True
     assert parse_tokens(json.loads((ROOT / "config" / "tokens.example.json").read_text()))
     settings = load_settings(ROOT / "config" / "settings.example.json")
-    assert settings.settings_version == "v1"
+    assert settings.settings_version == "v1.1"
 
 
 def test_settings_refuse_unknown_fields(tmp_path):
@@ -151,7 +155,9 @@ def test_settings_refuse_unknown_fields(tmp_path):
     with pytest.raises(ValueError, match="unknown settings"):
         load_settings(path)
     with pytest.raises(ValueError):
-        test_settings(ambient_level=1.5)
+        test_settings(occupied_level=1.5)
+    with pytest.raises(ValueError):
+        test_settings(prox_near_m=3.0, prox_far_m=3.0)
     with pytest.raises(ValueError):
         test_settings(night_start="25:00")
 
@@ -272,6 +278,7 @@ def test_http_stream_pushes_state_on_change(server):
     assert first[0] == "id: 1" and first[1] == "event: state"
     assert json.loads(first[2][6:])["mode"] == "off"
     # A change wakes the stream at once (the period is 60 s in this test).
+    clock.tick(1)  # past the 0.25 s push interval
     call(srv, "POST", f"{BASE}/events", batch(occupancy(NOON), zone(NOON)), token=TOKEN_HA)
     second = read_frame(response)
     assert second[0] == "id: 2" and json.loads(second[2][6:])["occupancy"]["present"] is True

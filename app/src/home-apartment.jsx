@@ -2301,7 +2301,7 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
   const retryPhotoDisabled = !!(disabled || pointsOnlyReason || modeLockedReason);
   const backToCloudDisabled = !!(disabled || modeLockedReason);
   const loadingPercent = modeLoading && modeProgress?.mode === modeLoading && Number.isFinite(modeProgress.percent) ? modeProgress.percent : null;
-  return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view">
+  return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view" data-apt-label-avoid="">
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-seg" role="group" aria-label="Scene mode">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
@@ -9135,6 +9135,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       hasPerception: perceptionDockAvailable,
       dockState: perceptionDockAvailable ? unifiedDock : "hidden",
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
+      haConnection: connection, haLastReportedAt: selectedSiteId === "echo" ? window.HomeApartmentStates?.latestReport(statesRef.current, window.HomeApartmentQuick?.echoLightEntityIds(model.devices)) ?? null : null,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
       openSetup: openUnifiedSetup, aimBridge: echoNamedAims.chatBridge || null,
       selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
@@ -10056,6 +10057,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         <div
           role="group"
           aria-label="apartment zoom controls"
+          data-apt-label-avoid=""
           style={{
             position: "absolute",
             right: mobile ? 10 : 18,

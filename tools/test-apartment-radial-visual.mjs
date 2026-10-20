@@ -28,7 +28,7 @@ actual = replaceOne(actual, 'import(`./equipment-spotlight-visual.mjs${new URL(i
 for (const name of ['home-den-fixtures.js', 'home-apartment-aiming.js']) actual = replaceOne(actual,
   'import(`../' + name + '${new URL(import.meta.url).search}`)',
   'import(' + JSON.stringify(pathToFileURL(path.join(ROOT, 'app/src', name)).href) + ')');
-const { createEquipmentVirtualFixtures } = await import(dataModule(actual));
+const { createEquipmentVirtualFixtures, orbHaloRadius } = await import(dataModule(actual));
 const { createEquipmentSpotlightDepth } = await import(spotlight);
 const { createPicking } = await import(dataModule(replaceOne(fs.readFileSync(sourceFile('picking.js'), 'utf8'),
   "from 'three'", 'from ' + JSON.stringify(threeURL))));
@@ -522,6 +522,29 @@ test('every channel and mixed CCT tint the halo through the producer display whi
   assert.notDeepEqual(parts.spot.material.color.toArray(), parts.down.material.color.toArray());
   assert.equal(f.api.setFixtureState(f.id, { downward: { on: false } }).ok, true);
   assert.equal(parts.down.visible, false); assert.equal(parts.spot.visible, true);
+});
+
+test('the halo grows with how much light the socket gives; every layer keeps its opacity contract', t => {
+  // Prototype _styleFixtures: level = min(1, (spot + down + mean radial) / 1.4), radius .10 → .26 m.
+  assert.equal(orbHaloRadius(0, 0, [0, 0, 0, 0, 0, 0]), .10);
+  assert.ok(Math.abs(orbHaloRadius(1, 0, [0, 0, 0, 0, 0, 0]) - (.10 + .16 / 1.4)) < 1e-12);
+  assert.ok(Math.abs(orbHaloRadius(1, 1, [1, 1, 1, 1, 1, 1]) - .26) < 1e-12, 'full output reaches 26 cm and no further');
+  assert.ok(orbHaloRadius(.2, 0, []) < orbHaloRadius(.6, 0, []), 'monotone in level');
+  const f = fixture(t), parts = orbParts(f.root), layers = haloLayers(f.root), radius = .15;
+  const scales = () => new Set(layers.map(layer => layer.scale.x));
+  const shown = () => [...scales()][0] * radius;
+  assert.equal(f.api.setFixtureState(f.id, allOff).ok, true); f.api.setVisible(false); f.api.setVisible(true);
+  assert.equal(scales().size, 1, 'every halo layer draws the same shell size');
+  assert.ok(Math.abs(shown() - .10) < 1e-12);
+  assert.equal(f.api.setFixtureState(f.id, { spotlight: { on: true, brightness: 1, color_temp_kelvin: 3000 } }).ok, true);
+  assert.ok(Math.abs(shown() - (.10 + .16 / 1.4)) < 1e-12); assert.ok(Math.abs(parts.spot.material.opacity - .3) < 1e-12, 'spot opacity stays .3 × brightness');
+  assert.equal(f.api.setFixtureState(f.id, { downward: { on: true, brightness: 1, color_temp_kelvin: 2700 },
+    radials: [1, 2, 3, 4, 5, 6].map(number => ({ number, on: true, brightness: 1, color_temp_kelvin: 2700 })) }).ok, true);
+  f.api.setVisible(false); f.api.setVisible(true);
+  assert.equal(scales().size, 1); assert.ok(Math.abs(shown() - .26) < 1e-12, 'a fully lit socket glows at 26 cm');
+  for (const sector of parts.sectors) assert.ok(Math.abs(sector.material.opacity - .1) < 1e-12, 'sector opacity stays .1 × level');
+  assert.ok(Math.abs(parts.down.material.opacity - .3) < 1e-12);
+  assert.deepEqual(f.root.getObjectByName('virtual-fixture-pick').scale.toArray(), [1, 1, 1], 'the pick sphere never scales');
 });
 
 test('the halo falloff hooks the vendored basic shader exactly once and shares one program', t => {

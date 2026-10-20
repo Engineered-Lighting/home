@@ -953,6 +953,13 @@ bash scripts/stack.sh restart
 docker exec -it hav-vllm nvidia-smi -L
 ```
 
+### Swap or roll back the vLLM model
+The Qwen3.6-35B-A3B trial runs as a compose override on the host's
+`/opt/home-ai-voice` stack. The download, the window checks and the
+one-command rollback are in [VLLM-QWEN36-SWAP.md](VLLM-QWEN36-SWAP.md).
+Recreating `hav-vllm` for any reason changes the engine identity the LA camera
+pilot pins, so the live Qwen facts stay closed until they are re-pinned.
+
 ## Home Assistant operations
 
 ### Where the config lives

@@ -5330,7 +5330,6 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
   // APT-S02: every home that holds unsaved work keeps its mark, viewed or not.
   const parkedUnsaved = window.HomeApartmentData?.dirtySites?.() || [];
   const status = apartmentStatusRows(state);
-  const StatusBadge = window.HomeApartmentUI?.Badge;
   return <header className="apt-home-topbar">
     <span className="apt-home-wordmark">Home</span>
     <div className="apt-home-switcher" role="group" aria-label="Home">
@@ -5351,13 +5350,10 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
       <span className="apt-home-status-summary">{state?.sourceLabel || "Loading room"}</span>
       <span className="apt-home-status-segment" data-optional="1">{status.find(row => row.key === "lights")?.title}</span>
       {state?.saveState && <span className="apt-home-status-save">{state.saveState}</span>}
-    </summary><div role="status" aria-label="What this home is connected to">
-      {status.map(row => <div className="apt-home-status-row" key={row.key} data-system={row.key}>
-        <span className="apt-home-status-system">{row.system}</span>
-        <span className="apt-home-status-value">{StatusBadge && row.state ? <StatusBadge state={row.state}>{row.title}</StatusBadge> : row.title}</span>
-        {row.detail && <span className="apt-home-status-detail">{row.detail}</span>}
-      </div>)}
-    </div></details>
+    </summary>{/* APT-S02: one row per system, from the shared states (APT-F06). */}
+      {window.HomeApartmentStatusRows ? <window.HomeApartmentStatusRows state={state} />
+        : <div role="status"><p>{state?.sourceLabel || "Loading room"}</p></div>}
+    </details>
     <div className="apt-home-top-actions">
     {state?.openSetup && <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
       onClick={state.openSetup}>Setup</button>}
@@ -5392,32 +5388,11 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
  * edits, a save in flight or in conflict, and preserved local drafts. */
 const APARTMENT_UNSAVED_STATES = ["unsaved", "saving", "conflict", "offline", "reviewed", "validation"];
 
-/* APT-S02: one row per system, from facts the current home already reports.
- * Capability rows wait on the agreed per-home capability contract (APT-F05). */
+/* APT-S02: one row per system for the home being shown. The rows come from
+ * the shared data states (APT-F06, home-apartment-states.js); none are
+ * computed here. Before the Apartment loads there are none. */
 function apartmentStatusRows(state) {
-  const phase = state?.phase || "loading";
-  const room = phase === "ready" ? ["current", "Room ready"] : phase === "error" ? ["blocked", "Room unavailable"] : ["loading", "Loading room"];
-  const fixtures = state?.modeledFixtures || 0;
-  const lights = state?.lightEntities > 0
-    ? state.haConnection === "online"
-      ? ["connected", "Home Assistant connected", state.physicalControls ? "Output guards apply." : "Physical controls are unavailable here."]
-      : ["disconnected", "Home Assistant not connected", "Light controls are disabled and nothing is queued."]
-    : fixtures > 0
-      ? ["modeled", `No light entities for ${state.lightsRoom || "these"} fixtures`, `${fixtures} modeled fixture${fixtures === 1 ? "" : "s"} · nothing is sent to hardware.`]
-      : ["unavailable", "No lights in this home's model", ""];
-  const save = { saved: ["saved", "Saved"], unsaved: ["unsaved", "Unsaved changes"], saving: ["loading", "Saving"],
-    conflict: ["conflict", "Save conflict"], offline: ["draft", "Local draft kept"], reviewed: ["draft", "Draft ready to publish"],
-    validation: ["invalid", "Can't save yet"] }[state?.saveState] || ["unavailable", "No changes"];
-  return [
-    { key: "room", system: "Room", state: room[0], title: room[1], detail: state?.sourceLabel || "" },
-    { key: "lights", system: "Lights", state: lights[0], title: lights[1], detail: lights[2] },
-    { key: "save", system: "Saved work", state: save[0], title: save[1], detail: state?.saveDetail || "" },
-    { key: "camera", system: "Camera", state: state?.hasPerception ? null : "unavailable",
-      title: state?.hasPerception ? "Camera · JEV" : "No analyzed-frame camera here",
-      detail: state?.hasPerception ? "Video, analyzed frames, pose and inference have separate states there. Missing pose does not mean vacant." : "" },
-    { key: "capabilities", system: "Capabilities", state: "unavailable", title: "Not available yet",
-      detail: "Fixture, bench and perception capabilities wait on the agreed capability contract." },
-  ];
+  return window.HomeApartmentStates?.statusRows?.(state) || [];
 }
 
 /* APT-S05: the sheet handle. Drag moves between peek, half and full; a tap
@@ -5803,6 +5778,12 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const chatAbout = chatSelection && !chatAboutRemoved ? { ...chatSelection, siteId: chatRoom.siteId, key: chatRoom.key } : null;
   const chatAboutRef = useRef(null);
   chatAboutRef.current = chatAbout;
+  // The home on screen, for Chat's "Auto" home: an attached About chip's home,
+  // else the Apartment's selected home while the unified Home shell is open.
+  const viewSite = chatAbout?.siteId
+    || (unifiedHome && ["echo", "victoria"].includes(shellState?.siteId) ? shellState.siteId : null);
+  const viewSiteRef = useRef(null);
+  viewSiteRef.current = viewSite;
   const chatRoomRef = useRef(null);
   chatRoomRef.current = { room: chatRoom, bridge: chatRoomBridge };
   const chatBindingsRef = useRef(new Map());
@@ -9738,9 +9719,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     window.HomeCameraQuery?.reset();
     window.HomeSpatialViewport?.selectSite?.(next);
   }, []);
-  // "auto": a command naming no home goes to the home you are in (device
-  // network, then phone zone), else the last home acted on. A hand-picked home
-  // lasts for this tab only.
+  // "auto": a command naming no home goes to the home you are viewing (an
+  // attached chip's home, else the Apartment's home), else the home you are in
+  // (device network, then phone zone), else the last home acted on. A
+  // hand-picked home wins over the view and lasts for this tab only.
   const [homeChoice, setHomeChoice] = useState('auto');
   const homeChoiceRef = useRef('auto');
   const [autoHome, setAutoHome] = useState(null);
@@ -9755,7 +9737,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     let live = true;
     const refresh = () => {
       if (homeChoiceRef.current !== 'auto') return;
-      window.HomeLightingControl.resolveHome('auto').then(home => {
+      window.HomeLightingControl.resolveHome('auto', { viewSite: viewSiteRef.current }).then(home => {
         if (!live || homeChoiceRef.current !== 'auto') return;
         setAutoHome(home);
       }).catch(() => {});
@@ -9764,7 +9746,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     const timer = setInterval(refresh, 60000);
     window.addEventListener('focus', refresh);
     return () => { live = false; clearInterval(timer); window.removeEventListener('focus', refresh); };
-  }, [homeChoice]);
+  }, [homeChoice, viewSite]);
   const cameraEndpointRef = useRef(endpoint);
   useEffect(() => {
     const clear = () => {
@@ -9879,7 +9861,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     }
     // Cross-home lighting: commands that name a home, or name none while the
     // default home is Victoria, are handled here; the rest continue below.
-    if (await window.HomeLightingControl?.run(text, {addEvent, homeChoice: homeChoiceRef.current,
+    if (await window.HomeLightingControl?.run(text, {addEvent, homeChoice: homeChoiceRef.current, viewSite: viewSiteRef.current,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
     })) {
       window.HomeCameraQuery?.reset();

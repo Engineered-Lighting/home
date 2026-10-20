@@ -1,0 +1,66 @@
+{
+  "schema": "activity-lighting-events-1",
+  "synthetic": true,
+  "events": [
+    {
+      "type": "health",
+      "home": "victoria",
+      "room": "den",
+      "source": "perception-lab/activity-loop",
+      "observed_at": 1799999940,
+      "sent_at": 1799999940.2,
+      "ttl_s": 150,
+      "component": "jev",
+      "ok": false,
+      "detail": "jev_egress_blocked_indeterminate"
+    },
+    {
+      "type": "health",
+      "home": "victoria",
+      "room": "den",
+      "source": "perception-lab/activity-loop",
+      "observed_at": 1799999970,
+      "sent_at": 1799999970.2,
+      "ttl_s": 150,
+      "component": "jev",
+      "ok": false,
+      "detail": "jev_resuming"
+    },
+    {
+      "type": "health",
+      "home": "victoria",
+      "room": "den",
+      "source": "perception-lab/activity-loop",
+      "observed_at": 1800000000,
+      "sent_at": 1800000000.2,
+      "ttl_s": 150,
+      "component": "jev",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "type": "health",
+      "home": "victoria",
+      "room": "den",
+      "source": "perception-lab/activity-loop",
+      "observed_at": 1800000000,
+      "sent_at": 1800000000.2,
+      "ttl_s": 150,
+      "component": "deep_stack",
+      "ok": false,
+      "detail": "deep_stack_no_recent_output"
+    },
+    {
+      "type": "health",
+      "home": "victoria",
+      "room": "den",
+      "source": "perception-lab/activity-loop",
+      "observed_at": 1800000000,
+      "sent_at": 1800000000.2,
+      "ttl_s": 150,
+      "component": "camera",
+      "ok": false,
+      "detail": "camera_no_frames_yet"
+    }
+  ]
+}

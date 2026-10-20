@@ -323,6 +323,14 @@ class ManagedDeepStack:
             source = getattr(self.runtime, 'apartment_viewing_sessions', {}).get(sid)
             metric = getattr(source, 'metric', None)
             placement = metric.snapshot() if metric is not None else None
+            people = activity_pose.positions(placement)
+            if people:
+                times = placement['frame'].get('original_times') or {}
+                seen['position'] = {'key': placement['approximate_pose']['provenance'].get('source_event_id'),
+                                    'people': people, 'observed_at': times.get('observed_at') or now}
+            else:
+                seen['position_reason'] = ('approximate_placement_unavailable' if metric is None
+                                           else (placement or {}).get('reason') or 'approximate_no_placement')
             if isinstance(placement, dict) and placement.get('renderable'):
                 provenance = placement['approximate_pose']['provenance']
                 raw = None
@@ -380,7 +388,8 @@ def build(config, *, controller, occupancy, read_token, post=None, read_json=Non
             raise ValueError('a private file reader is required for the zones export')
         zones = read_json(zones)
     return ActivityLoop(deep=deep, occupancy=occupancy, publisher=publisher, home=config['home'], room=config['room'],
-                        source=SOURCE, clock=time.time, pricing=config['pricing'], zones=zones, **timings)
+                        source=SOURCE, clock=time.time, pricing=config['pricing'], zones=zones,
+                        person_position=config.get('person_position', True), **timings)
 
 
 def install(app, loop, *, prefix='/api/perception-lab/v1'):

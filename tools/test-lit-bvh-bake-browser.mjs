@@ -52,9 +52,12 @@ async function bakeTwoRoom(endpoint) {
 }
 window.proof = async () => {
   const adapter = navigator.gpu ? await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }) : null;
-  const result = { webgpu: !!adapter, adapter: adapter?.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture, description: adapter.info.description } : null };
+  const software = Bake.isSoftwareAdapter(adapter);
+  const result = { webgpu: !!adapter, software, adapter: adapter?.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture, description: adapter.info.description } : null };
+  // A hardware GPU runs in the worker as in the app; a software adapter
+  // (CI's SwiftShader) is refused there, so the WGSL runs in-page instead.
   const worker = new Worker('./lit-bvh-worker.mjs', { type: 'module' });
-  const gpuRoom = await bakeTwoRoom(worker);
+  const gpuRoom = await bakeTwoRoom(software ? Bake.createLocalBakeEndpoint({ gpu: navigator.gpu, allowSoftware: true }) : worker);
   const cpuRoom = await bakeTwoRoom(Bake.createLocalBakeEndpoint({ gpu: null }));
   result.twoRoom = { backend: gpuRoom.info.backend, maxB: gpuRoom.maxB, sumA: gpuRoom.sumA, cpuBackend: cpuRoom.info.backend, cpuMaxB: cpuRoom.maxB, cpuSumA: cpuRoom.sumA, warnings: gpuRoom.warnings };
   if (gpuRoom.info.backend === 'webgpu') {
@@ -64,8 +67,10 @@ window.proof = async () => {
     for (let i = 0; i < both[0].length; i += 4) for (let c = 0; c < 3; c++) { diff += Math.abs(both[0][i + c] - both[1][i + c]); total += both[1][i + c]; }
     result.twoRoom.relativeL1 = diff / Math.max(1e-9, total);
   }
+  if (software) { const workerRoom = await bakeTwoRoom(worker); result.twoRoom.workerBackend = workerRoom.info.backend; result.twoRoom.workerMaxB = workerRoom.maxB; }
   worker.terminate();
-  if (gpuRoom.info.backend !== 'webgpu') return result;
+  // Scan-size timing needs a hardware GPU: a software one would take minutes.
+  if (gpuRoom.info.backend !== 'webgpu' || software) return result;
   // Timing on the scan-sized room (WebGPU only: the CPU twin would take minutes).
   const big = session(new Worker('./lit-bvh-worker.mjs', { type: 'module' })), scene = largeRoomScene(), lights = largeRoomLights();
   big.client.setScene(scene.triangles, scene.albedo);
@@ -101,6 +106,7 @@ function browserOptions() {
   const installed = fs.existsSync(chromium.executablePath());
   const args = ['--disable-background-networking', '--enable-unsafe-webgpu', '--ignore-gpu-blocklist'];
   if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
+  if (process.env.HOME_LIT_BAKE_SOFTWARE === '1') args.push('--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader');
   else if (process.platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--enable-features=Vulkan', '--use-webgpu-adapter=swiftshader');
   // HOME_LIT_BAKE_CHANNEL=msedge (or chrome) on Windows: the bundled Chromium
   // ships without dxil.dll, so its D3D12 WebGPU device cannot be created.
@@ -133,8 +139,9 @@ test('the bounce bake runs on WebGPU in a worker: zero leak, the CPU twin agrees
     if (result.twoRoom.backend === 'webgpu') {
       assert.deepEqual(result.twoRoom.warnings, []);
       assert.ok(result.twoRoom.relativeL1 < 0.05, 'the WGSL kernels match the CPU twin within 5 % (L1 over the lightmap): ' + result.twoRoom.relativeL1);
-      assert.equal(result.large.backend, 'webgpu');
-      if (process.env.HOME_LIT_BAKE_GATE === '1') {
+      if (result.software) assert.equal(result.twoRoom.workerBackend, 'cpu', 'the app worker refuses a software adapter');
+      else assert.equal(result.large.backend, 'webgpu');
+      if (process.env.HOME_LIT_BAKE_GATE === '1' && !result.software) {
         const worst = Math.max(...result.large.spotRebake.map(row => row.job.ms));
         assert.ok(worst < 100, 'desktop gate: a spot re-bake under 100 ms (worst of 5: ' + worst.toFixed(1) + ' ms)');
       }

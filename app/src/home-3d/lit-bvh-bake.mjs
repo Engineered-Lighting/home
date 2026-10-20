@@ -690,10 +690,15 @@ fn visibleTo(p: vec3f, n: vec3f, q: vec3f) -> bool {
 const WORKGROUP = 64;
 const MAX_DISPATCH_RECEIVERS = 65535 * WORKGROUP;
 const SKY_CHUNK_MAX = 32768;
-export async function createGpuTracer(gpu, { adapterOptions = { powerPreference: 'high-performance' } } = {}) {
+/* A software (fallback) adapter such as SwiftShader is no faster than the
+ * CPU twin and holds the GPU process, so it is refused unless asked for
+ * (the CI proof uses it to run the WGSL). */
+export const isSoftwareAdapter = adapter => !!(adapter?.isFallbackAdapter || adapter?.info?.isFallbackAdapter
+    || /swiftshader|llvmpipe|lavapipe|warp|software/i.test([adapter?.info?.vendor, adapter?.info?.architecture, adapter?.info?.description].join(' ')));
+export async function createGpuTracer(gpu, { adapterOptions = { powerPreference: 'high-performance' }, allowSoftware = false } = {}) {
     if (!gpu?.requestAdapter) return null;
     const adapter = await gpu.requestAdapter(adapterOptions);
-    if (!adapter) return null;
+    if (!adapter || (!allowSoftware && isSoftwareAdapter(adapter))) return null;
     const limit = (name, want) => Math.min(adapter.limits?.[name] ?? want, want);
     const device = await adapter.requestDevice({ requiredLimits: {
         maxStorageBufferBindingSize: limit('maxStorageBufferBindingSize', 1 << 30), maxBufferSize: limit('maxBufferSize', 1 << 30) } });
@@ -804,7 +809,7 @@ export async function createGpuTracer(gpu, { adapterOptions = { powerPreference:
  *   { type: 'lightmap', seq, scene, data: Uint16Array, width, height, final, stats }
  *   { type: 'lux', seq, scene, aims: [{ id, label, lux, direct, bounce }] }
  *   { type: 'error', seq, message } */
-export function attachBakeHost(scope, { gpu = null, now = () => performance.now(), yieldTask = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
+export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now = () => performance.now(), yieldTask = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
     let scene = null, tracer = null, tracerTried = false, latest = null, done = null, running = false, disposed = false;
     const layers = new Map();   // key -> { signature, data: Uint16Array(R * 3) }
     const post = (message, transfer = []) => { if (!disposed) scope.postMessage(message, transfer); };
@@ -813,7 +818,7 @@ export function attachBakeHost(scope, { gpu = null, now = () => performance.now(
     async function useTracer() {
         if (tracerTried) return tracer;
         tracerTried = true;
-        try { tracer = await createGpuTracer(gpu); } catch (error) { tracer = null; post({ type: 'warning', message: String(error?.message || error) }); }
+        try { tracer = await createGpuTracer(gpu, { allowSoftware }); } catch (error) { tracer = null; post({ type: 'warning', message: String(error?.message || error) }); }
         return tracer;
     }
     async function setScene(message) {

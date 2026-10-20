@@ -27,7 +27,11 @@ test('full Home: Simulation stays disclosed, changes/resets state, and exits fro
       const scenario=dialog.getByRole('combobox',{name:'Simulation scenario',exact:true});
       assert.equal(await scenario.inputValue(),'healthy');
       if(viewport.width<700)for(const action of [scenario,dialog.getByRole('button',{name:'reset',exact:true}),dialog.getByRole('button',{name:'exit',exact:true}),dialog.getByRole('button',{name:'Close simulation controls',exact:true})]){
-        const box=await action.boundingBox();assert.ok(box.width>=44&&box.height>=44,'phone Simulation controls have44px targets');
+        const box=await action.boundingBox();
+        checks.push({stage:'simulation_phone_target',name:await action.getAttribute('aria-label')||await action.innerText(),box});
+        // getBoundingClientRect can lose a few fractional bits during the
+        // panel's translateY entrance. Retain the44px bound to .001px precision.
+        assert.ok(box.width+.001>=44&&box.height+.001>=44,'phone Simulation controls have44px targets: '+JSON.stringify(box));
       }
       await scenario.selectOption('empty');assert.equal(await scenario.inputValue(),'empty');
       await dialog.getByRole('button',{name:'Close simulation controls',exact:true}).focus();

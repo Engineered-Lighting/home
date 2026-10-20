@@ -43,7 +43,7 @@ function close(server) {
   return new Promise((resolve) => server.close(() => resolve()));
 }
 
-function request(port, urlPath, headers = {}) {
+function request(port, urlPath, headers = {}, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const req = http.request({
       host: "127.0.0.1",
@@ -58,15 +58,17 @@ function request(port, urlPath, headers = {}) {
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body }));
     });
     req.once("error", reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error("authored gateway request timed out")));
     req.end();
   });
 }
 
 async function waitForGateway(port, child) {
-  for (let i = 0; i < 50; i += 1) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
     if (child.exitCode != null) throw new Error(`gateway exited early with ${child.exitCode}`);
     try {
-      const res = await request(port, "/healthz");
+      const res = await request(port, "/healthz", {}, Math.min(1000, Math.max(1, deadline - Date.now())));
       if (res.status === 200) return JSON.parse(res.body);
     } catch {
       // keep polling

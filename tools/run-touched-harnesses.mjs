@@ -14,9 +14,9 @@
  *   node tools/run-touched-harnesses.mjs --all
  *   node tools/run-touched-harnesses.mjs --all --list
  *   node tools/run-touched-harnesses.mjs --base origin/main --shard 2/3 \
- *     --receipt .tmp/touched-harnesses/shard-2-of-3.json
+ *     --receipt .tmp/touched-harnesses/shard-2-of-4.json
  *   node tools/run-touched-harnesses.mjs --base origin/main \
- *     --verify-receipts .tmp/touched-harnesses --shards 3
+ *     --verify-receipts .tmp/touched-harnesses --shards 4
  *
  * --shard i/n runs only the plan items a deterministic partition assigns to
  * worker i. Every worker computes the same full plan first, so the n shards

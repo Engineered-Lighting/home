@@ -108,6 +108,25 @@ test('frame publishes only after native DOM hit paths and hub positions match it
   api.attach(f.elements); assert.equal(api.frame({ nowMs: 100 }), true); assert.equal(publications, 1); api.dispose();
 });
 
+test('the mode pill stays inside the room with its coarse hit area, sized by an observer rather than a frame-loop layout read', () => {
+  const f = fixture(), observers = [];
+  f.document.defaultView = { ResizeObserver: class { constructor(callback) { this.callback = callback; observers.push(this); }
+    observe() {} disconnect() { this.disconnected = true; } } };
+  f.api.attach(f.elements);
+  Object.assign(f.elements.root, { clientWidth: 800, clientHeight: 600 }); Object.assign(f.elements.pill, { offsetWidth: 180, offsetHeight: 44 });
+  observers.at(-1).callback();
+  const project = f.frame.project;
+  f.frame.project = point => { const p = project(point); return { ...p, x: p.x - 395, y: p.y - 292 }; };
+  f.api.frame({ nowMs: 0 });
+  assert.match(f.elements.pill.style.transform, /^translate3d\(95px,49px,0\)/, 'clamped 5 px inside the top-left edge');
+  f.frame.project = point => { const p = project(point); return { ...p, x: p.x + 395, y: p.y + 330 }; };
+  f.api.frame({ nowMs: 16 });
+  assert.match(f.elements.pill.style.transform, /^translate3d\(705px,595px,0\)/, 'clamped 5 px inside the bottom-right edge');
+  f.frame.project = project; f.api.frame({ nowMs: 32 });
+  assert.match(f.elements.pill.style.transform, /^translate3d\(400px,274px,0\)/, 'an unclamped pill keeps the handoff position');
+  f.api.dispose(); assert.equal(observers.at(-1).disconnected, true, 'disposal disconnects the observer');
+});
+
 test('the handoff pill stays on whole pixels during fractional camera settling while the drawn input plane remains exact', () => {
   const f = fixture(), project = f.frame.project;
   let offset = 0;

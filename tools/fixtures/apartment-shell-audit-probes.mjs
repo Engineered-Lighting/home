@@ -116,8 +116,11 @@ export function auditTargets() {
     }
     if (scroller) scroller.scrollTop = before;
     const hit = centre ? null : document.elementFromPoint(cx, cy);
+    const missed = wide && tall ? [] : [[0, 0], [-reach, 0], [reach, 0], [0, -reach], [0, reach]]
+      .filter(([dx, dy]) => !probe(cx + dx, cy + dy))
+      .map(([dx, dy]) => { const other = document.elementFromPoint(cx + dx, cy + dy); return [dx, dy, Math.round(cy + dy), other ? describe(other) : null]; });
     rows.push({ element: describe(element), width: +rect.width.toFixed(1), height: +rect.height.toFixed(1),
-      covered: !centre, coveredBy: hit ? describe(hit) : null,
+      covered: !centre, coveredBy: hit ? describe(hit) : null, missed, top: Math.round(rect.top),
       label: element.closest('label') ? element.closest('label').getBoundingClientRect().height : null, ok: wide && tall, stage: !!element.closest('.apt-home-stage') });
   }
   return rows;

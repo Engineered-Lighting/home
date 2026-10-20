@@ -12,6 +12,7 @@
 //   HOME_LIT_WEBGPU_CHANNEL     a Playwright browser channel ('msedge', 'chrome') with a
 //                             WebGPU adapter; the bundled headless Chromium has none.
 //   HOME_LIT_WEBGPU_FPS_GATE=1  also require >= 60 fps in Lit (owner's RTX 4090).
+//   HOME_LIT_WEBGPU_ALL_TONES=1 also render the Neutral and Reinhard views at moonlight.
 //   HOME_LIT_WEBGPU_STILLS=1    write the ladder rungs as PNGs beside the receipt (local review).
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -97,7 +98,7 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
   let server, browser, page, origin, handler, timer, stage = 'boot';
   const started = Date.now(), at = name => { stage = name; receipt.stages = { ...receipt.stages, [name]: Date.now() - started }; };
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
-    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('165s lit webgpu browser deadline at stage ' + stage));
+    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('165s lit webgpu browser deadline at stage ' + stage + ' ' + JSON.stringify(receipt.stages || {})));
   }, 165000); });
 
   async function proof() {
@@ -336,14 +337,18 @@ for (const backend of backends) test(`Lit on the WebGPU path (${backend}): Tier-
     at('tone_views');
     // Comparison views: no presentation effects, so moonlight is the design exposure's near-black.
     const compare = {};
-    for (const operator of ['linear', 'neutral', 'reinhard', 'agx']) {
+    // Each switch recompiles the display pass, which is slow on software GL: CI
+    // checks the linear comparison against the view; HOME_LIT_WEBGPU_ALL_TONES=1
+    // adds Neutral and the Reinhard fallback (whose moonlight gate test-lit-exposure.mjs also holds).
+    const operators = process.env.HOME_LIT_WEBGPU_ALL_TONES === '1' ? ['linear', 'neutral', 'reinhard', 'agx'] : ['linear', 'agx'];
+    for (const operator of operators) {
       const state = await page.evaluate(operator => window.__APT_ENGINE.setLitTone(operator), operator);
       assert.equal(state.tone.operator, operator); assert.equal(state.tone.presentation, operator === 'agx' || operator === 'reinhard');
       await frames(4);
       const frame = await capture(); compare[operator] = { mean_display_luminance: frame.meanY, near_black_pct: frame.nearBlackPct };
     }
     assert.ok(compare.linear.mean_display_luminance < compare.agx.mean_display_luminance, 'the linear comparison view shows no night adaptation');
-    assert.ok(compare.reinhard.near_black_pct <= 60, 'the Reinhard fallback also passes the moonlight gate: ' + compare.reinhard.near_black_pct);
+    if (compare.reinhard) assert.ok(compare.reinhard.near_black_pct <= 60, 'the Reinhard fallback also passes the moonlight gate: ' + compare.reinhard.near_black_pct);
     check('tone_views_at_moonlight', compare);
 
     // The adaptation eases: slowly as the room darkens, quickly as it brightens.

@@ -20,7 +20,7 @@ function ${name}() {
   const [connection, setConnection] = useState(hasStoredHaCredentials ? "reconnecting" : "disconnected");
   const [endpoint, setEndpoint] = useState(mapRehearsalOffline ? "" : initialPrefs.endpoint);
   const [token, setToken] = useState(mapRehearsalOffline ? "" : initialPrefs.token);
-  const apartmentNetworkPriority = mapRehearsalOffline || !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);
+  const apartmentNetworkPriority = mapRehearsalOffline || !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout) && !shellMetricsOpen;
   const deferred = () => sim.active;
   const sim = window.useSimulation({});
   useEffect(() => { if (sim.active) return; }, [mapRehearsalOffline, connection, sim.active]);

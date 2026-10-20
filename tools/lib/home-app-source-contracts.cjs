@@ -56,9 +56,9 @@ function inspectHomeApp(source) {
   function priorityCases() {
     const expression = declaration("apartmentNetworkPriority").init, cases = [];
     for (const mapRehearsalOffline of [false, true]) for (const web of [false, true])
-      for (const apartmentOpen of [false, true]) for (const spatialLayout of [false, true]) {
-        const expected = rehearsalIsolation && mapRehearsalOffline || web && (apartmentOpen || spatialLayout);
-        const input = { mapRehearsalOffline, web, apartmentOpen, spatialLayout };
+      for (const apartmentOpen of [false, true]) for (const spatialLayout of [false, true]) for (const shellMetricsOpen of [false, true]) {
+        const expected = rehearsalIsolation && mapRehearsalOffline || web && (apartmentOpen || spatialLayout) && !shellMetricsOpen;
+        const input = { mapRehearsalOffline, web, apartmentOpen, spatialLayout, shellMetricsOpen };
         const actual = evaluate(expression, { ...input, window: { HG_WEB_MODE: web } });
         cases.push({ input, expected, actual, ok: actual === expected });
       }

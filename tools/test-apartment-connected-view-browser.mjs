@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { runFullUiShell } from './fixtures/home-full-ui-harness.mjs';
+import { authoredLightingLayer } from './fixtures/apartment-lit-layer-fixtures.mjs';
 const fixtureBytes = fs.readFileSync(new URL('./fixtures/apartment-connected-view.json', import.meta.url));
 const fixture = JSON.parse(fixtureBytes);
 const boundBrain = JSON.parse(fs.readFileSync(new URL('../docs/contracts/den/fixtures/brain-state-reading.json', import.meta.url)));
@@ -15,8 +16,17 @@ const ids = ['victoria-den-proposed-fixture-01', 'victoria-den-proposed-fixture-
 const digest = value => createHash('sha256').update(Buffer.from(value, 'base64')).digest('hex');
 
 test('connected Apartment: actual viewer joins authored body, camera playback, scoped Qwen/JEV and coordinator-driven rendering', { timeout: 145000 }, async () => {
-  await runFullUiShell('apartment-connected-view-browser', async ({page, origin, openShell, waitSite, homes, checks, receipt, inViewport}) => {
+  await runFullUiShell('apartment-connected-view-browser', async ({page, origin, openShell, waitSite, homes, checks, receipt, inViewport, victoria}) => {
     const calls = [], state = { loop: 'running', qwen: 0, advanceQwen: false, cameraFailed: false, brain: 0 };
+    const layer = authoredLightingLayer(victoria);
+    await page.context().route('**/content-packs/**',route=>{
+      const request=route.request(),url=new URL(request.url());
+      if(url.origin!==origin||!url.pathname.startsWith(layer.base))return route.fallback();
+      assert.equal(request.method(),'GET');
+      const bytes=layer.files[url.pathname.slice(layer.base.length)];
+      assert.ok(bytes,'only declared authored lighting files are requested');
+      return route.fulfill({status:200,contentType:url.pathname.endsWith('.json')?'application/json':'application/octet-stream',body:bytes});
+    });
     const body = fixture.body, sid = body.live.session.id, graph = structuredClone(body.graph);
     Object.assign(graph.arms.b.chain.find(row=>row.stage==='result'),{status:'completed',activity:'reading',
       request_id:'authored-jev-request',output_event_id:42,source_end_s:.4,available_at_s:.7,
@@ -136,7 +146,14 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     await page.locator('[data-apartment-approximate-badge="1"]').waitFor({state:'hidden',timeout:5000});
     const readFixture = () => page.evaluate(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id),ids[0]);
     await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.brightness===.25,ids[0]);
-    const first = await readFixture(); state.brain = 1;
+    const first = await readFixture();
+    await page.getByRole('button',{name:'Lighting',exact:true}).click();
+    await page.waitForFunction(()=>{
+      const s=window.__APT_ENGINE.litState();
+      return s.active&&s.frame?.active&&s.frame.format==='RGBA16F'&&s.frame.frames>0&&s.receivers?.blends>0;
+    });
+    const lighting=await page.evaluate(()=>window.__APT_ENGINE.litState());
+    state.brain = 1;
     await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.brightness===.6,ids[0]);
     const second = await readFixture();
     assert.notDeepEqual(second.target,first.target,'the actual follower changes virtual aim from coordinator messages');
@@ -145,7 +162,8 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     await page.waitForFunction(()=>window.HomeDenLightingEvidence?.readback().events.some(row=>row.stage==='gpu_completed_frame'&&row.decision_id==='authored-brain:1'));
     const renderEvidence = await page.evaluate(()=>window.HomeDenLightingEvidence.readback());
     assert.ok(renderEvidence.events.filter(row=>row.stage==='gpu_completed_frame').every(row=>row.presentation_observed===false&&row.physical_commands===false));
-    checks.push({stage:'authored_coordinator_updates_virtual_state_aim_and_completed_render',capture,renderEvidence});
+    assert.equal(lighting.frame.format,'RGBA16F','the normal-frame receipt follows the actual composed HDR render');
+    checks.push({stage:'authored_coordinator_updates_virtual_state_aim_and_completed_hdr_render',capture,renderEvidence,lighting});
     state.brain = 2;
     await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.on===false,ids[0]);
     await page.waitForFunction(()=>window.HomeDenLightingEvidence.readback().events.some(row=>row.stage==='offline_spot_stop'&&row.reason==='state_reading_evidence_unbound'));

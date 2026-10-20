@@ -53,9 +53,9 @@ const FILE_SETS = [
   ['tools/run-touched-harnesses.mjs'], ['web-gateway/server.mjs', 'app/src/index.html'],
 ];
 
-test('for the actual base, every worker count 1..6 partitions the unsharded --list exactly', () => {
+test('for the actual base, every worker count 1..8 partitions the unsharded --list exactly', () => {
   const base = actualBase();
-  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6]);
+  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6, 7, 8]);
   const listed = run(['--base', base, '--list']).stdout.split('\n')[0];
   assert.match(listed, new RegExp(`^\\[touched-harnesses\\] \\d+ changed files → ${full.filter(name => name !== 'check-jsx.js').length} harnesses`));
 });
@@ -105,7 +105,7 @@ test('receipts from real sharded runs verify, and every inexact or failing cover
     const files = ['--files', 'tools/test-apartment-travel-guard.cjs,tools/test-apartment-chat-presenter.cjs'];
     const plan = planOf(files);
     assert.deepEqual(plan, ['test-apartment-chat-presenter.cjs', 'test-apartment-travel-guard.cjs']);
-    for (const count of [2, 3]) {
+    for (const count of [2, 3, 8]) {
       const sub = path.join(dir, String(count)); fs.mkdirSync(sub);
       for (let index = 1; index <= count; index++) {
         const result = run([...files, '--shard', `${index}/${count}`, '--receipt', path.join(sub, `shard-${index}-of-${count}.json`)], 180000);

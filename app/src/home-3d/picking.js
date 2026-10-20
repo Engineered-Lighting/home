@@ -44,13 +44,88 @@ export function aimChipBlocker(path) {
     });
 }
 
+/* Pick filters for the dollhouse cut-away (the owner looks down into a room
+ * whose near walls and ceiling are opened up).
+ *
+ * The collision proxy keeps its ceiling, so a ray toward floor the viewer can
+ * see first meets the ceiling from above. `rejectHit` skips an up-facing
+ * (toward the viewer) horizontal hit in the ceiling band, seen from above,
+ * and the pick takes the next surface: floor, wall or furniture. The band is
+ * the top `ceilingBandM` of the collision bounds and never below
+ * `minCeilingHeightM` over the floor, so desks, shelves and other furniture
+ * tops stay pickable.
+ *
+ * `floorGap` bridges hairline cracks in the scanned floor: when nothing is
+ * accepted, the nearest floor hit within `toleranceM` of where the ray meets
+ * the floor plane is used, at the ray's own floor point. Collision bytes are
+ * never changed. Heights are Apartment-local Z-up metres. */
+export function cutawayPickFilters({ floorZ, topZ, ceilingBandM = 0.35, minCeilingHeightM = 1.8, gapToleranceM = 0.04 } = {}) {
+    if (!Number.isFinite(floorZ) || !Number.isFinite(topZ) || !(topZ > floorZ)) return null;
+    const ceilingZ = Math.max(floorZ + minCeilingHeightM, topZ - ceilingBandM);
+    return Object.freeze({
+        ceilingZ,
+        rejectHit: ({ point, normal, eye }) => normal[2] >= 0.7 && point[2] >= ceilingZ && eye[2] > point[2],
+        floorGap: Object.freeze({ floorZ, toleranceM: gapToleranceM }),
+    });
+}
+
+const GAP_RINGS = [0.01, 0.02, 0.03, 0.04, 0.06, 0.08];
+const GAP_SPOKES = 8;
+
 export function createPicking(camera, hostEl) {
     const raycaster = new THREE.Raycaster();
     // beamPath has its own raycaster, so it can never change pick() bounds.
     const pathRaycaster = new THREE.Raycaster();
+    // The floor-gap fallback casts its own rays too.
+    const gapRaycaster = new THREE.Raycaster();
     const v = new THREE.Vector3();
     let host = hostEl;   // re-homed on every view mount — the engine outlives
                          // the React tree, so the boot-time host div goes stale
+
+    /* A hairline crack lets the ray fall through the floor. Find where the
+     * ray meets the floor plane and look for the nearest floor hit in rings
+     * up to `toleranceM` around it; answer at the ray's own floor point with
+     * that floor's height and normal. */
+    function floorGapHit(apartmentRoot, objects, ray, { floorZ, toleranceM = 0.04 }, firstAccepted, doubleSided) {
+        const originLocal = apartmentRoot.worldToLocal(ray.origin.clone());
+        const ahead = apartmentRoot.worldToLocal(ray.origin.clone().add(ray.direction));
+        const directionLocal = ahead.sub(originLocal);
+        if (!(directionLocal.z < -1e-6)) return null;
+        const t = (floorZ - originLocal.z) / directionLocal.z;
+        if (!(t > 0)) return null;
+        const onPlane = originLocal.clone().addScaledVector(directionLocal, t);
+        const sides = new Map();
+        try {
+            if (doubleSided === true) for (const object of objects) object.traverse(node => {
+                if (!node.isMesh) return;
+                for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+                    if (material && !sides.has(material)) { sides.set(material, material.side); material.side = THREE.DoubleSide; }
+                }
+            });
+            for (const radius of GAP_RINGS) {
+                if (radius > toleranceM + 1e-9) break;
+                let best = null;
+                for (let i = 0; i < GAP_SPOKES; i++) {
+                    const angle = (i / GAP_SPOKES) * Math.PI * 2;
+                    const targetLocal = onPlane.clone().add(new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, 0));
+                    const direction = apartmentRoot.localToWorld(targetLocal).sub(ray.origin).normalize();
+                    gapRaycaster.set(ray.origin, direction); gapRaycaster.near = 0; gapRaycaster.far = Infinity;
+                    const hit = firstAccepted(gapRaycaster.intersectObjects(objects, true), direction);
+                    // Only the floor itself bridges a crack.
+                    if (!hit || hit.normal[2] < 0.7 || hit.point[2] > floorZ + 0.1) continue;
+                    const offset = Math.hypot(hit.point[0] - onPlane.x, hit.point[1] - onPlane.y);
+                    if (!best || offset < best.offset) best = { ...hit, offset };
+                }
+                if (best) {
+                    // The ray's own floor point, at the found floor's height.
+                    const z = best.point[2], s = (z - originLocal.z) / directionLocal.z;
+                    const at = originLocal.clone().addScaledVector(directionLocal, s);
+                    return { point: [at.x, at.y, z], normal: best.normal, object: best.object };
+                }
+            }
+            return null;
+        } finally { for (const [material, side] of sides) material.side = side; }
+    }
 
     return {
         raycaster,
@@ -99,35 +174,48 @@ export function createPicking(camera, hostEl) {
          * normal are both converted back into the shared Z-up apartment
          * frame, so edit tools can place horizontal work surfaces and
          * vertical art/custom aim planes directly on the runtime mesh. */
-        surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false } = {}) {
+        /* `rejectHit({ point, normal, eye }, candidate)` and `floorGap` are
+         * opt-in (see cutawayPickFilters); without them the result is exactly
+         * the first accepted hit, as before. */
+        surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false, rejectHit = null, floorGap = null } = {}) {
             const hits = this.pick(objects || [], clientX, clientY, { doubleSided });
             apartmentRoot.updateMatrixWorld(true);
+            const rootQInverse = apartmentRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
+            const eyeLocal = apartmentRoot.worldToLocal(raycaster.ray.origin.clone());
+            const eye = [eyeLocal.x, eyeLocal.y, eyeLocal.z];
+            // The face normal in the Apartment frame, facing the viewing ray.
+            const normalOf = (candidate, rayDirection) => {
+                const normal = new THREE.Vector3(0, 0, 1);
+                if (candidate.face?.normal) {
+                    candidate.object.updateMatrixWorld(true);
+                    normal.copy(candidate.face.normal).transformDirection(candidate.object.matrixWorld);
+                    // Double-sided scan triangles have mixed winding. Use the
+                    // geometric normal facing the viewing ray, as Three does.
+                    if (normal.dot(rayDirection) > 0) normal.negate();
+                    normal.applyQuaternion(rootQInverse).normalize();
+                }
+                return [normal.x, normal.y, normal.z];
+            };
             // Presentation filtering chooses a visible deeper face without
             // modifying the collision mesh used for independent world queries.
-            let hit = null, point = null;
-            for (const candidate of hits) {
-                if (!candidate.point) continue;
-                const local = apartmentRoot.worldToLocal(candidate.point.clone());
-                if (acceptPoint && !acceptPoint([local.x, local.y, local.z], candidate)) continue;
-                hit = candidate; point = local; break;
-            }
-            if (!hit) return null;
-            hit.object.updateMatrixWorld(true);
-            let normal = new THREE.Vector3(0, 0, 1);
-            if (hit.face?.normal) {
-                normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
-                // Double-sided scan triangles have mixed winding. Use the
-                // geometric normal facing the viewing ray, as Three does.
-                if (normal.dot(raycaster.ray.direction) > 0) normal.negate();
-                const rootQ = new THREE.Quaternion();
-                apartmentRoot.getWorldQuaternion(rootQ);
-                normal.applyQuaternion(rootQ.invert()).normalize();
-            }
-            return {
-                point: [point.x, point.y, point.z],
-                normal: [normal.x, normal.y, normal.z],
-                object: hit.object,
+            const firstAccepted = (candidates, rayDirection) => {
+                for (const candidate of candidates) {
+                    if (!candidate.point) continue;
+                    const local = apartmentRoot.worldToLocal(candidate.point.clone());
+                    const point = [local.x, local.y, local.z];
+                    if (acceptPoint && !acceptPoint(point, candidate)) continue;
+                    if (rejectHit) {
+                        const normal = normalOf(candidate, rayDirection);
+                        if (rejectHit({ point, normal, eye }, candidate)) continue;
+                        return { point, normal, object: candidate.object };
+                    }
+                    return { point, normal: normalOf(candidate, rayDirection), object: candidate.object };
+                }
+                return null;
             };
+            const found = firstAccepted(hits, raycaster.ray.direction);
+            if (found || !floorGap) return found;
+            return floorGapHit(apartmentRoot, objects || [], raycaster.ray, floorGap, firstAccepted, doubleSided);
         },
 
         /* Apartment-local beam ray sampling against the dedicated collision

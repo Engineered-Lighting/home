@@ -324,6 +324,30 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
     const overlay = markersM.createOverlay(apartmentRoot);
+    /* The collision proxy's floor and top heights in the Apartment frame,
+     * once per collision object, for the cut-away pick filters. */
+    let cutawayFilterCache = null;
+    function collisionCutawayFilters(collision) {
+        if (cutawayFilterCache?.collision === collision) return cutawayFilterCache.filters;
+        apartmentRoot.updateMatrixWorld(true);
+        collision.updateMatrixWorld(true);
+        let floorZ = Infinity, topZ = -Infinity;
+        const corner = new THREE.Vector3();
+        collision.traverse(node => {
+            if (!node.isMesh || !node.geometry) return;
+            if (!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+            const { min, max } = node.geometry.boundingBox;
+            for (let i = 0; i < 8; i++) {
+                corner.set(i & 1 ? max.x : min.x, i & 2 ? max.y : min.y, i & 4 ? max.z : min.z)
+                    .applyMatrix4(node.matrixWorld);
+                const z = apartmentRoot.worldToLocal(corner).z;
+                floorZ = Math.min(floorZ, z); topZ = Math.max(topZ, z);
+            }
+        });
+        const filters = pickingM.cutawayPickFilters({ floorZ, topZ });
+        cutawayFilterCache = { collision, filters };
+        return filters;
+    }
     let litView = null, litUnsubscribe = () => {};
     const picking = pickingM.createPicking(camera, hostEl);
     const deskSurfacePicking = pickingM.createRegisteredDeskSurfacePicker({
@@ -833,12 +857,19 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         deskTargetSurfaceHit(clientX, clientY, binding) {
             return deskSurfacePicking.surfaceHit(clientX, clientY, binding);
         },
+        /* Under the dollhouse cut-away the viewer looks down into the room, so
+         * a tap on visible floor must not land on the collision ceiling above
+         * it, and hairline floor cracks must not read as "no surface"
+         * (picking.cutawayPickFilters). Without the cut-away the pick is
+         * exactly the first accepted hit, as before. */
         displaySurfaceHit(clientX, clientY) {
             const collision = modes.getCollision?.();
             if (!collision) return null;
             const policy = modes.debugInfo?.().dollhouseCutaway;
+            const filters = policy?.enabled ? collisionCutawayFilters(collision) : null;
             return picking.surfaceHit(apartmentRoot, [collision], clientX, clientY, {
                 acceptPoint: point => cutawayM.dollhouseKeep(point, policy) > .05,
+                ...(filters ? { rejectHit: filters.rejectHit, floorGap: filters.floorGap } : {}),
             });
         },
         /* The aim chip's ray from a light to an aim point (picking.beamPath),

@@ -153,7 +153,7 @@ export async function runFullUiShell(name, steps) {
       throw error;
     }
     assert.deepEqual(sourceHashes(), receipt.full_ui.source_sha256, 'production source is stable for the entire mounted proof');
-    assert.deepEqual(writes, [], 'browsing the populated and refused services never writes');
-    checks.push({ stage: 'all_service_requests_authored_and_no_writes', count: calls.length });
+    assert.deepEqual(writes, [], 'the default read-only fixture transport receives no writes; dedicated fixture writes are recorded separately');
+    checks.push({ stage: 'all_default_service_requests_authored_and_no_writes', count: calls.length });
   });
 }

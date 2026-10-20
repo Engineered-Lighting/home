@@ -63,7 +63,13 @@ test('the drawer owns only its group, reuses anchors and disposes cleanly', () =
   const view = Pools.createLightPools({ layer });
   let readback = view.update(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', floor }));
   assert.deepEqual(readback.axes, ['a']); assert.deepEqual(readback.down_pools, ['a', 'b']);
-  assert.deepEqual(readback.objects, ['light-pools-axis:a', 'light-pools-cone:a', 'light-pools-cone-rim:a', 'light-pools-down:a', 'light-pools-down:b']);
+  assert.deepEqual(readback.objects, ['light-pools-axis:a', 'light-pools-down:a', 'light-pools-down:b'],
+    'one thin axis; no spokes or rim over the fixture’s own beam volume');
+  const root = group.children[0];
+  assert.equal(root.getObjectByName('light-pools-axis:a').material.opacity, .75, 'the selected axis is bright');
+  readback = view.update(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', beams: 'all', floor }));
+  assert.deepEqual(readback.objects.filter(name => /axis/.test(name)), ['light-pools-axis:a', 'light-pools-axis:b']);
+  assert.equal(root.getObjectByName('light-pools-axis:b').material.opacity, .3, 'other lights draw a dim axis');
   assert.deepEqual(anchors.map(anchor => anchor.label), ['Spot · modeled', 'Down · modeled']);
   readback = view.update(Pools.lightPoolsPlan({ fixtures, selectedId: 'c', floor }));
   assert.deepEqual(readback.objects, ['light-pools-last-aim:c', 'light-pools-down:a', 'light-pools-down:b']);

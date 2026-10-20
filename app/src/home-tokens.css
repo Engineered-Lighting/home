@@ -918,6 +918,11 @@ button.hg-no-press:active {
 .apt-home-shell input[type="range"].apt-ui-range::-webkit-slider-thumb { transition: transform 120ms ease; }
 .apt-home-shell input[type="range"].apt-ui-range:active::-webkit-slider-thumb { transform: scale(1.18); }
 
+/* Modeled pool and beam labels on the room ("Spot · modeled"): a small
+ * dashed chip, the state vocabulary's simulated/authored shape, never
+ * mistaken for a fixture label or a measured reading. */
+.apt-home-shell .apt-ui-overlay-label { margin-top: -6px; padding: 2px 7px; border: 1px dashed rgba(255,255,255,.28); border-radius: 6px; background: rgba(8,9,11,.72); color: #d4d4d4; font: 500 11.5px/1.3 'Geist', sans-serif; white-space: nowrap; }
+
 /* Coarse pointers: every shell target is at least 44 px (SPEC › Layout,
  * HANDOFF › Phone). Visuals stay the design's; only hit areas grow. */
 @media (pointer: coarse) {

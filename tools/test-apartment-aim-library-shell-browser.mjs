@@ -46,15 +46,15 @@ function sources(root) {
   return result;
 }
 
-const run = path.join(ROOT, '.tmp/apartment-named-aims-shell-browser', 'run-' + Date.now());
+const run = path.join(ROOT, '.tmp/apartment-aim-library-shell-browser', 'run-' + Date.now());
 fs.mkdirSync(run, { recursive: true });
 const packs = path.join(run, 'packs'), echo = installPack(packs, 'echo'), victoria = installPack(packs, 'victoria');
 const index = Buffer.from(JSON.stringify({ schemaVersion: 1, packs: [echo, victoria].map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
 const files = sources(SRC);
 // Simulation Mode's bundled synthetic Echo fixtures, exactly the tracked four.
 for (const name of ['frame.json', 'manifest.json', 'points.sim.ply', 'seed-model.json']) files.set('/assets/apartment/' + name, path.join(SRC, 'assets/apartment', name));
-const receipt = { schema: 'home-apartment-named-aims-shell-browser-1', authored_room: true, simulation_mode: true, household_data: false,
-  screenshots: false, source_sha256: Object.fromEntries(['home-apartment.jsx', 'home-apartment-named-aim.jsx', 'home-apartment-named-aims.js',
+const receipt = { schema: 'home-apartment-aim-library-shell-browser-1', authored_room: true, simulation_mode: true, household_data: false,
+  screenshots: false, source_sha256: Object.fromEntries(['home-apartment.jsx', 'home-apartment-aim-library.jsx', 'home-apartment-aim-library.js',
     'home-apartment-echo-aim.js', 'home-apartment-aim.jsx', 'home-apartment-chat-aim.js', 'home-app.jsx'].map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
   checks: [], requests: [], forbidden: [], websocket_sends: [], errors: [] };
 const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
@@ -205,7 +205,7 @@ async function proof() {
 }
 
 try {
-  await Promise.race([proof(), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('145s named-aims shell deadline')), BROWSER_DEADLINE_MS); })]);
+  await Promise.race([proof(), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('145s aim-library shell deadline')), BROWSER_DEADLINE_MS); })]);
   receipt.result = 'passed';
 } catch (error) {
   receipt.result = 'failed'; receipt.failure = error.stack || String(error); process.exitCode = 1;

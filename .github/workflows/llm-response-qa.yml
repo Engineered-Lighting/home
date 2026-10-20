@@ -46,7 +46,7 @@ jobs:
       - name: Touched-harness shard contracts
         run: node --test tools/test-touched-shards.mjs
 
-      - name: Authored Apartment shell browser acceptance
+      - name: Authored Apartment shell browser acceptance, part 1
         run: node --test tools/test-apartment-home-shell-browser.mjs
 
       - name: Retain authored shell diagnostics
@@ -61,15 +61,53 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+  shell_browser_parts:
+    name: full-shell browser parts 2 and 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for authored Apartment acceptance
+        run: npx playwright install --with-deps chromium
+
+      - name: Authored Apartment shell browser acceptance, part 2
+        run: node --test tools/test-apartment-home-shell-browser-part2.mjs
+
+      - name: Authored Apartment shell browser acceptance, part 3
+        run: node --test tools/test-apartment-home-shell-browser-part3.mjs
+
+      - name: Retain authored shell diagnostics, parts 2 and 3
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: apartment-shell-authored-browser-parts-2-3
+          path: |
+            .tmp/apartment-home-shell-browser/run-*/*receipt.json
+            .tmp/apartment-home-shell-browser/run-*/*.png
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+
   touched_contracts:
-    name: touched-surface contracts (${{ matrix.shard }}/3)
+    name: touched-surface contracts (${{ matrix.shard }}/5)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         # Disjoint shards of one touched plan; the aggregate verifies the union.
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
 
     steps:
       - uses: actions/checkout@v4
@@ -89,15 +127,15 @@ jobs:
 
       - name: Touched-surface harnesses
         if: github.event_name == 'pull_request'
-        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --shard "${{ matrix.shard }}/3" --receipt ".tmp/touched-harnesses/shard-${{ matrix.shard }}-of-3.json"
+        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --shard "${{ matrix.shard }}/5" --receipt ".tmp/touched-harnesses/shard-${{ matrix.shard }}-of-5.json"
 
       - name: Publish this worker's harness receipt
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: touched-harness-shard-${{ matrix.shard }}-of-3
+          name: touched-harness-shard-${{ matrix.shard }}-of-5
           path: |
-            .tmp/touched-harnesses/shard-${{ matrix.shard }}-of-3.json
+            .tmp/touched-harnesses/shard-${{ matrix.shard }}-of-5.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
@@ -106,7 +144,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: apartment-touched-authored-browser-${{ matrix.shard }}-of-3
+          name: apartment-touched-authored-browser-${{ matrix.shard }}-of-5
           path: |
             .tmp/apartment-overlay-bridge-browser/run-*/receipt.json
             .tmp/apartment-room-selection-browser/run-*/receipt.json
@@ -115,25 +153,27 @@ jobs:
             .tmp/apartment-aim-theme-browser/run-*/receipt.json
             .tmp/apartment-aim-theme-browser/run-*/*.png
             .tmp/apartment-aim-wiring-browser/run-*/receipt.json
-            .tmp/apartment-named-aims-shell-browser/run-*/receipt.json
+            .tmp/apartment-aim-library-shell-browser/run-*/receipt.json
+            .tmp/apartment-composer-comfort-browser/run-*/receipt.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
 
   deterministic:
     name: deterministic chat and ui contracts
-    needs: [shell_contracts, touched_contracts]
+    needs: [shell_contracts, shell_browser_parts, touched_contracts]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
 
     steps:
-      - name: Require both independent suites
+      - name: Require every independent suite
         env:
           SHELL_RESULT: ${{ needs.shell_contracts.result }}
+          SHELL_PARTS_RESULT: ${{ needs.shell_browser_parts.result }}
           TOUCHED_RESULT: ${{ needs.touched_contracts.result }}
         run: |
-          test "$SHELL_RESULT" = success && test "$TOUCHED_RESULT" = success
+          test "$SHELL_RESULT" = success && test "$SHELL_PARTS_RESULT" = success && test "$TOUCHED_RESULT" = success
 
       - uses: actions/checkout@v4
         with:
@@ -148,10 +188,10 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
-          pattern: touched-harness-shard-*-of-3
+          pattern: touched-harness-shard-*-of-5
           path: .tmp/touched-harnesses
           merge-multiple: true
 
       - name: Require the shard union to equal the unsharded plan
         if: github.event_name == 'pull_request'
-        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --verify-receipts .tmp/touched-harnesses --shards 3
+        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --verify-receipts .tmp/touched-harnesses --shards 5

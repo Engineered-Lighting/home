@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const P = require('../app/src/home-apartment-aim-proposals.js');
-const N = require('../app/src/home-apartment-named-aims.js');
+const N = require('../app/src/home-apartment-aim-library.js');
 const E = require('../app/src/home-apartment-echo-aim.js');
 const C = require('../app/src/home-apartment-chat-aim.js');
 

@@ -126,6 +126,18 @@ function aptUseSyntheticSpatialQa(simActive, qaEnabled) {
   return simActive === true && qaEnabled === true;
 }
 
+/* SPEC Layout > Fitting: the room toolbar floats over the bottom of the
+ * canvas, so the renderer fits the room above it. Bottom inset in CSS pixels
+ * from the host's bottom edge to just above the toolbar, or 0 without one. */
+function aptRoomToolbarInsets(host) {
+  const toolbar = host?.parentElement?.querySelector?.(".apt-ui-room-toolbar");
+  if (!host || !toolbar) return { top: 0, right: 0, bottom: 0, left: 0 };
+  const box = host.getBoundingClientRect(), bar = toolbar.getBoundingClientRect();
+  const visible = bar.width > 0 && bar.height > 0 && getComputedStyle(toolbar).visibility !== "hidden"
+    && bar.right > box.left && bar.left < box.right && bar.bottom > box.top && bar.top < box.bottom;
+  return { top: 0, right: 0, bottom: visible ? Math.max(0, Math.round(box.bottom - bar.top + 8)) : 0, left: 0 };
+}
+
 function aptZoomTransitionDisabled(phase, targetDirection, requestedDirection) {
   return phase !== "idle" && targetDirection === requestedDirection;
 }
@@ -534,6 +546,15 @@ function aptCameraAlignment(dev) {
     short: "camera - estimated pose",
     detail: `estimated alignment - missing ${missing || "calibration"}`,
   };
+}
+
+/* A camera view is a room pose. Victoria offers none until Den supplies a
+ * calibrated camera pose; room or socket positions never stand in for one. */
+const APT_DEN_CAMERA_POSE_REASON = "Needs a Den-calibrated camera pose. Room and socket positions are never used as a camera pose.";
+function aptCameraViewAvailability(siteId, devices) {
+  if (siteId === "victoria") return { available: false, reason: APT_DEN_CAMERA_POSE_REASON };
+  return (devices || []).some((d) => d?.type === "camera" || !!d?.camera)
+    ? { available: true, reason: null } : { available: false, reason: "No camera is placed in this home's model." };
 }
 
 function aptSnapshotSrc(src) {
@@ -2253,57 +2274,86 @@ function AptUnifiedIcon({ name }) {
 }
 
 function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
-  onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible }) {
+  onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
+  homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about, modeProgress = null, viewLockedReason = null, onDismissNotice,
+  lit = null, onLit = null }) {
+  const Guide = window.HomeApartmentRoomGuide;
   const [popover, setPopover] = useState(null);
+  const [guideDialog, setGuideDialog] = useState(null);
   const popoverRef = useRef(null);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-room-toolbar", active: !!popover, rootRef: popoverRef,
     trap: false, initialFocus: "first", onEscape: () => setPopover(null) });
-  const photoError = !modeLoading && modeError?.mode === "splat";
+  const openGuide = (dialog) => { setPopover(null); setGuideDialog(dialog); };
+  Guide.useHelpShortcut(!guideDialog, () => openGuide("help"));
+  Guide.useFitPopover(popoverRef, popover);
+  /* Per-mode loading and recovery words. A saved-view failure keeps the room on
+   * the mode it already shows; nothing here switches homes. */
+  const APT_MODE_WORDS = { points: "Cloud", splat: "Photo", mesh: "Mesh" };
+  const recoveryFor = (error, home = homeName || "this home") => {
+    if (!error || typeof error !== "object" || !APT_MODE_WORDS[error.mode] || error.mode === "points") return null;
+    const word = APT_MODE_WORDS[error.mode];
+    return error.source === "saved-view"
+      ? { word, title: "Your saved view didn't load", body: `${word} isn't available here, so the room stays on Cloud. You're still looking at ${home}.` }
+      : { word, title: `${word} isn't available here`, body: `You're still looking at ${home}.` };
+  };
+  const recovery = !modeLoading ? recoveryFor(modeError) : null;
+  const photoError = !!recovery && modeError.mode === "splat" && modeError.source !== "saved-view";
   const retryPhotoDisabled = !!(disabled || pointsOnlyReason || modeLockedReason);
   const backToCloudDisabled = !!(disabled || modeLockedReason);
+  const loadingPercent = modeLoading && modeProgress?.mode === modeLoading && Number.isFinite(modeProgress.percent) ? modeProgress.percent : null;
   return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view">
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-seg" role="group" aria-label="Scene mode">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
-      <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key}
+      <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key && !lit}
         title={key !== "points" && pointsOnlyReason ? pointsOnlyReason : undefined}
-        disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)} onClick={() => onMode(key)}>{label}</button>)}
-      <button type="button" disabled title="Lit mode is planned; current scan modes remain available">Lit</button>
+        disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)}
+        onClick={() => (key === "mesh" && lit ? onLit?.(false) : onMode(key))}>{label}</button>)}
+      <button type="button" aria-label="Lit view" aria-pressed={!!lit}
+        title={!onLit ? "Lit needs modeled fixtures in this home" : modeLockedReason || pointsOnlyReason || "Simulated light on the mesh · not photometric"}
+        disabled={disabled || !onLit || !!modeLockedReason || !!pointsOnlyReason || modeLoading === "mesh"}
+        onClick={() => onLit?.(!lit)}>Lit</button>
     </div><span className="apt-ui-toolbar-separator apt-ui-orbit" />
-    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
-    <span className="apt-home-toolbar-detent apt-ui-value apt-ui-orbit" aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
-    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit right" disabled={disabled} onClick={() => onOrbit(1)}><AptUnifiedIcon name="chevR" /></button>
-    <button type="button" className="apt-ui-button is-small hide-small" aria-label="Fit room" disabled={disabled} onClick={onFit}><AptUnifiedIcon name="fit" />Fit</button>
+    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || undefined} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
+    <span className="apt-home-toolbar-detent apt-ui-value apt-ui-orbit" role="status" aria-live="polite" aria-atomic="true"
+      aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
+    <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit right" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || undefined} onClick={() => onOrbit(1)}><AptUnifiedIcon name="chevR" /></button>
+    <button type="button" className="apt-ui-button is-small hide-small" aria-label="Fit room" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || undefined} onClick={onFit}><AptUnifiedIcon name="fit" />Fit</button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-help"><button type="button" className="apt-ui-button is-small" aria-label="Layers"
       aria-expanded={popover === "layers"} onClick={() => setPopover(popover === "layers" ? null : "layers")}><AptUnifiedIcon name="layers" /><span className="apt-ui-toolbar-word">Layers</span></button>
       {popover === "layers" && <div ref={popoverRef} role="dialog" aria-label="Room layers">
         <h3 className="apt-ui-heading">Room layers</h3>
-        {hasVirtualFixtures ? <label className="apt-ui-row apt-ui-copy"><input type="checkbox" checked={virtualVisible}
-          aria-label="Show virtual spotlights layer" onChange={event => onVirtualVisible(event.target.checked)} />Virtual spotlights</label>
-          : <p className="apt-ui-copy">Mapped lights and room surfaces follow the current scene.</p>}
-        <p className="apt-ui-meta">Body and analyzed-frame layers are controlled in Camera · JEV.</p>
-        <p className="apt-ui-meta">Shadows and body occlusion are planned.</p>
+        <Guide.LayersPanel homeId={homeId} hasPerception={hasPerception} fixtureCount={fixtureCount}
+          seams={hasVirtualFixtures ? { fixtures: { value: virtualVisible, set: onVirtualVisible } } : {}} />
         <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close layers</button>
       </div>}
     </div>
-    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-icon is-small" aria-label="Room help"
-      aria-expanded={popover === "help"} onClick={() => setPopover(popover === "help" ? null : "help")}><AptUnifiedIcon name="help" /></button>
-      {popover === "help" && <div ref={popoverRef} role="dialog" aria-label="Room navigation help"><h3 className="apt-ui-heading">Room navigation</h3>
-        <p className="apt-ui-copy">Drag empty space to orbit. Scroll or pinch to zoom. Select a fixture to open its controls.</p>
-        <p className="apt-ui-meta">Arrow keys change the room view. H returns home. N / P selects a mapped device.</p>
-        {onRehearse && <button type="button" className="apt-ui-button is-small" onClick={() => { setPopover(null); onRehearse(); }}>Rehearse moving book</button>}
-        {nativePacks && <section className="apt-ui-channel"><h3 className="apt-ui-heading">Home pack</h3>
-          <button type="button" className="apt-ui-button" disabled={packBusy} onClick={() => { setPopover(null); onPackChange(); }}>Import home pack</button>
-          {nativePacks.length > 1 && <select className="apt-ui-input" aria-label="Home pack version" value={packVersion} disabled={packBusy}
-            onChange={event => { setPopover(null); onPackChange(event.target.value); }}>{nativePacks.map(pack =>
-              <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>)}</select>}
-        </section>}
-        <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close help</button></div>}
+    <div className="apt-ui-help"><button type="button" className="apt-ui-button is-icon is-small" aria-label="Gestures and keys"
+      title="Gestures and keys (?)" aria-haspopup="dialog" aria-expanded={guideDialog === "help"}
+      onClick={() => openGuide("help")}><AptUnifiedIcon name="help" /></button>
     </div>
+    {guideDialog === "help" && <Guide.HelpDialog homeId={homeId} hasPerception={hasPerception}
+      onClose={() => setGuideDialog(null)} onAbout={about ? () => setGuideDialog("about") : null}>
+      {onRehearse && <button type="button" className="apt-ui-button is-small" onClick={() => { setGuideDialog(null); onRehearse(); }}>Rehearse moving book</button>}
+      {nativePacks && <section className="apt-ui-channel"><h3 className="apt-ui-heading">Home pack</h3>
+        <button type="button" className="apt-ui-button" disabled={packBusy} onClick={() => { setGuideDialog(null); onPackChange(); }}>Import home pack</button>
+        {nativePacks.length > 1 && <select className="apt-ui-input" aria-label="Home pack version" value={packVersion} disabled={packBusy}
+          onChange={event => { setGuideDialog(null); onPackChange(event.target.value); }}>{nativePacks.map(pack =>
+            <option key={pack.manifest.revision} value={pack.manifest.revision}>{pack.manifest.revision}</option>)}</select>}
+      </section>}
+    </Guide.HelpDialog>}
+    {guideDialog === "about" && about && <Guide.AboutDialog homeName={homeName} facts={Guide.aboutFacts(about)}
+      onClose={() => setGuideDialog(null)} />}
+    <Guide.Legend homeId={homeId} selected={!!fixtureSelected} hasPerception={hasPerception}
+      suppressed={!!(popover || guideDialog || modeLoading || modeError || viewLockedReason)} />
     {popover === "source" && <div ref={popoverRef} className="apt-ui-toolbar-source-detail" role="dialog" aria-label="Scene source">
       <h3 className="apt-ui-heading">Scene source</h3><p className="apt-ui-copy">{sourceDetail || sourceLabel}</p>{sourceStatus}
       <p className="apt-ui-meta">Cloud, Photo and Mesh use this home's existing scene assets.</p>
+      {about && <button type="button" className="apt-ui-button is-small" onClick={() => openGuide("about")}>What's real here</button>}
       {stats && <details><summary className="apt-ui-meta">Renderer details</summary><p className="apt-ui-meta">
         {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k points · DPR {stats.pixelRatio}
         {stats.calls != null ? ` · ${stats.calls} draw calls` : ""}{stats.tris ? ` · ${(stats.tris / 1e6).toFixed(1)}m triangles` : ""}
@@ -2312,8 +2362,25 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
           {` · visible ${String(stats.modeDebug.splatVisible)} · parent ${stats.modeDebug.srParent}`}</>}
       </p></details>}
       <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close source</button></div>}
-    {(modeLoading || modeError) && <div className="apt-ui-toolbar-notice">
-      <span role="status">{modeLoading ? `Loading ${modeLoading === "splat" ? "Photo" : modeLoading}` : modeError.message}</span>
+    {lit && !modeLoading && !modeError && <p className="apt-ui-toolbar-notice" role="note" data-apt-lit-disclosure={lit.quality}
+      title={lit.disclosureDetail}>{lit.disclosure}{lit.quality === "reduced" ? " · reduced quality for speed" : ""}
+      {lit.bounceLimit && <><br /><span data-apt-lit-bounce-limit="">{lit.bounceLimit}</span></>}</p>}
+    {(modeLoading || modeError) && <div className="apt-ui-toolbar-notice" data-apt-mode-notice={modeLoading ? "loading" : recovery ? modeError.source || "mode" : "message"}>
+      {modeLoading ? <><div role="status"><h3>Loading {APT_MODE_WORDS[modeLoading] || modeLoading}{loadingPercent != null ? ` · ${Math.round(loadingPercent)}%` : ""}</h3>
+        <p>The current view stays as it is.</p></div>
+        {loadingPercent != null && <div className="apt-ui-progress" role="progressbar" aria-label={`Loading ${APT_MODE_WORDS[modeLoading] || modeLoading}`}
+          aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(loadingPercent)}><i style={{ width: `${Math.max(0, Math.min(100, loadingPercent))}%` }} /></div>}</>
+        : recovery ? <div role="status"><h3>{recovery.title}</h3><p>{recovery.body}</p></div>
+          : <span role="status">{typeof modeError === "string" ? modeError : modeError?.message || "This view didn't load."}</span>}
+      {recovery && !photoError && <div className="apt-ui-toolbar-recovery" role="group" aria-label={`${recovery.word} recovery`}>
+        <button type="button" className="apt-ui-button is-small" aria-label={`Retry ${recovery.word}`} disabled={retryPhotoDisabled}
+          title={modeLockedReason || pointsOnlyReason || undefined}
+          onClick={() => { if (!retryPhotoDisabled) onMode(modeError.mode); }}>Retry</button>
+        {modeError.source === "saved-view"
+          ? <button type="button" className="apt-ui-button is-small" disabled={!onDismissNotice} onClick={() => onDismissNotice?.()}>Stay on Cloud</button>
+          : <button type="button" className="apt-ui-button is-small" disabled={backToCloudDisabled} title={modeLockedReason || undefined}
+            onClick={() => { if (!backToCloudDisabled) onMode("points"); }}>Back to Cloud</button>}
+      </div>}
       {photoError && <div className="apt-ui-toolbar-recovery" role="group" aria-label="Photo recovery">
         <button type="button" className="apt-ui-button is-small" aria-label="Retry Photo" disabled={retryPhotoDisabled}
           title={modeLockedReason || pointsOnlyReason || undefined}
@@ -2406,7 +2473,8 @@ const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
-  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, aimControls, aimNamedAims }) {
+  tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, commandBinding,
+  aimControls, aimNamedAims }) {
   const radialSnapshot = React.useSyncExternalStore(directionalView?.subscribe || aptEmptySubscribe,
     directionalView?.getSnapshot || aptEmptySnapshot, aptEmptySnapshot);
   const [localTab, setLocalTab] = useState("light");
@@ -2451,24 +2519,27 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   const selectedRadials = zone == null ? radials : radials.filter(item => item.number === zone);
   const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.brightness ?? 1), 0) / selectedRadials.length : 0;
   const patchRadials = patch => onPatch({ radials: selectedRadials.map(item => ({ number: item.number, ...patch })) });
+  // Profile ranges are assumed until the Den confirms them; a moved slider powers its channel on.
+  const range = (key, fallback) => Array.isArray(fixture.color_temp_ranges?.[key]) ? fixture.color_temp_ranges[key] : fallback;
   const channel = (key, title, desc, brightnessLabel, temperatureLabel, minimum) => {
-    const current = state[key] || {};
+    const current = state[key] || {}, [low, high] = range(key, [minimum, 5000]);
+    const powered = value => !current.on && value > 0 ? { on: true } : {};
     return <section className="apt-ui-channel" aria-label={`${title} channel`}>
       <div className="apt-ui-channel-head"><div className="apt-ui-grow"><div className="apt-ui-channel-name">{title}</div>
         <div className="apt-ui-channel-desc">{desc}</div></div><label className="apt-ui-switch">
         <input type="checkbox" aria-label={`${title} power`} checked={!!current.on}
           onChange={event => onPatch({ [key]: { on: event.target.checked } })} /><span>{current.on ? "On" : "Off"}</span></label></div>
       <AptUnifiedRange label="Brightness" ariaLabel={brightnessLabel} value={(current.brightness ?? 1) * 100}
-        onChange={value => onPatch({ [key]: { brightness: value / 100, ...(value > 0 && !current.on ? { on: true } : {}) } })} />
-      <AptUnifiedRange label="Color temp" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
-        min={minimum} max={5000} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value } })} />
+        onChange={value => onPatch({ [key]: { brightness: value / 100, ...powered(value) } })} />
+      <AptUnifiedRange label="Color temp · assumed range" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
+        min={low} max={high} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value, ...powered(1) } })} />
       {key === "spotlight" && <div className="apt-ui-row"><span className="apt-ui-meta grow">Where it points is set in Aim.</span>
         <button type="button" className="apt-ui-button is-small" onClick={() => setTab("aim")}>Aim</button></div>}
     </section>;
   };
   return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Fixture lighting inspector">
     <header className="apt-ui-header"><div className="apt-ui-header-row">
-      <button type="button" className="apt-ui-button is-icon" aria-label="Back to room" onClick={onBack}><AptUnifiedIcon name="back" /></button>
+      <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
       <div className="apt-ui-grow"><h2 className="apt-ui-title">{fixture.label || fixture.fixture_id}</h2>
         <div className="apt-ui-sub">{homeName} · {isLit(fixture) ? "Light on" : "Light off"}</div></div>
       <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
@@ -2482,9 +2553,9 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <button type="button" key={String(on)} className="apt-ui-button is-small" onClick={() => onPatch({
           spotlight: { on }, downward: { on }, radials: aptUnifiedRadialPowerPatch(radials, on) })}>All {on ? "on" : "off"}</button>)}</div>
       {channel("spotlight", "Spot", "Hidden robotic spotlight", "Brightness", "Color temperature", 2700)}
-      {channel("downward", "Down", "Downward LED zone", "Down brightness", "Down color temperature", 2200)}
+      {channel("downward", "Down", "Soft pool below the socket", "Down brightness", "Down color temperature", 2200)}
       <section className="apt-ui-channel" aria-label="Radial channel"><div className="apt-ui-channel-head">
-        <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser</div></div>
+        <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser film</div></div>
         <label className="apt-ui-switch"><input type="checkbox" aria-label="Radial power" checked={radials.some(item => item.on)}
           onChange={event => onPatch({ radials: aptUnifiedRadialPowerPatch(radials, event.target.checked) })} />
           <span>{radials.some(item => item.on) ? "On" : "Off"}</span></label></div>
@@ -2498,7 +2569,8 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <div className="apt-ui-actions"><span className="apt-ui-meta grow">Light only</span>{["Toward walls", "Into the room"].map(label =>
           <button key={label} type="button" className="apt-ui-button is-small" disabled title="Available after radial heading commissioning">{label}</button>)}</div>
         <AptUnifiedRange label="Brightness" ariaLabel="Radial brightness" value={radialLevel * 100} onChange={value => patchRadials({ on: value > 0, brightness: value / 100 })} />
-        <AptUnifiedRange label="Color temp" ariaLabel="Radial color temperature" min={2200} max={5000} step={100} suffix=" K"
+        <AptUnifiedRange label="Color temp · assumed range" ariaLabel="Radial color temperature" min={range("radials", [2200, 5000])[0]}
+          max={range("radials", [2200, 5000])[1]} step={100} suffix=" K"
           value={selectedRadials[0]?.color_temp_kelvin ?? 3000} onChange={value => patchRadials({ color_temp_kelvin: value })} />
       </section>
       <p className="apt-ui-meta">Virtual preview · no hardware command sent.</p>
@@ -2513,6 +2585,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
       <div className="apt-ui-actions"><button type="button" className="apt-ui-button" disabled={!canUndo} onClick={onUndo}>Undo aim</button>
         <button type="button" className="apt-ui-button" disabled={!canRedo} onClick={onRedo}>Redo aim</button></div>
       {notice && <p role="status" className="apt-ui-copy">{notice}</p>}<p className="apt-ui-meta">Modeled aim · virtual preview only.</p>
+      {window.AptCommandLadder && <window.AptCommandLadder site="victoria" fixture={fixture} binding={commandBinding} />}
     </section>}
     {tab === "setup" && <section className="apt-ui-section" id="apt-ui-virtual-setup" role="tabpanel" aria-label="Fixture setup">
       <h3 className="apt-ui-heading">Fixture</h3><select className="apt-ui-input" aria-label="Virtual fixture" value={fixture.fixture_id} onChange={event => onSelect(event.target.value)}>
@@ -2589,7 +2662,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [stats, setStats] = useState(null);
   const [mode, setMode] = useState("points");
   const [modeLoading, setModeLoading] = useState(null);
+  const [litState, setLitState] = useState(null);
   const [modeError, setModeError] = useState(null);
+  const [modeProgress, setModeProgress] = useState(null);   // { mode, percent } for the loading notice
   const modeRequestRef = useRef(null);
   /* The loaded interior's disclosed placeholder (engine.scenePlaceholder), or
    * null for a real scan. Drives the "scan pending" badge and points-only. */
@@ -2752,6 +2827,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [semanticRoomStatus, setSemanticRoomStatus] = useState("");
   const [semanticStatusDeviceId, setSemanticStatusDeviceId] = useState(null);
   const [hoverId, setHoverId] = useState(null);
+  const [quickBusy, setQuickBusy] = useState(false);
+  const quickBusyRef = useRef(false);
   const [cardId, setCardId] = useState(null);
   const [inCamPose, setInCamPose] = useState(false);
   const [liveCam, setLiveCam] = useState(null);   // camera device while snapped
@@ -4481,6 +4558,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         const unsubs = [
           engine.on("progress", (p) => { if (current()) setProgress({ ...p }); }),
           engine.on("stats", (s) => { if (current()) setStats(s); }),
+          engine.modes.onLoadProgress?.(({ kind, loaded, total }) => {
+            const mode = kind === "splat" || kind === "sparkRenderer" ? "splat" : kind === "mesh" || kind === "collision" ? "mesh" : null;
+            if (mode && total && current()) setModeProgress({ mode, percent: Math.min(100, (loaded / total) * 100) });
+          }),
           engine.on("contextlost", () => { if (current()) showToast("graphics context lost — recovering"); }),
           engine.modes.onChange((next) => {
             if (modePresentationIsCurrent()) setMode(next);
@@ -4540,7 +4621,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           engine.rig.goTo?.({ az: preference.az, el: preference.el, zoom: preference.zoom, dur: 0 });
           if (!engine.scenePlaceholder && preference.mode !== engine.modes.mode) {
             try { await engine.modes.setMode(preference.mode, { duration: 0 }); }
-            catch (error) { if (current()) setModeError(String(error?.message || error)); }
+            catch (error) {
+              // Same shape as a picked mode's failure, so the toolbar can offer recovery.
+              if (current()) setModeError({ mode: preference.mode, source: "saved-view",
+                message: `${preference.mode === "splat" ? "photo" : preference.mode} unavailable`,
+                detail: String(error?.message || error || "asset load failed") });
+            }
           }
         }
         viewRestored = true;
@@ -5412,6 +5498,81 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     return () => { closed = true; unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(lease); };
   }, [selectionEngine, getDirectionalSnapshot, virtualFixtureId, apartmentSceneControlsEnabled]);
 
+  // APT-L02: restrained beams and the Down pool, drawn on their own UI overlay
+  // layer from published descriptors while a Den light is selected, like the
+  // directional composer. Equipment state and receivers are unchanged.
+  const lightPoolsInputRef = useRef(null), lightPoolsDrawRef = useRef(null);
+  lightPoolsInputRef.current = { selectedId: virtualFixtureControlsOpen ? virtualFixtureId : null,
+    floor: virtualFixtureDocument?.references?.floor || null, beams: "selected", pools: true };
+  useEffect(() => {
+    const engine = selectionEngine, host = hostRef.current;
+    if (!engine || !host || !virtualFixtureDocument || !apartmentSceneControlsEnabled || !virtualFixtureControlsOpen) return undefined;
+    let closed = false, poolLease = null;
+    const admitted = () => !closed && document.visibilityState !== "hidden" && engineRef.current === engine
+      && engine.siteId === "victoria" && host.isConnected;
+    const retire = owned => {
+      if (!owned || owned.retired) return;
+      owned.retired = true;
+      try { owned.view?.dispose(); } finally { owned.controller.abort(); owned.layer?.dispose(); }
+      if (poolLease === owned) poolLease = null;
+      lightPoolsDrawRef.current = null;
+    };
+    // Frames redraw at most 10 Hz: after a React-side change (marked dirty),
+    // or when the selected beam's published metadata (new objects on every
+    // renderer update) changed. Radial painting alone pays no readback.
+    const draw = (owned, nowMs = null) => {
+      if (!owned.view || owned.retired) return;
+      const overlay = engine.overlay;
+      if (nowMs != null) {
+        if (nowMs - (owned.drawnAt || 0) < 100) return;
+        owned.drawnAt = nowMs;
+        const id = lightPoolsInputRef.current?.selectedId;
+        if (owned.beamId !== id || !owned.beamNode?.parent) {
+          owned.beamId = id;
+          owned.beamNode = id ? overlay.virtualFixturesGroup?.getObjectByName("equipment-virtual-fixture:" + id)?.getObjectByName("robotic-spotlight") : null;
+        }
+        const beam = owned.beamNode?.userData;
+        const moved = !!beam && (beam.endpoint_m !== owned.lastEndpoint || beam.channel !== owned.lastChannel);
+        if (!moved && !owned.dirty) return;
+        if (beam) { owned.lastEndpoint = beam.endpoint_m; owned.lastChannel = beam.channel; }
+      }
+      owned.dirty = false;
+      const preview = overlay.virtualFixturesReadback?.();
+      const fixtures = preview?.status === "ready" && preview.visible ? preview.fixtures.map(item => {
+        const spot = overlay.virtualFixturesGroup?.getObjectByName("equipment-virtual-fixture:" + item.fixture_id)
+          ?.getObjectByName("robotic-spotlight")?.userData;
+        return { fixture_id: item.fixture_id, label: item.label, state: item.state,
+          anchor_m: overlay.virtualFixtureInteractionDescriptor?.(item.fixture_id)?.display_anchor_m,
+          beam: spot ? { origin_m: spot.beam_origin_m, endpoint_m: spot.endpoint_m, reach_m: spot.reach_m } : null };
+      }) : [];
+      owned.view.update(owned.module.lightPoolsPlan({ fixtures, ...lightPoolsInputRef.current }));
+    };
+    const start = async () => {
+      if (poolLease || !admitted()) return;
+      const owned = { controller: new AbortController(), layer: null, view: null, module: null, retired: false };
+      poolLease = owned;
+      const current = () => poolLease === owned && !owned.retired && !owned.controller.signal.aborted && admitted();
+      try {
+        const home3d = await window.Home3D.ready;
+        if (!current() || typeof home3d.loadLightPools !== "function") { retire(owned); return; }
+        owned.module = await home3d.loadLightPools();
+        if (!current()) { retire(owned); return; }
+        const layer = await engine.createUiOverlayLayer({ host, signal: owned.controller.signal, isCurrent: current,
+          onPresentationFrame: info => draw(owned, info.nowMs), onPresentationDispose: () => retire(owned) });
+        if (!layer || !current()) { layer?.dispose(); retire(owned); return; }
+        owned.layer = layer; owned.view = owned.module.createLightPools({ layer });
+        lightPoolsDrawRef.current = () => { owned.dirty = true; }; draw(owned);
+      } catch (_) { retire(owned); }
+    };
+    const unsubscribe = engine.on("running", ({ running }) => { if (running) void start(); else retire(poolLease); });
+    const onVisibility = () => { retire(poolLease); if (document.visibilityState !== "hidden") void start(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    void start();
+    return () => { closed = true; unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(poolLease); };
+  }, [selectionEngine, virtualFixtureBindingKey, apartmentSceneControlsEnabled, virtualFixtureControlsOpen]);
+  useEffect(() => { lightPoolsDrawRef.current?.(); },
+    [virtualFixturePreview, virtualFixtureId, virtualFixtureControlsOpen, virtualSpotlightsVisible]);
+
   const directionalDisplay = directionalView && !directionalView.readback().disposed && hostRef.current && window.AptDirectionalComposer
     && window.HomeApartmentDirectional?.identityKey(getDirectionalSnapshot(virtualFixtureId, { drawing: false })?.descriptor)
       === directionalView.readback().identity ? directionalView : null;
@@ -6005,7 +6166,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || "")) return;
       const actions = aimActionsRef.current;
       if (!actions?.enabled()) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if ((event.metaKey || event.ctrlKey) && (event.key === "z" || event.key === "Z")) {
         if (actions.history(event.shiftKey ? "redo" : "undo")) event.preventDefault();
         return;
       }
@@ -6625,7 +6786,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       return;
     }
     if ((liveCam || engine.rig.inCameraPose?.()) && !calibCam) {
-      showToast("camera view is locked to mesh - tap back to change modes");
+      showToast("camera view is locked to mesh - Return to room to change modes");
       return;
     }
     const siteId = engine.siteId;
@@ -6682,6 +6843,24 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       if (modeRequestRef.current === request) modeRequestRef.current = null;
     }
   }, [showToast, refitMobileOverview, liveCam, calibCam, selectedSiteInterior]);
+  // Progress belongs to the load in flight; it can arrive before the loading
+  // state commits (a joined read), so it is cleared only when loading ends.
+  useEffect(() => { if (!modeLoading) setModeProgress(null); }, [modeLoading]);
+  /* Tier-0 Lit (engine.setLit): Mesh first, then the relit mesh. Session
+   * only and never restored, so Lit is off by default on every device. */
+  const toggleLit = useCallback(async (next) => {
+    const engine = engineRef.current;
+    if (!engine?.setLit) return;
+    if (next && engine.modes.mode !== "mesh") await pickMode("mesh");
+    if (engineRef.current !== engine) return;
+    const state = await engine.setLit(!!next && engine.modes.mode === "mesh");
+    if (engineRef.current === engine) setLitState(state);
+  }, [pickMode]);
+  useEffect(() => {
+    const engine = engineRef.current;
+    setLitState(engine?.litState?.() || null);
+    return engine?.on?.("lit", (state) => { if (engineRef.current === engine) setLitState(state); });
+  }, [phase, selectedSiteId]);
 
   /*
    * The +/- controls stay mounted through a handoff, but the already-targeted
@@ -6836,7 +7015,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     }
 
     if (rig.inCameraPose?.()) {
-      showToast("camera view is locked - tap back before zooming");
+      showToast("camera view is locked - Return to room before zooming");
       return;
     }
     if (direction !== "outward" || !rig.atWorldBoundary?.() || !worldZoomEnabled) {
@@ -7918,17 +8097,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     spatialTravelIntentRef.current, engineRef.current, apartmentAuthorityKey]);
 
   const callSvc = useCallback(async (domain, service, data) => {
-    if (rehearsalIsolated || window.HomeMapRehearsalOfflineState?.active) return;
+    // Resolves true only when Home Assistant accepted the call; guards are unchanged.
+    if (rehearsalIsolated || window.HomeMapRehearsalOfflineState?.active) return false;
     if (!window.HomeApartmentSiteSession.canControlEcho({
         sceneSiteId: engineRef.current?.siteId,
         selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
         transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready"
           || (window.HomeSpatialViewport?.getSite?.("echo")?.contentRevision || "legacy") !== (engineRef.current?.contentRevision || "legacy") })) {
-      showToast("Home controls are not configured for this interior"); return;
+      showToast("Home controls are not configured for this interior"); return false;
     }
-    if (modelScopeRef.current?.authorityKey !== workspaceAuthorityRef.current.key) return;
+    if (modelScopeRef.current?.authorityKey !== workspaceAuthorityRef.current.key) return false;
     const client = window.__hav_haClient;
-    if (!client || simActive) { showToast("sim mode - controls disabled"); return; }
+    if (!client || simActive) { showToast("sim mode - controls disabled"); return false; }
     const engine = engineRef.current;
     const operation = spatialTravelIntentRef.current;
     const authority = workspaceAuthorityRef.current.key;
@@ -7942,7 +8122,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const dev = entityId ? (model.devices || []).find((d) => d.ha_entity_id === entityId) : null;
     try {
       await window.HomeApartmentData.callService(client, domain, service, data, { siteId: "echo", isCurrent: () => current() && isControlCurrent() });
-      if (!current()) return;
+      if (!current()) return true;
     if (entityId && optimistic) {
       statesRef.current[entityId] = optimistic;
       if (dev) engineRef.current?.overlay.setDeviceState(dev.id, optimistic);
@@ -7954,9 +8134,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           let verified = null;
           for (const delayMs of [350, 900, 1600]) {
             await aptDelay(delayMs);
-            if (!current()) return;
+            if (!current()) return true;
             const states = await window.HomeApartmentData.readStates(client, [entityId], { siteId: "echo" });
-            if (!current()) return;
+            if (!current()) return true;
             verified = states[entityId] || null;
             if (verified) {
               statesRef.current[entityId] = verified;
@@ -7972,9 +8152,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           console.warn("[apartment] service state readback failed", e);
         }
       }
+      return true;
     } catch (e) {
-      if (!current()) return;
+      if (!current()) return false;
       showToast(e?.message?.includes("Travel Mode") ? e.message : `${entityId || domain} didn't respond`, { tone: "error" });
+      return false;
     }
   }, [simActive, showToast, model.devices, isControlCurrent]);
 
@@ -8127,6 +8309,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     if (!apartmentDeviceControlsEnabled) return false;
     const eng = engineRef.current;
     if (!eng) return false;
+    if (!aptCameraViewAvailability(eng.siteId, [dev]).available) return false;
     const seq = ++flySeqRef.current;
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
     const alignment = aptCameraAlignment(dev);
@@ -8467,7 +8650,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         };
       },
       flyFirstCamera: () => {
-        const dev = (model.devices || []).find((d) => d.type === "camera" || aptCameraCanFeed(d));
+        const devices = model.devices || [];
+        const dev = devices.find((d) => d.type === "camera") || devices.find((d) => aptCameraCanFeed(d));
         return dev ? flyToDeviceView(dev) : false;
       },
       flyFirstCalibratedCamera: () => {
@@ -8537,13 +8721,22 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     ? virtualFixtureItems.map(fixture => ({ id: fixture.fixture_id, label: fixture.label || fixture.fixture_id,
       ariaLabel: `Select ${fixture.label || fixture.fixture_id}`,
       room_id: fixture.room_id, selected: virtualFixtureControlsOpen && virtualFixtureId === fixture.fixture_id,
+      summary: window.HomeApartmentQuick?.virtualSummary(fixture.state),
       power: [fixture.state?.spotlight, fixture.state?.downward, ...(fixture.state?.radials || [])].some(channel => channel?.on === true) ? "on"
         : fixture.state?.spotlight?.on === false && fixture.state?.downward?.on === false
           && fixture.state?.radials?.length === 6 && fixture.state.radials.every(channel => channel.on === false) ? "off" : "unknown" }))
     : (model.devices || []).filter(device => device.ha_entity_id?.startsWith("light.")).map(device => ({
       id: device.id, label: device.name || device.label || device.id, room_id: device.room_id, selected: cardId === device.id,
+      summary: window.HomeApartmentQuick?.lightSummary(device.ha_entity_id, statesRef.current[device.ha_entity_id]),
       power: ["on", "off"].includes(statesRef.current[device.ha_entity_id]?.state) ? statesRef.current[device.ha_entity_id].state : "unknown",
     })) }) || [];
+  // List hover highlights the same Echo marker as canvas hover; it never selects.
+  const hoverRoomDevice = id => {
+    const context = getRoomInspectorContext();
+    if (!context || selectedSiteId !== "echo" || virtualFixtureDocument) return;
+    const next = id && (model.devices || []).some(device => device.id === id) ? id : null;
+    setHoverId(next); context.engine.overlay.setHover?.(next);
+  };
   const roomPowerDisabledReason = !apartmentSceneControlsEnabled ? "Room controls unavailable"
     : virtualFixtureDocument ? "" : !apartmentDeviceControlsEnabled || connection !== "online" || simActive
       ? "Home Assistant controls unavailable" : "";
@@ -8553,6 +8746,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const group = roomLightGroups.find(group => group.id === roomId);
     if (!group || group.power === "unknown") return false;
     if (virtualFixtureDocument) {
+      const before = window.HomeApartmentQuick?.virtualSnapshot(context.preview.fixtures
+        .filter(fixture => group.lights.some(light => light.id === fixture.fixture_id))) || null;
       for (const light of group.lights) {
         if (getRoomInspectorContext()?.engine !== context.engine) return false;
         const fixture = context.preview.fixtures.find(fixture => fixture.fixture_id === light.id);
@@ -8563,15 +8758,97 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         if (!actual || actual.spotlight?.on !== on || actual.downward?.on !== on
             || actual.radials?.length !== 6 || actual.radials.some(zone => zone.on !== on)) return false;
       }
+      offerVirtualUndo(`${group.label} ${on ? "on" : "off"}`, before, context);
       return true;
     }
     const entityIds = [...new Set(group.lights.map(light => (model.devices || []).find(device => device.id === light.id)?.ha_entity_id)
       .filter(entityId => typeof entityId === "string" && entityId.startsWith("light.")))];
+    // The existing guarded loop is unchanged; Undo is offered only for calls Home Assistant accepted.
+    const Q = window.HomeApartmentQuick, before = Q ? Q.snapshot(statesRef.current, entityIds) : null;
+    let sent = 0;
     for (const entityId of entityIds) {
       if (getRoomInspectorContext()?.engine !== context.engine || !isControlCurrent()) return false;
-      await callSvc("light", on ? "turn_on" : "turn_off", { entity_id: entityId });
+      if (await callSvc("light", on ? "turn_on" : "turn_off", { entity_id: entityId }) === true) sent++;
     }
-    return getRoomInspectorContext()?.engine === context.engine;
+    const done = getRoomInspectorContext()?.engine === context.engine;
+    if (done && before && sent) offerEchoUndo({ label: `${group.label} ${on ? "on" : "off"}`, note: "" }, before, context);
+    return done;
+  };
+  /* Quick and room switches share one exact-Undo path (APT-R03). Echo calls go
+   * through callSvc, so site, currentness and Travel Mode guards are unchanged. */
+  const quickBlock = window.HomeApartmentQuick?.quickBlock({ connection, sim: simActive })
+    || { all: "Quick controls unavailable", energizing: "Quick controls unavailable" };
+  // Chips come from this home's own HA scenes and scripts (registry snapshot).
+  const quickChips = selectedSiteId === "echo" && !virtualFixtureDocument && !simActive
+    ? window.HomeApartmentQuick?.quickChips(registry.states || {}) || [] : [];
+  const echoQuickCurrent = context => () => getRoomInspectorContext()?.engine === context.engine && isControlCurrent() === true;
+  const undoEchoQuick = async (plan, before, current) => {
+    const Q = window.HomeApartmentQuick;
+    if (!Q || quickBusyRef.current || !current()) return false;
+    quickBusyRef.current = true; setQuickBusy(true);
+    try {
+      const result = await Q.undoQuick(before, { dispatch: callSvc, isCurrent: current });
+      if (!current()) return false;
+      // "Undone" means Home Assistant's readback matches the exact snapshot.
+      const confirmed = before.filter(entry => ["on", "off"].includes(entry.state))
+        .every(entry => Q.matchesSnapshot(entry, statesRef.current[entry.entity_id]));
+      if (result.ok) showToast(!result.exact
+        ? `${plan.label} undone; ${result.skipped.length} unavailable light${result.skipped.length === 1 ? " was" : "s were"} not restored`
+        : confirmed ? `${plan.label} undone` : `${plan.label} undo sent; Home Assistant hasn't confirmed every light yet`);
+      else if (result.sent) showToast(`${plan.label} was only partly undone`, { tone: "error" });
+      return result.ok;
+    } finally { quickBusyRef.current = false; setQuickBusy(false); }
+  };
+  const runEchoQuick = async (action, context = getRoomInspectorContext()) => {
+    const Q = window.HomeApartmentQuick;
+    if (!Q || !context || selectedSiteId !== "echo" || virtualFixtureDocument || quickBusyRef.current) return false;
+    const plan = Q.planQuick(action, { devices: model.devices || [], states: { ...registry.states, ...statesRef.current } });
+    if (!plan) return false;
+    const reason = quickBlock.all || (plan.energizing ? quickBlock.energizing : "");
+    if (reason) { showToast(reason, { tone: "error" }); return false; }
+    const current = echoQuickCurrent(context);
+    quickBusyRef.current = true; setQuickBusy(true);
+    let result;
+    try {
+      // Undo needs the live state of every light a scene touches, mapped or not.
+      let states = statesRef.current;
+      const unmapped = plan.targets.filter(id => !states[id]);
+      if (unmapped.length && window.__hav_haClient && typeof window.HomeApartmentData.readStates === "function") {
+        try { states = { ...states, ...await window.HomeApartmentData.readStates(window.__hav_haClient, unmapped, { siteId: "echo" }) }; }
+        catch (_) { /* Unread lights are reported as not restorable. */ }
+        if (!current()) return false;
+      }
+      result = await Q.applyQuick(plan, { states, dispatch: callSvc, isCurrent: current });
+    } finally { quickBusyRef.current = false; setQuickBusy(false); }
+    if (!result.sent || !current()) return false;
+    offerEchoUndo({ ...plan, label: `${plan.label}${result.ok ? "" : " · partly applied"}` }, result.before, context);
+    return result.ok;
+  };
+  const offerEchoUndo = (plan, before, context) => {
+    const current = echoQuickCurrent(context);
+    showToast(`${plan.label}${plan.note ? `. ${plan.note}` : ""}`, { actionLabel: "Undo", timeoutMs: 6000, isCurrent: current,
+      action: () => { void undoEchoQuick(plan, before, current); } });
+  };
+  // The Den's modeled batches restore their exact channel snapshot; nothing is sent.
+  const offerVirtualUndo = (label, before, context) => {
+    const Q = window.HomeApartmentQuick;
+    if (!Q || !before?.length) return;
+    const current = () => getRoomInspectorContext()?.engine === context.engine;
+    showToast(`${label} · modeled`, { actionLabel: "Undo", timeoutMs: 6000, isCurrent: current, action: () => {
+      for (const entry of before) changeVirtualFixtureByHand(Q.virtualRestorePatch(entry), entry.fixture_id);
+      const fixtures = getRoomInspectorContext()?.preview.fixtures || [];
+      const exact = before.every(entry => Q.virtualMatches(entry, fixtures.find(fixture => fixture.fixture_id === entry.fixture_id)?.state));
+      showToast(exact ? `${label} undone` : `${label} could not be undone exactly`, exact ? undefined : { tone: "error" });
+    } });
+  };
+  const setVirtualQuickPower = on => {
+    const context = getRoomInspectorContext();
+    if (!context || !virtualFixtureDocument) return false;
+    const before = window.HomeApartmentQuick?.virtualSnapshot(context.preview.fixtures) || null;
+    for (const fixture of virtualFixtureItems) changeVirtualFixtureByHand({ spotlight: { on }, downward: { on },
+      radials: aptUnifiedRadialPowerPatch(fixture.state?.radials || [], on) }, fixture.fixture_id);
+    offerVirtualUndo(`All ${on ? "on" : "off"}`, before, context);
+    return true;
   };
   const openNamedAimEditor = useCallback(id => {
     const context = getRoomInspectorContext();
@@ -8583,7 +8860,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   }, [getRoomInspectorContext, model, apartmentPlacementControlsEnabled, selectedSiteId, apartmentAuthorityKey,
     roomInspectorFrame, roomInspectorRegistration, selectedContentRevision, onShowShellControls]);
   // Named aims and Echo's engineered light on the shared aim path
-  // (home-apartment-named-aim.jsx): this view supplies its state and guarded
+  // (home-apartment-aim-library.jsx): this view supplies its state and guarded
   // callbacks and mounts what the hook returns.
   const echoNamedAims = (window.useAptEchoNamedAims || aptNoEchoNamedAims)({ open, siteId: selectedSiteId, engine: engineRef.current,
     host: hostRef.current, model, setModel, saveModel, saveStatus, markModelDirty, sim: simActive, store: aimProposals, aimMode, aimFixtureId,
@@ -8596,14 +8873,130 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     disabledReason={model._equipment_registration ? "Named-aim editing is unavailable for this registration."
       : !apartmentPlacementControlsEnabled || !apartmentSceneControlsEnabled ? "Setup is unavailable for this room." : ""} />;
   const openUnifiedSetup = useCallback(() => {
+    // APT-U01: Setup is a pressed toggle; pressing it again leaves like Done.
+    if (editing) { setEditing(false); return; }
     if (!apartmentSceneControlsEnabled || !(apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)) return;
     setEditorTargetEntry(null);
     setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
     onShowShellControls?.();
-  }, [apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  }, [editing, apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  // APT-U01: Setup › Cameras and sensors starts the existing calibration. It
+  // leaves Setup, flies to the camera view, and once that flight has ended
+  // (settled or timed out) runs the same steps as the camera-view calibrate
+  // button.
+  // APT-U03: Setup › Home Assistant Flash. The same Echo, authority and
+  // currentness gates as callSvc, then the shared guarded dispatch (site,
+  // rehearsal, Travel Mode read from Home Assistant). Never queued.
+  const flashFromSetup = useCallback(device => {
+    const engine = engineRef.current, operation = spatialTravelIntentRef.current, authority = workspaceAuthorityRef.current.key;
+    const current = () => engineRef.current === engine && spatialTravelIntentRef.current === operation
+      && workspaceAuthorityRef.current.key === authority && modelScopeRef.current?.authorityKey === authority
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo" && isControlCurrent()
+      && window.HomeApartmentSiteSession.canControlEcho({ sceneSiteId: engineRef.current?.siteId,
+        selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
+        transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready" });
+    if (!window.AptSetupLinks) return Promise.resolve({ ok: false, reason: "Flash is unavailable; nothing was sent." });
+    return window.AptSetupLinks.flash({ client: rehearsalIsolated || simActive || window.HomeMapRehearsalOfflineState?.active ? null : window.__hav_haClient,
+      entityId: device?.ha_entity_id, siteId: engine?.siteId, isCurrent: current });
+  }, [rehearsalIsolated, simActive, isControlCurrent]);
+  const setupCalibrationRef = useRef(null);
+  const calibrateFromSetup = useCallback(device => {
+    if (!device || simActive || mobile || !window.HomeApartmentCalibrate || !device.camera?.frigate_name) return false;
+    setupCalibrationRef.current = device.id;
+    setEditing(false);
+    if (flyToDeviceView(device)) return true;
+    setupCalibrationRef.current = null; return false;
+  }, [simActive, mobile, flyToDeviceView]);
+  useEffect(() => {
+    const pending = setupCalibrationRef.current;
+    if (!pending) return;
+    if (!liveCam || liveCam.id !== pending || calibCam || !apartmentSceneControlsEnabled) { setupCalibrationRef.current = null; return; }
+    if (liveFeedStatus === "flying") return;
+    setupCalibrationRef.current = null;
+    setLiveOn(false);
+    const e = engineRef.current;
+    if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
+    e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+    aptBeginDollhouseCalibration(e);
+    calibPairCountRef.current = 0; calibEscArmRef.current = 0;
+    setCalibCam(liveCam);
+  }, [liveCam, calibCam, liveFeedStatus, apartmentSceneControlsEnabled]);
   const unifiedSelectionLabel = virtualFixtureControlsOpen && selectedVirtualFixture
     ? selectedVirtualFixture.label || selectedVirtualFixture.fixture_id
     : (model.devices || []).find(device => device.id === cardId)?.name || null;
+  // Chat bound to the room (APT-C02/C03): the current home's names for chips,
+  // presentation-only hover and select, and one modeled change path. A Victoria
+  // patch goes through changeVirtualFixture like any hand change; nothing here
+  // calls a service. Every call re-checks the home and room key it was given.
+  const chatRoomKey = selectedSiteId === "victoria"
+    ? virtualFixtureDocument ? `victoria:${selectedContentRevision}:${virtualFixtureDocument.revision}:${virtualFixtureDocument.digest}` : ""
+    : selectedSiteId === "echo" && selectedContentRevision ? `echo:${selectedContentRevision}` : "";
+  const chatRoomLights = selectedSiteId === "victoria"
+    ? virtualFixtureItems.map(fixture => ({ id: fixture.fixture_id, label: fixture.label || fixture.fixture_id }))
+    : (model.devices || []).filter(device => device.ha_entity_id?.startsWith("light."))
+      .map(device => ({ id: device.id, label: device.name || device.label || device.id, entityId: device.ha_entity_id }));
+  const chatRoomAims = selectedSiteId === "echo"
+    ? (model.targets || []).filter(target => typeof target.id === "string").map(target => ({ id: target.id, label: target.name || target.label || target.id }))
+    : [];
+  const chatRoomSelection = selectedSiteId === "victoria"
+    ? virtualFixtureControlsOpen && selectedVirtualFixture ? { kind: "light", id: selectedVirtualFixture.fixture_id } : null
+    : cardId && chatRoomLights.some(light => light.id === cardId) ? { kind: "light", id: cardId } : null;
+  const chatRoomSignature = chatRoomKey && JSON.stringify([selectedSiteId, chatRoomKey, chatRoomLights, chatRoomAims, chatRoomSelection]);
+  const chatRoomActionsRef = useRef(null);
+  const chatRoomHoverRef = useRef(null);
+  const chatRoomIsCurrent = ref => !!chatRoomKey && !!ref && ref.siteId === selectedSiteId && ref.key === chatRoomKey;
+  const chatRoomHover = ref => {
+    const engine = engineRef.current;
+    if (!engine) return false;
+    if (ref === null) {
+      const previous = chatRoomHoverRef.current;
+      chatRoomHoverRef.current = null;
+      if (previous?.kind === "light") { engine.overlay.setHover(null); setHoverId(null); }
+      if (previous?.kind === "aim") engine.overlay.setTargetHover?.(null, aimDestination?.kind === "named" ? aimDestination.id : null);
+      return true;
+    }
+    // Victoria's virtual fixtures have no renderer hover seam yet.
+    if (!chatRoomIsCurrent(ref) || selectedSiteId !== "echo" || !getRoomInspectorContext()) return false;
+    if (ref.kind === "light" && chatRoomLights.some(light => light.id === ref.id)) {
+      engine.overlay.setHover(ref.id); setHoverId(ref.id); chatRoomHoverRef.current = ref; return true;
+    }
+    if (ref.kind === "aim" && chatRoomAims.some(aim => aim.id === ref.id) && engine.overlay.setTargetHover) {
+      engine.overlay.setTargetHover(ref.id, aimDestination?.kind === "named" ? aimDestination.id : null);
+      chatRoomHoverRef.current = ref; return true;
+    }
+    return false;
+  };
+  const chatRoomSelect = ref => {
+    if (!chatRoomIsCurrent(ref) || ref.kind !== "light") return false;
+    return selectedSiteId === "victoria" ? selectVirtualFixture(ref.id) : selectRoomDevice(ref.id);
+  };
+  const chatRoomModeledLight = ref => {
+    if (!chatRoomIsCurrent(ref) || selectedSiteId !== "victoria" || ref.kind !== "light"
+        || !virtualFixtureControlsOpen || virtualFixtureId !== ref.id) return null;
+    const fixture = getVirtualFixtureSelectionContext()?.preview.fixtures.find(item => item.fixture_id === ref.id);
+    return fixture ? { state: fixture.state, color_temp_ranges: fixture.color_temp_ranges } : null;
+  };
+  chatRoomActionsRef.current = {
+    hover: chatRoomHover,
+    select: chatRoomSelect,
+    readModeledLight: chatRoomModeledLight,
+    applyModeledPatch: (ref, patch) => {
+      // A Chat-originated write is a hand change too (Den sign-off, 2026-10-19).
+      if (!chatRoomModeledLight(ref) || changeVirtualFixtureByHand(patch, ref.id) !== true) return null;
+      const after = chatRoomModeledLight(ref);
+      return after ? { ok: true, state: after.state } : null;
+    },
+  };
+  const chatRoomSnapshot = useMemo(() => {
+    if (!chatRoomSignature) return null;
+    const [siteId, key, lights, namedAims, selection] = JSON.parse(chatRoomSignature);
+    const call = (name, fallback) => (...args) => {
+      try { return chatRoomActionsRef.current?.[name]?.(...args) ?? fallback; } catch (_) { return fallback; }
+    };
+    return Object.freeze({ schema: "home-apartment-chat-room-1", siteId, key, lights, namedAims, selection,
+      hover: call("hover", false), select: call("select", false), adjust: call("select", false),
+      readModeledLight: call("readModeledLight", null), applyModeledPatch: call("applyModeledPatch", null) });
+  }, [chatRoomSignature]);
   useEffect(() => {
     if (!unifiedShell || !onShellState) return;
     onShellState({ siteId: selectedSiteId, sites: window.HomeSpatialViewport?.getSites?.() || [], phase,
@@ -8615,17 +9008,40 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
       openSetup: openUnifiedSetup, aimBridge: echoNamedAims.chatBridge || null,
-      selectHome: id => travelToSite(id, { presentation: "interior" }) });
+      selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
-    unifiedDockCollapsed, unifiedDockExpanded, echoNamedAims.chatBridge]);
+    unifiedDockCollapsed, unifiedDockExpanded, chatRoomSnapshot, echoNamedAims.chatBridge]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);
   React.useLayoutEffect(() => {
     if (unifiedShell && shellControlsHost) shellControlsHost.scrollTop = 0;
   }, [unifiedShell, shellControlsHost, cardId, virtualFixtureId, virtualFixtureControlsOpen, aimMode, editing]);
+  /* Room toolbar inset for the renderer's fit (aptRoomToolbarInsets). */
+  React.useLayoutEffect(() => {
+    const host = hostRef.current, engine = engineRef.current;
+    if (!open || phase !== "ready" || !host?.parentElement || typeof engine?.setViewInsets !== "function") return undefined;
+    let toolbar = null, raf = 0;
+    const resize = new ResizeObserver(() => measure());
+    function measure() {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const next = host.parentElement?.querySelector(".apt-ui-room-toolbar") || null;
+        if (next !== toolbar) { if (toolbar) resize.unobserve(toolbar); toolbar = next; if (toolbar) resize.observe(toolbar); }
+        if (engineRef.current === engine) engine.setViewInsets(aptRoomToolbarInsets(host));
+      });
+    }
+    const children = new MutationObserver(measure);
+    children.observe(host.parentElement, { childList: true });
+    resize.observe(host);
+    measure();
+    return () => {
+      cancelAnimationFrame(raf); children.disconnect(); resize.disconnect();
+      if (engineRef.current === engine) engine.setViewInsets({ top: 0, right: 0, bottom: 0, left: 0 });
+    };
+  }, [open, phase, unifiedShell, selectedSiteId]);
 
   if (!open) return null;
 
@@ -8637,7 +9053,27 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const cameraSnap = cameraTop && !calibCam;
   const cameraAlignment = liveCam ? aptCameraAlignment(liveCam) : null;
   const mobileCameraSnap = mobile && cameraTop;
-  const hideViewHud = mobile ? cameraTop : cameraSnap;
+  /* Unified Home keeps its room toolbar through a camera view and says where
+   * the view is from in the shared hint bar; calibration keeps its own tools. */
+  const unifiedCameraView = !!(unifiedShell && spatialScale === "apartment" && cameraSnap);
+  const hideViewHud = unifiedShell && spatialScale === "apartment" && !calibCam ? false : mobile ? cameraTop : cameraSnap;
+  const canCalibrateCamera = !!(cameraTop && liveCam && !mobile && !simActive && window.HomeApartmentCalibrate);
+  const startCameraCalibration = () => {
+    if (!apartmentSceneControlsEnabled) return;
+    setLiveOn(false);
+    const e = engineRef.current;
+    if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
+    e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+    // snapped pose sits point-blank in the geometry — pull back to
+    // the overview so the room is visible and orbit/zoom unlock
+    aptBeginDollhouseCalibration(e);
+    calibPairCountRef.current = 0; calibEscArmRef.current = 0;
+    setCalibCam(liveCam);
+  };
+  const returnToRoom = () => {
+    if (!apartmentSceneControlsEnabled) return;
+    exitCameraPose(); restoreApartmentOperationFocus("camera");
+  };
   /* Navigation chrome stays fixed above the spatial effect. During a handoff,
    * the already-targeted direction is the only impossible action; the opposite
    * button remains enabled and retargets the one live reversible clock. */
@@ -9305,7 +9741,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       </div>
 
       {/* Classic tools remain available while a camera pose is active. */}
-      {!editing && (!unifiedShell || cameraTop) && (
+      {!editing && (!unifiedShell || (cameraTop && !!calibCam) || (cameraTop && spatialScale !== "apartment")) && (
         <div data-apt-legacy-toolbar="1" style={{
           position: "absolute", top: 0, left: 0, right: 0, display: "flex",
           flexDirection: mobileCameraSnap ? "column" : "row",
@@ -9407,23 +9843,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             width: mobileCameraSnap ? "100%" : "auto",
           }}>
             {cameraTop && (
-              <AptHudButton label="← back" disabled={!apartmentSceneControlsEnabled}
+              <AptHudButton label="Return to room" disabled={!apartmentSceneControlsEnabled}
                 onClick={() => { if (apartmentSceneControlsEnabled) exitCameraPose(); }} mobile={mobile} />
             )}
-            {cameraTop && liveCam && !mobile && !simActive && window.HomeApartmentCalibrate && (
+            {canCalibrateCamera && (
               <AptHudButton label="calibrate" active={!!calibCam}
-                disabled={!apartmentSceneControlsEnabled} onClick={() => {
-                if (!apartmentSceneControlsEnabled) return;
-                setLiveOn(false);
-                const e = engineRef.current;
-                if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
-                e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
-                // snapped pose sits point-blank in the geometry — pull back to
-                // the overview so the room is visible and orbit/zoom unlock
-                aptBeginDollhouseCalibration(e);
-                calibPairCountRef.current = 0; calibEscArmRef.current = 0;
-                setCalibCam(liveCam);
-              }} mobile={mobile} />
+                disabled={!apartmentSceneControlsEnabled} onClick={startCameraCalibration} mobile={mobile} />
             )}
             {!cameraTop && apartmentDeviceControlsEnabled && (
               <>
@@ -9470,7 +9895,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           </div>
         </div>
       )}
-      {phase === "error" && (
+      {phase === "error" && unifiedShell && (() => {
+        const Notice = window.HomeApartmentUI.Notice;
+        const other = homeSites.find(site => site.id !== selectedSiteId && site.sceneAvailable);
+        return <Notice kind="renderer" title={`${selectedSiteName}'s room didn't load`} label="Room recovery" actions={[
+          { label: "Retry", ariaLabel: "Retry room", primary: true, onClick: () => { void switchInteriorHome(selectedSiteId, { force: true }); } },
+          other && { label: `Open ${other.shortName}`, onClick: () => { void travelToSite(other.id, { presentation: "interior" }); } },
+        ]}>
+          <p>The room renderer stopped{error ? `: ${error}` : ""}.</p>
+          <p>Nothing else changed, and Home won't switch homes on its own.</p>
+        </Notice>;
+      })()}
+      {phase === "error" && !unifiedShell && (
         <div style={{ position: "absolute", left: 0, right: 0, top: "44%", textAlign: "center",
                       fontFamily: APT_FONT_MONO, fontSize: 11, color: "var(--hg-crit)" }}>
           renderer failed — {error}
@@ -9523,8 +9959,26 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           nativePacks={!liveShadow && window.HomeContentPacks?.isNative ? contentPacks.filter(pack => pack.manifest.siteId === selectedSiteId) : null}
           packVersion={contentPacks.find(pack => pack.active && pack.manifest.siteId === selectedSiteId)?.manifest.revision || ""}
           packBusy={contentPackBusy} onPackChange={version => { void changeContentPack(version); }}
-          hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible} />
+          hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible}
+          homeId={selectedSiteId} homeName={selectedSiteEntry?.shortName} fixtureCount={virtualFixtureItems.length}
+          fixtureSelected={virtualFixtureControlsOpen && virtualSpotlightsVisible}
+          hasPerception={selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception}
+          modeProgress={modeProgress} onDismissNotice={() => setModeError(null)}
+          viewLockedReason={unifiedCameraView ? "Camera view · Return to room to orbit or fit" : null}
+          about={{ homeId: selectedSiteId, source: sourceMeta, revision: model.revision, liveShadow, simActive, trackerStatus,
+            hasVirtualFixtures: !!virtualFixtureDocument, fixtureCount: virtualFixtureItems.length,
+            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception,
+            cameraViews: aptCameraViewAvailability(selectedSiteId, model.devices) }}
+          lit={litState?.active ? litState : null} onLit={virtualFixtureDocument ? next => { if (apartmentSceneControlsEnabled) void toggleLit(next); } : null} />
       )}
+
+      {unifiedCameraView && (() => {
+        const HintBar = window.HomeApartmentUI.HintBar;
+        return <HintBar kind="camera-view" detail={cameraAlignment ? cameraAlignment.short.replace(/^camera - /, "") : null} actions={[
+          canCalibrateCamera && { label: "Calibrate", disabled: !apartmentSceneControlsEnabled, onClick: startCameraCalibration },
+          { label: "Return to room", primary: true, escape: true, disabled: !apartmentSceneControlsEnabled, onClick: returnToRoom },
+        ]}>Viewing from {liveCam?.name || liveCam?.label || liveCam?.id || "camera"}</HintBar>;
+      })()}
 
       {/* Established HUD stays intact for Classic and the wider world view. */}
       {!editing && !hideViewHud && (!unifiedShell || spatialScale !== "apartment") && (
@@ -9807,7 +10261,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         })}
 
       {/* labels + cards layer */}
-      {phase === "ready" && spatialScale === "apartment" && !editing
+      {phase === "ready" && spatialScale === "apartment" && !editing && !unifiedCameraView
         && apartmentSceneControlsEnabled && apartmentDeviceControlsEnabled && (
         <>
           {hoverDevice && !cardDevice && (
@@ -9817,7 +10271,18 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             <window.AptPersonLabel track={track} screen={anchors.__person} />
           )}
           {track && !track.pos && <window.AptRoomChip track={track} />}
-          {cardDevice && !aimMode && (
+          {cardDevice && !aimMode && unifiedShell && window.AptEchoLightInspector && window.HomeApartmentQuick?.isEchoLightDevice(cardDevice) && (
+            <AptHomePanelSlot enabled={true} target={shellControlsHost}><window.AptEchoLightInspector
+              homeName={selectedSiteName} device={cardDevice} state={cardState} connection={connection} sim={simActive}
+              roomName={(model.zones || []).find(zone => zone.id === cardDevice.room_id)?.name}
+              engineered={cardDevice.fixture_kind === "engineered_gimbal_v1"}
+              onService={callSvc} onBack={() => setCardId(null)}
+              aimDisabledReason={apartmentDeviceControlsEnabled ? "" : "Aiming is unavailable for this room."}
+              onAim={() => { if (!apartmentDeviceControlsEnabled) return; setAimFixtureId(cardDevice.id); setCardId(null); setAimMode(true); onShowShellControls?.(); }}
+              onSetup={openUnifiedSetup} canSetup={apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)}
+            /></AptHomePanelSlot>
+          )}
+          {cardDevice && !aimMode && !(unifiedShell && window.AptEchoLightInspector && window.HomeApartmentQuick?.isEchoLightDevice(cardDevice)) && (
             <AptHomePanelSlot enabled={unifiedShell} target={shellControlsHost} className="apt-home-card"><window.AptControlCard
               device={cardDevice}
               state={cardState}
@@ -9892,12 +10357,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             <h2 className="apt-ui-title">{selectedSiteName}</h2><div className="apt-ui-sub">{(model.devices || []).filter(device => device.ha_entity_id).length} mapped devices</div>
             <div className="apt-ui-actions"><span className="apt-ui-badge" data-state={connection === "online" && apartmentDeviceControlsEnabled ? "current" : "unavailable"}>
               Home Assistant {connection === "online" && apartmentDeviceControlsEnabled ? "connected" : "unavailable"}</span></div>
-          </header><section className="apt-ui-section"><h3 className="apt-ui-heading">Quick</h3>
+          </header>{window.AptQuickControls ? <window.AptQuickControls chips={quickChips} block={quickBlock} busy={quickBusy}
+            onAll={on => { void runEchoQuick({ kind: "all", on }); }} onChip={entityId => { void runEchoQuick({ kind: "chip", entity_id: entityId }); }}>
             <button type="button" className="apt-ui-button" disabled={!apartmentDeviceControlsEnabled}
               onClick={() => { if (!apartmentDeviceControlsEnabled) return; setCardId(null); setAimMode(true); onShowShellControls?.(); }}>Aim a light</button>
-          </section>
+          </window.AptQuickControls> : <section className="apt-ui-section"><h3 className="apt-ui-heading">Quick</h3>
+            <button type="button" className="apt-ui-button" disabled={!apartmentDeviceControlsEnabled}
+              onClick={() => { if (!apartmentDeviceControlsEnabled) return; setCardId(null); setAimMode(true); onShowShellControls?.(); }}>Aim a light</button>
+          </section>}
           {window.AptRoomLightGroups && <window.AptRoomLightGroups groups={roomLightGroups} onSelect={selectRoomDevice}
-            onPower={setRoomLightsPower} disabledReason={roomPowerDisabledReason} />}
+            onPower={setRoomLightsPower} disabledReason={roomPowerDisabledReason} onHover={hoverRoomDevice} />}
           {namedAims}
           <section className="apt-ui-section"><h3 className="apt-ui-heading">Other devices</h3>
             <ul className="apt-ui-list">{(model.devices || []).filter(device => device.ha_entity_id && !device.ha_entity_id.startsWith("light.")).map(device => {
@@ -9919,14 +10388,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
             tab={virtualInspectorTab} onTabChange={changeVirtualInspectorTab} onSelect={selectVirtualFixture}
-            onBack={clearVirtualFixtureSelection}
+            onBack={clearVirtualFixtureSelection} commandBinding={virtualFixtureDocument.binding}
             directionalView={directionalDisplay}
             onShowComposer={() => changeFixtureInteractionMode("zones")}
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}
-            onPatch={patchVirtualFixtureFromInspector} onPatchAll={on => {
-              for (const fixture of virtualFixtureItems) changeVirtualFixtureByHand({ spotlight: { on }, downward: { on },
-                radials: aptUnifiedRadialPowerPatch(fixture.state?.radials || [], on) }, fixture.fixture_id);
-            }} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
+            onPatch={patchVirtualFixtureFromInspector} onPatchAll={setVirtualQuickPower} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
             canUndo={aimHistoryLength("undo") > 0} canRedo={aimHistoryLength("redo") > 0}
             aimControls={aimPresentation && aimSelectedDescriptor ? <AptAimProposalRows descriptor={aimSelectedDescriptor}
               limits={selectedVirtualFixture?.limits} proposal={aimSelectedProposal} tapAim={!!tapAim}
@@ -10122,6 +10588,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           liveComparison={liveComparison}
           onCompareLive={compareLiveModel}
           mobile={mobile}
+          inspectorHost={unifiedShell ? shellControlsHost : null}
+          homeName={selectedSiteName}
+          onCalibrateCamera={calibrateFromSetup}
+          onFlashLight={flashFromSetup}
         />
       )}
 

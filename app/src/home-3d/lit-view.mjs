@@ -51,7 +51,7 @@
  *
  * Night adaptation is presentation, not lux.
  *
- * L4 lit receivers (behind ?lit-splats=1, lit-receivers.mjs): in Photo and
+ * L4 lit receivers (lit-receivers.mjs): in Photo and
  * Cloud no mesh is relit and no light or shadow map is made. The engine hands
  * Lit a receiver controller; each sync passes it the eased lights and the
  * adaptation, and it re-blends the splat or point colours from L3's light
@@ -606,7 +606,8 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     function adapt(at) {
         if (!pipeline && !receivers) return;
         if (metered === null) { adapting = true; return; }
-        adaptTarget = Exposure.adaptationFromLuminance(metered, LIT_DESIGN_EV100);
+        // Photo and Cloud: the receivers' look decides (the camera meters the highlights).
+        adaptTarget = receivers?.adaptationFrom?.(metered, LIT_DESIGN_EV100) || Exposure.adaptationFromLuminance(metered, LIT_DESIGN_EV100);
         const elapsed = adaptedAt === null ? Infinity : at - adaptedAt;
         const step = Exposure.easeAdaptation(adaptEv, adaptTarget.adaptEv, elapsed, { snap: adaptEv === null || !!reducedMotion?.matches });
         adaptEv = step.ev; adapting = step.adapting; adaptedAt = at;

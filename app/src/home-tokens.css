@@ -788,6 +788,7 @@ button.hg-no-press:active {
 .apt-home-shell [aria-label="apartment zoom controls"] button { width: 26px!important; min-width: 26px!important; height: 26px!important; min-height: 26px!important; padding: 0!important; border-radius: 7px!important; background: var(--apt-glass)!important; color: #ededed!important; font: 500 13px 'Geist', sans-serif!important; }
 @container apartment-home (width < 900px) { .apt-home-shell [aria-label="apartment zoom controls"] { display: none!important; } }
 @container apartment-home (width < 600px) { .apt-home-shell .apt-ui-toolbar-word { display: none; } }
+@container apartment-home (width < 900px) { .apt-home-shell .apt-ui-lighting-word { display: none; } }
 @media (pointer: coarse) { @container apartment-home (width < 600px) { .apt-home-shell .apt-ui-orbit { display: none; } } }
 
 /* The existing boot artwork may scroll inside a short sheet, but cannot displace its composer. */

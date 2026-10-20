@@ -131,7 +131,7 @@ test('all original diagnostics and every worker receipt upload exactly once unde
     assert.deepEqual([...entry.matchAll(/^            (\S.*)$/gm)].map(match => match[1]), shellPaths);
   }
   assert.deepEqual(paths.sort(), [...shellPaths, ...shellPaths,
-    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme', 'aim-wiring', 'aim-library-shell', 'composer-comfort'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
+    receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme', 'aim-wiring', 'aim-library-shell', 'composer-comfort', 'setup-rail'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
     '.tmp/apartment-aim-theme-browser/run-*/*.png'].sort());
 });
 

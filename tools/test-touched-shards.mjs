@@ -203,6 +203,20 @@ test('renderer parity always selects Cloud, Mesh and Photo on separate workers',
   }
 });
 
+test('all Setup rail phases are selected together and distributed across workers', () => {
+  const parts = ['test-apartment-setup-rail-browser.mjs', 'test-apartment-setup-rail-browser-part2.mjs', 'test-apartment-setup-rail-browser-part3.mjs'];
+  for (const file of ['app/src/home-apartment.jsx', 'tools/fixtures/apartment-setup-rail-proof.mjs', 'tools/test-apartment-setup-rail-browser-part3.mjs']) {
+    const argv = ['--files', file], full = planOf(argv);
+    assert.ok(parts.every(name => full.includes(name)), 'all nine Setup checks guard ' + file);
+    for (const count of [3, 8]) {
+      const shards = Array.from({length:count}, (_,index) => planOf([...argv, '--shard', `${index+1}/${count}`]));
+      const owners = parts.map(name => shards.flatMap((plan,index) => plan.includes(name) ? [index] : []));
+      assert.ok(owners.every(list => list.length === 1));
+      assert.equal(new Set(owners.flat()).size, parts.length);
+    }
+  }
+});
+
 test('the two Photo parity parts retain frames and contracts without dropping either phase', () => {
   const files = ['test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
   const phases = files.map(file => {

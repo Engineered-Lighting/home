@@ -1,13 +1,13 @@
-// L4 browser proof, shared by tools/test-apartment-lit-splats-browser.mjs (part 1:
-// flag off and Photo) and its -part2 twin (part 2: Cloud and the node
-// renderer's WebGL2 backend), so neither part nears the 180 s file limit.
-// Authored-room browser proof for L4 lit splats and points (?lit-splats=1) on
-// the real renderer (WebGL, Spark): flag off is the identical frame and loads
-// nothing; flag on relights Photo and Cloud from the SHA-256 bound authored
-// lighting layer, the GPU blend equals its CPU twin, dimming darkens, and
-// leaving Lit restores the exact frame. Authored packs and an authored layer
-// only; no household pack, live camera, model session, physical command,
-// screenshot or deployment.
+// Lighting in every view (L4 lit splats and points) browser proof, shared by
+// tools/test-apartment-lit-splats-browser.mjs (part 1: Lighting off and Photo)
+// and its -part2 twin (part 2: Lighting following the view through Cloud and
+// Mesh, and the node renderer's WebGL2 backend), so neither part nears the
+// 180 s file limit. On the real renderer (WebGL, Spark): with Lighting off the
+// frame is identical and nothing lit loads; with it on, Photo and Cloud are
+// relit from the SHA-256 bound authored lighting layer, the GPU blend equals
+// its CPU twin, dimming darkens, and turning Lighting off restores the exact
+// frame. Authored packs and an authored layer only; no household pack, live
+// camera, model session, physical command, screenshot or deployment.
 //   HOME_LIT_SPLATS_RENDERER  'webgl' (default: Spark) or 'webgpu' (the splat
 //                             fork's colour hook and compute; needs a real
 //                             adapter, so local only, with
@@ -214,49 +214,31 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     await context.routeWebSocket('**/*', socket => socket.close());
 
     if (part === 1) {
-    // ---- Flag off: Lit stays Mesh only, nothing lit loads, the frame is identical.
-    const off = await openPage(context, RENDERER_QUERY);
-    await enterMode(off.page, 'Photo view', 'splat');
-    const offBefore = await stable(off.page, 'off:before');
-    const offState = await off.page.evaluate(async () => {
-      const engine = window.__APT_ENGINE;
-      return { available: engine.litAvailableIn('splat'), state: await engine.setLit(true), mode: engine.modes.mode };
-    });
-    assert.equal(offState.available, false); assert.equal(offState.mode, 'splat');
-    assert.ok(!offState.state?.active, 'Lit does not start in Photo without the flag');
-    await frames(off.page, 8);
-    await stable(off.page, 'off:after');
-    // With the flag off nothing lit runs at all (no module or layer is even
-    // requested, below): on WebGL that is the identical frame; on WebGPU this
-    // difference is the unlit splat path's own noise, the floor used later.
-    const offDiff = RENDERER === 'webgl' ? await assertSameFrame(off.page, 'off:after', 'off:before', 'flag off: the identical frame')
-      : (measuredNoise = await frameDiff(off.page, 'off:after', 'off:before'));
-    assert.deepEqual(off.requested.filter(pathname => LIT_MODULES.test(pathname)), [], 'flag off: no lit receiver module or layer is requested');
-    check('flag_off_identical', { frame: offBefore, diff: offDiff });
-    await off.page.close();
-
-    // ---- Flag on: Photo relit from the bound authored layer.
-    const on = await openPage(context, RENDERER_QUERY + '&lit-splats=1');
+    // ---- Lighting off: nothing lit loads and the frame is the identical frame.
+    const on = await openPage(context, RENDERER_QUERY);
     if (RENDERER === 'webgpu') assert.equal(await on.page.evaluate(() => window.__APT_ENGINE.renderer.backend?.isWebGPUBackend === true), true,
       'a real WebGPU adapter (set HOME_LIT_WEBGPU_CHANNEL)');
     const page = on.page;
+    const lighting = page.getByRole('button', { name: 'Lighting', exact: true });
+    assert.equal(await page.getByRole('button', { name: 'Lit view', exact: true }).count(), 0, 'Lighting is a toggle, not a view tab');
+    assert.equal(await lighting.getAttribute('aria-pressed'), 'false', 'Lighting is off by default');
     await enterMode(page, 'Photo view', 'splat');
     const unlit = await stable(page, 'photo:unlit');
     await still(page, 'photo-unlit');
-    // Separate page loads are not bit-reproducible (Spark's load and sort
-    // timing); the exact identities are proved within one page above and below.
-    if (RENDERER === 'webgl') assert.ok(Math.abs(unlit.luma - offBefore.luma) < 0.01, 'the flag alone changes nothing until Lit is on');
-    check('flag_on_unlit', { luma: unlit.luma, flag_off_luma: offBefore.luma });
-    if (RENDERER === 'webgpu') {
-      // A second noise sample on this page, before Lit.
-      await frames(page, 12); await stable(page, 'photo:unlit2');
-      const second = await frameDiff(page, 'photo:unlit2', 'photo:unlit');
-      measuredNoise = { mean: Math.max(measuredNoise.mean, second.mean), over8: Math.max(measuredNoise.over8, second.over8) };
-    }
+    await frames(page, 12);
+    await stable(page, 'photo:unlit2');
+    // Nothing lit runs while Lighting is off (no lit module or layer is even
+    // requested): on WebGL that is the identical frame; on WebGPU this
+    // difference is the unlit splat path's own noise, the floor used later.
+    const offDiff = RENDERER === 'webgl' ? await assertSameFrame(page, 'photo:unlit2', 'photo:unlit', 'Lighting off: the identical frame')
+      : (measuredNoise = await frameDiff(page, 'photo:unlit2', 'photo:unlit'));
+    assert.deepEqual(on.requested.filter(pathname => LIT_MODULES.test(pathname)), [], 'Lighting off: no lit receiver module or layer is requested');
+    check('lighting_off_identical', { frame: unlit, diff: offDiff });
 
-    await page.getByRole('button', { name: 'Lit view', exact: true }).click();
+    await lighting.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: WAIT_MS });
-    assert.equal(await page.evaluate(() => window.__APT_ENGINE.modes.mode), 'splat', 'Lit stays in Photo with the flag');
+    assert.equal(await page.evaluate(() => window.__APT_ENGINE.modes.mode), 'splat', 'Photo stays the view, now lit');
+    assert.equal(await page.getByRole('button', { name: 'Photo view', exact: true }).getAttribute('aria-pressed'), 'true');
     await settled(page);
     await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 6);
     const litState = await page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { ...s, receivers: { ...s.receivers } }; });
@@ -271,7 +253,7 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     await page.waitForFunction(() => document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: WAIT_MS });
     assert.ok((await page.locator('[data-apt-lit-disclosure]').textContent()).trim().startsWith('Simulated · not photometric · assumed output'), 'disclosed in Photo');
     assert.equal((await page.locator('[data-apt-lit-bounce-limit]').textContent()).trim(),
-      'Precomputed light basis · live spots re-baked with shadows · capture sheen dropped · window daylight off', 'Photo states its own limits');
+      'Precomputed light basis · live spots re-baked with shadows · night ambient through the windows · capture sheen dropped', 'Photo states its own limits');
     const relit = await capture(page, 'photo:lit');
     await still(page, 'photo-lit');
     const relitDiff = await frameDiff(page, 'photo:lit', 'photo:unlit');
@@ -330,8 +312,8 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     await frames(page, 3); await settled(page);
     await page.evaluate(() => window.__APT_ENGINE.setLitTone('agx'));
 
-    // Leaving Lit restores the exact Photo frame.
-    await page.getByRole('button', { name: 'Lit view', exact: true }).click();
+    // Lighting off restores the exact Photo frame.
+    await lighting.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false, null, { timeout: WAIT_MS });
     await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 8);
     await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
@@ -341,15 +323,22 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
 
     await page.close();
     } else {
-    // ---- Cloud: the points relit, then restored.
-    const page = (await openPage(context, RENDERER_QUERY + '&lit-splats=1')).page;
-    await enterMode(page, 'Cloud view', 'points');
+    // ---- Lighting follows the view: Photo lit, then Cloud and Mesh lit in turn
+    // without touching the toggle; Lighting off restores every view exactly.
+    const page = (await openPage(context, RENDERER_QUERY)).page;
+    const lighting = page.getByRole('button', { name: 'Lighting', exact: true });
     const pointMaterials = () => page.evaluate(() => { const rows = []; window.__APT_ENGINE.scene.traverse(node => {
       if (node.isPoints) rows.push(node.material.uuid, ...node.children.filter(child => child.isSprite).map(child => child.material.uuid)); }); return rows; });
+    await enterMode(page, 'Cloud view', 'points');
     const cloudBefore = await pointMaterials();
     await still(page, 'cloud-unlit');
-    await page.getByRole('button', { name: 'Lit view', exact: true }).click();
-    await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: WAIT_MS });
+    await enterMode(page, 'Photo view', 'splat');
+    await lighting.click();
+    await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.receivers?.kind === 'splat', null, { timeout: WAIT_MS });
+    await page.getByRole('button', { name: 'Cloud view', exact: true }).click();
+    await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'points' && window.__APT_ENGINE.litState?.()?.receivers?.kind === 'points',
+      null, { timeout: WAIT_MS });
+    assert.equal(await lighting.getAttribute('aria-pressed'), 'true', 'Lighting stays on across views');
     await settled(page);
     await still(page, 'cloud-lit');
     const cloud = await page.evaluate(() => ({ ...window.__APT_ENGINE.litState().receivers }));
@@ -358,22 +347,34 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     const cloudTwin = await page.evaluate(() => window.__APT_ENGINE.litReceiversReadback(256));
     const cloudWorst = Math.max(...cloudTwin.gpu.flatMap((row, i) => row.map((value, c) => Math.abs(value - cloudTwin.cpu[i][c]))));
     assert.ok(cloudWorst <= 2.5 / 255, 'points: GPU equals the CPU twin: ' + cloudWorst);
-    await page.getByRole('button', { name: 'Lit view', exact: true }).click();
-    await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false, null, { timeout: WAIT_MS });
-    assert.deepEqual(await pointMaterials(), cloudBefore, 'the cloud materials are restored');
-    check('cloud_relit_and_restored', { blends: cloud.blends, twin_max_abs: cloudWorst });
+    check('cloud_lit_by_following_the_view', { blends: cloud.blends, twin_max_abs: cloudWorst });
+    // Mesh: the relit scan mesh (Tier-0 + L5), still without touching the toggle.
+    await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
+    await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'mesh' && window.__APT_ENGINE.litState?.()?.active === true
+      && window.__APT_ENGINE.litState().receivers === null, null, { timeout: WAIT_MS });
+    const mesh = await page.evaluate(() => { const s = window.__APT_ENGINE.litState(); return { lights: s.lights, meshSwapped: s.meshSwapped }; });
+    assert.equal(mesh.lights, 32); assert.ok(mesh.meshSwapped > 0, 'the scan mesh is relit');
+    assert.deepEqual(await pointMaterials(), cloudBefore, 'leaving Cloud restored its materials');
+    check('mesh_lit_by_following_the_view', mesh);
+    await lighting.click();
+    await page.waitForFunction(() => !window.__APT_ENGINE.litState()?.active && window.__APT_ENGINE.litState()?.wanted === false, null, { timeout: WAIT_MS });
+    await page.waitForFunction(() => document.querySelector('[aria-label="Lighting"]')?.getAttribute('aria-pressed') === 'false', null, { timeout: WAIT_MS });
 
     await page.close();
 
     // ---- The node renderer's WebGL2 backend: declared unavailable, frame untouched.
-    const fallback = await openPage(context, '&renderer=webgpu-webgl&lit-splats=1');
+    const fallback = await openPage(context, '&renderer=webgpu-webgl');
     await enterMode(fallback.page, 'Photo view', 'splat');
     await stable(fallback.page, 'fallback:before');
     // This backend's CPU-sorted splats tie on the authored grid too: measure its noise first.
     await frames(fallback.page, 12); await stable(fallback.page, 'fallback:noise');
     const fallbackNoise = await frameDiff(fallback.page, 'fallback:noise', 'fallback:before');
-    const refused = await fallback.page.evaluate(async () => ({ ...(await window.__APT_ENGINE.setLit(true)) }));
-    assert.equal(refused.active, false);
+    await fallback.page.getByRole('button', { name: 'Lighting', exact: true }).click();
+    await fallback.page.waitForFunction(() => !!window.__APT_ENGINE.litState()?.receiversRefused, null, { timeout: WAIT_MS });
+    const refused = await fallback.page.evaluate(() => ({ ...window.__APT_ENGINE.litState() }));
+    assert.equal(refused.active, false); assert.equal(refused.wanted, true);
+    await fallback.page.waitForFunction(() => document.querySelector('[data-apt-lit-refused]'), null, { timeout: WAIT_MS });
+    assert.match(await fallback.page.locator('[data-apt-lit-refused]').textContent(), /this renderer can't relight Photo or Cloud\./);
     assert.equal(refused.receiversRefused, 'lit_receivers_unavailable_on_webgl2_backend');
     await stable(fallback.page, 'fallback:after');
     const fallbackDiff = await frameDiff(fallback.page, 'fallback:after', 'fallback:before');

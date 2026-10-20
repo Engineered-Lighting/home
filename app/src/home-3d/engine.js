@@ -336,10 +336,13 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         return filters;
     }
     let litView = null, litUnsubscribe = () => {};
-    /* L4 lit splats and points (lit-receivers.mjs): opt-in with ?lit-splats=1
-     * for this page only, never stored. With the flag off nothing below loads
-     * and Lit stays Mesh only, exactly as before. */
-    const litReceiversFlag = (() => { try { return new URLSearchParams(window.location.search).get('lit-splats') === '1'; } catch (_) { return false; } })();
+    /* Lighting is a property of the room, not a view (owner, 2026-10-20):
+     * once on, Cloud, Photo and Mesh are all shown lit, and switching views
+     * keeps it on. Mesh relights the scan mesh (Tier-0 + L5); Photo and Cloud
+     * relight the splats and points from the pack's bound lighting layer
+     * (L4, lit-receivers.mjs). Off by default and never stored; with it off
+     * nothing lit loads. */
+    let litWanted = false, litApply = Promise.resolve(), litMode = null;
     let litReceivers = null, litReceiversRefusal = null;
     const litLayers = new Map();
     async function releaseLitReceivers() {
@@ -381,6 +384,70 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         return null;
     }
     lifetimeController.signal.addEventListener('abort', () => { void releaseLitReceivers(); }, { once: true });
+    const litReceiversPossible = () => !(renderer.isWebGPURenderer && !renderer.backend?.isWebGPUBackend);
+    // The lit state as the shell sees it: the view's state plus whether Lighting is on.
+    const litSnapshot = () => {
+        const state = litView ? litView.state() : null;
+        if (!state && !litWanted) return null;
+        return Object.freeze({ ...(state || { active: false }), wanted: litWanted, receiversRefused: litReceiversRefusal });
+    };
+    const emitLit = () => { const snapshot = litSnapshot(); if (snapshot) emit('lit', snapshot); return snapshot; };
+    const createLitViewFor = litM => litM.createLitView({ scene, renderer,
+        getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
+        getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
+        // Named aims for the modeled lux readout, in their own frame.
+        getNamedAims: () => [...(overlay.targetsById?.values() || [])].map(item => ({ id: item.target?.id,
+            label: item.target?.name || item.target?.id, point: item.target?.pos, normal: item.target?.normal, frame: item.group?.parent })),
+        isPresentationActive: () => overlay.virtualFixturesPresentationActive?.() === true,
+        onStateChange: state => { if (state.active) emitLit(); },
+        signal: lifetimeController.signal,
+        spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg,
+        // In Photo and Cloud the scan only feeds the bake; the receivers are relit.
+        getBakeMesh: () => modes.getMesh?.() ?? null, getReceivers: () => litReceivers });
+    async function litOff() {
+        if (!litView?.state().active) return;
+        litView.disable(); litUnsubscribe(); litMode = null;
+        if (litReceivers) await releaseLitReceivers();
+    }
+    /* Bring the room in line with litWanted for the current view: one step at
+     * a time, so a view change during a slow Photo layer load cannot race. */
+    function applyLit() {
+        const step = litApply.then(async () => {
+            if (disposed) return null;
+            if (!litWanted) { await litOff(); litReceiversRefusal = null; return emitLit(); }
+            const mode = modes.mode;
+            if (litView?.state().active && litMode === mode) return emitLit();
+            await litOff();
+            litReceiversRefusal = null;
+            const receiverMode = mode === 'splat' || mode === 'points' ? mode : null;
+            if (!receiverMode && (mode !== 'mesh' || !modes.getMesh?.())) return emitLit();
+            if (!litView) {
+                const litM = await sib('lit-view.mjs');
+                if (disposed) return null;
+                litView ||= createLitViewFor(litM);
+            }
+            if (receiverMode) {
+                litReceiversRefusal = await prepareLitReceivers(receiverMode);
+                if (litReceiversRefusal || modes.mode !== receiverMode || !litWanted) {
+                    if (!litReceiversRefusal) await releaseLitReceivers();
+                    return emitLit();
+                }
+            } else if (modes.mode !== 'mesh' || !litWanted) return emitLit();
+            litMode = mode;
+            litView.enable();
+            if (receiverMode) modes.setLitTick?.(camera => litView.tickReceivers(camera));
+            const offStats = engine.on('stats', stats => {
+                const before = litView.state().quality, after = litView.observeFrameRate(stats?.fps).quality;
+                if (after !== before) emitLit();
+            });
+            litUnsubscribe = () => { offStats(); litUnsubscribe = () => {}; };
+            return emitLit();
+        });
+        litApply = step.catch(() => null);
+        return step;
+    }
+    // A view change re-lights the new view while Lighting is on.
+    modes.onChange(() => { if (litWanted || litView?.state().active) void applyLit(); });
     const picking = pickingM.createPicking(camera, hostEl);
     const deskSurfacePicking = pickingM.createRegisteredDeskSurfacePicker({
         apartmentRoot, modes, picking, sceneIdentity,
@@ -921,75 +988,27 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         traceBeam(originValue, pointValue) {
             return pickingM.aimChipBlocker(engine.beamPath(originValue, pointValue));
         },
-        /* Tier-0 Lit (lit-view.mjs): the scan mesh relit with simulated light
-         * from the virtual fixtures, disclosed as simulated, not photometric
-         * and with assumed output. Mesh only: it needs Mesh to be the current
-         * mode and turns itself off when the mode changes. Emits 'lit' with
-         * the state on every change, including a declared reduced quality. */
-        async setLit(on) {
-            if (!on) {
-                if (litView?.state().active) {
-                    litView.disable(); litUnsubscribe();
-                    if (litReceivers) await releaseLitReceivers();
-                    emit('lit', litView.state());
-                }
-                return litView ? litView.state() : null;
-            }
-            // L4 (flag only): Photo and Cloud relight the splats or points.
-            const receiverMode = litReceiversFlag && (modes.mode === 'splat' || modes.mode === 'points') ? modes.mode : null;
-            if (disposed || (!receiverMode && (modes.mode !== 'mesh' || !modes.getMesh?.()))) return litView ? litView.state() : null;
-            if (!litView) {
-                const litM = await sib('lit-view.mjs');
-                if (disposed) return null;
-                litView ||= litM.createLitView({ scene, renderer,
-                    getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
-                    getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
-                    // Named aims for the modeled lux readout, in their own frame.
-                    getNamedAims: () => [...(overlay.targetsById?.values() || [])].map(item => ({ id: item.target?.id,
-                        label: item.target?.name || item.target?.id, point: item.target?.pos, normal: item.target?.normal, frame: item.group?.parent })),
-                    isPresentationActive: () => overlay.virtualFixturesPresentationActive?.() === true,
-                    onStateChange: state => { if (state.active) emit('lit', state); },
-                    signal: lifetimeController.signal,
-                    spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg,
-                    // L4: in Photo/Cloud the scan only feeds the bake; the receivers are relit.
-                    getBakeMesh: () => modes.getMesh?.() ?? null, getReceivers: () => litReceivers });
-            }
-            if (receiverMode) {
-                if (litView.state().active) return litView.state();
-                litReceiversRefusal = litReceivers ? null : await prepareLitReceivers(receiverMode);
-                if (litReceiversRefusal || modes.mode !== receiverMode || litView.state().active) {
-                    const refused = Object.freeze({ ...litView.state(), receiversRefused: litReceiversRefusal || 'lit_receivers_mode_changed' });
-                    if (!litReceiversRefusal) await releaseLitReceivers();
-                    emit('lit', refused);
-                    return refused;
-                }
-            } else if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
-            const litMode = modes.mode;
-            litView.enable();
-            if (receiverMode) modes.setLitTick?.(camera => litView.tickReceivers(camera));
-            const offMode = modes.onChange(next => { if (next !== litMode) void engine.setLit(false); });
-            const offStats = engine.on('stats', stats => {
-                const before = litView.state().quality, after = litView.observeFrameRate(stats?.fps).quality;
-                if (after !== before) emit('lit', litView.state());
-            });
-            litUnsubscribe = () => { offMode(); offStats(); litUnsubscribe = () => {}; };
-            emit('lit', litView.state());
-            return litView.state();
-        },
-        litState() { return litView ? litView.state() : null; },
-        /* L4: whether Lit can relight this mode (Photo/Cloud need ?lit-splats=1). */
-        litAvailableIn(mode) { return mode === 'mesh' || (litReceiversFlag && (mode === 'splat' || mode === 'points')); },
+        /* Lighting (lit-view.mjs, lit-receivers.mjs): every view relit with
+         * simulated light from the virtual fixtures, disclosed as simulated,
+         * not photometric and with assumed output. setLit(on) turns Lighting
+         * on or off for the room; it follows view changes. Emits 'lit' with
+         * the state ({ active, wanted, receiversRefused, ... }) on every
+         * change, including a declared reduced quality. */
+        setLit(on) { litWanted = !!on; return applyLit(); },
+        litState() { return litSnapshot(); },
+        /* Whether Lighting can relight a view: Mesh always; Photo and Cloud
+         * unless this is the node renderer's WebGL2 backend (no compute). */
+        litAvailableIn(mode) { return mode === 'mesh' || ((mode === 'splat' || mode === 'points') && litReceiversPossible()); },
         /* L4 proofs: the relit receivers as the GPU wrote them beside the CPU twin. */
-        litReceiversReadback(n) { return litReceiversFlag && litReceivers ? litReceivers.readback(n) : Promise.resolve(null); },
-        litReceiversBenchmark(iterations) { return litReceiversFlag && litReceivers ? litReceivers.benchmark(iterations) : Promise.resolve(null); },
+        litReceiversReadback(n) { return litReceivers ? litReceivers.readback(n) : Promise.resolve(null); },
+        litReceiversBenchmark(iterations) { return litReceivers ? litReceivers.benchmark(iterations) : Promise.resolve(null); },
         /* L2 (WebGPU path): the view operator ('agx', Reinhard as the
          * fallback) or a comparison view ('neutral', 'linear') without the
          * presentation effects. The WebGL path stays 'linear'. */
         setLitTone(operator) {
-            if (!litView?.state().active) return litView ? litView.state() : null;
-            const state = litView.setTone(operator);
-            emit('lit', state);
-            return state;
+            if (!litView?.state().active) return litSnapshot();
+            litView.setTone(operator);
+            return emitLit();
         },
         /* L2 (WebGPU path): the lit mesh's scene-referred luminance in cd/m²,
          * modeled from assumed output, for calibration; null elsewhere. */

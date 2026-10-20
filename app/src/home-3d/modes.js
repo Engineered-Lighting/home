@@ -166,7 +166,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     let sparkUpdateJob = null;
     let sparkIdlePromise = Promise.resolve(null);
     let lastSparkError = null;
-    // L4 lit receivers (lit-receivers.mjs, ?lit-splats=1 only): Lit's step
+    // L4 lit receivers (lit-receivers.mjs): Lighting's step
     // before each render, and the Photo floor backing hidden while relit.
     let litTick = null, photoFloorSuppressed = false;
     const sparkUpdateCounts = { started: 0, completed: 0, failed: 0, coalescedTicks: 0 };
@@ -842,7 +842,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
          */
         splatColorHook() { return state.splat?.colorHook?.() ?? null; },
 
-        /* L4 lit receivers (lit-receivers.mjs, behind ?lit-splats=1): the
+        /* L4 lit receivers (lit-receivers.mjs): the
          * loaded splat and its pack asset name, Lit's step run first in the
          * splat tick (before renderer.render, never inside it), and the
          * Photo floor backing, which shows the capture's daylight colours,

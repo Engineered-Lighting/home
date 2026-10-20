@@ -1,10 +1,10 @@
 /* home-3d/lit-receivers.mjs — L4: lit splats and points, the scene glue for
  * lit-basis-blend.mjs ("Hyperreal browser room lighting" L4).
  *
- * Behind the opt-in flag (?lit-splats=1) and disclosed as simulated, Lit can
- * relight Photo (the splats) and Cloud (the point cloud) from L3's additive
- * lighting layer. Nothing here loads unless the flag is on, and every change
- * is reversed exactly on exit:
+ * Disclosed as simulated, Lighting relights Photo (the splats) and Cloud
+ * (the point cloud) from L3's additive lighting layer. Nothing here loads
+ * until Lighting is turned on, and every change is reversed exactly when it
+ * is turned off or the view changes:
  *
  *   WebGL (r180, the default)   the blend is a GPGPU pass into an RGBA8
  *       target; Spark reads it through an object modifier (by splat index,
@@ -27,15 +27,9 @@ const Blend = await import(`./lit-basis-blend.mjs${search}`);
 const Loader = await import(`./lit-layer-loader.mjs${search}`);
 const Exposure = await import(`./lit-exposure.mjs${search}`);
 
-export const LIT_RECEIVERS_FLAG = 'lit-splats';
 // Meter samples: a fixed spread of receivers, kept when they are in view.
 const METER_SAMPLES = 4096;
 const W = Blend.LIT_TEXTURE_WIDTH;
-
-/* The flag: ?lit-splats=1 on the page, this session only (never stored). */
-export function litReceiversOptedIn(location = globalThis.location) {
-    try { return new URLSearchParams(location?.search || '').get(LIT_RECEIVERS_FLAG) === '1'; } catch (_) { return false; }
-}
 
 /* Why this renderer cannot light receivers, or null: the node renderer's
  * WebGL2 backend has no compute (the splat colour hook says the same). */

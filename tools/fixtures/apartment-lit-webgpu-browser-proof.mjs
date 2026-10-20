@@ -226,9 +226,9 @@ async function proveOn(backend, part) {
     const renderer = await page.evaluate(() => ({ backend: window.__APT_ENGINE.rendererBackend, gpu: window.__APT_ENGINE.webgpuReadback()?.gpu }));
     assert.equal(renderer.backend, backend === 'webgpu' ? 'webgpu' : 'webgpu-webgl2', 'the requested node backend is the one running: ' + renderer.gpu);
     receipt.renderer = renderer;
-    const litButton = page.getByRole('button', { name: 'Lit view', exact: true });
+    const litButton = page.getByRole('button', { name: 'Lighting', exact: true });
     await litButton.waitFor();
-    assert.equal(await litButton.getAttribute('aria-pressed'), 'false', 'Lit is off by default');
+    assert.equal(await litButton.getAttribute('aria-pressed'), 'false', 'Lighting is off by default');
 
     // Mesh unlit: the baseline.
     await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
@@ -250,7 +250,7 @@ async function proveOn(backend, part) {
     await litButton.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: LIT_WAIT_MS });
     await frames(6); await settled();
-    await page.waitForFunction(() => document.querySelector('[aria-label="Lit view"]')?.getAttribute('aria-pressed') === 'true'
+    await page.waitForFunction(() => document.querySelector('[aria-label="Lighting"]')?.getAttribute('aria-pressed') === 'true'
       && document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: LIT_WAIT_MS });
     const note = page.locator('[data-apt-lit-disclosure]');
     const shownQuality = await page.evaluate(() => window.__APT_ENGINE.litState().quality);

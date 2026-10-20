@@ -51,7 +51,7 @@
  *
  * Night adaptation is presentation, not lux.
  *
- * L4 lit receivers (behind ?lit-splats=1, lit-receivers.mjs): in Photo and
+ * L4 lit receivers (lit-receivers.mjs): in Photo and
  * Cloud no mesh is relit and no light or shadow map is made. The engine hands
  * Lit a receiver controller; each sync passes it the eased lights and the
  * adaptation, and it re-blends the splat or point colours from L3's light

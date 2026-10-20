@@ -2268,15 +2268,28 @@ function AptUnifiedIcon({ name }) {
     layers: "M8 2l6 3-6 3-6-3 6-3zM2 8l6 3 6-3M2 11l6 3 6-3", help: "M6 6a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.2V10M8 12.5v.5",
     fit: "M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4", info: "M8 7v5M8 4.5V5M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14z",
     expand: "M9 3h4v4M7 13H3V9M13 3L9 7M3 13l4-4", collapse: "M13 7H9V3M3 9h4v4M9 7l4-4M7 9l-4 4",
+    bulb: "M6 12.5h4M6.5 14.5h3M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.4.3.6.8.6 1.3v.5h4V11c0-.5.2-1 .6-1.3A4.5 4.5 0 0 0 8 1.5z",
   };
   return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || ""} /></svg>;
 }
 
+/* Why a view can't be lit, in plain words (engine litState().receiversRefused). */
+function aptLitRefusalWords(reason) {
+  const text = String(reason || "");
+  if (text.startsWith("lighting_layer_absent")) return "this scan has no lighting layer yet.";
+  if (text.startsWith("lighting_layer_binding_mismatch") || text.startsWith("lighting_layer_pack_asset_mismatch")
+    || text.startsWith("lighting_layer_source_mismatch")) return "its lighting layer was made for another version of this scan.";
+  if (text.startsWith("lighting_layer_file_mismatch")) return "its lighting layer failed its integrity check.";
+  if (text === "lit_receivers_unavailable_on_webgl2_backend") return "this renderer can't relight Photo or Cloud.";
+  if (text === "lighting_layer_no_set_for_asset") return "this Photo asset has no lighting layer.";
+  return "its lighting layer couldn't be used.";
+}
+
 function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
   onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
   homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about, modeProgress = null, viewLockedReason = null, onDismissNotice,
-  lit = null, onLit = null }) {
+  lit = null, onLit = null, lighting = false, litRefused = null }) {
   const Guide = window.HomeApartmentRoomGuide;
   const [popover, setPopover] = useState(null);
   const [guideDialog, setGuideDialog] = useState(null);
@@ -2305,15 +2318,18 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-seg" role="group" aria-label="Scene mode">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
-      <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key && !lit}
+      <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key}
         title={key !== "points" && pointsOnlyReason ? pointsOnlyReason : undefined}
         disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)}
-        onClick={() => (key === "mesh" && lit ? onLit?.(false) : onMode(key))}>{label}</button>)}
-      <button type="button" aria-label="Lit view" aria-pressed={!!lit}
-        title={!onLit ? "Lit needs modeled fixtures in this home" : modeLockedReason || pointsOnlyReason || "Simulated light on the mesh · not photometric"}
-        disabled={disabled || !onLit || !!modeLockedReason || !!pointsOnlyReason || modeLoading === "mesh"}
-        onClick={() => onLit?.(!lit)}>Lit</button>
-    </div><span className="apt-ui-toolbar-separator apt-ui-orbit" />
+        onClick={() => onMode(key)}>{label}</button>)}
+    </div>
+    {/* Lighting is a property of the room, not a view: it relights whichever
+      * view is shown (Cloud, Photo or Mesh) and stays on across them. */}
+    <button type="button" className="apt-ui-button is-small" aria-label="Lighting" aria-pressed={!!lighting}
+      title={!onLit ? "Lighting needs modeled fixtures in this home" : modeLockedReason || "Simulated light from the virtual fixtures · not photometric"}
+      disabled={disabled || !onLit || !!modeLockedReason} onClick={() => onLit?.(!lighting)}>
+      <AptUnifiedIcon name="bulb" /><span className="apt-ui-toolbar-word">Lighting</span></button>
+    <span className="apt-ui-toolbar-separator apt-ui-orbit" />
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled || !!viewLockedReason}
       title={viewLockedReason || undefined} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
     <span className="apt-home-toolbar-detent apt-ui-value apt-ui-orbit" role="status" aria-live="polite" aria-atomic="true"
@@ -2362,6 +2378,8 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
           {` · visible ${String(stats.modeDebug.splatVisible)} · parent ${stats.modeDebug.srParent}`}</>}
       </p></details>}
       <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close source</button></div>}
+    {lighting && !lit && litRefused && !modeLoading && !modeError && <p className="apt-ui-toolbar-notice" role="note" data-apt-lit-refused={litRefused}>
+      Simulated lighting isn't available in this view: {aptLitRefusalWords(litRefused)}</p>}
     {lit && !modeLoading && !modeError && <p className="apt-ui-toolbar-notice" role="note" data-apt-lit-disclosure={lit.quality}
       title={lit.disclosureDetail}>{lit.disclosure}{lit.quality === "reduced" ? " · reduced quality for speed" : ""}
       {lit.bounceLimit && <><br /><span data-apt-lit-bounce-limit="">{lit.bounceLimit}</span></>}
@@ -6973,18 +6991,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // Progress belongs to the load in flight; it can arrive before the loading
   // state commits (a joined read), so it is cleared only when loading ends.
   useEffect(() => { if (!modeLoading) setModeProgress(null); }, [modeLoading]);
-  /* Tier-0 Lit (engine.setLit): Mesh first, then the relit mesh. Session
-   * only and never restored, so Lit is off by default on every device.
-   * With ?lit-splats=1 (L4) Photo and Cloud are relit in place instead. */
+  /* Lighting (engine.setLit): every view relit with simulated light, and it
+   * stays on across Cloud, Photo and Mesh. Session only and never restored,
+   * so Lighting is off by default on every device. */
   const toggleLit = useCallback(async (next) => {
     const engine = engineRef.current;
     if (!engine?.setLit) return;
-    const litHere = mode => mode === "mesh" || engine.litAvailableIn?.(mode) === true;
-    if (next && !litHere(engine.modes.mode)) await pickMode("mesh");
-    if (engineRef.current !== engine) return;
-    const state = await engine.setLit(!!next && litHere(engine.modes.mode));
+    const state = await engine.setLit(!!next);
     if (engineRef.current === engine) setLitState(state);
-  }, [pickMode]);
+  }, []);
   useEffect(() => {
     const engine = engineRef.current;
     setLitState(engine?.litState?.() || null);
@@ -10112,7 +10127,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             hasVirtualFixtures: !!virtualFixtureDocument, fixtureCount: virtualFixtureItems.length,
             hasPerception: perceptionDockAvailable,
             cameraViews: aptCameraViewAvailability(selectedSiteId, model.devices) }}
-          lit={litState?.active ? litState : null} onLit={virtualFixtureDocument ? next => { if (apartmentSceneControlsEnabled) void toggleLit(next); } : null} />
+          lit={litState?.active ? litState : null} lighting={!!litState?.wanted}
+          litRefused={litState?.wanted && !litState?.active ? litState.receiversRefused || null : null}
+          onLit={virtualFixtureDocument ? next => { if (apartmentSceneControlsEnabled) void toggleLit(next); } : null} />
       )}
 
       {unifiedCameraView && (() => {

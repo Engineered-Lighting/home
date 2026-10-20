@@ -158,10 +158,12 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 });
     await page.waitForFunction(() => window.__APT_ENGINE?.siteId === 'victoria'
       && window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.length === 4, null, { timeout: 45000 });
-    const litButton = page.getByRole('button', { name: 'Lit view', exact: true });
+    // Lighting is a room toggle beside the view switch, not a fourth view.
+    const litButton = page.getByRole('button', { name: 'Lighting', exact: true });
     await litButton.waitFor();
-    assert.equal(await litButton.isDisabled(), false, 'Lit is offered in a home with modeled fixtures');
-    assert.equal(await litButton.getAttribute('aria-pressed'), 'false', 'Lit is off by default');
+    assert.equal(await page.getByRole('button', { name: 'Lit view', exact: true }).count(), 0, 'no Lit view tab');
+    assert.equal(await litButton.isDisabled(), false, 'Lighting is offered in a home with modeled fixtures');
+    assert.equal(await litButton.getAttribute('aria-pressed'), 'false', 'Lighting is off by default');
 
     // Mesh unlit: the baseline.
     await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
@@ -180,10 +182,10 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: LIT_WAIT_MS });
     await frames(6);
     // React publishes the state a beat after the engine on slow software GL.
-    await page.waitForFunction(() => document.querySelector('[aria-label="Lit view"]')?.getAttribute('aria-pressed') === 'true'
+    await page.waitForFunction(() => document.querySelector('[aria-label="Lighting"]')?.getAttribute('aria-pressed') === 'true'
       && document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: LIT_WAIT_MS });
     assert.equal(await litButton.getAttribute('aria-pressed'), 'true');
-    assert.equal(await page.getByRole('button', { name: 'Mesh view', exact: true }).getAttribute('aria-pressed'), 'false', 'Lit, not Mesh, reads as the current view');
+    assert.equal(await page.getByRole('button', { name: 'Mesh view', exact: true }).getAttribute('aria-pressed'), 'true', 'Mesh stays the current view, now lit');
     const note = page.locator('[data-apt-lit-disclosure]');
     // Software GL may fall under 30 fps; Lit must then say so, never drop frames silently.
     const shownQuality = await page.evaluate(() => window.__APT_ENGINE.litState().quality);
@@ -250,7 +252,7 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     // Opt-in stills for visual review; never part of the pass criteria.
     if (process.env.HOME_APARTMENT_LIT_SCREENSHOTS === '1') {
       await page.screenshot({ path: path.join(run, 'lit-1366.png') });
-      await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
+      await litButton.click();
       await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false); await frames(6);
       await page.screenshot({ path: path.join(run, 'mesh-1366.png') });
       await litButton.click(); await page.waitForFunction(() => window.__APT_ENGINE.litState().active === true, null, { timeout: LIT_WAIT_MS }); await frames(6);
@@ -259,15 +261,21 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     receipt.performance = { note: 'descriptive only; headless browser on this machine is not the owner laptop', unlit_mesh: unlitTiming, lit: litTiming,
       quality: await page.evaluate(() => window.__APT_ENGINE.litState().quality) };
 
-    // Mesh while Lit returns to the unlit mesh; Lit then Cloud restores everything.
-    await page.getByRole('button', { name: 'Mesh view', exact: true }).click();
+    // Lighting off returns to the unlit mesh; Lighting stays on across views:
+    // Cloud is then lit too, or says plainly why not (this authored pack has
+    // no lighting layer), and the mesh is restored exactly either way.
+    await litButton.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState().active === false);
     assert.equal(await page.evaluate(() => window.__APT_ENGINE.modes.mode), 'mesh');
     await page.waitForFunction(() => !document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: LIT_WAIT_MS });
-    assert.equal(await note.count(), 0, 'the disclosure leaves with Lit');
+    assert.equal(await note.count(), 0, 'the disclosure leaves with Lighting');
     await litButton.click(); await page.waitForFunction(() => window.__APT_ENGINE.litState().active === true, null, { timeout: LIT_WAIT_MS });
     await page.getByRole('button', { name: 'Cloud view', exact: true }).click();
-    await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'points' && window.__APT_ENGINE.litState().active === false);
+    await page.waitForFunction(() => window.__APT_ENGINE.modes.mode === 'points' && window.__APT_ENGINE.litState().wanted === true
+      && window.__APT_ENGINE.litState().active === false && !!window.__APT_ENGINE.litState().receiversRefused, null, { timeout: LIT_WAIT_MS });
+    await page.waitForFunction(() => document.querySelector('[data-apt-lit-refused]'), null, { timeout: LIT_WAIT_MS });
+    assert.match(await page.locator('[data-apt-lit-refused]').textContent(), /Simulated lighting isn't available in this view: this scan has no lighting layer yet\./);
+    assert.equal(await litButton.getAttribute('aria-pressed'), 'true', 'Lighting stays on across views');
     const after = await page.evaluate(() => {
       const engine = window.__APT_ENGINE, rows = [];
       engine.modes.getMesh().traverse(node => { if (node.isMesh) rows.push([node.material.uuid, Object.keys(node.geometry.attributes).sort().join(',')]); });
@@ -276,7 +284,9 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     });
     assert.deepEqual(after.meshMaterials, before.meshMaterials, 'leaving Lit restores the exact mesh materials and geometry attributes');
     assert.equal(after.shadows, before.shadows); assert.equal(after.toneMapping, before.toneMapping); assert.equal(after.litLights, 0);
-    await page.waitForFunction(() => document.querySelector('[aria-label="Lit view"]')?.getAttribute('aria-pressed') === 'false', null, { timeout: LIT_WAIT_MS });
+    await litButton.click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="Lighting"]')?.getAttribute('aria-pressed') === 'false'
+      && !document.querySelector('[data-apt-lit-refused]'), null, { timeout: LIT_WAIT_MS });
     check('leaving_lit_restores_mesh_and_renderer', after);
 
     assert.deepEqual(Object.fromEntries(protectedFiles.map(file => [file, hash(fs.readFileSync(file))])), protectedHashes, 'authored pack bytes unchanged');

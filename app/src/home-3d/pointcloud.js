@@ -175,7 +175,7 @@ void main() {
 `;
 
 /*
- * L4 lit points (lit-receivers.mjs, behind ?lit-splats=1): a copy of the
+ * L4 lit points (lit-receivers.mjs): a copy of the
  * cloud's material whose colour is the relit, display-encoded colour of each
  * point, read by vertex index from the blend's RGBA8 target. It shares every
  * uniform object with `base`, so the engine's per-frame writes (fade, size,

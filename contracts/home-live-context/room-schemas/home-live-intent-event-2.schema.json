@@ -1,0 +1,393 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-live-intent-event-2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-live-intent-event-2"
+    },
+    "version": {
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "site_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "room_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "manifest_ref": {
+      "$ref": "#/$defs/pin"
+    },
+    "actor_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "origin": {
+      "enum": [
+        "human_declaration",
+        "human_preference"
+      ]
+    },
+    "truth_role": {
+      "const": "runtime_intent"
+    },
+    "kind": {
+      "enum": [
+        "set_brightness",
+        "clear_person_hazards"
+      ]
+    },
+    "target": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/person"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "set_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "available_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "valid_until": {
+      "type": "number",
+      "minimum": 0
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "scene_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "episode_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "subject_ref": {
+              "$ref": "#/$defs/subject"
+            },
+            "brightness_fraction": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "scene_id",
+            "episode_id",
+            "subject_ref",
+            "brightness_fraction"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "hazard_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pin"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "policy_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "applicability_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "procedure_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "room_assessment_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "inspection_at": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "hazard_refs",
+            "policy_ref",
+            "applicability_ref",
+            "procedure_ref",
+            "room_assessment_ref",
+            "inspection_at"
+          ]
+        }
+      ]
+    },
+    "reply_to": {
+      "type": "null"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "manifest_ref",
+    "actor_ref",
+    "origin",
+    "truth_role",
+    "kind",
+    "target",
+    "set_at",
+    "available_at",
+    "valid_until",
+    "value",
+    "reply_to"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "set_brightness"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "$ref": "#/$defs/person"
+          },
+          "origin": {
+            "const": "human_preference"
+          },
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "scene_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "episode_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "subject_ref": {
+                "$ref": "#/$defs/subject"
+              },
+              "brightness_fraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "scene_id",
+              "episode_id",
+              "subject_ref",
+              "brightness_fraction"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "target": {
+            "type": "null"
+          },
+          "origin": {
+            "const": "human_declaration"
+          },
+          "value": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hazard_refs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/pin"
+                },
+                "maxItems": 128,
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "policy_ref": {
+                "$ref": "#/$defs/pin"
+              },
+              "applicability_ref": {
+                "$ref": "#/$defs/pin"
+              },
+              "procedure_ref": {
+                "$ref": "#/$defs/pin"
+              },
+              "room_assessment_ref": {
+                "$ref": "#/$defs/pin"
+              },
+              "inspection_at": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "hazard_refs",
+              "policy_ref",
+              "applicability_ref",
+              "procedure_ref",
+              "room_assessment_ref",
+              "inspection_at"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "person": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "track_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "track_epoch",
+        "pid"
+      ]
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "subject_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "subject_id",
+        "subject_epoch"
+      ]
+    }
+  }
+}

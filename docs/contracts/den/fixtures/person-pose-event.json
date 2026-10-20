@@ -1,0 +1,66 @@
+{
+  "schema": "activity-lighting-events-1",
+  "synthetic": true,
+  "events": [
+    {
+      "type": "person_pose",
+      "home": "victoria",
+      "room": "den",
+      "source": "perception-lab/activity-loop",
+      "observed_at": 1800000000,
+      "sent_at": 1800000000.2,
+      "ttl_s": 10,
+      "person_count": 1,
+      "people": [
+        {
+          "track_id": "slot-0",
+          "shoulders_m": {
+            "left": [
+              1.6,
+              4.1,
+              1
+            ],
+            "right": [
+              2,
+              4.1,
+              1
+            ]
+          },
+          "head_m": [
+            1.8,
+            4.05,
+            1.25
+          ],
+          "head_pitch_deg": 18,
+          "approximate": true
+        }
+      ]
+    },
+    {
+      "type": "person_pose",
+      "home": "victoria",
+      "room": "den",
+      "source": "perception-lab/activity-loop",
+      "observed_at": 1800000001,
+      "sent_at": 1800000001.2,
+      "ttl_s": 10,
+      "person_count": 1,
+      "people": [
+        {
+          "track_id": "slot-0",
+          "shoulders_m": {
+            "left": null,
+            "right": [
+              2,
+              4.1,
+              1
+            ]
+          },
+          "head_m": null,
+          "head_pitch_deg": null,
+          "approximate": true
+        }
+      ]
+    }
+  ]
+}

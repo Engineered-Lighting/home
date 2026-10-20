@@ -683,6 +683,9 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             }
             return changed;
         },
+        /* Read-only: a beam sweep or radial ease is still drawing (Lit's
+         * bounce re-bake waits for the Set sweep to land). */
+        presentationActive() { return !disposed && presentationActive; },
         pickObjects() { return disposed || !root.visible ? [] : [...views].flatMap(([id, view]) => id === selectedId ? [view.pick, view.handlePick] : [view.pick]); },
         setSelected(fixtureId) {
             selectedId = views.has(fixtureId) ? fixtureId : null;

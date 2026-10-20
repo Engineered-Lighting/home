@@ -25,6 +25,42 @@ export function createDirectionalPresentation({ group, host, api, initial, getPr
     let snapshot = Object.freeze({ descriptor: initial.descriptor, mode: getMode(), active: false, readout: null });
     const listeners = new Set(), resources = new Set();
     const own = resource => { resources.add(resource); return resource; };
+    // The mode pill stays inside the room: sizes come from a ResizeObserver,
+    // never a layout read in the frame loop. PILL_EDGE keeps the coarse 44 px
+    // hit area (36 px buttons, 3 px padding) clear of the stage edge.
+    const PILL_EDGE = 5;
+    let pillBox = null, pillObserver = null;
+    // Chromium's touch adjustment moves a fingertip to the nearest element
+    // that answers taps. The radial hit shapes take input through the host's
+    // pointer handlers, so on their own they do not count, and a finger on a
+    // lobe beside the mode pill was retargeted to the pill. A no-op click
+    // listener marks each hit shape as a tap target where it is drawn.
+    const tapTarget = () => {};
+    let tapTargets = [];
+    function markTapTargets(next) {
+        for (const node of tapTargets) node.removeEventListener?.('click', tapTarget);
+        tapTargets = next?.root ? [...next.root.querySelectorAll('[data-apt-radial-number]'), ...next.root.querySelectorAll('[data-apt-radial-hub="hit"]')] : [];
+        for (const node of tapTargets) node.addEventListener?.('click', tapTarget);
+    }
+    function watchPill(next) {
+        markTapTargets(next);
+        pillObserver?.disconnect(); pillObserver = null; pillBox = null;
+        const View = next?.root?.ownerDocument?.defaultView;
+        if (!next?.pill || typeof View?.ResizeObserver !== 'function') return;
+        pillObserver = new View.ResizeObserver(() => {
+            pillBox = { width: next.root.clientWidth, height: next.root.clientHeight, pillWidth: next.pill.offsetWidth, pillHeight: next.pill.offsetHeight };
+        });
+        pillObserver.observe(next.root); pillObserver.observe(next.pill);
+    }
+    function pillPosition(hub) {
+        let x = hub.x, y = hub.y - 26;
+        const box = pillBox;
+        if (box?.pillWidth > 0 && box.pillHeight > 0 && box.width > box.pillWidth + 2 * PILL_EDGE && box.height > box.pillHeight + 2 * PILL_EDGE) {
+            x = Math.min(Math.max(x, box.pillWidth / 2 + PILL_EDGE), box.width - box.pillWidth / 2 - PILL_EDGE);
+            y = Math.min(Math.max(y, box.pillHeight + PILL_EDGE), box.height - PILL_EDGE);
+        }
+        return { x: Math.round(x), y: Math.round(y) };
+    }
     let scene;
     try {
     scene = new THREE.Group(); scene.name = 'apartment-directional-composer';
@@ -162,20 +198,21 @@ export function createDirectionalPresentation({ group, host, api, initial, getPr
         for (const circle of elements.root.querySelectorAll('[data-apt-radial-hub]')) { setAttribute(circle, 'cx', geometry.hub.x); setAttribute(circle, 'cy', geometry.hub.y); }
         const hubTarget = elements.root.querySelector('[data-apt-radial-hub="hit"]');
         if (snapshot.mode === 'zones') setAttribute(hubTarget, 'data-apt-radial-start', 'hub'); else hubTarget?.removeAttribute('data-apt-radial-start');
-        elements.pill.style.transform = `translate3d(${Math.round(geometry.hub.x)}px,${Math.round(geometry.hub.y - 26)}px,0) translate(-50%,-100%)`;
+        const pill = pillPosition(geometry.hub);
+        elements.pill.style.transform = `translate3d(${pill.x}px,${pill.y}px,0) translate(-50%,-100%)`;
         writeReadout();
         if (!current()) { dispose(); return false; }
         drawn = { ...projection, geometry }; publishPlane(drawn); return true;
     }
     function dispose() {
-        if (disposed) return; disposed = true; withdraw();
+        if (disposed) return; disposed = true; withdraw(); watchPill(null);
         scene.removeFromParent(); for (const resource of resources) { try { resource.dispose(); } catch {} }
         resources.clear(); listeners.clear(); elements = null; plan = null;
         try { onRetire(); } catch {} // Observer failures do not escape the owner's retirement.
     }
     return Object.freeze({ frame, dispose, withdraw,
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }, getSnapshot: () => snapshot,
-        attach(next) { if (!disposed) { elements = next; elements.root.hidden = true; } return () => { if (elements === next) { withdraw(); elements = null; } }; },
+        attach(next) { if (!disposed) { elements = next; elements.root.hidden = true; watchPill(next); } return () => { if (elements === next) { withdraw(); elements = null; watchPill(null); } }; },
         attachPlan(element) { plan = element; return () => { if (plan === element) plan = null; }; },
         sync(descriptor) { return current() && syncDescriptor(descriptor); },
         pointer(readout, active) { if (!current()) { dispose(); return false; } notify({ ...snapshot, active, readout }); writeReadout(); return true; },

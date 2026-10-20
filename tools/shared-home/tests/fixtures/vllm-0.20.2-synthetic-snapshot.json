@@ -1,0 +1,36 @@
+{
+  "id": "chatcmpl-8d14115ddcf241d4",
+  "object": "chat.completion",
+  "created": 1790458120,
+  "model": "qwen3-vl-30b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The image displays a solid blue background with a red square centered in the frame. The red square is positioned in the middle of the blue area. There are no other visible objects or people in the image.",
+        "refusal": null,
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [],
+        "reasoning": null
+      },
+      "logprobs": null,
+      "finish_reason": "stop",
+      "stop_reason": null,
+      "token_ids": null
+    }
+  ],
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "prompt_tokens": 301,
+    "total_tokens": 343,
+    "completion_tokens": 42,
+    "prompt_tokens_details": null
+  },
+  "prompt_logprobs": null,
+  "prompt_token_ids": null,
+  "kv_transfer_params": null
+}

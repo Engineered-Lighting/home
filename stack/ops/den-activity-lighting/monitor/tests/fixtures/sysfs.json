@@ -1,0 +1,20 @@
+{
+  "_note": "Synthetic sysfs trees. The tests write them into a temp dir: thermal/<zone>/{type,temp} and hwmon/<chip>/{name,tempN_input,tempN_label}.",
+  "jetson_thermal": {
+    "thermal_zone0": {"type": "cpu-thermal", "temp": "47500"},
+    "thermal_zone1": {"type": "gpu-thermal", "temp": "45718"},
+    "thermal_zone2": {"type": "cv0-thermal", "temp": "-256000"},
+    "thermal_zone3": {"type": "soc0-thermal", "temp": "46625"},
+    "thermal_zone4": {"type": "tj-thermal", "temp": "48100"},
+    "thermal_zone5": {"type": "soc1-thermal"}
+  },
+  "la_thermal": {
+    "thermal_zone0": {"type": "acpitz", "temp": "27800"}
+  },
+  "la_hwmon": {
+    "hwmon0": {"name": "k10temp", "temp1_input": "61250", "temp1_label": "Tctl", "temp3_input": "55000", "temp3_label": "Tccd1", "temp4_input": "57500", "temp4_label": "Tccd2"},
+    "hwmon1": {"name": "nvme", "temp1_input": "41850", "temp1_label": "Composite", "temp2_input": "44850", "temp2_label": "Sensor 1"},
+    "hwmon2": {"name": "nvme", "temp1_input": "46850", "temp1_label": "Composite"},
+    "hwmon3": {"name": "acpitz", "temp1_input": "27800"}
+  }
+}

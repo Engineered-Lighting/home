@@ -1,0 +1,57 @@
+# Victoria HA/Frigate occupancy bridge (AL-2, #322) on the Victoria Jetson.
+# Always on. It subscribes to Frigate's MQTT on the Pi and POSTs occupancy,
+# zone and health events to the brain through the gateway's HTTPS origin.
+# Render with ../../render_units.py; each placeholder comes from private values.
+#
+# @ENV_FILE@ (0600, owned by @SERVICE_USER@) holds the private values:
+#   BRIDGE_CONFIG=<absolute path to bridge.json>   (bridge.example.json keys)
+# bridge.json names its own secret files (producer token, MQTT password,
+# HA token), each 0600 and owned by @SERVICE_USER@.
+[Unit]
+Description=Victoria HA/Frigate occupancy bridge for the den lighting brain
+After=network-online.target
+Wants=network-online.target
+# Restart with back-off: at most 10 starts in 10 min, then the unit stays
+# failed and the den-ops monitor alerts on the new failed unit.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@RELEASE_DIR@
+EnvironmentFile=@ENV_FILE@
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@VENV@/bin/python -m victoria_ha_bridge --config ${BRIDGE_CONFIG}
+Restart=always
+RestartSec=5
+# systemd >= 254 also honours these; older versions ignore them with a warning.
+#RestartSteps=5
+#RestartMaxDelaySec=60
+
+# A few MB and almost no CPU (AL-2 README); these bound a leak or busy loop.
+MemoryMax=128M
+MemorySwapMax=0
+CPUQuota=25%
+TasksMax=32
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+KillMode=mixed
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=victoria-ha-bridge
+
+[Install]
+WantedBy=multi-user.target

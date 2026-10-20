@@ -422,7 +422,7 @@ function AptDirectionalComposer({ view, onMode, spotBadge = null, spotName = nul
       <circle data-apt-radial-hub="hit" r="34" fill="transparent" />
       <circle data-apt-radial-hub="dot" r="7" fill="transparent" pointerEvents="none" />
     </svg>
-    <div ref={pillRef} hidden className="apt-directional-toolpill" role="group" aria-label="Room lighting tool" data-aim-ignore="true"
+    <div ref={pillRef} hidden className="apt-directional-toolpill" role="group" aria-label="Room lighting tool" data-aim-ignore="true" data-apt-label-avoid=""
       onPointerDownCapture={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
       style={{ fontFamily: CARD_FONT_SANS }}>
       <span className="nm">{descriptor.label || descriptor.fixture_id}</span>

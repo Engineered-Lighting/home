@@ -1,0 +1,20 @@
+{
+  "schema": "den-ops-soak-1",
+  "_note": "LA host soak (SOAK.md). Copy next to the private monitor config and fill the <placeholders>.",
+  "host": "la-host",
+  "release": "<release id: commit or tag>",
+  "duration_s": 10800,
+  "interval_s": 60,
+  "warmup_s": 1800,
+  "units": [
+    {"name": "lighting-brain.service", "scope": "system", "max_restarts": 0, "memory_growth_mib_per_h": 8, "memory_peak_fraction": 0.85},
+    {"name": "home-web-gateway.service", "scope": "system", "max_restarts": 0, "memory_growth_mib_per_h": 32, "memory_peak_fraction": 0.85}
+  ],
+  "brain": {
+    "state_url": "http://127.0.0.1:8101/api/lighting-brain/v1/homes/victoria/state",
+    "healthz_url": "http://127.0.0.1:8101/healthz"
+  },
+  "monitor_status": "/var/lib/den-ops-monitor/status.json",
+  "bounds": {"host_mem_available_slope_mib_per_h": -256, "gpu_mem_used_drift_mib": 1024},
+  "freshness": {}
+}

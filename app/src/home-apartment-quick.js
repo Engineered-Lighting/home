@@ -33,30 +33,10 @@
     return [...new Set((devices || []).filter(isEchoLightDevice).map(device => device.ha_entity_id))];
   }
 
-  // One status vocabulary for the Echo inspector, chips and room switches.
-  function haStatus({ connection, sim = false } = {}) {
-    if (sim) return "simulation";
-    if (connection === "online") return "connected";
-    if (connection === "connecting" || connection === "picking-model") return "connecting";
-    return "offline";
-  }
-
-  // Only a time Home Assistant reported is shown; nothing is invented.
-  function lastReportedAt(state) {
-    const value = state?.last_reported || state?.last_updated || null;
-    return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
-  }
-
-  function formatClock(iso) {
-    const date = new Date(iso);
-    if (!Number.isFinite(date.getTime())) return null;
-    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  }
-
-  function lastReportedLine(state) {
-    const at = lastReportedAt(state);
-    return at ? `Last reported ${formatClock(at)}` : "Last reported time unavailable";
-  }
+  // APT-F06: Home Assistant status and report times have one source, the
+  // shared state module, so every Echo surface reads the same states.
+  const States = global.HomeApartmentStates || (typeof require === "function" ? require("./home-apartment-states.js") : null);
+  const { haStatus, lastReportedAt, formatClock, lastReportedLine } = States;
 
   function controlBlock({ connection, sim = false, state, entityId } = {}) {
     const status = haStatus({ connection, sim });

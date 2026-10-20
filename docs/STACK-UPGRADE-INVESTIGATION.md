@@ -49,6 +49,8 @@ Capture:
 ### AI Model Candidates
 
 Keep Qwen3-VL 30B FP8 as production until a candidate passes all gates.
+The Qwen3.6-35B-A3B-FP8 trial (download, maintenance window, smoke checks
+and one-command rollback) is in [VLLM-QWEN36-SWAP.md](VLLM-QWEN36-SWAP.md).
 
 Evaluate split-model architecture as a first-class outcome:
 

@@ -1,0 +1,7 @@
+{
+  "schema": "den-ops-fault-baseline-1",
+  "host": "<host>",
+  "source": "LA: docs/UBUNTU-AI-HOST-STABILITY-REVIEW-2026-08-13.md found no machine-check, hardware-error, lockup, thermal, OOM, panic, I/O or segfault record in the reviewed boots. Jetson: none recorded yet.",
+  "_note": "The documented historical baseline: kernel records that were reviewed and found benign, so the monitor does not count them as new faults. Start empty. Add an entry only after a reviewed incident note says the record is benign, and cite that note as the why. The monitor reads this file and never writes it.",
+  "ignore": []
+}

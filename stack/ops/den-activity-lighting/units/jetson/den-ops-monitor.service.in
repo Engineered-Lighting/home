@@ -1,0 +1,30 @@
+# Den activity-lighting ops monitor (AL-5) on the Victoria Jetson: one pass
+# per timer tick. A systemd --user unit for @SERVICE_USER@, beside
+# perception-lab-managed.service, so it can read that user's units and use
+# the Lab token of that user. It is the one monitor that acts on the activity
+# loop (cadence -> pause -> stop) and it also takes the LA host's level from
+# the gateway. Render with ../../render_units.py; install as
+#   ~/.config/systemd/user/den-ops-monitor.service
+# @SERVICE_USER@ must be in the adm or systemd-journal group to read the
+# kernel journal (the monitor reports "kernel journal unreadable" otherwise).
+#
+# @ENV_FILE@ (0600, owned by @SERVICE_USER@) holds the private value:
+#   DEN_OPS_MONITOR_CONFIG=<absolute path to monitor.json>
+[Unit]
+Description=Den activity-lighting ops monitor (one pass)
+
+[Service]
+Type=oneshot
+EnvironmentFile=@ENV_FILE@
+Environment=DEN_OPS_STATE_DIR=%S/den-ops-monitor
+StateDirectory=den-ops-monitor
+WorkingDirectory=@RELEASE_OPS_DIR@/monitor
+ExecStart=/usr/bin/python3 -E -s -m den_ops check
+MemoryMax=96M
+CPUQuota=20%
+TasksMax=16
+Nice=10
+TimeoutStartSec=60
+NoNewPrivileges=yes
+UMask=0077
+SyslogIdentifier=den-ops-monitor

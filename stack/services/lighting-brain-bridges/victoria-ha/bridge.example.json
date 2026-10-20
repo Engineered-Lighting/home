@@ -1,0 +1,36 @@
+{
+  "home": "victoria",
+  "room": "den",
+  "source": "victoria-ha-bridge",
+  "brain": {
+    "events_url": "https://gateway.example.invalid/api/lighting-brain/v1/homes/victoria/events",
+    "token_file": "secrets/brain-producer-token",
+    "ca_file": null,
+    "timeout_s": 5
+  },
+  "mqtt": {
+    "host": "victoria-pi.example.invalid",
+    "port": 1883,
+    "username": "lighting-bridge",
+    "password_file": "secrets/mqtt-password",
+    "client_id": "victoria-ha-bridge",
+    "keepalive_s": 30
+  },
+  "frigate": {
+    "topic_prefix": "frigate",
+    "camera": "den_oak",
+    "object": "person",
+    "zones": {},
+    "silence_timeout_s": 150
+  },
+  "ha_seed": {
+    "url": "http://victoria-pi.example.invalid:8123",
+    "token_file": "secrets/ha-token"
+  },
+  "timing": {
+    "state_heartbeat_s": 30,
+    "state_ttl_s": 90,
+    "health_heartbeat_s": 60,
+    "health_ttl_s": 150
+  }
+}

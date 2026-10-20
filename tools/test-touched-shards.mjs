@@ -53,9 +53,9 @@ const FILE_SETS = [
   ['tools/run-touched-harnesses.mjs'], ['web-gateway/server.mjs', 'app/src/index.html'],
 ];
 
-test('for the actual base, every worker count 1..6 partitions the unsharded --list exactly', () => {
+test('for the actual base, every worker count 1..8 partitions the unsharded --list exactly', () => {
   const base = actualBase();
-  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6]);
+  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6, 7, 8]);
   const listed = run(['--base', base, '--list']).stdout.split('\n')[0];
   assert.match(listed, new RegExp(`^\\[touched-harnesses\\] \\d+ changed files → ${full.filter(name => name !== 'check-jsx.js').length} harnesses`));
 });
@@ -105,7 +105,7 @@ test('receipts from real sharded runs verify, and every inexact or failing cover
     const files = ['--files', 'tools/test-apartment-travel-guard.cjs,tools/test-apartment-chat-presenter.cjs'];
     const plan = planOf(files);
     assert.deepEqual(plan, ['test-apartment-chat-presenter.cjs', 'test-apartment-travel-guard.cjs']);
-    for (const count of [2, 3]) {
+    for (const count of [2, 3, 8]) {
       const sub = path.join(dir, String(count)); fs.mkdirSync(sub);
       for (let index = 1; index <= count; index++) {
         const result = run([...files, '--shard', `${index}/${count}`, '--receipt', path.join(sub, `shard-${index}-of-${count}.json`)], 180000);
@@ -169,6 +169,22 @@ test('the two directional browser parts are both planned together and run on dif
       const owners = parts.map(name => [...Array(count).keys()].filter(index => planOf([...argv, '--shard', `${index + 1}/${count}`]).includes(name)));
       assert.ok(owners.every(list => list.length === 1), 'each part has exactly one worker');
       assert.notEqual(owners[0][0], owners[1][0], `the parts run on different workers with ${count} shards: ${argv.join(' ')}`);
+    }
+  }
+});
+
+test('all three WebGPU lighting proof parts are planned together and use separate workers', () => {
+  const parts = ['test-apartment-lit-webgpu-browser.mjs', 'test-apartment-lit-webgpu-browser-part2.mjs',
+    'test-apartment-lit-webgpu-browser-part3.mjs'];
+  for (const file of ['app/src/home-3d/lit-exposure.mjs', 'tools/fixtures/apartment-lit-webgpu-browser-proof.mjs',
+    'tools/test-apartment-lit-webgpu-browser-part3.mjs']) {
+    const argv = ['--files', file], full = planOf(argv);
+    assert.ok(parts.every(name => full.includes(name)), 'the complete lighting proof guards ' + file);
+    for (const count of [3, 6, 8]) {
+      const shards = Array.from({ length: count }, (_, index) => planOf([...argv, '--shard', `${index + 1}/${count}`]));
+      const owners = parts.map(name => shards.flatMap((plan, index) => plan.includes(name) ? [index] : []));
+      assert.ok(owners.every(list => list.length === 1), 'each proof part has exactly one worker');
+      assert.equal(new Set(owners.flat()).size, parts.length, 'lighting proof parts use separate workers with ' + count + ' shards');
     }
   }
 });

@@ -108,6 +108,17 @@ for (const photoFloor of [false, true]) {
   api.dispose();
 }
 
+// splat-cutaway.js: Spark's Photo cutaway graph (shared GLSL and its dyno
+// statements); splat-cutaway-tsl.mjs is its twin on the WebGPU splat pipeline.
+{
+  const { DOLLHOUSE_CUTAWAY_GLSL } = await import(fileUrl('home-3d/dollhouse-cutaway.mjs'));
+  const { SPLAT_EXTERIOR_CLEANUP_GLSL } = await import(fileUrl('home-3d/splat-exterior-cleanup.mjs'));
+  const statementsSource = Prints.splatCutawayStatements(fs.readFileSync(path.join(SRC, 'home-3d/splat-cutaway.js'), 'utf8'));
+  assert.ok(statementsSource, 'splat-cutaway.js keeps one dyno statements block');
+  record('splat-cutaway', Prints.splatCutawayFingerprint({ dollhouseGlsl: DOLLHOUSE_CUTAWAY_GLSL,
+    exteriorGlsl: SPLAT_EXTERIOR_CLEANUP_GLSL, statementsSource }));
+}
+
 // apartment-directional-presentation.mjs needs a DOM canvas to build; its fill
 // shader is two literals in one ShaderMaterial, read from the source as is.
 {

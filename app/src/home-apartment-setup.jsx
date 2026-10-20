@@ -111,30 +111,54 @@
     </section>;
   }
 
-  /* Name column only: the existing per-device name field, edited live exactly
-     as the device inspector edits it. A separate short Label needs a stored
-     field and waits on the owner's schema decision. */
-  function AptSetupNames({ devices = [], zones = [], originalNames = {}, onRename, onFocusDevice, selectedId }) {
+  /* Every light grouped by room. Name is the existing per-device name field,
+     edited live exactly as the device inspector edits it; "Was …", Reset,
+     the duplicate flag and the room highlight are presentation only. The
+     short Label (proposed `devices[].label`) shows only with the Setup
+     proposal flag, pending the owner's approval. */
+  function AptSetupNames({ devices = [], zones = [], originalNames = {}, originalLabels = {}, onRename, onLabel, onFocusDevice,
+    onHoverDevice, onFindDevice, selectedId, proposal = false }) {
+    const Fields = window.AptSetupDevices;
     const lights = devices.filter((device) => device && device.type === "light");
     const groups = zones.map((zone) => [zone, lights.filter((device) => device.room_id === zone.id)]).filter(([, list]) => list.length);
     const rest = lights.filter((device) => !zones.some((zone) => zone.id === device.room_id));
     if (rest.length) groups.push([{ id: "_unassigned", name: "Unassigned" }, rest]);
     if (!lights.length) return <section className="apt-ui-section"><p className="apt-ui-copy">No lights are placed in this home yet.</p></section>;
+    const duplicates = Fields ? Fields.duplicateNames(lights) : new Set();
     return <>
       <section className="apt-ui-section">
-        <p className="apt-ui-copy">The name shows in lists, the inspector and messages. Renames stay in Apartment; Home Assistant keeps its own names.</p>
+        <p className="apt-ui-copy">The name shows in lists, the inspector and messages.{proposal ? " The label is the short tag over each light in the room." : ""} Renames stay in Apartment; Home Assistant keeps its own names.</p>
+        {proposal && <p className="apt-ui-meta apt-setup-proposal" data-setup-proposal="names">Proposed field · pending the owner's approval: the room label is saved as <code>devices[].label</code>.</p>}
       </section>
       {groups.map(([zone, list]) => <section key={zone.id} className="apt-ui-section" aria-label={`${zone.name} names`}>
         {groups.length > 1 && <h3 className="apt-ui-heading">{zone.name}</h3>}
-        {list.map((device) => <label key={device.id} className="apt-setup-field" data-setup-name={device.id}
-          data-selected={selectedId === device.id ? "true" : undefined}>
-          <span className="apt-ui-meta">{device.ha_entity_id || "Not linked"}</span>
-          <input className="apt-ui-input" value={device.name || ""} maxLength={48}
-            aria-label={`Name for ${originalNames[device.id] ?? device.name ?? device.id}`}
-            onFocus={() => onFocusDevice?.(device.id)}
-            onChange={(event) => onRename(device.id, event.target.value)}
-            onBlur={(event) => { if (!event.target.value.trim() && originalNames[device.id]) onRename(device.id, originalNames[device.id]); }} />
-        </label>)}
+        {list.map((device) => {
+          const original = originalNames[device.id] ?? device.name ?? device.id, originalLabel = originalLabels[device.id] ?? "";
+          const changed = (device.name || "") !== (originalNames[device.id] ?? device.name ?? "") || (proposal && (device.label || "") !== originalLabel);
+          const duplicate = duplicates.has(device.id), labelError = proposal && Fields ? Fields.labelError(device.label) : "";
+          return <div key={device.id} className="apt-setup-name-row" data-setup-name={device.id} data-selected={selectedId === device.id ? "true" : undefined}
+            onMouseEnter={() => onHoverDevice?.(device.id)} onMouseLeave={() => onHoverDevice?.(null)}>
+            <div className="apt-ui-row">
+              <label className="apt-setup-field grow"><span className="apt-ui-meta">{device.ha_entity_id || "Not linked"}</span>
+                <input className="apt-ui-input" value={device.name || ""} maxLength={48} aria-label={`Name for ${original}`}
+                  onFocus={() => { onFocusDevice?.(device.id); onHoverDevice?.(device.id); }}
+                  onChange={(event) => onRename(device.id, event.target.value)}
+                  onBlur={(event) => { onHoverDevice?.(null); if (!event.target.value.trim() && originalNames[device.id]) onRename(device.id, originalNames[device.id]); }} /></label>
+              {proposal && <label className="apt-setup-field apt-setup-label-field"><span className="apt-ui-meta">Label</span>
+                <input className="apt-ui-input" value={device.label || ""} maxLength={Fields?.LABEL_MAX || 10} aria-label={`Room label for ${original}`}
+                  onFocus={() => onHoverDevice?.(device.id)} onChange={(event) => onLabel?.(device.id, event.target.value)}
+                  onBlur={() => onHoverDevice?.(null)} /></label>}
+              <button type="button" className="apt-ui-button is-small is-icon apt-setup-find" aria-label={`Find ${device.name || original} in the room`}
+                title="Find in the room" onClick={() => onFindDevice?.(device.id)}>⌖</button>
+            </div>
+            {(changed || duplicate || labelError) && <div className="apt-ui-row">
+              <span className={`apt-ui-meta grow${duplicate || labelError ? " apt-setup-flag" : ""}`} data-name-note={duplicate ? "duplicate" : labelError ? "label" : "changed"}>
+                {duplicate ? "Another light has this name." : labelError || `Was “${original}”${proposal && originalLabel ? ` · ${originalLabel}` : ""}`}</span>
+              {changed && <button type="button" className="apt-ui-button is-small" aria-label={`Reset ${original}`}
+                onClick={() => { onRename(device.id, originalNames[device.id] ?? device.name); if (proposal) onLabel?.(device.id, originalLabel); }}>Reset</button>}
+            </div>}
+          </div>;
+        })}
       </section>)}
     </>;
   }
@@ -285,12 +309,18 @@
 .apt-setup-header .apt-setup-toolbar:empty { display: none; }
 .apt-setup-caps { display: inline-block; }
 .apt-setup-caps::first-letter { text-transform: uppercase; }
-.apt-setup-body [data-apt-edit-ui] :is([style*="--ed-heading"], [role="status"], label > span:first-child)::first-letter { text-transform: uppercase !important; }
+.apt-setup-body [data-apt-edit-ui] :is([style*="--ed-heading"], [role="status"], label:not(.apt-setup-field) > span:first-child)::first-letter { text-transform: uppercase !important; }
 .apt-setup-field { display: grid; gap: 4px; min-width: 0; }
+.apt-setup-field > .apt-ui-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apt-setup-field[data-selected="true"] .apt-ui-input { border-color: var(--hg-border-strong); }
 .apt-setup-inspector .apt-ui-input { width: 100%; min-height: 32px; padding: 5px 8px; border: 1px solid var(--apt-border, var(--hg-border)); border-radius: 7px;
   background: var(--hg-bg-0); color: var(--hg-fg-0); font: 400 13px/1.4 'Geist', ui-sans-serif, sans-serif; }
 .apt-setup-camera-row { display: grid; gap: 4px; padding-bottom: 6px; }
+.apt-setup-name-row { display: grid; gap: 4px; }
+.apt-setup-name-row .apt-setup-label-field { width: 92px; flex: 0 0 92px; }
+.apt-setup-name-row .apt-setup-find { align-self: end; }
+.apt-setup-flag { color: var(--apt-attn) !important; }
+.apt-setup-proposal { padding: 6px 8px; border: 1px dashed var(--apt-attn); border-radius: 7px; color: var(--hg-fg-2); }
 .apt-setup-links { display: grid; gap: 4px; }
 .apt-setup-link { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--apt-border-soft, var(--hg-border-soft)); }
 .apt-setup-link:last-child { border-bottom: 0; }
@@ -304,7 +334,7 @@
 .apt-setup-body > [data-apt-edit-ui="inspector"]:empty { display: none; }
 .apt-setup-body [data-apt-edit-ui] :is(div, span, label, button, input, select, summary, fieldset, p, option) {
   font-size: max(12px, 1em) !important; letter-spacing: normal !important; text-transform: none !important; line-height: 1.45 !important; font-family: inherit !important; }
-.apt-setup-body [data-apt-edit-ui] :is(input, select) { font-family: 'Geist Mono', ui-monospace, monospace !important; min-height: 30px; border-radius: 6px; }
+.apt-setup-body [data-apt-edit-ui] :is(input, select):not(.apt-ui-input) { font-family: 'Geist Mono', ui-monospace, monospace !important; min-height: 30px; border-radius: 6px; }
 .apt-setup-body [data-apt-edit-ui] [data-setup-heading] { font-size: 12.5px !important; font-weight: 560; color: var(--hg-fg-2) !important; margin: 16px 0 6px !important; }
 .apt-setup-body [data-apt-edit-ui] button { border-radius: 7px; }
 `;

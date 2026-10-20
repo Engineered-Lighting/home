@@ -84,6 +84,8 @@
         ["home-apartment-setup-links.js", false],
         ["home-apartment-named-aims.js", false],
         ["home-apartment-named-aims.jsx", true],
+        ["home-apartment-setup-devices.js", false],
+        ["home-apartment-setup-devices.jsx", true],
         ["home-apartment.jsx", true],
       ],
       ready: () => !!window.HomeApartmentView,

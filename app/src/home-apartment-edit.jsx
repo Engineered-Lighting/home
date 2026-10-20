@@ -442,6 +442,10 @@ function HomeApartmentEdit({
   const rail = !!(inspectorHost && Setup);
   const [railTool, setRailTool] = useState(entryTargetId ? "targets" : "sockets");
   const [originalNames] = useState(() => Object.fromEntries((model.devices || []).map((device) => [device.id, device.name])));
+  const [originalLabels] = useState(() => Object.fromEntries((model.devices || []).map((device) => [device.id, device.label || ""])));
+  // Proposed stored fields (labels, hand placement, mmWave) stay behind the
+  // Setup proposal flag until the owner approves them.
+  const [proposal] = useState(() => !!(window.AptSetupDevices?.proposalEnabled(window)));
   const [placing, setPlacing] = useState(null);        // palette item being placed
   const [placingTarget, setPlacingTarget] = useState(null);
   const [selectedId, setSelectedId] = useState(null);  // device id
@@ -744,10 +748,15 @@ function HomeApartmentEdit({
   // target presets; a click lands in the mapper instead of the model.
   const mapperPickRef = useRef(null);
   const registerMapperPick = useCallback((pick) => { mapperPickRef.current = pick; }, []);
-  const beginMapperPlacing = useCallback(() => {
-    setTool("targets"); setPlacingTarget({ mapper: true, label: "named aim" }); setMoveTargetId(null); setTargetDraftId(null); setNotice("");
+  const beginRailPick = useCallback((owner) => {
+    setTool("targets"); setPlacingTarget({ mapper: true, owner, label: owner === "targets" ? "named aim" : "device" });
+    setMoveTargetId(null); setTargetDraftId(null); setNotice("");
   }, []);
+  const beginMapperPlacing = useCallback(() => beginRailPick("targets"), [beginRailPick]);
   const endMapperPlacing = useCallback(() => setPlacingTarget(null), []);
+  // The proposed camera and sensor placer uses the same exact mesh pick.
+  const beginDevicePick = useCallback(() => beginRailPick("cameras"), [beginRailPick]);
+  const endDevicePick = useCallback(() => { setPlacingTarget(null); setTool("select"); }, []);
 
   const cameraDevices = (model.devices || []).filter((device) => device.type === "camera");
   const railAvailability = rail ? Setup.availability({ registration: isEquipmentRegistration }) : null;
@@ -777,10 +786,10 @@ function HomeApartmentEdit({
   // device returning to select); keep the rail on the tool that is open.
   useEffect(() => {
     if (!rail || isEquipmentRegistration) return;
-    const next = tool === "targets" ? "targets" : tool === "zones" ? "zones" : tool === "measure" ? "position"
+    const next = placingTarget?.owner ? placingTarget.owner : tool === "targets" ? "targets" : tool === "zones" ? "zones" : tool === "measure" ? "position"
       : tool === "links" ? "links" : ["sockets", "names", "cameras"].includes(railTool) ? railTool : "sockets";
     if (next !== railTool) setRailTool(next);
-  }, [rail, isEquipmentRegistration, tool]);
+  }, [rail, isEquipmentRegistration, tool, placingTarget]);
 
   useEffect(() => { if (rail) Setup.installCss(); }, [rail]);
 
@@ -1583,11 +1592,16 @@ function HomeApartmentEdit({
     : isEquipmentRegistration ? null
     : railTool === "targets" && window.AptNamedAimMapper ? <>{echoSourceStatus}<window.AptNamedAimMapper engine={engine} model={model}
         homeName={homeName} saveStatus={saveStatus} saving={saving} mutate={mutate} onSave={onSave} roomAt={roomAt}
-        placing={!!placingTarget?.mapper} beginPlacing={beginMapperPlacing} endPlacing={endMapperPlacing}
+        placing={placingTarget?.owner === "targets"} beginPlacing={beginMapperPlacing} endPlacing={endMapperPlacing}
         registerPick={registerMapperPick} selectedTargetId={selectedTargetId}
         onSelectTarget={(id) => { setSelectedTargetId(id); if (id) { setSelectedId(null); setSelectedZone(null); } }} /></>
     : railTool === "names" ? <>{echoSourceStatus}<Setup.Names devices={model.devices || []} zones={model.zones || []}
-        originalNames={originalNames} selectedId={selectedId}
+        originalNames={originalNames} originalLabels={originalLabels} selectedId={selectedId} proposal={proposal}
+        onHoverDevice={(id) => engine?.overlay?.setHover?.(id)} onFindDevice={frameDevice}
+        onLabel={(id, value) => mutate((m) => {
+          const d = m.devices.find((x) => x.id === id); if (!d) return;
+          if (String(value || "").trim()) d.label = String(value).slice(0, window.AptSetupDevices?.LABEL_MAX || 10); else delete d.label;
+        }, { undoable: false })}
         onFocusDevice={(id) => { setSelectedId(id); setSelectedTargetId(null); setSelectedZone(null); }}
         onRename={(id, value) => mutate((m) => {
           const d = m.devices.find((x) => x.id === id); if (d) d.name = value;
@@ -1612,6 +1626,10 @@ function HomeApartmentEdit({
           </div>)}
         </>}
         {notice && tool === "add" && <div role="status" style={{ marginTop: 10, fontSize: 12, color: "var(--hg-fg-3)" }}>{notice}</div>}
+        {proposal && window.AptSetupDevicePlacer && <window.AptSetupDevicePlacer engine={engine} model={model} homeName={homeName}
+          registryIds={(registry?.entities || []).map((entity) => entity.entity_id)} mutate={mutate} onSave={onSave} saveStatus={saveStatus}
+          saving={saving} roomAt={roomAt} placing={placingTarget?.owner === "cameras"} beginPlacing={beginDevicePick}
+          endPlacing={endDevicePick} registerPick={registerMapperPick} />}
       </>
     : null;
 

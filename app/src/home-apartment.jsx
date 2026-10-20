@@ -8854,11 +8854,54 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     disabledReason={model._equipment_registration ? "Named-aim editing is unavailable for this registration."
       : !apartmentPlacementControlsEnabled || !apartmentSceneControlsEnabled ? "Setup is unavailable for this room." : ""} />;
   const openUnifiedSetup = useCallback(() => {
+    // APT-U01: Setup is a pressed toggle; pressing it again leaves like Done.
+    if (editing) { setEditing(false); return; }
     if (!apartmentSceneControlsEnabled || !(apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)) return;
     setEditorTargetEntry(null);
     setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
     onShowShellControls?.();
-  }, [apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  }, [editing, apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  // APT-U01: Setup › Cameras and sensors starts the existing calibration. It
+  // leaves Setup, flies to the camera view, and once that flight has ended
+  // (settled or timed out) runs the same steps as the camera-view calibrate
+  // button.
+  // APT-U03: Setup › Home Assistant Flash. The same Echo, authority and
+  // currentness gates as callSvc, then the shared guarded dispatch (site,
+  // rehearsal, Travel Mode read from Home Assistant). Never queued.
+  const flashFromSetup = useCallback(device => {
+    const engine = engineRef.current, operation = spatialTravelIntentRef.current, authority = workspaceAuthorityRef.current.key;
+    const current = () => engineRef.current === engine && spatialTravelIntentRef.current === operation
+      && workspaceAuthorityRef.current.key === authority && modelScopeRef.current?.authorityKey === authority
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo" && isControlCurrent()
+      && window.HomeApartmentSiteSession.canControlEcho({ sceneSiteId: engineRef.current?.siteId,
+        selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
+        transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready" });
+    if (!window.AptSetupLinks) return Promise.resolve({ ok: false, reason: "Flash is unavailable; nothing was sent." });
+    return window.AptSetupLinks.flash({ client: rehearsalIsolated || simActive || window.HomeMapRehearsalOfflineState?.active ? null : window.__hav_haClient,
+      entityId: device?.ha_entity_id, siteId: engine?.siteId, isCurrent: current });
+  }, [rehearsalIsolated, simActive, isControlCurrent]);
+  const setupCalibrationRef = useRef(null);
+  const calibrateFromSetup = useCallback(device => {
+    if (!device || simActive || mobile || !window.HomeApartmentCalibrate || !device.camera?.frigate_name) return false;
+    setupCalibrationRef.current = device.id;
+    setEditing(false);
+    if (flyToDeviceView(device)) return true;
+    setupCalibrationRef.current = null; return false;
+  }, [simActive, mobile, flyToDeviceView]);
+  useEffect(() => {
+    const pending = setupCalibrationRef.current;
+    if (!pending) return;
+    if (!liveCam || liveCam.id !== pending || calibCam || !apartmentSceneControlsEnabled) { setupCalibrationRef.current = null; return; }
+    if (liveFeedStatus === "flying") return;
+    setupCalibrationRef.current = null;
+    setLiveOn(false);
+    const e = engineRef.current;
+    if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
+    e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+    aptBeginDollhouseCalibration(e);
+    calibPairCountRef.current = 0; calibEscArmRef.current = 0;
+    setCalibCam(liveCam);
+  }, [liveCam, calibCam, liveFeedStatus, apartmentSceneControlsEnabled]);
   const unifiedSelectionLabel = virtualFixtureControlsOpen && selectedVirtualFixture
     ? selectedVirtualFixture.label || selectedVirtualFixture.fixture_id
     : (model.devices || []).find(device => device.id === cardId)?.name || null;
@@ -10521,6 +10564,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           liveComparison={liveComparison}
           onCompareLive={compareLiveModel}
           mobile={mobile}
+          inspectorHost={unifiedShell ? shellControlsHost : null}
+          homeName={selectedSiteName}
+          onCalibrateCamera={calibrateFromSetup}
+          onFlashLight={flashFromSetup}
         />
       )}
 

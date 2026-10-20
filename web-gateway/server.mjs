@@ -968,10 +968,18 @@ async function handleAuthRoute(req, res, parsed) {
   }
 
   if (parsed.pathname === "/auth/status" && req.method === "GET") {
+    const auth = hasValidAuth(req);
+    // Bind private camera context to the existing authenticated identity.
+    // Domain separation keeps this opaque identifier distinct from the cookie;
+    // a credential change invalidates both without storing another field.
+    const authorityTag = authState.enabled && auth.ok
+      ? crypto.createHmac("sha256", authCookieValue()).update("home-camera-context-authority:v1").digest("hex")
+      : null;
     sendJson(res, 200, {
       ok: true,
       authEnabled: authState.enabled,
-      authenticated: hasValidAuth(req).ok,
+      authenticated: auth.ok,
+      authorityTag,
       username: authState.username || null,
     });
     return;

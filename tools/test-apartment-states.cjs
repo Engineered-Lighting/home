@@ -84,7 +84,7 @@ test('vocabulary: every listed code and pattern in den-reason-vocabulary-1 resol
   assert.ok(codes > 100 && patterns >= 6, `${codes} codes, ${patterns} patterns`);
 });
 
-test('HANDOFF "HA offline (Echo)": Home Assistant offline, "Last reported 20:58", controls disabled, nothing queued', () => {
+test('HANDOFF "HA offline (Echo)": Home Assistant named, "Last reported 20:58", controls disabled, nothing queued', () => {
   const at = new Date(2026, 9, 19, 20, 58, 12).toISOString();
   const states = { 'light.front_left': { state: 'on', last_reported: at },
     'light.front_right': { state: 'off', last_reported: new Date(2026, 9, 19, 20, 41).toISOString() },
@@ -92,17 +92,20 @@ test('HANDOFF "HA offline (Echo)": Home Assistant offline, "Last reported 20:58"
   const reported = S.latestReport(states, ['light.front_left', 'light.front_right']);
   assert.equal(reported, at, 'the newest time this home\'s lights reported, never another entity\'s');
   const rows = rowsByKey(S.statusRows(echoShell({ haConnection: 'offline', physicalControls: false, haLastReportedAt: reported }), { report: null, vocabulary: V }));
-  assert.deepEqual([rows['home-assistant'].state, rows['home-assistant'].title, rows['home-assistant'].detail],
-    ['disconnected', 'Home Assistant offline', 'Last reported 20:58']);
   assert.deepEqual([rows.lights.state, rows.lights.title, rows.lights.detail],
-    ['blocked', 'Light controls disabled', 'Nothing is queued. Last reported 20:58']);
+    ['disconnected', 'Home Assistant not connected', 'Light controls are disabled and nothing is queued. Last reported 20:58']);
+  assert.equal(rows['home-assistant'], undefined, 'Echo names its connection in the lights row, once');
+  // The shared state that the Echo inspector's badge also names.
+  assert.deepEqual([S.haState({ siteId: 'echo', connection: 'offline', lastReportedAt: reported }).title, S.haState({ siteId: 'echo', connection: 'offline', lastReportedAt: reported }).detail],
+    ['Home Assistant offline', 'Last reported 20:58']);
   // No time reported: said so, never invented.
   const noTime = rowsByKey(S.statusRows(echoShell({ haConnection: 'disconnected', haLastReportedAt: null }), { report: null, vocabulary: V }));
-  assert.equal(noTime['home-assistant'].detail, 'Last reported time unavailable');
+  assert.equal(noTime.lights.detail, 'Light controls are disabled and nothing is queued. Last reported time unavailable');
+  assert.match(rowsByKey(S.statusRows(echoShell({ haConnection: 'connecting' }), { report: null, vocabulary: V })).lights.detail, /^Connecting\. Light controls are disabled/);
   assert.equal(S.latestReport({ 'light.a': { last_reported: 'not a time' } }, ['light.a']), null);
   // Connected always names the system.
   const online = rowsByKey(S.statusRows(echoShell(), { report: null, vocabulary: V }));
-  assert.equal(online['home-assistant'].title, 'Home Assistant connected');
+  assert.equal(online.lights.title, 'Home Assistant connected');
   assert.equal(online.lights.detail, 'Output guards apply.');
   // Producer seconds format the same way as Home Assistant ISO times.
   assert.equal(S.reportedLine(new Date(2026, 9, 19, 20, 58).getTime() / 1000), 'Last reported 20:58');
@@ -166,6 +169,10 @@ test('local draft, loading and failed read from the one save and room vocabulary
   assert.deepEqual([S.saveState('saving').badge, S.saveState('failed').title, S.saveState('saved').unsaved], ['loading', 'Save failed', false]);
   assert.deepEqual([S.saveState(undefined).title, S.saveState('mystery').title, S.saveState('mystery').detail], ['No changes', 'Unavailable', 'mystery']);
   for (const state of S.UNSAVED_SAVE_STATES) assert.equal(S.isUnsaved(state), true, state);
+  // The top bar keeps its own copy for before the Apartment loads; it must match.
+  const app = fs.readFileSync(path.join(ROOT, 'app/src/home-app.jsx'), 'utf8');
+  assert.deepEqual(JSON.parse(app.match(/const APARTMENT_UNSAVED_STATES = (\[[^\]]*\]);/)[1]), [...S.UNSAVED_SAVE_STATES]);
+  assert.ok(app.includes('function apartmentStatusRows(state) {\n  return window.HomeApartmentStates?.statusRows?.(state) || [];\n}'), 'the top bar computes no rows of its own');
   assert.equal(S.isUnsaved('dirty'), false, 'the Apartment never emits dirty');
   assert.deepEqual([S.siteState('loading').title, S.siteState('error').title, S.siteState(undefined).badge, S.siteState('ready').badge],
     ['Loading room', 'Room failed to load', 'loading', 'current']);
@@ -203,8 +210,9 @@ test('home isolation: Victoria never inherits Echo\'s status, and Echo never rea
   const echoOffline = { haConnection: 'offline', haLastReportedAt: new Date(2026, 9, 19, 20, 58).toISOString() };
   // Victoria with no report of its own: nothing of Echo's shows.
   const bare = rowsByKey(S.statusRows(victoriaShell(echoOffline), { report: null, vocabulary: V }));
-  assert.equal(bare['home-assistant'].title, 'Home Assistant not reported for this home');
-  assert.doesNotMatch(text(Object.values(bare)), /20:58|Home Assistant offline|Home Assistant connected|Output guards/);
+  assert.equal(bare['home-assistant'], undefined, 'no Home Assistant row without a report from this home');
+  assert.doesNotMatch(text(Object.values(bare)), /20:58|Home Assistant|Output guards/);
+  assert.equal(S.haState({ siteId: 'victoria', connection: 'online' }).title, 'Home Assistant not reported for this home');
   // Victoria with its own report: its own HA connection and time, not Echo's.
   const own = rowsByKey(S.statusRows(victoriaShell(echoOffline), { report: { capabilities: CAPS }, vocabulary: V }));
   assert.equal(own['home-assistant'].title, 'Home Assistant connected');

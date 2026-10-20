@@ -386,14 +386,16 @@
   function lightsRow(shell, ha, caps) {
     const siteId = shell?.siteId;
     const engineered = caps?.sections?.engineered || null;
+    // Lights driven through Home Assistant name its connection. Another home's
+    // connection is never used: haState reads only this home's own report.
     if (siteId === HA_CLIENT_SITE || shell?.lightEntities > 0) {
       if (ha.status === "connected") {
-        return { key: "lights", system: "Lights", state: "connected", title: "Home Assistant lights",
+        return { key: "lights", system: "Lights", state: "connected", title: "Home Assistant connected",
           detail: shell?.physicalControls ? "Output guards apply." : "Physical controls are unavailable here." };
       }
-      if (ha.status === "connecting") return { key: "lights", system: "Lights", state: "loading", title: "Waiting for Home Assistant", detail: "Light controls are disabled. Nothing is queued." };
-      return { key: "lights", system: "Lights", state: "blocked", title: "Light controls disabled",
-        detail: `Nothing is queued. ${ha.detail || reportedLine(null)}` };
+      const why = ha.status === "connecting" ? "Connecting. " : "";
+      return { key: "lights", system: "Lights", state: ha.status === "connecting" ? "loading" : "disconnected", title: "Home Assistant not connected",
+        detail: `${why}Light controls are disabled and nothing is queued.${ha.detail ? ` ${ha.detail}` : ""}` };
     }
     const modeled = engineered ? engineered.fixtures.length : finite(shell?.modeledFixtures) ? shell.modeledFixtures : 0;
     if (engineered?.invalid) return { key: "lights", system: "Lights", state: "invalid", title: "Engineered state invalid", detail: "The report claims physical output, which is always off here." };
@@ -403,7 +405,7 @@
       return { key: "lights", system: "Lights", state: "modeled", title: `No light entities for ${room} fixtures`,
         detail: `${plural(modeled, "modeled fixture")} · nothing is sent to hardware.` };
     }
-    return { key: "lights", system: "Lights", state: "unavailable", title: "No Home Assistant lights for this home", detail: "" };
+    return { key: "lights", system: "Lights", state: "unavailable", title: "No lights in this home's model", detail: "" };
   }
 
   /* One row per system for the home being shown, from that home's facts:
@@ -424,10 +426,12 @@
     const save = saveState(shell?.saveState, shell?.saveDetail);
     const rows = [
       { key: "room", system: "Room", state: room.badge, title: room.title, detail: shell?.sourceLabel || room.detail },
-      { key: "home-assistant", system: "Home Assistant", state: ha.badge, title: ha.title, detail: ha.detail },
       lightsRow(shell, ha, caps?.applicable ? caps : null),
       { key: "save", system: "Saved work", state: save.badge, title: save.title, detail: save.detail },
     ];
+    // Echo's lights row names its connection. Any other home shows Home
+    // Assistant only from its own report, so it never shows Echo's.
+    if (siteId !== HA_CLIENT_SITE && sections.ha) rows.splice(1, 0, { key: "home-assistant", system: "Home Assistant", state: ha.badge, title: ha.title, detail: ha.detail });
     if (sections.perception) {
       const perception = perceptionState(sections.perception, vocab);
       rows.push({ key: "camera", system: "Camera", state: perception.badge, title: perception.title, detail: perception.detail });

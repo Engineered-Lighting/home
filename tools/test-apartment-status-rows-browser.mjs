@@ -82,14 +82,13 @@ test('status rows: HA offline (Echo), No session, Den contract rows and home iso
       const check = async (name, operation) => { const detail = await operation(); receipt.checks.push({ scenario: label, name, ...detail }); save(); };
       await status.waitFor();
 
-      await check('HANDOFF "HA offline (Echo)": the status names Home Assistant offline, shows "Last reported 20:58" and queues nothing', async () => {
+      await check('HANDOFF "HA offline (Echo)": the status names Home Assistant, shows "Last reported 20:58" and queues nothing', async () => {
         assert.equal(await status.getAttribute('aria-label'), 'Echo Park · what is connected');
-        assert.equal(await rowText('home-assistant'), 'Home Assistant Home Assistant offline Last reported 20:58');
-        assert.equal(await row('home-assistant').locator('.apt-ui-badge').getAttribute('data-state'), 'disconnected');
-        assert.equal(await rowText('lights'), 'Lights Light controls disabled Nothing is queued. Last reported 20:58');
+        assert.equal(await rowText('lights'), 'Lights Home Assistant not connected Light controls are disabled and nothing is queued. Last reported 20:58');
+        assert.equal(await row('lights').locator('.apt-ui-badge').getAttribute('data-state'), 'disconnected');
         assert.equal(await status.locator('button').count(), 0, 'status offers no control that could queue output');
         await page.evaluate(() => window.__statusProof.set({ haConnection: 'online', physicalControls: true }));
-        assert.equal(await rowText('home-assistant'), 'Home Assistant Home Assistant connected');
+        assert.equal(await rowText('lights'), 'Lights Home Assistant connected Output guards apply.');
         await page.evaluate(() => window.__statusProof.set({ haConnection: 'offline', physicalControls: false }));
         return { last_reported: '20:58', buttons: 0 };
       });
@@ -97,13 +96,13 @@ test('status rows: HA offline (Echo), No session, Den contract rows and home iso
       await check('Victoria never inherits Echo\'s status, with or without a report of its own', async () => {
         await page.evaluate(() => window.__statusProof.set({ siteId: 'victoria', sourceLabel: 'Victoria Den', hasPerception: true }));
         const bare = await status.innerText();
-        assert.match(bare, /Home Assistant not reported for this home/);
-        assert.doesNotMatch(bare, /20:58|Home Assistant offline|Home Assistant connected|Light controls disabled/);
+        assert.doesNotMatch(bare, /20:58|Home Assistant|Light controls are disabled/);
         await page.evaluate(fixtures => {
           window.HomeApartmentStates.reports.setVocabulary(fixtures.vocabulary);
           if (window.HomeApartmentStates.reports.set('echo', { capabilities: fixtures.capabilities })) throw Error('a Den report filed under Echo');
           window.HomeApartmentStates.reports.set('victoria', { capabilities: fixtures.capabilities, activityHealth: fixtures.health });
         }, FIXTURES);
+        await status.locator('[data-system="lighting-brain"]').waitFor();
         assert.equal(await status.getAttribute('aria-label'), 'Victoria · what is connected');
         assert.equal(await rowText('lights'), 'Lights No light entities for Den fixtures 4 modeled fixtures · nothing is sent to hardware.');
         assert.equal(await rowText('home-assistant'), 'Home Assistant Home Assistant connected', 'its own report, not the offline Echo client');
@@ -131,6 +130,8 @@ test('status rows: HA offline (Echo), No session, Den contract rows and home iso
           capabilities.perception.analysis = 'idle'; capabilities.perception.frame = null;
           window.HomeApartmentStates.reports.set('victoria', { capabilities });
         }, FIXTURES);
+        // The store notifies React; wait for that render rather than racing it.
+        await status.locator('[data-system="camera"] .apt-ui-badge[data-state="no-session"]').waitFor();
         assert.equal(await row('camera').locator('.apt-ui-badge').getAttribute('data-state'), 'no-session');
         assert.equal(await rowText('camera'), 'Camera No session No analysis session is running for this home. Start and Stop are in Camera · JEV.');
         return { camera: 'no-session' };

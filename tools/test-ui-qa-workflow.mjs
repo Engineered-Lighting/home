@@ -135,6 +135,7 @@ test('all original diagnostics and every worker receipt upload exactly once unde
     '.tmp/apartment-lit-splats-browser/*/*receipt.json',
     receiptPath, ...['overlay-bridge', 'room-selection', 'room-inspector', 'directional', 'aim-theme', 'aim-wiring', 'aim-library-shell', 'composer-comfort', 'setup-rail', 'setup-read-only'].map(name => '.tmp/apartment-' + name + '-browser/run-*/receipt.json'),
     '.tmp/apartment-aim-theme-browser/run-*/*.png', '.tmp/apartment-connected-view-browser/run-*/receipt.json',
+    '.tmp/gateway-apartment-browser-run-*/receipt.json',
     ...['people','intelligence','metrics','lab','lights','connection','simulation','labeler','labeler-editor'].map(name => '.tmp/home-full-ui-' + name + '-browser/run-*/receipt.json')].sort());
 });
 

@@ -170,6 +170,7 @@ jobs:
             .tmp/home-full-ui-labeler-editor-browser/run-*/receipt.json
             .tmp/apartment-setup-rail-browser/run-*/receipt.json
             .tmp/apartment-setup-read-only-browser/run-*/receipt.json
+            .tmp/gateway-apartment-browser-run-*/receipt.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7

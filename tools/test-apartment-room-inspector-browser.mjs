@@ -241,7 +241,8 @@ test('real authored room inspector preserves named aims and modeled channel bind
       return { target_id: echo.seed.targets[0].id, selected_coordinates_exact: true, placing: false, save_disabled: true, empty_undo_redo: true };
     });
     await check('generic Setup after named Edit uses the normal default tool without carrying the target entry', async () => {
-      await page.locator('.apt-home-setup').click(); await editorToolbar().waitFor();
+      await page.getByRole('button', { name: 'Home menu', exact: true }).click();
+      await page.getByRole('menuitemcheckbox', { name: 'Setup', exact: true }).click(); await editorToolbar().waitFor();
       assert.equal(await editorInspector().getByRole('spinbutton', { name: /^target [xyz]$/ }).count(), 0);
       assert.match(await page.locator('[data-apt-edit-ui="targets-and-palette"]').innerText(), /Select a marker or target directly in 3D/);
       await expectCleanEditor();

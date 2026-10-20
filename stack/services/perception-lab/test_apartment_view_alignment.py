@@ -241,9 +241,11 @@ class ViewAlignmentSuccessorTests(unittest.TestCase):
         calibration=[self.refusal(self.changed('successor',('camera','calibration_content_id'),'f'*64)),
             self.refusal(self.changed('successor',('verification','calibration_content_id'),'f'*64))]
         self.assertEqual(len(set(calibration)),1);reasons['successor_calibration_mismatch']=calibration[0]
+        # The recorded depth check is advisory: changed/unknown still bind.
         for status,counts in (('changed',(64,40)),('unknown',(8,0))):
             mount=dict(status=status,compared_cells=counts[0],changed_cells=counts[1])
-            reasons['successor_mount_'+status]=self.refusal(self.changed('successor',('verification','check_mount'),mount))
+            with self.subTest(advisory_mount=status):
+                self.assertTrue(self.bound(self.changed('successor',('verification','check_mount'),mount)))
         reasons['successor_mount_counts']=self.refusal(self.changed('successor',('verification','check_mount'),
             dict(status='unchanged',compared_cells=64,changed_cells=40)))
         authority=[self.refusal(self.changed('successor',(key,),True)) for key in self.module.NO_AUTHORITY]
@@ -274,7 +276,6 @@ class ViewAlignmentSuccessorTests(unittest.TestCase):
         expected={'v1_alone_new_epoch':'approximate_camera_epoch_changed',
             'successor_for_other_epoch':'approximate_camera_epoch_unverified',
             'successor_calibration_mismatch':'approximate_successor_calibration_changed',
-            'successor_mount_changed':'approximate_successor_mount_changed','successor_mount_unknown':'approximate_successor_mount_unknown',
             'successor_mount_counts':'approximate_successor_mount_check_required',
             'authority_flag_true':'approximate_successor_approximate_only_required',
             'predecessor_sha_changed':'approximate_successor_predecessor_changed',

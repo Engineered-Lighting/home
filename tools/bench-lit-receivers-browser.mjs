@@ -32,7 +32,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), S
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const arg = (name, fallback) => { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : fallback; };
 const RENDERER = arg('renderer', 'webgl'), CHANNEL = arg('channel', RENDERER === 'webgpu' ? 'msedge' : null);
-const SPLATS = Number(arg('splats', 370001)), POINTS = Number(arg('points', 876773));
+const SPLATS = Number(arg('splats', 370001)), POINTS = Number(arg('points', 876773)), MODES = arg('modes', 'splat,points').split(',');
 
 // Deterministic receivers on the authored room's floor and two walls.
 function surfaceRows(count, seed) {
@@ -88,7 +88,7 @@ for (const name of ['apartment.ply', 'points.ply', 'content-pack.json']) fs.writ
 fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1, packs: [echo, victoria].map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
 initRegistration(privateRoot, authoredDocument(readActiveBinding(packs), Core), { contentPacksDir: packs });
 const t0 = Date.now();
-const layer = authoredLightingLayer(victoria, { rows: { splat: splatRows, points: pointRows } });
+const layer = authoredLightingLayer(victoria, { rows: { splat: splatRows, points: pointRows }, sets: MODES });
 process.stdout.write(`synthetic layer: ${(Object.values(layer.files).reduce((sum, b) => sum + b.length, 0) / 1e6).toFixed(1)} MB in ${Date.now() - t0} ms\n`);
 const sources = publicSources(SRC);
 
@@ -142,7 +142,7 @@ try {
     };
     requestAnimationFrame(step);
   }), [frames, perFrame]);
-  for (const [label, mode] of [['Photo view', 'splat'], ['Cloud view', 'points']]) {
+  for (const [label, mode] of [['Photo view', 'splat'], ['Cloud view', 'points']].filter(([, m]) => MODES.includes(m))) {
     await page.getByRole('button', { name: label, exact: true }).click();
     await page.waitForFunction(m => window.__APT_ENGINE.modes.mode === m, mode);
     await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
@@ -160,8 +160,8 @@ try {
     entry.blend_ms = await page.evaluate(async () => { const times = await window.__APT_ENGINE.litReceiversBenchmark(30); const p = q => times[Math.floor((times.length - 1) * q)]; return { p50: p(.5), p95: p(.95), min: times[0] }; });
     // One spot re-aimed: its receiver column is re-baked in the worker.
     const before = await page.evaluate(() => window.__APT_ENGINE.litState().receivers.blends);
-    await page.evaluate(() => { const e = window.__APT_ENGINE, id = e.overlay.virtualFixturesReadback().fixtures[1].fixture_id;
-      e.overlay.aimVirtualFixtureAtTarget(id, { point: [1, 1, 0], normal: [0, 0, 1], kind: 'authored_floor' }); });
+    await page.evaluate(point => { const e = window.__APT_ENGINE, id = e.overlay.virtualFixturesReadback().fixtures[1].fixture_id;
+      e.overlay.aimVirtualFixtureAtTarget(id, { point, normal: [0, 0, 1], kind: 'authored_floor' }); }, mode === 'splat' ? [1, 1, 0] : [3, 3, 0]);
     const aimed = Date.now();
     await page.waitForFunction(b => window.__APT_ENGINE.litState().receivers.blends > b && window.__APT_ENGINE.overlay.virtualFixturesPresentationActive() === false
       && window.__APT_ENGINE.litState().bounce.status === 'ready', before);

@@ -126,6 +126,7 @@ const MAP = [
     ["test-apartment-states.cjs", "test-apartment-status-rows-browser.mjs"]],
   [/^app\/src\/home-apartment-states\.js$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-light-pools\.mjs|tools\/test-apartment-light-pools\.mjs)$/, ["test-apartment-light-pools.mjs", "test-apartment-room-inspector-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:apartment-echo-glyphs\.mjs|apartment-light-pools\.mjs|markers\.js)|tools\/test-apartment-echo-glyphs\.mjs)$/, ["test-apartment-echo-glyphs.mjs"]],
   [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:test-apartment-directional(?:-integration|-browser(?:-part2)?)?\.mjs|fixtures\/apartment-directional-browser-proof\.mjs)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:fixtures\/apartment-directional-native-mouse|test-apartment-directional-native-mouse)\.mjs$/, ["test-apartment-directional-native-mouse.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],

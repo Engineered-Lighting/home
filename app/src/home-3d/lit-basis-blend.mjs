@@ -55,6 +55,8 @@ export const LIT_WEIGHT_VEC4S = LIT_BASIS_SLOTS + LIT_SPOT_SLOTS + 2;
 const AMBIENT_SLOT = LIT_BASIS_SLOTS + LIT_SPOT_SLOTS, PARAMS_SLOT = AMBIENT_SLOT + 1;
 export const LIT_RECEIVER_FLAGS = Object.freeze({ unexplained_light: 1, clipped: 2, emitter: 4, off_surface: 8,
     low_irradiance: 16, open_hemisphere: 32, neighbor_fill: 64 });
+// What the relit splats and points do and do not do, stated with the view.
+export const LIT_RECEIVERS_LIMIT = 'Precomputed light basis · live spots re-baked with shadows · capture sheen dropped · window daylight off';
 export const LIT_RECEIVERS_DISCLOSURE = 'Photo and Cloud are relit by simulation: the capture\'s daylight is removed with a modeled '
     + 'de-lit layer, then the fixtures\' assumed output is added from a precomputed light basis. Modeled, not measured; '
     + 'the capture\'s view-dependent sheen is dropped while lit, and the window daylight column is off (night).';

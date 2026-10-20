@@ -784,7 +784,8 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             cutaway: swapped.length > 0 && swapped.every(entry => entry.cut),
             ambientFloor: LIT_AMBIENT_FLOOR,
             bounce: Object.freeze({ ...bounce, lastBake: bounce.lastBake ? Object.freeze({ ...bounce.lastBake }) : null }),
-            bounceLimit: LIT_BOUNCE_LIMIT, assumedAlbedos: LIT_BOUNCE_ALBEDO,
+            // Photo and Cloud state their own limits (the relit receivers'), Mesh L5's.
+            bounceLimit: (receivers && receivers.state().limit) || LIT_BOUNCE_LIMIT, assumedAlbedos: LIT_BOUNCE_ALBEDO,
             lux: Object.freeze(lux.slice()), luxLabel: LIT_LUX_LABEL,
             assumedLumens: LIT_ASSUMED_LUMENS, assumptionSource: LIT_ASSUMPTION_SOURCE, measured: false,
             disclosure: LIT_DISCLOSURE,

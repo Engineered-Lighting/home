@@ -201,6 +201,8 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
                 };
             },
             async detach() { const undo = restore; restore = null; await undo?.(); },
+            /* Proofs: the blend pass alone, waited on (gl.finish), in ms. */
+            async time() { const gl = renderer.getContext(), t0 = performance.now(); this.run(); gl.finish(); return performance.now() - t0; },
             async readback(n) {
                 const rows = Math.ceil(n / W), out = new Uint8Array(W * rows * 4), gl = renderer.getContext();
                 // The async frame readback may leave a pixel-pack buffer bound;
@@ -261,6 +263,12 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
                 restore = () => { sprite.material = original; lit.dispose(); };
             },
             async detach() { const undo = restore; restore = null; await undo?.(); },
+            /* Proofs: the compute pass alone, submitted and waited on, in ms. */
+            async time() {
+                const queue = renderer.backend.device.queue;
+                await queue.onSubmittedWorkDone();
+                const t0 = performance.now(); this.run(); await queue.onSubmittedWorkDone(); return performance.now() - t0;
+            },
             async readback(n) {
                 const values = new Float32Array(await renderer.getArrayBufferAsync(hook ? hook.attribute : output));
                 return Array.from({ length: n }, (_, i) => [values[i * 4], values[i * 4 + 1], values[i * 4 + 2]]);
@@ -330,6 +338,13 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
             const cpu = gpuRows.map((_, i) => Blend.blendReceiverDisplay(packed, i, weights, spots, { operator }));
             return { gpu: gpuRows, cpu };
         },
+        /* Proofs: the blend pass timed `iterations` times (ms, sorted). */
+        async benchmark(iterations = 20) {
+            if (!attached || disposed) return null;
+            const times = [];
+            for (let i = 0; i < iterations; i++) times.push(await gpu.time());
+            return times.sort((a, b) => a - b);
+        },
         /* Modeled scene luminance (cd/m²) of the receivers in view, metered
          * like lit-exposure.mjs's LIT_METER; null with none in view. */
         meter(camera) {
@@ -349,7 +364,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
             return Object.freeze({ available: true, kind, set: layer.set, source: layer.source, count, backend: gpu.backend, attached,
                 operator, blends, lastBlendMs, columns: layer.columns, matched: matched.length, unbaked: Object.freeze(unbaked.slice()),
                 liveSpots: spotSlots.size, gpuBytes: gpu.memoryBytes, layerBytes: layer.bytes, binding: 'sha256-verified',
-                provenance: layer.provenance, simulated: true, measured: false, disclosure: Blend.LIT_RECEIVERS_DISCLOSURE });
+                provenance: layer.provenance, simulated: true, measured: false, disclosure: Blend.LIT_RECEIVERS_DISCLOSURE, limit: Blend.LIT_RECEIVERS_LIMIT });
         },
     };
 }

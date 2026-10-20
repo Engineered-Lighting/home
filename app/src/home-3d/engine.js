@@ -962,6 +962,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         litAvailableIn(mode) { return mode === 'mesh' || (litReceiversFlag && (mode === 'splat' || mode === 'points')); },
         /* L4 proofs: the relit receivers as the GPU wrote them beside the CPU twin. */
         litReceiversReadback(n) { return litReceiversFlag && litReceivers ? litReceivers.readback(n) : Promise.resolve(null); },
+        litReceiversBenchmark(iterations) { return litReceiversFlag && litReceivers ? litReceivers.benchmark(iterations) : Promise.resolve(null); },
         /* L2 (WebGPU path): the view operator ('agx', Reinhard as the
          * fallback) or a comparison view ('neutral', 'linear') without the
          * presentation effects. The WebGL path stays 'linear'. */

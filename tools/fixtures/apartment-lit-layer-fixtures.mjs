@@ -118,11 +118,11 @@ function encodeSet(rows, sockets) {
  * { 'lighting-manifest.json': Buffer, '<set>-<field>.bin': Buffer, ... },
  * served from …/<revision>.lighting/. `tamper` edits the manifest for refusal
  * tests. */
-export function authoredLightingLayer(pack, { sockets = AUTHORED_SOCKETS, sets = ['splat', 'points'], tamper = null } = {}) {
-    const rows = authoredReceivers(), sources = { splat: 'apartment.ply', 'splat-mobile': 'apartment.mobile.ply', points: 'points.ply' };
+export function authoredLightingLayer(pack, { sockets = AUTHORED_SOCKETS, sets = ['splat', 'points'], tamper = null, rows: rowsBySet = null } = {}) {
+    const rowsFor = set => (Array.isArray(rowsBySet) ? rowsBySet : rowsBySet?.[set]) || authoredReceivers(), sources = { splat: 'apartment.ply', 'splat-mobile': 'apartment.mobile.ply', points: 'points.ply' };
     const files = {}, receivers = {}, entries = {};
     for (const set of sets) {
-        const encoded = encodeSet(rows, sockets), names = [];
+        const encoded = encodeSet(rowsFor(set), sockets), names = [];
         for (const [field, bytes] of Object.entries(encoded.fields)) {
             const name = `${set}-${field}.bin`, buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
             files[name] = buffer; entries[name] = { bytes: buffer.length, sha256: hash(buffer), keyed_by: 'vertex index in the source PLY' };

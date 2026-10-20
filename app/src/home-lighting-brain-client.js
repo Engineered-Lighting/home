@@ -26,6 +26,12 @@
   const cct = v => finite(v) && v >= 1000 && v <= 10000;
   const fade = v => finite(v) && v >= 0 && v <= 600;
   const copy = v => JSON.parse(JSON.stringify(v));
+  const activeSpot = doc => doc.fixtures.some(row => row.spot.on && row.paused_until === null);
+  function expiresAtMs(doc, heartbeatMs) {
+    const deadline = doc.generated_at * 1000 + heartbeatMs;
+    return activeSpot(doc) ? Math.min(deadline, doc.reading_evidence.activity_valid_until * 1000,
+      doc.reading_evidence.pose_valid_until * 1000) : deadline;
+  }
 
   function refuse(reason) { return { ok: false, reason, state: null }; }
 
@@ -45,10 +51,16 @@
     if (doc.schema !== SCHEMA) return refuse('state_schema_unsupported');
     if (doc.home !== 'victoria' || doc.room !== 'den') return refuse('state_scope_mismatch');
     if (!finite(doc.generated_at) || doc.generated_at <= 0) return refuse('state_generated_at_invalid');
+    if (doc.state_revision != null && (!Number.isSafeInteger(doc.state_revision) || doc.state_revision < 0)) return refuse('state_revision_invalid');
+    if (doc.decision_id != null && (!text(doc.decision_id, 120) || !doc.decision_id)) return refuse('state_decision_id_invalid');
     if (!text(doc.brain, 40) || !MODES.includes(doc.mode) || !text(doc.why)) return refuse('state_header_invalid');
     if (!Array.isArray(doc.fixtures) || doc.fixtures.length !== FIXTURE_IDS.length) return refuse('state_fixtures_incomplete');
     for (const row of doc.fixtures) { const reason = validateFixture(row); if (reason) return refuse(reason); }
     if (new Set(doc.fixtures.map(row => row.fixture_id)).size !== FIXTURE_IDS.length) return refuse('state_fixtures_duplicate');
+    if (activeSpot(doc) && (!object(doc.reading_evidence) || doc.reading_evidence.bound !== true
+        || !object(doc.reading_evidence.activity) || !object(doc.reading_evidence.pose)
+        || !finite(doc.reading_evidence.activity_valid_until) || !finite(doc.reading_evidence.pose_valid_until)))
+      return refuse('state_reading_evidence_unbound');
     if (!Array.isArray(doc.decisions) || doc.decisions.length > 20 || !doc.decisions.every(row => object(row)
         && finite(row.at) && text(row.rule, 80) && text(row.why) && nullable(row.change ?? null, v => text(v, 240))))
       return refuse('state_decisions_invalid');
@@ -68,7 +80,7 @@
       throw TypeError('lighting_brain_client_dependencies_required');
     const root = String(base).replace(/\/+$/, '');
     let status = 'stopped', reason = null, state = null, receivedAtMs = null, refusedReason = null, refusedCount = 0;
-    let source = null, watchdog = null, retry = null, backoff = BACKOFF_MIN_MS, epoch = 0, started = false;
+    let source = null, watchdog = null, retry = null, backoff = BACKOFF_MIN_MS, epoch = 0, connection = 0, started = false;
     const readback = () => ({ status, reason, online: status === 'online', state: state && copy(state),
       received_at_ms: receivedAtMs, refused_reason: refusedReason, refused_count: refusedCount, physical_commands: false });
     const notify = () => { try { onChange(readback()); } catch (_) { /* a view failure never stops the stream */ } };
@@ -85,16 +97,26 @@
       const token = epoch;
       watchdog = later(() => {
         if (token !== epoch) return;
-        watchdog = null; goOffline('heartbeat_missed'); closeSource(); schedule();
-      }, heartbeatMs);
+        watchdog = null; connection++; goOffline(state && nowMs() >= expiresAtMs(state, heartbeatMs) ? 'state_expired' : 'heartbeat_missed'); closeSource(); schedule();
+      }, Math.min(heartbeatMs, state ? Math.max(0, expiresAtMs(state, heartbeatMs) - nowMs()) : heartbeatMs));
     }
     function accept(result) {
       if (!result.ok) {
         refusedReason = result.reason; refusedCount++;
-        notify(); return false;
+        if (result.reason === 'state_reading_evidence_unbound') goOffline(result.reason);
+        else notify();
+        return false;
       }
       // Out-of-order GET/stream documents never move the brain backwards.
       if (state && result.state.generated_at < state.generated_at) return false;
+      if (state?.decision_id && result.state.decision_id && state.decision_id.split(':')[0] === result.state.decision_id.split(':')[0]
+          && Number.isSafeInteger(state.state_revision) && Number.isSafeInteger(result.state.state_revision)
+          && result.state.state_revision < state.state_revision) return false;
+      // Arrival is not freshness. A proxy replay cannot extend either the
+      // original state timestamp or the hard expiry of the reading evidence.
+      if (nowMs() >= expiresAtMs(result.state, heartbeatMs)) {
+        refusedReason = 'state_expired'; refusedCount++; goOffline('state_expired'); return false;
+      }
       state = result.state; receivedAtMs = nowMs(); refusedReason = null;
       backoff = BACKOFF_MIN_MS;
       status = state.brain === 'online' ? 'online' : 'offline';
@@ -107,31 +129,33 @@
       backoff = Math.min(BACKOFF_MAX_MS, backoff * 2);
       retry = later(() => { retry = null; if (token === epoch) connect(); }, delay);
     }
-    async function readState(token) {
+    async function readState(token, connected) {
       try {
         const response = await fetchFn(`${root}/state`, { cache: 'no-store', credentials: 'same-origin', redirect: 'error',
           headers: { Accept: 'application/json' } });
-        if (token !== epoch) return;
+        if (token !== epoch || connected !== connection) return;
         if (!response.ok) { goOffline(`state_http_${response.status}`); return; }
-        accept(parse(await response.text()));
-      } catch (_) { if (token === epoch) goOffline('state_unreachable'); }
+        const raw = await response.text();
+        if (token !== epoch || connected !== connection) return;
+        accept(parse(raw));
+      } catch (_) { if (token === epoch && connected === connection) goOffline('state_unreachable'); }
     }
     function connect() {
       if (!started) return;
       closeSource();
-      const token = epoch;
+      const token = epoch, connected = ++connection;
       if (status !== 'online') { status = state ? status : 'connecting'; notify(); }
       arm();
-      readState(token);
+      readState(token, connected);
       if (typeof Source !== 'function') return;
       try { source = new Source(`${root}/stream`, { withCredentials: true }); }
       catch (_) { source = null; goOffline('stream_unavailable'); schedule(); return; }
-      const message = event => { if (token === epoch) accept(parse(event?.data)); };
+      const message = event => { if (token === epoch && connected === connection) accept(parse(event?.data)); };
       source.onmessage = message;
       source.addEventListener?.('state', message);
       source.onerror = () => {
-        if (token !== epoch) return;
-        closeSource(); schedule();
+        if (token !== epoch || connected !== connection) return;
+        connection++; closeSource(); goOffline('stream_disconnected'); schedule();
       };
     }
     async function send(method, path, body) {

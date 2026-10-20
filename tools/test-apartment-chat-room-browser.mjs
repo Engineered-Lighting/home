@@ -52,7 +52,7 @@ function browserOptions() {
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-test('Chat bound to the room changes only the modeled selected light and dispatches nothing', { timeout: 180000 }, async () => {
+test('Chat bound to the room changes only the modeled selected light and dispatches nothing', { timeout: 145000 }, async () => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'proof serves only this worktree');
   const run = path.join(ROOT, '.tmp/apartment-chat-room-browser', 'run-' + Date.now());
   fs.mkdirSync(run, { recursive: true });

@@ -50,9 +50,10 @@ test('real gateway authenticates installed content and exposes registration with
     child.kill(); await Promise.race([once(child, 'exit').catch(() => {}), new Promise(resolve => setTimeout(resolve, 2000))]);
     fs.rmSync(root, { recursive: true, force: true });
   });
-  for (let tries = 0; ; tries++) {
+  const startupDeadline = Date.now() + 15000;
+  for (;;) {
     try { const health = await fetch(origin + '/healthz', { signal: AbortSignal.timeout(1000) }); if (health.ok) break; } catch {}
-    if (tries >= 60 || child.exitCode !== null) assert.fail('authored gateway failed to start: ' + diagnostics);
+    if (Date.now() >= startupDeadline || child.exitCode !== null) assert.fail('authored gateway failed to start: ' + diagnostics);
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   const auth = { Authorization: 'Basic ' + Buffer.from('fixture-owner:fixture-password').toString('base64') };

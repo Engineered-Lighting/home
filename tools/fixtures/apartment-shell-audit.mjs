@@ -47,7 +47,7 @@ const PARTS = {
 
 export function shellAudit(part) {
 assert.ok(Object.hasOwn(PARTS, part), 'known shell audit part');
-test(PARTS[part], { timeout: 160000 }, async () => {
+test(PARTS[part], { timeout: 145000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-shell-audit-browser', part + '-run-' + Date.now());
   fs.mkdirSync(path.join(run, 'evidence'), { recursive: true });
   const receipt = { schema: 'home-apartment-shell-audit-1', part, authored_room: true, real_household_data: false, live_camera: false,

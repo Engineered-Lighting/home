@@ -196,7 +196,7 @@ function transformedFiles(page) {
     .filter((entry) => /transform/.test(entry.phase)).map((entry) => entry.file));
 }
 
-test("browser loaders run precompiled JSX, fall back per file, and match in-browser Babel exactly", { timeout: 170000 }, async () => {
+test("browser loaders run precompiled JSX, fall back per file, and match in-browser Babel exactly", { timeout: 145000 }, async () => {
   const outDir = tempDir("out");
   const browser = await chromium.launch({ headless: true });
   try {

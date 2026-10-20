@@ -724,8 +724,9 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
                 return { ok: true, descriptor: interactionDescriptor(fixtureId), physical_commands: false };
             } catch (error) { return { ok: false, reason: error.message }; }
         },
-        setFixtureState(fixtureId, patch) {
+        setFixtureState(fixtureId, patch, { expectedGeneration = generation } = {}) {
             if (disposed) return { ...readback(), ok: false, reason: 'equipment_preview_disposed' };
+            if (expectedGeneration !== generation) return { ok: false, reason: 'equipment_preview_generation_changed' };
             if (!states.has(fixtureId)) return { ...readback(), ok: false, reason: 'equipment_preview_fixture_missing' };
             try {
                 const state = nextState(states.get(fixtureId), patch);

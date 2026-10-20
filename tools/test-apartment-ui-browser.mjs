@@ -97,7 +97,9 @@ function contrast(fg, bg) {
 test('authored shared UI keeps status contrast and safe native toast actions in both themes', { timeout: 120000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-ui-browser', 'run-' + Date.now());
   fs.mkdirSync(run, { recursive: true });
-  const screenshotDirectory = path.join(ROOT, 'docs/design/apartment-unified/evidence-wave1-foundations');
+  const screenshotDirectory = process.env.HOME_APARTMENT_UI_UPDATE_EVIDENCE === '1'
+    ? path.join(ROOT, 'docs/design/apartment-unified/evidence-wave1-foundations')
+    : run;
   fs.mkdirSync(screenshotDirectory, { recursive: true });
   const receipt = { schema: 'home-apartment-ui-authored-browser-1', authored_components_only: true, room: false,
     household_data: false, model_session: false, physical_commands: 0, http_requests: [], web_sockets: [], errors: [],

@@ -4,5 +4,5 @@
 import test from 'node:test';
 import { runDirectionalBrowserProof } from './fixtures/apartment-directional-browser-proof.mjs';
 
-test('real authored directional controls preserve native input, aim and output boundaries (part 2: stages 1-2, 7-13)', { timeout: 180000 },
+test('real authored directional controls preserve native input, aim and output boundaries (part 2: stages 1-2, 7-13)', { timeout: 145000 },
   () => runDirectionalBrowserProof({ part: 2 }));

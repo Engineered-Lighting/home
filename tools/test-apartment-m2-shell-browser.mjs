@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runM2Shell, waitForDirectionalReadiness, FORMER_SCREENS } from './fixtures/apartment-m2-shell-harness.mjs';
 
-test('M2 shell: Photo missing, mode recovery, camera views and every former screen in the actual Home shell', { timeout: 180000 }, async () => {
+test('M2 shell: Photo missing, mode recovery, camera views and every former screen in the actual Home shell', { timeout: 145000 }, async () => {
   await runM2Shell('apartment-m2-shell-browser', async shell => {
     const { page, faults, stalled, requests, checks, receipt, echo, assetPath, waitSite, homes, selectedHome, toolbar, modeButton, notice, engineMode, openShell, tab, menu } = shell;
     receipt.former_screens = FORMER_SCREENS;

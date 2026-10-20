@@ -57,7 +57,7 @@ test('for the actual base, every worker count 1..8 partitions the unsharded --li
   const base = actualBase();
   const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6, 7, 8]);
   const listed = run(['--base', base, '--list']).stdout.split('\n')[0];
-  assert.match(listed, new RegExp(`^\\[touched-harnesses\\] \\d+ changed files â†’ ${full.filter(name => name !== 'check-jsx.js').length} harnesses`));
+  assert.match(listed, new RegExp(`^\\[touched-harnesses\\] \\d+ changed files → ${full.filter(name => name !== 'check-jsx.js').length} harnesses`));
 });
 
 test('fixed file sets and --all partition exactly for 1, 2, 3 and 5 workers', () => {

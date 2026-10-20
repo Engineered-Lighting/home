@@ -57,6 +57,13 @@ The screenshots are full-page captures; each includes an authored-fixture label
 and a focused notice action. The fixture's example Live badge demonstrates the
 component appearance and asserts no actual stream.
 
+Routine test runs save the four captures beside their receipt under
+`.tmp/apartment-ui-browser/run-<timestamp>/`, leaving this committed gallery
+unchanged. To intentionally refresh the authored gallery, set
+`HOME_APARTMENT_UI_UPDATE_EVIDENCE=1` before running
+`node --test tools/test-apartment-ui-browser.mjs`, then review the four images
+before committing them.
+
 ## Provenance and remaining acceptance
 
 The final focused receipt records these SHA-256 values:

@@ -21,7 +21,7 @@ const CLOCK = '2026-10-19T12:00:00.000Z';
 const REGISTRATION = '/api/apartment/v1/sites/victoria/maps/victoria-den/rooms/den/registration';
 const SAVE_EQUIPMENT = 'button[title="Save equipment positions for this Victoria Den scan revision"]';
 
-test('rail saves are byte-identical to legacy saves and a registration conflict keeps session edits', { timeout: 200000 }, async () => {
+test('rail saves are byte-identical to legacy saves and a registration conflict keeps session edits', { timeout: 145000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-setup-saves-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const rooms = installSetupRooms(run), initialRegistration = fs.readFileSync(rooms.registrationFile, 'utf8');
   const receipt = { schema: 'home-apartment-setup-saves-browser-1', authored_room: true, household_data: false, screenshots: false,
@@ -30,8 +30,8 @@ test('rail saves are byte-identical to legacy saves and a registration conflict 
   let server, browser, timer;
   const started = Date.now();
   const stage = name => { receipt.current_stage = name; receipt.stages.push({ name, at: Math.round((Date.now() - started) / 100) / 10 }); save(); };
-  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('180s Setup saves browser deadline at: '
-    + receipt.current_stage + ' · ' + JSON.stringify(receipt.stages))); }, 180000); });
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => { browser?.close().catch(() => {}); reject(Error('145s Setup saves browser deadline at: '
+    + receipt.current_stage + ' · ' + JSON.stringify(receipt.stages))); }, 145000); });
   const check = async (name, operation) => { stage(name); receipt.checks.push({ name, ...(await operation()) }); save(); };
   const tape = async (field, value) => { await field.fill(value); await field.press('Enter'); };
 

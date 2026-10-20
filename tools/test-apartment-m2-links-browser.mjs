@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runM2Shell, waitForDirectionalReadiness } from './fixtures/apartment-m2-shell-harness.mjs';
 
-test('M2 shell: old deep links keep working and a failed room recovers in place', { timeout: 180000 }, async () => {
+test('M2 shell: old deep links keep working and a failed room recovers in place', { timeout: 145000 }, async () => {
   await runM2Shell('apartment-m2-links-browser', async shell => {
     const { page, faults, checks, echo, assetPath, waitSite, homes, selectedHome, toolbar, openShell, tab, menu } = shell;
     // Deep links: the bare URL lands in the room; old links keep working.

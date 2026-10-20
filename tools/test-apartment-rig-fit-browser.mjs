@@ -52,7 +52,7 @@ function browserOptions() {
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-test('renderer fits the visible canvas at 1920, 1366 and 1024, pans, and keeps the owner pose through layout changes', { timeout: 180000 }, async () => {
+test('renderer fits the visible canvas at 1920, 1366 and 1024, pans, and keeps the owner pose through layout changes', { timeout: 145000 }, async () => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'this proof uses only current worktree source');
   const run = path.join(ROOT, '.tmp/apartment-rig-fit-browser', 'run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');

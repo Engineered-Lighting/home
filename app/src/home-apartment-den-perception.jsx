@@ -100,7 +100,8 @@
     const dock=model()?.normalizeDockState(controlledDock??ownDock)||'default',detail=model()?.normalizeDetail(controlledDetail??ownDetail)||'simple';
     const setDock=next=>{writeStored('apt.dock.state',next);if(onDockState)onDockState(next);else setOwnDock(next);};
     const setDetail=next=>{writeStored('apt.dock.detail',next);if(onDetail)onDetail(next);else setOwnDetail(next);};
-    const playerRef=useRef(null),layerRef=useRef(null),discoveryRef=useRef(null),generationRef=useRef(0);
+    const playerRef=useRef(null),layerRef=useRef(null),discoveryRef=useRef(null),generationRef=useRef(0),fastRef=useRef(null);
+    const [fastStatus,setFastStatus]=useState(null);
     const loopRef=useRef(null),loopBindingRef=useRef(null);
     const engineRef=useRef(engine),lastViewRef=useRef(null),analysisGenerationRef=useRef(0),analysisBindingRef=useRef(null),activeRef=useRef(active);
     const aimPreviewRef=useRef(null),aimPreviewEngineRef=useRef(null),aimRegistrationRef=useRef(onAimPreviewController),aimChangeRef=useRef(onAimPreviewChange);
@@ -110,6 +111,19 @@
     aimRegistrationRef.current=onAimPreviewController;aimChangeRef.current=onAimPreviewChange;
     const identity=engine?.sceneIdentity;
     const identityKey=[identity?.siteId,identity?.contentRevision,identity?.frameDigest,identity?.registrationVersion].join('|');
+    useEffect(()=>{
+      let retired=false,layer=null;
+      if(active&&engine?.siteId==='victoria')loadLayer().then(module=>{
+        if(retired||!module.attachFastTracking)return;
+        layer=module.attachFastTracking(engine,{isCurrent:()=>!retired&&activeRef.current&&engineRef.current===engine,
+          onStatus:value=>{if(!retired){
+            if(value.active&&layerRef.current){const scope=layerRef.current.readback().scope;
+              layerRef.current.draw({scope,status:'unavailable',roomPose:{status:'unavailable',reason:'fast_tracking_active'}});}
+            setFastStatus(value);
+          }}});fastRef.current=layer;
+      }).catch(()=>{if(!retired)setFastStatus({active:false,status:'unavailable'});});
+      return()=>{retired=true;layer?.dispose();if(fastRef.current===layer)fastRef.current=null;setFastStatus(null);};
+    },[engine,identityKey,active,loadLayer]);
     const capability=model()?.perceptionCapability({siteId:engine?.siteId,capabilities:suppliedCapability})||{variant:'none',cameraId:null,body:{}};
     const siteId=engine?.siteId,cameraId=capability.cameraId;
 
@@ -230,7 +244,7 @@
           if(token!==generationRef.current||engineRef.current!==engine)return;
           lastViewRef.current=next.view;setState(next);
           setModelHistory(previous=>model()?.modelUpdates(previous,next.view)||previous);
-          layerRef.current?.draw(roomView(next.view));
+          if(!fastRef.current?.readback().active)layerRef.current?.draw(roomView(next.view));
           aimPreviewRef.current?.update(next.view?.virtualTargetPreview,next.view?.deskPreviewEvidence);
           const readback=layerRef.current?.readback();setFollowing(readback?.following===true);setFollowPaused(readback?.followPaused===true);
         }});
@@ -239,7 +253,7 @@
         if(token!==generationRef.current||engineRef.current!==engine)return;
         const layer=module.attachApartmentPerceptionLayer(engine,scope,{isCurrent:()=>token===generationRef.current&&engineRef.current===engine,
           reducedMotion:()=>global.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true});
-        layerRef.current=layer;setLayerReady(true);if(lastViewRef.current)layer.draw(roomView(lastViewRef.current));
+        layerRef.current=layer;setLayerReady(true);if(lastViewRef.current&&!fastRef.current?.readback().active)layer.draw(roomView(lastViewRef.current));
       }catch(error){if(token===generationRef.current)setNotice(error.message||'Perception view unavailable');}
     }
     function viewActivityLoop(){
@@ -336,6 +350,9 @@
 
     const header=<header className="apt-ui-dock-header" data-collapsed={dock==='collapsed'?'true':'false'}>
       <div className="apt-ui-grow apt-dock-title"><h2 className="apt-ui-heading">Den camera</h2>
+        {fastStatus?.active&&<span role="status" data-fast-tracking="1" title="SDK camera timestamp to GPU completion. Bounds include clock mapping; exposure synchronization remains unqualified." style={note}>Skeleton {Number.isFinite(fastStatus.updateHz)?`${fastStatus.updateHz.toFixed(1)} Hz`:'connected'}
+          {Array.isArray(fastStatus.cameraToGpuMs)?` · ${Math.round(fastStatus.cameraToGpuMs[0])}–${Math.round(fastStatus.cameraToGpuMs[1])} ms camera clock to GPU`:''}
+          <span style={{display:'block'}}>Approximate room placement</span></span>}
         <DockBadge state={badge.state}>{badge.label}</DockBadge></div>
       <button type="button" className="apt-ui-button is-icon" aria-label={dock==='expanded'?'Restore camera dock size':'Expand camera dock'}
         aria-pressed={dock==='expanded'} onClick={()=>setDock(dock==='expanded'?'default':'expanded')}>

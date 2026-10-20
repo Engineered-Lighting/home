@@ -27,11 +27,12 @@ def validate_limits(values):
         raise ValueError('At most one CPU quota required')
 
 
-def validate_config(config, now):
+def validate_config(config, now, *, tracking=False):
     if set(config)-{'pose','runtime_seconds'}!={'schema_version','checkpoint_path','ledger_root','manifest','grants','expires_at','maximum_requests','gate_references'} or config['schema_version']!=1:
         raise ValueError('Exact trial configuration required')
     from session_budget import worker_budget
-    limits=worker_budget(config)
+    limits=({'runtime_seconds':900,'maximum_requests':9000} if tracking else worker_budget(config))
+    if tracking and config.get('runtime_seconds')!=900:raise ValueError('Exact fifteen-minute tracking trial required')
     expiry=config['expires_at']
     if type(expiry) not in (int,float) or not now<expiry<=now+limits['runtime_seconds']:
         raise ValueError('Fresh trial expiry within provisioned runtime required')
@@ -62,25 +63,26 @@ def validate_config(config, now):
     return deepcopy(config)
 
 
-def create_la_detector_app():
+def create_la_detector_app(*, tracking=False):
     if sys.platform!='linux' or socket.gethostname()!='EngineeredLightingServer1':
         raise ValueError('Explicit LA host required')
+    unit='den-fast-tracking.service' if tracking else UNIT
     groups=[line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::/')]
-    if len(groups)!=1 or not groups[0].endswith('/'+UNIT):
+    if len(groups)!=1 or not groups[0].endswith('/'+unit):
         raise ValueError('Dedicated bounded detector trial unit required')
     cgroup=Path('/sys/fs/cgroup')/groups[0].lstrip('/')
     validate_limits({k:(cgroup/k).read_text() for k in ('memory.max','memory.swap.max','pids.max','cpu.max')})
-    properties=subprocess.run(['systemctl','--user','show',UNIT,'-p','RuntimeMaxUSec','-p','Restart'],
+    properties=subprocess.run(['systemctl','--user','show',unit,'-p','RuntimeMaxUSec','-p','Restart'],
         capture_output=True,text=True,check=True,timeout=3).stdout
     properties=dict(line.split('=',1) for line in properties.splitlines() if '=' in line)
-    path=Path(os.environ['PERCEPTION_LAB_LA_WORKER_CONFIG'])
+    path=Path(os.environ['PERCEPTION_LAB_FAST_WORKER_CONFIG' if tracking else 'PERCEPTION_LAB_LA_WORKER_CONFIG'])
     if path.is_symlink() or path.stat().st_uid!=os.geteuid() or path.stat().st_mode&0o077:
         raise ValueError('Private operator provisioning required')
     with path.open('rb') as source:raw=source.read(16385)
     if len(raw)>16384:raise ValueError('Configuration too large')
-    config=validate_config(json.loads(raw),time.time())
+    config=validate_config(json.loads(raw),time.time(),tracking=tracking)
     from session_budget import worker_budget, verify_process_lifetime
-    limits=worker_budget(config)
+    limits=({'runtime_seconds':900,'maximum_requests':9000} if tracking else worker_budget(config))
     verify_process_lifetime(properties,limits)
     base=Path('/home/marcelo-lima/home-lab-yolo26-trial')
     for key,parent in [('checkpoint_path',base),('ledger_root',base/'live-ledgers')]:
@@ -120,7 +122,7 @@ def create_la_detector_app():
         if 'pose' in config:
             from pose_composition import compose
             worker=compose(ledger,detector,config['pose'],fresh,pending)
-        receiver=RemoteReceiver(ledger,worker,profile,admit)
+        receiver=RemoteReceiver(ledger,worker,profile,admit,viewing_jpeg=tracking)
         app=RemoteHTTP(receiver,config['grants'],owns_store=True)
         with ledger.lock:
             if ledger.db.execute("SELECT 1 FROM remote_execution WHERE state!='terminal' LIMIT 1").fetchone():
@@ -143,6 +145,15 @@ def create_la_detector_app():
         # Torch allocator bound only; does not isolate whole-process CUDA memory.
         torch.cuda.set_per_process_memory_fraction(512*1024**2/torch.cuda.get_device_properties(0).total_memory,0)
         detector.load(Path(config['checkpoint_path']))
+        if tracking:
+            from fast_tracking_runtime import private_json,TrackingPump,TrackingHTTP
+            if 'pose' not in config:raise ValueError('Tracking requires the admitted pose stage')
+            pump=TrackingPump(receiver,private_json(os.environ['PERCEPTION_LAB_FAST_TRACKING_CONFIG']),fresh)
+            return TrackingHTTP(app,pump)
         return app
     except BaseException:
         ledger.close();raise
+
+
+def create_fast_tracking_app():
+    return create_la_detector_app(tracking=True)

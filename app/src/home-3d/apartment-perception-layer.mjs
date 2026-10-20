@@ -2,6 +2,7 @@
  * Admission and freshness belong to the perception projection. This layer has
  * no acquisition, identity, lighting, network or model API. */
 import * as THREE from 'three';
+export { attachFastTracking } from './fast-tracking-layer.mjs';
 
 const SCOPE_KEYS = ['siteId', 'contentRevision', 'frameDigest', 'registrationVersion', 'cameraId', 'sessionId', 'generation'];
 const finite3 = value => Array.isArray(value) && value.length === 3 && value.every(number => Number.isFinite(number) && Number.isFinite(Math.fround(number)));

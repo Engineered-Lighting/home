@@ -23,6 +23,7 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
+import { createFastTrackingHandler, FAST_TRACKING_PREFIX } from "./fast-tracking-route.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -1867,6 +1868,11 @@ const perceptionLabReadHandler = createPerceptionLabReadHandler({
   credential: () => readLabConfigFile(process.env.HOME_WEB_DEN_LAB_READ_TOKEN_FILE, 1024, true).toString("utf8").trim(),
   authenticate: req => hasValidAuth(req).ok, timeoutMs: 5000, maxConcurrent: 4,
 });
+let trackingCa=null;
+try { trackingCa=readLabConfigFile(process.env.HOME_WEB_DEN_TRACKING_CA_FILE,65536); } catch { /* Opt-in route fails closed. */ }
+const fastTrackingHandler=createFastTrackingHandler({ca:trackingCa,
+  credential:()=>readLabConfigFile(process.env.HOME_WEB_DEN_TRACKING_READ_TOKEN_FILE,1024,true).toString('utf8').trim(),
+  authenticate:req=>hasValidAuth(req).ok});
 function labReadOriginAllowed(req) {
   if (["same-site", "cross-site"].includes(req.headers["sec-fetch-site"])) return false;
   if (!req.headers.origin) return true;
@@ -1977,6 +1983,10 @@ const server = http.createServer({
     && !labReadOriginAllowed(req)) {
     sendJson(res, 403, { error: { code: "lab_origin_denied" } }); return;
   }
+  if (String(req.url).startsWith(FAST_TRACKING_PREFIX) && !labReadOriginAllowed(req)) {
+    sendJson(res,403,{error:'tracking_origin_denied'});return;
+  }
+  if (fastTrackingHandler(req,res)) return;
   if (perceptionLabReadHandler(req, res)) return;
   if (lightingLayerHandler(req, res) || contentPackHandler(req, res)) return;
   if (await equipmentRegistrationHandler(req, res)) return;

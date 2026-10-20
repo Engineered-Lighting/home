@@ -32,5 +32,13 @@ class TrialGuards(unittest.TestCase):
             config=self.config();config['manifest'][field]=value
             with self.subTest(field=field),self.assertRaises(ValueError):validate_config(config,1000)
 
+    def test_fast_tracking_budget_is_separate_and_remains_finite(self):
+        config=self.config();config.update(runtime_seconds=900,maximum_requests=9000,expires_at=1900)
+        validate_config(config,1000,tracking=True)
+        with self.assertRaises(ValueError):validate_config(config,1000)
+        for key,value in [('runtime_seconds',901),('maximum_requests',9001),('expires_at',1901)]:
+            wrong=deepcopy(config);wrong[key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):validate_config(wrong,1000,tracking=True)
+
 
 if __name__=='__main__':unittest.main()

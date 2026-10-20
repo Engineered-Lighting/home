@@ -9,6 +9,9 @@
 # unit or restarts anything to get a pass.
 set -u
 TCTL_MAX=${1:-82}
+# Optional kernel-fault window start (journalctl --since syntax), e.g. "2026-10-19 18:36"
+# to look past an already-explained fault such as the 18:35 download OOM.
+SINCE=${2:--24h}
 GPU_MAX=85
 DISK_MIN_GB=60
 # Failures recorded before this work started (H0, 2026-10-19). Anything else is new.
@@ -21,8 +24,8 @@ echo "system: $(systemctl is-system-running 2>/dev/null)"
 for unit in $(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}'); do
   case " $KNOWN_FAILED " in *" $unit "*) echo "known failed unit: $unit" ;; *) bad "new failed unit $unit" ;; esac
 done
-faults=$(journalctl -k -b --since "-24h" --no-pager 2>/dev/null | grep -icE "xid|nvrm.*error|out of memory|oom-kill|mce|hardware error|soft lockup|thermal|i/o error|segfault")
-[ "${faults:-0}" -eq 0 ] && echo "kernel faults 24h: 0" || bad "kernel faults 24h: $faults (journalctl -k -b --since -24h)"
+faults=$(journalctl -k -b --since "$SINCE" --no-pager 2>/dev/null | grep -icE "xid|nvrm.*error|out of memory|oom-kill|mce|hardware error|soft lockup|thermal|i/o error|segfault")
+[ "${faults:-0}" -eq 0 ] && echo "kernel faults since $SINCE: 0" || bad "kernel faults since $SINCE: $faults (journalctl -k -b --since \"$SINCE\")"
 
 read -r gpu_temp gpu_used gpu_free <<<"$(nvidia-smi --query-gpu=temperature.gpu,memory.used,memory.free --format=csv,noheader,nounits | tr -d ',')"
 echo "gpu: ${gpu_temp}C used=${gpu_used}MiB free=${gpu_free}MiB"

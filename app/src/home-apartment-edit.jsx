@@ -740,6 +740,15 @@ function HomeApartmentEdit({
     setNotice("select a shaded room · drag a round corner to reshape it, or drag inside to move it");
   };
 
+  // APT-U04: the mapper arms the same click-to-place gesture as the legacy
+  // target presets; a click lands in the mapper instead of the model.
+  const mapperPickRef = useRef(null);
+  const registerMapperPick = useCallback((pick) => { mapperPickRef.current = pick; }, []);
+  const beginMapperPlacing = useCallback(() => {
+    setTool("targets"); setPlacingTarget({ mapper: true, label: "named aim" }); setMoveTargetId(null); setTargetDraftId(null); setNotice("");
+  }, []);
+  const endMapperPlacing = useCallback(() => setPlacingTarget(null), []);
+
   const cameraDevices = (model.devices || []).filter((device) => device.type === "camera");
   const railAvailability = rail ? Setup.availability({ registration: isEquipmentRegistration }) : null;
   const railKinds = isEquipmentRegistration ? (railTool === "position" ? ["fixture"] : railTool === "cameras" ? ["camera"] : null) : null;
@@ -801,6 +810,8 @@ function HomeApartmentEdit({
 
     const placeTargetAt = (clientX, clientY) => {
       if (tool !== "targets" || !placingTarget) return false;
+      // The Setup rail's named-aim mapper owns its own draft (APT-U04).
+      if (placingTarget.mapper) { mapperPickRef.current?.(clientX, clientY); return true; }
       const fp = engine.picking.floorPoint(engine.apartmentRoot, clientX, clientY);
       const mesh = engine.modes.getMesh?.();
       const hit = mesh
@@ -1553,7 +1564,7 @@ function HomeApartmentEdit({
   const railBlocked = !!(railState && !railState.available);
   // Home Assistant rows carry their own pickers, so the legacy link inspector
   // would only repeat them.
-  const railHidesInspector = railBlocked || (rail && railTool === "links");
+  const railHidesInspector = railBlocked || (rail && (railTool === "links" || (railTool === "targets" && !isEquipmentRegistration)));
   const Links = window.AptSetupLinks;
   const unplacedCameras = rail && !isEquipmentRegistration
     ? Object.values(palette).flat().filter((item) => item.domain === "camera") : [];
@@ -1570,6 +1581,11 @@ function HomeApartmentEdit({
           }} />
         {notice && <div role="status" style={{ marginTop: 10, fontSize: 12, color: "var(--hg-fg-3)" }}>{notice}</div>}</>)
     : isEquipmentRegistration ? null
+    : railTool === "targets" && window.AptNamedAimMapper ? <>{echoSourceStatus}<window.AptNamedAimMapper engine={engine} model={model}
+        homeName={homeName} saveStatus={saveStatus} saving={saving} mutate={mutate} onSave={onSave} roomAt={roomAt}
+        placing={!!placingTarget?.mapper} beginPlacing={beginMapperPlacing} endPlacing={endMapperPlacing}
+        registerPick={registerMapperPick} selectedTargetId={selectedTargetId}
+        onSelectTarget={(id) => { setSelectedTargetId(id); if (id) { setSelectedId(null); setSelectedZone(null); } }} /></>
     : railTool === "names" ? <>{echoSourceStatus}<Setup.Names devices={model.devices || []} zones={model.zones || []}
         originalNames={originalNames} selectedId={selectedId}
         onFocusDevice={(id) => { setSelectedId(id); setSelectedTargetId(null); setSelectedZone(null); }}

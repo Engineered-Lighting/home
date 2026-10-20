@@ -68,7 +68,7 @@ test('Setup rail opens every existing tool in both homes and leaves the room exa
       const seen = {};
       const expect = {
         sockets: /Select a marker or target directly in 3D/, names: /Renames stay in Apartment; Home Assistant keeps its own names/,
-        targets: /add target · step 1 of 2/i, zones: /edit room zones/i, position: /Mapped fixtures · 2/,
+        targets: /Surfaces lights can be pointed at by name/, zones: /edit room zones/i, position: /Mapped fixtures · 2/,
         links: /Match each light in the model to the Home Assistant light that controls it/, cameras: /Placed by hand · not calibrated/,
       };
       for (const [id, label] of TOOLS) {

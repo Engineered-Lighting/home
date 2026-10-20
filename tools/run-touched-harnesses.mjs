@@ -39,6 +39,7 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^(?:app\/src\/(?:home-apartment-perception-source|home-perception-lab-transport)\.js|tools\/test-(?:apartment-perception-source\.cjs|perception-lab-transport\.mjs))$/, ["test-apartment-perception-source.cjs", "test-perception-lab-transport.mjs"]],
   [/^(?:app\/src\/(?:home-app\.jsx|home-metrics(?:-lab)?\.jsx)|tools\/test-home-full-ui-metrics-browser\.mjs)$/, ["test-home-full-ui-metrics-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-people)\.jsx|tools\/test-home-full-ui-people-browser\.mjs)$/, ["test-home-full-ui-people-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-intelligence)\.jsx|tools\/test-home-full-ui-intelligence-browser\.mjs)$/, ["test-home-full-ui-intelligence-browser.mjs"]],

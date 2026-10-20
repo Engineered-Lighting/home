@@ -6,6 +6,7 @@
   const KEYS=['siteId','contentRevision','frameDigest','registrationVersion','cameraId','sessionId','generation'],ID=/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
   const copy=x=>JSON.parse(JSON.stringify(x)),fail=code=>{throw Object.assign(Error(code),{code});};
   let active=null,epoch=0,listPending=null;
+  const loopReaders=new Set();
   function scope(value){
     if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==KEYS.length||!KEYS.every(k=>Object.hasOwn(value,k))
       ||value.siteId!=='victoria'||value.cameraId!=='den'||!ID.test(value.sessionId||'')||!Number.isSafeInteger(value.generation)||value.generation<0
@@ -218,10 +219,50 @@
         ||!Number.isSafeInteger(s.generation)||s.generation<0))fail('apartment_perception_session_response_mismatch');return copy(value.items);
     }finally{if(listPending===request)listPending=null;}
   }
-  const invalidate=()=>{epoch++;active?.close();if(ownedAnalysis)stopAnalysis().catch(()=>{});};
+  // Observe the already-running producer. This path never creates, stops or
+  // renews a recording. A changed epoch/session is announced before its new
+  // session read so the consumer can retire the preceding frame immediately.
+  function watchActivityLoop(value){
+    const options=analysisOptions(value);
+    if(typeof value.onChange!=='function')fail('apartment_activity_loop_callback_required');
+    let closed=false,timer=null,pending=null,lastKey=null;
+    const valid=()=>!closed&&currentAnalysis(options);
+    const publish=state=>{if(valid())value.onChange(copy(state));};
+    const close=()=>{if(closed)return;closed=true;root.clearTimeout(timer);pending?.abort();
+      value.signal?.removeEventListener('abort',close);loopReaders.delete(close);};
+    async function read(){
+      if(!valid()){close();return;}
+      const abort=new (root.AbortController||AbortController)();pending=abort;
+      try{
+        const status=await root.HomePerceptionLabTransport.request('activityLoop.get',{siteId:'victoria'},{signal:abort.signal});
+        if(!valid()||abort.signal.aborted)return;
+        if(status?.schema!=='perception-lab-activity-loop-1'||!['running','paused','stopped'].includes(status.state))fail('apartment_activity_loop_response_invalid');
+        const deep=status.deep_stack;
+        if(status.state!=='running'||!deep?.session_id||deep.wanted!==true){lastKey=null;
+          publish({status:status.state,reason:status.stopped_reason||'activity_loop_not_producing',session:null});return;}
+        if(!ID.test(deep.session_id)||typeof deep.producer_epoch!=='string'||!/^[a-f0-9]{32}$/.test(deep.producer_epoch)
+          ||!Number.isSafeInteger(deep.rolls)||deep.rolls<0)fail('apartment_activity_loop_binding_invalid');
+        const key=[deep.producer_epoch,deep.session_id].join(':');
+        if(key!==lastKey){lastKey=null;publish({status:'connecting',reason:'activity_loop_session_changed',session:null});}
+        const response=await root.HomePerceptionLabTransport.request('sessions.get',{siteId:'victoria',sessionId:deep.session_id},{signal:abort.signal});
+        if(!valid()||abort.signal.aborted)return;
+        const session=response?.session||response;
+        if(session?.id!==deep.session_id||session.site_id!=='victoria'||session.camera_id!=='den'
+          ||!Number.isSafeInteger(session.generation)||session.generation<0)fail('apartment_activity_loop_session_mismatch');
+        if(!['recording','running','starting'].includes(session.state)){lastKey=null;
+          publish({status:'waiting',reason:'activity_loop_session_not_running',session:null});return;}
+        lastKey=key;
+        publish({status:'running',reason:null,session,producerEpoch:deep.producer_epoch,rolls:deep.rolls});
+      }catch(error){lastKey=null;publish({status:'unavailable',reason:error.code||error.message||'activity_loop_unavailable',session:null});}
+      finally{if(pending===abort)pending=null;if(valid())timer=root.setTimeout(read,1000);else close();}
+    }
+    loopReaders.add(close);value.signal?.addEventListener('abort',close,{once:true});
+    void read();return close;
+  }
+  const invalidate=()=>{epoch++;for(const close of [...loopReaders])close();active?.close();if(ownedAnalysis)stopAnalysis().catch(()=>{});};
   root.addEventListener?.('home:logout',invalidate);root.addEventListener?.('pagehide',invalidate);
   root.document?.addEventListener?.('visibilitychange',()=>{if(root.document.hidden)invalidate();});
   root.document?.addEventListener?.('click',e=>{if(e.target?.closest?.('#logout'))invalidate();},true);
-  root.HomeApartmentPerceptionSource=Object.freeze({subscribe,sampleClock,readFrame,listSessions,
+  root.HomeApartmentPerceptionSource=Object.freeze({subscribe,sampleClock,readFrame,listSessions,watchActivityLoop,
     analysisState,watchAnalysis,analysisAvailability,startAnalysis,reconcileAnalysis,stopAnalysis,releaseAnalysis});
 })(typeof window!=='undefined'?window:globalThis);

@@ -58,9 +58,9 @@
       {pose.keypoints.map(point=><circle key={point.id} cx={point.x} cy={point.y} r="3" fill={dim?'none':'#b8d8ff'} stroke="#b8d8ff" strokeDasharray={dim?'2 2':undefined}/>)}
     </svg>;
   }
-  function ModelResult({model:row}){
+  function ModelResult({model:row,historical=false,scope=null}){
     return <details style={{borderTop:'1px solid var(--apt-border-soft, #26323d)',padding:'7px 0'}}>
-      <summary style={{cursor:'pointer',lineHeight:1.5}}>{row.family||'Model'} · {words(row.status)}
+      <summary style={{cursor:'pointer',lineHeight:1.5}}>{row.family||'Model'} · {historical?'recorded update · ':''}{words(row.status)}
         <span style={{display:'block',...note}}>{resultText(row.result)}</span></summary>
       <dl className="apt-dock-kv">
         <dt>Model</dt><dd>{row.model_id||'unavailable'}{row.model_revision?` · ${row.model_revision}`:''}</dd>
@@ -69,8 +69,9 @@
         <dt>Available</dt><dd>{timestamp(row.available_at)}</dd>
         <dt>Expires</dt><dd>{timestamp(row.valid_until)}</dd>
         <dt>Frame association</dt><dd>{words(row.association)}{row.frame_id?` · ${row.frame_id}`:''}</dd>
+        {scope&&<><dt>Session</dt><dd>{scope.sessionId} · generation {scope.generation}</dd></>}
       </dl>
-      <div style={note}>{ageText(row.age)}{row.reason?` · ${words(row.reason)}`:''}</div>
+      <div style={note}>{historical?'History only · original expiry above; no current-evidence authority':ageText(row.age)}{row.reason?` · ${words(row.reason)}`:''}</div>
     </details>;
   }
   function DockBadge({state,children}){
@@ -91,12 +92,15 @@
       [analysis,setAnalysis]=useState(()=>source?.analysisState?.()||{status:'idle',owned:false}),
       [aimPreview,setAimPreview]=useState({enabled:false,active:false,status:'disabled',reason:null}),
       [analysisAvailability,setAnalysisAvailability]=useState(null),
+      [loopState,setLoopState]=useState(null),
+      [modelHistory,setModelHistory]=useState([]),
       [ownDock,setOwnDock]=useState(()=>model()?.normalizeDockState(readStored('apt.dock.state','default'))||'default'),
       [ownDetail,setOwnDetail]=useState(initialDetail),[frameSource,setFrameSource]=useState('analyzed'),[traceStep,setTraceStep]=useState(null);
     const dock=model()?.normalizeDockState(controlledDock??ownDock)||'default',detail=model()?.normalizeDetail(controlledDetail??ownDetail)||'simple';
     const setDock=next=>{writeStored('apt.dock.state',next);if(onDockState)onDockState(next);else setOwnDock(next);};
     const setDetail=next=>{writeStored('apt.dock.detail',next);if(onDetail)onDetail(next);else setOwnDetail(next);};
     const playerRef=useRef(null),layerRef=useRef(null),discoveryRef=useRef(null),generationRef=useRef(0);
+    const loopRef=useRef(null),loopBindingRef=useRef(null);
     const engineRef=useRef(engine),lastViewRef=useRef(null),analysisGenerationRef=useRef(0),analysisBindingRef=useRef(null),activeRef=useRef(active);
     const aimPreviewRef=useRef(null),aimPreviewEngineRef=useRef(null),aimRegistrationRef=useRef(onAimPreviewController),aimChangeRef=useRef(onAimPreviewChange);
     // The owner's arm survives only a reconnect; every other stop disarms.
@@ -114,17 +118,21 @@
       if(controller){aimRegistrationRef.current?.(controller,false);controller.dispose();aimChangeRef.current?.(previewEngine,controller.readback());}
     },[]);
     const stop=useCallback((reason='viewer_disconnected')=>{
+      if(!['new_connection','activity_loop_waiting'].includes(reason)){
+        loopRef.current?.();loopRef.current=null;loopBindingRef.current=null;setLoopState(null);
+      }
       generationRef.current++;if(reason!=='new_connection')aimArmedRef.current=false;
       releaseAimPreview();setAimPreview({enabled:false,active:false,status:'disabled',reason:null});
       discoveryRef.current?.abort();discoveryRef.current=null;setDiscovering(false);
       playerRef.current?.destroy();playerRef.current=null;
       layerRef.current?.dispose();layerRef.current=null;
       lastViewRef.current=null;setState(null);setAnchor(null);setFollowing(false);setFollowPaused(false);setLayerReady(false);setTraceStep(null);
+      setModelHistory([]);
       setNotice(reason==='viewer_disconnected'?'Disconnected from this view. The Lab session is unchanged.':
         reason==='dock_hidden'?'Camera dock hidden. The viewer disconnected; the Lab session is unchanged.':
         reason==='opened_in_lab'?'Opened in Perception Lab. This view disconnected; Connect again when you are back.':'');
     },[releaseAimPreview]);
-    useEffect(()=>()=>{generationRef.current++;releaseAimPreview();discoveryRef.current?.abort();playerRef.current?.destroy();layerRef.current?.dispose();},[releaseAimPreview]);
+    useEffect(()=>()=>{generationRef.current++;loopRef.current?.();releaseAimPreview();discoveryRef.current?.abort();playerRef.current?.destroy();layerRef.current?.dispose();},[releaseAimPreview]);
     useEffect(()=>{stop('view_identity_changed');setSessionId('');setSessions([]);setOpened(false);},[engine,identityKey,active,source,stop]);
     // Hidden detaches the viewer (no invisible media). Collapsed keeps it.
     useEffect(()=>{if(dock==='hidden'&&playerRef.current)stop('dock_hidden');},[dock,stop]);
@@ -185,6 +193,7 @@
       finally{if(discoveryRef.current===abort){discoveryRef.current=null;if(!abort.signal.aborted)setDiscovering(false);}}
     }
     async function connect(options={}){
+      if(!options.activityLoop){loopRef.current?.();loopRef.current=null;loopBindingRef.current=null;setLoopState(null);}
       stop('new_connection');setNotice('');
       const session=options.session||sessions.find(row=>row.id===sessionId),selectedArm=options.arm||arm;
       if(!session){setNotice('Select an existing Den session first.');return;}
@@ -213,12 +222,13 @@
             if(aimArmedRef.current)controller.setEnabled(true);
           }catch(_){setAimPreview({enabled:false,active:false,status:'unavailable',reason:'desk_preview_controls_unavailable'});}
         }
-        // The room layer draws Den's body as body.md places it: shoulders and
-        // head only. Every other view field passes through unchanged.
+        // Render the supplied viewing joints; the coordinator's reduced
+        // shoulders/head event remains a separate contract and authority.
         const roomView=view=>model()?.roomLayerView(view)||view;
         const player=players.create({source:scopedSource,scope,collisionDigest,onChange:next=>{
           if(token!==generationRef.current||engineRef.current!==engine)return;
           lastViewRef.current=next.view;setState(next);
+          setModelHistory(previous=>model()?.modelUpdates(previous,next.view)||previous);
           layerRef.current?.draw(roomView(next.view));
           aimPreviewRef.current?.update(next.view?.virtualTargetPreview,next.view?.deskPreviewEvidence);
           const readback=layerRef.current?.readback();setFollowing(readback?.following===true);setFollowPaused(readback?.followPaused===true);
@@ -230,6 +240,26 @@
           reducedMotion:()=>global.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true});
         layerRef.current=layer;setLayerReady(true);if(lastViewRef.current)layer.draw(roomView(lastViewRef.current));
       }catch(error){if(token===generationRef.current)setNotice(error.message||'Perception view unavailable');}
+    }
+    function viewActivityLoop(){
+      if(typeof source?.watchActivityLoop!=='function')return;
+      stop('activity_loop_selected');setOpened(true);setLoopState({status:'connecting',reason:null});
+      setFrameSource(global.HomeApartmentOwnerCamera?'live':'analyzed');
+      const options=analysisOptions();
+      loopRef.current=source.watchActivityLoop({...options,onChange:next=>{
+        if(!options.isCurrent())return;
+        setLoopState(next);
+        if(next.status!=='running'||!next.session){
+          loopBindingRef.current=null;stop('activity_loop_waiting');return;
+        }
+        const row=next.session,key=[next.producerEpoch,row.id,row.generation].join(':');
+        if(loopBindingRef.current===key)return;
+        loopBindingRef.current=key;setSessions(previous=>[row,...previous.filter(item=>item.id!==row.id)].slice(0,100));
+        setSessionId(row.id);setArm('B');
+        void connect({session:row,arm:'B',activityLoop:true}).then(()=>{
+          if(!playerRef.current&&loopBindingRef.current===key)loopBindingRef.current=null;
+        });
+      }});
     }
     async function ownAnalysis(reconcile=false){
       const options=analysisOptions();analysisBindingRef.current={identity:options.identity,generation:options.generation};setNotice('');
@@ -320,6 +350,12 @@
     </header>;
 
     const sessionControls=opened&&<section aria-label="Den session" className="apt-dock-section">
+      {typeof source?.watchActivityLoop==='function'&&<div className="apt-dock-analysis" aria-label="Existing activity loop">
+        <button type="button" style={button} className="apt-ui-button" onClick={viewActivityLoop}>View activity loop</button>
+        <p style={note}>Views the existing analysis and follows its recording rolls. No recording or model starts here.</p>
+        {loopState&&<p role="status" data-activity-loop-status={loopState.status}>{words(loopState.status)}
+          {loopState.reason?` · ${words(loopState.reason)}`:''}{Number.isSafeInteger(loopState.rolls)?` · roll ${loopState.rolls}`:''}</p>}
+      </div>}
       {typeof source?.startAnalysis==='function'&&<div aria-label="Live analysis" role="group" className="apt-dock-analysis">
         {(analysisAvailability?.available===true||analysis.owned)&&<div className="apt-dock-row">
           <button type="button" style={button} className="apt-ui-button" disabled={!analysisAvailability?.available||analysis.owned} onClick={()=>ownAnalysis()}>Start live analysis (90 s)</button>
@@ -493,7 +529,7 @@
         <dt>Detector</dt><dd>{detector.status==='available'?`${detector.count} · raw ${detector.scores.map(value=>value.toFixed(2)).join(', ')||'scores not supplied'}`:words(detector.reason)}</dd>
         <dt>Pose</dt><dd>{view?.pose2d?.model_id||'unavailable'} · {pose.text}</dd>
         <dt>JEV</dt><dd>{jev.model||'unavailable'} · {jev.label}{Number.isFinite(jev.probability)?` · ${jev.probability.toFixed(2)}`:''}</dd>
-        <dt>Placement</dt><dd>{approximateActive?'approximate · supplied shoulders and head':words(approximateReason||room?.reason||'none')}</dd>
+        <dt>Placement</dt><dd>{approximateActive?'approximate · supplied viewing joints':words(approximateReason||room?.reason||'none')}</dd>
         <dt>Capability</dt><dd>{capability.source==='capability'?'home-den-capabilities-1':'interim default · no capability supplied'}</dd>
       </dl>
       <details style={note}><summary>Pose metadata</summary>
@@ -561,6 +597,12 @@
           {inference}
           {roomPlacement}
           {persons}
+          {connected&&<section aria-label="Recent model updates" className="apt-dock-section">
+            <h3 className="apt-ui-heading">Recent model updates</h3>
+            <p style={note}>Last 20 received updates in this session. History is separate from current evidence; original times and expiry are retained.</p>
+            {modelHistory.length?modelHistory.map(entry=><ModelResult key={entry.key} model={entry.model} scope={entry.scope} historical/>):
+              <p style={note}>No model updates supplied.</p>}
+          </section>}
           {details}
           {connected&&sessionControls}
           {labRow}

@@ -4,7 +4,8 @@
  * evidence, and anything not supplied reads unavailable with its reason.
  *
  * Contracts: docs/contracts/den/home-capabilities.md (frame timing),
- * reason-vocabulary.md (wording) and body.md (shoulders and head only). */
+ * reason-vocabulary.md (wording) and body.md (the coordinator's reduced pose,
+ * separate from the fuller viewing-only approximate room pose). */
 (function (root, factory) {
   "use strict";
   var api = factory(root);
@@ -241,22 +242,26 @@
     return head + " · proposes nothing";
   }
 
-  /* body.md: Den places shoulders and head only, approximately. Missing
-   * joints stay missing; no midpoint or limb is synthesized. */
+  /* The viewing-only approximate_room_pose can supply the full joint set.
+   * The coordinator's separate person_pose still uses shoulders and head.
+   * Keep only actual, visible positions; never synthesize missing joints. */
   function bodyInRoom(placement) {
     if (!placement || placement.renderable !== true || !Array.isArray(placement.joints)) return null;
-    var byId = new Map(placement.joints.filter(function (joint) { return joint && joint.visible !== false; }).map(function (joint) { return [joint.id, joint]; }));
+    var byId = new Map(placement.joints.filter(function (joint) { return joint && joint.visible !== false
+      && Number.isInteger(joint.id) && joint.id >= 0 && joint.id < COCO.length
+      && Array.isArray(joint.position_m) && joint.position_m.length === 3 && joint.position_m.every(finite);
+    }).map(function (joint) { return [joint.id, joint]; }));
     var shoulders = SHOULDERS.filter(function (id) { return byId.has(id); });
     var head = HEAD_FALLBACK.find(function (row) { return row.ids.every(function (id) { return byId.has(id); }); }) || null;
-    var keep = shoulders.concat(head ? head.ids : []);
-    var joints = keep.map(function (id) { return byId.get(id); });
-    var edges = (placement.edges || []).filter(function (edge) { return Array.isArray(edge) && edge.length === 2 && (edge[0] === 5 && edge[1] === 6 || edge[0] === 6 && edge[1] === 5) && shoulders.length === 2; });
+    var joints = Array.from(byId.values());
+    var edges = (placement.edges || []).filter(function (edge) { return Array.isArray(edge) && edge.length === 2
+      && edge[0] !== edge[1] && byId.has(edge[0]) && byId.has(edge[1]); });
     return { joints: joints, edges: edges, shoulders: shoulders.length, head: head ? head.part : null,
-      text: "Shoulders " + shoulders.length + " of 2 · head " + (head ? "from " + head.part : "missing"),
+      text: joints.length + " of 17 supplied joints · shoulders " + shoulders.length + " of 2 · head " + (head ? "from " + head.part : "missing"),
       label: "One analyzed frame, not tracked" };
   }
-  /* The view the room layer draws: the approximate placement narrowed to
-   * shoulders and head. Every other field, and other placements, pass through. */
+  /* The room layer draws all supplied viewing joints. All provenance,
+   * freshness, approximation and authority fields pass through unchanged. */
   function roomLayerView(view) {
     if (!view || !view.approximateRoomPose || view.approximateRoomPose.renderable !== true) return view;
     var body = bodyInRoom(view.approximateRoomPose);
@@ -264,6 +269,23 @@
     var copy = Object.assign({}, view);
     copy.approximateRoomPose = Object.assign({}, view.approximateRoomPose, { joints: body.joints, edges: body.edges });
     return copy;
+  }
+
+  // App-lifetime display history only. Source times and expiry stay original;
+  // the history never grants current-evidence, geometry or lighting authority.
+  function modelUpdates(previous, view) {
+    if (!view || view.status !== 'available' || !view.scope) return previous || [];
+    var context = JSON.stringify([view.scope, view.sourceEpoch]);
+    var rows = (previous || []).filter(function (entry) { return entry.context === context; });
+    var changed = rows.length !== (previous || []).length;
+    (view.models || []).forEach(function (row) {
+      var snapshot = Object.assign({}, row); delete snapshot.age;
+      var key = JSON.stringify(snapshot);
+      if (rows.some(function (entry) { return entry.key === key; })) return;
+      rows.unshift({ context: context, key: key, scope: Object.assign({}, view.scope), model: snapshot });
+      changed = true;
+    });
+    return changed ? rows.slice(0, 20) : previous || [];
   }
 
   /* Open in Lab: session always; time only from the frame's capture time
@@ -288,5 +310,5 @@
     reason: reason, words: words, normalizeDockState: normalizeDockState, normalizeDetail: normalizeDetail,
     perceptionCapability: perceptionCapability, frameTiming: frameTiming, frameState: frameState, badge: badge,
     replayLabel: replayLabel, clockLabel: clockLabel, detector: detector, pose: poseSummary, jev: jev, trace: trace,
-    summary: summary, bodyInRoom: bodyInRoom, roomLayerView: roomLayerView, labIntent: labIntent });
+    summary: summary, bodyInRoom: bodyInRoom, roomLayerView: roomLayerView, modelUpdates: modelUpdates, labIntent: labIntent });
 });

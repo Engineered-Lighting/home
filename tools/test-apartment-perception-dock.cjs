@@ -94,19 +94,19 @@ test('detector, pose and JEV stay three separate values; an abstention is explic
   assert.equal(health.text, 'JEV paused: an earlier request has an unknown outcome'); assert.equal(health.severity, 'warn');
 });
 
-test('the room body is shoulders and head only, approximate, with missing joints left missing', () => {
+test('the room body preserves every supplied viewing joint, with missing joints left missing', () => {
   const joint = (id, p = [id, 0, 1]) => ({ id, position_m: p, visible: true, error_bound_m: null });
   const placement = { renderable: true, joints: [0, 3, 4, 5, 6, 7, 9, 11].map(id => joint(id)), edges: [[5, 6], [5, 7], [7, 9], [5, 11]] };
   const body = Dock.bodyInRoom(placement);
-  assert.deepEqual(body.joints.map(row => row.id), [5, 6, 0]); assert.deepEqual(copy(body.edges), [[5, 6]]);
+  assert.deepEqual(body.joints.map(row => row.id), [0, 3, 4, 5, 6, 7, 9, 11]); assert.deepEqual(copy(body.edges), placement.edges);
   assert.equal(body.head, 'nose'); assert.equal(body.label, 'One analyzed frame, not tracked');
   const noNose = Dock.bodyInRoom({ renderable: true, joints: [3, 4, 5].map(id => joint(id)), edges: [[5, 6]] });
-  assert.deepEqual(noNose.joints.map(row => row.id), [5, 3, 4], 'ears stand in for the head; no midpoint is invented');
+  assert.deepEqual(noNose.joints.map(row => row.id), [3, 4, 5], 'supplied ears remain separate; no midpoint is invented');
   assert.deepEqual(copy(noNose.edges), [], 'no shoulder line with one shoulder');
-  assert.equal(noNose.text, 'Shoulders 1 of 2 · head from ears');
+  assert.equal(noNose.text, '3 of 17 supplied joints · shoulders 1 of 2 · head from ears');
   const view = { status: 'available', approximateRoomPose: placement, roomPose: { admitted: false } };
   const narrowed = Dock.roomLayerView(view);
-  assert.deepEqual(narrowed.approximateRoomPose.joints.map(row => row.id), [5, 6, 0]);
+  assert.deepEqual(narrowed.approximateRoomPose.joints.map(row => row.id), [0, 3, 4, 5, 6, 7, 9, 11]);
   assert.equal(view.approximateRoomPose.joints.length, 8, 'the view itself is not mutated');
 });
 
@@ -119,6 +119,32 @@ test('Open in Lab carries the session and the frame time inside that session, an
   assert.equal(Dock.labIntent({ session, frame: { captured_at: start + 500 } }).t_s, null, 'outside the session is refused, not clamped');
   assert.equal(Dock.labIntent({ session, frame: null }).t_s, null);
   assert.equal(Dock.labIntent({ session: null }).available, false);
+});
+
+test('viewing geometry omits hidden, missing or invalid positions without creating limb endpoints',()=>{
+  const joints=Array.from({length:17},(_,id)=>({id,position_m:[id,0,1],visible:true}));
+  joints[7].visible=false;joints[9].position_m=null;joints[15].position_m=[NaN,0,1];
+  const body=Dock.bodyInRoom({renderable:true,joints,edges:[[5,7],[7,9],[13,15],[11,12],[12,14],[14,16]]});
+  assert.equal(body.joints.length,14);assert.deepEqual(copy(body.edges),[[11,12],[12,14],[14,16]]);
+  assert.equal(body.joints.some(joint=>[7,9,15].includes(joint.id)),false);
+});
+
+test('rolling model history deduplicates age ticks, stays bounded and clears foreign session/epoch context',()=>{
+  const scope={siteId:'victoria',sessionId:'loop-one',generation:0};
+  const row={family:'Qwen',source_id:'source-one',model_id:'qwen-one',observed_at:99,available_at:100,valid_until:101,
+    frame_id:'f1',result:{activity:'reading'},status:'candidate',age:{status:'current',seconds:1}};
+  const view={status:'available',scope,sourceEpoch:'producer-one',models:[row]};
+  let history=Dock.modelUpdates([],view);assert.equal(history.length,1);
+  assert.equal(history[0].model.valid_until,101);assert.equal(history[0].model.age,undefined,'historical rows cannot retain a frozen current-age claim');
+  const same=Dock.modelUpdates(history,{...view,models:[{...row,age:{status:'stale',seconds:10}}]});
+  assert.equal(same,history,'clock ticks alone do not invent model results');
+  for(let i=0;i<25;i++)history=Dock.modelUpdates(history,{...view,models:[{...row,frame_id:'f'+(i+2),observed_at:100+i}]});
+  assert.equal(history.length,20);assert.equal(history[0].model.frame_id,'f26');
+  history=Dock.modelUpdates(history,{...view,scope:{...scope,sessionId:'loop-two'}});
+  assert.equal(history.length,1);assert.equal(history[0].scope.sessionId,'loop-two');
+  history=Dock.modelUpdates(history,{...view,sourceEpoch:'producer-two'});
+  assert.equal(history.length,1);assert.match(history[0].context,/producer-two/);
+  assert.equal(row.age.status,'current','original projection is not mutated');
 });
 
 /* ---------- the dock component in jsdom ---------- */
@@ -349,7 +375,7 @@ test('a replay is labelled with its recording date and is never called live', as
   } finally { await m.unmount(); }
 });
 
-test('the room body is approximate shoulders and head, labelled one analyzed frame, and Follow stays disabled', async () => {
+test('the room body keeps all supplied approximate viewing joints and Follow stays disabled', async () => {
   const m = await mount();
   try {
     const sub = await m.connect();
@@ -357,19 +383,45 @@ test('the room body is approximate shoulders and head, labelled one analyzed fra
     const joints = [0, 1, 2, 5, 6, 7, 11].map(id => ({ id, visible: true, position_m: [1 + id / 10, 2, 1.2], error_bound_m: null }));
     let shown = null;
     // The approximate placement is validated by the real view; here the
-    // projected view is narrowed before the room layer draws it.
+    // projected view preserves its supplied joints before the room draw.
     const projected = { status: 'available', sourceEpoch: null, approximateRoomPose: { renderable: true, status: 'approximate', joints, edges: [[5, 6], [5, 7], [5, 11]] },
       roomPose: { admitted: false }, diagnosticRoomPose: { renderable: false } };
     shown = w.HomeApartmentPerceptionDockModel.roomLayerView(projected);
-    assert.deepEqual(copy(shown.approximateRoomPose.joints.map(joint => joint.id)), [5, 6, 0]);
-    assert.deepEqual(copy(shown.approximateRoomPose.edges), [[5, 6]]);
+    assert.deepEqual(copy(shown.approximateRoomPose.joints.map(joint => joint.id)), [0, 1, 2, 5, 6, 7, 11]);
+    assert.deepEqual(copy(shown.approximateRoomPose.edges), [[5, 6], [5, 7], [5, 11]]);
     await m.emit(value);
     assert.equal(button(m.container, 'Follow').disabled, true);
     assert.match(m.container.textContent, /Follow is off until continuous registered tracking exists/);
     const source = fs.readFileSync(path.join(src, 'home-apartment-den-perception.jsx'), 'utf8');
-    assert.match(source, /layerRef\.current\?\.draw\(roomView\(next\.view\)\)/, 'every room draw is narrowed');
+    assert.match(source, /layerRef\.current\?\.draw\(roomView\(next\.view\)\)/, 'every room draw uses supplied viewing geometry');
     assert.match(source, /data-apartment-body-label="1"/); assert.match(source, /\{body\.label\}/);
   } finally { await m.unmount(); }
+});
+
+test('viewing the activity loop retires old observers on rolls and pause, recovers, and never starts analysis',async()=>{
+  const m=await mount();let notify,closed=0;
+  m.appSource.watchActivityLoop=options=>{notify=options.onChange;return()=>{closed++;};};
+  await m.render({});
+  try{
+    await click(m.container,'View perception');await click(m.container,'View activity loop');
+    const update=async value=>{await act(async()=>notify(value));await flush();};
+    const first=denSession({id:'loop-one',generation:0});
+    await update({status:'running',session:first,producerEpoch:'epoch-one',rolls:0});
+    const old=m.appSource.subscriptions.at(-1);assert.equal(old.scope.sessionId,'loop-one');assert.equal(old.scope.generation,0);
+    assert.equal(old.arm,'B');
+    await update({status:'connecting',session:null,reason:'activity_loop_session_changed'});
+    assert.equal(old.signal.aborted,true);assert.equal(m.layers[0].disposed,1);
+    const second=denSession({id:'loop-two',generation:2});
+    await update({status:'running',session:second,producerEpoch:'epoch-one',rolls:1});
+    assert.equal(m.appSource.subscriptions.at(-1).scope.sessionId,'loop-two');
+    const next=m.appSource.subscriptions.at(-1);
+    await update({status:'paused',session:null,reason:'vacant'});
+    assert.equal(next.signal.aborted,true);assert.equal(m.container.querySelector('[data-activity-loop-status]').dataset.activityLoopStatus,'paused');
+    await update({status:'running',session:second,producerEpoch:'epoch-two',rolls:1});
+    assert.equal(m.appSource.subscriptions.length,3);
+    assert.deepEqual(m.appSource.forbidden,[]);assert.equal(closed,0,'pause keeps the read-only watcher for recovery');
+    await click(m.container,'Hide camera dock');assert.equal(closed,1,'hiding the view stops its status reads');
+  }finally{await m.unmount();}
 });
 
 test('Open in Lab is a working control that carries the session and frame time; the dead Back control is gone', async () => {

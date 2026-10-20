@@ -46,6 +46,9 @@
     let method = "GET", path, body;
     switch (operation) {
       case "capabilities.get": path = "/capabilities"; break;
+      case "activityLoop.get":
+        if (siteId !== 'victoria' || Object.keys(args).some(key => key !== 'siteId')) fail('lab_invalid_arguments');
+        path = '/activity-loop'; break;
       case "cameras.preview": path = "/cameras/" + id(args.cameraId) + "/preview"; break;
       case "cameras.video": {
         const query=[];
@@ -228,6 +231,7 @@
     const route = describe(operation, args);
     const epoch = connectionEpoch;
     if (nativeContext()) {
+      if (operation === 'activityLoop.get') fail('lab_native_activity_loop_not_available');
       // The virtual-den event cursor is browser-only; no new native authority.
       if (operation === "sessions.events") fail("lab_native_events_not_available");
       // Camera reads are typed native operations. Refresh has no native scope or
@@ -261,7 +265,7 @@
         route.body ? { "Content-Type": "application/json", "X-Home-Lab-CSRF": "1" } : {}),
       body: route.body ? JSON.stringify(route.body) : undefined,
     }, options);
-    let payload; const bytes = await boundedBytes(response, operation === 'cameras.structuredContext' ? 32768 : GRAPH_READS.has(operation) ? MAX_GRAPH_JSON : MAX_JSON);
+    let payload; const bytes = await boundedBytes(response, operation === 'activityLoop.get' ? 65536 : operation === 'cameras.structuredContext' ? 32768 : GRAPH_READS.has(operation) ? MAX_GRAPH_JSON : MAX_JSON);
     try { payload = JSON.parse(new TextDecoder().decode(bytes)); } catch (_) { fail("lab_invalid_response", response.status); }
     current(epoch);
     if (!response.ok) fail(decodedError(payload, response.status), response.status);

@@ -284,6 +284,37 @@ test('modes: the splat tick drives the node renderer\'s splat; Spark stays the W
   assert.match(source, /export async function loadSplatAsset[\s\S]*?import\('@sparkjsdev\/spark'\)[\s\S]*?new SplatMesh\(/, 'the default splat adapter builds a Spark SplatMesh');
 });
 
+test('Cloud/Photo fades do not leave transparent point depth in front of Photo', async () => {
+  globalThis.window ??= {};
+  const THREE = await import(threeURL);
+  const { createModes } = await import(fileUrl('home-3d/modes.js'));
+  const pointsMaterial = { depthWrite: true, uniforms: { uOpacity: { value: 1 } } };
+  const points = new THREE.Object3D();
+  points.material = pointsMaterial;
+  // The node renderer retains the Points owner and draws its sprite child.
+  const sprite = new THREE.Object3D(); sprite.material = { depthWrite: true }; points.add(sprite);
+  const splat = Object.assign(new THREE.Object3D(), { numSplats: 3, opacity: 0 });
+  const modes = createModes({ apartmentRoot: new THREE.Group(), pointsMaterial, getPoints: () => points,
+    sim: false, assetCandidates: name => ['memory://' + name],
+    fetchFrame: async () => ({ frame: 'z_up_metric_floor0', extents_m: [4, 4, 2.5], splat_baked: true }),
+    loadAdapters: { loadSplat: async () => splat, createSparkRenderer: null } });
+  const depth = value => { assert.equal(pointsMaterial.depthWrite, value, 'GL points'); assert.equal(sprite.material.depthWrite, value, 'node sprite'); };
+  try {
+    await modes.setMode('splat', { duration: 600 }); modes.update(.55);
+    assert.ok(points.visible && pointsMaterial.uniforms.uOpacity.value < .003);
+    depth(false);
+    sprite.material = { depthWrite: true }; modes.update(.01); depth(false);
+    modes.update(.1); assert.equal(points.visible, false); depth(true);
+    await modes.setMode('points', { duration: 600 }); modes.update(.05); depth(false);
+    assert.ok(splat.opacity > .997);
+    await modes.setMode('splat', { duration: 0 }); assert.equal(points.visible, false); depth(true);
+    await modes.setMode('points', { duration: 0 }); assert.equal(points.visible, true); depth(true);
+    await modes.setMode('splat', { duration: 600 }); modes.update(.3);
+    await modes.setMode('points', { duration: 0 }); depth(true);
+    modes.update(1); assert.equal(points.visible, true); assert.equal(pointsMaterial.uniforms.uOpacity.value, 1); depth(true);
+  } finally { modes.dispose(); }
+});
+
 test('the default Spark adapter keeps unlit options and restores the same renderer after HDR', async () => {
   globalThis.window ??= {};
   const THREE = await import(threeURL);

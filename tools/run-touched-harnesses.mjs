@@ -176,6 +176,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser(?:-part2)?\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
   // The WebGPU splat pipeline (Photo on ?renderer=webgpu) and the Spark cutaway it mirrors.
+  [/^(?:app\/src\/home-3d\/(?:modes\.js|pointcloud\.js|webgpu-renderer\.mjs|webgpu-material-ports\.mjs)|tools\/test-apartment-photo-crossfade-browser\.mjs)$/, ["test-apartment-photo-crossfade-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|modes\.js|adaptive-performance\.mjs)|tools\/test-apartment-gaussian-splat\.mjs)$/, ["test-apartment-gaussian-splat.mjs"]],
   [/^(?:app\/src\/(?:vendor\/(?:three-0\.186\.1|spark-2\.1\.0)\/.+|home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/test-apartment-webgpu-splat-browser\.mjs)$/, ["test-apartment-webgpu-splat-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:splat-cutaway\.js|splat-exterior-cleanup\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
@@ -307,6 +308,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-lit-splats-browser.mjs": 125,
   "test-apartment-lit-splats-browser-part2.mjs": 90,
   "test-apartment-webgpu-photo-browser.mjs": 125,
+  "test-apartment-photo-crossfade-browser.mjs": 30,
   "test-apartment-webgpu-photo-browser-part2.mjs": 110,
   "test-apartment-composer-comfort-browser.mjs": 115,
   "test-apartment-aim-wiring-keys-browser.mjs": 96,

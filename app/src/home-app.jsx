@@ -5324,6 +5324,15 @@ function apartmentChatAboutReply(text, about, current) {
 function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  // Setup is never a dead control: when the home can't open it, a press says why.
+  const [setupWhy, setSetupWhy] = useState(false);
+  const setupBlocked = state?.canSetup === false && !state?.setupActive;
+  useEffect(() => { if (!setupBlocked) setSetupWhy(false); }, [setupBlocked, state?.siteId]);
+  useEffect(() => {
+    if (!setupWhy) return undefined;
+    const timer = setTimeout(() => setSetupWhy(false), 8000);
+    return () => clearTimeout(timer);
+  }, [setupWhy]);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
     rootRef: menuRef, trap: false, initialFocus: "first", onEscape: () => setMenuOpen(false) });
   const run = action => { setMenuOpen(false); action?.(); };
@@ -5355,8 +5364,16 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
         : <div role="status"><p>{state?.sourceLabel || "Loading room"}</p></div>}
     </details>
     <div className="apt-home-top-actions">
-    {state?.openSetup && <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
-      onClick={state.openSetup}>Setup</button>}
+    {state?.openSetup && <span style={{ position: "relative", display: "inline-flex" }}>
+      <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
+        aria-disabled={setupBlocked ? "true" : undefined} aria-describedby={setupWhy ? "apt-home-setup-why" : undefined}
+        style={setupBlocked ? { opacity: .6 } : undefined}
+        onClick={() => { if (setupBlocked) { setSetupWhy(true); return; } setSetupWhy(false); state.openSetup(); }}>Setup</button>
+      {setupWhy && <span id="apt-home-setup-why" role="status" data-apt-setup-unavailable="1" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0,
+        zIndex: 31, width: "max-content", maxWidth: 280, padding: "8px 10px", border: "1px solid var(--hg-border-strong)", borderRadius: 8,
+        background: "var(--apt-surface-raised, var(--hg-bg-2))", color: "var(--apt-text, var(--hg-fg-1))", fontSize: 12.5, lineHeight: 1.45,
+        whiteSpace: "normal" }}>{state.setupUnavailableReason || "Setup isn't available for this home here."}</span>}
+    </span>}
     <button type="button" className="apt-home-travel" onClick={() => onFeature("lights")}>Lights / Travel Mode</button>
     <div className="apt-home-menu" ref={menuRef}>
       <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"

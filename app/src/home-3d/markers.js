@@ -8,6 +8,7 @@
  */
 import * as THREE from 'three';
 import { createDirectAimGestureController } from './direct-aim-gesture.mjs';
+import { createEchoGlyph } from './apartment-echo-glyphs.mjs';
 import { createDeskTargetCapture, sealRegisteredDeskTarget } from './registered-desk-target.mjs';
 
 const { createEquipmentVirtualFixtures } = await import(
@@ -203,6 +204,10 @@ export function createOverlay(apartmentRoot) {
         stem.scale.y = Math.max(0.001, h);
         stem.position.z = -h / 2;
         group.add(core, ghost, glow, pick, stem);
+        // Echo lights draw their DIRECTION glyph instead of the sphere; the
+        // pick sphere, stem and floor pool are unchanged.
+        const glyph = createEchoGlyph(device);
+        if (glyph) { core.visible = ghost.visible = false; glow.visible = false; group.add(glyph.root); }
 
         if (equipment) {
             group.userData.equipmentKind = equipment.kind;
@@ -248,7 +253,7 @@ export function createOverlay(apartmentRoot) {
             cone.name = 'legacy-camera-frustum';
             group.add(cone);
         }
-        return { group, core, ghost, glow, pick, device, state: null };
+        return { group, core, ghost, glow, pick, device, state: null, glyph };
     }
 
     function setDevices(devices) {
@@ -858,6 +863,7 @@ export function createOverlay(apartmentRoot) {
         const st = haState?.state;
         const attrs = haState?.attributes || {};
         if (m.device.type === 'light' || m.device.ha_entity_id?.startsWith('switch.')) {
+            m.glyph?.setState(haState);
             const on = st === 'on';
             if (on) {
                 let c = TYPE_COLOR.light.clone();
@@ -1186,6 +1192,7 @@ export function createOverlay(apartmentRoot) {
                 const hov = id === deviceId;
                 if (hov) hovered = m;
                 m.core.scale.setScalar(hov ? 1.45 : 1.0);
+                m.glyph?.root.scale.setScalar(hov ? 1.2 : 1.0);
                 m.ghost.scale.setScalar(hov ? 1.45 : 1.0);
             }
             // pulsing floor ring under any hovered marker (incl. 'other'/proposals)

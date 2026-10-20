@@ -191,6 +191,7 @@ test('all four WebGPU lighting proof parts are planned together and use separate
 
 test('renderer parity always selects Cloud, Mesh and Photo on separate workers', () => {
   const formats = ['test-apartment-webgpu-renderer-browser.mjs', 'test-apartment-webgpu-mesh-browser.mjs',
+    'test-apartment-webgpu-mesh-browser-part2.mjs',
     'test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
   for (const file of ['app/src/home-apartment.jsx', 'app/src/home-3d/markers.js', 'app/src/home-3d/engine.js',
     ...formats.map(name => 'tools/' + name)]) {
@@ -217,13 +218,13 @@ test('all Setup rail phases are selected together and distributed across workers
   }
 });
 
-test('the two Photo parity parts retain frames and contracts without dropping either phase', () => {
-  const files = ['test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
+for (const [format, mode] of [['photo', 'splat'], ['mesh', 'mesh']]) test(`the two ${format} parity parts retain frames and contracts without dropping either phase`, () => {
+  const files = [`test-apartment-webgpu-${format}-browser.mjs`, `test-apartment-webgpu-${format}-browser-part2.mjs`];
   const phases = files.map(file => {
     const source = fs.readFileSync(path.join(root, 'tools', file), 'utf8');
-    assert.match(source, /__HOME_WEBGPU_PROOF_MODES = \['splat'\]/);
+    assert.ok(source.includes(`__HOME_WEBGPU_PROOF_MODES = ['${mode}']`));
     const match = /__HOME_WEBGPU_PROOF_PHASE = '(frames|contracts)'/.exec(source);
-    assert.ok(match, file + ' selects its Photo phase');
+    assert.ok(match, file + ' selects its parity phase');
     return match[1];
   });
   assert.deepEqual(phases.sort(), ['contracts', 'frames']);

@@ -58,15 +58,72 @@ export function aimChipBlocker(path) {
  * `floorGap` bridges hairline cracks in the scanned floor: when nothing is
  * accepted, the nearest floor hit within `toleranceM` of where the ray meets
  * the floor plane is used, at the ray's own floor point. Collision bytes are
- * never changed. Heights are Apartment-local Z-up metres. */
-export function cutawayPickFilters({ floorZ, topZ, ceilingBandM = 0.35, minCeilingHeightM = 1.8, gapToleranceM = 0.04 } = {}) {
-    if (!Number.isFinite(floorZ) || !Number.isFinite(topZ) || !(topZ > floorZ)) return null;
-    const ceilingZ = Math.max(floorZ + minCeilingHeightM, topZ - ceilingBandM);
+ * never changed. Heights are Apartment-local Z-up metres.
+ *
+ * `floorZ` and `ceilingZ` are the scanned floor and ceiling surfaces (see
+ * horizontalSurfaceHeights), not bounding-box extremes: a real scan proxy
+ * has stray triangles well below the floor and above the ceiling. The band
+ * starts `ceilingBandM` under the ceiling surface and never lower than
+ * `minCeilingHeightM` over the floor; inside it any upward-tilted hit seen
+ * from above (normal z >= `ceilingSlopeNz`) is ceiling, since scanned
+ * ceilings are often sloped where they meet walls. */
+export function cutawayPickFilters({ floorZ, ceilingZ, ceilingBandM = 0.2, minCeilingHeightM = 1.8, ceilingSlopeNz = 0.2, gapToleranceM = 0.06 } = {}) {
+    if (!Number.isFinite(floorZ) || !Number.isFinite(ceilingZ) || !(ceilingZ - floorZ >= minCeilingHeightM)) return null;
+    const bandZ = Math.max(floorZ + minCeilingHeightM, ceilingZ - ceilingBandM);
     return Object.freeze({
-        ceilingZ,
-        rejectHit: ({ point, normal, eye }) => normal[2] >= 0.7 && point[2] >= ceilingZ && eye[2] > point[2],
+        floorZ, ceilingZ, bandZ,
+        rejectHit: ({ point, normal, eye }) => normal[2] >= ceilingSlopeNz && point[2] >= bandZ && eye[2] > point[2],
         floorGap: Object.freeze({ floorZ, toleranceM: gapToleranceM }),
     });
+}
+
+/* The scanned floor and ceiling heights of a mesh in the Apartment frame:
+ * area-weighted modes (2 cm bins) of near-horizontal triangles (|normal z|
+ * >= 0.9, either winding) in the lower and upper thirds of the mesh's height.
+ * Stray triangles barely move a mode, unlike min and max. Null when either
+ * surface is missing. */
+export function horizontalSurfaceHeights(object, apartmentRoot, { binM = 0.02 } = {}) {
+    if (!object?.isObject3D || !apartmentRoot?.isObject3D) return null;
+    apartmentRoot.updateMatrixWorld(true); object.updateMatrixWorld(true);
+    const toLocal = new THREE.Matrix4().copy(apartmentRoot.matrixWorld).invert();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), ab = new THREE.Vector3(), ac = new THREE.Vector3();
+    const samples = [];
+    let low = Infinity, high = -Infinity;
+    object.traverse(node => {
+        const geometry = node.isMesh ? node.geometry : null, position = geometry?.attributes?.position;
+        if (!position) return;
+        const matrix = new THREE.Matrix4().multiplyMatrices(toLocal, node.matrixWorld), index = geometry.index;
+        const count = index ? index.count : position.count;
+        for (let i = 0; i + 2 < count; i += 3) {
+            const at = k => (index ? index.getX(i + k) : i + k);
+            a.fromBufferAttribute(position, at(0)).applyMatrix4(matrix);
+            b.fromBufferAttribute(position, at(1)).applyMatrix4(matrix);
+            c.fromBufferAttribute(position, at(2)).applyMatrix4(matrix);
+            const cross = ab.subVectors(b, a).cross(ac.subVectors(c, a)), doubleArea = cross.length();
+            if (!(doubleArea > 1e-12)) continue;
+            const z = (a.z + b.z + c.z) / 3;
+            low = Math.min(low, z); high = Math.max(high, z);
+            if (Math.abs(cross.z) / doubleArea >= 0.9) samples.push([z, doubleArea / 2]);
+        }
+    });
+    if (!samples.length || !(high > low)) return null;
+    const third = (high - low) / 3;
+    const mode = (from, to) => {
+        const bins = new Map();
+        for (const [z, area] of samples) if (z >= from && z <= to) {
+            const key = Math.round(z / binM);
+            bins.set(key, (bins.get(key) || 0) + area);
+        }
+        let best = null;
+        for (const [key, area] of bins) if (!best || area > best.area) best = { key, area };
+        if (!best) return null;
+        // The area-weighted mean inside the winning bin and its neighbours.
+        let sum = 0, weight = 0;
+        for (const [z, area] of samples) if (Math.abs(z / binM - best.key) <= 1.5) { sum += z * area; weight += area; }
+        return weight > 0 ? sum / weight : best.key * binM;
+    };
+    const floorZ = mode(low, low + third), ceilingZ = mode(high - third, high);
+    return floorZ == null || ceilingZ == null ? null : Object.freeze({ floorZ, ceilingZ });
 }
 
 const GAP_RINGS = [0.01, 0.02, 0.03, 0.04, 0.06, 0.08];

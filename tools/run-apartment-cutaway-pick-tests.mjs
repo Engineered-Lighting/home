@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
-import { createPicking, cutawayPickFilters } from "../app/src/home-3d/picking.js";
+import { createPicking, cutawayPickFilters, horizontalSurfaceHeights } from "../app/src/home-3d/picking.js";
 
 let passed = 0;
 function check(name, condition, detail = "") {
@@ -36,6 +36,12 @@ collision.add(plane(5, 2.5, [2.5, 4, 1.25], [Math.PI / 2, 0, 0]));        // bac
 collision.add(plane(4, 2.5, [0, 2, 1.25], [Math.PI / 2, Math.PI / 2, 0])); // side wall (x = 0)
 const desk = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.75), collisionMaterial);
 desk.position.set(3.5, 1.5, 0.375); collision.add(desk);
+// Like the real v4 proxy: a sloped ceiling strip where the ceiling meets the
+// back wall (normal z about 0.5), and stray scan triangles well below the
+// floor and above the ceiling that stretch the bounding box (-0.316, 2.733).
+collision.add(plane(5, 0.4, [2.5, 3.8, 2.38], [Math.PI / 3, 0, 0]));
+const stray = (z) => { const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute([4.9, 3.9, z, 4.95, 3.9, z + 0.02, 4.9, 3.95, z], 3)); return new THREE.Mesh(g, collisionMaterial); };
+collision.add(stray(-0.316), stray(2.733));
 root.add(collision);
 root.updateMatrixWorld(true);
 
@@ -51,7 +57,8 @@ const eye = root.localToWorld(new THREE.Vector3(7.5, -3.5, 6.2)), look = root.lo
 camera.position.copy(eye); camera.lookAt(look); camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);
 const host = { clientWidth: 800, clientHeight: 600, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };
 const picking = createPicking(camera, host);
-const filters = cutawayPickFilters({ floorZ: 0, topZ: 2.5 });
+const heights = horizontalSurfaceHeights(collision, root);
+const filters = cutawayPickFilters(heights);
 
 const truthRay = new THREE.Raycaster();
 function truthAt(x, y) {
@@ -64,6 +71,8 @@ function truthAt(x, y) {
 const grid = [];
 for (let y = 6; y < 600; y += 12) for (let x = 6; x < 800; x += 12) grid.push([x, y]);
 const floorTaps = grid.map(([x, y]) => ({ x, y, truth: truthAt(x, y) })).filter(tap => tap.truth);
+check("floor and ceiling heights come from the surfaces, not the stretched bounding box",
+  Math.abs(heights.floorZ) < 0.011 && Math.abs(heights.ceilingZ - 2.5) < 0.011, JSON.stringify(heights));
 check("the authored view shows plenty of floor", floorTaps.length > 300, String(floorTaps.length));
 
 /* ---- the bug, reproduced ---------------------------------------------------- */
@@ -83,9 +92,14 @@ const bridged = fixed.filter((_, index) => !plain[index]);
 check("every tap that fell through the crack now resolves to the floor", bridged.length === missed && bridged.every(({ hit }) => hit && Math.abs(hit.point[2]) < .02),
   `${bridged.length} of ${missed}`);
 
+// Den's v4 root cause: heights from the bounding-box extremes miss the real ceiling and floor.
+const naive = cutawayPickFilters({ floorZ: -0.316, ceilingZ: 2.733 });
+const naiveWrong = floorTaps.filter(tap => { const hit = picking.surfaceHitUnderCutaway(root, [collision], tap.x, tap.y, { rejectHit: naive.rejectHit, floorGap: naive.floorGap });
+  return !hit || Math.abs(hit.point[2]) > 0.02; }).length;
+check("bounding-box heights (the first #379 head) still leave ceiling hits and cracks", naiveWrong > 0, String(naiveWrong));
 const allFiltered = grid.map(([x, y]) => picking.surfaceHitUnderCutaway(root, [collision], x, y, { rejectHit: filters.rejectHit, floorGap: filters.floorGap }));
-check("the ceiling is ignored under the cut-away (walls may still reach the band)", allFiltered.every(hit => !hit || hit.point[2] < filters.ceilingZ || Math.abs(hit.normal[2]) < .1)
-  && allFiltered.some(hit => hit && hit.point[2] >= filters.ceilingZ));
+check("the ceiling is ignored under the cut-away (walls may still reach the band)", allFiltered.every(hit => !hit || hit.point[2] < filters.bandZ || Math.abs(hit.normal[2]) < .1)
+  && allFiltered.some(hit => hit && hit.point[2] >= filters.bandZ));
 const deskTop = (() => {
   const p = root.localToWorld(new THREE.Vector3(3.5, 1.5, 0.75)).project(camera);
   return [Math.round((p.x + 1) * 400), Math.round((1 - p.y) * 300)];
@@ -108,11 +122,12 @@ check("surfaceHit itself is unchanged", pickingSource.includes("surfaceHit(apart
 check("pick() bounds are untouched by the gap search", picking.raycaster.near === 0 && picking.raycaster.far === Infinity);
 
 /* ---- filter rules ---------------------------------------------------------------- */
-check("the ceiling band is the top 0.35 m, never under 1.8 m", filters.ceilingZ === 2.15
-  && cutawayPickFilters({ floorZ: 0, topZ: 2 }).ceilingZ === 1.8);
+check("the ceiling band starts 0.2 m under the ceiling surface, never under 1.8 m",
+  cutawayPickFilters({ floorZ: 0, ceilingZ: 2.5 }).bandZ === 2.3 && cutawayPickFilters({ floorZ: 0, ceilingZ: 1.9 }).bandZ === 1.8);
+check("a sloped ceiling hit in the band, seen from above, is rejected", filters.rejectHit({ point: [1, 3.8, 2.38], normal: [0, -.866, .5], eye: [7, -3, 6] }));
 check("a horizontal hit seen from below is never rejected", !filters.rejectHit({ point: [0, 0, 2.5], normal: [0, 0, 1], eye: [0, 0, 1.6] }));
 check("a vertical hit in the ceiling band is never rejected", !filters.rejectHit({ point: [0, 0, 2.4], normal: [1, 0, 0], eye: [0, 0, 6] }));
-check("unusable bounds give no filters", cutawayPickFilters({ floorZ: 0, topZ: 0 }) === null && cutawayPickFilters({}) === null);
+check("unusable heights give no filters", cutawayPickFilters({ floorZ: 0, ceilingZ: 1 }) === null && cutawayPickFilters({}) === null);
 
 /* ---- engine wiring --------------------------------------------------------------- */
 const engineSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../app/src/home-3d/engine.js"), "utf8");

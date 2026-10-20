@@ -324,27 +324,14 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
     const overlay = markersM.createOverlay(apartmentRoot);
-    /* The collision proxy's floor and top heights in the Apartment frame,
-     * once per collision object, for the cut-away pick filters. */
+    /* The collision proxy's scanned floor and ceiling heights (not its
+     * bounding box, which stray triangles stretch), once per collision
+     * object, for the cut-away pick filters. */
     let cutawayFilterCache = null;
     function collisionCutawayFilters(collision) {
         if (cutawayFilterCache?.collision === collision) return cutawayFilterCache.filters;
-        apartmentRoot.updateMatrixWorld(true);
-        collision.updateMatrixWorld(true);
-        let floorZ = Infinity, topZ = -Infinity;
-        const corner = new THREE.Vector3();
-        collision.traverse(node => {
-            if (!node.isMesh || !node.geometry) return;
-            if (!node.geometry.boundingBox) node.geometry.computeBoundingBox();
-            const { min, max } = node.geometry.boundingBox;
-            for (let i = 0; i < 8; i++) {
-                corner.set(i & 1 ? max.x : min.x, i & 2 ? max.y : min.y, i & 4 ? max.z : min.z)
-                    .applyMatrix4(node.matrixWorld);
-                const z = apartmentRoot.worldToLocal(corner).z;
-                floorZ = Math.min(floorZ, z); topZ = Math.max(topZ, z);
-            }
-        });
-        const filters = pickingM.cutawayPickFilters({ floorZ, topZ });
+        const heights = pickingM.horizontalSurfaceHeights(collision, apartmentRoot);
+        const filters = heights ? pickingM.cutawayPickFilters(heights) : null;
         cutawayFilterCache = { collision, filters };
         return filters;
     }

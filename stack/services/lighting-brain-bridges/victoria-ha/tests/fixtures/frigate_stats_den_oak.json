@@ -1,0 +1,22 @@
+{
+  "_comment": "Synthetic frigate/stats payload in the shape Frigate 0.14+ publishes. Values are made up; no live read.",
+  "cameras": {
+    "den_oak": {
+      "camera_fps": 5.0,
+      "process_fps": 5.0,
+      "skipped_fps": 0.0,
+      "detection_fps": 1.2,
+      "detection_enabled": true,
+      "pid": 401,
+      "capture_pid": 402,
+      "ffmpeg_pid": 403,
+      "audio_rms": 0.0,
+      "audio_dBFS": 0.0
+    }
+  },
+  "detectors": {
+    "hailo8l": {"inference_speed": 11.4, "detection_start": 0.0, "pid": 390}
+  },
+  "detection_fps": 1.2,
+  "service": {"uptime": 86400, "version": "0.18.0", "latest_version": "0.18.0", "storage": {}, "last_updated": 1760000000}
+}

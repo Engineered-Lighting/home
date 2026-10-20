@@ -345,9 +345,17 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
         const box = bounds(), proposal = shownProposal();
         drawProposal(drag ? null : proposal);
         if (!elements?.root?.isConnected || !box) return false;
+        // Every projection reads layout, so all of them run before any style
+        // write; one frame then costs at most one layout, not one per element.
         const placed = placeFixtureLabels(state.fixtures.map(fixture => ({ id: fixture.fixture_id,
             screen: project(vector(fixture.display_anchor_m) ? [fixture.display_anchor_m[0], fixture.display_anchor_m[1], fixture.display_anchor_m[2] + .02] : null) })),
         { selectedId: state.selectedId, hoverId: state.hoverId, pillFixtureId: state.pillFixtureId, bounds: box });
+        const aim = aimFixture(), reticleAt = drag ? drag.cursor : aim ? project(reticlePoint()) : null;
+        const chipAt = drag?.model && placeDragChip(drag.cursor, box);
+        const blockerAt = drag?.model?.blocker_point_m && project(drag.model.blocker_point_m);
+        const proposalAt = !drag && proposal ? project(proposal.target.point_m) : null;
+        // A spot under the column or sheet keeps its bar, clamped into view.
+        const barAt = proposalAt ? placeAimBar(proposalAt, box) : null;
         for (const item of placed) {
             const label = elements.labels.get(item.id), ring = elements.rings.get(item.id);
             write(label, !item.visible, item.x, item.y);
@@ -355,17 +363,11 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
             write(ring, !item.ring, item.ring?.x, item.ring?.y);
             if (ring && item.ring) ring.setAttribute('data-state', item.state);
         }
-        const aim = aimFixture(), reticleAt = drag ? drag.cursor : aim ? project(reticlePoint()) : null;
         write(elements.reticle, !aim || !within(reticleAt, box), reticleAt?.x, reticleAt?.y);
         if (elements.reticle && elements.reticle.getAttribute('data-state') !== reticleState()) elements.reticle.setAttribute('data-state', reticleState());
-        const chipAt = drag?.model && placeDragChip(drag.cursor, box);
         write(elements.chip, !chipAt, chipAt?.x, chipAt?.y);
-        const blockerAt = drag?.model?.blocker_point_m && project(drag.model.blocker_point_m);
         write(elements.blocker, !within(blockerAt, box), blockerAt?.x, blockerAt?.y);
-        const proposalAt = !drag && proposal ? project(proposal.target.point_m) : null;
         write(elements.proposal, !within(proposalAt, box), proposalAt?.x, proposalAt?.y);
-        // A spot under the column or sheet keeps its bar, clamped into view.
-        const barAt = proposalAt ? placeAimBar(proposalAt, box) : null;
         write(elements.bar, !barAt, barAt?.x, barAt?.y);
         return current();
     }

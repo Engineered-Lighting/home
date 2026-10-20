@@ -405,6 +405,8 @@ function retainedSelectionFixture() {
     state.overlaySelections.push(id); return engine.overlay.virtualFixtureInteractionDescriptor(id);
   };
   context.virtualFixtureControlsOpen = true; context.virtualFixtureId = 'two'; context.unifiedShell = true;
+  // The render-time mirror the first-selection rule reads (a retained selection is open).
+  context.virtualFixtureControlsOpenRef = { current: true };
   context.virtualAimGestureRef = { current: null };
   context.setVirtualFixtureId = id => state.calls.push(['fixture-id', id]);
   context.setVirtualFixtureControlsOpen = open => state.calls.push(['fixture-controls', open]);

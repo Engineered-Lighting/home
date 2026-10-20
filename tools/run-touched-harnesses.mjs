@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-/* ============================================================================
- * run-touched-harnesses.mjs — run the test harnesses that guard the files
+/* ===================================================================== * run-touched-harnesses.mjs — run the test harnesses that guard the files
  * touched by a diff.
  *
  * The tools/run-*.js harnesses and explicitly mapped Node test suites guard
@@ -73,6 +72,8 @@ const MAP = [
   [/^app\/src\/home-apartment(?:-ui|-aim|-cards)?\.jsx$/, ["run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
   [/^tools\/(?:run-apartment-ui-tests\.js|test-apartment-ui-browser\.mjs)$/, ["run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["run-apartment-3d-contract-tests"]],
+  [/^(?:app\/src\/(?:home-3d\/(?:lit-(?:view|model)\.mjs|engine\.js)|home-apartment\.jsx)|tools\/test-apartment-lit-(?:view|browser)\.mjs)$/, ["test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
   [/^app\/src\/home-ai-stack\.jsx$/, ["run-ai-stack-card-tests"]],
@@ -108,6 +109,10 @@ const MAP = [
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
+  [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
+  [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
+  [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/apartment-light-pools\.mjs|tools\/test-apartment-light-pools\.mjs)$/, ["test-apartment-light-pools.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:test-apartment-directional(?:-integration|-browser(?:-part2)?)?\.mjs|fixtures\/apartment-directional-browser-proof\.mjs)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:fixtures\/apartment-directional-native-mouse|test-apartment-directional-native-mouse)\.mjs$/, ["test-apartment-directional-native-mouse.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
@@ -115,6 +120,11 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-directional-presentation\.mjs|tools\/test-apartment-directional-presentation\.mjs)$/, ["test-apartment-directional-presentation.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)|home-3d\/apartment-directional-presentation\.mjs)|tools\/test-apartment-composer-comfort-browser\.mjs)$/, ["test-apartment-composer-comfort-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures\.mjs|markers\.js)|tools\/test-apartment-radial-visual\.mjs)$/, ["test-apartment-radial-visual.mjs"]],
+  // W2 aim wiring: the mounted overlay, its store and presentation, and the hand-change switch point.
+  [/^(?:app\/src\/(?:home-apartment(?:-room-overlay|-cards)?\.jsx|home-apartment-aim-proposals\.js|home-app\.jsx|home-3d\/(?:apartment-aim-presentation\.mjs|engine\.js))|tools\/(?:test-apartment-(?:aim-wiring(?:-(?:drag|keys|room|phone))?-browser|manual-intent-contract)\.mjs|fixtures\/apartment-aim-wiring-harness\.mjs))$/,
+    ["test-apartment-aim-wiring-browser.mjs", "test-apartment-aim-wiring-drag-browser.mjs", "test-apartment-aim-wiring-keys-browser.mjs",
+      "test-apartment-aim-wiring-room-browser.mjs", "test-apartment-aim-wiring-phone-browser.mjs", "test-apartment-manual-intent-contract.mjs",
+      "run-apartment-aim-presentation-tests.mjs", "run-apartment-aim-lifecycle-browser.mjs", "run-apartment-aim-proposals-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
@@ -123,6 +133,7 @@ const MAP = [
   [/^(?:app\/src\/home-apartment-room-guide\.jsx|tools\/test-apartment-room-guide(?:\.cjs|-browser\.mjs))$/, ["test-apartment-room-guide.cjs", "test-apartment-room-guide-browser.mjs"]],
   [/^app\/src\/(?:home-apartment\.jsx|index\.html|home-feature-loader\.js|home-3d\/(?:rig\.js|markers\.js|equipment-virtual-fixtures\.mjs|apartment-perception-layer\.mjs|registered-desk-target\.mjs))$/, ["test-apartment-room-guide.cjs"]],
   [/^app\/src\/home-apartment(?:-ui)?\.jsx$/, ["test-apartment-room-guide-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-ui|-room-guide)?\.jsx|home-app\.jsx|home-perception-lab\.jsx|home-tokens\.css|home-3d\/(?:modes\.js|asset-byte-cache\.mjs|rig\.js))|tools\/(?:test-apartment-m2-(?:shell|links)-browser|fixtures\/apartment-m2-shell-harness|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["test-apartment-m2-shell-browser.mjs", "test-apartment-m2-links-browser.mjs"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",
@@ -159,6 +170,8 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * An unmeasured browser suite counts as its 145 s deadline and
  * any other unmeasured item as 1 s. Weights never add, drop or reorder a
  * harness; they only decide which worker runs it. */
+// The two M2 shell suites are unmeasured on hosted CI: local runs of 54 s
+// (links) and 38 s (shell), doubled for the software renderer.
 const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
@@ -167,6 +180,9 @@ const SHARD_WEIGHT_S = {
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-beam-path-browser.mjs": 40,
   "test-apartment-room-inspector-browser.mjs": 62,
+  "test-apartment-m2-links-browser.mjs": 110,
+  "test-apartment-m2-shell-browser.mjs": 80,
+  "test-apartment-lit-browser.mjs": 90,
   "test-apartment-composer-comfort-browser.mjs": 55,
   "test-apartment-rig-fit-browser.mjs": 45,
   "test-apartment-aim-theme-browser.mjs": 8,
@@ -175,6 +191,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-chat-header-browser.mjs": 5,
   "test-apartment-unread-integration.mjs": 5,
   "test-apartment-escape-browser.mjs": 4,
+  "test-apartment-echo-inspector-browser.mjs": 4,
   "test-apartment-directional-integration.mjs": 4,
   "check-jsx.js": 4,
   "run-resilience-tests.js": 3,

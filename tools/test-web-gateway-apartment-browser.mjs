@@ -114,7 +114,18 @@ test('authenticated production gateway executes Apartment modules, renders both 
     await context.routeWebSocket('**/*', socket => { if (new URL(socket.url()).host !== new URL(origin).host) receipt.forbidden.push({ websocket: 'foreign origin' }); socket.close(); });
     const login = await context.request.post(origin + '/auth/login', { data: { username: 'fixture-owner', password: 'fixture-password' } });
     assert.equal(login.status(), 200);
-    assert.equal((await (await context.request.get(origin + '/auth/status')).json()).authenticated, true);
+    const ownerStatus = await (await context.request.get(origin + '/auth/status')).json();
+    assert.equal(ownerStatus.authenticated, true);
+    assert.match(ownerStatus.authorityTag, /^[a-f0-9]{64}$/, 'the real gateway produces the camera-context authority contract');
+    assert.equal((await (await fetch(gatewayOrigin + '/auth/status')).json()).authorityTag, null, 'unauthenticated callers receive no authority identifier');
+    const ownerCookie = (await context.cookies(origin)).find(cookie => cookie.httpOnly);
+    assert.ok(ownerCookie, 'the fixture uses the actual HttpOnly owner cookie');
+    const metadataAsCookie = await (await fetch(gatewayOrigin + '/auth/status', {
+      headers: { Cookie: ownerCookie.name + '=' + ownerStatus.authorityTag },
+    })).json();
+    assert.equal(metadataAsCookie.authenticated, false, 'the opaque identifier cannot authenticate as the owner cookie');
+    assert.equal(metadataAsCookie.authorityTag, null);
+    receipt.checks.push({ name: 'authenticated authority metadata without guest exposure', passed: true });
     const precompiled = await (await context.request.get(origin + '/precompiled/manifest.json')).json();
     assert.equal(precompiled.verified, true, 'the actual gateway verifies the isolated production build');
     assert.equal(Object.keys(precompiled.files).length, receipt.precompiled_files);
@@ -132,6 +143,9 @@ test('authenticated production gateway executes Apartment modules, renders both 
     assert.match(moduleResponse.headers()['content-type'], /^(?:text|application)\/javascript\b/);
     const shell = homeShell(page, origin);
     await shell.boot('1', 'victoria');
+    assert.equal(await page.evaluate(() => window.HomeCameraQuery.validateAuthority()), true,
+      'the mounted camera-context guard accepts the actual gateway owner session before informational Chat');
+    receipt.checks.push({ name: 'mounted camera-context guard accepts real gateway authority', passed: true });
     for (const site of ['victoria', 'echo']) {
       if (site === 'echo') await shell.selectHome(site);
       const state = await page.evaluate(async () => { const engine = window.__APT_ENGINE; await engine.pointsPromise; return { site: engine.siteId, mode: engine.modes.mode, hasCanvas: !!window.__APT_CANVAS?.isConnected }; });
@@ -143,6 +157,11 @@ test('authenticated production gateway executes Apartment modules, renders both 
     assert.equal(manifest.errors.filter(item => item.critical).length, 0, 'native manifest loader keeps the authenticated owner cookie');
     assert.equal(JSON.parse(manifest.data).name, 'Home');
     receipt.checks.push({ name: 'native private webmanifest fetch', passed: true });
+    const logout = await context.request.post(origin + '/auth/logout');
+    assert.equal(logout.status(), 200);
+    assert.equal(await page.evaluate(() => window.HomeCameraQuery.validateAuthority()), false,
+      'the same mounted guard refuses the revoked owner cookie');
+    receipt.checks.push({ name: 'mounted camera-context guard refuses logout', passed: true });
     assert.equal(hash(fs.readFileSync(rooms.registrationFile)), originalRegistration, 'registration unchanged');
     assert.deepEqual(receipt.forbidden, []);
     assert.deepEqual(receipt.page_errors, []);

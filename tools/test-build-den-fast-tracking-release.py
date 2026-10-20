@@ -7,10 +7,12 @@ class ReleaseTests(unittest.TestCase):
    root=pathlib.Path(temp);a=release.build(root/'a','1'*40);b=release.build(root/'b','1'*40)
    self.assertEqual(a['archive_sha256'],b['archive_sha256'])
    with tarfile.open(a['archive']) as tar:
-    names=tar.getnames();self.assertEqual(len(names),58)
+    names=tar.getnames();self.assertEqual(len(names),59)
     self.assertTrue(all(name=='manifest.json' or name.startswith('service/') and name.endswith('.py') for name in names))
     self.assertFalse(any('test_' in name or 'token' in name for name in names))
     m=json.load(tar.extractfile('manifest.json'));self.assertEqual(m['entrypoints']['la_detector_app'],'create_fast_tracking_app')
+    self.assertEqual(m['required_worker_environment']['YOLO_AUTOINSTALL'],'false')
+    self.assertIn('service/fast_tracking_depth.py',names)
  def test_new_unreviewed_local_import_is_refused(self):
   with tempfile.TemporaryDirectory() as temp:
    root=pathlib.Path(temp)

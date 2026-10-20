@@ -38,6 +38,29 @@ class CameraTests(unittest.TestCase):
             self.camera.project(dict(frame_key=first['frame_key'],identity=first['identity'],poses=[]))
         self.assertEqual(frame['identity']['sequence'],11)
         self.assertNotIn('depth',frame);self.assertNotIn('nv12',frame)
+    def test_frame_carries_its_immutable_depth_without_a_return_trip(self):
+        self.offer(1,1234);frame=self.camera.frame()
+        self.assertEqual(frame['schema'],'home-fast-camera-2')
+        from fast_tracking_depth import decode_paired_depth_frame
+        with patch('bundle_ingest.calibration_content_id',return_value=frame['identity']['calibration_content_id']):
+            value=decode_paired_depth_frame(frame)
+        self.assertTrue(np.all(value['depth']==1234))
+        self.assertFalse(value['depth'].flags.writeable)
+        altered=deepcopy(frame);altered['paired_depth']['encoded_sha256']='0'*64
+        with self.assertRaisesRegex(ValueError,'depth_integrity'):decode_paired_depth_frame(altered)
+
+    def test_decompression_bomb_and_cross_session_depth_are_refused(self):
+        import zlib
+        from fast_tracking_depth import decode_paired_depth_frame
+        self.offer(1);frame=self.camera.frame()
+        altered=deepcopy(frame);raw=zlib.compress(bytes(512001),1)
+        altered['paired_depth'].update(data_base64=base64.b64encode(raw).decode(),encoded_sha256=sha(raw))
+        with self.assertRaisesRegex(ValueError,'depth_integrity'):decode_paired_depth_frame(altered)
+        altered=deepcopy(frame);altered['calibration']['session']='different-camera-session'
+        with self.assertRaisesRegex(ValueError,'camera_binding'):decode_paired_depth_frame(altered)
+        altered=deepcopy(frame);altered['projection_metadata']['frames']['depth']['sequence']+=1
+        with self.assertRaisesRegex(ValueError,'camera_binding'):decode_paired_depth_frame(altered)
+
     def test_source_restart_and_expiry_revoke_old_depth(self):
         self.offer(1);frame=self.camera.frame();self.owner.session='replacement'
         with self.assertRaisesRegex(ValueError,'source_changed'):
@@ -81,6 +104,22 @@ class PumpTests(unittest.TestCase):
         self.assertFalse(packet['physical_permission']);self.assertFalse(packet['lighting_authority'])
         self.assertFalse(self.pump.tick())
         self.assertEqual(len(self.calls),3)  # repeated observation never reexecutes
+    def test_paired_frame_projects_on_la_without_a_camera_callback(self):
+        self.frame['schema']='home-fast-camera-2'
+        value=dict(depth='immutable-depth',metadata={},calibration={},identity=self.identity)
+        self.pump.local_projector=SimpleNamespace(project=lambda v,p:[dict(instance_id='local',joints=[dict(id=5,camera_xyz_m=[1,2,3])])])
+        with patch('fast_tracking_runtime.decode_paired_depth_frame',return_value=value,create=True):
+            self.assertTrue(self.pump.tick())
+        self.assertEqual([x[0] for x in self.calls],['/tracking/frame'])
+        self.assertEqual(self.pump.snapshot()['people'][0]['joints'][0]['position_m'],[1,2,3])
+
+    def test_corrupt_paired_depth_cannot_invoke_a_model(self):
+        self.frame['schema']='home-fast-camera-2';executions=[]
+        self.receiver.execute=lambda *a,**k:executions.append(a)
+        with patch('fast_tracking_runtime.decode_paired_depth_frame',side_effect=ValueError('tracking_depth_integrity'),create=True):
+            with self.assertRaisesRegex(ValueError,'depth_integrity'):self.pump.tick()
+        self.assertEqual(executions,[])
+
     def test_mismatched_depth_and_source_changes_never_publish(self):
         self.frame['identity']['epoch']='other';self.frame['frame_key']=digest(self.frame['identity'])
         with self.assertRaisesRegex(ValueError,'binding_changed'):self.pump.tick()

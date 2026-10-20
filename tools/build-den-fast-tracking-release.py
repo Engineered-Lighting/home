@@ -5,7 +5,7 @@ import subprocess,tarfile
 
 ROOT=Path(__file__).resolve().parents[1]
 SERVICE=ROOT/'stack/services/perception-lab'
-REVIEWED=frozenset('ambient_context,apartment_desk_preview,apartment_view_alignment,apartment_viewing_metric,apartment_viewing_metric_source,apartment_viewing_source,assessment_existing_api,bundle_ingest,bundle_rgb_input,chrony_preview_client,config,depth_association,fast_tracking_camera,fast_tracking_camera_entry,fast_tracking_runtime,geometry,head3d,host_home,jev_evidence,jev_semantics,jev_wire,keypoint_loader,keypoint_reference,keypoint_worker,la_detector_app,ownership,persisted_evidence,pose_composition,presentation,preview_client,preview_ingest,qwen_scene,reasoning,recorder,registered_image,remote_crops,remote_http,remote_receiver,remote_specialist,remote_transport,room_context,room_mapper,room_mesh,room_words,rtmpose_worker,rtmw3d_worker,runtime,session_budget,spatial_validation,staged_specialist,store,ultralytics_worker,view_person_association,vjepa_scene,worker_artifacts,yolox_loader,yolox_worker'.split(','))
+REVIEWED=frozenset('ambient_context,apartment_desk_preview,apartment_view_alignment,apartment_viewing_metric,apartment_viewing_metric_source,apartment_viewing_source,assessment_existing_api,bundle_ingest,bundle_rgb_input,chrony_preview_client,config,depth_association,fast_tracking_camera,fast_tracking_camera_entry,fast_tracking_depth,fast_tracking_runtime,geometry,head3d,host_home,jev_evidence,jev_semantics,jev_wire,keypoint_loader,keypoint_reference,keypoint_worker,la_detector_app,ownership,persisted_evidence,pose_composition,presentation,preview_client,preview_ingest,qwen_scene,reasoning,recorder,registered_image,remote_crops,remote_http,remote_receiver,remote_specialist,remote_transport,room_context,room_mapper,room_mesh,room_words,rtmpose_worker,rtmw3d_worker,runtime,session_budget,spatial_validation,staged_specialist,store,ultralytics_worker,view_person_association,vjepa_scene,worker_artifacts,yolox_loader,yolox_worker'.split(','))
 ENTRYPOINTS={'fast_tracking_camera_entry':'main','la_detector_app':'create_fast_tracking_app'}
 def sha(value):return hashlib.sha256(value).hexdigest()
 def encoded(value):return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
@@ -28,6 +28,7 @@ def sources(root=SERVICE):
     return {'service/'+name+'.py':raw for name,raw in sorted(files.items())}
 def build(output,source_ref):
     files=sources();manifest={'schema':'home-fast-tracking-release-1','source_ref':source_ref,'entrypoints':ENTRYPOINTS,
+        'required_worker_environment':{'YOLO_AUTOINSTALL':'false','OMP_NUM_THREADS':'1','OPENBLAS_NUM_THREADS':'1','MKL_NUM_THREADS':'1'},
         'camera_baseline_sha256':'d052fc217b2d412cb877cfb49608e7dcef4a52526932b8d036a51380accb6132',
         'files':{name:{'sha256':sha(raw),'bytes':len(raw),'mode':0o644} for name,raw in files.items()}}
     identifier=sha(encoded(manifest))[:16];manifest['release_id']=identifier

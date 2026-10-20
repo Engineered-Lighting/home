@@ -17,6 +17,7 @@ import time
 import uuid
 
 from reasoning import canonical,digest
+from fast_tracking_depth import decode_paired_depth_frame,DepthProjector
 
 
 def private_json(path,maximum=131072):
@@ -70,9 +71,9 @@ class CameraClient:
             self.connection.request('POST' if value is not None else 'GET',path,
                 canonical(value).encode() if value is not None else None,
                 {'Authorization':'Bearer '+token,'Content-Type':'application/json','Accept-Encoding':'identity'})
-            reply=self.connection.getresponse();raw=reply.read(512*1024+1);end=time.monotonic()
+            reply=self.connection.getresponse();raw=reply.read(1024*1024+1);end=time.monotonic()
             if reply.will_close:self.connection.close();self.connection=None
-            if reply.status!=200 or len(raw)>512*1024 or reply.getheader('Content-Type')!='application/json':
+            if reply.status!=200 or len(raw)>1024*1024 or reply.getheader('Content-Type')!='application/json':
                 raise ValueError('tracking_camera_unavailable')
             result=json.loads(raw);return result,start,end
         except BaseException:
@@ -89,7 +90,7 @@ class TrackingPump:
             raise ValueError('tracking_configuration_contract')
         self.config,bound=deepcopy(config),None
         configured,bound=load_tracking_alignment(config['alignment'])
-        self.alignment=bound.document
+        self.alignment=bound.document;self.local_projector=DepthProjector()
         if (self.alignment['camera']['calibration_content_id']!=config['calibration_content_id']
                 or configured['pack']!=self.alignment['pack']
                 or config['expected_camera_epoch']!=(getattr(bound,'verified_epoch',None) or self.alignment['camera']['capture_epoch'])):
@@ -129,7 +130,7 @@ class TrackingPump:
             if offered is None:return False
             frame,sent,received=offered
         identity=frame['identity'];key=frame['frame_key']
-        if (frame.get('schema')!='home-fast-camera-1' or digest(identity)!=key
+        if (frame.get('schema') not in ('home-fast-camera-1','home-fast-camera-2') or digest(identity)!=key
                 or identity['epoch']!=self.config['expected_camera_epoch']
                 or identity['calibration_content_id']!=self.config['calibration_content_id']):
             raise ValueError('tracking_camera_binding_changed')
@@ -140,6 +141,7 @@ class TrackingPump:
         interval=frame['source_interval_s'];reply=frame['camera_reply_s']
         observed=[sent-reply+interval[0],received-reply+interval[1]]
         if not 0<=received-observed[1]<=.75 or observed[1]<observed[0]:raise ValueError('tracking_original_expired')
+        paired=decode_paired_depth_frame(frame) if frame['schema']=='home-fast-camera-2' else None
         now_wall=time.time();age=max(0,self.clock()-observed[0]);expiry=now_wall+.75-age
         if age>=.75:raise ValueError('tracking_original_expired')
         source=dict(site_id='victoria',camera_id='den',session_id=self.attempt,capture_epoch=identity['epoch'],
@@ -157,7 +159,10 @@ class TrackingPump:
         if proof.get('terminal') is not True or proof.get('state')!='completed':return False
         if proof['result'].get('frame_id')!=key:raise ValueError('tracking_model_frame_mismatch')
         poses=proof['result'].get('pose_instances',[])
-        projected,_,_=self.camera.call('/tracking/project',{'frame_key':key,'identity':identity,'poses':poses})
+        if paired is not None:
+            projected=dict(schema='home-fast-depth-1',frame_key=key,identity=identity,instances=self.local_projector.project(paired,poses))
+        else:
+            projected,_,_=self.camera.call('/tracking/project',{'frame_key':key,'identity':identity,'poses':poses})
         if projected.get('schema')!='home-fast-depth-1' or projected['frame_key']!=key or projected['identity']!=identity:
             raise ValueError('tracking_depth_frame_mismatch')
         if not self.fresh() or time.time()>expiry or self.clock()-observed[0]>.75:raise ValueError('tracking_original_expired')

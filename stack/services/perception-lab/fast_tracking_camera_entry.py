@@ -20,7 +20,7 @@ def patched_source(raw):
     anchors=[
         ("                if group is not None:\n                    last_group = now\n",
          "                if group is not None:\n                    last_group = now\n                    try:\n                        state.fast_tracking.offer({name:group[name] for name in ('rgb','depth')})\n                    except Exception:\n                        with state.fast_tracking.lock:state.fast_tracking.latest=None\n"),
-        ("    class Handler(BaseHTTPRequestHandler):\n", "    class Handler(BaseHTTPRequestHandler):\n        protocol_version='HTTP/1.1'\n"),
+        ("    class Handler(BaseHTTPRequestHandler):\n", "    class Handler(BaseHTTPRequestHandler):\n        protocol_version='HTTP/1.1'\n        disable_nagle_algorithm=True\n"),
         ("            if self.path == '/frame.jpg':\n",
          "            if self.path == '/tracking/frame':\n                try:\n                    body=json.dumps(state.fast_tracking.frame(),separators=(',',':'),allow_nan=False).encode()\n                    status,content_type=200,'application/json'\n                except (ValueError,TypeError,KeyError):\n                    status,content_type,body=503,'application/json',b'{\"error\":\"tracking_unavailable\"}'\n            elif self.path == '/frame.jpg':\n"),
         ("        def log_message(self, *args):\n",

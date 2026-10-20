@@ -2603,7 +2603,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   </aside>;
 }
 
-function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "", unifiedShell = false, shellControlsHost = null, shellCameraHost = null, onShellState, onShowShellControls, onShowShellAim }) {
+function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false, onOpenDynamicReplay, mapRehearsalOpen = false, onCloseMapRehearsal, mapRehearsalError = "", unifiedShell = false, shellControlsHost = null, shellCameraHost = null, onShellState, onShowShellControls, onShowShellAim, onOpenPerceptionLab = null }) {
   const controlConnectionRef = useRef({ connection, endpoint, token, generation: 0 });
   if (controlConnectionRef.current.connection !== connection || controlConnectionRef.current.endpoint !== endpoint
       || controlConnectionRef.current.token !== token) {
@@ -2740,6 +2740,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     && loadedInteriorSiteRef.current === selectedSiteEntry.id
     && interiorSwitchState.phase !== "loading" && interiorSwitchState.phase !== "error" : null;
   const selectedSiteName = selectedSiteEntry?.shortName || "this home";
+  // APT-P01: the camera dock follows the home's perception capability, not
+  // its site id. A site record's home-den-capabilities-1 block wins; without
+  // one the dock model's interim default for that home applies.
+  const siteCapabilities = selectedSiteEntry?.capabilities || window.HomeSpatialViewport?.getSite?.(selectedSiteId)?.capabilities || null;
+  const perceptionCapability = window.HomeApartmentPerceptionDockModel?.perceptionCapability({ siteId: selectedSiteId, capabilities: siteCapabilities })
+    || { variant: "none", source: "interim_default" };
+  const perceptionDockAvailable = perceptionCapability.variant === "exact-frame" && !!window.HomeApartmentDenPerception;
   const selectedContentRevision = selectedSiteEntry?.contentRevision || null;
   const apartmentSceneControlsEnabled = !liveShadow && apartmentOwnsInput && phase === "ready" && selectedSiteInterior === true;
   // The current HA model belongs to Echo. Importing a scan grants no control
@@ -2888,8 +2895,17 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const directionalProjectionRef = useRef(null);
   const directionalViewRef = useRef(null);
   const [directionalView, setDirectionalView] = useState(null);
-  const [unifiedDockCollapsed, setUnifiedDockCollapsed] = useState(false);
-  const [unifiedDockExpanded, setUnifiedDockExpanded] = useState(false);
+  // APT-P01: one dock presentation state (collapsed, default, expanded or
+  // hidden) and one detail level, kept across homes for this view.
+  const [unifiedDock, setUnifiedDock] = useState(() => {
+    try { return window.HomeApartmentPerceptionDockModel?.normalizeDockState(localStorage.getItem("apt.dock.state")) || "default"; } catch (_) { return "default"; }
+  });
+  const [unifiedDockDetail, setUnifiedDockDetail] = useState(() => {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search || "").get("detail");
+      return window.HomeApartmentPerceptionDockModel?.normalizeDetail(fromUrl || localStorage.getItem("apt.dock.detail")) || "simple";
+    } catch (_) { return "simple"; }
+  });
   const [virtualAimNotice, setVirtualAimNotice] = useState("");
   const [virtualAimHistoryVersion, setVirtualAimHistoryVersion] = useState(0);
   const virtualAimHistoryRef = useRef({ undo: [], redo: [] });
@@ -8801,7 +8817,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     enabled: !!(open && liveCam && !calibCam && !simActive && liveHaEntity),
   });
   const liveCameraExact = !!(liveCam && aptCameraAlignment(liveCam).exact);
-  const cameraSurroundActive = !!(open && liveOn && liveCam && mobile && !calibCam && liveCameraExact && cameraPoseReady);
+  // The unified shell shows the feed in the camera column, so the room never
+  // reshapes around it.
+  const cameraSurroundActive = !!(open && !unifiedShell && liveOn && liveCam && mobile && !calibCam && liveCameraExact && cameraPoseReady);
 
   const roomInspectorFrame = modelScopeRef.current?.frameDigest;
   const roomInspectorRegistration = modelScopeRef.current?.registrationVersion;
@@ -9115,9 +9133,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       sourceLabel: sourceMeta.label, saveState: saveStatus.state, saveDetail: saveStatus.detail,
       physicalControls: apartmentDeviceControlsEnabled && connection === "online",
       ...aptShellLightFacts(model, virtualFixtureItems.length, virtualFixtureDocument?.scope?.room_id, connection),
-      hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception,
-      dockState: selectedSiteId === "victoria" && window.HomeApartmentDenPerception
-        ? unifiedDockCollapsed ? "collapsed" : unifiedDockExpanded ? "expanded" : "default" : "hidden",
+      hasPerception: perceptionDockAvailable,
+      dockState: perceptionDockAvailable ? unifiedDock : "hidden",
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
       haConnection: connection, haLastReportedAt: selectedSiteId === "echo" ? window.HomeApartmentStates?.latestReport(statesRef.current, window.HomeApartmentQuick?.echoLightEntityIds(model.devices)) ?? null : null,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
@@ -9126,7 +9143,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite, model.devices, model.zones, virtualFixtureItems.length, virtualFixtureDocument,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
-    unifiedDockCollapsed, unifiedDockExpanded, chatRoomSnapshot, echoNamedAims.chatBridge]);
+    unifiedDock, perceptionDockAvailable, chatRoomSnapshot, echoNamedAims.chatBridge]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);
@@ -10087,12 +10104,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible}
           homeId={selectedSiteId} homeName={selectedSiteEntry?.shortName} fixtureCount={virtualFixtureItems.length}
           fixtureSelected={virtualFixtureControlsOpen && virtualSpotlightsVisible}
-          hasPerception={selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception}
+          hasPerception={perceptionDockAvailable}
           modeProgress={modeProgress} onDismissNotice={() => setModeError(null)}
           viewLockedReason={unifiedCameraView ? "Camera view · Return to room to orbit or fit" : null}
           about={{ homeId: selectedSiteId, source: sourceMeta, revision: model.revision, liveShadow, simActive, trackerStatus,
             hasVirtualFixtures: !!virtualFixtureDocument, fixtureCount: virtualFixtureItems.length,
-            hasPerception: selectedSiteId === "victoria" && !!window.HomeApartmentDenPerception,
+            hasPerception: perceptionDockAvailable,
             cameraViews: aptCameraViewAvailability(selectedSiteId, model.devices) }}
           lit={litState?.active ? litState : null} onLit={virtualFixtureDocument ? next => { if (apartmentSceneControlsEnabled) void toggleLit(next); } : null} />
       )}
@@ -10266,7 +10283,33 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       {/* live camera feed - prefers HA's signed camera_proxy_stream (same path
           as the fast vision tray), with Frigate as a fallback. Shown over the
           3D canvas while snapped; mode switching returns after backing out. */}
-      {apartmentSceneControlsEnabled && liveCam && liveOn && !calibCam && (
+      {/* APT-P01: in the unified shell the live feed belongs to the camera
+          column, never over the room; the room keeps the camera pose. */}
+      {unifiedShell && apartmentSceneControlsEnabled && liveCam && liveOn && !calibCam && (
+        <AptHomePanelSlot enabled={true} target={shellCameraHost}>
+          <section className="apt-dock apt-dock-live" aria-label="Live camera feed" data-apartment-live-feed="column">
+            <header className="apt-ui-dock-header"><div className="apt-ui-grow">
+              <h2 className="apt-ui-heading">{liveCam.name || liveCam.label || "Camera"}</h2>
+              <p className="apt-ui-meta">Live feed · separate from any analyzed frame</p></div>
+              {window.HomeApartmentUI?.Badge ? <window.HomeApartmentUI.Badge state={liveFeedSettled ? "live" : "loading"}>
+                {liveFeedSettled ? "Live" : liveFeedStatus}</window.HomeApartmentUI.Badge> : null}</header>
+            <div className="apt-dock-body"><div className="apt-dock-frame" style={{ position: "relative", aspectRatio: "16 / 9", background: "#05090c" }}>
+              <AptUndistortedFeed
+                key={`${liveCam.id}-${serviceEpoch}-${liveFeedSource}-${signedLiveFeed.streamKey}`}
+                src={liveFeedBase}
+                snapshotSrc={liveSnapshotSrc}
+                snapshotIntervalMs={liveSnapshotIntervalMs}
+                alt={liveCam.name}
+                intrinsics={liveFeedIntrinsics}
+                style={{ width: "100%", height: "100%", maxWidth: "100%", maxHeight: "100%", objectFit: "contain", background: "#000", boxShadow: "none", opacity: 1 }}
+                onStatus={setLiveFeedStatus}
+                onReload={signedLiveFeed.src ? signedLiveFeed.reload : undefined}
+              /></div>
+              <p className="apt-ui-meta">Return to room leaves this camera view. No detection boxes are mapped to this feed.</p></div>
+          </section>
+        </AptHomePanelSlot>
+      )}
+      {!unifiedShell && apartmentSceneControlsEnabled && liveCam && liveOn && !calibCam && (
         <div style={mobileCameraFrame
           ? {
               ...mobileCameraFrame,
@@ -10453,24 +10496,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         /></AptHomePanelSlot>
       )}
 
-      {selectedSiteId === "victoria" && !rehearsalIsolated && window.HomeApartmentDenPerception && (
+      {perceptionDockAvailable && !rehearsalIsolated && (
         <AptHomePanelSlot enabled={unifiedShell} target={shellCameraHost}>
-          {unifiedShell && <header className="apt-ui-dock-header" data-collapsed={unifiedDockCollapsed ? "true" : "false"}>
-            <div className="apt-ui-grow"><h2 className="apt-ui-heading">Camera · JEV</h2><p className="apt-ui-meta">Den · video and analyzed frames</p></div>
-            <button type="button" className="apt-ui-button is-icon" aria-label={unifiedDockExpanded ? "Restore camera dock size" : "Expand camera dock"}
-              aria-pressed={unifiedDockExpanded} onClick={() => { setUnifiedDockExpanded(value => !value); setUnifiedDockCollapsed(false); }}>
-              <AptUnifiedIcon name={unifiedDockExpanded ? "collapse" : "expand"} /></button>
-            <button type="button" className="apt-ui-button is-icon" aria-label={unifiedDockCollapsed ? "Show camera dock" : "Collapse camera dock"}
-              aria-expanded={!unifiedDockCollapsed} onClick={() => { setUnifiedDockCollapsed(value => !value); setUnifiedDockExpanded(false); }}>
-              <AptUnifiedIcon name={unifiedDockCollapsed ? "chevU" : "chevD"} /></button>
-          </header>}
-          {unifiedShell && <section className="apt-ui-dock-intro"><h3 className="apt-ui-heading">Camera view closed</h3>
-            <p className="apt-ui-copy">Open this view to inspect live video and analyzed frames. Their status is shown separately.</p></section>}
           <window.HomeApartmentDenPerception
           engine={engineRef.current}
           active={open && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn}
           mobile={mobile}
-          onReturnToHome={onClose}
+          capability={perceptionCapability.source === "capability" ? siteCapabilities : null}
+          dockState={unifiedDock} onDockState={setUnifiedDock}
+          detail={unifiedDockDetail} onDetail={setUnifiedDockDetail}
+          onOpenLab={onOpenPerceptionLab} Icon={AptUnifiedIcon}
           onAimPreviewController={registerDenDeskAimPreview}
           onAimPreviewChange={refreshDenDeskAimPreview}
         /></AptHomePanelSlot>

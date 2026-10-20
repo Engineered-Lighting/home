@@ -235,10 +235,10 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
     // Chromium aligns moves to animation frames and may coalesce two quick
     // ones. Each sample is sent only after the page saw the previous one as
     // its own trusted pointermove, so every dispatched sample is delivered.
-    const delivered = async (pointerType, x, y, dispatch) => {
+    const delivered = async (pointerType, x, y, dispatch, eventType = 'pointermove') => {
       const seen = await page.evaluate(() => window.__comfortPointers.length); await dispatch();
-      await page.waitForFunction(({ seen, pointerType, x, y }) => window.__comfortPointers.slice(seen).some(row => row.type === 'pointermove'
-        && row.isTrusted && row.pointerType === pointerType && Math.abs(row.x - x) <= 1 && Math.abs(row.y - y) <= 1), { seen, pointerType, x, y });
+      await page.waitForFunction(({ seen, pointerType, x, y, eventType }) => window.__comfortPointers.slice(seen).some(row => row.type === eventType
+        && row.isTrusted && row.pointerType === pointerType && Math.abs(row.x - x) <= 1 && Math.abs(row.y - y) <= 1), { seen, pointerType, x, y, eventType });
     };
     const mouse = {
       move: (x, y, buttons = 0) => delivered('mouse', x, y, () => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: buttons ? 'left' : 'none', buttons, pointerType: 'mouse' })),
@@ -248,7 +248,15 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
     };
     const touch = (type, points) => {
       const dispatch = () => send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y, id]) => ({ x, y, id, radiusX: 4, radiusY: 4, force: 1 })) });
-      return type === 'touchMove' ? delivered('touch', points[0][0], points[0][1], dispatch) : dispatch();
+      if (type === 'touchMove') return delivered('touch', points[0][0], points[0][1], dispatch);
+      // CDP may acknowledge touchStart before Chromium delivers pointerdown.
+      // Observe that trusted input first; capture and paint assertions below
+      // still independently verify what the application does with it.
+      if (type === 'touchStart') {
+        const point = points.at(-1);
+        return delivered('touch', point[0], point[1], dispatch, 'pointerdown');
+      }
+      return dispatch();
     };
     // The touch stages reuse this booted shell: Chromium's own touch emulation
     // (the protocol call Playwright's hasTouch makes) turns the pointer coarse.

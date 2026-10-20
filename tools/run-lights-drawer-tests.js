@@ -164,8 +164,8 @@ async function expectReject(name, promise, pattern) {
   assert("footer reset labels signal arming and name the confirm verb",
     source.includes('{_lightsConfirmButtonLabel(confirmVerb, "reset_all", "✓ confirm reset", "↺ reset all…")}'));
   assert("cooldown sweeper does not write while HA is offline",
-    source.includes("if (!open || !haOnline) return undefined;") &&
-    source.includes("}, [open, client, haOnline]);"));
+    source.includes("if (!open || !client || !haOnline || !tuningActive) return undefined;") &&
+    source.includes("}, [open, client, haOnline, tuningActive]);"));
 
   process.stdout.write("\ntravel_mode_wiring_test\n");
   assert("travel mode helper constant is present", source.includes('const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";'));

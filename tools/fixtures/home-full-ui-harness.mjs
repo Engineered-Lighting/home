@@ -20,7 +20,7 @@ export async function runFullUiShell(name, steps) {
     const { page, origin, receipt, checks } = shell, context = page.context();
     const state = { people: 'populated', intelligence: 'populated', metrics: 'populated', lab: 'populated', detailError: false };
     const calls = [], writes = [], sockets = [];
-    const sourceFiles = ['home-app.jsx', 'home-people.jsx', 'home-intelligence.jsx', 'home-perception-lab.jsx',
+    const sourceFiles = ['home-app.jsx', 'home-lights.jsx', 'home-video-labeler.jsx', 'home-people.jsx', 'home-intelligence.jsx', 'home-perception-lab.jsx',
       'home-perception-lab-data.js', 'home-perception-lab-transport.js', 'home-tokens.css',
       'home-apartment-camera.jsx', 'home-apartment-camera-source.js', 'home-apartment-den-perception.jsx',
       'home-apartment-perception-source.js', 'home-apartment-perception-player.js', 'home-apartment-perception-view.js',

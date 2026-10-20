@@ -153,6 +153,16 @@ test(PARTS[part], { timeout: 160000 }, async () => {
       });
       expect(!overlays.overlaps.length && !overlays.outside.length, 'room overlays never collide and stay on the stage · ' + label, overlays);
       expect(Object.values(overlays.nonDrag).every(Boolean), 'the room can be zoomed, turned and refit without dragging · ' + label, overlays.nonDrag);
+      // No toolbar control is cut off by the bar or the stage at any size.
+      state.toolbar_clipped = await page.evaluate(() => {
+        const bar = document.querySelector('.apt-home-shell .apt-ui-room-toolbar'); if (!bar) return [];
+        const stage = document.querySelector('.apt-home-stage').getBoundingClientRect(), box = bar.getBoundingClientRect();
+        return [...bar.querySelectorAll('button')].filter(node => node.getClientRects().length && !node.closest('[hidden]')).filter(node => {
+          const rect = node.getBoundingClientRect();
+          return rect.left < Math.max(stage.left, box.left) - .5 || rect.right > Math.min(stage.right, box.right) + .5;
+        }).map(node => node.getAttribute('aria-label') || node.textContent.trim());
+      });
+      expect(!state.toolbar_clipped.length, 'every room toolbar control shows in full · ' + label, state.toolbar_clipped);
     }
     expect(state.stage === 'rgb(0, 0, 0)', 'the room stage stays dark · ' + label, state.stage);
     if (surface === 'room' || surface === 'light') {

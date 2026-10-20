@@ -2320,8 +2320,9 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
       aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit right" disabled={disabled || !!viewLockedReason}
       title={viewLockedReason || undefined} onClick={() => onOrbit(1)}><AptUnifiedIcon name="chevR" /></button>
-    <button type="button" className="apt-ui-button is-small hide-small" aria-label="Fit room" disabled={disabled || !!viewLockedReason}
-      title={viewLockedReason || undefined} onClick={onFit}><AptUnifiedIcon name="fit" />Fit</button>
+    {/* Icon-only, as in the prototype toolbar, so the row fits a 768 px stage. */}
+    <button type="button" className="apt-ui-button is-icon is-small hide-small" aria-label="Fit room" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || "Fit room"} onClick={onFit}><AptUnifiedIcon name="fit" /></button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-help"><button type="button" className="apt-ui-button is-small" aria-label="Layers"
       aria-expanded={popover === "layers"} onClick={() => setPopover(popover === "layers" ? null : "layers")}><AptUnifiedIcon name="layers" /><span className="apt-ui-toolbar-word">Layers</span></button>

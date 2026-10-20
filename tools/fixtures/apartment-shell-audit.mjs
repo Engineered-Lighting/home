@@ -62,7 +62,17 @@ test(PARTS[part], { timeout: 160000 }, async () => {
   const expect = (ok, message, detail) => { if (!ok) findings.push({ message, detail }); };
   const phase = async (name, operation) => {
     const started = Date.now();
-    try { return await operation(); } finally { receipt.phases.push({ name, ms: Date.now() - started }); save(); }
+    receipt.current_phase = name; save();
+    try { return await operation(); }
+    catch (error) {
+      receipt.failure ||= { phase: name, after_ms: Date.now() - started, message: String(error?.message || error).split('\n')[0].slice(0, 300),
+        stack: String(error?.stack || '').split('\n').slice(0, 6).join('\n') };
+      if (String(error?.message).startsWith('[' + part + ' · ')) throw error;
+      // The printed stack is fixed when an error is made, so the phase goes into a new one.
+      const tagged = new Error('[' + part + ' · ' + name + '] ' + (error?.name && error.name !== 'Error' ? error.name + ': ' : '') + String(error?.message || error), { cause: error });
+      tagged.stack = tagged.name + ': ' + tagged.message + '\n' + String(error?.stack || '').split('\n').slice(1).join('\n');
+      throw tagged;
+    } finally { receipt.phases.push({ name, ms: Date.now() - started }); save(); }
   };
 
   const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -287,21 +297,31 @@ test(PARTS[part], { timeout: 160000 }, async () => {
   async function sheetGrip() {
     await setProfile(PROFILES[1]); await setTheme('dark'); await selectHome('victoria');
     const detent = () => page.locator('.apt-home-shell').getAttribute('data-sheet');
+    // Two frames let the release commit; then no drag is open and the panel's
+    // height transition (0.22 s, longer on a slow runner) has finished.
+    const sheetSettled = async () => {
+      await settle();
+      await waitForDirectionalReadiness(page, () => {
+        const shell = document.querySelector('.apt-home-shell'), panel = document.querySelector('.apt-home-panel');
+        return !!shell && !!panel && !shell.hasAttribute('data-sheet-dragging')
+          && !panel.getAnimations().some(animation => animation.playState === 'running');
+      });
+    };
     const grip = page.getByRole('button', { name: 'Resize Home sheet', exact: true });
     const drag = async dy => {
       const box = await grip.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2, steps = 6;
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
       for (let i = 1; i <= steps; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + dy * i / steps, id: 1 }] });
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      await page.waitForTimeout(300); await settle();
+      await sheetSettled();
     };
     const path = [await detent()];
     await drag(-260); path.push(await detent());
     await drag(520); path.push(await detent());
     await drag(-60); path.push(await detent());
-    await grip.focus(); await page.keyboard.press('ArrowUp'); await settle(); path.push(await detent());
-    await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await settle(); path.push(await detent());
-    await grip.click(); await settle(); path.push(await detent());
+    await grip.focus(); await page.keyboard.press('ArrowUp'); await sheetSettled(); path.push(await detent());
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await sheetSettled(); path.push(await detent());
+    await grip.click(); await sheetSettled(); path.push(await detent());
     const motion = await page.evaluate(() => getComputedStyle(document.querySelector('.apt-home-panel')).transitionDuration);
     receipt.sheet_grip = { path, motion };
     expect(JSON.stringify(path) === JSON.stringify(['half', 'full', 'peek', 'half', 'full', 'peek', 'half']),
@@ -431,7 +451,12 @@ test(PARTS[part], { timeout: 160000 }, async () => {
     assert.deepEqual(served.forbidden, [], 'the audit sends no command or session request');
     assert.deepEqual(receipt.errors, [], 'no page errors');
     if (REPORT_ONLY) console.log('Report only: ' + findings.length + ' findings');
-    else assert.deepEqual(findings.map(finding => finding.message), [], JSON.stringify(findings.slice(0, 4), null, 1).slice(0, 6000));
+    else if (findings.length) {
+      const first = findings[0];
+      // The full list goes to the log and receipt; the failure itself stays one line for the runner's tail.
+      console.error('Shell audit findings: ' + JSON.stringify(findings.slice(0, 4), null, 1).slice(0, 6000));
+      assert.fail('[' + part + '] ' + findings.length + ' finding(s); first: ' + first.message + ' · ' + JSON.stringify(first.detail ?? null).slice(0, 300));
+    }
   } finally {
     clearTimeout(timer); save(); console.log('Shell audit receipt: ' + path.join(run, 'receipt.json'));
     await browser?.close().catch(() => {}); served?.server.closeAllConnections(); served?.server.close();

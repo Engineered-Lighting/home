@@ -1,11 +1,12 @@
 ---
-title: Touched-surface CI runs on six shards
+title: Touched-surface checks run on six shards
 target: internal
 type: changed
 ---
 
-The touched-surface contracts job now splits one plan across six workers
-instead of three. A PR that touches the Home shell and Apartment view plans
-about 2,300 s of harnesses, which no longer fit three 10-minute workers. Each
-worker keeps its 10-minute limit, every harness keeps its deadline, and the
-aggregate still verifies that the six receipts cover the plan exactly once.
+The touched-surface CI job now splits its plan across six workers instead of
+five. A change that touches both the Home shell and the Apartment view plans
+about 75 suites (about 2,300 s measured), which needs about 390 s per worker
+on six shards rather than about 470 s on five. Each worker keeps its
+10-minute limit, every suite keeps its deadline, and the aggregate still
+requires the six receipts to cover the plan exactly once.

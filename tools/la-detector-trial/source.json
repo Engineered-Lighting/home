@@ -1,0 +1,10 @@
+{
+  "status": "candidate-not-installed",
+  "target": "Linux x86_64 CPython3.12 CUDA12.8",
+  "jetson_lock_sha256": "2be1aeaac1797951981c6816717d7a5c759259dc32360513d62626cadfb7a77a",
+  "difference": "Jetson ARM64 CPython3.10 CUDA12.6; same application/torch/torchvision versions, platform wheels differ",
+  "resolver": "uv 0.12.19",
+  "requirements_lock_sha256": "b88cb2d0674f447b9c8488f52c982cbd20555033d3d9397483a7d870e8694a0d",
+  "resolved_packages": 53,
+  "validation": "Linux-target dependency resolution only; no installation, imports or GPU execution"
+}

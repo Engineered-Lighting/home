@@ -1,0 +1,37 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "controlled-room-clarification-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "worker_interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "scene_interface_digest": "b1e5df3bc1c9a17c40a4c27c997e96e2748f1cc559e66dcf72a3fd74313ab674",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "199f9b909705deeb6e6c3b7d3008f0f3e1b86e848c87c95894249667b033d65a",
+  "payload_versions": {
+    "home-live-shadow-decision-9": 9,
+    "home-live-worker-checkpoint-9": 9,
+    "home-live-worker-commit-9": 9,
+    "home-live-input-cut-9": 9,
+    "home-live-room-output-1": 1,
+    "home-live-room-snapshot-1": 1,
+    "home-live-person-lifecycle-1": 1,
+    "home-live-intent-event-2": 2,
+    "home-live-intent-event-3": 3
+  },
+  "publication_families": [
+    "home-live-shadow-decision-9",
+    "home-live-intent-event-3"
+  ],
+  "schemas": {
+    "home-live-shadow-decision-9.schema.json": "d3067da11de620d209174edf955db19715a1f901d08a5f79c1f90f1881df3737",
+    "home-live-worker-checkpoint-9.schema.json": "8e825a256099346b17a75f21260a6b91e5b5091500048018e9e364130582f6cd",
+    "home-live-worker-commit-9.schema.json": "c0a8b23518d5ed8c54f4becdf8a58a52e3cc6069801cca67a59df2bef849f0cb",
+    "home-live-input-cut-9.schema.json": "da23fe95dcb3bcce70962aebe0e697ce94eca1f0b8b0f55754d7b5c883a77e84",
+    "home-live-room-output-1.schema.json": "93e0fde40ec0daebb0eeffc14c2478c52351b05eb5327af443ae54f8fdf56ba0",
+    "home-live-room-snapshot-1.schema.json": "fd2d0bc803b49c8e8930f4b749f6e917f52ed956d8f6d086425aa1cdf50831c5",
+    "home-live-person-lifecycle-1.schema.json": "213f3782c206c28e995ab14f9a256b85581511f481cb50b2857f743335df1bfe",
+    "home-live-intent-event-2.schema.json": "50f697caf8a915b7e0e918a3dda9bd511ea780c6282c8a8499a89fc9fe24ee0a",
+    "home-live-intent-event-3.schema.json": "3c2802e9e4f47dcf900d1e9b4197a7d3ed77d735cacf9e34a3b57742ffca5d66"
+  },
+  "conservative_delivery_interface_digest": "23c8d39e42b9c2ad8a22c7af87f7c8628913e3557455744321011987709d8b98",
+  "room_interface_digest": "a0178ab12c6315b7972cc2a23454daebd732f09c3122666dec86c4d79982bbf7"
+}

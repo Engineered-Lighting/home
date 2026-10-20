@@ -29,7 +29,16 @@ const DISPLAY_PIVOT_Z = -.14;
 // Orb cosmetics only (SPEC: a small orb with a glow tinted by the channels
 // that are on). None of these moves a source, pick, handle or receiver.
 const ORB_CORE_RADIUS = .03, ORB_CORE_COLOR = 0x3d3f43;
-const ORB_HALO_RADIUS = .15, ORB_HALO_FALLOFF = 2.5, ORB_HALO_CHANNEL_OPACITY = .3;
+const ORB_HALO_RADIUS = .15, ORB_HALO_FALLOFF = 2.5, ORB_HALO_CHANNEL_OPACITY = .3, ORB_HALO_MIN_RADIUS = .10, ORB_HALO_GROWTH = .16, ORB_HALO_FULL_SUM = 1.4;
+// Halo size follows how much light the socket gives (prototype scene.js
+// _styleFixtures): level = min(1, (spot + down + mean radial) / 1.4) grows
+// the glow from a 10 cm to a 26 cm radius. Drawing only: every layer keeps
+// its opacity contract, and no pick, source or receiver moves.
+export function orbHaloRadius(spot, down, radialLevels) {
+    const level = value => Number.isFinite(value) && value > 0 ? Math.min(1, value) : 0;
+    const radial = radialLevels?.length ? Array.from(radialLevels, level).reduce((sum, value) => sum + value, 0) / radialLevels.length : 0;
+    return ORB_HALO_MIN_RADIUS + ORB_HALO_GROWTH * Math.min(1, (level(spot) + level(down) + radial) / ORB_HALO_FULL_SUM);
+}
 const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = .0005, RADIAL_SETTLED_KELVIN = 2;
 const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
 // SPEC Aim lifecycle: Set aim moves the warm beam to its new target with a
@@ -410,7 +419,14 @@ function buildFixture(item, state, depth, reducedMotion) {
     downwardHalo.userData = { orb_halo_layer: 'downward' };
     const spotlightHalo = halo(roboticGroup, 'orb-halo-spotlight', ORB_HALO_CHANNEL_OPACITY);
     spotlightHalo.userData = { orb_halo_layer: 'spotlight' };
+    const haloLayers = [];
+    let haloSpot = 0, haloDown = 0;
+    const sizeHalo = () => {
+        const scale = orbHaloRadius(haloSpot, haloDown, shownLevels) / ORB_HALO_RADIUS;
+        for (const layer of haloLayers) if (layer.scale.x !== scale) layer.scale.setScalar(scale);
+    };
     const paintHalo = (layer, channel) => {
+        if (!haloLayers.includes(layer)) haloLayers.push(layer);
         layer.visible = channel.on && channel.brightness > 0;
         layer.material.color.copy(displayWhite(channel.color_temp_kelvin)); layer.material.opacity = ORB_HALO_CHANNEL_OPACITY * channel.brightness;
     };
@@ -497,7 +513,9 @@ function buildFixture(item, state, depth, reducedMotion) {
             view.port.material.opacity = active ? .4 + level * .6 : .65;
             view.sector.visible = active; view.sector.material.color.copy(view.tone); view.sector.material.opacity = .10 * level;
             view.patch.visible = active; view.patch.material.color.copy(view.tone); view.patch.material.opacity = .06 * level;
+            if (!haloLayers.includes(view.sector)) haloLayers.push(view.sector);
         }
+        sizeHalo();
     }
     function snapPresentation(nowMs) {
         shownLevels.set(targetLevels); shownKelvins.set(targetKelvins); radialMoving = false; radialAt = nowMs; paintRadials();
@@ -544,13 +562,15 @@ function buildFixture(item, state, depth, reducedMotion) {
         paintRadials(); return true;
     }
     function update(next, target = null, { sweep: sweepAim = false } = {}) {
+        const lit = channel => channel.on && channel.brightness > 0 ? channel.brightness : 0;
+        haloSpot = lit(next.spotlight); haloDown = lit(next.downward);
         updateRadials(next.radials);
         downwardEmitter.material.color.copy(next.downward.on && next.downward.brightness > 0 ? displayWhite(next.downward.color_temp_kelvin) : new THREE.Color(0x283039));
         downwardEmitter.material.opacity = next.downward.on && next.downward.brightness > 0 ? .4 + .6 * next.downward.brightness : .65;
         downwardGroup.userData.channel = copy(next.downward);
         downGlow.visible = next.downward.on && next.downward.brightness > 0;
         downGlow.material.color.copy(displayWhite(next.downward.color_temp_kelvin)); downGlow.material.opacity = .035 * next.downward.brightness;
-        paintHalo(downwardHalo, next.downward); paintHalo(spotlightHalo, next.spotlight);
+        paintHalo(downwardHalo, next.downward); paintHalo(spotlightHalo, next.spotlight); sizeHalo();
         const direction = new THREE.Vector3(...Aiming.directionFromAim(next.pan_deg, next.tilt_deg, { horizontal_world_reference: item.reference.toArray() }));
         head.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), direction);
         panStage.rotation.z = Math.atan2(item.reference.y, item.reference.x) - next.pan_deg * DEG;

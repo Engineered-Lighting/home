@@ -40,7 +40,10 @@ const REPO = path.resolve(TOOLS, "..");
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
   [/^(?:app\/src\/(?:home-app|home-lights)\.jsx|tools\/test-home-full-ui-lights-browser\.mjs)$/, ["test-home-full-ui-lights-browser.mjs"]],
-  [/^tools\/fixtures\/home-full-ui-harness\.mjs$/, ["test-home-full-ui-lights-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs"]],
+  [/^tools\/fixtures\/home-full-ui-harness\.mjs$/, ["test-home-full-ui-lights-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs", "test-home-full-ui-connection-browser.mjs", "test-home-full-ui-simulation-browser.mjs", "test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
+  [/^(?:app\/src\/home-app\.jsx|tools\/test-home-full-ui-connection-browser\.mjs)$/, ["test-home-full-ui-connection-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-app|simulation)\.jsx|app\/src\/simulation\/|tools\/test-home-full-ui-simulation-browser\.mjs)/, ["test-home-full-ui-simulation-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-app|home-video-labeler(?:-timeline)?)\.jsx|app\/src\/home-video-labeler-data\.js|tools\/(?:fixtures\/home-video-labeler-harness|test-home-full-ui-labeler(?:-editor)?-browser)\.mjs)$/, ["test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment\.jsx|home-3d\/(?:engine\.js|equipment-virtual-fixtures\.mjs|lighting-render-evidence\.mjs))|docs\/contracts\/den\/fixtures\/brain-state-reading\.json|tools\/test-den-lighting-render-evidence\.mjs)$/, ["test-den-lighting-render-evidence.mjs", "test-apartment-lighting-brain.mjs", "test-apartment-connected-view-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app\.jsx|home-tokens\.css|home-apartment(?:\.jsx|-den-perception\.jsx|-camera\.jsx|-camera-source\.js|-perception-(?:source|player|view|dock-model)\.js)|home-den-lab-stream\.js|home-feature-loader\.js|home-perception-lab(?:\.jsx|-graph\.jsx|-data\.js|-transport\.js)|home-lighting-brain-(?:client|follower)\.js|home-3d\/apartment-perception-layer\.mjs)|tools\/(?:test-apartment-connected-view-browser\.mjs|fixtures\/apartment-connected-view\.json))$/, ["test-apartment-connected-view-browser.mjs"]],
   [/^(?:app\/src\/home-apartment-perception-view\.js|tools\/test-home-apartment-perception-view\.cjs)$/, ["test-home-apartment-perception-view.cjs"]],
@@ -54,7 +57,6 @@ const MAP = [
   [/^(?:app\/src\/(?:home-app|home-people)\.jsx|tools\/test-home-full-ui-people-browser\.mjs)$/, ["test-home-full-ui-people-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-intelligence)\.jsx|tools\/test-home-full-ui-intelligence-browser\.mjs)$/, ["test-home-full-ui-intelligence-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-perception-lab)\.jsx|tools\/test-home-full-ui-lab-browser\.mjs)$/, ["test-home-full-ui-lab-browser.mjs"]],
-  [/^tools\/fixtures\/home-full-ui-harness\.mjs$/, ["test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs"]],
   [/^(?:web-gateway\/(?:server|content-pack-route|equipment-registration|lighting-layer)\.mjs|tools\/test-web-gateway-(?:content-pack-route|installed-content|lighting-layer)\.mjs)$/, ["test-web-gateway-content-pack-route.mjs", "test-web-gateway-installed-content.mjs", "test-web-gateway-lighting-layer.mjs"]],
   [/^app\/src\/(?:home-app\.jsx|home-apartment-data\.js)$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs", "run-control-card-tests.js", "run-simulation-control-tests.js"]],
   [/^tools\/test-chat-(?:output-refusal|service-envelope)\.cjs$/, ["test-chat-output-refusal.cjs", "test-chat-service-envelope.cjs"]],
@@ -234,6 +236,10 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
  * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
 const SHARD_WEIGHT_S = {
+  "test-home-full-ui-connection-browser.mjs": 35,
+  "test-home-full-ui-simulation-browser.mjs": 60,
+  "test-home-full-ui-labeler-browser.mjs": 45,
+  "test-home-full-ui-labeler-editor-browser.mjs": 45,
   "test-home-full-ui-lights-browser.mjs": 90,
   "test-apartment-connected-view-browser.mjs": 90,
   "test-home-full-ui-people-browser.mjs": 35,

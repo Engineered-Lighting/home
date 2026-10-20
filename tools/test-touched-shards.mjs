@@ -23,6 +23,18 @@ function planOf(argv) {
   assert.doesNotMatch(result.stdout, /^ {2}(?:RUN|FAIL) /m, 'listing executes nothing');
   return [...result.stdout.matchAll(/^ {2}PLAN (\S+)$/gm)].map(match => match[1]);
 }
+
+test('shared mounted UI and labeler fixtures select every affected browser consumer',()=>{
+  const fullUi=['test-home-full-ui-lights-browser.mjs','test-home-full-ui-people-browser.mjs','test-home-full-ui-intelligence-browser.mjs',
+    'test-home-full-ui-metrics-browser.mjs','test-home-full-ui-lab-browser.mjs','test-apartment-connected-view-browser.mjs',
+    'test-home-full-ui-connection-browser.mjs','test-home-full-ui-simulation-browser.mjs','test-home-full-ui-labeler-browser.mjs','test-home-full-ui-labeler-editor-browser.mjs'];
+  for(const [file,expected] of [['tools/fixtures/home-full-ui-harness.mjs',fullUi],
+    ['tools/fixtures/home-video-labeler-harness.mjs',fullUi.filter(name=>name.includes('labeler'))],
+    ['app/src/home-video-labeler-data.js',fullUi.filter(name=>name.includes('labeler'))],
+    ['app/src/simulation/scenarios.js',['test-home-full-ui-simulation-browser.mjs']]]){
+    const plan=planOf(['--files',file]);assert.ok(expected.every(name=>plan.includes(name)),'all mounted consumers are selected for '+file);
+  }
+});
 function assertExactCover(argv, counts) {
   const full = planOf(argv);
   assert.equal(new Set(full).size, full.length, 'the unsharded plan names each item once');

@@ -206,10 +206,11 @@ async function proveOn(backend, part) {
     const timing = () => page.evaluate(() => new Promise(resolve => {
       const engine = window.__APT_ENGINE, renderer = engine.renderer, original = renderer.render, renders = [], intervals = [];
       renderer.render = function (...args) { const t0 = performance.now(); try { return original.apply(this, args); } finally { if (args[0] === engine.scene) renders.push(performance.now() - t0); } };
-      let last = null, count = 0;
+      // 60 frames, or 5 s at most: hosted software GL can draw Lit at about 1 fps.
+      let last = null, count = 0, first = null;
       const step = now => {
-        if (last != null) intervals.push(now - last); last = now;
-        if (++count < 61) requestAnimationFrame(step);
+        if (last != null) intervals.push(now - last); last = now; first ??= now;
+        if (++count < 61 && (count < 3 || now - first < 5000)) requestAnimationFrame(step);
         else { renderer.render = original; const p = (a, q) => [...a].sort((x, y) => x - y)[Math.floor(a.length * q)];
           resolve({ frames: intervals.length, fps_p50: 1000 / p(intervals, .5), frame_p50_ms: p(intervals, .5), frame_p95_ms: p(intervals, .95),
             render_p50_ms: p(renders, .5), render_p95_ms: p(renders, .95) }); }

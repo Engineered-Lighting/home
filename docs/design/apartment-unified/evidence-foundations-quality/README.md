@@ -72,6 +72,8 @@ Before the fix, the main findings were:
 
 - **Setup rail (APT-U01):** on the phone, the classic Setup editor renders in the stage under the sheet, so its fields are covered and Controls is empty. The audit records this under `known`; the Setup rail lane closes it when the editor moves into the column.
 
+- **Label placement (APT-R01, deferred polish):** after #314, the in-room fixture labels and the composer's mode pill can overlap one another or the top bar on phone and tablet stages. Each label now has a 44 px touch area (`::after`) on coarse pointers, but overlapping labels still cover each other. The audit records these under `known` rather than gating them, until label collision stacking lands.
+
 ## Captures
 
 - `phone-390x844-victoria-dark.png`: HANDOFF "Phone" example. The sheet has a light/camera switch, the toolbar is above the sheet, and the targets are 44 px. The toolbar's second row keeps ‹ › and Fit, and the zoom pair sits at the right edge.

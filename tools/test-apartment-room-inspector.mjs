@@ -233,6 +233,8 @@ function callbackFixture(site = 'echo') {
     selectedSiteId: site, selectedContentRevision: 'authored-' + site + '-r1', open: true, phase: 'ready', editing: false, calibCam: null,
     liveOn: false, rehearsalIsolated: false, spatialScale: 'apartment', connection: 'online', simActive: false,
     apartmentSceneControlsEnabled: true, apartmentDeviceControlsEnabled: site === 'echo', apartmentPlacementControlsEnabled: true,
+    // Derived in the Apartment from the three gates above; openUnifiedSetup reads it.
+    apartmentSetupAvailable: true,
     apartmentAuthorityKey: 'authored-owner', engineRef: { current: engine }, spatialLifecycleRevisionRef: { current: 5 },
     modelScopeRef: { current: { siteId: site, authorityKey: 'authored-owner', contentRevision: 'authored-' + site + '-r1', frameDigest: frame, registrationVersion: 1 } },
     workspaceAuthorityRef: { current: { key: 'authored-owner' } }, workspaceStateRef: { current: { model } }, modelSiteRef: { current: site },

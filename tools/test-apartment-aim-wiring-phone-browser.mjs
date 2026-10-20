@@ -1,0 +1,51 @@
+// W2 aim wiring on the mounted Home shell, with authored Victoria fixtures:
+// the phone sheet rising to half while Chat stays (APT-A02), and slider power-on.
+// Zero non-GET requests, WebSocket sends and service calls.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { aimWiringProof, FILE_TIMEOUT_MS } from './fixtures/apartment-aim-wiring-harness.mjs';
+
+// Hosted CI spends tens of seconds per check, so each W2 suite keeps two checks
+// inside its own fixed 145 s deadline.
+test('aim wiring: the phone sheet and slider power-on through the mounted Home shell without output', { timeout: FILE_TIMEOUT_MS }, () => aimWiringProof('phone-sliders', async ({ page, context, check, fixtures, ids, descriptor, pose, blur, inspector, fixtureInspector,
+  selectedTab, title, overlayState, until, canvasPoint, surfaceHit, near, settle, reticleDrag, save, receipt }) => {
+    const id = fixtures[0].fixture_id;
+    await page.locator(`[data-apt-fixture-label="${id}"]`).click(); await fixtureInspector().waitFor();
+    await blur(); await page.keyboard.press('a');
+    await until('Spot tool and Aim tab', () => document.querySelector('[data-apt-directional-mode="spot"]')?.getAttribute('aria-pressed') === 'true');
+    await until('reticle', () => !document.querySelector('[data-apt-aim-reticle]')?.hidden);
+    const original = await descriptor(id);
+
+    await check('A02: on a phone, aiming raises the sheet from peek to half and keeps Chat', async () => {
+      await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+      await page.setViewportSize({ width: 390, height: 844 });
+      const grip = page.getByRole('button', { name: 'Resize Home sheet', exact: true });
+      for (let tries = 0; tries < 3 && await page.locator('.apt-home-shell').getAttribute('data-sheet') !== 'peek'; tries++) await grip.click();
+      assert.equal(await page.locator('.apt-home-shell').getAttribute('data-sheet'), 'peek');
+      await until('phone reticle', () => !document.querySelector('[data-apt-aim-reticle]')?.hidden);
+      await page.locator('[data-apt-aim-reticle]').focus(); await page.keyboard.press('ArrowLeft');
+      await until('half', () => document.querySelector('.apt-home-shell')?.getAttribute('data-sheet') === 'half');
+      assert.equal(await page.getByRole('tab', { name: 'Chat', exact: true }).getAttribute('aria-selected'), 'true');
+      await until('phone bar', () => !document.querySelector('[data-apt-aim-bar]')?.hidden);
+      await page.keyboard.press('Escape'); await until('phone discard', () => document.querySelector('[data-apt-aim-bar]')?.hidden === true);
+      await page.setViewportSize({ width: 1366, height: 768 });
+      await page.getByRole('tab', { name: 'Controls', exact: true }).click();
+      return { sheet: 'half' };
+    });
+
+    await check('a Spot or Down brightness slider powers its channel on', async () => {
+      await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Light', exact: true }).click();
+      const power = fixtureInspector().getByRole('checkbox', { name: 'Spot power', exact: true });
+      if (await power.isChecked()) await power.uncheck();
+      await until('spot off', id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.on === false, id);
+      const slider = fixtureInspector().getByRole('slider', { name: 'Brightness', exact: true });
+      await slider.focus(); await page.keyboard.press('Home'); await page.keyboard.press('ArrowRight');
+      await until('spot on', id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.on === true, id);
+      const down = fixtureInspector().getByRole('checkbox', { name: 'Down power', exact: true });
+      if (await down.isChecked()) await down.uncheck();
+      const downSlider = fixtureInspector().getByRole('slider', { name: 'Down brightness', exact: true });
+      await downSlider.focus(); await page.keyboard.press('ArrowRight');
+      await until('down on', id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.downward.on === true, id);
+      return { spot: true, down: true };
+    });
+}));

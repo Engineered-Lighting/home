@@ -3,7 +3,8 @@
  * module reads no household data, starts no session and sends no command.
  *
  * Keys: KEY_MAP lists what the room actually binds. The room handler in
- * home-apartment.jsx owns every "room" key, HomeOverlay owns Escape and this
+ * home-apartment.jsx owns every "room" key, its aim key handler owns the
+ * "aim" keys (with A/Z's "z"), HomeOverlay owns Escape and this
  * module owns "?". tools/test-apartment-room-guide.cjs compares KEY_MAP with
  * the bound handler in both directions, so help can only list working keys.
  *
@@ -27,6 +28,10 @@
     { id: "cycle", owner: "room", keys: ["n", "p"], label: "N / P", action: "Select the next or previous light or device" },
     { id: "aim-mode", owner: "room", keys: ["a", "z"], label: "A / Z", homes: ["victoria"],
       action: "Spot aiming or radial zones for the selected light", when: "With a modeled light selected" },
+    { id: "aim-set", owner: "aim", keys: ["Enter"], label: "Enter", homes: ["victoria"],
+      action: "Set the proposed aim", when: "With a proposal waiting and no control focused" },
+    { id: "aim-history", owner: "aim", keys: ["Z"], label: "⌘Z / Ctrl+Z, with Shift to redo", homes: ["victoria"],
+      action: "Undo or redo the selected light's aim, or bring back a discarded proposal", when: "With a modeled light selected" },
     { id: "escape", owner: "overlay", keys: ["Escape"], label: "Esc",
       action: "Cancel the current step, then close the open card or clear the selection" },
     { id: "help", owner: "guide", keys: ["?"], label: "?", action: "Show these gestures and keys" },

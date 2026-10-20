@@ -16,6 +16,54 @@ HA = "https://ha.example.invalid"
 JOURNAL = ("journalctl", "-k", "-o", "json", "-q", "--no-pager")
 
 
+class FakeLoop:
+    """The AL-3 activity-loop routes (activity_loop_runtime.install) with the
+    real semantics: a stop records its reason and overwrites an earlier one; a
+    resume that names a reason refuses another reason's stop with 409; the
+    cadence is normal or reduced; nothing survives a service restart."""
+
+    def __init__(self):
+        self.state, self.reason, self.cadence = "running", None, "normal"
+        self.refuse_next_resume = False
+
+    def view(self):
+        return {"schema": "perception-lab-activity-loop-1", "state": self.state, "stopped_reason": self.reason,
+                "cadence": self.cadence}
+
+    def stop(self, body):
+        body = body or {}
+        if set(body) - {"reason"} or body.get("reason", "operator_stop") not in ("operator_stop", "monitor_backoff"):
+            return 422, {"detail": "activity_loop_stop_reason_invalid"}
+        self.state, self.reason = "stopped", body.get("reason", "operator_stop")
+        return 200, self.view()
+
+    def resume(self, body):
+        only = (body or {}).get("reason")
+        if self.refuse_next_resume or (only is not None and self.reason is not None and self.reason != only):
+            self.refuse_next_resume = False
+            return 409, {"detail": "activity_loop_stopped_by_" + (self.reason or "operator_stop")}
+        self.state, self.reason = "running", None
+        return 200, self.view()
+
+    def set_cadence(self, body):
+        if not isinstance(body, dict) or set(body) != {"level"} or body["level"] not in ("normal", "reduced"):
+            return 422, {"detail": "activity_loop_cadence_level_invalid"}
+        self.cadence = body["level"]
+        return 200, {"level": self.cadence, "factor": 1 if self.cadence == "normal" else 2}
+
+    def owner_stop(self):
+        self.stop({})
+
+    def restart(self):
+        self.state, self.reason, self.cadence = "running", None, "normal"
+
+    def serve(self, host):
+        host.responses[("GET", LAB)] = lambda body: (200, self.view())
+        host.responses[("POST", LAB + "/stop")] = self.stop
+        host.responses[("POST", LAB + "/resume")] = self.resume
+        host.responses[("POST", LAB + "/cadence")] = self.set_cadence
+
+
 class Jetson:
     """A Jetson monitor wired to a FakeHost, with a writable fake sysfs."""
 
@@ -43,8 +91,8 @@ class Jetson:
                  "clear_margin": 512, "label": "RAM available", "unit": " MiB"},
             ],
             "loop": {"status_url": LAB, "stop_url": LAB + "/stop", "resume_url": LAB + "/resume",
-                     "token_file": token, "ca_file": None},
-            "cadence": {"reduce": [], "restore": []},
+                     "cadence_url": LAB + "/cadence", "token_file": token, "ca_file": None},
+            "cadence": None,
             "remote": {"url": GATEWAY + "/status", "token_file": token},
             "gateway": {"status_url": GATEWAY + "/hosts/victoria-jetson/status", "token_file": token},
             "home_assistant": {"url": HA, "notify_service": "persistent_notification", "token_file": token,
@@ -58,18 +106,16 @@ class Jetson:
         self.host.commands[("systemctl",)] = (0, "")
         self.host.commands[("systemctl", "--user")] = (0, "")
         self.host.commands[JOURNAL] = (0, "")
-        self.loop_state = "running"
+        self.loop = FakeLoop()
         self.remote = {"schema": "den-ops-banner-1", "level": 0, "hosts": []}
-        self.host.responses[("GET", LAB)] = lambda body: (200, {"state": self.loop_state})
-        self.host.responses[("POST", LAB + "/stop")] = lambda body: self._set("stopped")
-        self.host.responses[("POST", LAB + "/resume")] = lambda body: self._set("running")
+        self.loop.serve(self.host)
         self.host.responses[("GET", GATEWAY + "/status")] = lambda body: (200, self.remote)
         self.host.responses[("POST", GATEWAY + "/hosts/victoria-jetson/status")] = (200, {"ok": True})
         self.host.responses[("POST", HA + "/api/services/notify/persistent_notification")] = (200, [])
 
-    def _set(self, value):
-        self.loop_state = value
-        return 200, {"state": value}
+    @property
+    def loop_state(self):
+        return self.loop.state
 
     def temp(self, celsius):
         with open(os.path.join(self.root, "thermal_zone0", "temp"), "w", encoding="utf-8") as out:
@@ -98,7 +144,8 @@ def test_heat_backs_off_stops_the_loop_then_recovers_and_resumes(jetson):
     assert status["level"] == 0 and state["pending"] == 1          # one hot reading is not enough
     state, status, report = jetson.check()
     assert status["level"] == 2 and status["step"] == "deep_stack_paused"
-    assert report["effects"] == ["loop_stop"] and jetson.loop_state == "stopped"
+    assert report["effects"] == ["cadence_reduce", "loop_stop"] and jetson.loop_state == "stopped"
+    assert jetson.loop.reason == "monitor_backoff" and jetson.loop.cadence == "reduced"
     assert "Jetson max zone 78.5°C ≥ 78°C" in status["message"]
     assert len(jetson.ha_posts()) == 1
     assert jetson.ha_posts()[0]["body"]["title"] == "Den lighting: deep stack paused"
@@ -116,15 +163,44 @@ def test_heat_backs_off_stops_the_loop_then_recovers_and_resumes(jetson):
             transitions.append((report["transition"]["to"], report["effects"]))
         if status["level"] == 0:
             break
-    assert transitions == [(1, ["loop_resume"]), (0, [])]
-    assert jetson.loop_state == "running"
+    assert transitions == [(1, ["loop_resume"]), (0, ["cadence_restore"])]
+    assert jetson.loop_state == "running" and jetson.loop.cadence == "normal"
     assert status["message"] == "Den lighting ops normal"
     assert len(jetson.ha_posts()) == 3                              # 2 -> 1 -> 0 each notified
     history = state["history"]
     assert [h["transition"]["to"] for h in history if h["transition"]] == [2, 1, 0]
 
 
+def test_level_one_reduces_the_loop_cadence_and_recovery_restores_it(jetson):
+    jetson.temp(76)
+    jetson.check()
+    _, status, report = jetson.check()
+    assert status["level"] == 1 and report["effects"] == ["cadence_reduce"]
+    assert jetson.loop.cadence == "reduced" and jetson.loop_state == "running"
+    assert not any(r["signal"] == "actuator.cadence" for r in status["reasons"])
+    jetson.loop.restart()                                            # the service came back at normal cadence
+    _, _, report = jetson.check()
+    assert report["effects"] == ["cadence_reduce"]
+    _, _, report = jetson.check()
+    assert report["effects"] == []                                  # already reduced: no repeat call
+    jetson.temp(60)
+    effects = []
+    for _ in range(15):
+        effects += jetson.check()[2]["effects"]
+    assert effects == ["cadence_restore"] and jetson.loop.cadence == "normal"
+    assert [c["body"] for c in jetson.host.posts(LAB + "/cadence")] == [
+        {"level": "reduced"}, {"level": "reduced"}, {"level": "normal"}]
+
+
+def test_an_owner_cadence_is_left_alone_at_level_zero(jetson):
+    jetson.loop.cadence = "reduced"                                  # set by hand, not by the monitor
+    for _ in range(3):
+        _, status, _ = jetson.check()
+    assert status["level"] == 0 and not jetson.host.posts(LAB) and jetson.loop.cadence == "reduced"
+
+
 def test_level_one_without_a_cadence_route_records_and_alerts_only(jetson):
+    del jetson.cfg["loop"]["cadence_url"]
     jetson.temp(76)
     jetson.check()
     state, status, report = jetson.check()
@@ -135,11 +211,13 @@ def test_level_one_without_a_cadence_route_records_and_alerts_only(jetson):
 
 def test_cadence_actions_run_once_when_configured(tmp_path, private):
     token = private("cadence-token", "c" * 40)
-    reduce = {"method": "POST", "url": LAB + "/cadence", "token_file": token, "body": {"level": "reduced"}}
-    restore = {"method": "POST", "url": LAB + "/cadence", "token_file": token, "body": {"level": "normal"}}
+    other = "https://la.example.invalid/live/cadence"                # an extra, non-loop cadence control
+    reduce = {"method": "POST", "url": other, "token_file": token, "body": {"level": "reduced"}}
+    restore = {"method": "POST", "url": other, "token_file": token, "body": {"level": "normal"}}
     j = Jetson(tmp_path, private, cadence={"reduce": [reduce], "restore": [restore]},
                policy={"escalate_checks": 1, "recover_after_s": 60, "fault_hold_s": 1800})
-    j.host.responses[("POST", LAB + "/cadence")] = (200, {"ok": True})
+    del j.cfg["loop"]["cadence_url"]
+    j.host.responses[("POST", other)] = (200, {"ok": True})
     j.temp(76)
     _, status, report = j.check()
     assert status["level"] == 1 and report["effects"] == ["cadence_reduce"]
@@ -151,7 +229,7 @@ def test_cadence_actions_run_once_when_configured(tmp_path, private):
         _, status, report = j.check()
         effects += report["effects"]
     assert status["level"] == 0 and effects == ["cadence_restore"]
-    assert [c["body"]["level"] for c in j.host.posts("/cadence")] == ["reduced", "normal"]
+    assert [c["body"]["level"] for c in j.host.posts(other)] == ["reduced", "normal"]
 
 
 def test_kernel_mce_latches_level_three_until_the_owner_releases(jetson):
@@ -161,7 +239,7 @@ def test_kernel_mce_latches_level_three_until_the_owner_releases(jetson):
     jetson.host.commands[JOURNAL] = (0, mce)
     state, status, report = jetson.check()
     assert any(a[-1].startswith("--since=@") for a in jetson.host.ran)   # anchored on the last check time
-    assert status["level"] == 3 and status["latched"] and report["effects"] == ["loop_stop"]
+    assert status["level"] == 3 and status["latched"] and report["effects"] == ["cadence_reduce", "loop_stop"]
     assert report["faults"][0]["class"] == "mce"
     assert "held until the owner releases it" in status["message"]
     jetson.host.commands[JOURNAL] = (0, "")
@@ -198,17 +276,92 @@ def test_a_restarted_service_is_stopped_again_and_an_owner_stop_is_left_alone(je
     jetson.check()
     jetson.check()
     assert jetson.loop_state == "stopped"
-    jetson.loop_state = "running"                                   # the managed service restarted
+    jetson.loop.restart()                                           # the managed service restarted
     _, _, report = jetson.check()
-    assert report["effects"] == ["loop_stop"] and jetson.loop_state == "stopped"
+    assert report["effects"] == ["cadence_reduce", "loop_stop"] and jetson.loop.reason == "monitor_backoff"
 
 
 def test_owner_stopped_loop_is_never_resumed(jetson):
-    jetson.loop_state = "stopped"                                   # the owner stopped it at level 0
+    jetson.loop.owner_stop()                                        # the owner stopped it at level 0
     for _ in range(5):
         _, status, report = jetson.check()
     assert status["level"] == 0 and jetson.loop_state == "stopped"
     assert not jetson.host.posts(LAB + "/resume")
+
+
+def back_off_then_cool(jetson, checks=40):
+    jetson.temp(79)
+    jetson.check()
+    jetson.check()
+    assert jetson.loop.reason == "monitor_backoff"
+    jetson.temp(60)
+    return [jetson.check() for _ in range(checks)]
+
+
+def test_the_monitor_sends_the_exact_request_bodies(jetson):
+    back_off_then_cool(jetson)
+    assert [c["body"] for c in jetson.host.posts(LAB + "/stop")] == [{"reason": "monitor_backoff"}]
+    assert [c["body"] for c in jetson.host.posts(LAB + "/resume")] == [{"reason": "monitor_backoff"}]
+    assert [c["body"] for c in jetson.host.posts(LAB + "/cadence")] == [{"level": "reduced"}, {"level": "normal"}]
+    assert all(c["token"] == "t" * 40 for c in jetson.host.calls if c["url"].startswith(LAB))
+
+
+def test_an_owner_stop_during_a_back_off_is_never_resumed(jetson):
+    jetson.temp(79)
+    jetson.check()
+    jetson.check()
+    jetson.loop.owner_stop()                                         # the owner stops it too: the reason is now theirs
+    jetson.temp(60)
+    statuses = [jetson.check()[1] for _ in range(40)]
+    assert statuses[-1]["level"] == 0
+    assert jetson.loop_state == "stopped" and jetson.loop.reason == "operator_stop"
+    assert not jetson.host.posts(LAB + "/resume")
+    held = [r for r in statuses[-1]["reasons"] if r["signal"] == "actuator.owner_stop"]
+    assert len(held) == 1 and "left stopped: the owner stopped it (activity_loop_stopped_by_operator_stop)" in held[0]["detail"]
+    assert statuses[-1]["message"].startswith("Den lighting notice: activity loop left stopped")
+    jetson.loop.resume({})                                           # the owner resumes it
+    _, status, _ = jetson.check()
+    assert not any(r["signal"] == "actuator.owner_stop" for r in status["reasons"])
+    _, status, _ = jetson.check()
+    assert status["reasons"] == [] and not jetson.host.posts(LAB + "/resume")
+    saved = json.load(open(os.path.join(jetson.cfg["state_dir"], "state.json"), encoding="utf-8"))
+    assert saved["stopped_by_monitor"] is False
+
+
+def test_a_refused_resume_is_recorded_and_the_loop_left_stopped(jetson):
+    jetson.loop.refuse_next_resume = True                           # e.g. the owner stopped it between GET and POST
+    checks = back_off_then_cool(jetson)
+    assert len(jetson.host.posts(LAB + "/resume")) == 1 and jetson.loop_state == "stopped"
+    held = [r for r in checks[-1][1]["reasons"] if r["signal"] == "actuator.owner_stop"]
+    assert len(held) == 1 and "activity_loop_stopped_by_monitor_backoff" in held[0]["detail"]
+    assert not any("loop_resume" in report["effects"] for _, _, report in checks)
+    assert any("owner stopped" in post["body"]["message"] for post in jetson.ha_posts())
+
+
+def test_an_owner_stop_is_never_overwritten_by_a_back_off(jetson):
+    jetson.loop.owner_stop()
+    jetson.temp(79)
+    jetson.check()
+    _, status, report = jetson.check()
+    assert status["level"] == 2 and "loop_stop" not in report["effects"]
+    assert not jetson.host.posts(LAB + "/stop") and jetson.loop.reason == "operator_stop"
+    assert any(r["signal"] == "actuator.owner_stop" for r in status["reasons"])
+    jetson.temp(60)
+    for _ in range(40):
+        jetson.check()
+    assert not jetson.host.posts(LAB + "/resume") and jetson.loop.reason == "operator_stop"
+
+
+def test_a_monitor_stop_found_after_lost_state_is_adopted(jetson):
+    jetson.loop.stop({"reason": "monitor_backoff"})                 # e.g. the state file was lost
+    jetson.temp(79)
+    jetson.check()
+    _, _, report = jetson.check()
+    assert "loop_stop" not in report["effects"]
+    jetson.temp(60)
+    for _ in range(40):
+        jetson.check()
+    assert jetson.loop_state == "running" and len(jetson.host.posts(LAB + "/resume")) == 1
 
 
 def test_new_failed_units_are_notices_and_alert_once(jetson):
@@ -249,7 +402,7 @@ def test_the_la_level_reaches_the_acting_monitor_through_the_gateway(jetson):
         {"host": "la-host", "level": 2, "stale": False, "message": "Den lighting backed off — GPU 78°C"},
         {"host": "victoria-jetson", "level": 0, "stale": False, "message": "ok"}]}
     _, status, report = jetson.check()
-    assert status["level"] == 2 and report["effects"] == ["loop_stop"]
+    assert status["level"] == 2 and report["effects"] == ["cadence_reduce", "loop_stop"]
     assert status["reasons"][0]["signal"] == "remote.la-host"
     jetson.remote["hosts"][0]["stale"] = True                       # a silent LA monitor does not hold the level
     levels = [jetson.check()[1]["level"] for _ in range(30)]
@@ -338,9 +491,10 @@ def test_plain_http_home_assistant_needs_an_explicit_opt_in():
 
 
 def test_an_unreadable_cadence_token_is_a_notice_not_a_crash(tmp_path, private):
-    action = {"method": "POST", "url": LAB + "/cadence", "token_file": str(tmp_path / "missing")}
+    action = {"method": "POST", "url": "https://la.example.invalid/live/cadence", "token_file": str(tmp_path / "missing")}
     j = Jetson(tmp_path, private, cadence={"reduce": [action], "restore": [action]},
                policy={"escalate_checks": 1, "recover_after_s": 60, "fault_hold_s": 1800})
+    del j.cfg["loop"]["cadence_url"]
     j.temp(76)
     _, status, report = j.check()
     assert status["level"] == 1 and report["effects"] == []

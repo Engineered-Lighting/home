@@ -207,7 +207,7 @@ den lights keep following the HA automation.
 
 | Piece | Rollback |
 |---|---|
-| Jetson monitor | `systemctl --user disable --now den-ops-monitor.timer`. If it had stopped the loop, resume it with `POST …/activity-loop/resume`. |
+| Jetson monitor | `systemctl --user disable --now den-ops-monitor.timer`. If it had stopped or slowed the loop, undo that with `POST …/activity-loop/resume` and `POST …/activity-loop/cadence {"level":"normal"}`. |
 | Activity loop | Durable off: set `"enabled": false` in the loop config and restart the managed service. Full removal: delete the drop-in, run `systemctl --user daemon-reload`, then restart the managed service. |
 | Bridge | `sudo systemctl disable --now victoria-ha-bridge.service` |
 | LA monitor | `sudo systemctl disable --now den-ops-monitor.timer` |
@@ -222,14 +222,11 @@ After any rollback:
 
 ## 5. What the monitor needs from planning (follow-ups)
 
-- **AL-3: a cadence route** (for example
-  `POST /api/perception-lab/v1/activity-loop/cadence {"level":"reduced"|"normal"}`).
-  Level 1 has nothing to act on until it exists. Plug it into the Jetson
-  monitor's `cadence.reduce` and `cadence.restore`.
+- **AL-3 routes:** the cadence route and the stop/resume reasons now exist,
+  and the Jetson monitor uses them (`loop.cadence_url`, `monitor_backoff`).
+  They ship with AL-3's PR. Deploy that before enabling the Jetson monitor,
+  or level 1 calls get 404 and are reported as `actuator.cadence_failed`.
 - **AL-4: show the ops banner.** Home should show the banner from
   `GET /api/den-ops/v1/status` (`den-ops-banner-1`: `level`, and `banner`
   with `severity` and `text`). Poll it every 30–60 s, and hide it when
   `banner` is null.
-- **Owner stop vs monitor stop.** The loop's stop does not record who
-  stopped it, so a manual stop during a monitor hold is resumed on recovery.
-  A `reason` on `POST …/activity-loop/stop` would fix this.

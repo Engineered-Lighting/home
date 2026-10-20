@@ -54,7 +54,7 @@ def validate_config(cfg):
     for action in ((cfg.get("cadence") or {}).get("reduce", []) + (cfg.get("cadence") or {}).get("restore", [])):
         if action.get("method") not in ("POST", "PUT", "PATCH") or not str(action.get("url", "")).startswith("https://"):
             raise ValueError("cadence actions are POST/PUT/PATCH to https URLs")
-    urls = [(cfg.get("loop") or {}).get(key) for key in ("status_url", "stop_url", "resume_url")]
+    urls = [(cfg.get("loop") or {}).get(key) for key in ("status_url", "stop_url", "resume_url", "cadence_url")]
     urls += [(cfg.get("remote") or {}).get("url"), (cfg.get("gateway") or {}).get("status_url")]
     for url in [u for u in urls if u is not None]:
         if not _secure_url(url):
@@ -238,14 +238,22 @@ def _call(host, action):
     return code
 
 
+# The activity loop's control routes (AL-3): every monitor call names its
+# reason, so the loop can tell the monitor's stop from the owner's.
+MONITOR_STOP = {"reason": "monitor_backoff"}
+CADENCE_FOR_LEVEL = ("normal", "reduced", "reduced", "reduced")
+
+
 def enforce(cfg, state, host):
     """Make the loop and cadence match the level. Returns (effects, notices)."""
     effects, notices = [], []
     level = state["level"]
+    loop = cfg.get("loop") or {}
     cadence = cfg.get("cadence") or {}
-    if level >= 1 and not cadence.get("reduce"):
+    if level >= 1 and not cadence.get("reduce") and not loop.get("cadence_url"):
         notices.append(_notice("actuator.cadence", "no cadence control configured; level 1 records and alerts only",
                                alert=False))
+    # Extra cadence controls beyond the loop (optional plain actions).
     if level >= 1 and not state.get("cadence_reduced") and cadence.get("reduce"):
         codes = [_call(host, action) for action in cadence["reduce"]]
         if all(200 <= c < 300 for c in codes):
@@ -261,8 +269,8 @@ def enforce(cfg, state, host):
         else:
             notices.append(_notice("actuator.cadence_failed", "cadence restore failed (HTTP %s)" % codes))
 
-    loop = cfg.get("loop")
-    if not loop or (level < 2 and not state.get("stopped_by_monitor")):
+    if not loop or (level == 0 and not state.get("stopped_by_monitor") and not state.get("loop_cadence_reduced")
+                    and not state.get("owner_held")):
         return effects, notices
     try:
         token = read_token(loop["token_file"])
@@ -270,27 +278,78 @@ def enforce(cfg, state, host):
         notices.append(_notice("actuator.loop_token", "activity-loop token unreadable"))
         return effects, notices
     timeout = float(loop.get("timeout_s", 10))
+
+    def post(url, body):
+        return host.http("POST", url, token=token, body=body, ca_file=loop.get("ca_file"), timeout_s=timeout)
+
     code, doc = host.http("GET", loop["status_url"], token=token, ca_file=loop.get("ca_file"), timeout_s=timeout)
     if code != 200 or not isinstance(doc, dict):
         notices.append(_notice("actuator.loop_unreachable", "activity loop status unreachable (HTTP %s)" % code))
         return effects, notices
-    loop_state = doc.get("state")
-    if level >= 2 and loop_state != "stopped":
-        code, _ = host.http("POST", loop["stop_url"], token=token, ca_file=loop.get("ca_file"), timeout_s=timeout)
-        if code == 200:
+    loop_state, reason = doc.get("state"), doc.get("stopped_reason")
+
+    # Step 1: cadence. Re-asserted every check (a restarted service comes back
+    # at normal); restored only if the monitor reduced it.
+    if loop.get("cadence_url"):
+        want = CADENCE_FOR_LEVEL[level]
+        applied = doc.get("cadence") == want
+        if (level >= 1 or state.get("loop_cadence_reduced")) and not applied:
+            code, _ = post(loop["cadence_url"], {"level": want})
+            applied = code == 200
+            if applied:
+                effects.append("cadence_reduce" if want == "reduced" else "cadence_restore")
+            else:
+                notices.append(_notice("actuator.cadence_failed", "activity loop cadence %s failed (HTTP %s)"
+                                       % (want, code)))
+        if applied:
+            state["loop_cadence_reduced"] = want == "reduced"
+
+    # Steps 2-3: stop with the monitor's reason; never over the owner's stop.
+    if level >= 2:
+        if loop_state != "stopped":
+            code, _ = post(loop["stop_url"], MONITOR_STOP)
+            if code == 200:
+                state["stopped_by_monitor"] = True
+                effects.append("loop_stop")
+            else:
+                notices.append(_notice("actuator.loop_stop_failed", "activity loop stop failed (HTTP %s)" % code))
+        elif reason == MONITOR_STOP["reason"]:
             state["stopped_by_monitor"] = True
-            effects.append("loop_stop")
         else:
-            notices.append(_notice("actuator.loop_stop_failed", "activity loop stop failed (HTTP %s)" % code))
-    elif level < 2 and state.get("stopped_by_monitor"):
-        if loop_state == "stopped":
-            code, _ = host.http("POST", loop["resume_url"], token=token, ca_file=loop.get("ca_file"), timeout_s=timeout)
-            if code != 200:
-                notices.append(_notice("actuator.loop_resume_failed", "activity loop resume failed (HTTP %s)" % code))
-                return effects, notices
-            effects.append("loop_resume")
+            state["stopped_by_monitor"] = False
+            state["owner_held"] = "activity_loop_stopped_by_%s" % reason   # reported after recovery too
+            notices.append(_notice("actuator.owner_stop", "activity loop already stopped by the owner (%s)" % reason,
+                                   alert=False))
+    elif state.get("stopped_by_monitor"):
         state["stopped_by_monitor"] = False
+        if loop_state == "stopped" and reason == MONITOR_STOP["reason"]:
+            code, reply = post(loop["resume_url"], MONITOR_STOP)
+            if code == 200:
+                effects.append("loop_resume")
+            elif code == 409:
+                state["owner_held"] = (reply or {}).get("detail") if isinstance(reply, dict) else None
+                state["owner_held"] = state["owner_held"] or "activity_loop_stopped_by_operator_stop"
+            else:
+                state["stopped_by_monitor"] = True   # retry on the next check
+                notices.append(_notice("actuator.loop_resume_failed", "activity loop resume failed (HTTP %s)" % code))
+        elif loop_state == "stopped":
+            state["owner_held"] = "activity_loop_stopped_by_%s" % reason
+    # The owner's stop outlived the back-off: report it every check until the
+    # owner resumes the loop (the monitor never does).
+    if level < 2 and state.get("owner_held"):
+        if loop_state == "stopped" and not state.get("stopped_by_monitor"):
+            notices.append(_owner_held({"detail": state["owner_held"]}))
+        else:
+            state["owner_held"] = None
     return effects, notices
+
+
+def _owner_held(reply):
+    """The loop refused the monitor's resume: the owner stopped it. Recorded,
+    and the loop is left stopped for the owner to resume."""
+    detail = reply.get("detail") if isinstance(reply, dict) else None
+    return _notice("actuator.owner_stop", "activity loop left stopped: the owner stopped it (%s); resume it from Home"
+                   " or the Lab when ready" % (detail or "activity_loop_stopped_by_operator_stop"))
 
 
 # --- status and alerts -----------------------------------------------------

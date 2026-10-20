@@ -88,9 +88,28 @@ pass:
    | Level | Step | Action |
    |---|---|---|
    | 0 | normal | none |
-   | 1 | `cadence_reduced` | the configured cadence calls (none exist yet: see Limits) |
-   | 2 | `deep_stack_paused` | `POST …/activity-loop/stop`; the brain then holds ambient only |
+   | 1 | `cadence_reduced` | `POST …/activity-loop/cadence {"level":"reduced"}`: the JEV interval doubles and the pose rate halves |
+   | 2 | `deep_stack_paused` | as 1, plus `POST …/activity-loop/stop {"reason":"monitor_backoff"}`; the brain then holds ambient only |
    | 3 | `loop_stopped` | as 2, and latched until the owner runs `den_ops release --confirm` |
+
+   **Activity-loop calls.** These are AL-3's routes, called with the
+   monitor's Lab token, which has the `read` and `record` capabilities.
+   - **Every check:** the monitor reads `GET …/activity-loop` (`state`,
+     `stopped_reason`, `cadence`) and re-asserts the cadence and the stop,
+     because neither survives a service restart.
+   - **On recovery:** it sends `POST …/resume {"reason":"monitor_backoff"}` and
+     `POST …/cadence {"level":"normal"}`. It sends the cadence call only if the
+     monitor reduced the cadence itself.
+   - **The owner's stop wins.**
+     - The monitor never POSTs a stop over an `operator_stop`, because a
+       stop overwrites the reason.
+     - It only resumes a `monitor_backoff` stop. The loop refuses anything
+       else with 409.
+     - When the owner's stop outlives a back-off, the monitor records
+       `actuator.owner_stop` ("left stopped: the owner stopped it") every
+       check, which shows in the banner and in a Home Assistant notice,
+       until the owner resumes the loop.
+     - The monitor never resumes the owner's stop.
 
    - **Escalation:** a threshold must hold for 2 checks before the level
      rises. A new kernel fault record, or another host's level, escalates at
@@ -145,15 +164,12 @@ The thresholds come from limits already in the repo; none is new except NVMe.
 | Jetson recording disk free | 30 / 25 / 20 GiB | `jetson_lifecycle` 20 GiB minimum |
 | Swap used | LA 25 / 50 / 75 %, Jetson 40 / 60 / 80 % | proposed |
 
-- **No cadence route yet.** The activity loop has no cadence route today,
-  only status, stop and resume. So level 1 records and alerts but does not
-  change any cadence. The LA host's own thermal ladder still sheds V-JEPA and
-  Qwen at 74 and 77 °C. A cadence route in AL-3 can be plugged into `cadence`
-  without code changes here.
-- **An owner stop is lost on recovery.** The loop's own stop does not say who
-  stopped it. If the owner stops the loop by hand while the monitor holds
-  level 2, the monitor resumes it on recovery. The durable owner off switch
-  is `"enabled": false` in the loop config.
+- **Other cadence controls.** The LA host's own thermal ladder still sheds
+  V-JEPA and Qwen at 74 and 77 °C. Any other cadence control can be added as
+  plain calls in the config's `cadence` block (`reduce` and `restore`).
+- **Without `loop.cadence_url`,** level 1 records and alerts only.
+- **The durable owner off switch** is still `"enabled": false` in the loop
+  config, because a stop does not survive a restart.
 
 ## Tests
 

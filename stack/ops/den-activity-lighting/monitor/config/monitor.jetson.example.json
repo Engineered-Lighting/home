@@ -1,6 +1,6 @@
 {
   "schema": "den-ops-monitor-1",
-  "_note": "Victoria Jetson. Copy to a private path and replace every <placeholder>. This monitor acts on the activity loop and takes the LA host's level from the gateway. The thresholds are the existing Jetson limits (README: Limits). cadence stays empty until AL-3 has a cadence route.",
+  "_note": "Victoria Jetson. Copy to a private path and replace every <placeholder>. This monitor acts on the activity loop and takes the LA host's level from the gateway. The thresholds are the existing Jetson limits (README: Limits). Step 1 uses the loop's cadence route; the cadence block can add further plain calls.",
   "host": "victoria-jetson",
   "role": "jetson",
   "policy": {"escalate_checks": 2, "recover_after_s": 600, "fault_hold_s": 1800},
@@ -24,11 +24,12 @@
     "status_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop",
     "stop_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop/stop",
     "resume_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop/resume",
+    "cadence_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop/cadence",
     "token_file": "<private dir>/lab-monitor.token",
     "ca_file": "<private dir>/lab-ca.pem",
     "timeout_s": 10
   },
-  "cadence": {"reduce": [], "restore": []},
+  "cadence": null,
   "remote": {
     "url": "https://<gateway origin>/api/den-ops/v1/status",
     "token_file": "<private dir>/den-ops-monitor.token",

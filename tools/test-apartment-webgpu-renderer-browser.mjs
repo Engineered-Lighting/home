@@ -158,6 +158,13 @@ async function proofInPage() {
   const capture = async () => {
     e.setRunning(false);
     e.pointsMaterial.uniforms.uTime.value = 0;
+    // Photo: Spark sorts and commits the cut asynchronously, so on a slow
+    // GPU (SwiftShader in CI) the last update can still belong to an earlier
+    // pose. Finish any update in flight, then one started at this pose. The
+    // node renderer's tick is synchronous; the same calls are no-ops there.
+    if (e.modes.mode === 'splat') {
+      for (let i = 0; i < 2; i++) { e.modes.tickSplat(e.camera, performance.now() / 1000); await e.modes.whenSparkIdle(); }
+    }
     const frame = await e.captureFrame({ scale: 1 });
     e.setRunning(true);
     return frame ? encode(frame) : null;

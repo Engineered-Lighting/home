@@ -87,7 +87,7 @@ function AptSpotPendingDot({ store, siteId, descriptor, tool }) {
 }
 
 function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId = null, hoverId = null,
-  pillFixtureId = null, aim = null, onSelect, onHover, onAimStart, onPropose, onSet, onDiscard }) {
+  pillFixtureId = null, aim = null, onSelect, onHover, onAimStart, onPropose, onSet, onDiscard, onReticleGrab }) {
   const rootRef = useRef(null), reticleRef = useRef(null);
   useAptAimStore(store);
   const view = React.useSyncExternalStore(presentation?.subscribe || APT_ROOM_OVERLAY_NO_SUBSCRIBE,
@@ -130,6 +130,9 @@ function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId
   const reticleDown = event => {
     if (!aimable || !scope || event.button !== 0 || event.isPrimary === false) return;
     event.preventDefault(); event.stopPropagation();
+    // The reticle can sit over another light; the host may take the press
+    // as selecting that light instead of starting an aim.
+    if (onReticleGrab?.({ clientX: event.clientX, clientY: event.clientY }) === false) return;
     event.currentTarget.focus({ preventScroll: true });
     if (!presentation.beginDrag({ pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY })) return;
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch (_) { /* detached */ }

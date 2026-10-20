@@ -18,7 +18,7 @@ const compiled = babel.transform(uiSource, { presets: ['react'], sourceType: 'sc
 const css = cssSource.replace(/url\("(vendor\/fonts\/[a-z-]+\.woff2)"\)/g,
   (_, name) => `url("data:font/woff2;base64,${fs.readFileSync(path.join(SRC, name)).toString('base64')}")`);
 const states = ['connected', 'current', 'saved', 'applied', 'reported', 'live', 'proposed', 'draft',
-  'recorded', 'replay', 'authored', 'simulated', 'held', 'stale', 'unsaved', 'changed', 'disconnected',
+  'recorded', 'replay', 'authored', 'simulated', 'held', 'holding', 'stale', 'unsaved', 'changed', 'disconnected',
   'blocked', 'conflict', 'invalid', 'unavailable', 'no-session', 'modeled', 'loading'];
 
 // Extract only the actual mounted adapter callbacks, without initializing Home.

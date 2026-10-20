@@ -12,6 +12,10 @@ const vector3 = (value) => Array.isArray(value) && value.length === 3 && value.e
 const vector2 = (value) => Array.isArray(value) && value.length === 2 && value.every(finite);
 const SHELL_INSET_M = 0.12;
 const SHELL_FEATHER_M = 0.03;
+/* The shader constants, for the WebGPU path's TSL twin of the GLSL below
+ * (dollhouse-cutaway-tsl.mjs). The GLSL embeds them with toFixed(2). */
+export const DOLLHOUSE_SHADER_CONSTANTS = Object.freeze({ floorGuard: FLOOR_GUARD,
+    upperRelaxation: UPPER_RELAXATION, upperStartM: UPPER_START_M, upperEndM: UPPER_END_M });
 const BINDING_KEYS = ['content_revision', 'registration_version', 'manifest_digest', 'frame_digest', 'canonical_collision_digest'];
 const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 

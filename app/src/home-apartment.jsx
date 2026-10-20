@@ -2364,7 +2364,9 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
       <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close source</button></div>}
     {lit && !modeLoading && !modeError && <p className="apt-ui-toolbar-notice" role="note" data-apt-lit-disclosure={lit.quality}
       title={lit.disclosureDetail}>{lit.disclosure}{lit.quality === "reduced" ? " · reduced quality for speed" : ""}
-      {lit.bounceLimit && <><br /><span data-apt-lit-bounce-limit="">{lit.bounceLimit}</span></>}</p>}
+      {lit.bounceLimit && <><br /><span data-apt-lit-bounce-limit="">{lit.bounceLimit}</span></>}
+      {lit.lux?.length > 0 && <><br /><span data-apt-lit-lux="">{lit.luxLabel}{lit.lux.slice(0, 3).map(row =>
+        ` · ${row.label} ${row.lux >= 100 ? Math.round(row.lux / 10) * 10 : Math.round(row.lux)} lx`).join("")}</span></>}</p>}
     {(modeLoading || modeError) && <div className="apt-ui-toolbar-notice" data-apt-mode-notice={modeLoading ? "loading" : recovery ? modeError.source || "mode" : "message"}>
       {modeLoading ? <><div role="status"><h3>Loading {APT_MODE_WORDS[modeLoading] || modeLoading}{loadingPercent != null ? ` · ${Math.round(loadingPercent)}%` : ""}</h3>
         <p>The current view stays as it is.</p></div>

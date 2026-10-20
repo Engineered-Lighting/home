@@ -860,7 +860,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 litView ||= litM.createLitView({ scene, renderer,
                     getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
                     getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
-                    getCollision: () => modes.getCollision?.() || null,
+                    // Named aims for the modeled lux readout, in their own frame.
+                    getNamedAims: () => [...(overlay.targetsById?.values() || [])].map(item => ({ id: item.target?.id,
+                        label: item.target?.name || item.target?.id, point: item.target?.pos, normal: item.target?.normal, frame: item.group?.parent })),
+                    isPresentationActive: () => overlay.virtualFixturesPresentationActive?.() === true,
+                    onStateChange: state => { if (state.active) emit('lit', state); },
+                    signal: lifetimeController.signal,
                     spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
             }
             if (modes.mode !== 'mesh' || litView.state().active) return litView.state();

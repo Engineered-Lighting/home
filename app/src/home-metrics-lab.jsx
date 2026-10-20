@@ -186,18 +186,18 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
       chipText: "offline",
       statusWord: "ai stack offline",
       statusWordTone: "crit",
-      sub: "last seen â€” tap start to bring it up",
+      sub: "last seen — tap start to bring it up",
       actions: [
-        { label: "start ai stack", verb: "start", style: "cool", glyph: "â–¶" },
-        { label: "logs", verb: "logs", style: "default", glyph: "â–¤" },
+        { label: "start ai stack", verb: "start", style: "cool", glyph: "▶" },
+        { label: "logs", verb: "logs", style: "default", glyph: "▤" },
       ],
       banner: {
         tone: "crit", lbl: "offline",
-        why: "ai box unreachable Â· last seen recently",
+        why: "ai box unreachable · last seen recently",
         act: "retry",
       },
       progress: null,
-      chartBadge: { text: "â€”", tone: "default" },
+      chartBadge: { text: "—", tone: "default" },
     };
   }
 
@@ -212,11 +212,11 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
       chipText: "warming",
       statusWord: "starting ai stack",
       statusWordTone: "default",
-      sub: `${step} ${eta ? "Â· " + eta : ""}`,
+      sub: `${step} ${eta ? "· " + eta : ""}`,
       actions: [],
       banner: null,
       progress: { step, pct, eta },
-      chartBadge: { text: "â€”", tone: "default" },
+      chartBadge: { text: "—", tone: "default" },
     };
   }
 
@@ -229,18 +229,18 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
       chipText: "error",
       statusWord: `${e.name} crashed`,
       statusWordTone: "crit",
-      sub: e.detail || "service crashed Â· retrying",
+      sub: e.detail || "service crashed · retrying",
       actions: [
-        { label: "view logs", verb: "logs", style: "default", glyph: "â–¤" },
-        { label: "restart", verb: "restart", style: "danger", glyph: "â–¶" },
+        { label: "view logs", verb: "logs", style: "default", glyph: "▤" },
+        { label: "restart", verb: "restart", style: "danger", glyph: "▶" },
       ],
       banner: {
         tone: "crit", lbl: "error",
-        why: `<b>${e.name}</b> crashed Â· ${e.detail || "see logs"}`,
+        why: `<b>${e.name}</b> crashed · ${e.detail || "see logs"}`,
         act: "logs",
       },
       progress: null,
-      chartBadge: { text: "â€”", tone: "default" },
+      chartBadge: { text: "—", tone: "default" },
     };
   }
 
@@ -252,9 +252,9 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
       chipText: "pressured",
       statusWord: `vram at ${Math.round(vramPct * 100)}%`,
       statusWordTone: "warn",
-      sub: `voice synthesis may queue Â· ${((metrics.vramMax - metrics.vram) || 0).toFixed(1)}g headroom`,
+      sub: `voice synthesis may queue · ${((metrics.vramMax - metrics.vram) || 0).toFixed(1)}g headroom`,
       actions: [
-        { label: "stop ai models", verb: "stopStack", style: "danger", glyph: "âœ•", confirm: true },
+        { label: "stop ai models", verb: "stopStack", style: "danger", glyph: "✕", confirm: true },
       ],
       banner: {
         tone: "warn", lbl: "pressured",
@@ -277,14 +277,14 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
       chipText: "partial",
       statusWord: `${degradedServices.length} services down`,
       statusWordTone: "warn",
-      sub: degradedServices.map((s) => s.name).join(" Â· ") + " Â· core stack healthy",
+      sub: degradedServices.map((s) => s.name).join(" · ") + " · core stack healthy",
       actions: [
-        { label: "restart all", verb: "restart", style: "danger", glyph: "â–¶", confirm: true },
-        { label: "logs", verb: "logs", style: "default", glyph: "â–¤" },
+        { label: "restart all", verb: "restart", style: "danger", glyph: "▶", confirm: true },
+        { label: "logs", verb: "logs", style: "default", glyph: "▤" },
       ],
       banner: {
         tone: "warn", lbl: "partial",
-        why: `<b>${degradedServices.length} of ${services.length || 6}</b> services degraded Â· core stack healthy`,
+        why: `<b>${degradedServices.length} of ${services.length || 6}</b> services degraded · core stack healthy`,
         act: "view",
       },
       progress: null,
@@ -303,12 +303,12 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
       statusWordTone: "warn",
       sub: d.detail || "auto-recovering",
       actions: [
-        { label: "restart", verb: "restart", style: "danger", glyph: "â–¶", confirm: true },
-        { label: "logs", verb: "logs", style: "default", glyph: "â–¤" },
+        { label: "restart", verb: "restart", style: "danger", glyph: "▶", confirm: true },
+        { label: "logs", verb: "logs", style: "default", glyph: "▤" },
       ],
       banner: {
         tone: "warn", lbl: "degraded",
-        why: `${d.name} heartbeat missed Â· auto-retrying`,
+        why: `${d.name} heartbeat missed · auto-retrying`,
         act: "view logs",
       },
       progress: null,
@@ -325,7 +325,7 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
       chipText: "slow",
       statusWord: `last turn ${(lastTurnMs / 1000).toFixed(1)}s`,
       statusWordTone: "warn",
-      sub: `${xs}Ã— baseline Â· investigate stage breakdown`,
+      sub: `${xs}× baseline · investigate stage breakdown`,
       actions: [],
       banner: null,
       progress: null,
@@ -334,14 +334,14 @@ function deriveLabTier(metrics, aiStackState, lastTrace, baseline) {
   }
 
   // ready (default healthy)
-  const uptime = aiStackState.uptime_h ? `warm ${aiStackState.uptime_h}h Â· ` : "";
+  const uptime = aiStackState.uptime_h ? `warm ${aiStackState.uptime_h}h · ` : "";
   return {
     tier: "ready",
     chipTone: "cool",
     chipText: "ready",
     statusWord: metrics.model || "ai stack",
     statusWordTone: "default",
-    sub: `${uptime}ai stack online Â· everything healthy`,
+    sub: `${uptime}ai stack online · everything healthy`,
     actions: [],
     banner: null,
     progress: null,
@@ -646,7 +646,7 @@ const SERVICE_META = {
     tooltip: "Local LLM (Qwen3-VL-30B). Reasons over voice commands and image captions; runs on the Ubuntu AI box.",
   },
   "wyoming-parakeet": {
-    tooltip: "Speech-to-text. Voice PE â†’ Wyoming protocol â†’ Parakeet â†’ text transcript.",
+    tooltip: "Speech-to-text. Voice PE → Wyoming protocol → Parakeet → text transcript.",
   },
   kokoro: {
     tooltip: "Fallback text-to-speech engine. Kept online behind the Wyoming TTS bridge when Chatterbox is primary.",
@@ -658,7 +658,7 @@ const SERVICE_META = {
     tooltip: "Wyoming TTS bridge. Presents HA-compatible TTS while routing to Chatterbox primary and Kokoro fallback.",
   },
   "vision-sidecar": {
-    tooltip: "Fetches camera snapshots and calls vLLM to generate prose captions ('a person stands on the drivewayâ€¦').",
+    tooltip: "Fetches camera snapshots and calls vLLM to generate prose captions ('a person stands on the driveway…').",
   },
   "metrics-sidecar": {
     tooltip: "Telemetry, conversation SSE, and LLM proxy sidecar. The Home app uses it for Lab traces, stack health, and chat visibility.",
@@ -676,7 +676,7 @@ const SERVICE_META = {
     tooltip: "S2S / direct-dispatch bridge container (personaplex-bridge) on the Ubuntu AI box. Only in the request path when S2S mode is active; otherwise this is just the bridge's heartbeat.",
   },
   network: {
-    tooltip: "LAN connectivity between this app, the AI box, and HAOS. Hardcoded 'ok' today â€” not a live probe.",
+    tooltip: "LAN connectivity between this app, the AI box, and HAOS. Hardcoded 'ok' today — not a live probe.",
   },
   openai: {
     tooltip: "OpenAI Chat Completions API. The HA classifier (external_routing.py) sends 'general knowledge' questions here instead of vLLM, so the local model isn't asked things outside its directive.",
@@ -920,7 +920,7 @@ function LabStackFlow({ services, metrics }) {
   function nodeLabel(node) {
     if (node.kind === "service") {
       let lbl = node.id;
-      if (node.showModel && metrics?.model) lbl = `${node.id} Â· ${metrics.model}`;
+      if (node.showModel && metrics?.model) lbl = `${node.id} · ${metrics.model}`;
       return lbl;
     }
     return ENDPOINT_META[node.id]?.label || node.id;
@@ -1256,7 +1256,7 @@ function LabStackFlow({ services, metrics }) {
           const svc = byName[id];
           const dotKey = svc?.dot || "idle";
           const dotColor = FLOW_DOT_COLOR[dotKey] || FLOW_DOT_COLOR.default;
-          const meta = svc?.meta || "â€”";
+          const meta = svc?.meta || "—";
           return (
             <span
               key={id}
@@ -1269,7 +1269,7 @@ function LabStackFlow({ services, metrics }) {
                 opacity: 0.85,
                 boxShadow: dotKey === "cool" ? "0 0 3px var(--hg-ice-glow)" : "none",
               }}></span>
-              {id} Â· {meta}
+              {id} · {meta}
             </span>
           );
         })}
@@ -1345,7 +1345,7 @@ function LabChartHero({ lastTurn, baseline, slow, prevMs }) {
           content: "''", position: "absolute", left: 0, top: "10%", bottom: "10%",
           width: 1, background: "var(--hg-fg-5)",
         }}></span>
-        {num != null ? num : "â€”"}
+        {num != null ? num : "—"}
         <span style={{
           fontFamily: HG_FONT_MONO, fontSize: 11, letterSpacing: "0.08em",
           color: "var(--hg-fg-3)", marginLeft: 4, fontWeight: 400,
@@ -1367,11 +1367,11 @@ function LabChartHero({ lastTurn, baseline, slow, prevMs }) {
         {baseline.hasBaseline ? (
           <>
             baseline <b style={{ color: "var(--hg-fg-0)", fontWeight: 500 }}>
-              {(baseline.p10 / 1000).toFixed(1)}â€“{(baseline.p90 / 1000).toFixed(1)} s
+              {(baseline.p10 / 1000).toFixed(1)}–{(baseline.p90 / 1000).toFixed(1)} s
             </b>
           </>
         ) : (
-          <span style={{ color: "var(--hg-fg-4)" }}>awaiting baseline Â· 5+ turns needed</span>
+          <span style={{ color: "var(--hg-fg-4)" }}>awaiting baseline · 5+ turns needed</span>
         )}
       </div>
       <div style={{
@@ -1760,7 +1760,7 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
           color: "var(--hg-fg-0)", fontWeight: 500,
         }}>{N} calls</div>
         {metricsRendered.map((m) => {
-          const last = m.path ? (m.peak * 100).toFixed(0) : "â€”";
+          const last = m.path ? (m.peak * 100).toFixed(0) : "—";
           const pk = (m.peak * 100).toFixed(0);
           return (
             <div key={m.id} style={{
@@ -1982,7 +1982,7 @@ function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
           color: "var(--hg-fg-0)", fontWeight: 500,
         }}>{total}ms</div>
         {metricsRendered.map((m) => {
-          const last = m.last != null ? (m.last * 100).toFixed(0) : "â€”";
+          const last = m.last != null ? (m.last * 100).toFixed(0) : "—";
           const pk = (m.peak * 100).toFixed(0);
           return (
             <div key={m.id} style={{
@@ -2092,7 +2092,7 @@ function LabTooltip({ data, position }) {
                 fontFamily: HG_FONT_MONO, fontSize: 8.5,
                 letterSpacing: "0.22em", textTransform: "uppercase",
                 color: "var(--hg-fg-4)", marginRight: 6,
-              }}>you Â·</span>
+              }}>you ·</span>
               <span style={{ fontStyle: "italic" }}>
                 "{String(data.quote).slice(0, 140)}"
               </span>
@@ -2111,7 +2111,7 @@ function LabTooltip({ data, position }) {
                 fontFamily: HG_FONT_MONO, fontSize: 8.5,
                 letterSpacing: "0.22em", textTransform: "uppercase",
                 color: "var(--hg-fg-4)", marginRight: 6,
-              }}>home Â·</span>
+              }}>home ·</span>
               <span style={{ fontStyle: "italic" }}>
                 "{String(data.quote_assistant).slice(0, 140)}"
               </span>
@@ -2218,7 +2218,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
     // window.HomeMetricsLabHelpers.formatMs. Tests:
     // tools/run-lab-tests.js â†’ "formatMs" suite.
     const fmt = (window.HomeMetricsLabHelpers && window.HomeMetricsLabHelpers.formatMs)
-      || ((v) => (v == null ? "â€”" : String(Math.round(v))));
+      || ((v) => (v == null ? "—" : String(Math.round(v))));
     // F-15 (Addendum 27): per-stage baseline callout. Hovering a slow
     // stage now shows "STT +400ms vs 200ms baseline (3.0Ã—)" beneath
     // the standard ms readout. Baseline = rolling p50 across the
@@ -2236,7 +2236,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
     setTooltipData({
       kicker: view === "now"
         ? seg.stage
-        : `${seg.stage} Â· ${seg.turnIdx === N - 1 ? "now" : (N - 1 - seg.turnIdx) + " turns ago"}`,
+        : `${seg.stage} · ${seg.turnIdx === N - 1 ? "now" : (N - 1 - seg.turnIdx) + " turns ago"}`,
       value: fmt(seg.ms),
       unit: "ms",
       // Warn coloring: original `slow audio` heuristic OR explicit
@@ -2279,7 +2279,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
     let valueStr, unitStr;
     if (info.metricId === "temp") {
       valueStr = String(Math.round((info.value || 0) * 100));
-      unitStr = "Â°c";
+      unitStr = "°c";
     } else {
       valueStr = String(pct);
       unitStr = "%";
@@ -2289,7 +2289,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
       value: valueStr,
       unit: unitStr,
       warn: isWarn,
-      micro: `peak ${Math.round((info.peak || 0) * 100)}${info.metricId === "temp" ? "Â°c" : "%"}`,
+      micro: `peak ${Math.round((info.peak || 0) * 100)}${info.metricId === "temp" ? "°c" : "%"}`,
       quote: null,
     });
   };
@@ -2418,7 +2418,7 @@ function LabResPills({ metrics }) {
     {
       id: "vram",
       value: Math.round(vramPct * 100),
-      unit: `% Â· ${(metrics.vram || 0).toFixed(1)}/${(metrics.vramMax || 0).toFixed(0)}g`,
+      unit: `% · ${(metrics.vram || 0).toFixed(1)}/${(metrics.vramMax || 0).toFixed(0)}g`,
       pct: vramPct, warn: vramPct >= LAB_THRESHOLDS.vram.warn,
     },
     {
@@ -2436,7 +2436,7 @@ function LabResPills({ metrics }) {
     {
       id: "ram",
       value: Math.round((metrics.ram || 0)),
-      unit: `g Â· ${Math.round(ramPct * 100)}%`,
+      unit: `g · ${Math.round(ramPct * 100)}%`,
       pct: ramPct, warn: ramPct >= LAB_THRESHOLDS.ram.warn,
     },
   ];
@@ -2541,13 +2541,13 @@ function LabDiagPane({ services, supervisorUrl, stackToken, tokenConfigured, onA
       <div style={{
         display: "flex", gap: 8, marginBottom: 14,
       }}>
-        <DiagBtn label="free gpu" glyph="âœ•" tone="danger" confirm
+        <DiagBtn label="free gpu" glyph="✕" tone="danger" confirm
           onClick={() => onAction?.("freeGpu")} disabled={!tokenConfigured} />
-        <DiagBtn label="reload all" glyph="â–¶" tone="danger" confirm
+        <DiagBtn label="reload all" glyph="▶" tone="danger" confirm
           onClick={() => onAction?.("restart")} disabled={!tokenConfigured} />
         <DiagBtn label="pause perception" glyph="||" tone="warn" confirm
           onClick={() => onAction?.("pausePerception")} disabled={!tokenConfigured} />
-        <DiagBtn label="clear cache" glyph="â†»" confirm
+        <DiagBtn label="clear cache" glyph="↻" confirm
           onClick={() => onAction?.("clearCache")} />
       </div>
 
@@ -2580,13 +2580,13 @@ function LabDiagPane({ services, supervisorUrl, stackToken, tokenConfigured, onA
               letterSpacing: "0.04em",
             }}>{svc.meta}</span>
             <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              <DiagBtn label="logs" glyph="â–¤" small
+              <DiagBtn label="logs" glyph="▤" small
                 onClick={() => onAction?.("serviceLogs", svc.name)}
                 disabled={!tokenConfigured} />
-              <DiagBtn label="stop" glyph="â–¢" tone="danger" small confirm
+              <DiagBtn label="stop" glyph="▢" tone="danger" small confirm
                 onClick={() => onAction?.("serviceStop", svc.name)}
                 disabled={!tokenConfigured} />
-              <DiagBtn label="restart" glyph="â–¶" tone="danger" small confirm
+              <DiagBtn label="restart" glyph="▶" tone="danger" small confirm
                 onClick={() => onAction?.("serviceRestart", svc.name)}
                 disabled={!tokenConfigured} />
             </div>
@@ -2641,7 +2641,7 @@ function DiagBtn({ label, glyph, tone, small, confirm, onClick, disabled }) {
   return (
     <button
       disabled={disabled}
-      title={disabled ? "STACK_TOKEN required â€” use /stack-token" : ""}
+      title={disabled ? "STACK_TOKEN required — use /stack-token" : ""}
       onClick={handleClick}
       style={{
         display: "inline-flex", alignItems: "center", gap: 6,
@@ -2703,7 +2703,7 @@ function LabLogPane({ lines }) {
         padding: "20px 14px",
         fontFamily: HG_FONT_MONO, fontSize: 10.5,
         color: "var(--hg-fg-4)", textAlign: "center",
-      }}>no recent log lines Â· streaming when stack is active</div>
+      }}>no recent log lines · streaming when stack is active</div>
     );
   }
   return (
@@ -2912,7 +2912,7 @@ function HmLabTab({
           fontFamily: HG_FONT_MONO, fontSize: 10, letterSpacing: "0.10em",
           textTransform: "lowercase",
           color: diagOpen ? "var(--hg-fg-0)" : "var(--hg-fg-3)", cursor: "pointer",
-        }}>{diagOpen ? "â† back" : "diag Â· logs + service ops â†’"}</button>
+        }}>{diagOpen ? "← back" : "diag · logs + service ops →"}</button>
       </div>
 
       {actionResult && (
@@ -2921,7 +2921,7 @@ function HmLabTab({
           color: actionResult.kind === "error" ? "var(--hg-crit)" : "var(--hg-fg-3)",
           letterSpacing: "0.04em", textAlign: "right",
         }}>
-          {actionResult.verb} {actionResult.kind === "error" ? `Â· ${actionResult.error}` : "Â· dispatched"}
+          {actionResult.verb} {actionResult.kind === "error" ? `· ${actionResult.error}` : "· dispatched"}
         </div>
       )}
     </div>
@@ -2954,17 +2954,17 @@ function buildStackList(aiStackState, metrics) {
                    s.health === "stale" || s.health === "degraded" ||
                    s.probe === "fail" || s.probe === "stale" ? "warn" :
                    s.probe === "ok" ? (primary ? "cool" : "good") : "good";
-      const meta = s.detail || `${s.container || "running"}${s.health ? " Â· " + s.health : ""}`;
+      const meta = s.detail || `${s.container || "running"}${s.health ? " · " + s.health : ""}`;
       const cls = (tone === "err" || tone === "warn") ? tone : "default";
       return { name: displayName, dot: tone, meta, cls };
     }
-    return { name, dot: "idle", meta: "â€”", cls: "default" };
+    return { name, dot: "idle", meta: "—", cls: "default" };
   }
 
   const ordered = STACK_SERVICE_ORDER.map((name) => rowFor(name, name === "vllm"));
   const vllm = ordered.find((s) => s.name === "vllm");
   if (vllm && metrics?.model) {
-    vllm.meta = `${metrics.model}` + (vllm.meta !== "â€”" ? ` Â· ${vllm.meta}` : "");
+    vllm.meta = `${metrics.model}` + (vllm.meta !== "—" ? ` · ${vllm.meta}` : "");
   }
 
   const known = new Set(STACK_SERVICE_ORDER);

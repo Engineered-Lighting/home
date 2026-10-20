@@ -16,6 +16,8 @@ test('full Home: Metrics reads populated service data while the room stays mount
       const summary = metrics.locator('button.hg-focusable').first();
       await summary.click();
       await metrics.getByText('Authored full UI model', { exact: true }).first().waitFor();
+      const visibleCopy = await metrics.innerText();
+      assert.doesNotMatch(visibleCopy, /\u00c2\u00b7|\u00e2\u20ac|\u00e2\u2020|\u00c3\u2014/, 'Metrics labels render readable Unicode rather than mojibake');
       state.metrics = 'error';
       await page.waitForFunction(() => window.__hav_metricsLatest === null, null, { timeout: 15000 });
       await metrics.getByText('Authored full UI model', { exact: true }).waitFor({ state: 'hidden' });

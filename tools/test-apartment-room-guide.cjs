@@ -82,7 +82,7 @@ test('help rows are generated from the key map and nothing else', () => {
     assert.deepEqual(rows.gestures, Guide.GESTURES.filter(row => !row.homes || row.homes.includes(home)));
   }
   assert.deepEqual(Guide.helpRows('echo').keys.map(row => row.id), ['orbit', 'tilt', 'zoom', 'home', 'cycle', 'escape', 'help']);
-  assert.deepEqual(Guide.helpRows('victoria').keys.map(row => row.id), ['orbit', 'tilt', 'zoom', 'home', 'cycle', 'aim-mode', 'escape', 'help']);
+  assert.deepEqual(Guide.helpRows('victoria').keys.map(row => row.id), ['orbit', 'tilt', 'zoom', 'home', 'cycle', 'aim-mode', 'aim-set', 'aim-history', 'escape', 'help']);
   assert.equal(new Set(Guide.KEY_MAP.flatMap(row => row.keys)).size, Guide.KEY_MAP.flatMap(row => row.keys).length, 'no key is listed twice');
 });
 
@@ -96,7 +96,14 @@ test('the room key handler binds exactly the room keys the help lists', () => {
   assert.match(source, /\(e\.key === "a" \|\| e\.key === "z"\)[\s\S]{0,200}virtualFixtureControlsOpen && selectedSiteId === "victoria"/);
   assert.deepEqual(Guide.KEY_MAP.find(row => row.id === 'aim-mode').homes, ['victoria']);
   // Zoom keys keep their existing condition, so the listing says nothing more specific.
-  assert.ok(Guide.KEY_MAP.every(row => !/Enter|⌘|Shift|F\b/.test(row.label)), 'unbound keys from the design are not promised');
+  // W2 binds Enter and ⌘Z/Ctrl+Z (Shift to redo) in the aim key handler, so only its rows may name them.
+  assert.ok(Guide.KEY_MAP.every(row => !/Enter|⌘|Shift|F\b/.test(row.label) || row.owner === 'aim'), 'unbound keys from the design are not promised');
+  const aim = declarators(apartment, 'onAimKey');
+  assert.equal(aim.length, 1, 'one aim key handler');
+  const aimRows = Guide.KEY_MAP.filter(row => row.owner === 'aim');
+  assert.deepEqual([...new Set(keyLiterals(apartment, aim[0]))].sort(), [...aimRows.flatMap(row => row.keys), 'z'].sort(),
+    "the aim handler binds exactly the aim rows plus A/Z's z, used with Cmd/Ctrl");
+  assert.ok(aimRows.every(row => row.homes?.join() === 'victoria'));
 });
 
 test('every other room keydown listener only handles keys the help lists', () => {
@@ -122,20 +129,19 @@ test('"?" is bound by the guide and wired from the toolbar', () => {
   assert.match(apartment.source, /Guide\.useHelpShortcut\(!guideDialog, \(\) => openGuide\("help"\)\)/);
 });
 
-test('gestures list exactly the bound pointer input: orbit, pan, wheel and pinch, nothing else', () => {
+test('gestures list exactly the bound pointer input, pan and pinch included', () => {
   const rig = read('home-3d/rig.js');
   const attach = rig.slice(rig.indexOf('export function attachInput'));
   assert.match(attach, /addEventListener\('pointerdown', onDown\)/);
   assert.match(attach, /addEventListener\('wheel', onWheel/);
-  // Pan (Shift-drag or right-drag) and two-pointer pinch are bound by the rig
-  // through pointer events; no touch or Safari gesture events are.
-  assert.match(attach, /if \(e\.button === 2 \|\| \(e\.button === 0 && e\.shiftKey\)\)/, 'Shift-drag or right-drag pans');
-  assert.match(attach, /pointers\.size === 2/, 'two pointers pinch');
-  assert.doesNotMatch(rig, /touchstart|gesturestart/i);
+  assert.match(attach, /if \(e\.button !== 0\) return;/, 'only the primary button orbits');
+  assert.match(attach, /e\.button === 2 \|\| \(e\.button === 0 && e\.shiftKey\)/, 'Shift-drag and right-drag pan are bound');
+  assert.match(attach, /rig\.panStart\?\.\(\)/);
+  assert.match(attach, /PINCH_STEP/, 'two-finger pinch is bound to the zoom detents');
+  assert.doesNotMatch(rig, /touchstart|gesturestart/i, 'pinch uses pointer events, not touch or gesture events');
   const words = [...Guide.GESTURES, ...Guide.KEY_MAP].map(row => `${row.label} ${row.action} ${row.when || ''}`).join(' ');
-  assert.match(words, /shift-drag or right-drag/i); assert.match(words, /pinch with two fingers/i);
-  assert.deepEqual(Guide.GESTURES.map(row => row.id), ['drag-orbit', 'pan', 'wheel-zoom', 'pinch-zoom', 'select', 'aim-handle']);
-  assert.doesNotMatch(words, /rotate with two|two-finger (?:rotate|twist|pan)|long-press/i, 'no unbound gesture is promised');
+  assert.match(words, /Shift-drag or right-drag Pan the room/);
+  assert.match(words, /Pinch with two fingers Zoom one step at a time/);
   assert.match(read('home-3d/equipment-virtual-fixtures.mjs'), /interaction_role: 'aim_handle'/, 'the aim handle exists');
 });
 
@@ -213,7 +219,7 @@ test('toolbar mount passes the single fixture setter and existing facts only', (
   const body = text(apartment, toolbar);
   assert.equal((body.match(/onVirtualVisible/g) || []).length, 2, 'the toolbar only forwards the fixture setter as the Layers seam');
   assert.match(body, /seams=\{hasVirtualFixtures \? \{ fixtures: \{ value: virtualVisible, set: onVirtualVisible \} \} : \{\}\}/);
-  assert.doesNotMatch(body, /pinch/i, 'the old help text promising pinch is gone');
+  assert.doesNotMatch(body, /pinch/i, 'gesture help lives in the guide, not in toolbar copy');
 });
 
 test('the guide loads with the Apartment, before the view that mounts it', () => {

@@ -69,6 +69,8 @@
         ["home-apartment-perception-player.js", false],
         ["home-apartment-den-perception.jsx", true],
         ["home-apartment-ui.jsx", true],
+        ["home-apartment-quick.js", false],
+        ["home-apartment-echo.jsx", true],
         ["home-apartment-directional.js", false],
         ["home-apartment-aim-proposals.js", false],
         ["home-apartment-room-overlay.jsx", true],

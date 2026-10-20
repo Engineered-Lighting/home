@@ -43,7 +43,7 @@ test('shared mounted UI and labeler fixtures select every affected browser consu
 test('People action browsers and both precision contracts are included in the complete plan',()=>{
   const people=['run-people-agent-tray-ui-tests.cjs','run-people-bridge-ui-tests.cjs'];
   const lighting=['test-apartment-lit-splats-browser.mjs','test-apartment-lit-splats-browser-part2.mjs',
-    'test-apartment-lit-splats-native-browser.mjs','test-apartment-lit-splats-native-browser-part2.mjs','test-apartment-lit-splats-native-browser-part3.mjs'];
+    'test-apartment-lit-splats-native-browser.mjs','test-apartment-lit-splats-native-browser-part2.mjs','test-apartment-lit-splats-native-browser-part3.mjs','test-apartment-lit-splats-native-browser-part4.mjs'];
   const all=planOf(['--all']);assert.ok([...people,...lighting].every(name=>all.includes(name)));
   assert.ok(people.every(name=>planOf(['--files','app/src/home-people.jsx']).includes(name)));
   const argv=['--files','tools/fixtures/apartment-lit-splats-browser-proof.mjs'];
@@ -52,6 +52,8 @@ test('People action browsers and both precision contracts are included in the co
   assert.ok(owners.every(index=>index>=0));assert.equal(new Set(owners).size,lighting.length);
   assert.ok(fs.readFileSync(path.join(root,'tools/test-apartment-lit-splats-native-browser.mjs'),'utf8').includes("phase:'frames'"));
   assert.ok(fs.readFileSync(path.join(root,'tools/test-apartment-lit-splats-native-browser-part3.mjs'),'utf8').includes("phase:'controls'"));
+  assert.ok(fs.readFileSync(path.join(root,'tools/test-apartment-lit-splats-native-browser-part4.mjs'),'utf8').includes("phase:'calibration'"));
+  assert.ok(fs.readFileSync(path.join(root,'tools/fixtures/apartment-lit-splats-browser-proof.mjs'),'utf8').includes("phase==='calibration'?12:1"));
 });
 function assertExactCover(argv, counts) {
   const full = planOf(argv);

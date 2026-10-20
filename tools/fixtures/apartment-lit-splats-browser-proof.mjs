@@ -71,7 +71,7 @@ const RENDERER_QUERY = RENDERER === 'webgpu' ? '&renderer=webgpu' : '';
 export async function runLitSplatsBrowserProof({ part, signal, precision='exact', phase='all' }) {
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
   assert.ok(['exact','native'].includes(precision),'known frame precision contract');
-  assert.ok(['all','frames','controls'].includes(phase)&&(phase==='all'||precision==='native'&&part===1),'known proof phase');
+  assert.ok(['all','frames','controls','calibration'].includes(phase)&&(phase==='all'||precision==='native'&&part===1),'known proof phase');
   const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
   const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -295,10 +295,10 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     let offDiff;
     if (nativeWebgl) {
       measuredNoise = {mean:0,max:0};
-      // The frames phase retains all twelve original calibration samples.
-      // The additional controls phase checks its own reference without
-      // duplicating that full calibration on a second software-rendered boot.
-      const calibrationSamples=phase==='controls'?1:12;
+      // A dedicated phase retains all twelve original samples. The HDR and
+      // controls phases each calibrate their own reference too; no worker
+      // carries calibration and HDR shader compilation past its 145s limit.
+      const calibrationSamples=phase==='calibration'?12:1;
       for(let sample=0;sample<calibrationSamples;sample++) {
         await frames(page,4);await capture(page,'photo:noise');
         const noise=await frameDiff(page,'photo:noise','photo:unlit');
@@ -314,6 +314,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     assert.deepEqual(on.requested.filter(pathname => LIT_MODULES.test(pathname)), [], 'Lighting off: no lit receiver module or layer is requested');
     check(nativeWebgl?'lighting_off_native_precision':'lighting_off_identical', { frame: unlit, diff: offDiff });
 
+    if(phase!=='calibration'){
     await lighting.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: WAIT_MS });
     assert.equal(await page.evaluate(() => window.__APT_ENGINE.modes.mode), 'splat', 'Photo stays the view, now lit');
@@ -446,6 +447,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       ?'leaving Lit restores the Photo frame within calibrated native precision':'leaving Lit restores the identical Photo frame');
     check('photo_restored', { frame: restored, diff: restoreDiff,precision });
 
+    }
     await page.close();
     } else {
     // ---- Lighting follows the view: Photo lit, then Cloud and Mesh lit in turn

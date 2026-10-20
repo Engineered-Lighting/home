@@ -1,0 +1,18 @@
+# Health check for lighting-brain.service: GET /healthz on loopback.
+# Three failed checks in a row restart the brain (and only the brain).
+[Unit]
+Description=Den lighting brain /healthz check
+After=lighting-brain.service
+Requisite=lighting-brain.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh @RELEASE_OPS_DIR@/units/la/lighting-brain-healthcheck.sh
+StateDirectory=lighting-brain-health
+Environment=HEALTH_STATE=/var/lib/lighting-brain-health/failures
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lighting-brain-health
+TimeoutStartSec=30

@@ -1,0 +1,2 @@
+● fwupd-refresh.service      loaded failed failed Refresh fwupd metadata and update motd
+lighting-brain.service loaded failed failed Den activity lighting brain (virtual only)

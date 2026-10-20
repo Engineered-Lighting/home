@@ -60,7 +60,23 @@ export const PORT_FINGERPRINTS = Object.freeze({
     'equipment-beam': 'a35832a8',
     'equipment-glow': '7f6790f3',
     'directional-fill': '85fab0ed',
+    'splat-cutaway': 'f1801faf',
 });
+
+/**
+ * Spark's Photo cutaway (splat-cutaway.js) is a dyno graph, not a material:
+ * its GLSL is the two shared function sources plus the graph's statements.
+ * splat-cutaway-tsl.mjs is its TSL twin on the WebGPU splat pipeline.
+ */
+export function splatCutawayFingerprint({ dollhouseGlsl, exteriorGlsl, statementsSource }) {
+    return fingerprintText(`${dollhouseGlsl}\n//--exterior--\n${exteriorGlsl}\n//--statements--\n${statementsSource}`);
+}
+
+/** The dyno statements block, as written in splat-cutaway.js's source. */
+export function splatCutawayStatements(source) {
+    const match = /statements: \(\{ inputs: i, outputs: o \}\) => \[([\s\S]*?)\n\s*\],/.exec(String(source));
+    return match ? match[1].trim() : null;
+}
 
 export const ON_BEFORE_COMPILE_PORTS = Object.freeze({
     'home-scan-display-floor-0-1': 'scan-display-floor-0',

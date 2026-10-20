@@ -37,8 +37,15 @@ export const LIT_ASSUMED_LUMENS = Object.freeze(Object.defineProperty({ spot: 45
 export const LIT_ASSUMPTION_SOURCE = LIT_LUMEN_SOURCE.summary;
 export const LIT_DISCLOSURE = 'Simulated · not photometric · assumed output';
 export const LIT_DISCLOSURE_DETAIL = 'Assumed output, not measured: spot 450 lm, down 350 lm, each radial zone 120 lm. '
-    + 'Fixed night exposure. Materials are assumed from the scan colours. One bounce from the eight strongest lit patches, '
-    + 'with assumed albedos.';
+    + 'Materials are assumed from the scan colours. One bounce, ray traced against the scan mesh '
+    + 'with assumed albedos; lux at named aims is modeled.';
+// The exposure sentence follows from lit-exposure.mjs, per renderer path.
+/* L5's bounce (lit-bvh-bake.mjs) traces and shadows every path, so it no
+ * longer leaks through walls; what it still does not do is stated with the
+ * view. Albedos are assumed: the scan colours x 0.8 (sRGB to linear,
+ * clamped), the untinted material's grey where a mesh has no colour. */
+export const LIT_BOUNCE_LIMIT = 'One bounce, shadowed · per-vertex detail · assumed albedos · radial zones cast no direct shadows';
+export const LIT_BOUNCE_ALBEDO = Object.freeze({ source: 'scan colours x 0.8', clamp: Object.freeze([0.02, 0.9]), untinted: '#9ea4aa', measured: false });
 /* The fixed night exposure (prototype scene.js _litApply). It scales every
  * simulated light's candela into display intensity, so a narrow spot reads
  * brighter than a wide wash of the same output, as it does in the room. */
@@ -53,23 +60,6 @@ export const DOWN_HALF_ANGLE = 1.0;
 export const ZONE_HALF_ANGLE = 0.95;
 // Shadow softness: Spot crisp (small aperture), Down soft (diffuser).
 export const SHADOW_RADIUS = Object.freeze({ crisp: 2.5, soft: 6 });
-/* One bounce (APT-V02; SPEC Lit view; prototype scene.js VPL block). TEMPORARY:
- * instant radiosity stands in until a GPU irradiance bake replaces it (WebGPU
- * renderer research, section 5), so it deliberately has no leak fixes. The
- * eight strongest lit patches become hemispherical bounce lights carrying the
- * reflected flux, placed 0.25 m off the patch with a 4.5 m range and no
- * shadow, so bounce can leak up to 4.5 m through a wall; the view says so. */
-export const LIT_BOUNCE_LIMIT = 'One bounce · casts no shadows · can leak up to 4.5 m through walls';
-export const LIT_BOUNCE_COUNT = 8;
-export const LIT_BOUNCE_RANGE_M = 4.5;
-export const LIT_BOUNCE_CONE = 1.45;
-export const LIT_BOUNCE_OFFSET_M = 0.25;
-export const LIT_BOUNCE_TINT = Object.freeze([1, 0.96, 0.9]);
-// Prototype VPL albedos (assumed): spot target flat 0.35 or vertical 0.6,
-// Down pool 0.35, zone wall 0.65, any other zone patch 0.4. A zone facing an
-// opening finds no surface in range and adds nothing; the opening class and
-// 'Toward walls' wait on APT-Z04 facing kinds.
-export const LIT_BOUNCE_ALBEDO = Object.freeze({ spotFlat: 0.35, spotVertical: 0.6, down: 0.35, zoneWall: 0.65, zoneOther: 0.4 });
 // A radial lobe aims outward and slightly down (prototype: d x 2 - 0.35 z).
 const ZONE_DROP = -0.35;
 
@@ -149,35 +139,6 @@ export function fixtureLights(fixture, { spotFwhmDeg = 20, exposure = LIT_EXPOSU
             peakCandela: candelaFromLumens(LIT_ASSUMED_LUMENS.zone, ZONE_HALF_ANGLE) });
     }
     return lights;
-}
-
-/* The bounce patches, strongest first, at most LIT_BOUNCE_COUNT.
- * `lights` are fixtureLights() entries; `hits[i]` is the first surface along
- * light i's axis as { point, normal } (normal unit, facing the light) or null.
- * `up` is the frame's up axis. Reflected flux is lumens x the dimmed output
- * (fluxFraction) x 0.8 (zones 0.7) x albedo. Each patch carries the bounce
- * light's pose and intensity: reflected / pi x 0.9 x exposure, as in the
- * prototype. */
-export function bouncePatches(lights, hits, { up = [0, 0, 1], exposure = LIT_EXPOSURE } = {}) {
-    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    const patches = [];
-    (lights || []).forEach((light, index) => {
-        const hit = hits?.[index];
-        if (!(light.level > 0) || !hit) return;
-        const facing = Math.abs(dot(hit.normal, up));
-        const output = Number.isFinite(light.fluxFraction) ? light.fluxFraction : litDimmingFraction(light.level);
-        let flux, albedo;
-        if (light.kind === 'spot') { flux = LIT_ASSUMED_LUMENS.spot * output * 0.8; albedo = facing > 0.8 ? LIT_BOUNCE_ALBEDO.spotFlat : LIT_BOUNCE_ALBEDO.spotVertical; }
-        else if (light.kind === 'down') { flux = LIT_ASSUMED_LUMENS.down * output * 0.8; albedo = LIT_BOUNCE_ALBEDO.down; }
-        else { flux = LIT_ASSUMED_LUMENS.zone * output * 0.7; albedo = facing <= 0.35 ? LIT_BOUNCE_ALBEDO.zoneWall : LIT_BOUNCE_ALBEDO.zoneOther; }
-        const reflected = flux * albedo;
-        if (!(reflected > 1)) return;
-        patches.push({ kind: light.kind, number: light.number ?? null, fixtureId: light.fixtureId ?? null,
-            point: hit.point.slice(), normal: hit.normal.slice(), albedo, reflected, kelvin: light.kelvin,
-            position: hit.point.map((v, i) => v + hit.normal[i] * LIT_BOUNCE_OFFSET_M),
-            intensity: (reflected / Math.PI) * 0.9 * exposure });
-    });
-    return patches.sort((a, b) => b.reflected - a.reflected).slice(0, LIT_BOUNCE_COUNT);
 }
 
 /* ---- Flux and beam profiles (L1) -------------------------------------------

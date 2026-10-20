@@ -1,0 +1,24 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "stationary-task-delivery-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "worker_interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "scene_interface_digest": "b1e5df3bc1c9a17c40a4c27c997e96e2748f1cc559e66dcf72a3fd74313ab674",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "44e2df944ec1b519369f31cb048afd79427897e2146fd05d18e1e13ea98e79a2",
+  "payload_versions": {
+    "home-live-shadow-decision-3": 3,
+    "home-live-worker-checkpoint-3": 3,
+    "home-live-worker-commit-3": 3,
+    "home-live-input-cut-3": 3
+  },
+  "publication_families": [
+    "home-live-shadow-decision-3"
+  ],
+  "schemas": {
+    "home-live-shadow-decision-3.schema.json": "53cbadd8cbfbecd5fea9cc2aa19ec67b9cd9944d8f7db2f7f193ac5b841f8169",
+    "home-live-worker-checkpoint-3.schema.json": "545cf1c175308816e9425612a11e97b2c86a314a35af6632ca89cc67779f85e7",
+    "home-live-worker-commit-3.schema.json": "95aff8dc6f3a0ee738ed4230259889f6130b777fff7dbba2a775a5bb85b5c55c",
+    "home-live-input-cut-3.schema.json": "dc892f0c822d96122544117b1c4c9eadaa77bcef8b0d77382af3d36161442fd8"
+  }
+}

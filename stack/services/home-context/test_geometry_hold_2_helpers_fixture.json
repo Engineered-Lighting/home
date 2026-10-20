@@ -1,0 +1,3562 @@
+{
+  "configuration": {
+    "identity": {
+      "site_id": "echo",
+      "room_id": "living_room",
+      "session_id": "synthetic-book-1",
+      "domain_epoch": "synthetic-domain-1"
+    },
+    "clock_profile": {
+      "id": "clock:synthetic-book-1",
+      "kind": "relative-session-seconds-1",
+      "session_id": "synthetic-book-1",
+      "maximum_t": 120,
+      "origin_utc_s": null,
+      "utc_source_clocks": [],
+      "digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4"
+    },
+    "materials": [
+      {
+        "object_ref": {
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "object_epoch": "books-1",
+          "oid": "book-1"
+        },
+        "source_id": "scripted-camera",
+        "registration_ref": "synthetic-room-registration",
+        "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+        "registration_generation": 0,
+        "uncertainty_correlation_ref": "object:4bd34ab7ac538d0cbbc9e6dcd9f8d3ef88b375e1495c338097a0ae99e290f5c4",
+        "transform_origin": "current_two_page_midpoint",
+        "transform_origin_m": null,
+        "estimate_qualification": "scripted_deliberately_noisy_protocol_pose"
+      },
+      {
+        "object_ref": {
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "object_epoch": "books-1",
+          "oid": "book-2"
+        },
+        "source_id": "scripted-camera",
+        "registration_ref": "synthetic-room-registration",
+        "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+        "registration_generation": 0,
+        "uncertainty_correlation_ref": "object:2dcf1f6c3bce91c8183a3bbaa14cab62585efa6808f03dbd1608b5ae7795cde3",
+        "transform_origin": "current_two_page_midpoint",
+        "transform_origin_m": null,
+        "estimate_qualification": "scripted_deliberately_noisy_protocol_pose"
+      }
+    ],
+    "registered_surfaces": [
+      {
+        "schema": "home-registered-surface-1",
+        "version": 1,
+        "id": "registered:synthetic-protected-1",
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "issued_at": 0,
+        "effective_at": 0,
+        "available_at": 0,
+        "valid_until": 3.1,
+        "update_mode": "partial",
+        "source_id": "scripted-camera",
+        "registration_ref": "synthetic-protected-region-far-1",
+        "registration_generation": 0,
+        "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+        "region_id": "synthetic-protected-1",
+        "region_epoch": "registered-regions-1",
+        "role": "protected",
+        "patches": [
+          {
+            "surface_id": "synthetic-protected-1-patch",
+            "surface_epoch": "protected-surface-1",
+            "role": "protected",
+            "centre_m": [
+              5.4,
+              4.9,
+              0.8
+            ],
+            "u": [
+              1,
+              0,
+              0
+            ],
+            "v": [
+              0,
+              1,
+              0
+            ],
+            "normal": [
+              0,
+              0,
+              1
+            ],
+            "vertices_uv_m": [
+              [
+                -0.1,
+                -0.1
+              ],
+              [
+                0.1,
+                -0.1
+              ],
+              [
+                0.1,
+                0.1
+              ],
+              [
+                -0.1,
+                0.1
+              ]
+            ]
+          }
+        ],
+        "transform_origin_m": [
+          5.4,
+          4.9,
+          0.8
+        ],
+        "uncertainty": {
+          "translation_radius_m": 0.008,
+          "rotation_radius_rad": 0.017453292519943295,
+          "extent_error_m": 0.002,
+          "profile_ref": "scripted-joint-pages-ensemble-1",
+          "profile_digest": "e37c27cd7e8ca5067742b10b9b4ec686471da11f3dceb8e333114cbdc0424f22"
+        },
+        "uncertainty_correlation_ref": "synthetic-registered-far-frame-1",
+        "qualification": "scripted_registered"
+      }
+    ],
+    "config": {
+      "registry": {
+        "site_id": "echo",
+        "room_id": "living_room",
+        "scene": {
+          "scene_kind": "synthetic",
+          "scene_ref": "synthetic:la-seed-v1",
+          "frame": "z_up_metric_floor0",
+          "dimensions_m": [
+            6.2,
+            5.6,
+            2.5
+          ],
+          "digest": "af581e083fcd53b6203c49dc851efb9bb9a64295ef53ac154842551fb746ec81"
+        },
+        "registration_generation": 0,
+        "fixtures": [
+          {
+            "id": "virtual-head-1",
+            "position_m": [
+              2.2,
+              2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          },
+          {
+            "id": "virtual-head-2",
+            "position_m": [
+              4.2,
+              2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          },
+          {
+            "id": "virtual-head-3",
+            "position_m": [
+              1.2,
+              4.2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          },
+          {
+            "id": "virtual-head-4",
+            "position_m": [
+              5,
+              4.2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          }
+        ],
+        "digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c"
+      },
+      "profile": {
+        "profile_ref": "synthetic-direct-gaussian-1",
+        "max_velocity_deg_s": 60,
+        "max_acceleration_deg_s2": 120,
+        "max_jerk_deg_s3": 480,
+        "settle_ms": 250,
+        "fade_out_ms": 200,
+        "fade_in_ms": 300,
+        "lumens": 800,
+        "fwhm_deg": 30,
+        "colour_temperature_k": 3500,
+        "geometry_max_age_s": 0.5,
+        "geometry_ttl_s": 1,
+        "lease_s": 2,
+        "deadband_m": 0.02,
+        "deadband_rad": 0.03490658503988659,
+        "coverage_fraction": 0.9,
+        "uncertainty_ensemble": {
+          "id": "scripted-joint-pages-ensemble-1",
+          "qualification": "scripted_mass_not_calibrated_confidence",
+          "samples": [
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.2
+            },
+            {
+              "translation_m": [
+                -0.008,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0.008,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                -0.008,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0.008,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                -0.008
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0.008
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                -0.017453292519943295,
+                0,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0.017453292519943295,
+                0,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                -0.017453292519943295,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0.017453292519943295,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                -0.017453292519943295
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0.017453292519943295
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                -0.03,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.025
+            },
+            {
+              "translation_m": [
+                0.03,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.025
+            }
+          ]
+        }
+      },
+      "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+      "interface_digest": "70b48eed3407511c88ca6b36e57f815d49bd1811cf97d84a62303d9df7abd0fb",
+      "registered_catalogue_digest": "1529705247cb5982be75f8acc280d867c15eb619aff9d9598ded5031045a24c6",
+      "materials_digest": "bfd9aab822d3b8a529c7b6b4984aab4a409b4442b6e744f68c342b814e4b2e1d",
+      "profile_mode": "feedback_reference_geometry_hold_2",
+      "feedback_config_digest": "c4613bcc48a9b9c0c6216ffc12288a5855a2cf9bf05146d0d92376bb87b2a287"
+    },
+    "config_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+    "producer_epochs": [
+      {
+        "principal_id": "g2-fixture-reader",
+        "producer_id": "g2-fixture-reader",
+        "producer_epoch": "g2-fixture-reader-1"
+      },
+      {
+        "principal_id": "g2-fixture-worker",
+        "producer_id": "g2-fixture-worker",
+        "producer_epoch": "g2-fixture-worker-1"
+      }
+    ],
+    "actor_bindings": [],
+    "classifier_policy": {
+      "schema": "home-experience-classifier-policy-1",
+      "version": 1,
+      "id": "fictional-id",
+      "site_id": "echo",
+      "room_id": "living_room",
+      "session_id": "synthetic-book-1",
+      "domain_epoch": "synthetic-domain-1",
+      "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+      "policy_version": "fictional-policy_version",
+      "allowed_dimensions": [
+        "illumination_lux"
+      ],
+      "allowed_context_keys": [],
+      "illumination_lux_bounds": {
+        "min": 0,
+        "max": 1000
+      },
+      "max_feedback_age_s": 3,
+      "max_exposure_age_s": 3,
+      "max_exposure_span_s": 1,
+      "allow_modeled_candidates": false,
+      "issued_at": 0,
+      "effective_at": 0,
+      "available_at": 0,
+      "valid_until": 30
+    },
+    "write_authorities": []
+  },
+  "grants": [
+    {
+      "principal_id": "g2-fixture-worker",
+      "producer_id": "g2-fixture-worker",
+      "producer_epoch": "g2-fixture-worker-1",
+      "expected_consumer_id": "g2-fixture-worker",
+      "expected_worker_id": "g2-fixture-worker",
+      "token_sha256": "7bc1b5cc03339790c9607974818bfbccb90ce009c782b95029f3c9899bb73f2c",
+      "scopes": [
+        {
+          "site_id": "echo",
+          "room_id": "living_room"
+        }
+      ],
+      "operations": [
+        "read",
+        "worker_commit"
+      ],
+      "payload_types": [
+        "home-acquisition-status-2",
+        "home-engagement-state-4",
+        "home-evidence-reply-3",
+        "home-evidence-request-3",
+        "home-experience-actor-binding-1",
+        "home-experience-classifier-disposition-1",
+        "home-experience-classifier-policy-1",
+        "home-experience-context-declaration-1",
+        "home-experience-feedback-1",
+        "home-experience-feedback-application-1",
+        "home-experience-goal-1",
+        "home-experience-producer-revocation-1",
+        "home-fact-batch-3",
+        "home-feedback-authority-revocation-1",
+        "home-geometry-4",
+        "home-goal-declaration-1",
+        "home-intent-application-result-3",
+        "home-intent-event-3",
+        "home-lighting-capability-1",
+        "home-lighting-control-carrier-1",
+        "home-lighting-control-decision-3",
+        "home-lighting-environment-1",
+        "home-lighting-installed-boundary-1",
+        "home-lighting-policy-decision-3",
+        "home-lighting-settled-exposure-1",
+        "home-preference-geometry-constraint-source-1",
+        "home-preference-learning-assessment-3",
+        "home-preference-learning-policy-1",
+        "home-preference-selector-memory-policy-1",
+        "home-preference-snapshot-2",
+        "home-preference-support-qualification-2",
+        "home-preference-write-3",
+        "home-preference-write-application-1",
+        "home-preference-write-authority-2",
+        "home-preference-write-frontier-2",
+        "home-registered-surface-1"
+      ],
+      "schema_pins": {
+        "home-acquisition-status-2": "e0f3dd009142951c0a230294e5b564f0bfc72c1153cb4dfc71450fc5bf8a1990",
+        "home-engagement-state-4": "88e28b5dcce35bdf49fc89af2e308b60283e33469fad314d1479006f0eb40562",
+        "home-evidence-reply-3": "cbb3412b2532d144e7508d479fc52131043a5574e76a6b66386b345ce119e0bf",
+        "home-evidence-request-3": "e83dfa58c157e6c959371169357b5ed9daaaf4a4c0a4bedffca64b8163249280",
+        "home-experience-actor-binding-1": "79287ee5efc02232a9215a15495b69568bd143da1ba66ad4d06c1d172972a935",
+        "home-experience-classifier-disposition-1": "418d2f1cb6cde700acdfe3d17699e40a5d24fe57e3da75bca176d35bfb799d76",
+        "home-experience-classifier-policy-1": "338e30a532e15189425905e34eae3bb35ed6b5d71812c2978f6c760d6d2d03bf",
+        "home-experience-context-declaration-1": "2fa1d1fdc2637a5bc735cd09ded9e0b50c9291850abf7e5e7470b546c00562c7",
+        "home-experience-feedback-1": "0cbe8ac88f0f867b4e85bd804df28c4ce2207c485e97ab0256e015019a172d61",
+        "home-experience-feedback-application-1": "b8e75b5119bb96936c66ae3e8e8147f8ae353f5c44be88d68a5d5c8e77559e94",
+        "home-experience-goal-1": "230ba3e42760606ade6eb87e4eced1c895693e88acc66647bf44f7d68626981c",
+        "home-experience-producer-revocation-1": "779bc181fc6d80dbe7430516311c7efbb7955fbae99c1752a50b552499b3fc9d",
+        "home-fact-batch-3": "1ce47790e3713f655499d6f8a7665889bb02c0b966678249f9682e04d0173a39",
+        "home-feedback-authority-revocation-1": "18fb85be47385892278437c034b1c4160bae71473055fb32e4d31031c874ae57",
+        "home-geometry-4": "c87b8179e750d25c5cfd7810a30e09f690ba50e15ab814a8076f293d2baa158b",
+        "home-goal-declaration-1": "63911d087aad1f60d960afc37358bde9b70a06e5e1937885abf21b565d68c2bf",
+        "home-intent-application-result-3": "288776c3ea9a5fdb0d5f539e3562e92cd03de0d8b4840a0db690065dac87171f",
+        "home-intent-event-3": "f2736f3b83a9bd9ba1e5db81eb536ce8662be928a9ad4b23d8ed415ce700ea42",
+        "home-lighting-capability-1": "b05442fb0dfaf5d71f5a7447f536159b435faf7ce822ea07ebeafafff2af3a31",
+        "home-lighting-control-carrier-1": "22aa22b8c5c5dfef2c679ed7cf2346a2994b832e5180f9b1c2cc8c12b3f9f8fc",
+        "home-lighting-control-decision-3": "5a6df691d49ca988b10a19058f3f0387976852dc4f41d8b1da487d87e3aa3440",
+        "home-lighting-environment-1": "27930fee98e1e84c070c384798c22e8ddcf40d41b080b8ae6465e132b2720cba",
+        "home-lighting-installed-boundary-1": "91cc19758d2e5e0c989c61bfeab4b1d8d58396311081eb9326b433a7cef7798f",
+        "home-lighting-policy-decision-3": "354770ff86a86ff3e7b7ebd12f5b1dfdf662180e0771a68f758be5f0443a996e",
+        "home-lighting-settled-exposure-1": "6010ab31ebd1eb4ce9be65362f1d668a6b0d2d3bee4576ad3fef8e50f455d467",
+        "home-preference-geometry-constraint-source-1": "02aca73338d12e470bcde254b39a26f41d8df64cd56df5dbc3aa3789f4177431",
+        "home-preference-learning-assessment-3": "974fe398d6893b095e9e47a91ba4f1ed0f88b20eb1cc0852a1e6b771f4cb3b85",
+        "home-preference-learning-policy-1": "79b466b6db1cad610a3b7515c5d5d0f98b9922be2531717c22fd41880eb42d1f",
+        "home-preference-selector-memory-policy-1": "f4cd402fa61dc259f3f6de633434ebc44e376f117810a21d42e9fb00b2f0fd76",
+        "home-preference-snapshot-2": "406711ee948889768449af12fdaefca9e6d9bec8cc1958b9efeac1fd17139332",
+        "home-preference-support-qualification-2": "deeda0456a97423be4dac419410beffc1928fe998215aa73bba0429ba6159193",
+        "home-preference-write-3": "924d5d0ecd51c351433224dfeb1f804fcc967906173759e5ca633de6af5d4bb8",
+        "home-preference-write-application-1": "82266b28d2ee81a4e55770aa44d5bd868e920f14ff3c752fb981e9cc350ea35e",
+        "home-preference-write-authority-2": "e0994f0fbcc8ba8a86686013f2a3649c99dbee5befeb0856057701926232b3e9",
+        "home-preference-write-frontier-2": "6c25d2cf652317ed250eaf6773a13607bb4e19bbdc7a8cff1e8d976627054679",
+        "home-registered-surface-1": "df6590b3eba816f3418675c624e28b9c050e78ea3234233c9b815c98c15daa9d"
+      },
+      "revisions": [
+        "1.0",
+        "2.0",
+        "3.0",
+        "4.0"
+      ],
+      "source_ids": [
+        "scripted-camera",
+        "scripted-daylight"
+      ],
+      "registration_bindings": {
+        "synthetic-room-registration": {
+          "source_id": "scripted-camera",
+          "geometry_revision": "synthetic-geometry",
+          "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+          "coverage_refs": [
+            "synthetic-pages"
+          ]
+        },
+        "synthetic-protected-region-far-1": {
+          "source_id": "scripted-camera",
+          "geometry_revision": "synthetic-geometry",
+          "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+          "coverage_refs": [
+            "synthetic-pages"
+          ]
+        }
+      },
+      "adaptive_subjects": [],
+      "expected_actor_ref": null
+    },
+    {
+      "principal_id": "g2-fixture-reader",
+      "producer_id": "g2-fixture-reader",
+      "producer_epoch": "g2-fixture-reader-1",
+      "expected_consumer_id": "g2-fixture-reader",
+      "expected_worker_id": null,
+      "token_sha256": "fd21dadf4d65eefb5f60db64b8c4187a315264a9e52ad7087215ca7b8e2931a2",
+      "scopes": [
+        {
+          "site_id": "echo",
+          "room_id": "living_room"
+        }
+      ],
+      "operations": [
+        "read"
+      ],
+      "payload_types": [
+        "home-acquisition-status-2",
+        "home-engagement-state-4",
+        "home-evidence-reply-3",
+        "home-evidence-request-3",
+        "home-experience-actor-binding-1",
+        "home-experience-classifier-disposition-1",
+        "home-experience-classifier-policy-1",
+        "home-experience-context-declaration-1",
+        "home-experience-feedback-1",
+        "home-experience-feedback-application-1",
+        "home-experience-goal-1",
+        "home-experience-producer-revocation-1",
+        "home-fact-batch-3",
+        "home-feedback-authority-revocation-1",
+        "home-geometry-4",
+        "home-goal-declaration-1",
+        "home-intent-application-result-3",
+        "home-intent-event-3",
+        "home-lighting-capability-1",
+        "home-lighting-control-carrier-1",
+        "home-lighting-control-decision-3",
+        "home-lighting-environment-1",
+        "home-lighting-installed-boundary-1",
+        "home-lighting-policy-decision-3",
+        "home-lighting-settled-exposure-1",
+        "home-preference-geometry-constraint-source-1",
+        "home-preference-learning-assessment-3",
+        "home-preference-learning-policy-1",
+        "home-preference-selector-memory-policy-1",
+        "home-preference-snapshot-2",
+        "home-preference-support-qualification-2",
+        "home-preference-write-3",
+        "home-preference-write-application-1",
+        "home-preference-write-authority-2",
+        "home-preference-write-frontier-2",
+        "home-registered-surface-1"
+      ],
+      "schema_pins": {
+        "home-acquisition-status-2": "e0f3dd009142951c0a230294e5b564f0bfc72c1153cb4dfc71450fc5bf8a1990",
+        "home-engagement-state-4": "88e28b5dcce35bdf49fc89af2e308b60283e33469fad314d1479006f0eb40562",
+        "home-evidence-reply-3": "cbb3412b2532d144e7508d479fc52131043a5574e76a6b66386b345ce119e0bf",
+        "home-evidence-request-3": "e83dfa58c157e6c959371169357b5ed9daaaf4a4c0a4bedffca64b8163249280",
+        "home-experience-actor-binding-1": "79287ee5efc02232a9215a15495b69568bd143da1ba66ad4d06c1d172972a935",
+        "home-experience-classifier-disposition-1": "418d2f1cb6cde700acdfe3d17699e40a5d24fe57e3da75bca176d35bfb799d76",
+        "home-experience-classifier-policy-1": "338e30a532e15189425905e34eae3bb35ed6b5d71812c2978f6c760d6d2d03bf",
+        "home-experience-context-declaration-1": "2fa1d1fdc2637a5bc735cd09ded9e0b50c9291850abf7e5e7470b546c00562c7",
+        "home-experience-feedback-1": "0cbe8ac88f0f867b4e85bd804df28c4ce2207c485e97ab0256e015019a172d61",
+        "home-experience-feedback-application-1": "b8e75b5119bb96936c66ae3e8e8147f8ae353f5c44be88d68a5d5c8e77559e94",
+        "home-experience-goal-1": "230ba3e42760606ade6eb87e4eced1c895693e88acc66647bf44f7d68626981c",
+        "home-experience-producer-revocation-1": "779bc181fc6d80dbe7430516311c7efbb7955fbae99c1752a50b552499b3fc9d",
+        "home-fact-batch-3": "1ce47790e3713f655499d6f8a7665889bb02c0b966678249f9682e04d0173a39",
+        "home-feedback-authority-revocation-1": "18fb85be47385892278437c034b1c4160bae71473055fb32e4d31031c874ae57",
+        "home-geometry-4": "c87b8179e750d25c5cfd7810a30e09f690ba50e15ab814a8076f293d2baa158b",
+        "home-goal-declaration-1": "63911d087aad1f60d960afc37358bde9b70a06e5e1937885abf21b565d68c2bf",
+        "home-intent-application-result-3": "288776c3ea9a5fdb0d5f539e3562e92cd03de0d8b4840a0db690065dac87171f",
+        "home-intent-event-3": "f2736f3b83a9bd9ba1e5db81eb536ce8662be928a9ad4b23d8ed415ce700ea42",
+        "home-lighting-capability-1": "b05442fb0dfaf5d71f5a7447f536159b435faf7ce822ea07ebeafafff2af3a31",
+        "home-lighting-control-carrier-1": "22aa22b8c5c5dfef2c679ed7cf2346a2994b832e5180f9b1c2cc8c12b3f9f8fc",
+        "home-lighting-control-decision-3": "5a6df691d49ca988b10a19058f3f0387976852dc4f41d8b1da487d87e3aa3440",
+        "home-lighting-environment-1": "27930fee98e1e84c070c384798c22e8ddcf40d41b080b8ae6465e132b2720cba",
+        "home-lighting-installed-boundary-1": "91cc19758d2e5e0c989c61bfeab4b1d8d58396311081eb9326b433a7cef7798f",
+        "home-lighting-policy-decision-3": "354770ff86a86ff3e7b7ebd12f5b1dfdf662180e0771a68f758be5f0443a996e",
+        "home-lighting-settled-exposure-1": "6010ab31ebd1eb4ce9be65362f1d668a6b0d2d3bee4576ad3fef8e50f455d467",
+        "home-preference-geometry-constraint-source-1": "02aca73338d12e470bcde254b39a26f41d8df64cd56df5dbc3aa3789f4177431",
+        "home-preference-learning-assessment-3": "974fe398d6893b095e9e47a91ba4f1ed0f88b20eb1cc0852a1e6b771f4cb3b85",
+        "home-preference-learning-policy-1": "79b466b6db1cad610a3b7515c5d5d0f98b9922be2531717c22fd41880eb42d1f",
+        "home-preference-selector-memory-policy-1": "f4cd402fa61dc259f3f6de633434ebc44e376f117810a21d42e9fb00b2f0fd76",
+        "home-preference-snapshot-2": "406711ee948889768449af12fdaefca9e6d9bec8cc1958b9efeac1fd17139332",
+        "home-preference-support-qualification-2": "deeda0456a97423be4dac419410beffc1928fe998215aa73bba0429ba6159193",
+        "home-preference-write-3": "924d5d0ecd51c351433224dfeb1f804fcc967906173759e5ca633de6af5d4bb8",
+        "home-preference-write-application-1": "82266b28d2ee81a4e55770aa44d5bd868e920f14ff3c752fb981e9cc350ea35e",
+        "home-preference-write-authority-2": "e0994f0fbcc8ba8a86686013f2a3649c99dbee5befeb0856057701926232b3e9",
+        "home-preference-write-frontier-2": "6c25d2cf652317ed250eaf6773a13607bb4e19bbdc7a8cff1e8d976627054679",
+        "home-registered-surface-1": "df6590b3eba816f3418675c624e28b9c050e78ea3234233c9b815c98c15daa9d"
+      },
+      "revisions": [
+        "1.0",
+        "2.0",
+        "3.0",
+        "4.0"
+      ],
+      "source_ids": [
+        "scripted-camera",
+        "scripted-daylight"
+      ],
+      "registration_bindings": {
+        "synthetic-room-registration": {
+          "source_id": "scripted-camera",
+          "geometry_revision": "synthetic-geometry",
+          "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+          "coverage_refs": [
+            "synthetic-pages"
+          ]
+        },
+        "synthetic-protected-region-far-1": {
+          "source_id": "scripted-camera",
+          "geometry_revision": "synthetic-geometry",
+          "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+          "coverage_refs": [
+            "synthetic-pages"
+          ]
+        }
+      },
+      "adaptive_subjects": [],
+      "expected_actor_ref": null
+    }
+  ],
+  "options": {
+    "identity": {
+      "site_id": "echo",
+      "room_id": "living_room",
+      "session_id": "synthetic-book-1",
+      "domain_epoch": "synthetic-domain-1"
+    },
+    "clock_profile": {
+      "id": "clock:synthetic-book-1",
+      "kind": "relative-session-seconds-1",
+      "session_id": "synthetic-book-1",
+      "maximum_t": 120,
+      "origin_utc_s": null,
+      "utc_source_clocks": [],
+      "digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4"
+    },
+    "materials": [
+      {
+        "object_ref": {
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "object_epoch": "books-1",
+          "oid": "book-1"
+        },
+        "source_id": "scripted-camera",
+        "registration_ref": "synthetic-room-registration",
+        "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+        "registration_generation": 0,
+        "uncertainty_correlation_ref": "object:4bd34ab7ac538d0cbbc9e6dcd9f8d3ef88b375e1495c338097a0ae99e290f5c4",
+        "transform_origin": "current_two_page_midpoint",
+        "transform_origin_m": null,
+        "estimate_qualification": "scripted_deliberately_noisy_protocol_pose"
+      },
+      {
+        "object_ref": {
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "object_epoch": "books-1",
+          "oid": "book-2"
+        },
+        "source_id": "scripted-camera",
+        "registration_ref": "synthetic-room-registration",
+        "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+        "registration_generation": 0,
+        "uncertainty_correlation_ref": "object:2dcf1f6c3bce91c8183a3bbaa14cab62585efa6808f03dbd1608b5ae7795cde3",
+        "transform_origin": "current_two_page_midpoint",
+        "transform_origin_m": null,
+        "estimate_qualification": "scripted_deliberately_noisy_protocol_pose"
+      }
+    ],
+    "registered_surfaces": [
+      {
+        "schema": "home-registered-surface-1",
+        "version": 1,
+        "id": "registered:synthetic-protected-1",
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "issued_at": 0,
+        "effective_at": 0,
+        "available_at": 0,
+        "valid_until": 3.1,
+        "update_mode": "partial",
+        "source_id": "scripted-camera",
+        "registration_ref": "synthetic-protected-region-far-1",
+        "registration_generation": 0,
+        "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+        "region_id": "synthetic-protected-1",
+        "region_epoch": "registered-regions-1",
+        "role": "protected",
+        "patches": [
+          {
+            "surface_id": "synthetic-protected-1-patch",
+            "surface_epoch": "protected-surface-1",
+            "role": "protected",
+            "centre_m": [
+              5.4,
+              4.9,
+              0.8
+            ],
+            "u": [
+              1,
+              0,
+              0
+            ],
+            "v": [
+              0,
+              1,
+              0
+            ],
+            "normal": [
+              0,
+              0,
+              1
+            ],
+            "vertices_uv_m": [
+              [
+                -0.1,
+                -0.1
+              ],
+              [
+                0.1,
+                -0.1
+              ],
+              [
+                0.1,
+                0.1
+              ],
+              [
+                -0.1,
+                0.1
+              ]
+            ]
+          }
+        ],
+        "transform_origin_m": [
+          5.4,
+          4.9,
+          0.8
+        ],
+        "uncertainty": {
+          "translation_radius_m": 0.008,
+          "rotation_radius_rad": 0.017453292519943295,
+          "extent_error_m": 0.002,
+          "profile_ref": "scripted-joint-pages-ensemble-1",
+          "profile_digest": "e37c27cd7e8ca5067742b10b9b4ec686471da11f3dceb8e333114cbdc0424f22"
+        },
+        "uncertainty_correlation_ref": "synthetic-registered-far-frame-1",
+        "qualification": "scripted_registered"
+      }
+    ],
+    "config": {
+      "registry": {
+        "site_id": "echo",
+        "room_id": "living_room",
+        "scene": {
+          "scene_kind": "synthetic",
+          "scene_ref": "synthetic:la-seed-v1",
+          "frame": "z_up_metric_floor0",
+          "dimensions_m": [
+            6.2,
+            5.6,
+            2.5
+          ],
+          "digest": "af581e083fcd53b6203c49dc851efb9bb9a64295ef53ac154842551fb746ec81"
+        },
+        "registration_generation": 0,
+        "fixtures": [
+          {
+            "id": "virtual-head-1",
+            "position_m": [
+              2.2,
+              2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          },
+          {
+            "id": "virtual-head-2",
+            "position_m": [
+              4.2,
+              2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          },
+          {
+            "id": "virtual-head-3",
+            "position_m": [
+              1.2,
+              4.2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          },
+          {
+            "id": "virtual-head-4",
+            "position_m": [
+              5,
+              4.2,
+              2.5
+            ],
+            "pan_min_deg": -180,
+            "pan_max_deg": 180,
+            "tilt_min_deg": 0,
+            "tilt_max_deg": 90
+          }
+        ],
+        "digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c"
+      },
+      "profile": {
+        "profile_ref": "synthetic-direct-gaussian-1",
+        "max_velocity_deg_s": 60,
+        "max_acceleration_deg_s2": 120,
+        "max_jerk_deg_s3": 480,
+        "settle_ms": 250,
+        "fade_out_ms": 200,
+        "fade_in_ms": 300,
+        "lumens": 800,
+        "fwhm_deg": 30,
+        "colour_temperature_k": 3500,
+        "geometry_max_age_s": 0.5,
+        "geometry_ttl_s": 1,
+        "lease_s": 2,
+        "deadband_m": 0.02,
+        "deadband_rad": 0.03490658503988659,
+        "coverage_fraction": 0.9,
+        "uncertainty_ensemble": {
+          "id": "scripted-joint-pages-ensemble-1",
+          "qualification": "scripted_mass_not_calibrated_confidence",
+          "samples": [
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.2
+            },
+            {
+              "translation_m": [
+                -0.008,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0.008,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                -0.008,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0.008,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                -0.008
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0.008
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.075
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                -0.017453292519943295,
+                0,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0.017453292519943295,
+                0,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                -0.017453292519943295,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0.017453292519943295,
+                0
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                -0.017453292519943295
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                0,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0.017453292519943295
+              ],
+              "weight": 0.05
+            },
+            {
+              "translation_m": [
+                -0.03,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.025
+            },
+            {
+              "translation_m": [
+                0.03,
+                0,
+                0
+              ],
+              "rotation_rad": [
+                0,
+                0,
+                0
+              ],
+              "weight": 0.025
+            }
+          ]
+        }
+      },
+      "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+      "interface_digest": "70b48eed3407511c88ca6b36e57f815d49bd1811cf97d84a62303d9df7abd0fb",
+      "registered_catalogue_digest": "1529705247cb5982be75f8acc280d867c15eb619aff9d9598ded5031045a24c6",
+      "materials_digest": "bfd9aab822d3b8a529c7b6b4984aab4a409b4442b6e744f68c342b814e4b2e1d",
+      "profile_mode": "feedback_reference_geometry_hold_2",
+      "feedback_config_digest": "c4613bcc48a9b9c0c6216ffc12288a5855a2cf9bf05146d0d92376bb87b2a287"
+    },
+    "config_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+    "producer_epochs": [
+      {
+        "principal_id": "g2-fixture-reader",
+        "producer_id": "g2-fixture-reader",
+        "producer_epoch": "g2-fixture-reader-1"
+      },
+      {
+        "principal_id": "g2-fixture-worker",
+        "producer_id": "g2-fixture-worker",
+        "producer_epoch": "g2-fixture-worker-1"
+      }
+    ],
+    "actor_bindings": [],
+    "classifier_policy": {
+      "schema": "home-experience-classifier-policy-1",
+      "version": 1,
+      "id": "fictional-id",
+      "site_id": "echo",
+      "room_id": "living_room",
+      "session_id": "synthetic-book-1",
+      "domain_epoch": "synthetic-domain-1",
+      "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+      "policy_version": "fictional-policy_version",
+      "allowed_dimensions": [
+        "illumination_lux"
+      ],
+      "allowed_context_keys": [],
+      "illumination_lux_bounds": {
+        "min": 0,
+        "max": 1000
+      },
+      "max_feedback_age_s": 3,
+      "max_exposure_age_s": 3,
+      "max_exposure_span_s": 1,
+      "allow_modeled_candidates": false,
+      "issued_at": 0,
+      "effective_at": 0,
+      "available_at": 0,
+      "valid_until": 30
+    },
+    "write_authorities": [],
+    "registry": {
+      "site_id": "echo",
+      "room_id": "living_room",
+      "scene": {
+        "scene_kind": "synthetic",
+        "scene_ref": "synthetic:la-seed-v1",
+        "frame": "z_up_metric_floor0",
+        "dimensions_m": [
+          6.2,
+          5.6,
+          2.5
+        ],
+        "digest": "af581e083fcd53b6203c49dc851efb9bb9a64295ef53ac154842551fb746ec81"
+      },
+      "registration_generation": 0,
+      "fixtures": [
+        {
+          "id": "virtual-head-1",
+          "position_m": [
+            2.2,
+            2,
+            2.5
+          ],
+          "pan_min_deg": -180,
+          "pan_max_deg": 180,
+          "tilt_min_deg": 0,
+          "tilt_max_deg": 90
+        },
+        {
+          "id": "virtual-head-2",
+          "position_m": [
+            4.2,
+            2,
+            2.5
+          ],
+          "pan_min_deg": -180,
+          "pan_max_deg": 180,
+          "tilt_min_deg": 0,
+          "tilt_max_deg": 90
+        },
+        {
+          "id": "virtual-head-3",
+          "position_m": [
+            1.2,
+            4.2,
+            2.5
+          ],
+          "pan_min_deg": -180,
+          "pan_max_deg": 180,
+          "tilt_min_deg": 0,
+          "tilt_max_deg": 90
+        },
+        {
+          "id": "virtual-head-4",
+          "position_m": [
+            5,
+            4.2,
+            2.5
+          ],
+          "pan_min_deg": -180,
+          "pan_max_deg": 180,
+          "tilt_min_deg": 0,
+          "tilt_max_deg": 90
+        }
+      ],
+      "digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c"
+    },
+    "profile": {
+      "profile_ref": "synthetic-direct-gaussian-1",
+      "max_velocity_deg_s": 60,
+      "max_acceleration_deg_s2": 120,
+      "max_jerk_deg_s3": 480,
+      "settle_ms": 250,
+      "fade_out_ms": 200,
+      "fade_in_ms": 300,
+      "lumens": 800,
+      "fwhm_deg": 30,
+      "colour_temperature_k": 3500,
+      "geometry_max_age_s": 0.5,
+      "geometry_ttl_s": 1,
+      "lease_s": 2,
+      "deadband_m": 0.02,
+      "deadband_rad": 0.03490658503988659,
+      "coverage_fraction": 0.9,
+      "uncertainty_ensemble": {
+        "id": "scripted-joint-pages-ensemble-1",
+        "qualification": "scripted_mass_not_calibrated_confidence",
+        "samples": [
+          {
+            "translation_m": [
+              0,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.2
+          },
+          {
+            "translation_m": [
+              -0.008,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.075
+          },
+          {
+            "translation_m": [
+              0.008,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.075
+          },
+          {
+            "translation_m": [
+              0,
+              -0.008,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.075
+          },
+          {
+            "translation_m": [
+              0,
+              0.008,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.075
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              -0.008
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.075
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              0.008
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.075
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              -0.017453292519943295,
+              0,
+              0
+            ],
+            "weight": 0.05
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0.017453292519943295,
+              0,
+              0
+            ],
+            "weight": 0.05
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              -0.017453292519943295,
+              0
+            ],
+            "weight": 0.05
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0.017453292519943295,
+              0
+            ],
+            "weight": 0.05
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              -0.017453292519943295
+            ],
+            "weight": 0.05
+          },
+          {
+            "translation_m": [
+              0,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0.017453292519943295
+            ],
+            "weight": 0.05
+          },
+          {
+            "translation_m": [
+              -0.03,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.025
+          },
+          {
+            "translation_m": [
+              0.03,
+              0,
+              0
+            ],
+            "rotation_rad": [
+              0,
+              0,
+              0
+            ],
+            "weight": 0.025
+          }
+        ]
+      }
+    },
+    "worker_producer_id": "g2-fixture-worker",
+    "worker_producer_epoch": "g2-fixture-worker-1",
+    "runtime_epoch": "g2-helper-fixture-runtime-1",
+    "duration_s": 3,
+    "subjectBindings": [],
+    "revision_authorizations": [],
+    "source_origins": {}
+  },
+  "original_input_bodies": [],
+  "provenance": {
+    "fresh_G2_configuration": true,
+    "old_checkpoint_or_configuration_relabeling": false,
+    "unchanged_mathematical_scene_helpers_reused": true,
+    "simulated_only": true,
+    "service_authenticated": false,
+    "native_commissioned": false,
+    "actuated": false,
+    "acceptance_eligible": false,
+    "configured_operations": [
+      "read",
+      "worker_commit"
+    ],
+    "issuer_operations_granted": []
+  },
+  "prepared_request_examples": {
+    "bootstrap_commit": {
+      "schema": "home-context-worker-commit-9",
+      "version": 9,
+      "id": "feedback-commit:1",
+      "site_id": "echo",
+      "room_id": "living_room",
+      "session_id": "synthetic-book-1",
+      "domain_epoch": "synthetic-domain-1",
+      "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+      "runtime_epoch": "g2-helper-fixture-runtime-1",
+      "journal_epoch": "g2-helper-fixture-journal-1",
+      "kind": "bootstrap",
+      "expected_commit_seq": 0,
+      "expected_input_cursor": 0,
+      "expected_authority": {
+        "room": {
+          "motion_generation": 0,
+          "motion_allowed": false
+        },
+        "sources": [],
+        "registrations": [],
+        "follows": [],
+        "producers": [
+          {
+            "producer_id": "g2-fixture-reader",
+            "producer_epoch": "g2-fixture-reader-1",
+            "revocation_generation": 0,
+            "revoked": false
+          },
+          {
+            "producer_id": "g2-fixture-worker",
+            "producer_epoch": "g2-fixture-worker-1",
+            "revocation_generation": 0,
+            "revoked": false
+          }
+        ]
+      },
+      "input_cut": {
+        "schema": "home-control-input-cut-3",
+        "version": 3,
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "runtime_epoch": "g2-helper-fixture-runtime-1",
+        "journal_epoch": "g2-helper-fixture-journal-1",
+        "cut_id": "g2-helper-fixture-cut-0",
+        "input_cursor": 0,
+        "as_of_t": 0,
+        "receipts": [],
+        "eligible_refs": [],
+        "buffered_refs": [],
+        "authority": {
+          "room": {
+            "motion_generation": 0,
+            "motion_allowed": false
+          },
+          "sources": [],
+          "registrations": [],
+          "follows": [],
+          "producers": [
+            {
+              "producer_id": "g2-fixture-reader",
+              "producer_epoch": "g2-fixture-reader-1",
+              "revocation_generation": 0,
+              "revoked": false
+            },
+            {
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "revocation_generation": 0,
+              "revoked": false
+            }
+          ]
+        },
+        "complete": true,
+        "geometry_snapshot_digest": "883eacdc55008426039ec9ec32323d2a05f7c9b0ed726cfdd2edc50a82c1bbed",
+        "digest": "9841ff835522d53208cc1e4fb8c20ddbeb4f73027874bf7917574bb39f140bf9"
+      },
+      "checkpoint": {
+        "schema": "home-context-worker-checkpoint-9",
+        "version": 9,
+        "boundary_phase": "bootstrap",
+        "runtime_duration_s": 3,
+        "last_installed_t": null,
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "runtime_epoch": "g2-helper-fixture-runtime-1",
+        "journal_epoch": "g2-helper-fixture-journal-1",
+        "static_bindings_digest": "5ce8436a740469689b4cce18805683d1e95a2cea85feed66f9d9813896de45dd",
+        "config_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+        "interface_digest": "70b48eed3407511c88ca6b36e57f815d49bd1811cf97d84a62303d9df7abd0fb",
+        "commit_seq": 1,
+        "semantic_seq": -1,
+        "control_seq": 0,
+        "input_cursor": 0,
+        "last_t": 0,
+        "authority": {
+          "room": {
+            "motion_generation": 0,
+            "motion_allowed": false
+          },
+          "sources": [],
+          "registrations": [],
+          "follows": [],
+          "producers": [
+            {
+              "producer_id": "g2-fixture-reader",
+              "producer_epoch": "g2-fixture-reader-1",
+              "revocation_generation": 0,
+              "revoked": false
+            },
+            {
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "revocation_generation": 0,
+              "revoked": false
+            }
+          ]
+        },
+        "reducer": {
+          "last_t": null,
+          "semantic_seq": -1,
+          "roots": [],
+          "relations": []
+        },
+        "pipeline": null,
+        "pending_inputs": [],
+        "geometry_inputs": [],
+        "retained_inputs": [],
+        "committed_output_inputs": [],
+        "facts": [],
+        "intents": [],
+        "control_keyframe": {
+          "accepted": null,
+          "pending": null
+        },
+        "intent_authority_bindings": [],
+        "receipts": [],
+        "revisions": {
+          "identity": {
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1"
+          },
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "maximum_rows": 96,
+          "rows": []
+        },
+        "goal_heads": [],
+        "goal_revision_count": 0,
+        "reservations": [],
+        "dependency_receipts": [],
+        "referenced_outputs": [],
+        "feedback_terminals": [],
+        "pending_installed": null,
+        "acknowledged_installed": null,
+        "next_semantic_t": 0,
+        "next_control_t": 0.2,
+        "execution_mode": "simulation_only",
+        "actuated": false,
+        "acceptance_eligible": false,
+        "physical_safety_validated": false
+      },
+      "outputs": []
+    },
+    "semantic0_commit": {
+      "schema": "home-context-worker-commit-9",
+      "version": 9,
+      "id": "feedback-commit:2",
+      "site_id": "echo",
+      "room_id": "living_room",
+      "session_id": "synthetic-book-1",
+      "domain_epoch": "synthetic-domain-1",
+      "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+      "runtime_epoch": "g2-helper-fixture-runtime-1",
+      "journal_epoch": "g2-helper-fixture-journal-1",
+      "kind": "semantic",
+      "expected_commit_seq": 1,
+      "expected_input_cursor": 0,
+      "expected_authority": {
+        "room": {
+          "motion_generation": 0,
+          "motion_allowed": false
+        },
+        "sources": [],
+        "registrations": [],
+        "follows": [],
+        "producers": [
+          {
+            "producer_id": "g2-fixture-reader",
+            "producer_epoch": "g2-fixture-reader-1",
+            "revocation_generation": 0,
+            "revoked": false
+          },
+          {
+            "producer_id": "g2-fixture-worker",
+            "producer_epoch": "g2-fixture-worker-1",
+            "revocation_generation": 0,
+            "revoked": false
+          }
+        ]
+      },
+      "input_cut": {
+        "schema": "home-control-input-cut-3",
+        "version": 3,
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "runtime_epoch": "g2-helper-fixture-runtime-1",
+        "journal_epoch": "g2-helper-fixture-journal-1",
+        "cut_id": "g2-helper-fixture-cut-0",
+        "input_cursor": 0,
+        "as_of_t": 0,
+        "receipts": [],
+        "eligible_refs": [],
+        "buffered_refs": [],
+        "authority": {
+          "room": {
+            "motion_generation": 0,
+            "motion_allowed": false
+          },
+          "sources": [],
+          "registrations": [],
+          "follows": [],
+          "producers": [
+            {
+              "producer_id": "g2-fixture-reader",
+              "producer_epoch": "g2-fixture-reader-1",
+              "revocation_generation": 0,
+              "revoked": false
+            },
+            {
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "revocation_generation": 0,
+              "revoked": false
+            }
+          ]
+        },
+        "complete": true,
+        "geometry_snapshot_digest": "883eacdc55008426039ec9ec32323d2a05f7c9b0ed726cfdd2edc50a82c1bbed",
+        "digest": "9841ff835522d53208cc1e4fb8c20ddbeb4f73027874bf7917574bb39f140bf9"
+      },
+      "checkpoint": {
+        "schema": "home-context-worker-checkpoint-9",
+        "version": 9,
+        "boundary_phase": "ready",
+        "runtime_duration_s": 3,
+        "last_installed_t": 0,
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "runtime_epoch": "g2-helper-fixture-runtime-1",
+        "journal_epoch": "g2-helper-fixture-journal-1",
+        "static_bindings_digest": "5ce8436a740469689b4cce18805683d1e95a2cea85feed66f9d9813896de45dd",
+        "config_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+        "interface_digest": "70b48eed3407511c88ca6b36e57f815d49bd1811cf97d84a62303d9df7abd0fb",
+        "commit_seq": 2,
+        "semantic_seq": 0,
+        "control_seq": 0,
+        "input_cursor": 0,
+        "last_t": 0,
+        "authority": {
+          "room": {
+            "motion_generation": 0,
+            "motion_allowed": false
+          },
+          "sources": [],
+          "registrations": [],
+          "follows": [],
+          "producers": [
+            {
+              "producer_id": "g2-fixture-reader",
+              "producer_epoch": "g2-fixture-reader-1",
+              "revocation_generation": 0,
+              "revoked": false
+            },
+            {
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "revocation_generation": 0,
+              "revoked": false
+            }
+          ]
+        },
+        "reducer": {
+          "last_t": 0,
+          "semantic_seq": 0,
+          "roots": [],
+          "relations": []
+        },
+        "pipeline": {
+          "t": 0,
+          "commands": [
+            {
+              "fixture_id": "virtual-head-1",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "initial_dark"
+            },
+            {
+              "fixture_id": "virtual-head-2",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "initial_dark"
+            },
+            {
+              "fixture_id": "virtual-head-3",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "initial_dark"
+            },
+            {
+              "fixture_id": "virtual-head-4",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "initial_dark"
+            }
+          ],
+          "policy": {
+            "schema": "home-lighting-policy-decision-3",
+            "version": 3,
+            "id": "feedback-policy:0",
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1",
+            "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+            "t": 0,
+            "semantic_seq": 0,
+            "requests": [],
+            "dispositions": [],
+            "intent_results": [],
+            "consumed_refs": [
+              {
+                "component_id": "config:454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+                "component_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+                "publication_ref": null
+              }
+            ],
+            "execution_mode": "simulation_only",
+            "actuated": false,
+            "acceptance_eligible": false,
+            "physical_safety_validated": false
+          },
+          "leases": [],
+          "frozen_heads": [],
+          "intent_ids": [],
+          "intents": [],
+          "intent_outcomes": [],
+          "fixtures": [
+            {
+              "id": "virtual-head-1",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            },
+            {
+              "id": "virtual-head-2",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            },
+            {
+              "id": "virtual-head-3",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            },
+            {
+              "id": "virtual-head-4",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            }
+          ],
+          "config_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+          "exposure_context": null,
+          "reservations": [],
+          "feedback_exposure": {
+            "held_context": null,
+            "acknowledged_boundaries": [],
+            "completed_intervals": []
+          }
+        },
+        "pending_inputs": [],
+        "geometry_inputs": [],
+        "retained_inputs": [],
+        "committed_output_inputs": [],
+        "facts": [],
+        "intents": [],
+        "control_keyframe": {
+          "accepted": null,
+          "pending": null
+        },
+        "intent_authority_bindings": [],
+        "receipts": [],
+        "revisions": {
+          "identity": {
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1"
+          },
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "maximum_rows": 96,
+          "rows": []
+        },
+        "goal_heads": [],
+        "goal_revision_count": 0,
+        "reservations": [],
+        "dependency_receipts": [],
+        "referenced_outputs": [],
+        "feedback_terminals": [],
+        "pending_installed": {
+          "commit_id": "feedback-commit:2",
+          "control_seq": 0,
+          "payload_type": "home-lighting-installed-boundary-1",
+          "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+        },
+        "acknowledged_installed": null,
+        "next_semantic_t": 1,
+        "next_control_t": 0.2,
+        "execution_mode": "simulation_only",
+        "actuated": false,
+        "acceptance_eligible": false,
+        "physical_safety_validated": false
+      },
+      "outputs": [
+        {
+          "schema": "home-engagement-state-4",
+          "version": 4,
+          "id": "engagement:0",
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "t": 0,
+          "semantic_seq": 0,
+          "relations": [],
+          "source_status": "unknown",
+          "execution_mode": "simulation_only",
+          "actuated": false,
+          "acceptance_eligible": false,
+          "physical_safety_validated": false
+        },
+        {
+          "schema": "home-lighting-policy-decision-3",
+          "version": 3,
+          "id": "feedback-policy:0",
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "t": 0,
+          "semantic_seq": 0,
+          "requests": [],
+          "dispositions": [],
+          "intent_results": [],
+          "consumed_refs": [
+            {
+              "component_id": "config:454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+              "component_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+              "publication_ref": null
+            }
+          ],
+          "execution_mode": "simulation_only",
+          "actuated": false,
+          "acceptance_eligible": false,
+          "physical_safety_validated": false
+        },
+        {
+          "schema": "home-lighting-settled-exposure-1",
+          "version": 1,
+          "id": "settled-exposure:0",
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "t": 0,
+          "semantic_seq": 0,
+          "from_t": null,
+          "until": null,
+          "status": "unavailable",
+          "reason": "complete_fixed_past_window_unavailable",
+          "exposures": [],
+          "available_at": 0,
+          "valid_until": 120,
+          "assessment_kind": "modeled",
+          "comfort_status": "unknown",
+          "execution_mode": "simulation_only",
+          "actuated": false,
+          "acceptance_eligible": false,
+          "physical_safety_validated": false
+        },
+        {
+          "schema": "home-lighting-installed-boundary-1",
+          "version": 1,
+          "id": "installed-boundary:0",
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "t": 0,
+          "installed_state": {
+            "t": 0,
+            "control_seq": 0,
+            "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+            "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+            "commands": [
+              {
+                "fixture_id": "virtual-head-1",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "initial_dark"
+              },
+              {
+                "fixture_id": "virtual-head-2",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "initial_dark"
+              },
+              {
+                "fixture_id": "virtual-head-3",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "initial_dark"
+              },
+              {
+                "fixture_id": "virtual-head-4",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "initial_dark"
+              }
+            ],
+            "fixtures": [
+              {
+                "id": "virtual-head-1",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              },
+              {
+                "id": "virtual-head-2",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              },
+              {
+                "id": "virtual-head-3",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              },
+              {
+                "id": "virtual-head-4",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              }
+            ],
+            "digest": "e7cc4d603b0c1ac90144528e6507a3a108d59212e4859c6604ef9cee4a21033d"
+          },
+          "input_cut_digest": "9841ff835522d53208cc1e4fb8c20ddbeb4f73027874bf7917574bb39f140bf9",
+          "execution_mode": "simulation_only",
+          "actuated": false,
+          "acceptance_eligible": false,
+          "physical_safety_validated": false
+        }
+      ]
+    },
+    "control_point2_commit": {
+      "schema": "home-context-worker-commit-9",
+      "version": 9,
+      "id": "feedback-commit:3",
+      "site_id": "echo",
+      "room_id": "living_room",
+      "session_id": "synthetic-book-1",
+      "domain_epoch": "synthetic-domain-1",
+      "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+      "runtime_epoch": "g2-helper-fixture-runtime-1",
+      "journal_epoch": "g2-helper-fixture-journal-1",
+      "kind": "control",
+      "expected_commit_seq": 2,
+      "expected_input_cursor": 0,
+      "expected_authority": {
+        "room": {
+          "motion_generation": 0,
+          "motion_allowed": false
+        },
+        "sources": [],
+        "registrations": [],
+        "follows": [],
+        "producers": [
+          {
+            "producer_id": "g2-fixture-reader",
+            "producer_epoch": "g2-fixture-reader-1",
+            "revocation_generation": 0,
+            "revoked": false
+          },
+          {
+            "producer_id": "g2-fixture-worker",
+            "producer_epoch": "g2-fixture-worker-1",
+            "revocation_generation": 0,
+            "revoked": false
+          }
+        ]
+      },
+      "input_cut": {
+        "schema": "home-control-input-cut-3",
+        "version": 3,
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "runtime_epoch": "g2-helper-fixture-runtime-1",
+        "journal_epoch": "g2-helper-fixture-journal-1",
+        "cut_id": "g2-helper-fixture-cut-0.2",
+        "input_cursor": 4,
+        "as_of_t": 0.2,
+        "receipts": [
+          {
+            "ref": {
+              "journal_epoch": "g2-helper-fixture-journal-1",
+              "cursor": 4,
+              "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05
+          }
+        ],
+        "eligible_refs": [
+          {
+            "journal_epoch": "g2-helper-fixture-journal-1",
+            "cursor": 4,
+            "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+          }
+        ],
+        "buffered_refs": [],
+        "authority": {
+          "room": {
+            "motion_generation": 0,
+            "motion_allowed": false
+          },
+          "sources": [],
+          "registrations": [],
+          "follows": [],
+          "producers": [
+            {
+              "producer_id": "g2-fixture-reader",
+              "producer_epoch": "g2-fixture-reader-1",
+              "revocation_generation": 0,
+              "revoked": false
+            },
+            {
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "revocation_generation": 0,
+              "revoked": false
+            }
+          ]
+        },
+        "complete": true,
+        "geometry_snapshot_digest": "fb2fb23d1c16bb23766e360599bc739536952c02a0f059db73eb867b3990b5b1",
+        "digest": "98d13ebd4810505d9d657b01d7bb3645040a87b9dcb02a9cf953ae5f7e3e7707"
+      },
+      "checkpoint": {
+        "schema": "home-context-worker-checkpoint-9",
+        "version": 9,
+        "boundary_phase": "ready",
+        "runtime_duration_s": 3,
+        "last_installed_t": 0.2,
+        "site_id": "echo",
+        "room_id": "living_room",
+        "session_id": "synthetic-book-1",
+        "domain_epoch": "synthetic-domain-1",
+        "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+        "runtime_epoch": "g2-helper-fixture-runtime-1",
+        "journal_epoch": "g2-helper-fixture-journal-1",
+        "static_bindings_digest": "5ce8436a740469689b4cce18805683d1e95a2cea85feed66f9d9813896de45dd",
+        "config_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+        "interface_digest": "70b48eed3407511c88ca6b36e57f815d49bd1811cf97d84a62303d9df7abd0fb",
+        "commit_seq": 3,
+        "semantic_seq": 0,
+        "control_seq": 1,
+        "input_cursor": 4,
+        "last_t": 0.2,
+        "authority": {
+          "room": {
+            "motion_generation": 0,
+            "motion_allowed": false
+          },
+          "sources": [],
+          "registrations": [],
+          "follows": [],
+          "producers": [
+            {
+              "producer_id": "g2-fixture-reader",
+              "producer_epoch": "g2-fixture-reader-1",
+              "revocation_generation": 0,
+              "revoked": false
+            },
+            {
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "revocation_generation": 0,
+              "revoked": false
+            }
+          ]
+        },
+        "reducer": {
+          "last_t": 0,
+          "semantic_seq": 0,
+          "roots": [],
+          "relations": []
+        },
+        "pipeline": {
+          "t": 0.2,
+          "commands": [
+            {
+              "fixture_id": "virtual-head-1",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "bounded_authority_or_certificate_cancellation"
+            },
+            {
+              "fixture_id": "virtual-head-2",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "bounded_authority_or_certificate_cancellation"
+            },
+            {
+              "fixture_id": "virtual-head-3",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "bounded_authority_or_certificate_cancellation"
+            },
+            {
+              "fixture_id": "virtual-head-4",
+              "target_id": null,
+              "pan_deg": 0,
+              "tilt_deg": 0,
+              "level": 0,
+              "reason": "bounded_authority_or_certificate_cancellation"
+            }
+          ],
+          "policy": {
+            "schema": "home-lighting-policy-decision-3",
+            "version": 3,
+            "id": "feedback-policy:0",
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1",
+            "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+            "t": 0,
+            "semantic_seq": 0,
+            "requests": [],
+            "dispositions": [],
+            "intent_results": [],
+            "consumed_refs": [
+              {
+                "component_id": "config:454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+                "component_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+                "publication_ref": null
+              }
+            ],
+            "execution_mode": "simulation_only",
+            "actuated": false,
+            "acceptance_eligible": false,
+            "physical_safety_validated": false
+          },
+          "leases": [],
+          "frozen_heads": [],
+          "intent_ids": [],
+          "intents": [],
+          "intent_outcomes": [],
+          "fixtures": [
+            {
+              "id": "virtual-head-1",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            },
+            {
+              "id": "virtual-head-2",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            },
+            {
+              "id": "virtual-head-3",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            },
+            {
+              "id": "virtual-head-4",
+              "pan": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "tilt": {
+                "position": 0,
+                "velocity": 0,
+                "acceleration": 0
+              },
+              "level": 0,
+              "target_id": null,
+              "settle_until": 0,
+              "phase": "idle",
+              "motion": null,
+              "fade": null
+            }
+          ],
+          "config_digest": "454f8af49e04a31fa3cd9ee2287663221f0c9442129397f199107fb8f01c5549",
+          "exposure_context": {
+            "representation": "held_context_projection_1",
+            "digest": "635b308e269b5a92cc224c30282b8ceaaa2e543462eb421a1056919e2e4d07fe"
+          },
+          "reservations": [],
+          "feedback_exposure": {
+            "held_context": {
+              "installed_at": 0.2,
+              "requests": [],
+              "targets": [],
+              "environment_heads": [],
+              "support_bounds": [],
+              "qualification_rows": [],
+              "installation_rows": []
+            },
+            "acknowledged_boundaries": [
+              {
+                "original_ref": {
+                  "publication_ref": {
+                    "journal_epoch": "g2-helper-fixture-journal-1",
+                    "cursor": 4,
+                    "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+                  },
+                  "publication_id": "installed-boundary:0",
+                  "producer_id": "g2-fixture-worker",
+                  "producer_epoch": "g2-fixture-worker-1",
+                  "payload_type": "home-lighting-installed-boundary-1",
+                  "payload_version": "1.0",
+                  "component": null
+                },
+                "installed_state_digest": "e7cc4d603b0c1ac90144528e6507a3a108d59212e4859c6604ef9cee4a21033d",
+                "t": 0,
+                "control_seq": 0,
+                "first_received_at": 0.05
+              }
+            ],
+            "completed_intervals": []
+          }
+        },
+        "pending_inputs": [],
+        "geometry_inputs": [],
+        "retained_inputs": [],
+        "committed_output_inputs": [],
+        "facts": [],
+        "intents": [],
+        "control_keyframe": {
+          "accepted": null,
+          "pending": {
+            "commit_id": "feedback-commit:3",
+            "control_seq": 1,
+            "semantic_seq": 0,
+            "t": 0.2,
+            "payload_digest": "58ed3296b964098ae926118979272f15ba897ed0aa597c019e167510f0047717"
+          }
+        },
+        "intent_authority_bindings": [],
+        "receipts": [
+          {
+            "ref": {
+              "journal_epoch": "g2-helper-fixture-journal-1",
+              "cursor": 4,
+              "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05
+          }
+        ],
+        "revisions": {
+          "identity": {
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1"
+          },
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "maximum_rows": 96,
+          "rows": []
+        },
+        "goal_heads": [],
+        "goal_revision_count": 0,
+        "reservations": [],
+        "dependency_receipts": [
+          {
+            "source_ref": {
+              "publication_ref": {
+                "journal_epoch": "g2-helper-fixture-journal-1",
+                "cursor": 2,
+                "payload_digest": "356980a21f35741c622b3840cb9b7f950c0576330246e42724baa871520fe867"
+              },
+              "publication_id": "feedback-policy:0",
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "payload_type": "home-lighting-policy-decision-3",
+              "payload_version": "3.0",
+              "component": null
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05,
+            "digest": "4986ace84c63ff209dcdecb0b2a98b10c71fd21a1ddfec6adb5c0fa37948de7e"
+          },
+          {
+            "source_ref": {
+              "publication_ref": {
+                "journal_epoch": "g2-helper-fixture-journal-1",
+                "cursor": 3,
+                "payload_digest": "0ca60e034066004ac96f607fc0e3e90fec63c9e7a421b417dee62e1241820cc6"
+              },
+              "publication_id": "settled-exposure:0",
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "payload_type": "home-lighting-settled-exposure-1",
+              "payload_version": "1.0",
+              "component": null
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05,
+            "digest": "b532babdd7d85711f1d3131ec675b24e4a9beebe8d39a7b7fc6076cecd250f89"
+          },
+          {
+            "source_ref": {
+              "publication_ref": {
+                "journal_epoch": "g2-helper-fixture-journal-1",
+                "cursor": 4,
+                "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+              },
+              "publication_id": "installed-boundary:0",
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "payload_type": "home-lighting-installed-boundary-1",
+              "payload_version": "1.0",
+              "component": null
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05,
+            "digest": "678155d7d1005cf06e8ed936152f1d846ee6329caa30710383685f502936d4b8"
+          }
+        ],
+        "referenced_outputs": [
+          {
+            "source_ref": {
+              "publication_ref": {
+                "journal_epoch": "g2-helper-fixture-journal-1",
+                "cursor": 2,
+                "payload_digest": "356980a21f35741c622b3840cb9b7f950c0576330246e42724baa871520fe867"
+              },
+              "publication_id": "feedback-policy:0",
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "payload_type": "home-lighting-policy-decision-3",
+              "payload_version": "3.0",
+              "component": null
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05,
+            "digest": "4986ace84c63ff209dcdecb0b2a98b10c71fd21a1ddfec6adb5c0fa37948de7e"
+          },
+          {
+            "source_ref": {
+              "publication_ref": {
+                "journal_epoch": "g2-helper-fixture-journal-1",
+                "cursor": 3,
+                "payload_digest": "0ca60e034066004ac96f607fc0e3e90fec63c9e7a421b417dee62e1241820cc6"
+              },
+              "publication_id": "settled-exposure:0",
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "payload_type": "home-lighting-settled-exposure-1",
+              "payload_version": "1.0",
+              "component": null
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05,
+            "digest": "b532babdd7d85711f1d3131ec675b24e4a9beebe8d39a7b7fc6076cecd250f89"
+          },
+          {
+            "source_ref": {
+              "publication_ref": {
+                "journal_epoch": "g2-helper-fixture-journal-1",
+                "cursor": 4,
+                "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+              },
+              "publication_id": "installed-boundary:0",
+              "producer_id": "g2-fixture-worker",
+              "producer_epoch": "g2-fixture-worker-1",
+              "payload_type": "home-lighting-installed-boundary-1",
+              "payload_version": "1.0",
+              "component": null
+            },
+            "received_at": 0.05,
+            "eligible_at": 0.05,
+            "digest": "678155d7d1005cf06e8ed936152f1d846ee6329caa30710383685f502936d4b8"
+          }
+        ],
+        "feedback_terminals": [],
+        "pending_installed": {
+          "commit_id": "feedback-commit:3",
+          "control_seq": 1,
+          "payload_type": "home-lighting-control-decision-3",
+          "payload_digest": "58ed3296b964098ae926118979272f15ba897ed0aa597c019e167510f0047717"
+        },
+        "acknowledged_installed": {
+          "frontier": {
+            "commit_id": "feedback-commit:2",
+            "control_seq": 0,
+            "payload_type": "home-lighting-installed-boundary-1",
+            "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+          },
+          "source_ref": {
+            "publication_ref": {
+              "journal_epoch": "g2-helper-fixture-journal-1",
+              "cursor": 4,
+              "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+            },
+            "publication_id": "installed-boundary:0",
+            "producer_id": "g2-fixture-worker",
+            "producer_epoch": "g2-fixture-worker-1",
+            "payload_type": "home-lighting-installed-boundary-1",
+            "payload_version": "1.0",
+            "component": null
+          },
+          "received_at": 0.05,
+          "eligible_at": 0.05
+        },
+        "next_semantic_t": 1,
+        "next_control_t": 0.4,
+        "execution_mode": "simulation_only",
+        "actuated": false,
+        "acceptance_eligible": false,
+        "physical_safety_validated": false
+      },
+      "outputs": [
+        {
+          "schema": "home-lighting-control-decision-3",
+          "version": 3,
+          "id": "feedback-control:1",
+          "site_id": "echo",
+          "room_id": "living_room",
+          "session_id": "synthetic-book-1",
+          "domain_epoch": "synthetic-domain-1",
+          "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+          "t": 0.2,
+          "semantic_seq": 0,
+          "control_seq": 1,
+          "input_cut_digest": "98d13ebd4810505d9d657b01d7bb3645040a87b9dcb02a9cf953ae5f7e3e7707",
+          "geometry_snapshot": {
+            "schema": "home-dynamic-geometry-snapshot-3",
+            "version": 3,
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1",
+            "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+            "as_of_t": 0.2,
+            "journal_epoch": "g2-helper-fixture-journal-1",
+            "input_cursor": 4,
+            "authority": {
+              "room": {
+                "motion_generation": 0,
+                "motion_allowed": false
+              },
+              "sources": [],
+              "registrations": [],
+              "follows": [],
+              "producers": [
+                {
+                  "producer_id": "g2-fixture-reader",
+                  "producer_epoch": "g2-fixture-reader-1",
+                  "revocation_generation": 0,
+                  "revoked": false
+                },
+                {
+                  "producer_id": "g2-fixture-worker",
+                  "producer_epoch": "g2-fixture-worker-1",
+                  "revocation_generation": 0,
+                  "revoked": false
+                }
+              ]
+            },
+            "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+            "object_heads": [],
+            "surface_heads": [],
+            "digest": "fb2fb23d1c16bb23766e360599bc739536952c02a0f059db73eb867b3990b5b1"
+          },
+          "allocation": {
+            "schema": "home-lighting-allocation-4",
+            "version": 4,
+            "id": "allocation:1",
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1",
+            "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+            "t": 0.2,
+            "control_seq": 1,
+            "targets": [],
+            "commands": [
+              {
+                "fixture_id": "virtual-head-1",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              },
+              {
+                "fixture_id": "virtual-head-2",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              },
+              {
+                "fixture_id": "virtual-head-3",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              },
+              {
+                "fixture_id": "virtual-head-4",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              }
+            ],
+            "assessments": [],
+            "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+            "status": "lamps_off",
+            "work": {
+              "assignments": 0,
+              "search_cell_visits": 0,
+              "motion_calls": 0,
+              "preview_fixture_ticks": 0,
+              "certificate_cell_visits": 0,
+              "head_light_terms": 0
+            },
+            "execution_mode": "simulation_only",
+            "actuated": false,
+            "acceptance_eligible": false,
+            "physical_safety_validated": false
+          },
+          "execution": {
+            "schema": "home-lighting-execution-3",
+            "version": 3,
+            "id": "execution:1",
+            "site_id": "echo",
+            "room_id": "living_room",
+            "session_id": "synthetic-book-1",
+            "domain_epoch": "synthetic-domain-1",
+            "from_t": 0,
+            "t": 0.2,
+            "control_seq": 1,
+            "samples": [
+              {
+                "t": 0.02,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.04,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.06,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.08,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.1,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.12,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.14,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.16,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.18,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              },
+              {
+                "t": 0.2,
+                "states": [
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "idle",
+                    -1
+                  ]
+                ]
+              }
+            ],
+            "boundary_state": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                "idle",
+                -1
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                "idle",
+                -1
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                "idle",
+                -1
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                "idle",
+                -1
+              ]
+            ],
+            "execution_mode": "simulation_only",
+            "actuated": false,
+            "acceptance_eligible": false,
+            "physical_safety_validated": false,
+            "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+            "sample_format": "kinematic-tuples-1",
+            "fixture_ids": [
+              "virtual-head-1",
+              "virtual-head-2",
+              "virtual-head-3",
+              "virtual-head-4"
+            ],
+            "target_ids": []
+          },
+          "installed_state": {
+            "t": 0.2,
+            "control_seq": 1,
+            "registry_digest": "c0554d262542bd4dfbd25d88155325f70bd9f21cfa7ff3c5d6b4435d85a1aa2c",
+            "clock_profile_digest": "49f16d1ba2e2faf567d361e6ca18464cfc5277fa3fc2924bf82f522ecd4329e4",
+            "commands": [
+              {
+                "fixture_id": "virtual-head-1",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              },
+              {
+                "fixture_id": "virtual-head-2",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              },
+              {
+                "fixture_id": "virtual-head-3",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              },
+              {
+                "fixture_id": "virtual-head-4",
+                "target_id": null,
+                "pan_deg": 0,
+                "tilt_deg": 0,
+                "level": 0,
+                "reason": "bounded_authority_or_certificate_cancellation"
+              }
+            ],
+            "fixtures": [
+              {
+                "id": "virtual-head-1",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              },
+              {
+                "id": "virtual-head-2",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              },
+              {
+                "id": "virtual-head-3",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              },
+              {
+                "id": "virtual-head-4",
+                "pan": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "tilt": {
+                  "position": 0,
+                  "velocity": 0,
+                  "acceleration": 0
+                },
+                "level": 0,
+                "target_id": null,
+                "settle_until": 0,
+                "phase": "idle",
+                "motion": null,
+                "fade": null
+              }
+            ],
+            "digest": "5b37e516cc02dd6edf2c8030bebfcadb540bae03e4198a871d6746e7e15f856f"
+          },
+          "interval_proof": {
+            "from_t": 0,
+            "t": 0.2,
+            "start_original_ref": {
+              "journal_epoch": "g2-helper-fixture-journal-1",
+              "cursor": 4,
+              "payload_digest": "5382688c3d3dd01d3171be86e74693afae9019a189a85fec4775940f9caf19a5"
+            },
+            "start_installed_digest": "e7cc4d603b0c1ac90144528e6507a3a108d59212e4859c6604ef9cee4a21033d",
+            "execution_sample_digest": "2a42acbc4769517c13eb177e62a5fd2dcb73f67d2ae621847b799d78af19b276",
+            "assessments": []
+          },
+          "interval_exposures": [],
+          "consumed_refs": [],
+          "execution_mode": "simulation_only",
+          "actuated": false,
+          "acceptance_eligible": false,
+          "physical_safety_validated": false
+        }
+      ]
+    },
+    "provenance": {
+      "purpose": "fresh Worker2 prepared request examples only",
+      "cut_and_ack_metadata_are_illustrative": true,
+      "service_accepted": false,
+      "genuine_consumer_or_worker_FIRST": false,
+      "admission_or_capacity_proof": false
+    }
+  }
+}

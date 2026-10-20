@@ -1,0 +1,42 @@
+{
+  "schema": "den-ops-monitor-1",
+  "_note": "LA AI host. Copy to a private path and replace every <placeholder>. This host senses and alerts; the Jetson monitor acts on the activity loop. The thresholds are the existing LA limits (README: Limits).",
+  "host": "la-host",
+  "role": "la",
+  "policy": {"escalate_checks": 2, "recover_after_s": 600, "fault_hold_s": 1800},
+  "sources": {
+    "thermal_zones": {"root": "/sys/class/thermal", "exclude_types": []},
+    "hwmon": {"root": "/sys/class/hwmon"},
+    "meminfo": "/proc/meminfo",
+    "nvidia_smi": true,
+    "tegrastats": false,
+    "disks": {"root": "/"},
+    "failed_units": {"scopes": ["system"], "baseline": "<private dir>/failed-units-baseline.json"},
+    "faults": {"baseline": "<private dir>/fault-baseline.json", "levels": {}}
+  },
+  "rules": [
+    {"id": "gpu.temp", "signal": "gpu.temp_c", "op": ">=", "levels": [74, 77, 79], "clear_margin": 4, "label": "GPU", "unit": "°C"},
+    {"id": "cpu.tctl", "signal": "temp.hwmon.k10temp.tctl", "op": ">=", "levels": [85, 88, 90], "clear_margin": 5, "label": "CPU Tctl", "unit": "°C"},
+    {"id": "cpu.tccd", "signal": "temp.hwmon.k10temp.tccd*", "op": ">=", "levels": [84, 86, 88], "clear_margin": 5, "label": "CPU Tccd", "unit": "°C"},
+    {"id": "nvme.temp", "signal": "temp.hwmon.nvme.composite", "op": ">=", "levels": [65, 70, 75], "clear_margin": 5, "label": "NVMe", "unit": "°C"},
+    {"id": "mem.available", "signal": "mem.available_mib", "op": "<=", "levels": [12288, 10240, 8192], "clear_margin": 1024, "label": "RAM available", "unit": " MiB"},
+    {"id": "swap.used", "signal": "swap.used_pct", "op": ">=", "levels": [25, 50, 75], "clear_margin": 10, "label": "Swap used", "unit": "%"},
+    {"id": "gpu.mem_free", "signal": "gpu.mem_free_mib", "op": "<=", "levels": [16384, 12288, 8192], "clear_margin": 2048, "label": "GPU memory free", "unit": " MiB"},
+    {"id": "disk.root", "signal": "disk.root.free_gib", "op": "<=", "levels": [100, 75, 50], "clear_margin": 10, "label": "Disk free", "unit": " GiB"}
+  ],
+  "loop": null,
+  "cadence": null,
+  "remote": null,
+  "gateway": {
+    "status_url": "http://127.0.0.1:5181/api/den-ops/v1/hosts/la-host/status",
+    "token_file": "<private dir>/den-ops-monitor.token",
+    "ca_file": null
+  },
+  "home_assistant": {
+    "url": "https://<victoria home assistant>",
+    "notify_service": "persistent_notification",
+    "token_file": "<private dir>/ha-notify.token",
+    "ca_file": null,
+    "min_interval_s": 900
+  }
+}

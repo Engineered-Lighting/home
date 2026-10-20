@@ -521,6 +521,19 @@ async function main() {
   wsWeb.D.openTracks({ onTracks: () => {} });
   assert("openTracks maps web tracker default to same-origin wss", wsWeb.sockets[0].url === "wss://home.tailnet.ts.net/proxy/tracker/ws/tracks", wsWeb.sockets[0].url);
 
+  // APT-S02: the switcher's per-home unsaved marks read parked dirty
+  // workspaces as site ids only, within the current authority.
+  const P = loadModule().D;
+  assert("dirtySites is empty before any parked work", JSON.stringify(P.dirtySites()) === "[]", P.dirtySites());
+  P.captureWorkspace({ siteId: "echo", authorityKey: "authored-a" }, { model: { site: "echo", devices: [] }, dirty: true });
+  P.captureWorkspace({ siteId: "victoria", authorityKey: "authored-a" }, { model: null, dirty: true });
+  assert("dirtySites names a home with parked unsaved work", JSON.stringify(P.dirtySites()) === '["echo"]', P.dirtySites());
+  P.captureWorkspace({ siteId: "echo", authorityKey: "authored-a" }, { model: { site: "echo", devices: [] }, dirty: false });
+  assert("a clean parked workspace drops the mark", JSON.stringify(P.dirtySites()) === "[]", P.dirtySites());
+  P.captureWorkspace({ siteId: "echo", authorityKey: "authored-a" }, { model: { site: "echo", devices: [] }, dirty: true });
+  P.setWorkspaceAuthority("authored-b");
+  assert("a new authority clears every mark", JSON.stringify(P.dirtySites()) === "[]", P.dirtySites());
+
   if (fails) {
     console.log("\nFailures:");
     for (const f of failures) console.log("- " + f.name + (f.detail ? ": " + JSON.stringify(f.detail) : ""));

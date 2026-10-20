@@ -1,0 +1,72 @@
+# Qwen3.6-35B-A3B-FP8 trial override for the vllm service.
+#
+# Layer it on the base compose file; everything not named here (image,
+# volumes, security policy, healthcheck) comes from the base service:
+#   docker compose -f docker-compose.yml -f vllm/qwen3.6-35b-a3b.override.yml up -d --no-deps vllm
+# Roll back by recreating from the base file alone:
+#   docker compose up -d --no-deps vllm
+# Procedure, gates and outage notes: docs/VLLM-QWEN36-SWAP.md.
+#
+# Requires vLLM >= 0.19 (the pinned base image is 0.20.2) and the pinned
+# revision already in the hf_cache volume: HF_HUB_OFFLINE stops a cold start
+# from fetching anything.
+services:
+  vllm:
+    environment:
+      HF_HUB_OFFLINE: "1"
+    # Production runs a read-only rootfs with JIT caches on tmpfs. The Gated
+    # DeltaNet layers add Triton kernels, so /tmp gets 4g instead of 2g; the
+    # other mounts repeat the production list because !override replaces it.
+    tmpfs: !override
+      - /tmp:size=4g,mode=1777,exec
+      - /root/.nv:size=256m,exec
+      - /root/.cache/flashinfer:size=2g,exec
+      - /root/.config:size=16m
+      - /root/.triton:size=1g,exec
+    command: !override
+      - --model
+      - Qwen/Qwen3.6-35B-A3B-FP8
+      - --revision
+      - 95a723d08a9490559dae23d0cff1d9466213d989
+      # Clients (HA bridge, vision sidecar, intelligence, supervisor and the
+      # perception-lab live facts) all ask for qwen3-vl-30b, and the live
+      # facts reject replies whose `model` differs. Keep it first so
+      # /v1/models data[0] still matches EXPECTED_VLLM_MODEL.
+      - --served-model-name
+      - qwen3-vl-30b
+      - qwen3.6-35b-a3b
+      - --max-model-len
+      - "32768"
+      # FP8 weights are ~37.5 GB vs ~31 GB for Qwen3-VL-30B. Only a quarter
+      # of the layers keep a full KV cache, so 0.50 should still hold
+      # 4 x 32k sequences; raise with VLLM_GPU_MEMORY_UTILIZATION=0.55 if
+      # startup reports too little KV cache.
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.50}"
+      - --max-num-seqs
+      - "4"
+      - --max-num-batched-tokens
+      - "16384"
+      # Prefix caching is experimental for hybrid (mamba "align") models in
+      # vLLM; drop this flag first if startup or replies misbehave.
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      # No --block-size: vLLM sizes attention blocks to match the DeltaNet
+      # state for hybrid models.
+      # One video item per request (15 s at 1 fps from the live facts);
+      # image-only clients keep their 8 stills.
+      - --limit-mm-per-prompt
+      - '{"image": 8, "video": 1}'
+      # Qwen3.6 thinks by default and has no /nothink soft switch.
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+      - --reasoning-parser
+      - qwen3
+      # Qwen3.6 emits Qwen3-Coder style tool calls; hermes does not parse them.
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      - --port
+      - "8000"
+      - --host
+      - "0.0.0.0"

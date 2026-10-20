@@ -1,0 +1,12 @@
+[
+  {"at": 0, "connect": true},
+  {"at": 0, "topic": "frigate/available", "payload": "online", "retain": true},
+  {"at": 0, "topic": "frigate/den_oak/detect/state", "payload": "ON", "retain": true},
+  {"every": [1, 600, 60], "topic": "frigate/stats", "payload": "@stats"},
+  {"at": 10, "topic": "frigate/den_oak/person", "payload": "1"},
+  {"at": 12, "topic": "frigate/den_desk/person", "payload": "1"},
+  {"at": 100, "topic": "frigate/den_sofa/person", "payload": "1"},
+  {"at": 101, "topic": "frigate/den_desk/person", "payload": "0"},
+  {"at": 300, "topic": "frigate/den_oak/person", "payload": "0"},
+  {"at": 300.5, "topic": "frigate/den_sofa/person", "payload": "0"}
+]

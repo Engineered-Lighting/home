@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-intent-application-result-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-intent-application-result-1"
+    },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "status": {
+      "enum": [
+        "applied",
+        "rejected"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "decision_ref": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "status",
+    "reason",
+    "decision_ref"
+  ]
+}

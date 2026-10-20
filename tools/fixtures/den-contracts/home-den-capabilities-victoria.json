@@ -1,0 +1,149 @@
+{
+  "schema": "home-den-capabilities-1",
+  "status": "proposed",
+  "synthetic": true,
+  "site_id": "victoria",
+  "generated_at": 1800000000,
+  "ha": {
+    "supported": true,
+    "available": true,
+    "connection": "connected",
+    "last_report_at": 1799999988,
+    "reason": null
+  },
+  "engineered": {
+    "supported": true,
+    "available": true,
+    "value": "modeled",
+    "driver": "lighting_brain",
+    "reason": null,
+    "fixtures": [
+      {
+        "fixture_id": "victoria-den-proposed-fixture-01",
+        "value": "modeled",
+        "physical_output": false
+      },
+      {
+        "fixture_id": "victoria-den-proposed-fixture-02",
+        "value": "modeled",
+        "physical_output": false
+      },
+      {
+        "fixture_id": "victoria-den-mount-03-virtual-fixture",
+        "value": "modeled",
+        "physical_output": false
+      },
+      {
+        "fixture_id": "victoria-den-mount-04-virtual-fixture",
+        "value": "modeled",
+        "physical_output": false
+      }
+    ]
+  },
+  "perception": {
+    "supported": true,
+    "available": true,
+    "camera": "available",
+    "analysis": "recording",
+    "jev": {
+      "ok": true,
+      "detail": null
+    },
+    "reason": null,
+    "frame": {
+      "captured_at": 1799999998.6,
+      "observed_at": 1799999998.6,
+      "available_at": 1799999999.1,
+      "valid_until": 1800000001,
+      "age": {
+        "status": "unavailable",
+        "seconds": null,
+        "uncertainty_s": null,
+        "reason": "clock_unavailable"
+      }
+    }
+  },
+  "body": {
+    "supported": true,
+    "available": true,
+    "placement": "approximate",
+    "renderable": true,
+    "reason": null,
+    "profile": null,
+    "frame": {
+      "captured_at": 1799999998.6,
+      "observed_at": 1799999998.6,
+      "available_at": 1799999999.1,
+      "valid_until": 1800000000.6,
+      "age": {
+        "status": "unavailable",
+        "seconds": null,
+        "uncertainty_s": null,
+        "reason": "clock_unavailable"
+      }
+    }
+  },
+  "assets": {
+    "supported": true,
+    "available": true,
+    "scene": "ready",
+    "content_revision": "synthetic-den-r1",
+    "registration_version": 1,
+    "equipment": {
+      "revision": 2,
+      "status": "saved"
+    },
+    "reason": null
+  },
+  "bench": {
+    "supported": false,
+    "available": null,
+    "reason": "not_supplied"
+  },
+  "lighting_brain": {
+    "supported": true,
+    "available": true,
+    "status": "online",
+    "reason": null,
+    "mode": "reading",
+    "why": "Reading at sofa · spotlight on",
+    "generated_at": 1800000000,
+    "fixtures": [
+      {
+        "fixture_id": "victoria-den-proposed-fixture-01",
+        "auto": true,
+        "paused": null,
+        "pause_reason": null,
+        "paused_until": null
+      },
+      {
+        "fixture_id": "victoria-den-proposed-fixture-02",
+        "auto": false,
+        "paused": "brain",
+        "pause_reason": "aim",
+        "paused_until": 1800001800
+      },
+      {
+        "fixture_id": "victoria-den-mount-03-virtual-fixture",
+        "auto": true,
+        "paused": null,
+        "pause_reason": null,
+        "paused_until": null
+      },
+      {
+        "fixture_id": "victoria-den-mount-04-virtual-fixture",
+        "auto": true,
+        "paused": null,
+        "pause_reason": null,
+        "paused_until": null
+      }
+    ]
+  },
+  "den_ops": {
+    "supported": true,
+    "available": true,
+    "level": 0,
+    "step": "normal",
+    "banner": null
+  }
+}

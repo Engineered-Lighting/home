@@ -17,6 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { chromium } = createRequire(import.meta.url)('playwright');
 
 test('authenticated production gateway executes Apartment modules, renders both authored homes and loads its private manifest', { timeout: 145000 }, async () => {
+  fs.mkdirSync(path.join(ROOT, '.tmp'), { recursive: true });
   const run = fs.mkdtempSync(path.join(ROOT, '.tmp/gateway-apartment-browser-run-'));
   const rooms = installSetupRooms(run), originalRegistration = hash(fs.readFileSync(rooms.registrationFile));
   const receipt = { schema: 'home-gateway-apartment-browser-1', authored_room: true, actual_gateway: true,

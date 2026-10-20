@@ -193,10 +193,13 @@ def _bind_successor(bound,successor_original_bytes,successor_review_original_byt
         and v['calibration_content_id']==a['camera']['calibration_content_id'],'approximate_successor_calibration_changed')
     mount=v['check_mount']
     need(isinstance(mount,dict) and mount.get('status') in ('unchanged','changed','unknown'),'approximate_successor_mount_check_required')
-    need(mount['status']=='unchanged','approximate_successor_mount_'+mount['status'])
+    # Advisory since 2026-10-20 (owner): the depth check is recorded, not a gate.
+    # It refused an empty room under different lighting while the owner attested
+    # the camera unmoved; the landmark overlay review below is the attestation.
     need(set(mount)=={'status','compared_cells','changed_cells'} and type(mount['compared_cells']) is int
-        and type(mount['changed_cells']) is int and 16<=mount['compared_cells']<=64
-        and 0<=2*mount['changed_cells']<=mount['compared_cells'],'approximate_successor_mount_check_required')
+        and type(mount['changed_cells']) is int and 0<=mount['changed_cells']<=mount['compared_cells']<=64
+        and (mount['status']!='unchanged' or (16<=mount['compared_cells'] and 2*mount['changed_cells']<=mount['compared_cells'])),
+        'approximate_successor_mount_check_required')
     need(isinstance(review,dict) and set(review)=={'schema','version','status','successor_sha256','predecessor_alignment_sha256',
             'verified_epoch','verification_sha256s','landmark_overlay_matches','metric_error_unknown',
             'owner_or_physical_calibration','reviewed_by',*NO_AUTHORITY}

@@ -508,7 +508,7 @@ button.hg-no-press:active {
 }
 .apt-home-shell .apt-home-status p { margin: 0; padding: 9px 10px; font-size: 12.5px; }
 .apt-home-shell .apt-home-tools, .apt-home-shell .apt-home-top-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; }
-.apt-home-shell .apt-home-top-actions > button, .apt-home-shell .apt-home-tools > button, .apt-home-shell .apt-home-menu > button {
+.apt-home-shell .apt-home-top-actions > button, .apt-home-shell .apt-home-tools > button, .apt-home-shell .apt-home-menu > button:not(.apt-home-menu-dismiss) {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 32px; padding: 0 12px;
   border: 1px solid var(--apt-border); border-radius: 8px; background: transparent; color: var(--apt-text);
   font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
@@ -518,9 +518,14 @@ button.hg-no-press:active {
   position: absolute; top: calc(100% + 8px); right: 0; width: 240px; padding: 4px; z-index: 2;
   border: 1px solid var(--hg-border-strong); border-radius: 10px; background: var(--apt-surface-raised); box-shadow: 0 12px 32px rgba(0,0,0,.45);
 }
-.apt-home-shell .apt-home-menu [role="menuitem"] { display: block; width: 100%; min-height: 36px; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--apt-text); text-align: left; font-size: 13px; cursor: pointer; }
-.apt-home-shell .apt-home-menu [role="menuitem"]:hover { background: var(--apt-fill-2); }
-.apt-home-shell .apt-home-menu-dismiss { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; cursor: default; }
+.apt-home-shell .apt-home-menu :is([role="menuitem"], [role="menuitemcheckbox"]) { display: block; width: 100%; min-height: 36px; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--apt-text); text-align: left; font-size: 13px; cursor: pointer; }
+.apt-home-shell .apt-home-menu :is([role="menuitem"], [role="menuitemcheckbox"]):hover { background: var(--apt-fill-2); }
+.apt-home-shell .apt-home-menu .apt-home-setup { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.apt-home-shell .apt-home-menu .apt-home-setup[aria-checked="true"] { background: var(--apt-fill-2); font-weight: 560; }
+.apt-home-shell .apt-home-menu .apt-home-setup[aria-disabled="true"] { color: var(--hg-fg-2); }
+.apt-home-shell .apt-home-menu-check { font-size: 11.5px; color: var(--hg-fg-2); }
+.apt-home-shell .apt-home-menu-note { margin: 0 0 4px; padding: 6px 9px 8px; font-size: 12.5px; line-height: 1.45; color: var(--hg-fg-2); }
+.apt-home-shell .apt-home-menu-dismiss { position: fixed; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: default; }
 .apt-home-shell .apt-home-stage { top: 52px!important; right: var(--apt-column-width)!important; min-height: 0; }
 .apt-home-shell .apt-home-panel {
   position: absolute; top: 52px; bottom: 0; right: 0; width: var(--apt-column-width); display: flex; flex-direction: column; min-height: 0; z-index: 10;
@@ -715,8 +720,7 @@ button.hg-no-press:active {
   .apt-home-shell .apt-home-status-summary, .apt-home-shell .apt-home-status-segment, .apt-home-shell .apt-home-status-save { display: none; }
   .apt-home-shell .apt-home-status > div { left: 12px; }
   .apt-home-shell .apt-home-top-actions, .apt-home-shell .apt-home-tools { gap: 4px; margin-left: 0; }
-  .apt-home-shell .apt-home-travel { display: none; } /* Lights and Travel Mode remain in Home menu. */
-  .apt-home-shell .apt-home-menu > button { padding: 0 9px; }
+  .apt-home-shell .apt-home-menu > button:not(.apt-home-menu-dismiss) { padding: 0 9px; }
   .apt-home-shell .apt-home-tabs { align-items: center; flex-basis: 44px; padding: 0 12px 8px; border-bottom: 0; }
   .apt-home-shell .apt-home-tabs [role="tablist"] { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 2px; height: 36px; padding: 3px; border: 1px solid var(--apt-border-soft); border-radius: 10px; background: var(--apt-fill); }
   .apt-home-shell .apt-home-tabs [role="tab"] { display: flex; min-width: 0; height: 28px; margin: 0; padding: 0 5px; border: 1px solid transparent; border-radius: 7px; font-size: 12.5px; }
@@ -733,7 +737,7 @@ button.hg-no-press:active {
   .apt-home-shell .apt-ui-list-button { min-height: 48px; }
 }
 @media (pointer: coarse) {
-  .apt-home-shell :is(.apt-ui-button, .apt-ui-seg > button, .apt-home-switcher > button, .apt-home-tabs [role="tab"], .apt-home-top-actions > button, .apt-home-tools > button, .apt-home-menu > button) { min-height: 44px; }
+  .apt-home-shell :is(.apt-ui-button, .apt-ui-seg > button, .apt-home-switcher > button, .apt-home-tabs [role="tab"], .apt-home-top-actions > button, .apt-home-tools > button, .apt-home-menu > button:not(.apt-home-menu-dismiss)) { min-height: 44px; }
   .apt-home-shell .apt-ui-button.is-icon { min-width: 44px; }
   .apt-home-shell .apt-ui-list-button { min-height: 48px; }
 }
@@ -795,9 +799,6 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-dock-header > .apt-ui-grow { flex: 1 1 auto; min-width: 0; }
 .apt-home-shell .apt-ui-dock-header > button { flex: 0 0 auto; }
 .apt-home-shell .apt-ui-advanced-aim > [data-apt-aim-inspector="1"] { position: relative!important; inset: auto!important; width: 100%!important; max-width: none!important; height: auto!important; max-height: none!important; border: 0!important; border-radius: 0!important; box-shadow: none!important; background: var(--apt-surface)!important; }
-@container apartment-home (width < 600px) {
-  .apt-home-shell .apt-home-top-actions > .apt-home-travel, .apt-home-shell .apt-home-tools > .apt-home-travel { display: none; }
-}
 
 /* APT-P01..P06: the camera dock. It shares the column with the inspector,
  * scrolls on its own and never covers the inspector or the room. */

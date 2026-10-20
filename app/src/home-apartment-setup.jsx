@@ -84,7 +84,7 @@
      and done controls, names and handlers, so a rail save writes exactly what
      the legacy toolbar wrote. Their accessible names stay the legacy ones;
      CSS shows them in sentence case. */
-  function AptSetupHeader({ tool, homeName, dirty, saveState, sourceLabel, sourceTone, detail, toolbarRef, onDone, children }) {
+  function AptSetupHeader({ tool, homeName, dirty, saveState, sourceLabel, sourceTone, detail, notice, toolbarRef, onDone, children }) {
     const Badge = window.HomeApartmentUI?.Badge;
     const status = saveState === "conflict" ? "conflict" : dirty ? "unsaved" : "saved";
     return <header ref={toolbarRef} tabIndex={-1} className="apt-ui-header apt-setup-header" data-apt-edit-ui="toolbar">
@@ -100,6 +100,7 @@
         {Badge && sourceLabel && <Badge state={sourceTone || "modeled"}>{sourceLabel}</Badge>}
       </div>
       {detail && <p className="apt-ui-meta" data-setup-detail="1">{detail}</p>}
+      {notice && <p className="apt-ui-meta apt-setup-proposal" role="note" data-setup-read-only="1">{notice}</p>}
       <div className="apt-ui-actions apt-setup-toolbar">{children}</div>
     </header>;
   }

@@ -263,7 +263,7 @@ function readBody(req, timeoutMs) {
     req.on('data', data); req.once('end', end); req.once('aborted', aborted); req.once('error', aborted);
   });
 }
-export function createEquipmentRegistrationGateway({ env = process.env, authenticate, requestTimeoutMs = 5000 } = {}) {
+export function createEquipmentRegistrationGateway({ env = process.env, authenticate, requestTimeoutMs = 5000, readOnly = false } = {}) {
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 5000) throw fault('equipment_timeout_invalid');
   let store, origin, configured = false, generation = 0, active = 0;
   try {
@@ -279,6 +279,7 @@ export function createEquipmentRegistrationGateway({ env = process.env, authenti
     let charged = false;
     try {
       if (!allowed(req)) throw fault('equipment_authentication_required', 401);
+      if (readOnly && req.method !== 'GET') throw fault('equipment_method_not_allowed', 405);
       if (!configured) throw fault('equipment_unconfigured');
       if (req.headers.host !== origin.host || (req.headers.origin && req.headers.origin !== origin.origin) ||
           ['cross-site', 'same-site'].includes(req.headers['sec-fetch-site'])) throw fault('equipment_origin_denied', 403);
@@ -301,10 +302,10 @@ export function createEquipmentRegistrationGateway({ env = process.env, authenti
         registration = store.read(options);
       }
       if (!authorize()) throw fault('equipment_authentication_required', 401);
-      send(res, 200, { ok: true, registration, capabilities: { read: true, write: options.revision === undefined } }, { ETag: '"' + registration.digest + '"' });
+      send(res, 200, { ok: true, registration, capabilities: { read: true, write: !readOnly && options.revision === undefined } }, { ETag: '"' + registration.digest + '"' });
     } catch (error) {
       send(res, error.status || 503, { ok: false, error: error.code || 'equipment_store_unavailable', ...(error.registration ? { registration: error.registration } : {}) },
-        error.status === 405 ? { Allow: 'GET, PUT' } : {});
+        error.status === 405 ? { Allow: readOnly ? 'GET' : 'GET, PUT' } : {});
     } finally { if (charged) active--; }
     return true;
   };

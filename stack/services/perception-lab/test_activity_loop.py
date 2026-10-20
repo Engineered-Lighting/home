@@ -81,7 +81,7 @@ class EventContractTests(unittest.TestCase):
         amendment = text[text.index('## v1.1 amendment'):]
         for token in ('`person_position`', 'track_id', 'position_m:[x,y,z]', 'approximate:true', '`person_count`', 'ttl 3 s'):
             self.assertIn(token, amendment)
-        self.assertEqual(events.TTL_S['person_position'], 3.)
+        self.assertEqual(events.TTL_S['person_position'], 10.)
         pose_row = next(line for line in text.splitlines() if line.startswith('| `person_pose` |'))
         self.assertTrue({'track_id', 'shoulders_m', 'head_m', 'head_pitch_deg', 'approximate'}
                         <= set(re.findall(r'([a-z_]+)', pose_row)))

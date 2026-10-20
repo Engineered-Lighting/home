@@ -425,6 +425,7 @@ export async function runDirectionalBrowserProof({ part }) {
     const HOME = '[role="group"][aria-label="Home"]', SHELL_TABS = '[role="tablist"][aria-label="Home panels"]';
     const RING = INSPECTOR + ' [role="group"][aria-label="Radial zones"]', CHANNEL = INSPECTOR + ' [aria-label="Radial channel"]';
     const LAYERS = '[role="dialog"][aria-label="Room layers"]', TOOLBAR = '[data-apt-edit-ui="toolbar"]';
+    const HOME_MENU = '[role="menu"][aria-label="Home features"]';
     const button = (scope, name, role = 'button') => ({ scope, selector: role === 'tab' ? 'button[role="tab"]' : 'button', name, tag: 'button', role, type: 'button' });
     const input = (scope, name, type) => ({ scope, selector: 'input[type="' + type + '"]', name, tag: 'input', type, role: type === 'range' ? 'slider' : 'checkbox' });
     const zoneButton = number => ({ scope: RING, selector: 'path[role="button"]', name: 'Radial zone ' + number, tag: 'path', role: 'button' });
@@ -1008,7 +1009,9 @@ export async function runDirectionalBrowserProof({ part }) {
       return { hidden_retired: true, ...reconciliation, restored_display_on: true };
     });
     await check('Setup retires active painting with only the exact saved-state reconciliation and no save', async () => {
-      await activeMotion(); await activateStatic(button('.apt-home-topbar', 'Setup'), 'Space');
+      // Setup is in the Home menu: open it by keyboard, then press Setup.
+      await activeMotion(); await activateStatic(button('.apt-home-topbar', 'Home menu'), 'Space');
+      await waitDOM(HOME_MENU); await activateStatic(button(HOME_MENU, 'Setup', 'menuitemcheckbox'), 'Space');
       await waitDOM(TOOLBAR);
       await waitDOM(COMPOSER, true); const retired = await retirementRead('click', 'Setup');
       const reconciliation = await unchangedAfterRetirement(retired.marker, true, retired.calls);

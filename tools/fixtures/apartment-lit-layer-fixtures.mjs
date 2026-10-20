@@ -67,8 +67,9 @@ export function authoredColumns(sockets = AUTHORED_SOCKETS) {
     return columns;
 }
 
+const LOBE_PEAKS = Object.freeze({ down: lobePeakPerLumen(DOWN_HWHM_DEG, 90), radial: lobePeakPerLumen(RADIAL_HWHM_DEG, 180) });
 function basisRow({ p, n }, sockets) {
-    const down = lobePeakPerLumen(DOWN_HWHM_DEG, 90), radial = lobePeakPerLumen(RADIAL_HWHM_DEG, 180), row = [];
+    const down = LOBE_PEAKS.down, radial = LOBE_PEAKS.radial, row = [];
     for (const socket of sockets) {
         const o = [socket.position[0], socket.position[1], socket.position[2] - EMITTER_DROP_M];
         row.push(lobeIrradiance(o, [0, 0, -1], DOWN_HWHM_DEG, 90, down, p, n));

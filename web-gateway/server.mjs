@@ -19,6 +19,9 @@ import {
 } from "./lighting-brain-route.mjs";
 import { safeFile } from "./path-security.mjs";
 import { createPrecompiledManifestVerifier } from "./precompiled-jsx.mjs";
+import { createContentPackHandler } from "./content-pack-route.mjs";
+import { createLightingLayerHandler } from "./lighting-layer.mjs";
+import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -29,6 +32,7 @@ const precompiledJsx = createPrecompiledManifestVerifier(APP_DIR);
 const HOST = process.env.HOME_WEB_HOST || "127.0.0.1";
 const PORT = Number(process.env.HOME_WEB_PORT || 5181);
 const APARTMENT_ASSETS_DIR = path.resolve(process.env.HOME_WEB_APARTMENT_ASSETS_DIR || path.join(ROOT, "app", "data", "apartment"));
+const CONTENT_PACKS_DIR = path.resolve(process.env.HOME_CONTENT_PACKS_DIR || path.join(path.dirname(APARTMENT_ASSETS_DIR), "home-content"));
 const LEGACY_BASIC_AUTH = (process.env.HOME_WEB_BASIC_AUTH || "").trim();
 const AUTH_REQUIRED = /^(1|true|yes|on)$/i.test(String(process.env.HOME_WEB_AUTH_REQUIRED || "1"));
 const defaultAuthRoot =
@@ -1811,6 +1815,12 @@ function checkConfig() {
   return agentOriginBoundary.valid;
 }
 
+const contentPackHandler = createContentPackHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: req => hasValidAuth(req).ok });
+const lightingLayerHandler = createLightingLayerHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: req => hasValidAuth(req).ok });
+const equipmentRegistrationHandler = createEquipmentRegistrationGateway({
+  env: { ...process.env, HOME_CONTENT_PACKS_DIR: CONTENT_PACKS_DIR }, authenticate: req => hasValidAuth(req).ok, readOnly: true,
+});
+
 if (process.argv.includes("--check")) {
   process.exit(checkConfig() ? 0 : 1);
 }
@@ -1907,6 +1917,8 @@ const server = http.createServer({
   }
 
   if (!requireAuth(req, res)) return;
+  if (lightingLayerHandler(req, res) || contentPackHandler(req, res)) return;
+  if (await equipmentRegistrationHandler(req, res)) return;
   if (parsed.pathname === "/api/home/location") {
     await handleHomeLocation(req, res);
     return;

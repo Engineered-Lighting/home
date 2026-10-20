@@ -271,5 +271,6 @@ test('modes: the splat tick drives the node renderer\'s splat; Spark stays the W
   assert.ok(calls.some(call => call[0] === 'dispose'));
   // The flag-off engine still builds Photo from Spark.
   const source = fs.readFileSync(path.join(SRC, 'home-3d/modes.js'), 'utf8');
-  assert.ok(source.includes("const { SplatMesh } = await import('@sparkjsdev/spark');") && source.includes('new SparkRenderer({ renderer: rendererRef, autoUpdate: false })'));
+  assert.match(source, /export async function loadSplatAsset[\s\S]*?import\('@sparkjsdev\/spark'\)[\s\S]*?new SplatMesh\(/, 'the default splat adapter builds a Spark SplatMesh');
+  assert.ok(source.includes('new SparkRenderer({ renderer: rendererRef, autoUpdate: false })'), 'the default adapter builds a SparkRenderer');
 });

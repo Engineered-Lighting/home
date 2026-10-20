@@ -33,7 +33,6 @@
     names: "Victoria's fixture names and short labels wait on the registration label schema. Socket and camera labels stay editable in Devices and sockets.",
     targets: "Victoria named aims wait on the Den named-aim store. The Den desk target stays managed by Den and is not changed here.",
     zones: "Victoria has no room-zone record yet, so there is nothing to reshape.",
-    links: "Victoria's sockets have no Home Assistant lights until each fixture is commissioned.",
   });
 
   function setupToolAvailability({ registration = false } = {}) {
@@ -167,6 +166,89 @@
     </section>;
   }
 
+  /* Travel Mode as Home last observed it; the guarded dispatch re-reads it
+     from Home Assistant at the moment of output. */
+  function useTravelState() {
+    const read = () => window.AptSetupLinks?.travelState(window) ?? null;
+    const [state, setState] = React.useState(read);
+    useEffect(() => {
+      const update = () => setState(read());
+      window.addEventListener("home-travel-mode-change", update);
+      return () => window.removeEventListener("home-travel-mode-change", update);
+    }, []);
+    return state;
+  }
+
+  const LINK_BADGE = { linked: ["current", "Linked"], shared: ["changed", "Shared"], not_linked: ["unavailable", "Not linked"] };
+
+  /* APT-U03, formerly "Fixture links". Matching changes only the link; Flash
+     is the only output and is refused unless Home Assistant is connected and
+     Travel Mode is known to be off. A registration home lists its sockets and
+     fixtures as Not linked with no picker. */
+  function AptSetupLinks({ rows = [], registration = false, homeName, siteId, sim, connection, onLink, onFlash, onFrame }) {
+    const Badge = window.HomeApartmentUI?.Badge;
+    const travel = useTravelState();
+    const [confirm, setConfirm] = React.useState(null);
+    const [status, setStatus] = React.useState(null);
+    const [busy, setBusy] = React.useState(null);
+    const offline = !registration && connection !== "online";
+    const flash = async (row) => {
+      setBusy(row.id); setStatus(null); onFrame?.(row.id);
+      const result = await onFlash(row);
+      setBusy(null);
+      setStatus({ id: row.id, ok: !!result?.ok, text: result?.ok ? `Flashed ${row.name}. Check that the right light blinked.` : result?.reason || "Flash was refused; nothing was sent." });
+    };
+    return <>
+      <section className="apt-ui-section">
+        <p className="apt-ui-copy">Match each light in the model to the Home Assistant light that controls it. That's how a slider here reaches the real bulb.</p>
+        {registration && <p className="apt-ui-meta" data-setup-links-note="registration">{homeName || "This home"}'s sockets don't have Home Assistant lights yet. Each is matched when its fixture is commissioned; until then their controls only change the model.</p>}
+        {offline && <p className="apt-ui-meta" id="apt-setup-flash-global" data-setup-links-note="offline">Home Assistant is offline. You can change matches; Flash needs a connection.</p>}
+        {!registration && !offline && !sim && travel !== "off" && <p className="apt-ui-meta" id="apt-setup-flash-global" data-setup-links-note="travel">{travel === "on" ? "Travel Mode is on, so Flash is refused." : "Travel Mode's state is unknown, so Flash is refused."}</p>}
+      </section>
+      <section className="apt-ui-section" aria-label="Home Assistant links">
+        {!rows.length && <p className="apt-ui-copy">No lights are placed in this home yet.</p>}
+        <ul className="apt-ui-list apt-setup-links">{rows.map((row) => {
+          const [state, label] = LINK_BADGE[row.state] || LINK_BADGE.not_linked;
+          const refusal = registration ? "" : window.AptSetupLinks.flashRefusal({ siteId, sim, connection, entityId: row.entity, travel });
+          // Offline and Travel Mode are explained once above; a row only
+          // explains what is particular to it (no link, simulation).
+          const global = offline || (!sim && travel !== "off");
+          return <li key={row.id} className="apt-setup-link" data-setup-link={row.id} data-link-state={row.state}>
+            <div className="apt-ui-row">
+              <span className="grow"><span className="apt-setup-link-name">{row.name}</span>{row.room && <span className="apt-ui-meta apt-setup-link-room">{row.room}</span>}</span>
+              {Badge ? <Badge state={state}>{label}</Badge> : <span>{label}</span>}
+            </div>
+            {!registration && <div className="apt-ui-row">
+              <select className="apt-ui-input grow" value={row.entity || ""} aria-label={`Home Assistant light for ${row.name}`}
+                onChange={(event) => {
+                  const next = event.target.value || null;
+                  setStatus(null);
+                  if (!next && row.entity) { setConfirm(row.id); return; }
+                  setConfirm(null); onLink(row.id, next);
+                }}>
+                <option value="">Not linked</option>
+                {row.options.map((option) => <option key={option.entity_id} value={option.entity_id}>
+                  {option.missing ? `${option.entity_id} · not in the registry` : `${option.name} · ${option.entity_id}`}</option>)}
+              </select>
+              <button type="button" className="apt-ui-button is-small" disabled={!!refusal || busy === row.id}
+                aria-label={`Flash ${row.name}`} aria-describedby={refusal ? (global ? "apt-setup-flash-global" : `apt-flash-why-${row.id}`) : undefined}
+                onClick={() => flash(row)}>{busy === row.id ? "Flashing…" : "Flash"}</button>
+            </div>}
+            {refusal && !global && <p className="apt-ui-meta" id={`apt-flash-why-${row.id}`}>{refusal}</p>}
+            {row.sharedWith.length > 0 && <p className="apt-ui-meta">Also controls {row.sharedWith.join(", ")}.</p>}
+            {confirm === row.id && <div className="apt-ui-row" role="group" aria-label={`Remove the link for ${row.name}`}>
+              <span className="apt-ui-meta grow">Remove the link? Position and calibration are kept.</span>
+              <button type="button" className="apt-ui-button is-small" onClick={() => { setConfirm(null); onLink(row.id, null); }}>Remove link</button>
+              <button type="button" className="apt-ui-button is-small" onClick={() => setConfirm(null)}>Keep</button>
+            </div>}
+            {status?.id === row.id && <p className="apt-ui-meta" role="status" data-flash-result={status.ok ? "sent" : "refused"}>{status.text}</p>}
+          </li>;
+        })}</ul>
+        <p className="apt-ui-meta">{registration ? "Nothing here sends output." : "Changing a match moves no geometry or tape measurement and sends nothing. Flash is the only output and respects Travel Mode."}</p>
+      </section>
+    </>;
+  }
+
   /* Portal into the unified right column. data-apt-setup-inspector lets CSS
      hide the other column content while Setup is open. */
   function AptSetupInspector({ host, children }) {
@@ -209,6 +291,11 @@
 .apt-setup-inspector .apt-ui-input { width: 100%; min-height: 32px; padding: 5px 8px; border: 1px solid var(--apt-border, var(--hg-border)); border-radius: 7px;
   background: var(--hg-bg-0); color: var(--hg-fg-0); font: 400 13px/1.4 'Geist', ui-sans-serif, sans-serif; }
 .apt-setup-camera-row { display: grid; gap: 4px; padding-bottom: 6px; }
+.apt-setup-links { display: grid; gap: 4px; }
+.apt-setup-link { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--apt-border-soft, var(--hg-border-soft)); }
+.apt-setup-link:last-child { border-bottom: 0; }
+.apt-setup-link-name { display: block; font-size: 13px; font-weight: 520; color: var(--hg-fg-0); }
+.apt-setup-link-room { display: block; }
 .apt-setup-body { display: grid; gap: 0; padding: 4px 16px 16px; }
 .apt-setup-body > [data-apt-edit-ui] { position: static !important; width: auto !important; max-width: none !important; padding: 0 !important;
   margin: 0 !important; border: 0 !important; background: transparent !important; backdrop-filter: none !important; overflow: visible !important;
@@ -234,6 +321,6 @@
   window.AptSetup = Object.freeze({
     TOOLS: SETUP_TOOLS, isTool: (id) => TOOL_IDS.has(id), availability: setupToolAvailability, label: setupToolLabel,
     Rail: AptSetupRail, Header: AptSetupHeader, Inspector: AptSetupInspector, Unavailable: AptSetupUnavailable,
-    Names: AptSetupNames, Cameras: AptSetupCameras, useCss: useSetupCss, installCss: installSetupCss,
+    Names: AptSetupNames, Cameras: AptSetupCameras, Links: AptSetupLinks, useCss: useSetupCss, installCss: installSetupCss,
   });
 })();

@@ -90,7 +90,7 @@
           },
           {
             "code": "offline",
-            "text": "Brain offline · holding the last state",
+            "text": "Brain offline · automatic following stopped",
             "severity": "warn"
           },
           {
@@ -110,6 +110,21 @@
           {
             "code": "stream_unavailable",
             "text": "Live updates unavailable",
+            "severity": "warn"
+          },
+          {
+            "code": "stream_disconnected",
+            "text": "Live updates disconnected",
+            "severity": "warn"
+          },
+          {
+            "code": "state_expired",
+            "text": "Brain or source evidence expired",
+            "severity": "warn"
+          },
+          {
+            "code": "state_reading_evidence_unbound",
+            "text": "Reading evidence unavailable",
             "severity": "warn"
           },
           {
@@ -151,6 +166,22 @@
           {
             "code": "state_generated_at_invalid",
             "text": "Brain state has no valid time"
+          },
+          {
+            "code": "state_revision_invalid",
+            "text": "Brain state revision invalid"
+          },
+          {
+            "code": "state_decision_id_invalid",
+            "text": "Brain decision identity invalid"
+          },
+          {
+            "code": "state_reading_evidence_unbound",
+            "text": "Reading evidence unavailable"
+          },
+          {
+            "code": "state_expired",
+            "text": "Brain or source evidence expired"
           },
           {
             "code": "state_header_invalid",
@@ -297,7 +328,7 @@
       },
       {
         "id": "activity_loop.health",
-        "source": "activity loop (AL-3) `health` event `detail`, per component (jev, deep_stack, camera)",
+        "source": "activity loop (AL-3) `health` event `detail`, per component (jev, deep_stack, camera, position)",
         "codes": [
           {
             "code": "jev_starting",
@@ -366,6 +397,16 @@
             "code": "camera_no_frames_yet",
             "component": "camera",
             "text": "Waiting for the first camera frame"
+          },
+          {
+            "code": "position_not_started",
+            "component": "position",
+            "text": "Position sensing has not started"
+          },
+          {
+            "code": "position_disabled",
+            "component": "position",
+            "text": "Position sensing is disabled"
           },
           {
             "code": "not_reported",

@@ -10,7 +10,7 @@
   };
   const statusLabel = brain => brain.online ? 'Brain online'
     : brain.status === 'connecting' ? 'Connecting to the lighting brain…'
-    : brain.status === 'stopped' ? 'Brain not connected' : 'Brain offline · holding the last state';
+    : brain.status === 'stopped' ? 'Brain not connected' : 'Brain offline · automatic following stopped';
   const note = { fontSize: 10, opacity: .7, lineHeight: 1.45 };
   const chip = auto => ({ fontSize: 10, padding: '1px 6px', border: '1px solid', borderRadius: 3,
     color: auto ? '#b8d8ff' : '#e9bd7e', borderColor: auto ? 'rgba(184,216,255,.35)' : '#8d6d39' });
@@ -31,7 +31,7 @@
       style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(184,216,255,.18)' }}>
       <OpsBanner ops={ops} />
       <div role="status" aria-live="polite" data-lighting-brain-why="1" style={{ fontSize: 12, lineHeight: 1.4 }}>
-        {brain.why || (brain.online ? 'Following the lighting brain' : 'No lighting decision yet')}
+        {brain.why ? `Brain decision: ${brain.why}` : (brain.online ? 'Following the lighting brain' : 'No lighting decision yet')}
       </div>
       <div data-lighting-brain-online={brain.online ? '1' : '0'}
         style={{ ...note, opacity: 1, color: brain.online ? 'var(--hg-fg-3, #a8b5c0)' : '#e9bd7e' }}>

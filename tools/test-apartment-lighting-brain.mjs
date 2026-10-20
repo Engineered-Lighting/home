@@ -31,6 +31,8 @@ function brainState({ at = 1000, why = 'Room empty · all off', mode = 'off', fi
   return { schema: 'activity-lighting-state-1', home: 'victoria', room: 'den', generated_at: at, brain, mode, why,
     occupancy: { present: mode !== 'off', people_count: mode === 'off' ? 0 : 1, zones: { sofa: mode !== 'off', desk: false } },
     activity: { label: mode === 'reading' ? 'reading' : null, confidence: 0.8, age_s: 1.2, source: 'jev' },
+    reading_evidence: { bound: true, activity: { session_id: 'authored-session' }, pose: { session_id: 'authored-session' },
+      activity_valid_until: at + 15, pose_valid_until: at + 15 },
     fixtures: Client.FIXTURE_IDS.map(fixture_id => ({ fixture_id, ...copy(OFF), ...copy(fixtures[fixture_id] || {}) })),
     decisions: decisions || [{ at, rule: mode === 'reading' ? 'reading_spot_on' : 'room_off', why, inputs: {}, change: null }],
     cost: { jev_calls_last_hour: 0, est_usd_last_hour: null },
@@ -111,11 +113,12 @@ function equipment() {
   return { preview, overlay, calls, state };
 }
 
-async function following(initial) {
+async function following(initial, { configure = () => {}, ...options } = {}) {
   const t = clock(), brain = mockBrain(initial), room = equipment(), views = [], applied = [];
+  configure(room);
   const wired = Follower.createBrainFollowing({ Client, fetch: brain.fetch, EventSource: brain.EventSource,
     setTimeout: t.setTimeout, clearTimeout: t.clearTimeout, nowMs: t.nowMs, getOverlay: () => room.overlay,
-    onChange: view => views.push(view), onApplied: id => applied.push(id) });
+    onChange: view => views.push(view), onApplied: id => applied.push(id), ...options });
   await pause(); await pause();
   return { t, brain, room, views, applied, wired, view: () => wired.follower.readback() };
 }
@@ -183,12 +186,14 @@ test('ambient and spot states reach the real virtual fixtures through the existi
   f.wired.dispose(); assert.equal(f.t.size(), 0);
 });
 
-test('brain offline after the heartbeat window holds the last state and applies nothing new', async () => {
+test('brain offline after the heartbeat window preserves ambient and disables automatic spots', async () => {
   const f = await following(brainState({ mode: 'ambient', why: 'Sofa · ambient', fixtures: { [F3]: AMBIENT } }));
   await f.t.advance(3500);
   const held = JSON.stringify(f.room.preview.readback().fixtures.map(row => row.state)), calls = f.room.calls.set;
   f.brain.getStatus = 0;
   await f.t.advance(Client.HEARTBEAT_MS + 10);
+  const offlineCalls = f.room.calls.set;
+  assert.equal(offlineCalls, calls + 4, 'one conservative spotlight stop per automatic fixture');
   assert.equal(f.view().online, false); assert.equal(f.view().status, 'offline');
   assert.equal(f.view().why, 'Sofa · ambient', 'last why kept');
   assert.equal(f.view().fixtures.length, 4, 'last state kept for display');
@@ -197,11 +202,11 @@ test('brain offline after the heartbeat window holds the last state and applies 
   await f.t.advance(5000);
   assert.equal(f.view().online, false); assert.equal(f.view().refused_reason, 'state_schema_unsupported');
   assert.equal(JSON.stringify(f.room.preview.readback().fixtures.map(row => row.state)), held);
-  assert.equal(f.room.calls.set, calls);
+  assert.equal(f.room.calls.set, offlineCalls);
   // A brain that reports itself not online is not followed either.
   await f.brain.push(brainState({ at: 2100, mode: 'reading', brain: 'degraded', fixtures: { [F1]: READING } }));
   await f.t.advance(3000);
-  assert.equal(f.view().online, false); assert.equal(f.room.calls.set, calls);
+  assert.equal(f.view().online, false); assert.equal(f.room.calls.set, offlineCalls);
   f.wired.dispose();
 });
 
@@ -229,6 +234,163 @@ test('stream loss reconnects with backoff and resumes following', async () => {
 });
 
 /* ---------- overrides ---------- */
+test('failed or missing aim keeps the automatic spotlight off while ambient still applies', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    diagnostics: true, configure: room => { room.overlay.aimVirtualFixtureAtTarget = () => ({ ok: false, reason: 'target_out_of_range' }); },
+  });
+  assert.equal(f.room.state(F3).spotlight.on, false, 'a previously on spot is disabled immediately');
+  await f.t.advance(2100);
+  near(f.room.state(F3).radials[0].brightness, .3);
+  const row = f.view().fixtures.find(row => row.fixture_id === F3);
+  assert.equal(row.requested_spot_on, true); assert.equal(row.spot_on, false);
+  assert.equal(row.application_error, 'target_out_of_range');
+  assert.match(f.view().notice, /Spotlight withheld/);
+  assert.ok(f.wired.follower.diagnosticReadback().events.some(e => e.stage === 'aim_refused' && e.fixture_id === F3));
+  f.wired.dispose();
+});
+
+test('fixture write refusal is never remembered as successfully applied and is retried', async () => {
+  let reject = true;
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    diagnostics: true, configure: room => {
+      const original = room.overlay.setVirtualFixtureState;
+      room.overlay.setVirtualFixtureState = (id, patch) => id === F3 && reject ? { ok: false, reason: 'write_refused' } : original(id, patch);
+    },
+  });
+  await f.t.advance(2100);
+  assert.equal(f.applied.includes(F3), false);
+  assert.equal(f.wired.follower.diagnosticReadback().events.some(e => e.fixture_id === F3 && e.stage === 'applied'), false);
+  reject = false;
+  await f.brain.push({ ...f.brain.state, generated_at: 1010 });
+  await f.t.advance(2100);
+  assert.equal(f.applied.includes(F3), true); assert.equal(f.room.state(F3).spotlight.on, true);
+  f.wired.dispose();
+});
+
+test('stream disconnect disables automatic spots immediately and preserves manual choice', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING, [F4]: READING } }));
+  await f.t.advance(2100);
+  f.wired.follower.handChange(F4); await pause();
+  const staleStream = f.brain.live();
+  staleStream.onerror();
+  assert.equal(f.view().online, false); assert.equal(f.view().reason, 'stream_disconnected');
+  assert.equal(f.room.state(F3).spotlight.on, false); assert.equal(f.room.state(F4).spotlight.on, true);
+  staleStream.onmessage({ data: JSON.stringify(brainState({ at: 1200, mode: 'reading', fixtures: { [F3]: READING } })) });
+  assert.equal(f.view().online, false, 'late events from a retired stream cannot revive following');
+  f.wired.dispose();
+});
+
+test('a replayed state cannot refresh original freshness and a retired GET cannot revive the client', async () => {
+  const t = clock(), brain = mockBrain(brainState({ at: 1 }));
+  const client = Client.createBrainClient({ fetch: brain.fetch, EventSource: brain.EventSource,
+    setTimeout: t.setTimeout, clearTimeout: t.clearTimeout, nowMs: () => 1000 + t.nowMs() });
+  client.start(); await pause();
+  await t.advance(10000); await brain.push(brain.state);
+  assert.equal(client.readback().online, true);
+  await t.advance(5000);
+  assert.equal(client.readback().online, false, 'original timestamp expiry is not extended by arrival');
+  await t.advance(1001);
+  assert.equal(client.readback().refused_reason, 'state_expired');
+  client.stop();
+
+  let response;
+  const b = mockBrain();
+  const late = Client.createBrainClient({ fetch: () => new Promise(resolve => { response = resolve; }), EventSource: b.EventSource,
+    setTimeout: t.setTimeout, clearTimeout: t.clearTimeout, nowMs: t.nowMs });
+  late.start(); b.live().onerror();
+  response({ ok: true, text: async () => JSON.stringify(brainState()) }); await pause(); await pause();
+  assert.equal(late.readback().online, false); late.stop();
+});
+
+test('active spots require bound source evidence; original source expiry stops silent-stream authority', async () => {
+  const legacy = brainState({ mode: 'reading', fixtures: { [F3]: READING } }); delete legacy.reading_evidence;
+  assert.equal(Client.validateState(legacy).reason, 'state_reading_evidence_unbound');
+  const ambient = brainState({ mode: 'ambient' }); delete ambient.reading_evidence;
+  assert.equal(Client.validateState(ambient).ok, true, 'legacy ambient remains usable');
+  const t = clock(), state = brainState({ at: 1, mode: 'reading', fixtures: { [F3]: READING } });
+  state.reading_evidence.activity_valid_until = 3; state.reading_evidence.pose_valid_until = 4;
+  const brain = mockBrain(state), client = Client.createBrainClient({ fetch: brain.fetch, EventSource: brain.EventSource,
+    setTimeout: t.setTimeout, clearTimeout: t.clearTimeout, nowMs: () => 1000 + t.nowMs() });
+  client.start(); await pause(); assert.equal(client.readback().online, true);
+  await t.advance(1000); await brain.push({ ...state, generated_at: 2 });
+  await t.advance(999); assert.equal(client.readback().online, true);
+  await t.advance(1); assert.equal(client.readback().online, false); assert.equal(client.readback().reason, 'state_expired');
+  client.stop();
+});
+
+test('source restart resets revision scope and a stale response body cannot revive a retired connection', async () => {
+  const t = clock(), brain = mockBrain({ ...brainState(), decision_id: 'epoch-one:20', state_revision: 20 });
+  const client = Client.createBrainClient({ fetch: brain.fetch, EventSource: brain.EventSource,
+    setTimeout: t.setTimeout, clearTimeout: t.clearTimeout, nowMs: t.nowMs });
+  client.start(); await pause();
+  await brain.push({ ...brainState({ at: 1010 }), decision_id: 'epoch-one:19', state_revision: 19 });
+  assert.equal(client.readback().state.state_revision, 20, 'earlier same-process revision is refused');
+  await brain.push({ ...brainState({ at: 1020 }), decision_id: 'epoch-two:1', state_revision: 1 });
+  assert.equal(client.readback().state.decision_id, 'epoch-two:1', 'a valid new process epoch can resume'); client.stop();
+  let resolveBody;
+  const deferred = mockBrain(), late = Client.createBrainClient({
+    fetch: async () => ({ ok: true, text: () => new Promise(resolve => { resolveBody = resolve; }) }),
+    EventSource: deferred.EventSource, setTimeout: t.setTimeout, clearTimeout: t.clearTimeout, nowMs: t.nowMs });
+  late.start(); await pause(); deferred.live().onerror(); resolveBody(JSON.stringify(brainState()));
+  await pause(); assert.equal(late.readback().online, false); late.stop();
+});
+
+test('generation changes stop an old fade and refuse old-generation writes before refresh', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }));
+  await f.t.advance(300);
+  const generation = f.room.preview.interactionDescriptor(F3).generation;
+  f.room.preview.setDocument(null); f.room.preview.setDocument(Core.toDocument(registrationModel()));
+  const before = copy(f.room.state(F3));
+  const refused = f.room.preview.setFixtureState(F3, { spotlight: { on: false } }, { expectedGeneration: generation });
+  assert.equal(refused.ok, false); assert.equal(refused.reason, 'equipment_preview_generation_changed');
+  await f.t.advance(300);
+  assert.deepEqual(f.room.state(F3), before, 'the retired fade never writes the replacement generation');
+  assert.equal(f.view().fixtures.find(row => row.fixture_id === F3).application_error, 'equipment_preview_generation_changed');
+  f.wired.follower.refresh(); await f.t.advance(2100);
+  near(f.room.state(F3).spotlight.brightness, .8); f.wired.dispose();
+});
+
+test('diagnostics correlate applied and GPU-completed frames, and discard manual-takeover receipts', async () => {
+  const pending = [];
+  const f = await following({ ...brainState({ mode: 'reading', fixtures: { [F3]: READING } }), state_revision: 7,
+    reading_evidence: { bound: true, activity: { session_id: 'test-session' }, pose: { session_id: 'test-session' },
+      activity_valid_until: 1010, pose_valid_until: 1010 } }, {
+    diagnostics: true, requestRenderEvidence: context => new Promise(resolve => pending.push({ context, resolve })),
+  });
+  f.wired.follower.annotateActivity({ phase: 'onset', at_ms: 12 });
+  await f.t.advance(3100);
+  const target = pending.find(row => row.context.fixture_id === F3);
+  assert.equal(target.context.state_revision, 7); assert.equal(target.context.reading_evidence.activity.session_id, 'test-session');
+  assert.equal(f.view().fixtures.find(row => row.fixture_id === F3).rendered, null, 'state application is not a render');
+  target.resolve({ ok: true, stage: 'gpu_completed_frame', frame_id: 4, gpu_completed_at_ms: 3200 }); await pause();
+  const rendered = f.view().fixtures.find(row => row.fixture_id === F3).rendered;
+  assert.equal(rendered.state_revision, 7); assert.equal(rendered.frame_id, 4); assert.equal(rendered.presentation_observed, false);
+  const other = pending.find(row => row.context.fixture_id === F4);
+  f.wired.follower.handChange(F4);
+  other.resolve({ ok: true, stage: 'gpu_completed_frame', frame_id: 5 }); await pause();
+  assert.equal(f.view().fixtures.find(row => row.fixture_id === F4).rendered, null);
+  const events = f.wired.follower.diagnosticReadback().events;
+  assert.ok(events.some(row => row.stage === 'independent_annotation' && row.at_ms === 12));
+  assert.ok(events.some(row => row.stage === 'applied' && row.fixture_id === F3));
+  assert.ok(events.some(row => row.stage === 'gpu_completed_frame' && row.fixture_id === F3));
+  f.wired.dispose();
+});
+
+test('an unchanged desired output cannot renew the source expiry captured by an old render attempt', async () => {
+  const pending = [], initial = brainState({ at: 1, mode: 'reading', fixtures: { [F3]: READING } });
+  initial.reading_evidence.activity_valid_until = 3; initial.reading_evidence.pose_valid_until = 3;
+  const f = await following(initial, { diagnostics: true,
+    requestRenderEvidence: context => new Promise(resolve => pending.push({ context, resolve })) });
+  await f.t.advance(2500);
+  const receipt = pending.find(row => row.context.fixture_id === F3); assert.ok(receipt);
+  const refreshed = brainState({ at: 2, mode: 'reading', fixtures: { [F3]: READING } });
+  refreshed.reading_evidence.activity_valid_until = 10; refreshed.reading_evidence.pose_valid_until = 10;
+  await f.brain.push(refreshed); await f.t.advance(600); assert.equal(f.view().online, true);
+  receipt.resolve({ ok: true, stage: 'gpu_completed_frame', frame_id: 9 }); await pause();
+  assert.equal(f.view().fixtures.find(row => row.fixture_id === F3).rendered, null);
+  f.wired.dispose();
+});
+
 test('a manual change pauses only that fixture, posts the override and holds until the brain clears it', async () => {
   const f = await following(brainState({ mode: 'ambient', fixtures: { [F3]: AMBIENT, [F4]: AMBIENT } }));
   await f.t.advance(2500);
@@ -334,7 +496,7 @@ test('the why line, brain status, Auto/Paused markers and the last-20 decision l
   const returned = [], p = await panel(f.view(), id => returned.push(id));
   try {
     const doc = p.w.document;
-    assert.equal(doc.querySelector('[data-lighting-brain-why]').textContent, 'Reading at sofa · spotlight on');
+    assert.equal(doc.querySelector('[data-lighting-brain-why]').textContent, 'Brain decision: Reading at sofa · spotlight on');
     assert.match(doc.querySelector('[data-lighting-brain-online]').textContent, /^Brain online · reading/);
     assert.equal(doc.querySelectorAll('[data-lighting-brain-decision]').length, 20);
     assert.equal(doc.querySelector('[data-lighting-brain-decision]').getAttribute('data-lighting-brain-decision'), 'reading_spot_on');
@@ -346,8 +508,8 @@ test('the why line, brain status, Auto/Paused markers and the last-20 decision l
     assert.deepEqual(returned, [F2]);
     f.brain.getStatus = 0;
     await f.t.advance(Client.HEARTBEAT_MS + 10); await p.render(f.view());
-    assert.match(doc.querySelector('[data-lighting-brain-online]').textContent, /Brain offline · holding the last state/);
-    assert.equal(doc.querySelector('[data-lighting-brain-why]').textContent, 'Reading at sofa · spotlight on');
+    assert.match(doc.querySelector('[data-lighting-brain-online]').textContent, /Brain offline · automatic following stopped/);
+    assert.equal(doc.querySelector('[data-lighting-brain-why]').textContent, 'Brain decision: Reading at sofa · spotlight on');
   } finally { await p.cleanup(); f.wired.dispose(); }
 });
 

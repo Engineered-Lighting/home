@@ -481,14 +481,14 @@ const brainReading = () => {
   const decisions = Array.from({ length: 20 }, (_, i) => ({ at: 1800000000 - i, rule: i ? 'zone_ambient' : 'reading_spot_on', why: i ? 'Sofa occupied' : 'Reading at sofa', change: null }));
   return { labels, brain: { status: 'online', online: true, mode: state.mode || 'reading', why: 'Reading at sofa · spotlight on', fixtures, decisions } };
 };
-test('brain panel: why line, online/offline, den-ops banner, last-20 log, Auto/Paused with Return to Auto render as before', async () => {
+test('brain panel: requested decision, conservative offline state, ops banner and manual controls render', async () => {
   const { labels, brain } = brainReading(), returned = [];
   const container = w.document.createElement('div'); w.document.body.appendChild(container);
   const root = createRoot(container);
   const render = async (value, ops = null) => { await act(async () => root.render(React.createElement(w.HomeLightingBrainPanel, { brain: value, ops, labels, onReturnToAuto: id => returned.push(id) }))); await flush(); };
   try {
     await render(brain, { severity: 'alert', host: 'la-host', text: 'Deep sensing paused · ambient only', level: 2, step: 'deep_stack_paused' });
-    assert.equal(container.querySelector('[data-lighting-brain-why]').textContent, 'Reading at sofa · spotlight on');
+    assert.equal(container.querySelector('[data-lighting-brain-why]').textContent, 'Brain decision: Reading at sofa · spotlight on');
     assert.match(container.querySelector('[data-lighting-brain-online]').textContent, /^Brain online/);
     assert.equal(container.querySelector('[data-den-ops-banner]').getAttribute('data-den-ops-banner'), 'alert');
     assert.equal(container.querySelectorAll('[data-lighting-brain-decision]').length, 20);
@@ -496,8 +496,8 @@ test('brain panel: why line, online/offline, den-ops banner, last-20 log, Auto/P
     await act(async () => container.querySelector('button[aria-label="Return Mount 2 to Auto"]').click()); await flush();
     assert.deepEqual(returned, ['victoria-den-proposed-fixture-02']);
     await render({ ...brain, status: 'offline', online: false });
-    assert.match(container.querySelector('[data-lighting-brain-online]').textContent, /Brain offline · holding the last state/);
-    assert.equal(container.querySelector('[data-lighting-brain-why]').textContent, 'Reading at sofa · spotlight on', 'offline keeps the last why');
+    assert.match(container.querySelector('[data-lighting-brain-online]').textContent, /Brain offline · automatic following stopped/);
+    assert.equal(container.querySelector('[data-lighting-brain-why]').textContent, 'Brain decision: Reading at sofa · spotlight on', 'offline retains the labelled decision, rather than claiming applied output');
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 

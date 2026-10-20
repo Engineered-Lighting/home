@@ -206,11 +206,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         frameDigest: pinnedPack?.assets?.['frame.json']?.sha256 ?? null,
     });
     const [pointcloudM, rigM, modesM, markersM, pickingM, assetsM, adaptiveM, placeholderM,
-        cutawayM, cutawayMaterialM] = await Promise.all([
+        cutawayM, cutawayMaterialM, lightingEvidenceM] = await Promise.all([
         sib('pointcloud.js'), sib('rig.js'), sib('modes.js'),
         sib('markers.js'), sib('picking.js'), sib('assets.js'),
         sib('adaptive-performance.mjs'), sib('scene-placeholder.mjs'),
         sib('dollhouse-cutaway.mjs'), sib('dollhouse-cutaway-material.js'),
+        sib('lighting-render-evidence.mjs'),
     ]);
     assertCreationLive();
     const lifetimeController = new AbortController();
@@ -689,6 +690,14 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
 
     // ---- render loop with frame governor ----
     let running = false;
+    const lightingRenderEvidence = lightingEvidenceM.createLightingRenderEvidence({ renderer,
+        isVisible: () => {
+            if (!running || disposed || document.hidden || !canvas.isConnected
+                || overlay.virtualFixturesReadback?.().visible !== true || !canvas.getClientRects().length) return false;
+            const rect = canvas.getBoundingClientRect(), style = window.getComputedStyle(canvas);
+            return style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
+                && rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
+        } });
     let rafId = 0;
     let last = performance.now();
     const frameTimes = [];
@@ -793,6 +802,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             }
         }
         renderer.render(scene, camera);
+        lightingRenderEvidence.afterRender();
 
         const renderTimeMs = Math.max(0, performance.now() - now);
         frameTimes.push(frameTimeMs);
@@ -827,6 +837,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     const engine = {
         scene, camera, renderer, rig, modes, overlay, picking, apartmentRoot,
         pointsMaterial, pointsPromise,
+        requestLightingRenderEvidence(context = {}) {
+            return lightingRenderEvidence.request({ ...context,
+                isReady: () => overlay.virtualFixturesPresentationActive?.() !== true });
+        },
         gpu: gpuName,
         /* 'webgl', or 'webgpu' / 'webgpu-webgl2' behind ?renderer=webgpu. */
         rendererBackend: nodeRenderer ? (nodeRenderer.backend === 'webgpu' ? 'webgpu' : 'webgpu-webgl2') : 'webgl',
@@ -1301,6 +1315,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             disposing = true;
             engine.setRunning(false);
             disposed = true;
+            lightingRenderEvidence.dispose();
             for (const layer of uiLayers) retireUiLayer(layer);
             equipmentCutaway.dispose();
             unsubscribePerformanceBudget();

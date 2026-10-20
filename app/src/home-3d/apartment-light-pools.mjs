@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 
 export const BEAM_RULES = Object.freeze(['selected', 'all', 'none']);
+// Prototype axis opacity: .75 for the selected light, .3 for the others.
+const AXIS_OPACITY = .75, AXIS_OTHER_OPACITY = .3;
 const DEG = Math.PI / 180, TAU = Math.PI * 2;
 const finite3 = value => Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
 const lit = channel => !!channel?.on && channel.brightness > 0;
@@ -41,7 +43,7 @@ export function lightPoolsPlan({ fixtures = [], selectedId = null, beams = 'sele
         const aimed = finite3(beam?.origin_m) && finite3(beam?.endpoint_m) && reach > .001;
         const radius = aimed ? reach * Math.tan(spotFwhmDeg * DEG / 2) : 0;
         if (shown && aimed && lit(state.spotlight)) {
-            axes.push({ fixture_id: id, from: beam.origin_m.slice(), to: beam.endpoint_m.slice(), radius,
+            axes.push({ fixture_id: id, from: beam.origin_m.slice(), to: beam.endpoint_m.slice(), radius, selected,
                 kelvin: state.spotlight.color_temp_kelvin, brightness: state.spotlight.brightness });
         } else if (selected && rule !== 'none' && aimed && !lit(state.spotlight)) {
             rings.push({ fixture_id: id, center: beam.endpoint_m.slice(), normal: beam.origin_m.map((value, i) => value - beam.endpoint_m[i]), radius });
@@ -106,14 +108,14 @@ export function createLightPools({ layer } = {}) {
         const next = JSON.stringify(plan);
         if (next === signature) return readback();
         signature = next; last = plan; clear();
+        // DIRECTION › Light (prototype scene.js _dynamic): beams are a thin
+        // axis, bright for the selected light and dim when Beams shows all.
+        // The faint cone is the fixture's own modeled beam volume, so no
+        // spokes or rim are drawn over it here.
         for (const axis of plan.axes) {
-            const color = new THREE.Color(...kelvinColor(axis.kelvin)), from = vec(axis.from), to = vec(axis.to);
-            line([from, to], new THREE.LineBasicMaterial({ color, transparent: true, opacity: .75, depthTest: false, depthWrite: false }), 'light-pools-axis:' + axis.fixture_id);
-            const ring = circle(axis.to, axis.from.map((value, i) => value - axis.to[i]), axis.radius, 32);
-            const spokes = [0, 8, 16, 24].flatMap(i => [from, ring[i]]);
-            const faint = new THREE.LineBasicMaterial({ color, transparent: true, opacity: .2, depthTest: false, depthWrite: false });
-            line(spokes, faint, 'light-pools-cone:' + axis.fixture_id, true);
-            line(ring, faint.clone(), 'light-pools-cone-rim:' + axis.fixture_id);
+            const color = new THREE.Color(...kelvinColor(axis.kelvin));
+            line([vec(axis.from), vec(axis.to)], new THREE.LineBasicMaterial({ color, transparent: true,
+                opacity: axis.selected === false ? AXIS_OTHER_OPACITY : AXIS_OPACITY, depthTest: false, depthWrite: false }), 'light-pools-axis:' + axis.fixture_id);
         }
         for (const ring of plan.rings) line(circle(ring.center, ring.normal, Math.max(.06, ring.radius), 48),
             new THREE.LineDashedMaterial({ color: 0x9aa0a6, transparent: true, opacity: .7, dashSize: .04, gapSize: .03, depthTest: false, depthWrite: false }),

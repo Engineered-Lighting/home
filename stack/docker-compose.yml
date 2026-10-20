@@ -6,11 +6,15 @@
 
 services:
   # =========================================================
-  # LLM: Qwen3.6-27B-FP8 served via vLLM (OpenAI-compatible).
+  # LLM: Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 served via vLLM (OpenAI-compatible).
   # Reachable at  http://${UBUNTU_IP}:8000/v1
+  # Qwen3.6-35B-A3B trial override: vllm/qwen3.6-35b-a3b.override.yml
+  # (procedure and rollback in docs/VLLM-QWEN36-SWAP.md).
   # =========================================================
   vllm:
-    image: vllm/vllm-openai:latest
+    # Pinned by digest to match production (vLLM 0.20.2, cu130). `:latest`
+    # let any `docker compose pull` upgrade the runtime silently.
+    image: vllm/vllm-openai@sha256:70a098d90dbab428a001d9e852fc0fc8d67da5beb03e7851a22247653bf35923
     container_name: hav-vllm
     restart: unless-stopped
     # vLLM is no longer published on the host — only reachable from the
@@ -44,12 +48,11 @@ services:
       - qwen3-vl-30b
       - --max-model-len
       - "32768"
-      # 0.70 of 95 GB = ~66 GB. The 30B MoE FP8 weights are ~30 GB plus
-      # KV-cache. Moshi listener is sitting at ~24 GB (heavier than the
-      # ~15 GB we expected — 0.75 here collided with it at boot), so
-      # we leave a slightly larger sliver for it.
+      # 0.50 of 96 GB = ~48 GB, matching production (2026-10-20 inventory:
+      # vLLM holds ~50 GB with ~33 GB free beside the sidecars and the
+      # V-JEPA probe). Was 0.70 when the Moshi listener shared the GPU.
       - --gpu-memory-utilization
-      - "0.70"
+      - "0.50"
       - --max-num-seqs
       - "4"
       - --max-num-batched-tokens
@@ -65,7 +68,7 @@ services:
       - "32"
       # Vision: cap multimodal items per request to bound encoder VRAM.
       - --limit-mm-per-prompt
-      - '{"image": 4, "video": 0}'
+      - '{"image": 8, "video": 0}'
       - --default-chat-template-kwargs
       - '{"enable_thinking": false}'
       - --enable-auto-tool-choice

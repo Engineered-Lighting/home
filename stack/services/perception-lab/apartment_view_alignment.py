@@ -238,6 +238,25 @@ def camera_session_compatibility(*,health_session,calibration_original_bytes,suc
 def blank(reason):return dict(schema=PACKET_SCHEMA,status='unavailable',renderable=False,reason=reason,
     label=LABEL,approximate_pose=None,room_pose=None,**NO_AUTHORITY)
 
+def _chest_point(observed,m):
+    """One lifted instance's approximate room-frame chest point: the shoulder
+    midpoint, else one shoulder, else the per-axis median of its depth-supported
+    joints. None when it has no supported joint."""
+    points={}
+    for joint in observed if isinstance(observed,list) else []:
+        xyz=joint.get('camera_xyz_m') if isinstance(joint,dict) and joint.get('status')=='candidate' else None
+        if not(isinstance(xyz,list) and len(xyz)==3 and all(finite(v) and abs(v)<=1000 for v in xyz) and xyz[2]>0):continue
+        point=[sum(m[row][k]*xyz[k] for k in range(3))+m[row][3] for row in range(3)]
+        if all(finite(v) and abs(v)<=1000 for v in point) and type(joint.get('joint_id')) is int:points[joint['joint_id']]=point
+    if 5 in points and 6 in points:return [(a+b)/2 for a,b in zip(points[5],points[6])],'shoulder_midpoint'
+    for index in (5,6):
+        if index in points:return points[index],'single_shoulder'
+    if not points:return None
+    values=sorted(points.values())
+    median=[sorted(p[axis] for p in values)[len(values)//2] if len(values)%2 else
+            sum(sorted(p[axis] for p in values)[len(values)//2-1:len(values)//2+1])/2 for axis in range(3)]
+    return median,'supported_joint_median'
+
 def project_approximate_ram_room_pose(lease,*,event,image_record,now_s,alignment,scope,
         active_collision_sha256,current_mount_revision,session_state,received_monotonic_s,
         now_monotonic_s,max_hold_s=2.,instance_index=0,timing_warnings=None,development=False):
@@ -321,11 +340,17 @@ def _project(lease,event,image_record,now_s,alignment,scope,collision,mount_revi
         provenance=dict(input_family=candidate['schema'],source_event_id=event['id'],original_event_sha256=candidate['original_event_sha256'],
             frame_media_id=frame['id'],frame_media_sha256=frame['sha256'],model_generation=p['generation'],media_generation=frame['generation'],
             calibration_content_id=camera['calibration_content_id'],ram_originals=deepcopy(descriptor['originals'])))
+    # Every lifted person (at most 2), for the position-only consumer. Same
+    # frame, same gates and same alignment as approximate_pose above.
+    people=[]
+    for index,item in enumerate(candidate['instances'][:2]):
+        chest=_chest_point(item.get('joints'),m)
+        if chest is not None:people.append(dict(instance_index=index,position_m=chest[0],method=chest[1]))
     if verified:pose['registration']['camera_session']=dict(status='verified_session_successor',
         verified_epoch=successor['verification']['verified_epoch'],reviewed_capture_epoch=camera['capture_epoch'],
         successor_digest=alignment.successor_sha256,successor_review_digest=alignment.successor_review_sha256)
     return dict(schema=PACKET_SCHEMA,status='approximate',renderable=True,reason=None,label=LABEL,session_state=state,
-        approximate_pose=pose,room_pose=None,frame=dict(frame_id=p['frame_id'],media_id=frame['id'],media_sha256=frame['sha256'],
+        approximate_pose=pose,approximate_people=people,room_pose=None,frame=dict(frame_id=p['frame_id'],media_id=frame['id'],media_sha256=frame['sha256'],
             generation=frame['generation'],site_id='victoria',camera_id='den',width=640,height=360,source_epoch=p['capture_epoch'],
             original_times={k:meta.get(k) for k in ('observed_at','available_at','valid_until')}),
         timing=dict(status='unverified',clock_qualification='unavailable',exposure_error_bound_s=None,

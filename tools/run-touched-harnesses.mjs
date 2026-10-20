@@ -124,7 +124,12 @@ const MAP = [
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
+  // APT-F06/S02: the shared data states, the status rows that read them, and Quick, which delegates to them.
+  [/^(?:app\/src\/(?:home-apartment-(?:states\.js|status\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)|tools\/(?:test-apartment-states\.cjs|test-apartment-status-rows-browser\.mjs|fixtures\/den-contracts\/.+))$/,
+    ["test-apartment-states.cjs", "test-apartment-status-rows-browser.mjs"]],
+  [/^app\/src\/home-apartment-states\.js$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-light-pools\.mjs|tools\/test-apartment-light-pools\.mjs)$/, ["test-apartment-light-pools.mjs", "test-apartment-room-inspector-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:apartment-echo-glyphs\.mjs|apartment-light-pools\.mjs|markers\.js)|tools\/test-apartment-echo-glyphs\.mjs)$/, ["test-apartment-echo-glyphs.mjs"]],
   [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:test-apartment-directional(?:-integration|-browser(?:-part2)?)?\.mjs|fixtures\/apartment-directional-browser-proof\.mjs)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:fixtures\/apartment-directional-native-mouse|test-apartment-directional-native-mouse)\.mjs$/, ["test-apartment-directional-native-mouse.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
@@ -179,6 +184,9 @@ const MAP = [
   [/^(?:app\/src\/home-apartment-(?:setup-devices\.(?:js|jsx)|setup\.jsx|edit\.jsx)|tools\/(?:test-apartment-setup-proposal-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-proposal-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment-named-aims\.(?:js|jsx)|home-apartment-(?:setup|edit)\.jsx|home-3d\/(?:picking\.js|apartment-ui-overlay-bridge\.mjs|markers\.js))|tools\/(?:test-apartment-named-aims-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-named-aims-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-aim|-command-ladder)?\.jsx|home-apartment-aiming\.js|index\.html|home-feature-loader\.js|home-service-worker\.js)|ha-config\/packages\/living_lights_manual_detection\.yaml)$/, ["run-apartment-command-ladder-tests.mjs"]],
+  // APT-P01..P06 camera dock: its own suite plus Den's two suites that mount the dock JSX.
+  [/^(?:app\/src\/(?:home-apartment-den-perception\.jsx|home-apartment-perception-(?:dock-model|view|player)\.js|home-den-reason-vocabulary\.js|home-lighting-brain-panel\.jsx|home-perception-lab\.jsx|home-apartment\.jsx|home-app\.jsx|home-feature-loader\.js)|docs\/contracts\/den\/(?:reason-vocabulary\.json|fixtures\/[^/]+\.json)|tools\/test-(?:apartment-perception-dock|home-apartment-perception-ui|apartment-desk-preview-ui)\.cjs)$/,
+    ["test-apartment-perception-dock.cjs", "test-home-apartment-perception-ui.cjs", "test-apartment-desk-preview-ui.cjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
   [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-shell-tests.js", "run-apartment-data-tests.js", "test-apartment-travel-guard.cjs", "test-home-app-source-contracts.cjs"]],
@@ -231,6 +239,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-chat-header-browser.mjs": 5,
   "test-apartment-unread-integration.mjs": 5,
   "test-apartment-escape-browser.mjs": 4,
+  "test-apartment-status-rows-browser.mjs": 6,
   "test-apartment-echo-inspector-browser.mjs": 4,
   "test-apartment-directional-integration.mjs": 4,
   "check-jsx.js": 4,

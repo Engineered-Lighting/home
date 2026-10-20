@@ -13,7 +13,7 @@ from . import EVENTS_SCHEMA
 from .geometry import ZONE_NAMES, Geometry
 from .settings import Settings
 
-EVENT_TYPES = ("occupancy", "zone", "activity", "person_pose", "health", "cost")
+EVENT_TYPES = ("occupancy", "zone", "activity", "person_pose", "person_position", "health", "cost")
 ACTIVITY_LABELS = ("reading", "computer_work", "phone_use", "resting", "transition", "other",
                    "insufficient_evidence")
 HEALTH_COMPONENTS = ("jev", "deep_stack", "frigate", "camera")
@@ -96,6 +96,17 @@ def _check_type_fields(event: dict) -> str | None:
                     or not (person.get("head_pitch_deg") is None or _number(person.get("head_pitch_deg")))
                     or person.get("approximate") is not True):
                 return "people[] entries need track_id, shoulders_m{left,right}, head_m, head_pitch_deg, approximate:true"
+    elif kind == "person_position":
+        people = event.get("people")
+        if not isinstance(people, list) or len(people) > MAX_PEOPLE_PER_POSE:
+            return "people must be a list"
+        if not _int_or_none(event.get("person_count")) or event.get("person_count") is None:
+            return "person_count must be a non-negative int"
+        for person in people:
+            if (not isinstance(person, dict) or not isinstance(person.get("track_id"), (str, int))
+                    or person.get("position_m") is None or not _vec_or_none(person.get("position_m"))
+                    or person.get("approximate") is not True):
+                return "people[] entries need track_id, position_m [x,y,z] and approximate:true"
     elif kind == "health":
         if event.get("component") not in HEALTH_COMPONENTS:
             return "component must be jev, deep_stack, frigate or camera"
@@ -186,6 +197,7 @@ class Inputs:
     activity: Obs | None = None
     reading: ReadingRun | None = None
     pose: Obs | None = None
+    position: Obs | None = None
     health: dict[str, Obs] = field(default_factory=dict)
     cost: list[tuple[float, int, float | None]] = field(default_factory=list)
     latest: dict[str, float] = field(default_factory=dict)
@@ -215,7 +227,7 @@ class Inputs:
             return "stale"
         self.latest[key] = observed
         obs = Obs(observed, ttl, event)
-        if kind in ("activity", "person_pose") and (event.get("person_count") or 0) >= 1:
+        if kind in ("activity", "person_pose", "person_position") and (event.get("person_count") or 0) >= 1:
             last = self.last_person_evidence_at
             self.last_person_evidence_at = observed if last is None else max(last, observed)
         if kind == "occupancy":
@@ -231,6 +243,8 @@ class Inputs:
             self.activity = obs
         elif kind == "person_pose":
             self.pose = obs
+        elif kind == "person_position":
+            self.position = obs
         elif kind == "health":
             self.health[event["component"]] = obs
         return None

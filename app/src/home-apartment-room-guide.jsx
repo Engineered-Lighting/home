@@ -202,7 +202,7 @@
     const show = legend && wide && !suppressed && items.length > 0;
     return <>
       <span ref={anchorRef} hidden />
-      {show && stage && ReactDOM.createPortal(<div className="apt-room-guide-legend" role="group" aria-label="Room legend">
+      {show && stage && ReactDOM.createPortal(<div className="apt-room-guide-legend" role="group" aria-label="Room legend" data-apt-label-avoid="">
         {items.map((item) => <span key={item.id} data-apt-legend={item.id} title={item.detail}><Swatch item={item} />{item.label}</span>)}
       </div>, stage)}
     </>;

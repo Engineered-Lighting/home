@@ -60,6 +60,7 @@ async function mounted({owned=false,emitOnStart=true}={}){
     HomeSpatialViewport:{getSelectedSiteId:()=> 'victoria',subscribe:()=>()=>{}},HomeContentPacks:{get:()=>({manifest:{assets:{'collision.glb':{sha256:hash('c')}}}})},
     HomeApartmentPerceptionPlayer:{create(options){playerOptions=options;player={start(){counts.playerStart++;if(emitOnStart)emit(preview());},destroy(){counts.playerDestroy++;}};return player;}}});
   const layer={draw(){counts.layerDraw++;},screenAnchor:()=>null,readback:()=>({following:false,followPaused:false}),setFollowing(){},dispose(){counts.layerDispose++;}};
+  for(const file of ['home-den-reason-vocabulary.js','home-apartment-perception-dock-model.js'])vm.runInContext(fs.readFileSync(path.join(SRC,file),'utf8'),dom.getInternalVMContext());
   vm.runInContext(Babel.transform(fs.readFileSync(path.join(SRC,'home-apartment-den-perception.jsx'),'utf8'),{presets:['react']}).code,dom.getInternalVMContext());
   const {createRoot}=require('react-dom/client'),root=createRoot(w.document.getElementById('root'));
   // The fixed-desk preview is retired in Home (AL-4); this suite keeps its opt-in path covered.

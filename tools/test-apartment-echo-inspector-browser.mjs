@@ -110,7 +110,7 @@ test('Echo light inspector and Quick: HA offline example, guarded controls and e
   fs.mkdirSync(run, { recursive: true });
   const receipt = { schema: 'home-apartment-echo-inspector-browser-1', authored_component: true, complete_home_app: false,
     authored_ha_adapter: 'in-page recording', physical_commands: 0, http_requests: [], websocket_attempts: [], errors: [], checks: [],
-    sources: Object.fromEntries(['home-apartment-echo.jsx', 'home-apartment-quick.js', 'home-apartment-ui.jsx', 'home-tokens.css'].map(name => [name, sha(read(name))])) };
+    sources: Object.fromEntries(['home-apartment-echo.jsx', 'home-apartment-states.js', 'home-apartment-quick.js', 'home-apartment-ui.jsx', 'home-tokens.css'].map(name => [name, sha(read(name))])) };
   let browser;
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   try {
@@ -128,7 +128,7 @@ test('Echo light inspector and Quick: HA offline example, guarded controls and e
       await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%}#root{position:relative;height:100%;overflow:auto}</style><div id="root" class="apt-home-shell"></div>');
       await page.addStyleTag({ content: css });
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, scenario.theme);
-      for (const name of ['vendor/react-18.3.1/react.production.min.js', 'vendor/react-18.3.1/react-dom.production.min.js', 'home-apartment-quick.js'])
+      for (const name of ['vendor/react-18.3.1/react.production.min.js', 'vendor/react-18.3.1/react-dom.production.min.js', 'home-apartment-states.js', 'home-apartment-quick.js'])
         await page.addScriptTag({ content: read(name) });
       await page.addScriptTag({ content: jsx('home-apartment-ui.jsx') });
       await page.addScriptTag({ content: jsx('home-apartment-echo.jsx') });

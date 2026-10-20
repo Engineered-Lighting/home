@@ -69,6 +69,10 @@
     });
   }
 
+  // Prototype app.jsx: a notice stays 3.6 s, and one that offers an action
+  // (Undo) stays 6 s so there is time to use it. A caller may set its own.
+  const TOAST_MS = 3600, TOAST_ACTION_MS = 6000;
+
   /* The parent owns which notice is shown. It must dismiss by toast identity,
    * so an expired notice cannot clear a newer one. Timeout belongs here only;
    * the parent must not also schedule a legacy dismissal timer. */
@@ -81,7 +85,7 @@
     React.useEffect(() => {
       if (!toast) return undefined;
       const requested = toast.timeoutMs;
-      const duration = Number.isFinite(requested) && requested >= 0 ? requested : 2800;
+      const duration = Number.isFinite(requested) && requested >= 0 ? requested : toast.action ? TOAST_ACTION_MS : TOAST_MS;
       const element = elementRef.current;
       const focused = !!element?.contains(element.ownerDocument?.activeElement);
       const life = { toast, timer: null, started: 0, remaining: duration, focus: focused, pointer: false, done: false };
@@ -142,7 +146,7 @@
    * action that Escape also performs carries the dimmable `esc` hint. */
   function HintBar({ kind, icon = null, children, detail, actions = [], ...attributes }) {
     // Extra attributes (for example a suite's data-* hook) land on the bar itself.
-    return <div {...attributes} className="apt-ui-hint" data-apt-hint={kind || "hint"} role="status" aria-live="polite">
+    return <div {...attributes} className="apt-ui-hint" data-apt-hint={kind || "hint"} data-apt-label-avoid="" role="status" aria-live="polite">
       {icon && <span className="apt-ui-hint-icon" aria-hidden="true">{icon}</span>}
       <span className="apt-ui-hint-text">{children}{detail && <span className="apt-ui-hint-detail"> · {detail}</span>}</span>
       {actions.filter(Boolean).map((action) => <button type="button" key={action.label}

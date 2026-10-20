@@ -1,0 +1,44 @@
+{
+  "schema": "den-ops-banner-1",
+  "synthetic": true,
+  "generated_at": 1800000000,
+  "level": 0,
+  "step": "normal",
+  "banner": {
+    "severity": "warn",
+    "host": "victoria-jetson",
+    "text": "Ops monitor silent on victoria-jetson"
+  },
+  "hosts": [
+    {
+      "schema": "den-ops-status-1",
+      "host": "la-host",
+      "role": "brain",
+      "level": 0,
+      "step": "normal",
+      "latched": false,
+      "since": 1799999400,
+      "checked_at": 1799999970,
+      "message": "Normal",
+      "reasons": [],
+      "received_at": 1799999971,
+      "age_s": 29,
+      "stale": false
+    },
+    {
+      "schema": "den-ops-status-1",
+      "host": "victoria-jetson",
+      "role": "activity_loop",
+      "level": 0,
+      "step": "normal",
+      "latched": false,
+      "since": 1799999400,
+      "checked_at": 1799999970,
+      "message": "Normal",
+      "reasons": [],
+      "received_at": 1799999580,
+      "age_s": 420,
+      "stale": true
+    }
+  ]
+}

@@ -9,3 +9,5 @@ With Lighting on, Photo, Cloud and Mesh now render into one high-dynamic-range f
 Turning Lighting off and on preserves other render instrumentation. Failed HDR proofs and frame-cost measurements restore their caller's render target.
 
 Adaptation diagnostics retain the renderer's original sample clock, so timing checks account for frames that take longer to render.
+
+CI retains authored lighting success and failure receipts, including the last meter and adaptation state on a failed browser proof.

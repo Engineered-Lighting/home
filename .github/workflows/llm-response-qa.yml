@@ -146,6 +146,8 @@ jobs:
         with:
           name: apartment-touched-authored-browser-${{ matrix.shard }}-of-8
           path: |
+            .tmp/apartment-lit-webgpu-browser/*/receipt.json
+            .tmp/apartment-lit-webgpu-browser/*/failure-receipt.json
             .tmp/apartment-overlay-bridge-browser/run-*/receipt.json
             .tmp/apartment-room-selection-browser/run-*/receipt.json
             .tmp/apartment-room-inspector-browser/run-*/receipt.json

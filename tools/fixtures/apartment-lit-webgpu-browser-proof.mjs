@@ -83,8 +83,9 @@ function browserOptions(backend) {
   assert.ok(installed || process.platform === 'win32', 'pinned Chromium must exist on Linux');
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
   if (backend === 'webgpu') args.push('--enable-unsafe-webgpu', '--ignore-gpu-blocklist');
-  if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
-  else if (process.platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  if (process.platform === 'linux' || process.env.HOME_LIT_WEBGPU_SOFTWARE === '1')
+    args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  else if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
   const channel = process.env.HOME_LIT_WEBGPU_CHANNEL || null;
   return { headless: true, args, ...(channel ? { channel } : process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
@@ -430,10 +431,14 @@ async function proveOn(backend, part, signal) {
       return {ev:s.adaptationEv,target:s.adaptationTargetEv,adapting:s.adapting,updatedAtMs:s.adaptationUpdatedAtMs}; });
     const after = async ms => { await page.waitForTimeout(ms); await frames(2); return sampleAdaptation(); };
     await page.evaluate(() => window.__APT_ENGINE.setLitTone('agx'));
-    const fromEv = (await page.evaluate(() => window.__APT_ENGINE.litState().adaptationEv));
+    const beforeBright = await sampleAdaptation(), fromEv = beforeBright.ev;
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await all(true); await frames(2);
-    await page.waitForFunction(()=>window.__APT_ENGINE.litState().adaptationTargetEv<=.01);
+    // The authored all-on scene need not meter at exactly zero EV on every
+    // backend. Require a newly sampled target below the unchanged brightening
+    // assertion, rather than assuming a particular meter calibration.
+    await page.waitForFunction(({ev,updatedAtMs})=>{const s=window.__APT_ENGINE.litState();
+      return s.adaptationUpdatedAtMs>updatedAtMs&&s.adaptationTargetEv<ev*.45;},beforeBright);
     const brightFrom=await sampleAdaptation();
     const brightening = await after(1000);
     assert.ok(brightening.ev < fromEv * 0.45, 'brightening adapts fast (tau 0.75 s): ' + JSON.stringify({ fromEv, ...brightening }));
@@ -489,6 +494,12 @@ async function proveOn(backend, part, signal) {
   catch (error) {
     failureSummary = (String(error.message) + ' | stack ' + String(error.stack || '').split(String.fromCharCode(10)).find(line => /lit-webgpu-browser(?:-proof)?\.mjs:\d+/.test(line))).replace(/\s+/g, ' ').slice(0, 1400);
     receipt.failure = error.message;
+    receipt.failure_state = await page?.evaluate(() => {
+      const s=window.__APT_ENGINE?.litState?.();
+      return s && {active:s.active,status:s.status,adaptationEv:s.adaptationEv,target:s.adaptationTargetEv,
+        updatedAtMs:s.adaptationUpdatedAtMs,meterSerial:s.meterSerial,meteredCdM2:s.meteredCdM2,
+        adapting:s.adapting,look:s.look,tone:s.tone,frame:s.frame};
+    }).catch(()=>null);
     fs.writeFileSync(path.join(run, 'failure-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
     throw new Error(error.message + '\nLit WebGPU failure evidence: ' + path.join(run, 'failure-receipt.json'), { cause: error });
   } finally {

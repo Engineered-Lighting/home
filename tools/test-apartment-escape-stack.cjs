@@ -322,6 +322,13 @@ function apartmentOperation(flags = {}) {
       assert.equal(fixture_id, 'authored-light'); assert.equal(proposal.id, 'authored-proposal');
       calls.push('proposal'); flags.proposal = false; return true;
     },
+    // Echo's named-aim owners: its reticle drag (step 1), its light's
+    // proposal (step 4, before leaving aim) and the named-aim inspector (5).
+    echoNamedAimsRef: { current: { escape: step => {
+      const owner = { drag: 'echoReticle', proposal: 'echoProposal', selection: 'namedAim' }[step];
+      if (!owner || !flags[owner]) return false;
+      calls.push(owner); flags[owner] = false; return true;
+    } } },
   };
   const handle = evaluate(apartment, local(apartment, 'handleApartmentEscape'), bindings);
   return { handle, calls, focus, refs, current, bindings };
@@ -348,6 +355,11 @@ for (const row of [
   { name: 'camera view before a pending proposal', flags: { camera: true, proposal: true, selection: true }, expected: 'camera', focus: 'camera' },
   { name: 'control card before a pending proposal', flags: { card: true, proposal: true, selection: true }, expected: 'card', focus: 'card' },
   { name: 'pending proposal discard before selection', flags: { proposal: true, selection: true }, expected: 'proposal' },
+  // Echo's named-aim owners; every row above is unchanged.
+  { name: 'Echo reticle drag cancels before every lower operation', flags: { echoReticle: true, echoProposal: true, namedAim: true, ...allLowerOperations, drag: false }, expected: 'echoReticle' },
+  { name: 'Echo proposal discard before leaving aim', flags: { echoProposal: true, tap: true, setup: true, card: true, namedAim: true }, expected: 'echoProposal' },
+  { name: 'control card before the named-aim inspector', flags: { card: true, namedAim: true, selection: true }, expected: 'card', focus: 'card' },
+  { name: 'named-aim inspector clears before a light selection', flags: { namedAim: true, selection: true }, expected: 'namedAim' },
 ]) {
   test('actual Apartment operation table: ' + row.name + ' invokes exactly its existing owner', () => {
     const f = apartmentOperation(row.flags);

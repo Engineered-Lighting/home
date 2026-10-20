@@ -2393,6 +2393,9 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
 }
 
 const APT_AIM_HISTORY_STEPS = 30;
+const APT_NO_ECHO_NAMED_AIMS = Object.freeze({ overlay: null, aimTab: null, roomList: null, inspector: null, escape: () => false,
+  openNamedAim: () => false, recall: () => null, host: null });
+const aptNoEchoNamedAims = () => APT_NO_ECHO_NAMED_AIMS;
 const aptUndoShortcut = () => /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘Z" : "Ctrl+Z";
 const aptVirtualFixtureLit = item => !!(item.state?.spotlight?.on || item.state?.downward?.on || item.state?.radials?.some(radial => radial.on));
 
@@ -2471,7 +2474,7 @@ const aptEmptySnapshot = () => null;
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
   tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, commandBinding,
-  aimControls }) {
+  aimControls, aimNamedAims }) {
   const radialSnapshot = React.useSyncExternalStore(directionalView?.subscribe || aptEmptySubscribe,
     directionalView?.getSnapshot || aptEmptySnapshot, aptEmptySnapshot);
   const [localTab, setLocalTab] = useState("light");
@@ -2575,6 +2578,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
     {tab === "aim" && <section className="apt-ui-section" id="apt-ui-virtual-aim" role="tabpanel" aria-label="Fixture aim">
       <h3 className="apt-ui-heading">Spotlight aim</h3>
       {aimControls || <p className="apt-ui-copy">Drag the aim handle onto a visible room surface. Its socket stays fixed.</p>}
+      {aimNamedAims}
       {['pan', 'tilt'].map(axis => <AptUnifiedRange key={axis} label={axis === 'pan' ? 'Pan' : 'Tilt'} ariaLabel={axis === 'pan' ? 'Pan' : 'Tilt'} suffix="°"
         min={fixture.limits?.[`${axis}_min_deg`] ?? (axis === 'pan' ? -175 : -5)} max={fixture.limits?.[`${axis}_max_deg`] ?? (axis === 'pan' ? 175 : 88)}
         value={state[`${axis}_deg`] || 0} onChange={value => onPatch({ [`${axis}_deg`]: value })} />)}
@@ -2895,6 +2899,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   if (!aimProposalStoreRef.current && window.HomeApartmentAimProposals?.createAimProposalStore)
     aimProposalStoreRef.current = window.HomeApartmentAimProposals.createAimProposalStore();
   const aimProposals = aimProposalStoreRef.current;
+  const echoNamedAimsRef = useRef(null);
   React.useSyncExternalStore(aimProposals?.subscribe || aptEmptySubscribe,
     aimProposals?.getSnapshot || aptEmptySnapshot, aimProposals?.getSnapshot || aptEmptySnapshot);
   const [aimPresentation, setAimPresentation] = useState(null);
@@ -6695,10 +6700,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     }
     // Step 1: a reticle drag cancels and leaves any proposal unchanged.
     if (aimPresentationRef.current?.readback().dragging) { aimPresentationRef.current.cancelDrag(); return true; }
+    if (echoNamedAimsRef.current?.escape("drag")) return true;
     if (mapRehearsalOpen) { void window.HomeMapRehearsalUI?.close?.(); return true; }
     if (travellingRef.current || (spatialCoordinatorRef.current?.getState?.()?.phase ?? "idle") !== "idle") {
       void cancelSpatialTravel(); return true;
     }
+    // Step 4 for Echo's engineered light: discard its proposal before leaving aim.
+    if (echoNamedAimsRef.current?.escape("proposal")) return true;
     if (aimMode) {
       setAimMode(false); setAimDestination(null); restoreApartmentOperationFocus("aim"); return true;
     }
@@ -6724,6 +6732,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     }
     if (editing) { setEditing(false); restoreApartmentOperationFocus("setup"); return true; }
     if (cardId) { setCardId(null); restoreApartmentOperationFocus("card"); return true; }
+    if (echoNamedAimsRef.current?.escape("selection")) return true;
     // Step 4: discard the selected light's proposal; Cmd/Ctrl+Z restores it.
     const pendingAim = virtualFixtureControlsOpen ? aimScopeFor(virtualFixtureId)?.proposal : null;
     if (pendingAim && discardAimProposal({ fixture_id: virtualFixtureId, proposal: pendingAim })) return true;
@@ -8850,7 +8859,17 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true); onShowShellControls?.(); return true;
   }, [getRoomInspectorContext, model, apartmentPlacementControlsEnabled, selectedSiteId, apartmentAuthorityKey,
     roomInspectorFrame, roomInspectorRegistration, selectedContentRevision, onShowShellControls]);
-  const namedAims = window.AptNamedAimList && <window.AptNamedAimList targets={model.targets || []} onEdit={openNamedAimEditor}
+  // Named aims and Echo's engineered light on the shared aim path
+  // (home-apartment-aim-library.jsx): this view supplies its state and guarded
+  // callbacks and mounts what the hook returns.
+  const echoNamedAims = (window.useAptEchoNamedAims || aptNoEchoNamedAims)({ open, siteId: selectedSiteId, engine: engineRef.current,
+    host: hostRef.current, model, setModel, saveModel, saveStatus, markModelDirty, sim: simActive, store: aimProposals, aimMode, aimFixtureId,
+    setAimMode, setAimFixtureId, editing, sceneEnabled: apartmentSceneControlsEnabled && spatialScale === "apartment" && !rehearsalIsolated,
+    placementEnabled: apartmentPlacementControlsEnabled && !model._equipment_registration, contentRevision: selectedContentRevision,
+    showToast, openNamedAimEditor, onShowControls: onShowShellControls, onShowAim: onShowShellAim || onShowShellControls,
+    onAimChange: () => setServicePulse(value => value + 1) });
+  echoNamedAimsRef.current = echoNamedAims;
+  const namedAims = echoNamedAims.roomList || window.AptNamedAimList && <window.AptNamedAimList targets={model.targets || []} onEdit={openNamedAimEditor}
     disabledReason={model._equipment_registration ? "Named-aim editing is unavailable for this registration."
       : !apartmentPlacementControlsEnabled || !apartmentSceneControlsEnabled ? "Setup is unavailable for this room." : ""} />;
   const openUnifiedSetup = useCallback(() => {
@@ -8990,12 +9009,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
       haConnection: connection, haLastReportedAt: selectedSiteId === "echo" ? window.HomeApartmentStates?.latestReport(statesRef.current, window.HomeApartmentQuick?.echoLightEntityIds(model.devices)) ?? null : null,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
-      openSetup: openUnifiedSetup,
+      openSetup: openUnifiedSetup, aimBridge: echoNamedAims.chatBridge || null,
       selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite, model.devices, model.zones, virtualFixtureItems.length, virtualFixtureDocument,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
-    unifiedDockCollapsed, unifiedDockExpanded, chatRoomSnapshot]);
+    unifiedDockCollapsed, unifiedDockExpanded, chatRoomSnapshot, echoNamedAims.chatBridge]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
   }, [unifiedShell, cardId, virtualFixtureControlsOpen, virtualFixtureId, aimMode, editing, onShowShellControls]);
@@ -9443,6 +9462,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         hostRef.current)}
 
       {aimOverlayElement && hostRef.current && ReactDOM.createPortal(aimOverlayElement, hostRef.current)}
+      {echoNamedAims.overlay}
       {tapAim && aimPresentation && hostRef.current && ReactDOM.createPortal(
         <div role="status" data-apt-tap-aim-hint="" style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
           zIndex: 7, display: "flex", alignItems: "center", gap: 8, padding: "5px 6px 5px 12px", borderRadius: 10,
@@ -10308,6 +10328,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           onSave={saveModel}
           saveStatus={saveStatus}
           saving={saving}
+          aimRows={echoNamedAims.aimTab}
           onStateReadback={(latest) => {
             Object.assign(statesRef.current, latest || {});
             setServicePulse((n) => n + 1);
@@ -10340,7 +10361,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         /></AptHomePanelSlot>
       )}
 
-      {unifiedShell && !virtualFixtureDocument && !cardDevice && !aimMode && phase === "ready" && (
+      {unifiedShell && !virtualFixtureDocument && !cardDevice && !aimMode && phase === "ready" && echoNamedAims.inspector && (
+        <AptHomePanelSlot enabled={true} target={shellControlsHost}>{echoNamedAims.inspector}</AptHomePanelSlot>)}
+      {unifiedShell && !virtualFixtureDocument && !cardDevice && !aimMode && phase === "ready" && !echoNamedAims.inspector && (
         <AptHomePanelSlot enabled={true} target={shellControlsHost}>
           <section className="apt-ui-inspector" aria-label="Room controls"><header className="apt-ui-header">
             <h2 className="apt-ui-title">{selectedSiteName}</h2><div className="apt-ui-sub">{(model.devices || []).filter(device => device.ha_entity_id).length} mapped devices</div>
@@ -10388,6 +10411,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               onSet={() => setAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
               onDiscard={() => discardAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
               onTapAim={() => setTapAim(value => value ? null : virtualFixtureId)} /> : null}
+            aimNamedAims={window.AptDenNamedAims && <window.AptDenNamedAims registrationRevision={virtualFixtureDocument?.binding?.registration_version ?? null} />}
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
             canSetup={apartmentPlacementControlsEnabled}
             deskControls={<section aria-label="Desk target" className="apt-ui-channel">

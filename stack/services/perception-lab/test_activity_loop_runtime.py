@@ -318,6 +318,67 @@ class CadenceTests(unittest.TestCase):
         self.assertEqual(runtime.reasoning_cadence, base[0], 'shutdown restores the configured cadence')
 
 
+class ManagedPairRuntimeTests(unittest.TestCase):
+    """Go-live 2026-10-20: on the managed controller, controller.runtime is a
+    ManagedPair; viewing sources, reasoning errors and cadence live on the
+    per-recording inner runtime it builds (item['inner'])."""
+    def setUp(self):
+        from managed_pair import ManagedPair
+        from service_runtime import cadence_settings, offer_interval
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.now = [1800000000.]
+        self.store = Store(Settings(storage_root=Path(temp.name), min_free_bytes=0, max_session_seconds=300),
+                           clock=lambda: self.now[0])
+        self.addCleanup(self.store.close)
+        self.pair = ManagedPair(self.store, {'a': object(), 'b': object()}, lambda *a, **k: None, {})
+        self.inner = SimpleNamespace(apartment_viewing_sessions={}, reasoning_errors={},
+                                     reasoning_cadence=cadence_settings(None), reasoning_min_offer_interval_s=offer_interval(None))
+        self.placement = Placement()
+        self.controller = Controller(self.store, self.pair)
+        self.deep = ManagedDeepStack(self.controller)
+
+    def bind(self, sid, inner):
+        with self.pair.lock:
+            self.pair.current = {'session': {'id': sid}, 'inner': inner, 'phase': 'recording'}
+
+    def test_viewing_source_pose_and_camera_come_from_the_inner_runtime(self):
+        from test_activity_position import packet
+        self.deep.start(); sid = self.deep.sid
+        self.assertEqual(self.deep.observe()['health']['camera'], (False, 'camera_no_viewing_source'),
+                         'while the workers prepare there is no inner runtime yet')
+        self.bind(sid, self.inner)
+        self.inner.apartment_viewing_sessions[sid] = SimpleNamespace(metric=self.placement,
+                                                                     status=lambda: {'accepted_frames': 4})
+        self.placement.packet = packet([1., 2., 1.2])
+        seen = self.deep.observe()
+        self.assertEqual(seen['health']['camera'], (True, None))
+        self.assertEqual(seen['position']['people'][0]['position_m'], [1., 2., 1.2])
+        self.inner.reasoning_errors[sid] = 'reasoning_ingestion_failed'
+        self.assertEqual(self.deep.observe()['health']['jev'][1], 'jev_egress_blocked_indeterminate'
+                         if self.deep.release.blocking() else 'reasoning_ingestion_failed')
+        self.bind('another-session', self.inner)
+        self.assertEqual(self.deep.observe()['health']['camera'], (False, 'camera_no_viewing_source'),
+                         'never another recording\'s runtime')
+
+    def test_cadence_reaches_each_rolled_recordings_inner_runtime(self):
+        from service_runtime import cadence_settings, offer_interval
+        base = (dict(self.inner.reasoning_cadence), self.inner.reasoning_min_offer_interval_s)
+        self.deep.start(); first = self.deep.sid
+        self.deep.set_cadence(2)                      # before the inner runtime exists
+        self.bind(first, self.inner); self.deep.observe()
+        self.assertEqual(self.inner.reasoning_cadence['keepalive_s'], 2 * base[0]['keepalive_s'])
+        self.assertEqual(self.deep.cadence_status()['keepalive_s'], 2 * base[0]['keepalive_s'])
+        # The roll opens a new recording with a fresh inner runtime at configured values.
+        fresh = SimpleNamespace(apartment_viewing_sessions={}, reasoning_errors={},
+                                reasoning_cadence=cadence_settings(None), reasoning_min_offer_interval_s=offer_interval(None))
+        self.now[0] += 290; self.deep.tick()
+        self.assertNotEqual(self.deep.sid, first)
+        self.bind(self.deep.sid, fresh); self.deep.observe()
+        self.assertEqual(fresh.reasoning_cadence['keepalive_s'], 2 * base[0]['keepalive_s'], 'not compounded, not lost')
+        self.deep.set_cadence(1)
+        self.assertEqual((fresh.reasoning_cadence, fresh.reasoning_min_offer_interval_s), base)
+
+
 class VjepaOffTests(unittest.TestCase):
     """MVP: the always-on loop runs fully without V-JEPA (owner, 2026-10-19)."""
     def config(self, **extra):

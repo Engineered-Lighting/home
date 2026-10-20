@@ -49,6 +49,7 @@ const MAP = [
   [/^tools\/(?:test-apartment-shell-audit(?:-echo|-behaviour)?-browser|fixtures\/apartment-shell-audit(?:-server|-probes)?)\.mjs$/, ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
   [/^tools\/test-apartment-(?:ui-overlay-bridge|overlay-bridge-browser)\.mjs$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
@@ -140,9 +141,9 @@ const MAP = [
   [/^(?:app\/src\/(?:home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)|home-3d\/apartment-directional-presentation\.mjs)|tools\/test-apartment-composer-comfort-browser\.mjs)$/, ["test-apartment-composer-comfort-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures\.mjs|markers\.js)|tools\/test-apartment-radial-visual\.mjs)$/, ["test-apartment-radial-visual.mjs"]],
   // W2 aim wiring: the mounted overlay, its store and presentation, and the hand-change switch point.
-  [/^(?:app\/src\/(?:home-apartment(?:-room-overlay|-cards)?\.jsx|home-apartment-aim-proposals\.js|home-app\.jsx|home-3d\/(?:apartment-aim-presentation\.mjs|engine\.js))|tools\/(?:test-apartment-(?:aim-wiring(?:-(?:drag|keys|room|phone))?-browser|manual-intent-contract)\.mjs|fixtures\/apartment-aim-wiring-harness\.mjs))$/,
+  [/^(?:app\/src\/(?:home-apartment(?:-room-overlay|-cards)?\.jsx|home-apartment-aim-proposals\.js|home-app\.jsx|home-3d\/(?:apartment-aim-presentation\.mjs|engine\.js))|tools\/(?:test-apartment-(?:aim-wiring(?:-(?:drag|keys|room|phone))?-browser|aim-reticle-drag-browser|manual-intent-contract)\.mjs|fixtures\/apartment-aim-wiring-harness\.mjs))$/,
     ["test-apartment-aim-wiring-browser.mjs", "test-apartment-aim-wiring-drag-browser.mjs", "test-apartment-aim-wiring-keys-browser.mjs",
-      "test-apartment-aim-wiring-room-browser.mjs", "test-apartment-aim-wiring-phone-browser.mjs", "test-apartment-manual-intent-contract.mjs",
+      "test-apartment-aim-wiring-room-browser.mjs", "test-apartment-aim-wiring-phone-browser.mjs", "test-apartment-aim-reticle-drag-browser.mjs", "test-apartment-manual-intent-contract.mjs",
       "run-apartment-aim-presentation-tests.mjs", "run-apartment-aim-lifecycle-browser.mjs", "run-apartment-aim-proposals-tests.mjs"]],
   // Named aims (aim library) and Echo's engineered aim on the shared proposal path.
   [/^(?:app\/src\/(?:home-apartment(?:-aim-library|-echo-aim|-chat-aim|-aim-proposals)\.js|home-apartment(?:-aim-library|-room-overlay|-aim)?\.jsx|home-app\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-(?:aim-library(?:-browser|-shell-browser)?|chat-aim)\.mjs)$/,

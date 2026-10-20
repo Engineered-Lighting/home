@@ -2328,7 +2328,7 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
     <button type="button" className="apt-ui-button is-small" aria-label="Lighting" aria-pressed={!!lighting}
       title={!onLit ? "Lighting needs modeled fixtures in this home" : modeLockedReason || "Simulated light from the virtual fixtures · not photometric"}
       disabled={disabled || !onLit || !!modeLockedReason} onClick={() => onLit?.(!lighting)}>
-      <AptUnifiedIcon name="bulb" /><span className="apt-ui-toolbar-word">Lighting</span></button>
+      <AptUnifiedIcon name="bulb" /><span className="apt-ui-toolbar-word apt-ui-lighting-word">Lighting</span></button>
     <span className="apt-ui-toolbar-separator apt-ui-orbit" />
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled || !!viewLockedReason}
       title={viewLockedReason || undefined} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
@@ -2336,8 +2336,9 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
       aria-label={`View angle ${view + 1} of 8`}>{view + 1}/8</span>
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit right" disabled={disabled || !!viewLockedReason}
       title={viewLockedReason || undefined} onClick={() => onOrbit(1)}><AptUnifiedIcon name="chevR" /></button>
-    <button type="button" className="apt-ui-button is-small hide-small" aria-label="Fit room" disabled={disabled || !!viewLockedReason}
-      title={viewLockedReason || undefined} onClick={onFit}><AptUnifiedIcon name="fit" />Fit</button>
+    {/* Icon-only, as in the prototype toolbar, so the row fits a 768 px stage. */}
+    <button type="button" className="apt-ui-button is-icon is-small hide-small" aria-label="Fit room" disabled={disabled || !!viewLockedReason}
+      title={viewLockedReason || "Fit room"} onClick={onFit}><AptUnifiedIcon name="fit" /></button>
     <span className="apt-ui-toolbar-separator hide-small" />
     <div className="apt-ui-help"><button type="button" className="apt-ui-button is-small" aria-label="Layers"
       aria-expanded={popover === "layers"} onClick={() => setPopover(popover === "layers" ? null : "layers")}><AptUnifiedIcon name="layers" /><span className="apt-ui-toolbar-word">Layers</span></button>
@@ -6065,6 +6066,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // keeps Chat open and raises a phone sheet to half (APT-A02).
   const startAimFromRoom = ({ fixture_id: id } = {}) => {
     if (id !== virtualFixtureId || !virtualFixtureControlsOpen) return;
+    // Grabbing the reticle is choosing Spot: no separate click on the tool,
+    // whichever tab or tool was showing.
+    if (fixtureInteractionModeRef.current !== "spot") changeFixtureInteractionMode("spot");
     setVirtualInspectorTab("aim");
     if (unifiedShell) (onShowShellAim || onShowShellControls)?.();
   };
@@ -6199,13 +6203,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     onSelect: id => aimActionsRef.current.select(id), onHover: id => setHoverFixtureId(id),
     onAimStart: info => aimActionsRef.current.start(info), onPropose: request => aimActionsRef.current.propose(request),
     onSet: request => aimActionsRef.current.setProposal(request), onDiscard: request => aimActionsRef.current.discard(request),
+    onReticleGrab: point => aimActionsRef.current.grab(point),
   }), []);
   const aimOverlaySelectedId = virtualFixtureControlsOpen ? virtualFixtureId : null;
   const aimOverlayPillId = directionalDisplay ? virtualFixtureId : null;
   const aimOverlayLimits = selectedVirtualFixture?.limits || null;
-  const aimOverlayAim = useMemo(() => aimSelectedDescriptor && fixtureInteractionMode === "spot"
+  // The reticle shows for the selected light on every tool; grabbing it
+  // switches to Spot (startAimFromRoom).
+  const aimOverlayAim = useMemo(() => aimSelectedDescriptor
     ? { descriptor: aimSelectedDescriptor, limits: aimOverlayLimits, namedAims: [] } : null,
-  [aimSelectedDescriptor, fixtureInteractionMode, aimOverlayLimits]);
+  [aimSelectedDescriptor, aimOverlayLimits]);
   const aimOverlayElement = useMemo(() => aimPresentation && window.AptRoomOverlay
     ? <window.AptRoomOverlay presentation={aimPresentation} store={aimProposals} siteId="victoria" fixtures={aimOverlayFixtures}
       selectedId={aimOverlaySelectedId} hoverId={hoverFixtureId} pillFixtureId={aimOverlayPillId} aim={aimOverlayAim} {...aimOverlayCallbacks} />
@@ -6294,6 +6301,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // any overlay above the Apartment keep their own keys.
   aimActionsRef.current = { propose: proposeAim, start: startAimFromRoom, select: id => selectVirtualFixture(id),
     setProposal: setAimProposal, discard: discardAimProposal,
+    // A press on the reticle over another light's body selects that light.
+    grab: ({ clientX, clientY }) => {
+      const engine = engineRef.current;
+      let id = null;
+      try { id = engine.picking.pick(engine.overlay.virtualFixturePickObjects(), clientX, clientY)[0]?.object.userData.fixture_id || null; }
+      catch (_) { id = null; }
+      if (!id || id === virtualFixtureId) return true;
+      selectVirtualFixture(id);
+      return false;
+    },
     enabled: () => !!(open && selectedSiteId === "victoria" && virtualFixtureControlsOpen && apartmentSceneControlsEnabled
       && !editing && !radialGestureOwnerRef.current && !virtualAimGestureRef.current?.readback().active
       && !aimPresentationRef.current?.readback().dragging),

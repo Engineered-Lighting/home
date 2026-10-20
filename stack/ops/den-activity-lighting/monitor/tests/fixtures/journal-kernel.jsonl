@@ -1,0 +1,13 @@
+{"__CURSOR": "s=1;i=100", "__REALTIME_TIMESTAMP": "1792432800000000", "PRIORITY": "6", "MESSAGE": "Linux version 6.8.0-45-generic (synthetic fixture)"}
+{"__CURSOR": "s=1;i=101", "__REALTIME_TIMESTAMP": "1792432801000000", "PRIORITY": "6", "MESSAGE": "thermal LNXTHERM:00: registered as thermal_zone0"}
+{"__CURSOR": "s=1;i=102", "__REALTIME_TIMESTAMP": "1792432802000000", "PRIORITY": "4", "MESSAGE": "mce: [Hardware Error]: Machine check events logged"}
+{"__CURSOR": "s=1;i=103", "__REALTIME_TIMESTAMP": "1792432803000000", "PRIORITY": "3", "MESSAGE": "Out of memory: Killed process 4242 (python3) total-vm:9000000kB, anon-rss:7000000kB"}
+{"__CURSOR": "s=1;i=104", "__REALTIME_TIMESTAMP": "1792432804000000", "PRIORITY": "6", "MESSAGE": "python3[5151]: segfault at 0 ip 00007f0000000000 sp 00007ffd00000000 error 4 in libc.so.6"}
+{"__CURSOR": "s=1;i=105", "__REALTIME_TIMESTAMP": "1792432805000000", "PRIORITY": "4", "MESSAGE": "CPU3: Core temperature above threshold, cpu clock throttled (total events = 1)"}
+{"__CURSOR": "s=1;i=106", "__REALTIME_TIMESTAMP": "1792432806000000", "PRIORITY": "4", "MESSAGE": "traps: node[777] general protection fault ip:55aa00000000 sp:7ffc00000000 error:0 in node[55aa00000000+100000]"}
+{"__CURSOR": "s=1;i=107", "__REALTIME_TIMESTAMP": "1792432807000000", "PRIORITY": "0", "MESSAGE": "watchdog: BUG: soft lockup - CPU#5 stuck for 22s! [kworker/5:1:123]"}
+{"__CURSOR": "s=1;i=108", "__REALTIME_TIMESTAMP": "1792432808000000", "PRIORITY": "3", "MESSAGE": "blk_update_request: I/O error, dev nvme0n1, sector 123456 op 0x1:(WRITE) flags 0x0"}
+{"__CURSOR": "s=1;i=109", "__REALTIME_TIMESTAMP": "1792432809000000", "PRIORITY": "4", "MESSAGE": "NVRM: Xid (PCI:0000:01:00): 79, pid=0, GPU has fallen off the bus."}
+{"__CURSOR": "s=1;i=110", "__REALTIME_TIMESTAMP": "1792432810000000", "PRIORITY": "6", "MESSAGE": [100, 101, 110, 255, 32, 111, 107]}
+not json at all
+{"__CURSOR": "s=1;i=111", "__REALTIME_TIMESTAMP": "1792432811000000", "PRIORITY": "4", "MESSAGE": "general protection fault, probably for non-canonical address 0xdead000000000100: 0000 [#1] PREEMPT SMP NOPTI"}

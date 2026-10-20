@@ -100,14 +100,14 @@ jobs:
           retention-days: 7
 
   touched_contracts:
-    name: touched-surface contracts (${{ matrix.shard }}/5)
+    name: touched-surface contracts (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         # Disjoint shards of one touched plan; the aggregate verifies the union.
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - uses: actions/checkout@v4
@@ -127,15 +127,15 @@ jobs:
 
       - name: Touched-surface harnesses
         if: github.event_name == 'pull_request'
-        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --shard "${{ matrix.shard }}/5" --receipt ".tmp/touched-harnesses/shard-${{ matrix.shard }}-of-5.json"
+        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --shard "${{ matrix.shard }}/6" --receipt ".tmp/touched-harnesses/shard-${{ matrix.shard }}-of-6.json"
 
       - name: Publish this worker's harness receipt
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: touched-harness-shard-${{ matrix.shard }}-of-5
+          name: touched-harness-shard-${{ matrix.shard }}-of-6
           path: |
-            .tmp/touched-harnesses/shard-${{ matrix.shard }}-of-5.json
+            .tmp/touched-harnesses/shard-${{ matrix.shard }}-of-6.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
@@ -144,7 +144,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: apartment-touched-authored-browser-${{ matrix.shard }}-of-5
+          name: apartment-touched-authored-browser-${{ matrix.shard }}-of-6
           path: |
             .tmp/apartment-overlay-bridge-browser/run-*/receipt.json
             .tmp/apartment-room-selection-browser/run-*/receipt.json
@@ -187,10 +187,10 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
-          pattern: touched-harness-shard-*-of-5
+          pattern: touched-harness-shard-*-of-6
           path: .tmp/touched-harnesses
           merge-multiple: true
 
       - name: Require the shard union to equal the unsharded plan
         if: github.event_name == 'pull_request'
-        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --verify-receipts .tmp/touched-harnesses --shards 5
+        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}" --verify-receipts .tmp/touched-harnesses --shards 6

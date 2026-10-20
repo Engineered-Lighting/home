@@ -1,0 +1,5 @@
+[
+  {"_comment": "Synthetic GET /api/states excerpt matching Victoria today: only the den camera occupancy sensor, no zones, count sensor unavailable. No live read."},
+  {"entity_id": "binary_sensor.den_oak_person_occupancy", "state": "on", "attributes": {"friendly_name": "Den Oak Person occupancy", "device_class": "occupancy"}},
+  {"entity_id": "sensor.den_oak_person_count", "state": "unavailable", "attributes": {}}
+]

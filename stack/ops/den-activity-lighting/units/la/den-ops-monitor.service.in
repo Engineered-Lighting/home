@@ -1,0 +1,38 @@
+# Den activity-lighting ops monitor (AL-5) on the LA AI host: one pass per
+# timer tick. On this host it senses and alerts (temperatures, memory, GPU,
+# failed units, kernel fault records); the Victoria Jetson's monitor is the
+# one that acts on the activity loop, and it reads this host's level through
+# the gateway. Render with ../../render_units.py.
+#
+# @ENV_FILE@ (0600, owned by @SERVICE_USER@) holds the private value:
+#   DEN_OPS_MONITOR_CONFIG=<absolute path to monitor.json>
+[Unit]
+Description=Den activity-lighting ops monitor (one pass)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+# Read the kernel journal without root.
+SupplementaryGroups=systemd-journal
+EnvironmentFile=@ENV_FILE@
+Environment=DEN_OPS_STATE_DIR=%S/den-ops-monitor
+StateDirectory=den-ops-monitor
+StateDirectoryMode=0700
+WorkingDirectory=@RELEASE_OPS_DIR@/monitor
+ExecStart=/usr/bin/python3 -E -s -m den_ops check
+MemoryMax=96M
+CPUQuota=20%
+TasksMax=16
+Nice=10
+TimeoutStartSec=60
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+UMask=0077
+SyslogIdentifier=den-ops-monitor

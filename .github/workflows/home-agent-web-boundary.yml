@@ -32,6 +32,7 @@ on:
       - "tools/run-web-gateway-stack-token-tests.js"
       - "tools/run-web-gateway-ha-token-tests.mjs"
       - "tools/run-web-gateway-home-location-tests.mjs"
+      - "tools/run-web-gateway-lighting-brain-tests.mjs"
       - "tools/run-lighting-intent-tests.js"
       - "tools/test-home-camera-query.cjs"
       - "app/src/home-camera-query.js"
@@ -69,6 +70,7 @@ on:
       - "tools/run-web-gateway-stack-token-tests.js"
       - "tools/run-web-gateway-ha-token-tests.mjs"
       - "tools/run-web-gateway-home-location-tests.mjs"
+      - "tools/run-web-gateway-lighting-brain-tests.mjs"
       - "tools/run-lighting-intent-tests.js"
       - "tools/test-home-camera-query.cjs"
       - "app/src/home-camera-query.js"
@@ -158,6 +160,7 @@ jobs:
           node_run node tools/run-web-gateway-stack-token-tests.js
           node_run node tools/run-web-gateway-ha-token-tests.mjs
           node_run node tools/run-web-gateway-home-location-tests.mjs
+          node_run node tools/run-web-gateway-lighting-brain-tests.mjs
           node_run node tools/run-lighting-intent-tests.js
           node_run node --test tools/test-home-camera-query.cjs
           node_run npm --prefix stack/services/home-agent-bff run check

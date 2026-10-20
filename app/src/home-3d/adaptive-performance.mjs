@@ -50,6 +50,14 @@ export const PERFORMANCE_MODES = freeze({
  * stays at full resolution because reducing it also reduces the map beneath it.
  * Particle count is absolute as well as relative, so the compositor need not
  * know the author's reference count to apply a decision.
+ *
+ * Splat knobs apply to the node renderer's Photo (?renderer=webgpu,
+ * gaussian-splat-webgpu.mjs); Spark ignores them. `splatSortKeyBits` is the
+ * radix key width (16 spans the scan's own depth range, about 0.2 mm
+ * buckets for Victoria, at about half the cost of 32; 32 is exact float order), chosen when Photo loads.
+ * `splatMaxShDegree` caps view-dependent colour and applies live: SH3 is
+ * nearly free in WebGPU's compute pre-pass but is evaluated per vertex on the
+ * WebGL2 fallback, so the low rungs shed it first.
  */
 export const PERFORMANCE_BUDGETS = freeze({
     maximum: freeze({
@@ -60,6 +68,8 @@ export const PERFORMANCE_BUDGETS = freeze({
         cloudSunSteps: 4,
         handoffParticleCount: 24_000,
         handoffParticleMultiplier: 1.0,
+        splatSortKeyBits: 32,
+        splatMaxShDegree: 3,
     }),
     high: freeze({
         id: 'high',
@@ -69,6 +79,8 @@ export const PERFORMANCE_BUDGETS = freeze({
         cloudSunSteps: 4,
         handoffParticleCount: 22_000,
         handoffParticleMultiplier: 0.92,
+        splatSortKeyBits: 16,
+        splatMaxShDegree: 3,
     }),
     balanced: freeze({
         id: 'balanced',
@@ -78,6 +90,8 @@ export const PERFORMANCE_BUDGETS = freeze({
         cloudSunSteps: 3,
         handoffParticleCount: 18_000,
         handoffParticleMultiplier: 0.75,
+        splatSortKeyBits: 16,
+        splatMaxShDegree: 3,
     }),
     low: freeze({
         id: 'low',
@@ -87,6 +101,8 @@ export const PERFORMANCE_BUDGETS = freeze({
         cloudSunSteps: 2,
         handoffParticleCount: 12_000,
         handoffParticleMultiplier: 0.5,
+        splatSortKeyBits: 16,
+        splatMaxShDegree: 2,
     }),
     minimum: freeze({
         id: 'minimum',
@@ -96,6 +112,8 @@ export const PERFORMANCE_BUDGETS = freeze({
         cloudSunSteps: 1,
         handoffParticleCount: 8_000,
         handoffParticleMultiplier: 1 / 3,
+        splatSortKeyBits: 16,
+        splatMaxShDegree: 1,
     }),
 });
 

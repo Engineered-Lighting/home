@@ -1,0 +1,38 @@
+{
+  "_note": "Copy to a private path (never commit the filled copy) and replace every <placeholder>. render_units.py refuses any value that still looks like <this>.",
+  "la": {
+    "brain": {
+      "RELEASE_DIR": "<release checkout>/stack/services/lighting-brain",
+      "VENV": "<lighting-brain venv>",
+      "PRIVATE_DIR": "<root-owned private dir, e.g. /etc/lighting-brain>",
+      "RELEASE_OPS_DIR": "<release checkout>/stack/ops/den-activity-lighting"
+    },
+    "monitor": {
+      "SERVICE_USER": "<monitor user>",
+      "SERVICE_GROUP": "<monitor group>",
+      "ENV_FILE": "<private dir>/den-ops-monitor.env",
+      "RELEASE_OPS_DIR": "<release checkout>/stack/ops/den-activity-lighting"
+    }
+  },
+  "jetson": {
+    "bridge": {
+      "SERVICE_USER": "<bridge user>",
+      "SERVICE_GROUP": "<bridge group>",
+      "RELEASE_DIR": "<release checkout>/stack/services/lighting-brain-bridges/victoria-ha",
+      "VENV": "<bridge venv>",
+      "ENV_FILE": "<private dir>/victoria-ha-bridge.env"
+    },
+    "loop": {
+      "SERVICE_USER": "<perception-lab user>",
+      "ENV_FILE": "<private dir>/activity-loop.env",
+      "MEMORY_MAX": "<the base unit's reviewed MemoryMax>",
+      "CPU_QUOTA": "<the base unit's reviewed CPUQuota, e.g. 200%>",
+      "TASKS_MAX": "<the base unit's reviewed TasksMax>"
+    },
+    "monitor": {
+      "SERVICE_USER": "<perception-lab user>",
+      "ENV_FILE": "<private dir>/den-ops-monitor.env",
+      "RELEASE_OPS_DIR": "<release checkout>/stack/ops/den-activity-lighting"
+    }
+  }
+}

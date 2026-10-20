@@ -1,0 +1,6 @@
+# Private config (real geometry export, producer tokens, tuned settings) never
+# lives in the repo. Only the *.example.json files are tracked.
+config/*.json
+!config/*.example.json
+__pycache__/
+.pytest_cache/

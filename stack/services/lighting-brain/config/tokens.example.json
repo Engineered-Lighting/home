@@ -1,0 +1,18 @@
+{
+  "schema": "lighting-brain-producer-tokens-1",
+  "_note": "Copy to a private path outside the repo and replace every token with a long random value (for example: python -c \"import secrets; print(secrets.token_urlsafe(32))\").",
+  "producers": [
+    {
+      "producer": "victoria-ha-bridge",
+      "token": "REPLACE-ME-victoria-ha-bridge-token",
+      "homes": ["victoria"],
+      "types": ["occupancy", "zone", "health"]
+    },
+    {
+      "producer": "victoria-jetson-activity-loop",
+      "token": "REPLACE-ME-victoria-jetson-activity-token",
+      "homes": ["victoria"],
+      "types": ["activity", "person_pose", "health", "cost"]
+    }
+  ]
+}

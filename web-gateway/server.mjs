@@ -8,6 +8,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyAgentOrigin, parseAgentOriginBoundary } from "./agent-origin.mjs";
 import { CLIENT_ADDRESS, homeLocatorFromEnv, proxyProtocolListener } from "./home-location.mjs";
+import { createDenOpsStore, DEN_OPS_PREFIX, handleDenOps, loadDenOpsTokens } from "./den-ops-status.mjs";
+import {
+  hasBearer,
+  hasLightingBrainCsrf,
+  LIGHTING_BRAIN_PREFIX,
+  lightingBrainProducerHeaders,
+  lightingBrainRouteKind,
+  lightingBrainSessionHeaders,
+} from "./lighting-brain-route.mjs";
 import { safeFile } from "./path-security.mjs";
 import { createPrecompiledManifestVerifier } from "./precompiled-jsx.mjs";
 
@@ -223,6 +232,11 @@ const stackTokenProxy = loadStackTokenProxy();
 const legacyHaProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_HA_PROXY");
 const haTokenProxy = loadHaTokenProxy();
 const legacyVisionProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_VISION_PROXY");
+// Den activity-lighting ops monitors (AL-5) report here; Home shows a banner.
+const denOpsTokens = loadDenOpsTokens(String(process.env.HOME_WEB_DEN_OPS_TOKENS_FILE || "").trim());
+const denOpsStore = createDenOpsStore({
+  staleS: Math.max(1, Number(process.env.HOME_WEB_DEN_OPS_STALE_S || 300) || 300),
+});
 // Default home for Home chat commands that name none (never an authority).
 const homeLocator = (() => {
   try {
@@ -352,6 +366,16 @@ const routes = [
     allow: (suffix, method) =>
       rx(/^\/(auth\/(start|callback|session|logout)|v1\/)/)(suffix) ||
       isNativeAgentRoute(method, suffix),
+    ws: false,
+  },
+  {
+    // Den lighting brain (AL-1) on this host's loopback. Auth is decided in
+    // handleLightingBrain before proxyHttp: session (+ CSRF for overrides),
+    // or a producer bearer for POST .../events only.
+    prefix: LIGHTING_BRAIN_PREFIX,
+    env: "HOME_WEB_LIGHTING_BRAIN_TARGET",
+    target: envTarget("HOME_WEB_LIGHTING_BRAIN_TARGET", "http://127.0.0.1:8101/api/lighting-brain"),
+    allow: (suffix, method) => lightingBrainRouteKind(method, suffix) !== null,
     ws: false,
   },
   {
@@ -499,6 +523,7 @@ function gatewayHealth() {
       count: nativeAgentOriginBoundary.origins.length,
     },
     apartmentAssetsDir: APARTMENT_ASSETS_DIR,
+    denOpsStatus: { enabled: denOpsTokens.enabled, monitors: denOpsTokens.monitors.length },
     routes: routeSummary(),
     ts: new Date().toISOString(),
   };
@@ -1023,7 +1048,7 @@ function isSupervisorStackApi(route, suffix) {
   return /^\/api\/(stack|services)\//.test(parsed.pathname);
 }
 
-function proxyHeaders(reqHeaders, route, suffix) {
+function proxyHeaders(reqHeaders, route, suffix, method) {
   if (route.prefix === "/api/agent" && suffix.startsWith("/native/")) {
     // Native ingress is a bearer-authenticated semantic protocol, not a
     // generic header tunnel. In particular, discard cookies, gateway Basic,
@@ -1043,6 +1068,11 @@ function proxyHeaders(reqHeaders, route, suffix) {
       if (reqHeaders[name] !== undefined) headers[name] = reqHeaders[name];
     }
     return headers;
+  }
+  if (route.prefix === LIGHTING_BRAIN_PREFIX) {
+    return lightingBrainRouteKind(method, suffix) === "producer"
+      ? lightingBrainProducerHeaders(reqHeaders, route.target)
+      : lightingBrainSessionHeaders(cleanHeaders(reqHeaders, route.target));
   }
   const headers = cleanHeaders(reqHeaders, route.target);
   if (route.prefix === "/api/agent" && !suffix.startsWith("/native/")) {
@@ -1492,7 +1522,7 @@ async function proxyNativeHttp(req, res, route, suffix, targetUrl) {
     return;
   }
   const client = targetUrl.protocol === "https:" ? https : http;
-  const headers = proxyHeaders(req.headers, route, suffix);
+  const headers = proxyHeaders(req.headers, route, suffix, req.method);
   headers["content-length"] = String(body.length);
   let bodyWiped = false;
   const wipeBody = () => {
@@ -1532,6 +1562,24 @@ async function proxyNativeHttp(req, res, route, suffix, targetUrl) {
   upstream.end(body);
 }
 
+function handleLightingBrain(req, res, route) {
+  const kind = lightingBrainRouteKind(req.method, routeSuffix(route, req.url));
+  if (kind === "producer") {
+    if (!hasBearer(req.headers)) {
+      sendJson(res, 401, { ok: false, error: "lighting_brain_producer_token_required" });
+      return;
+    }
+    proxyHttp(req, res, route);
+    return;
+  }
+  if (!requireAuth(req, res)) return;
+  if (kind === "override" && !hasLightingBrainCsrf(req.headers)) {
+    sendJson(res, 403, { ok: false, error: "lighting_brain_csrf_required" });
+    return;
+  }
+  proxyHttp(req, res, route);
+}
+
 function proxyHttp(req, res, route) {
   const suffix = routeSuffix(route, req.url);
   if (!route.allow(suffix, req.method)) {
@@ -1551,7 +1599,7 @@ function proxyHttp(req, res, route) {
   let responseTimer = null;
   const upstream = client.request(targetUrl, {
     method: req.method,
-    headers: proxyHeaders(req.headers, route, suffix),
+    headers: proxyHeaders(req.headers, route, suffix, req.method),
   }, (upstreamRes) => {
     receivedResponse = true;
     if (responseTimer) clearTimeout(responseTimer);
@@ -1704,7 +1752,7 @@ function proxyUpgrade(req, socket, head, route) {
   }
 
   const upstream = net.connect(targetUrl.port || 80, targetUrl.hostname, () => {
-    const headers = proxyHeaders(req.headers, route, suffix);
+    const headers = proxyHeaders(req.headers, route, suffix, req.method);
     let request = `${req.method} ${targetUrl.pathname}${targetUrl.search} HTTP/${req.httpVersion}\r\n`;
     for (const [key, value] of Object.entries(headers)) {
       if (Array.isArray(value)) {
@@ -1840,6 +1888,21 @@ const server = http.createServer({
   }
   if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {
     await handleAuthRoute(req, res, parsed);
+    return;
+  }
+
+  if (parsed.pathname === DEN_OPS_PREFIX || parsed.pathname.startsWith(DEN_OPS_PREFIX + "/")) {
+    await handleDenOps(req, res, {
+      pathname: parsed.pathname,
+      tokens: denOpsTokens,
+      store: denOpsStore,
+      sessionOk: requireAuth,
+      sendJson,
+    });
+    return;
+  }
+  if (route?.prefix === LIGHTING_BRAIN_PREFIX) {
+    handleLightingBrain(req, res, route);
     return;
   }
 

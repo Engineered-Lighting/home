@@ -1,0 +1,70 @@
+# Frigate zone proposal: Victoria den camera, desk and sofa (lane AL-2, #322)
+#
+# STATUS: proposal, not applied. Applying it to the Victoria Pi's Frigate is a
+# host change that needs the owner's approval first.
+#
+# The coordinates are PLACEHOLDERS: rough boxes in the lower left and lower
+# right of the frame that do NOT match the room. The owner draws the real
+# polygons in Frigate's UI (steps below). The other keys are the proposal.
+#
+# Only these keys are added. Nothing else in the den_oak camera changes, and
+# the existing den_lights_follow_person_occupancy automation keeps working on
+# binary_sensor.den_oak_person_occupancy as before.
+#
+# How the owner draws the zones (about 10 minutes):
+#   1. Open Frigate, then Settings > Masks / Zones, and pick the den_oak camera.
+#   2. Add a zone named exactly `den_desk`. Click points around the floor where
+#      the desk chair stands, including the chair seat and the floor under the
+#      front edge of the desk. Frigate places a person by the BOTTOM CENTRE of
+#      their box, so cover where feet and seat meet the floor, not the monitor
+#      or the wall behind it.
+#   3. Set objects to `person`, inertia 3 and loitering time 0. Save.
+#   4. Add `den_sofa` the same way: cover the seat cushions and the strip of
+#      floor in front of the sofa, where a seated person's feet rest. Keep it
+#      apart from den_desk; overlapping zones count one person in both.
+#   5. Save and let Frigate restart. Then sit at each spot and check Frigate's
+#      live debug view (zones overlay) shows the person inside the zone.
+#   6. Tell the planning session; the bridge config then gets
+#      "zones": {"desk": "den_desk", "sofa": "den_sofa"} (see README).
+#
+# What appears afterwards (from the Frigate integration and MQTT):
+#   MQTT:  frigate/den_desk/person, frigate/den_sofa/person   (count, on change)
+#          frigate/den_desk/person/active, .../den_sofa/person/active
+#   HA:    binary_sensor.den_desk_person_occupancy, sensor.den_desk_person_count
+#          binary_sensor.den_sofa_person_occupancy, sensor.den_sofa_person_count
+#          (plus the integration's `all` and active-count variants; exact entity
+#          ids can get a suffix if a name is taken, so check Settings > Entities.)
+
+mqtt:
+  # Frigate's heartbeat for the bridge. 60 s is Frigate's default; the bridge
+  # marks Frigate unhealthy after 150 s with no message, so keep it at 60.
+  stats_interval: 60
+
+cameras:
+  den_oak:
+    zones:
+      den_desk:
+        # PLACEHOLDER polygon (normalised x,y pairs). Redraw in Frigate's UI.
+        coordinates: 0.05,0.60,0.35,0.60,0.35,0.95,0.05,0.95
+        objects:
+          - person
+        # Frames a person must be inside (or outside) before the zone changes.
+        # 3 is Frigate's default: well under a second at the detect fps, and
+        # enough to ignore one-frame box jitter at the zone edge.
+        inertia: 3
+        # 0 = presence counts at once. The brain owns all dwell timing (its
+        # rules hold reading for 3 s and room-off for 120 s), so Frigate adds
+        # no delay of its own.
+        loitering_time: 0
+      den_sofa:
+        # PLACEHOLDER polygon (normalised x,y pairs). Redraw in Frigate's UI.
+        coordinates: 0.60,0.60,0.95,0.60,0.95,0.95,0.60,0.95
+        objects:
+          - person
+        inertia: 3
+        loitering_time: 0
+    # Deliberately NOT set: review.alerts.required_zones and
+    # review.detections.required_zones. Those only filter what Frigate saves
+    # for review; zone counts on MQTT do not need them, and setting them would
+    # hide den activity outside the two zones from Frigate's review page.
+    # The camera-wide count (frigate/den_oak/person) is unaffected by zones.

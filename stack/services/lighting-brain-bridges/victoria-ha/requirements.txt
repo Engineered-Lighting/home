@@ -1,0 +1,2 @@
+# Runtime: only the MQTT client. Everything else is the standard library.
+paho-mqtt>=1.6,<3

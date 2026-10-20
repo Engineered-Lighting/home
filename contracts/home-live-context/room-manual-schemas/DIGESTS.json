@@ -1,0 +1,46 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "controlled-room-manual-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "worker_interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "scene_interface_digest": "b1e5df3bc1c9a17c40a4c27c997e96e2748f1cc559e66dcf72a3fd74313ab674",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "15d81b773657eb632e73bf6324bee1aa6d5937c8ccc4a35cec374ca8489ead7a",
+  "payload_versions": {
+    "home-live-shadow-decision-10": 10,
+    "home-live-worker-checkpoint-10": 10,
+    "home-live-worker-commit-10": 10,
+    "home-live-input-cut-10": 10,
+    "home-live-room-output-2": 2,
+    "home-live-room-snapshot-2": 2,
+    "home-live-manual-policy-1": 1,
+    "home-live-manual-control-state-1": 1,
+    "home-live-room-control-status-1": 1,
+    "home-live-intent-event-4": 4,
+    "home-live-intent-event-2": 2,
+    "home-live-intent-event-3": 3,
+    "home-live-person-lifecycle-1": 1
+  },
+  "publication_families": [
+    "home-live-shadow-decision-10",
+    "home-live-intent-event-4"
+  ],
+  "schemas": {
+    "home-live-shadow-decision-10.schema.json": "9131868b07de85154cd403babeb949f8769b29a9a7b2e2836493aba2a4c16e17",
+    "home-live-worker-checkpoint-10.schema.json": "e997b9134eb8bb5a5e3903805beffcedc40238cc1b80eb2dc6c629240db38655",
+    "home-live-worker-commit-10.schema.json": "f96189f02744df104df0ceab8ef867a5e05562c8031440f9eb5ee4be6839008d",
+    "home-live-input-cut-10.schema.json": "3799bf91abe059961ef0c05c2bce43d7eadb329b640f7dcc6318499d5cbd3bb2",
+    "home-live-room-output-2.schema.json": "05bda73072c544034e9cfb7e573d2b953d4afcbf2eadc6b8905f196d677d67ba",
+    "home-live-room-snapshot-2.schema.json": "07905e4662ca7b627c14330a0363d8034f3e328d24c058bb2ab892d9a0bc3531",
+    "home-live-manual-policy-1.schema.json": "e59c3135ffda2dd3ee5dc14e51319035f614a6190ce60465357d9020a1004e3d",
+    "home-live-manual-control-state-1.schema.json": "e876525fe842fdbcea5f210a80a6b8b1dfc51c9b5b13cec362925b1301fd3436",
+    "home-live-room-control-status-1.schema.json": "bda44b7a7a9a7038466efd0a790e67bac22cc422ebc05b10e766efe1de38e857",
+    "home-live-intent-event-4.schema.json": "281ce20f8ecd4d19872fab4f336545a0ec9ddb028ae929f0d853424a89b8dc30",
+    "home-live-intent-event-2.schema.json": "50f697caf8a915b7e0e918a3dda9bd511ea780c6282c8a8499a89fc9fe24ee0a",
+    "home-live-intent-event-3.schema.json": "3c2802e9e4f47dcf900d1e9b4197a7d3ed77d735cacf9e34a3b57742ffca5d66",
+    "home-live-person-lifecycle-1.schema.json": "213f3782c206c28e995ab14f9a256b85581511f481cb50b2857f743335df1bfe"
+  },
+  "conservative_delivery_interface_digest": "23c8d39e42b9c2ad8a22c7af87f7c8628913e3557455744321011987709d8b98",
+  "room_interface_digest": "a0178ab12c6315b7972cc2a23454daebd732f09c3122666dec86c4d79982bbf7",
+  "room_clarification_interface_digest": "199f9b909705deeb6e6c3b7d3008f0f3e1b86e848c87c95894249667b033d65a"
+}

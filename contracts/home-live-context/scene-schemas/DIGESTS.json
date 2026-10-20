@@ -1,0 +1,26 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "profile-scene-worker-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "worker_interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "b1e5df3bc1c9a17c40a4c27c997e96e2748f1cc559e66dcf72a3fd74313ab674",
+  "payload_versions": {
+    "home-live-intent-event-1": 1,
+    "home-live-shadow-decision-2": 2,
+    "home-live-worker-checkpoint-2": 2,
+    "home-live-worker-commit-2": 2,
+    "home-live-input-cut-2": 2
+  },
+  "publication_families": [
+    "home-live-intent-event-1",
+    "home-live-shadow-decision-2"
+  ],
+  "schemas": {
+    "home-live-intent-event-1.schema.json": "322e60068de358e13749044551c47d704981c75fc597c3b3a98aecdf91d34fce",
+    "home-live-shadow-decision-2.schema.json": "2bb9d529b3eafcb9324601f71c96bd086d26221a43f9301e233593e6be3b811b",
+    "home-live-worker-checkpoint-2.schema.json": "813975d7badac1b19d6b9a97d87842a2345728037972beb106c112b13fd76236",
+    "home-live-worker-commit-2.schema.json": "9a7fe6093e9f93305c299265befc19a36b966fc0e1814b9aae455370893ac941",
+    "home-live-input-cut-2.schema.json": "4c10a58b6c8afd9a78344e3bab0f6389f96e5ad9b11557f6e19a890f1fe2f6c4"
+  }
+}

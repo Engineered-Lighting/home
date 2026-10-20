@@ -39,6 +39,7 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^(?:app\/src\/(?:home-apartment\.jsx|home-3d\/(?:engine\.js|equipment-virtual-fixtures\.mjs|lighting-render-evidence\.mjs))|docs\/contracts\/den\/fixtures\/brain-state-reading\.json|tools\/test-den-lighting-render-evidence\.mjs)$/, ["test-den-lighting-render-evidence.mjs", "test-apartment-lighting-brain.mjs", "test-apartment-connected-view-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app\.jsx|home-tokens\.css|home-apartment(?:\.jsx|-den-perception\.jsx|-camera\.jsx|-camera-source\.js|-perception-(?:source|player|view|dock-model)\.js)|home-den-lab-stream\.js|home-feature-loader\.js|home-perception-lab(?:\.jsx|-graph\.jsx|-data\.js|-transport\.js)|home-lighting-brain-(?:client|follower)\.js|home-3d\/apartment-perception-layer\.mjs)|tools\/(?:test-apartment-connected-view-browser\.mjs|fixtures\/apartment-connected-view\.json))$/, ["test-apartment-connected-view-browser.mjs"]],
   [/^(?:app\/src\/home-apartment-perception-view\.js|tools\/test-home-apartment-perception-view\.cjs)$/, ["test-home-apartment-perception-view.cjs"]],
   [/^(?:web-gateway\/(?:server|perception-lab-route)\.mjs|tools\/test-web-gateway-(?:perception-lab|lab-mounted)\.mjs)$/, ["test-web-gateway-perception-lab.mjs", "test-web-gateway-lab-mounted.mjs"]],
@@ -227,6 +228,11 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
  * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
 const SHARD_WEIGHT_S = {
+  "test-apartment-connected-view-browser.mjs": 90,
+  "test-home-full-ui-people-browser.mjs": 35,
+  "test-home-full-ui-intelligence-browser.mjs": 35,
+  "test-home-full-ui-metrics-browser.mjs": 35,
+  "test-home-full-ui-lab-browser.mjs": 35,
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
   "test-precompiled-jsx.mjs": 90,

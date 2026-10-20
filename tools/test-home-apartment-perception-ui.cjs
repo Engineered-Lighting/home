@@ -35,7 +35,7 @@ w.HomeSpatialViewport = {
   getSelectedSiteId: () => selectedSite,
   subscribe(fn) { registryListeners.add(fn); return () => registryListeners.delete(fn); },
 };
-for (const file of ['home-apartment-perception-view.js', 'home-apartment-perception-player.js']) {
+for (const file of ['home-den-reason-vocabulary.js', 'home-apartment-perception-dock-model.js', 'home-apartment-perception-view.js', 'home-apartment-perception-player.js']) {
   vm.runInContext(fs.readFileSync(path.join(src, file), 'utf8'), context);
 }
 const RealPlayer = w.HomeApartmentPerceptionPlayer;
@@ -119,7 +119,7 @@ function observations(sub, { id = 'f1', room = false, stopped = false, jev = tru
       joints: [{ id: 'head', position_m: [1, 2, 1.7] }, { id: 'hip', position_m: [1, 2, .9] }],
       edges: [['head', 'hip']], anchor_joint_id: 'hip' } : null };
 }
-async function mount({ appSource = source(), appEngine = engine(), loadLayer = null, decode = null, onReturnToHome = () => {} } = {}) {
+async function mount({ appSource = source(), appEngine = engine(), loadLayer = null, decode = null, onOpenLab = () => {}, capability = null } = {}) {
   selectedSite = 'victoria'; w.__APT_ENGINE = appEngine;
   const decoded = [], layerCalls = [], layerLoads = [];
   decoder = decode || (async (_value, { frame }) => {
@@ -138,7 +138,7 @@ async function mount({ appSource = source(), appEngine = engine(), loadLayer = n
   const loader = loadLayer || (() => { layerLoads.push(1); return Promise.resolve(layerModule); });
   const container = w.document.createElement('div'); w.document.body.appendChild(container);
   const root = createRoot(container);
-  let props = { engine: appEngine, source: appSource, loadLayer: loader, onReturnToHome };
+  let props = { engine: appEngine, source: appSource, loadLayer: loader, onOpenLab, ...(capability ? { capability } : {}) };
   const render = async extra => { props = { ...props, ...extra }; if (extra?.engine) w.__APT_ENGINE = extra.engine;
     await act(async () => root.render(React.createElement(w.HomeApartmentDenPerception, props))); await flush(); };
   await render({});
@@ -320,8 +320,22 @@ test('the DOM retains the exact A image/pose and its unknown age while B decodes
   for (const value of owned) assert.equal(value.disposed, 1);
 });
 
-test('admitted supplied joints enable the public layer Follow control and pointer/wheel cancel it', async () => {
+// APT-P05: Follow stays off until a capability reports continuous registered
+// tracking (no producer does yet); the layer mechanics below run behind it.
+const continuousTracking = { perception: { supported: true, variant: 'exact-frame', camera_id: 'den' },
+  body: { supported: true, placement: 'registered', tracking: 'continuous_registered' } };
+test('Follow stays disabled without continuous registered tracking even for admitted joints', async () => {
   const m = await mount();
+  try {
+    const sub = await connect(m); await m.emit(observations(sub, { room: true }));
+    assert.match(m.container.textContent, /Diagnostic room alignment.*no lighting authority/);
+    assert.equal(button(m.container, 'Follow').disabled, true);
+    assert.match(m.container.textContent, /Follow is off until continuous registered tracking exists/);
+  } finally { await m.unmount(); }
+});
+
+test('admitted supplied joints enable the public layer Follow control and pointer/wheel cancel it', async () => {
+  const m = await mount({ capability: continuousTracking });
   try {
     const sub = await connect(m); await m.emit(observations(sub, { room: true }));
     assert.match(m.container.textContent, /Diagnostic room alignment.*no lighting authority/);
@@ -342,7 +356,7 @@ test('Return releases this viewer without stopping the Lab session; stopped sele
   const m = await mount();
   try {
     const live = await connect(m); await m.emit(observations(live, { room: true }));
-    await click(m.container, 'Return');
+    await click(m.container, 'Close');
     assert.ok(button(m.container, 'View perception')); assert.equal(m.container.querySelector('img'), null);
     assert.equal(live.signal.aborted, true); assert.equal(live.off, 1); assert.equal(m.decoded[0].disposed, 1); assert.equal(m.layerCalls[0].disposed, 1);
     assert.equal(m.appSource.rows.find(row => row.id === 'den-session-one').state, 'recording'); assert.deepEqual(m.appSource.forbidden, []);
@@ -359,7 +373,7 @@ test('pending discovery is aborted by Return, logout and unmount; late rows cann
     const m = await mount({ appSource });
     try {
       await click(m.container, 'View perception'); assert.equal(appSource.listCalls.length, 1);
-      if (action === 'return') await click(m.container, 'Return');
+      if (action === 'return') await click(m.container, 'Close');
       else if (action === 'logout') { await act(async () => w.dispatchEvent(new w.Event('home:logout'))); await flush(); }
       else await m.unmount();
       assert.equal(appSource.listCalls[0].signal.aborted, true, action);
@@ -377,7 +391,7 @@ test('Return, logout and unmount abort a pending decode and release its eventual
     const m = await mount({ decode: async (_value, options) => { decodeSignal = options.signal; return pending.promise; } });
     try {
       const sub = await connect(m); await m.emit(observations(sub)); assert.ok(decodeSignal); assert.equal(decodeSignal.aborted, false);
-      if (action === 'return') await click(m.container, 'Return');
+      if (action === 'return') await click(m.container, 'Close');
       else if (action === 'logout') { await act(async () => w.dispatchEvent(new w.Event('home:logout'))); await flush(); }
       else await m.unmount();
       assert.equal(decodeSignal.aborted, true, action); assert.equal(sub.signal.aborted, true); assert.equal(sub.off, 1);
@@ -460,7 +474,7 @@ test('a layer import completing after Return, engine replacement or unmount cann
     const pending = deferred(); const m = await mount({ loadLayer: () => pending.promise }); let replacement = null;
     try {
       const sub = await connect(m); await m.emit(observations(sub, { room: true }));
-      if (action === 'return') await click(m.container, 'Return');
+      if (action === 'return') await click(m.container, 'Close');
       else if (action === 'engine') { replacement = engine(); await m.render({ engine: replacement }); }
       else await m.unmount();
       await act(async () => pending.resolve(m.layerModule)); await flush();
@@ -470,13 +484,14 @@ test('a layer import completing after Return, engine replacement or unmount cann
   }
 });
 
-test('no-session path offers the existing Lab entry and invalid timestamp metadata cannot crash the panel', async () => {
-  const appSource = source(); appSource.rows = []; let returned = 0;
-  const m = await mount({ appSource, onReturnToHome: () => returned++ });
+test('no-session path offers a working Open in Lab and invalid timestamp metadata cannot crash the panel', async () => {
+  const appSource = source(); appSource.rows = []; const opened = [];
+  const m = await mount({ appSource, onOpenLab: intent => opened.push(intent) });
   try {
     await click(m.container, 'View perception'); assert.match(m.container.textContent, /No existing Den session/);
-    await click(m.container, 'Back to Home / Perception Lab'); assert.equal(returned, 1);
-    appSource.rows = sessions(); await click(m.container, 'View perception'); await choose(m.container, 'Den Lab session', 'den-session-one'); await click(m.container, 'Connect');
+    assert.equal(button(m.container, 'Back to Home / Perception Lab'), undefined, 'the dead control is gone');
+    await click(m.container, 'Open in Lab'); assert.deepEqual(copy(opened), [{ session_id: null, t_s: null }]);
+    appSource.rows = sessions(); await click(m.container, 'Refresh sessions'); await choose(m.container, 'Den Lab session', 'den-session-one'); await click(m.container, 'Connect');
     const sub = appSource.subscriptions.at(-1), data = observations(sub);
     data.models[0].observed_at = 1e308; data.models[0].available_at = 1e308; data.models[0].valid_until = 1e308;
     await m.emit(data); assert.match(m.container.textContent, /Model results/); assert.ok(m.container.querySelector('img'));

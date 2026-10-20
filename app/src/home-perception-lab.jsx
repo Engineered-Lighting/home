@@ -1538,7 +1538,8 @@
   function LabSurface({
     open,
     onClose,
-    spatialMode
+    spatialMode,
+    intent = null
   }) {
     const state = useLab(),
       [mode, setMode] = useState('live'),
@@ -1723,6 +1724,14 @@
       const timer = setTimeout(() => { settleTries.current++; C.refresh(); }, SETTLE_MS);
       return () => clearTimeout(timer);
     }, [settling, caps]);
+    // APT-P06: the Apartment camera dock opens a session at the analyzed
+    // frame's time. Lab opens exactly that session or reports why it cannot.
+    const openSessionRef = useRef(null), intentSeen = useRef(null);
+    useEffect(() => {
+      if (!open || !intent?.session_id || intentSeen.current === intent.seq || !openSessionRef.current) return;
+      intentSeen.current = intent.seq;
+      openSessionRef.current(intent.session_id, Number.isFinite(intent.t_s) ? intent.t_s : null);
+    }, [open, intent?.seq, intent?.session_id, intent?.t_s, !!openSessionRef.current]);
     if (!open) return null;
     const selectExperiment = async x => {
       if (recording) {
@@ -1751,7 +1760,7 @@
         setNotice(r.session?.state === 'starting' ? 'The service prepares both workers before recording. Session status below updates automatically; Stop & save cancels preparation.' : D.isRecording(r.session) ? 'Recording is owned by the service and continues across Home tabs.' : r.session?.reason || 'Recording has not started. Review service admission and capture status.');
       }
     };
-    const openSession = async id => {
+    const openSession = async (id, atTime = null) => {
       const request = ++openSeq.current;
       // The opening view replaces the list at once and reports each read.
       setOpening({id, error: null, started: Date.now(), steps: {}});
@@ -1775,12 +1784,13 @@
         setReviewId(id);
         setMode('review');
         setSource('rgb');
-        setT(0);
+        setT(Number.isFinite(atTime) && atTime >= 0 ? atTime : 0);
         setPlaying(false);
       } catch (e) {
         if (request === openSeq.current) setOpening({id, error: e?.code || e?.message || 'session_open_failed'});
       }
     };
+    openSessionRef.current = openSession;
     const openingName = opening ? (state.sessions.find(s => s.id === opening.id)?.name || opening.id) : '';
     const liveAllowed = state.mode === 'demo' || caps?.recording_allowed === true;
     const expView = statusView(exp, session);

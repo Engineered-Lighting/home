@@ -2475,7 +2475,7 @@ const aptEmptySubscribe = () => () => {};
 const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
 function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
-  onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, deskControls,
+  onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, setupReadOnly = false, deskControls,
   tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, commandBinding,
   aimControls, aimNamedAims }) {
   const radialSnapshot = React.useSyncExternalStore(directionalView?.subscribe || aptEmptySubscribe,
@@ -2595,7 +2595,8 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         {fixtures.map(item => <option key={item.fixture_id} value={item.fixture_id}>{item.label || item.fixture_id}</option>)}
       </select><div className="apt-ui-row"><span className="apt-ui-meta grow">Identity</span><span className="apt-ui-value">{fixture.fixture_id}</span></div>
       <p className="apt-ui-copy">Six radial LED-strip zones, one downward zone and a hidden robotic spotlight inside the white diffuser cylinder.</p>
-      {visibility}<button type="button" className="apt-ui-button" disabled={!canSetup} onClick={onSetup}>Edit fixture placement</button>
+      {visibility}<button type="button" className="apt-ui-button" disabled={!canSetup} onClick={onSetup}>{setupReadOnly ? "Review fixture placement" : "Edit fixture placement"}</button>
+      {setupReadOnly && <p className="apt-ui-meta">The room layout is read-only here; Setup shows it without changes.</p>}
       <h3 className="apt-ui-heading">Registered desk target</h3>{deskControls}
       {notice && !/^(Drag a fixture|Aiming at|Aim updated|No visible room surface|That aim is unavailable|Aim canceled|Aim undone|Aim restored|This aim belongs)/.test(notice)
         && <p role="status" className="apt-ui-copy">{notice}</p>}
@@ -2874,6 +2875,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     && (selectedSiteId === "echo" || selectedSiteId === "victoria" && !!model._equipment_registration);
   const apartmentPlacementControlsEnabled = apartmentPlacementDisplayEnabled
     && (selectedSiteId === "echo" || model.source_detail?.read_only === false);
+  // Setup opens wherever its tools can at least be shown. A read-only
+  // registration opens it read-only with the reason, instead of a Setup
+  // button that silently does nothing. Placement writes stay gated above.
+  const apartmentSetupReadOnly = apartmentPlacementDisplayEnabled && !apartmentPlacementControlsEnabled;
+  const apartmentSetupAvailable = apartmentSceneControlsEnabled
+    && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled || apartmentSetupReadOnly);
+  const apartmentSetupUnavailableReason = apartmentSetupAvailable ? ""
+    : !apartmentSceneControlsEnabled ? `Setup opens once ${selectedSiteEntry?.shortName || "this home"} has finished loading.`
+      : selectedSiteId === "victoria" ? "Victoria's equipment registration isn't available here, so there is nothing to set up yet."
+        : "Setup isn't available for this home here.";
   const syntheticSpatialQa = aptUseSyntheticSpatialQa(
     simActive,
     aptSyntheticSpatialQaEnabled(),
@@ -9021,11 +9032,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const openUnifiedSetup = useCallback(() => {
     // APT-U01: Setup is a pressed toggle; pressing it again leaves like Done.
     if (editing) { setEditing(false); return; }
-    if (!apartmentSceneControlsEnabled || !(apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)) return;
+    if (!apartmentSetupAvailable) return;
     setEditorTargetEntry(null);
     setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
     onShowShellControls?.();
-  }, [editing, apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  }, [editing, apartmentSetupAvailable, onShowShellControls]);
   // APT-U01: Setup › Cameras and sensors starts the existing calibration. It
   // leaves Setup, flies to the camera view, and once that flight has ended
   // (settled or timed out) runs the same steps as the camera-view calibrate
@@ -9153,12 +9164,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       dockState: perceptionDockAvailable ? unifiedDock : "hidden",
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
       haConnection: connection, haLastReportedAt: selectedSiteId === "echo" ? window.HomeApartmentStates?.latestReport(statesRef.current, window.HomeApartmentQuick?.echoLightEntityIds(model.devices)) ?? null : null,
-      canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
+      canSetup: apartmentSetupAvailable, setupUnavailableReason: apartmentSetupUnavailableReason,
       openSetup: openUnifiedSetup, aimBridge: echoNamedAims.chatBridge || null,
       selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite, model.devices, model.zones, virtualFixtureItems.length, virtualFixtureDocument,
     unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
+    apartmentSetupAvailable, apartmentSetupUnavailableReason,
     unifiedDock, perceptionDockAvailable, chatRoomSnapshot, echoNamedAims.chatBridge]);
   useEffect(() => {
     if (unifiedShell && (cardId || virtualFixtureControlsOpen || aimMode || editing)) onShowShellControls?.();
@@ -10579,7 +10591,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
               onTapAim={() => setTapAim(value => value ? null : virtualFixtureId)} /> : null}
             aimNamedAims={window.AptDenNamedAims && <window.AptDenNamedAims registrationRevision={virtualFixtureDocument?.binding?.registration_version ?? null} />}
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
-            canSetup={apartmentPlacementControlsEnabled}
+            canSetup={apartmentPlacementControlsEnabled || apartmentSetupReadOnly} setupReadOnly={apartmentSetupReadOnly}
             deskControls={<section aria-label="Desk target" className="apt-ui-channel">
               {window.HomeLightingBrainPanel && <window.HomeLightingBrainPanel brain={lightingBrain} ops={denOpsBanner}
                 labels={Object.fromEntries(virtualFixtureItems.map((fixture) => [fixture.fixture_id, fixture.label]))}
@@ -10764,7 +10776,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         </aside>
       )}
       {editing && spatialScale === "apartment" && phase === "ready"
-        && apartmentSceneControlsEnabled && apartmentPlacementControlsEnabled && window.HomeApartmentEdit && (
+        && apartmentSceneControlsEnabled && (apartmentPlacementControlsEnabled || apartmentSetupReadOnly && unifiedShell) && window.HomeApartmentEdit && (
         <window.HomeApartmentEdit
           engine={engineRef.current}
           model={model}
@@ -10792,6 +10804,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           homeName={selectedSiteName}
           onCalibrateCamera={calibrateFromSetup}
           onFlashLight={flashFromSetup}
+          readOnlyReason={apartmentSetupReadOnly ? `${selectedSiteName}'s room layout is read-only here, so placement can't be changed. You can still review it.` : ""}
         />
       )}
 

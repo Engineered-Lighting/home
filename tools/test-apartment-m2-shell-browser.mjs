@@ -149,6 +149,9 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
     assert.equal(await page.getByRole('menu', { name: 'Home features', exact: true }).count(), 0);
     await page.getByRole('button', { name: 'Home menu', exact: true }).click();
     const items = await page.getByRole('menu', { name: 'Home features', exact: true }).getByRole('menuitem').allInnerTexts();
+    const first = await page.getByRole('menu', { name: 'Home features', exact: true }).locator('[role^="menuitem"]').first();
+    assert.deepEqual([await first.getAttribute('role'), (await first.innerText()).trim()], ['menuitemcheckbox', 'Setup'], 'Setup heads the Home menu');
+    assert.equal(items.filter(label => label === 'Lights / Travel Mode').length, 1, 'Lights / Travel Mode is listed once');
     await page.keyboard.press('Escape');
     for (const label of ['Perception Lab', 'Metrics', 'People', 'Intelligence', 'Video labeler', 'Lights / Travel Mode',
       'Preferences / connection', 'Previous Home']) assert.ok(items.includes(label), 'Home menu lists ' + label);

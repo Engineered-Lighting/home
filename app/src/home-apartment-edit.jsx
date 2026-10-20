@@ -429,7 +429,7 @@ function HomeApartmentEdit({
   engine, model, onModel, seedModel, registry, onSave, onDirtyChange,
   onExit, sim, connection, sourceMeta, saveStatus, saving,
   liveReview, liveComparison, onCompareLive, mobile = false, initialTargetId = null,
-  inspectorHost = null, homeName = "", onCalibrateCamera = null, onFlashLight = null,
+  inspectorHost = null, homeName = "", onCalibrateCamera = null, onFlashLight = null, readOnlyReason = "",
 }) {
   // Initial navigation only: opening an existing target never places or saves it.
   // Later model updates must not reset this editor's selection or dirty history.
@@ -1706,6 +1706,7 @@ function HomeApartmentEdit({
             : ` · Home Assistant ${connection === "online" ? "connected" : "offline"} · save ${saveStatus?.state || "idle"}`}`}
         sourceLabel={isEquipmentRegistration ? `Registration revision ${equipmentDocument.revision}` : sourceMeta?.label}
         sourceTone={isEquipmentRegistration ? "authored" : sourceMeta?.live ? "current" : sourceMeta?.kind === "simulation" ? "simulated" : "modeled"}
+        notice={readOnlyReason ? readOnlyReason + (isEquipmentRegistration ? " The registered desk and sofa targets are marked from a light's Setup tab, under Registered desk target." : "") : ""}
         toolbarRef={editorToolbarRef} onDone={onExit}>{historyAndSave}</Setup.Header>}>
       {/* left: task rail */}
       <div ref={editorPaletteRef} style={rail || mobile ? panel : { ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">

@@ -302,7 +302,16 @@ async function mockHomeAssistant(context, origin, { travel = 'off', lights = [],
 /** Real Home shell navigation used by every Setup suite. */
 function homeShell(page, origin) {
   const waitSite = site => page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
-    && window.__APT_ENGINE?.siteId === site && !!document.querySelector('.apt-home-setup'), site, { timeout: 45000 });
+    && window.__APT_ENGINE?.siteId === site && !!document.querySelector('.apt-home-topbar .apt-home-menu[data-setup]'), site, { timeout: 45000 });
+  // Setup lives in the Home menu: open the menu, then return its Setup item.
+  const homeMenu = () => page.getByRole('menu', { name: 'Home features', exact: true });
+  const setupItem = () => homeMenu().getByRole('menuitemcheckbox', { name: 'Setup', exact: true });
+  async function openMenu() {
+    if (await page.getByRole('button', { name: 'Home menu', exact: true }).getAttribute('aria-expanded') !== 'true') {
+      await page.getByRole('button', { name: 'Home menu', exact: true }).click();
+    }
+    await setupItem().waitFor(); return setupItem();
+  }
   return {
     async boot(layout = '1', site = 'echo') {
       await page.goto(origin + '/?apartmentRedesign=' + layout + '&worldZoom=off', { waitUntil: 'domcontentloaded' });
@@ -316,11 +325,16 @@ function homeShell(page, origin) {
         .getByRole('button', { name: site === 'victoria' ? 'Victoria' : 'Echo Park', exact: true }).click();
       await waitSite(site);
     },
-    setupButton: () => page.locator('.apt-home-topbar .apt-home-setup'),
+    homeMenu, setupItem, openMenu,
+    /** The Setup state the top bar shows: "off", "on" or "unavailable". */
+    setupState: () => page.locator('.apt-home-topbar .apt-home-menu').getAttribute('data-setup'),
+    waitSetupState: state => page.waitForFunction(state => document.querySelector('.apt-home-topbar .apt-home-menu')?.getAttribute('data-setup') === state, state),
+    /** Press Setup in the Home menu (opens Setup, or leaves it while it is on). */
+    async pressSetup(options) { await (await openMenu()).click(options); },
     rail: () => page.getByRole('navigation', { name: 'Setup tools', exact: true }),
     inspector: () => page.locator('[data-apt-setup-inspector]'),
     header: () => page.locator('[data-apt-setup-inspector] .apt-ui-title'),
-    async openSetup() { await page.locator('.apt-home-topbar .apt-home-setup').click(); await page.locator('[data-apt-setup-inspector]').waitFor(); },
+    async openSetup() { await (await openMenu()).click(); await page.locator('[data-apt-setup-inspector]').waitFor(); },
     async tool(id) { await page.locator(`.apt-setup-rail [data-setup-tool="${id}"]`).click(); },
   };
 }

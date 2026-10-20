@@ -31,7 +31,7 @@ export const FORMER_SCREENS = Object.freeze([
   { id: 'people', label: 'People', place: 'Menu › People' },
   { id: 'intelligence', label: 'Intelligence', place: 'Menu › Intelligence' },
   { id: 'video-labeler', label: 'Video labeler', place: 'Menu › Video labeler (desktop) and /labeler' },
-  { id: 'lights', label: 'Lights / Travel Mode', place: 'Top bar › Lights / Travel Mode, Menu and /lights' },
+  { id: 'lights', label: 'Lights / Travel Mode', place: 'Menu › Lights / Travel Mode and /lights' },
   { id: 'preferences', label: 'Preferences / connection', place: 'Menu › Preferences / connection and Chat › Connection' },
   { id: 'simulation', label: 'Simulation', place: '/simulation, ?simulation=1 and Chat setup › Try simulation; Menu › Simulation while it runs' },
   { id: 'bench', label: 'Bench', place: 'Chat header › Bench, when the bench console answers' },

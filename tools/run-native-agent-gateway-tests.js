@@ -47,7 +47,7 @@ function reservePort() {
   return listen(server).then((port) => close(server).then(() => port));
 }
 
-function request(port, pathname, { method = "GET", headers = {}, body } = {}) {
+function request(port, pathname, { method = "GET", headers = {}, body, timeoutMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const requestHeaders = pathname.startsWith("/api/agent/native/") && headers.Host === undefined
       ? { ...headers, Host: NATIVE_HOST }
@@ -61,6 +61,7 @@ function request(port, pathname, { method = "GET", headers = {}, body } = {}) {
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: value }));
     });
     req.once("error", reject);
+    if (timeoutMs > 0) req.setTimeout(timeoutMs, () => req.destroy(new Error("authored gateway probe timed out")));
     if (body !== undefined) req.end(body);
     else req.end();
   });
@@ -96,15 +97,21 @@ function websocketUpgrade(port, pathname, { headers = {} } = {}) {
 }
 
 async function waitForGateway(port, child) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  let lastResponse = null;
+  const started = Date.now(), deadline = started + 15000;
+  while (Date.now() < deadline) {
     if (child.exitCode != null) throw new Error(`gateway exited ${child.exitCode}`);
     try {
-      const response = await request(port, "/healthz", { headers: { Authorization: BASIC } });
-      if (response.status === 200) return;
+      const response = await request(port, "/healthz", { headers: { Authorization: BASIC }, timeoutMs: 1000 });
+      lastResponse = { status: response.status, body: response.body.slice(0, 240) };
+      if (response.status === 200) {
+        process.stdout.write(`  authored gateway ready after ${Date.now() - started} ms\n`);
+        return;
+      }
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("gateway did not start");
+  throw new Error("gateway did not start: " + JSON.stringify(lastResponse));
 }
 
 (async function main() {

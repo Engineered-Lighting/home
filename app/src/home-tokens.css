@@ -963,7 +963,7 @@ button.hg-no-press:active {
 /* Modeled pool and beam labels on the room ("Spot · modeled"): a small
  * dashed chip, the state vocabulary's simulated/authored shape, never
  * mistaken for a fixture label or a measured reading. */
-.apt-home-shell .apt-ui-overlay-label { margin-top: -6px; padding: 2px 7px; border: 1px dashed rgba(255,255,255,.28); border-radius: 6px; background: rgba(8,9,11,.72); color: #d4d4d4; font: 500 11.5px/1.3 'Geist', sans-serif; white-space: nowrap; }
+.apt-home-shell .apt-ui-overlay-label { padding: 2px 7px; border: 1px dashed rgba(255,255,255,.28); border-radius: 6px; background: rgba(8,9,11,.72); color: #d4d4d4; font: 500 11.5px/1.3 'Geist', sans-serif; white-space: nowrap; }
 
 /* In-room labels sit under the room's popovers, the status popover and dialogs (the prototype's
  * scrim): while one is open they are drawn but take no pointer. */

@@ -201,8 +201,16 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
                 };
             },
             async detach() { const undo = restore; restore = null; await undo?.(); },
-            /* Proofs: the blend pass alone, waited on (gl.finish), in ms. */
-            async time() { const gl = renderer.getContext(), t0 = performance.now(); this.run(); gl.finish(); return performance.now() - t0; },
+            /* Proofs: the blend pass alone, in ms per pass: 20 back to back,
+             * waited on once (gl.finish), as the WebGPU path measures it. */
+            async time() {
+                const gl = renderer.getContext(), batch = 20;
+                gl.finish();
+                const t0 = performance.now();
+                for (let i = 0; i < batch; i++) this.run();
+                gl.finish();
+                return (performance.now() - t0) / batch;
+            },
             async readback(n) {
                 const rows = Math.ceil(n / W), out = new Uint8Array(W * rows * 4), gl = renderer.getContext();
                 // The async frame readback may leave a pixel-pack buffer bound;
@@ -263,11 +271,16 @@ export async function createLitReceivers({ renderer, kind, object, layer, whenId
                 restore = () => { sprite.material = original; lit.dispose(); };
             },
             async detach() { const undo = restore; restore = null; await undo?.(); },
-            /* Proofs: the compute pass alone, submitted and waited on, in ms. */
+            /* Proofs: the compute pass alone, in ms per dispatch: 20 back to
+             * back, waited on once, so the queue's completion latency (several
+             * ms on its own) is amortized instead of counted per pass. */
             async time() {
-                const queue = renderer.backend.device.queue;
+                const queue = renderer.backend.device.queue, batch = 20;
                 await queue.onSubmittedWorkDone();
-                const t0 = performance.now(); this.run(); await queue.onSubmittedWorkDone(); return performance.now() - t0;
+                const t0 = performance.now();
+                for (let i = 0; i < batch; i++) this.run();
+                await queue.onSubmittedWorkDone();
+                return (performance.now() - t0) / batch;
             },
             async readback(n) {
                 const values = new Float32Array(await renderer.getArrayBufferAsync(hook ? hook.attribute : output));

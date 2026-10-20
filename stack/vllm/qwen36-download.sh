@@ -42,13 +42,13 @@ status)
   docker inspect -f 'oom_killed={{.State.OOMKilled}} exit={{.State.ExitCode}}' "$NAME" 2>/dev/null || true
   docker logs --tail 5 "$NAME" 2>&1 | tr '\r' '\n' | tail -n 5 || true
   docker run --rm --network none -v "$VOL":/hf:ro --entrypoint sh "$IMAGE" -c \
-    "du -sh /hf/$DIR 2>/dev/null; ls /hf/$DIR/snapshots/$REV 2>/dev/null | wc -l | sed 's/^/snapshot files: /'; ls /hf/$DIR/blobs 2>/dev/null | grep -c '\.incomplete$' | sed 's/^/incomplete: /'"
+    "du -sh /hf/$DIR 2>/dev/null; ls -A /hf/$DIR/snapshots/$REV 2>/dev/null | wc -l | sed 's/^/snapshot files: /'; ls /hf/$DIR/blobs 2>/dev/null | grep -c '\.incomplete$' | sed 's/^/incomplete: /'"
   echo "expected snapshot files: $EXPECTED_FILES"
   ;;
 verify)
   docker run --rm --network none --cpus 1 --memory 1g -v "$VOL":/hf:ro --entrypoint sh "$IMAGE" -c "
     set -e; cd /hf/$DIR
-    n=\$(ls snapshots/$REV | wc -l); echo \"snapshot files: \$n (expected $EXPECTED_FILES)\"
+    n=\$(ls -A snapshots/$REV | wc -l); echo \"snapshot files: \$n (expected $EXPECTED_FILES)\"
     [ \"\$n\" -eq $EXPECTED_FILES ] || { echo VERIFY FAILED: file count; exit 1; }
     ! ls blobs | grep -q '\.incomplete\$' || { echo VERIFY FAILED: incomplete blobs; exit 1; }
     cd blobs

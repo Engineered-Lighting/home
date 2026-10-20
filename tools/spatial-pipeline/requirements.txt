@@ -9,3 +9,6 @@ opencv-python-headless>=4.10
 shapely>=2.0
 pillow>=10.0
 pygltflib>=1.16
+# L3 lighting layer (90_delight_layer.py, 91_bake_light_basis.py): BVH path
+# tracing on the workstation RTX 4090 (CPU backend for the synthetic tests).
+warp-lang>=1.18

@@ -8,14 +8,19 @@ const http=require("node:http");
 const root=path.resolve(__dirname,"..");
 const VIEWPORTS={desktop:{width:1280,height:800},phone:{width:375,height:812}};
 const MODES=["direct","both-homes","partial","unknown","clarify","not-permitted","signed-out",
-  "manual-victoria","auto-victoria","auto-la","fallback-last","fallback-default"];
+  "manual-victoria","auto-victoria","auto-la","fallback-last","fallback-default","view-victoria","view-la","manual-over-view"];
 // Commands naming no home: the default home comes from the hand-picked choice,
-// then the gateway's location, then the last home acted on.
-const UNNAMED=["manual-victoria","auto-victoria","auto-la","fallback-last","fallback-default"];
+// then the home on screen, then the gateway's location, then the last home
+// acted on.
+const UNNAMED=["manual-victoria","auto-victoria","auto-la","fallback-last","fallback-default","view-victoria","view-la","manual-over-view"];
+const CHOICE={"manual-victoria":"victoria","manual-over-view":"victoria"};
+const VIEW={"view-victoria":"victoria","view-la":"echo","manual-over-view":"echo"};
 const PROMPTS={"both-homes":"Turn off the lights in both homes","clarify":"Turn off the attic light in Victoria"};
 for(const mode of UNNAMED) PROMPTS[mode]="Turn off the kitchen light";
 const LOCATION={"auto-victoria":{version:1,site:"victoria",basis:"network",label:"on the Victoria network"},
   "auto-la":{version:1,site:"echo",basis:"phone",label:"your phone is in Los Angeles"}};
+// The view wins over a location that says otherwise.
+LOCATION["view-victoria"]=LOCATION["auto-la"];LOCATION["view-la"]=LOCATION["auto-victoria"];
 const homePage=(mode,text)=>`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{margin:0;font:15px system-ui;background:#0b0f0e;color:#eee}main{padding:16px}#ask{min-height:44px}</style>
 <main><button id="ask">Ask Home</button><div id="thread"></div></main>
@@ -27,7 +32,7 @@ const thread=document.getElementById('thread');
 const addEvent=e=>{events.push(e);const row=document.createElement('div');row.className='event '+e.kind;row.textContent=e.text;thread.appendChild(row);
   if(e.mountReview){const slot=document.createElement('div');row.appendChild(slot);e.mountReview(slot);}};
 document.getElementById('ask').onclick=async()=>{handled=await HomeLightingControl.run(${JSON.stringify(text)},
-  {addEvent,homeChoice:${JSON.stringify(mode==="manual-victoria" ? "victoria" : "auto")},isCurrent:()=>current});};
+  {addEvent,homeChoice:${JSON.stringify(CHOICE[mode] || "auto")},viewSite:${JSON.stringify(VIEW[mode] || null)},isCurrent:()=>current});};
 </script>`;
 
 function served(originServer,pathname) {
@@ -104,12 +109,13 @@ async function scenario(browser,originServer,mode,viewportName) {
     const replied=prefix=>page.waitForFunction(p=>events.some(e=>e.kind==="home" && e.text.startsWith(p)),prefix);
     const frameGone=()=>page.waitForFunction(()=>!document.querySelector("iframe"));
     const stored=()=>page.evaluate(()=>localStorage.getItem("home.lastActedSite"));
-    if(mode==="auto-la" || mode==="fallback-default") {
+    if(["auto-la","fallback-default","view-la"].includes(mode)) {
       // Unnamed commands for Los Angeles stay on the existing path.
       assert.equal(await page.evaluate(()=>handled),false);
       assert.equal(await page.locator("iframe").count(),0);
       assert.equal(count("propose"),0);
       assert.equal(await stored(),"echo");
+      assert.equal(count("location"),mode==="view-la" ? 0 : 1);
     } else if(mode==="signed-out") {
       // Only the card can say the Agent sign-in expired, so it appears after a pause.
       await frame.getByText("Sign in to Home Agent and allow lighting control").waitFor({timeout:8000});
@@ -138,6 +144,7 @@ async function scenario(browser,originServer,mode,viewportName) {
         mode==="both-homes" ? "Done. Kitchen (Los Angeles): turned off; Kitchen (Victoria): turned off." : done);
       const last=await page.evaluate(()=>events.filter(e=>e.kind==="home").at(-1).text);
       if(mode==="auto-victoria") assert.equal(last,done+" (You're in Victoria.)");
+      else if(mode==="view-victoria") assert.equal(last,done+" (You're viewing Victoria.)");
       else if(mode==="fallback-last") assert.equal(last,done+" (I couldn't tell where you are, so I used Victoria, the last home you used.)");
       else if(!["partial","both-homes"].includes(mode)) assert.equal(last,done);
       if(UNNAMED.includes(mode)) assert.deepEqual(calls.find(c=>c.operation==="propose").body.sites,["victoria"]);

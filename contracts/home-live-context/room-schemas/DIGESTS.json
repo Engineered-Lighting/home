@@ -1,0 +1,33 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "controlled-room-delivery-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "worker_interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "scene_interface_digest": "b1e5df3bc1c9a17c40a4c27c997e96e2748f1cc559e66dcf72a3fd74313ab674",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "a0178ab12c6315b7972cc2a23454daebd732f09c3122666dec86c4d79982bbf7",
+  "payload_versions": {
+    "home-live-shadow-decision-8": 8,
+    "home-live-worker-checkpoint-8": 8,
+    "home-live-worker-commit-8": 8,
+    "home-live-input-cut-8": 8,
+    "home-live-room-output-1": 1,
+    "home-live-room-snapshot-1": 1,
+    "home-live-person-lifecycle-1": 1,
+    "home-live-intent-event-2": 2
+  },
+  "publication_families": [
+    "home-live-shadow-decision-8"
+  ],
+  "schemas": {
+    "home-live-shadow-decision-8.schema.json": "256705b623dc16d583f391db7f27941b85db81b7b4105070319f5cd226e42abc",
+    "home-live-worker-checkpoint-8.schema.json": "30f8d1c72515aaf7bba702d576d399f99bb96f15e754df3d1ad32b2fef5e2064",
+    "home-live-worker-commit-8.schema.json": "373dd4c05660dcf79f3d2cb75948c031b66cd897379d252a9a5f8efdd5b6be63",
+    "home-live-input-cut-8.schema.json": "2797e77a1b6f39ec259ccbd9402f8597049ae3426b5376823af39c3a18d63e41",
+    "home-live-room-output-1.schema.json": "93e0fde40ec0daebb0eeffc14c2478c52351b05eb5327af443ae54f8fdf56ba0",
+    "home-live-room-snapshot-1.schema.json": "fd2d0bc803b49c8e8930f4b749f6e917f52ed956d8f6d086425aa1cdf50831c5",
+    "home-live-person-lifecycle-1.schema.json": "213f3782c206c28e995ab14f9a256b85581511f481cb50b2857f743335df1bfe",
+    "home-live-intent-event-2.schema.json": "50f697caf8a915b7e0e918a3dda9bd511ea780c6282c8a8499a89fc9fe24ee0a"
+  },
+  "conservative_delivery_interface_digest": "23c8d39e42b9c2ad8a22c7af87f7c8628913e3557455744321011987709d8b98"
+}

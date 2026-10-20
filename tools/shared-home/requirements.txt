@@ -1,0 +1,3 @@
+# Only the production image codec path needs this dependency. No auto-install.
+# Validate ARM64 wheels and resource use before any Jetson installation.
+Pillow==12.3.0

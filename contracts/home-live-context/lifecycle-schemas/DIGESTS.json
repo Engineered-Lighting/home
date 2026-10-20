@@ -1,0 +1,30 @@
+{
+  "profile": "home-live-shadow-1",
+  "stage": "scene-correction-person-lifecycle-1",
+  "base_interface_digest": "40d805d02f779ff228beae9703970a197e588b86b3cf4b634dafd7a09f196130",
+  "worker_interface_digest": "b8883d45923bfc2e8e859d240b4f494d32249926f679c531c272e938860c906f",
+  "scene_interface_digest": "b1e5df3bc1c9a17c40a4c27c997e96e2748f1cc559e66dcf72a3fd74313ab674",
+  "handoff_digest": "8345e855397d86c65a2197daa7592dcf4f73dc48fa00659bd588093b297d7d0e",
+  "interface_digest": "15b2a5f3e303733aa1bab514b9ae73a2721f0d0ab41d1c3e8c00e4aa952f23f1",
+  "payload_versions": {
+    "home-live-shadow-decision-5": 5,
+    "home-live-worker-checkpoint-5": 5,
+    "home-live-worker-commit-5": 5,
+    "home-live-input-cut-5": 5,
+    "home-live-intent-event-2": 2,
+    "home-live-person-lifecycle-1": 1
+  },
+  "publication_families": [
+    "home-live-shadow-decision-5",
+    "home-live-intent-event-2",
+    "home-live-person-lifecycle-1"
+  ],
+  "schemas": {
+    "home-live-shadow-decision-5.schema.json": "ab7b5f9bb140201300fde60b47fbe924880ff4c3375b0a1f556918cdf6eedd4e",
+    "home-live-worker-checkpoint-5.schema.json": "b9ecad862de118212746969dcd41e8b8327959a615cbabbccd95390ba7c8dc3a",
+    "home-live-worker-commit-5.schema.json": "da1a460a0a8a8663749226dd97fd11bcd1b3ce7782392152209b2187be512bf1",
+    "home-live-input-cut-5.schema.json": "6e1bdcff8e23624946eb0717003fb93ab461c0e2c2afd46fef745cd9a4cfd474",
+    "home-live-intent-event-2.schema.json": "50f697caf8a915b7e0e918a3dda9bd511ea780c6282c8a8499a89fc9fe24ee0a",
+    "home-live-person-lifecycle-1.schema.json": "213f3782c206c28e995ab14f9a256b85581511f481cb50b2857f743335df1bfe"
+  }
+}

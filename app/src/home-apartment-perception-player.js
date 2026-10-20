@@ -1,10 +1,11 @@
 /* Exact-frame decoded presentation only. Source owns authenticated reads and polling. */
 (function(root,factory){
   const api=factory(root,()=>typeof module==='object'&&module.exports
-    ?require('./home-apartment-perception-view.js'):root.HomeApartmentPerceptionView);
+    ?require('./home-apartment-perception-view.js'):root.HomeApartmentPerceptionView,
+    ()=>typeof module==='object'&&module.exports?require('./home-apartment-desk-preview.js'):root.HomeApartmentDeskPreview);
   if(typeof module==='object'&&module.exports)module.exports=api;
   else root.HomeApartmentPerceptionPlayer=api;
-})(typeof window!=='undefined'?window:globalThis,function(root,getView){
+})(typeof window!=='undefined'?window:globalThis,function(root,getView,getDeskPreview){
   'use strict';
   const copy=x=>x==null?null:JSON.parse(JSON.stringify(x));
   const abortError=()=>Object.assign(Error('frame_decode_aborted'),{name:'AbortError'});
@@ -71,6 +72,8 @@
     let connection='idle',reason=null,mediaReason=null,view=null;
     let diagnostic=null,diagnosticTimer=null,diagnosticSourceStopped=false;
     let approximate=null,approximateTimer=null,approximateSourceStopped=false;
+    // Bounded record of deadlines deferred for development-retained metric PNGs.
+    const mediaWarnings=new Set();
     const monotonic=()=>{const value=env.performance?.now?.();return Number.isFinite(value)?value:null;};
     const clearDiagnosticTimer=()=>{if(diagnosticTimer!==null)(env.clearTimeout||root.clearTimeout)(diagnosticTimer);diagnosticTimer=null;};
     const clearApproximateTimer=()=>{if(approximateTimer!==null)(env.clearTimeout||root.clearTimeout)(approximateTimer);approximateTimer=null;};
@@ -139,7 +142,7 @@
     let environmentCleanup=[];
     function snapshot(){return {connection,reason:reason||mediaReason,mediaReason,view:copy(view),imageUrl:displayed?.owned.url||null,
       frame:copy(displayed?.frame||null),loading:pending!==null,
-      heldFrame:!!(pending&&displayed),disposed};}
+      heldFrame:!!(pending&&displayed),mediaWarnings:[...mediaWarnings],disposed};}
     function notify(){const value=snapshot();try{onChange?.(value);}catch(_){/* Presentation cannot acquire source authority. */}return value;}
     function release(value){try{value?.dispose?.();}catch(_){/* Continue releasing the remaining private state. */}}
     function abandonRead(){const job=pending;pending=null;job?.abort.abort();}
@@ -154,6 +157,19 @@
     }
     function active(token){return wanted&&!disposed&&token===serial&&!sourceAbort?.signal.aborted;}
     function clock(){try{return source.sampleClock();}catch(_){return null;}}
+    function expiredViewing(frame,pose){
+      if(frame?.viewing_only!==true&&!pose?.persons2d)return false;
+      const sample=clock(),until=[frame?.valid_until,pose?.valid_until].filter(Number.isFinite);
+      if(sample?.domain!=='unix'||!Number.isFinite(sample.now_s)||!until.length)return false;
+      // Unknown uncertainty does not qualify freshness. It also cannot extend
+      // the original deadline: retire conservatively at the supplied wall time.
+      const uncertainty=Number.isFinite(sample.uncertainty_s)&&sample.uncertainty_s>=0?sample.uncertainty_s:0;
+      const expired=sample.now_s+uncertainty>=Math.min(...until);
+      // The stream marks only the development-retained metric PNG. Its deadline
+      // becomes a recorded warning; the desk-preview validator still pins it.
+      if(expired&&frame?.timing_policy==='development'){if(mediaWarnings.size<16)mediaWarnings.add('media_original_expired');return false;}
+      return expired;
+    }
     function poseFor(frame,envelope){
       const paired=View.project({envelope,scope:fixedScope,clock:null,
         displayedFrame:{descriptor:frame,scope:fixedScope,key:View.frameKey(frame,fixedScope)}});
@@ -161,6 +177,9 @@
     }
     function project(){
       if(!latest){view=null;return;}
+      if(displayed&&expiredViewing(displayed.frame,displayed.pose)){
+        release(displayed.owned);displayed=null;mediaReason='frame_expired';
+      }
       const envelope=displayed?{...latest,pose2d:displayed.pose}:latest;
       const safeEnvelope=connection==='stopped'?{...envelope,session_state:'stopped'}:envelope;
       view=View.project({envelope:safeEnvelope,scope:fixedScope,clock:clock(),collisionDigest,diagnosticReceipt:diagnosticReceipt(),approximateReceipt:approximateReceipt(),displayedFrame:displayed
@@ -175,6 +194,15 @@
         view.roomPose={...view.roomPose,admitted:false,status:'unavailable',reason:'source_not_live',joints:[],edges:[],anchor:null};
         view.follow={allowed:false,anchor:null,reason:'source_not_live'};
       }
+      const Preview=env.HomeApartmentDeskPreview||getDeskPreview();
+      view.virtualTargetPreview=Preview?.project?Preview.project({packet:safeEnvelope.virtual_target_preview,envelope:safeEnvelope,
+        scope:fixedScope,displayedFrame:displayed?.frame||null,approximate:connection==='live'?view.approximateRoomPose:null,
+        clock:clock(),receipt:approximateReceipt()}):{available:false,status:'unavailable',reason:'desk_preview_validator_unavailable'};
+      // Hold evidence comes from the raw latest envelope, never the displayed
+      // pose: a newer 0/2+ person output contradicts even while its image read
+      // is pending or has failed.
+      const raw=connection==='stopped'?{...latest,session_state:'stopped'}:latest;
+      view.deskPreviewEvidence=Preview?.evidence?.({envelope:raw,connection,approximate:view.approximateRoomPose})??null;
     }
     function detach(){
       sourceAbort?.abort();sourceAbort=null;
@@ -186,7 +214,7 @@
     }
     function stop(nextReason='viewer_disconnected'){
       wanted=false;serial++;detach();clearImage();latest=null;view=null;epochKnown=false;sourceEpoch=null;diagnostic=null;diagnosticSourceStopped=false;
-      approximate=null;approximateSourceStopped=false;
+      approximate=null;approximateSourceStopped=false;mediaWarnings.clear();
       connection='disconnected';reason=nextReason;mediaReason=null;return notify();
     }
     function unavailable(nextConnection,nextReason){
@@ -212,6 +240,8 @@
           job.frame.media_sha256=value.frame_metadata.media_sha256;
           job.verifiedMediaSha256=value.frame_metadata.media_sha256;
         }
+        if(Number.isFinite(value.frame_metadata?.valid_until))job.frame.valid_until=Number.isFinite(job.frame.valid_until)
+          ?Math.min(job.frame.valid_until,value.frame_metadata.valid_until):value.frame_metadata.valid_until;
         return decode(value,{scope:copy(fixedScope),frame:copy(job.frame),signal:job.abort.signal,env});
       }).then(owned=>{
         if(!current()){release(owned);return;}
@@ -222,12 +252,16 @@
           release(owned);throw Error('frame_dimensions_mismatch');
         }
         const preceding=displayed;
-        displayed={owned,frame:job.frame,key:job.key,pose:poseFor(job.frame,latest),verifiedMediaSha256:job.verifiedMediaSha256||job.frame.media_sha256||null};
+        const pose=poseFor(job.frame,latest);
+        if(expiredViewing(job.frame,pose)){
+          pending=null;release(owned);mediaReason='frame_expired';reason=null;project();notify();return;
+        }
+        displayed={owned,frame:job.frame,key:job.key,pose,verifiedMediaSha256:job.verifiedMediaSha256||job.frame.media_sha256||null};
         pending=null;reason=null;mediaReason=null;project();notify();release(preceding?.owned);
       }).catch(error=>{
         if(!active(job.token)||pending!==job||job.abort.signal.aborted)return;
         if([401,403].includes(error?.status)||[401,403].includes(error?.statusCode)
-          ||['den_lab_frame_descriptor_mismatch','apartment_perception_current_scope_required'].includes(error?.code)){
+          ||['den_lab_frame_descriptor_mismatch','den_lab_frame_media_sha256_mismatch','apartment_perception_current_scope_required'].includes(error?.code)){
           unavailable('refused',error?.code||'frame_access_refused');return;
         }
         // A missing/late image is independent from model/JEV availability.
@@ -261,6 +295,9 @@
       const candidate=View.project({envelope:latest,scope:fixedScope,clock:clock(),displayedFrame:null});
       const frame=candidate.frame?.descriptor,key=candidate.frame?.key;
       if(!key){clearImage();reason='frame_unavailable';project();notify();return;}
+      if(expiredViewing(frame,latest.pose2d)){
+        clearImage();mediaReason='frame_expired';reason=null;project();notify();return;
+      }
       if(displayed?.key===key&&displayed.frame.width===frame.width&&displayed.frame.height===frame.height){
         abandonRead();displayed.frame=copy(frame);
         if(displayed.verifiedMediaSha256)displayed.frame.media_sha256=displayed.verifiedMediaSha256;

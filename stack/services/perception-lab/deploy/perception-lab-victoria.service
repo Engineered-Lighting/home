@@ -1,0 +1,32 @@
+# Template: render @JETSON_USER@ and @JETSON_HOME@ from the private deploy env (see README.md).
+[Unit]
+Description=Home Perception Lab Victoria controller
+After=network-online.target mediamtx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@JETSON_USER@
+Group=@JETSON_USER@
+WorkingDirectory=@JETSON_HOME@/perception-lab/releases/RELEASE_ID/service
+Environment=PERCEPTION_LAB_CAPTURE_CONFIG=@JETSON_HOME@/perception-lab/private/home-capture.json
+Environment=JETSON_HOME=@JETSON_HOME@
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PERCEPTION_LAB_DISPLAY_RTSP=1
+Environment=PERCEPTION_LAB_SHARED_CAPTION_FILE=@JETSON_HOME@/perception-lab/private/shared-caption.json
+Environment=PERCEPTION_LAB_CAMERA_ENV=@JETSON_HOME@/victoria-camera/private/camera.env
+ExecStart=@JETSON_HOME@/perception-lab/venv/bin/python -m uvicorn capture_app:create_capture_app --factory --host 192.168.1.168 --port 8789 --workers 1 --no-access-log --ssl-keyfile @JETSON_HOME@/perception-lab/private/review/server.key --ssl-certfile @JETSON_HOME@/perception-lab/private/review/server.pem
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=@JETSON_HOME@/perception-lab/data
+MemoryMax=768M
+CPUQuota=100%
+TasksMax=64
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

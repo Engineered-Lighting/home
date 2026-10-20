@@ -61,6 +61,8 @@ def decision_inputs(evaluation: Evaluation) -> dict:
         "jev": f.health["jev"],
         "deep_stack": f.health["deep_stack"],
         "night": f.night,
+        "positions": len(f.positions),
+        "nearest": evaluation.nearest_fixture,
     }
     plan = evaluation.spot_plan
     if plan is not None and plan.ok:
@@ -87,11 +89,17 @@ def diff_decision(previous: Evaluation | None, new: Evaluation, notes: dict) -> 
         if fo.paused_until is not None:
             continue
         pa, na = po.ambient, fo.ambient
-        if (pa.radial_level, pa.down_level) != (na.radial_level, na.down_level) or (
-                na.radial_level > 0 and pa.cct_k != na.cct_k):
+        # Proximity levels move continuously as people walk; the log records
+        # ambient switching on/off, changing colour or changing rule, not
+        # every step (the state and stream carry the levels).
+        if ((pa.radial_level > 0) != (na.radial_level > 0) or po.ambient_rule != fo.ambient_rule
+                or (na.radial_level > 0 and pa.cct_k != na.cct_k)):
             changes.append((fo.ambient_rule, _ambient_text(fo)))
         if po.spot.on != fo.spot.on:
             changes.append((fo.spot_rule, f"{name} spot {'on' if fo.spot.on else 'off'}"))
+    if (previous.nearest_fixture != new.nearest_fixture and new.nearest_fixture is not None
+            and new.mode_rule == "proximity_ambient"):
+        changes.append(("proximity_ambient", f"nearest {short_name(new.nearest_fixture)}"))
     for fid in notes:
         if not any(text.startswith(short_name(fid)) and rule == "manual_pause" for rule, text in changes):
             changes.append(("manual_pause", f"{short_name(fid)} pause updated"))
@@ -119,6 +127,7 @@ class Brain:
         self.started_at = clock()
         self.counts: Counter = Counter()
         self._signature: str | None = None
+        self._pushed_at: float | None = None
         self._notes: dict[str, str] = {}
         self._cond = threading.Condition(threading.RLock())
         self._closed = False
@@ -203,8 +212,13 @@ class Brain:
             log.info("%s: %s (%s)", decision["rule"], decision["why"], decision["change"])
         self.evaluation = new
         signature = json.dumps(_strip_volatile(self._state_locked(now)), sort_keys=True)
-        if signature != self._signature:
+        # At most max_push_hz visible changes per second: a change inside the
+        # interval waits for a later ingest or tick (tick_s <= the interval).
+        interval = 1.0 / self.settings.max_push_hz
+        due = self._pushed_at is None or now - self._pushed_at >= interval - 1e-6
+        if signature != self._signature and due:
             self._signature = signature
+            self._pushed_at = now
             self.version += 1
             self._cond.notify_all()
         return new
@@ -268,6 +282,7 @@ class Brain:
                 "occupancy_age_s": _r(occ.age(now), 1) if occ else None,
                 "activity_age_s": _r(f.activity_age, 1),
                 "pose_age_s": _r(f.pose_age, 1),
+                "position_age_s": _r(f.position_age, 1),
                 "health": dict(f.health),
             },
             "settings_version": self.settings.settings_version,

@@ -210,7 +210,7 @@ function fixture(actual, { site = 'victoria' } = {}) {
     virtualFixtureDocument: document, virtualFixtureBindingKey: JSON.stringify(['authored-authority', binding]),
     virtualFixtureItems: snapshot(), virtualFixtureId: '', virtualFixtureControlsOpen: false,
     virtualAimHistoryRef: { current: { undo: [], redo: [] } }, virtualAimGestureRef: { current: null },
-    virtualFixtureStatesRef: { current: { key: 'authored-binding', states: new Map(), targets: new Map() } },
+    virtualFixtureStatesRef: { current: { key: 'authored-binding', states: new Map(), targets: new Map() } }, denDeskAimPreviewRef: { current: null }, lightingBrainRef: { current: null }, releaseFixtureForHandChange: () => {},
     virtualFixturePreviewDirtyRef: { current: false }, directionalViewRef: { current: null },
     deskTargetCaptureRef: { current: null }, calibApiRef: { current: null }, calibPickRef: { current: false },
     model: { devices: [{ id: 'authored-echo-light', type: 'light', ha_entity_id: 'light.authored_echo' }], targets: [], zones: [] },

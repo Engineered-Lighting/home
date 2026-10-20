@@ -7,7 +7,9 @@
   // typed request and receives only results bound to this card's nonce, from
   // that exact frame and origin. At the owner's choice, a clear request is
   // carried out directly (after the one-time consent); unclear ones are asked.
-  // A command naming no home goes to the home the owner is in (the gateway's
+  // A command naming no home goes to the home the owner is looking at (the
+  // site of an attached room/fixture chip, else the home shown in the
+  // Apartment view), else the home the owner is in (the gateway's
   // /api/home/location: device network, then phone zone), else the last home
   // acted on. That choice is a default target, never an authority.
   let active=null,located=null;
@@ -42,9 +44,12 @@
       return value;
     } catch {return null;} finally {clearTimeout(timer);}
   }
-  // choice: "auto" (default), or "echo"/"victoria" picked by hand in Home.
-  async function resolveHome(choice) {
+  // choice: "auto" (default), or "echo"/"victoria" picked by hand in Home,
+  // which wins over the view. context.viewSite: the home on screen, if any.
+  async function resolveHome(choice,context) {
     if(SITES.includes(choice)) return {site:choice,basis:"manual",label:""};
+    const viewSite=context && typeof context==="object" ? context.viewSite : null;
+    if(SITES.includes(viewSite)) return {site:viewSite,basis:"view",label:"the home you're viewing"};
     const found=await locate();
     if(found) return found;
     const last=lastActed();
@@ -52,6 +57,7 @@
   }
   function homeNote(home) {
     if(!home) return "";
+    if(home.basis==="view") return ` (You're viewing ${HOME[home.site]}.)`;
     if(home.basis==="network" || home.basis==="phone") return ` (You're in ${HOME[home.site]}.)`;
     if(home.basis==="last") return ` (I couldn't tell where you are, so I used ${HOME[home.site]}, the last home you used.)`;
     return "";
@@ -84,7 +90,7 @@
     if(!parsed) return false;
     if(!parsed.needsHome) return start(text,parsed,options,null);
     if(!root.HG_WEB_MODE) return false;
-    return resolveHome(options.homeChoice).then(home=>{
+    return resolveHome(options.homeChoice,{viewSite:options.viewSite}).then(home=>{
       if(!options.isCurrent()) return true;
       const resolved=root.HomeLightingIntent.parse(text,home.site);
       if(!resolved) {remember(home.site);return false;}

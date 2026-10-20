@@ -160,12 +160,22 @@ test("default expiry cancels the action and dismisses the original toast identit
   const action = f.ui.createToastAction(() => assert.fail("expired Undo ran"), { isCurrent: () => true, onCancel: (reason) => reasons.push(reason) });
   const toast = { text: "Preview changed", action };
   f.render({ toast, onDismiss: (value) => dismissed.push(value) });
-  f.advance(2799);
-  assert.equal(dismissed.length, 0);
+  f.advance(5999);
+  assert.equal(dismissed.length, 0, "a notice that offers Undo stays the prototype's 6 s");
   f.advance(1);
   assert.deepEqual(dismissed, [toast]);
   assert.deepEqual(reasons, ["timeout"]);
   assert.equal(action.run(), false);
+});
+
+test("a plain notice stays the prototype's 3.6 s", () => {
+  const f = fixture(), dismissed = [];
+  const toast = { text: "Copied" };
+  f.render({ toast, onDismiss: (value) => dismissed.push(value) });
+  f.advance(3599);
+  assert.equal(dismissed.length, 0);
+  f.advance(1);
+  assert.deepEqual(dismissed, [toast]);
 });
 
 test("action and dismiss are native buttons; a repeated activation executes Undo once", () => {
@@ -281,7 +291,7 @@ test("the mounted Apartment toast adapter preserves legacy notices and refuses a
   assert.equal(notice.text, "Legacy message");
   assert.equal(notice.sticky, false);
   assert.equal(notice.action, null);
-  assert.equal(notice.timeoutMs, undefined, "the shared presenter owns the unchanged 2800ms default");
+  assert.equal(notice.timeoutMs, undefined, "the shared presenter owns the 3600 ms (6000 ms with an action) default");
   showToast("Legacy sticky", { sticky: true });
   assert.equal(notice.sticky, true);
   showToast("Legacy error", { tone: "error" });

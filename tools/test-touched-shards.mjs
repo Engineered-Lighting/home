@@ -156,3 +156,19 @@ test('receipts from real sharded runs verify, and every inexact or failing cover
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the two directional browser parts are both planned together and run on different workers', () => {
+  const parts = ['test-apartment-directional-browser.mjs', 'test-apartment-directional-browser-part2.mjs'];
+  for (const argv of [['--base', actualBase()], ['--files', 'app/src/home-apartment-directional.js'],
+    ['--files', 'tools/fixtures/apartment-directional-browser-proof.mjs'], ['--files', 'app/src/home-apartment.jsx,app/src/home-3d/engine.js']]) {
+    const full = planOf(argv);
+    assert.equal(parts.filter(name => full.includes(name)).length === 0 || parts.every(name => full.includes(name)), true,
+      'a change that triggers one directional part triggers both: ' + argv.join(' '));
+    if (!full.includes(parts[0])) continue;
+    for (const count of [2, 3, 4]) {
+      const owners = parts.map(name => [...Array(count).keys()].filter(index => planOf([...argv, '--shard', `${index + 1}/${count}`]).includes(name)));
+      assert.ok(owners.every(list => list.length === 1), 'each part has exactly one worker');
+      assert.notEqual(owners[0][0], owners[1][0], `the parts run on different workers with ${count} shards: ${argv.join(' ')}`);
+    }
+  }
+});

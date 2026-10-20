@@ -1,6 +1,6 @@
 /* eslint-disable */
 /**
- * home-apartment-named-aim.jsx — named aims in both homes' Aim hosts and the
+ * home-apartment-aim-library.jsx — named aims in both homes' Aim hosts and the
  * room (APT-A05, A07, A10, R04): the Aim rows with Set aim, Save as named
  * aim and Discard; recall chips with their attention flags and per-aim
  * state; the named-aim inspector; and the room's named-aim list.

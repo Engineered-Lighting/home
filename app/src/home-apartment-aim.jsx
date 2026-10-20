@@ -713,7 +713,7 @@ function HomeApartmentAim({
       </section>}
 
       {fixture?.fixture_kind === A.ENGINEERED_KIND && tab === "aim" && <>
-        {/* The shared aim path and named aims (home-apartment-named-aim.jsx);
+        {/* The shared aim path and named aims (home-apartment-aim-library.jsx);
             the destination panel below stays until APT-L01 retires it. */}
         {aimRows}
         {profileResolution.show_current && <section data-apt-current-profile="1" style={{ border: "1px solid var(--hg-border)", borderRadius: 13,
@@ -750,6 +750,7 @@ function HomeApartmentAim({
           <div style={{ fontFamily: AIM_MONO, fontSize: 11, color: "var(--hg-fg-3)", lineHeight: 1.45 }}>
             Existing Home Assistant light · shares this mount and its Fixture position measurements.
           </div>
+          {window.AptManualState && <window.AptManualState entityId={primaryEntity} states={states} offline={sim || connection !== "online"} />}
         </section>}
         {profileResolution.show_engineered && <>
         <section style={{ border: "1px solid var(--hg-border)", borderRadius: 13,
@@ -824,6 +825,8 @@ function HomeApartmentAim({
             Preview only · live movement authority and frame binding are not available.
           </div>}
         </section>
+        {window.AptCommandLadder && <window.AptCommandLadder site="echo" sim={sim} fixture={fixture} model={model} destination={destination}
+          isCurrent={destinationIsCurrent} solve={solve} product={product} spotlight={spotlightHaState} telemetry={telemetry} blockers={liveBlockers} />}
 
         <details style={{ borderTop: "1px solid var(--hg-border-soft)", paddingTop: 10 }}>
           <summary className="hg-focusable" style={{ cursor: "pointer", listStyle: "none", fontFamily: AIM_SANS,
@@ -867,20 +870,6 @@ function HomeApartmentAim({
           <div style={{ color: beamAnalysis?.blocked ? AIM_RED : "var(--hg-fg-3)" }}>obstruction · {beamAnalysis?.blocked ? "geometry hit before destination" : beamAnalysis?.collision_available ? "none before requested destination" : "collision proxy unavailable"}</div>
           <div style={{ color: "var(--hg-fg-3)" }}>beam overlap with named surfaces is estimated; no completed operation is correlated.</div>
         </section>}
-
-        <section style={{ borderTop: "1px solid var(--hg-border-soft)", paddingTop: 10, display: "grid", gap: 7 }}>
-          <div style={{ fontFamily: AIM_MONO, fontSize: 9, color: sim && product?.qualified ? AIM_CYAN : AIM_AMBER }}>Authoritative Product Aim request</div>
-          {sim && product?.qualified ? <>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-2)", lineHeight: 1.45 }}>{`SIMULATION ONLY\nPOST ${product.endpoint}\n${JSON.stringify(product.body, null, 2)}`}</pre>
-            <AimButton onClick={() => navigator.clipboard?.writeText(JSON.stringify(product.body))}>copy simulated request</AimButton>
-          </> : <>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: AIM_MONO, fontSize: 8.5, color: "var(--hg-fg-3)", lineHeight: 1.45 }}>{`POST /api/group/aim\n{ target_x_m, target_y_m, post_dwell_ms }`}</pre>
-            {liveBlockers.map((b) => <div key={b} style={{ fontFamily: AIM_MONO, fontSize: 8.5, color: AIM_AMBER }}>blocked · {b}</div>)}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
-              <AimButton disabled>copy command</AimButton><AimButton disabled>move light</AimButton>
-            </div>
-          </>}
-        </section>
 
         <AimButton onClick={() => window.open("http://127.0.0.1:8765/", "_blank", "noopener")}>open bench console</AimButton>
         <div style={{ fontFamily: AIM_MONO, fontSize: 11, color: "var(--hg-fg-3)", lineHeight: 1.45 }}>

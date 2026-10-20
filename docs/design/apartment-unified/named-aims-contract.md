@@ -1,9 +1,9 @@
 # Named aims: what the UI writes, reads and proposes
 
 APT-A05, A07, A10 and R04, Echo first. This note covers the data this lane writes and the
-interfaces it consumes. Code: `app/src/home-apartment-named-aims.js` (logic),
+interfaces it consumes. Code: `app/src/home-apartment-aim-library.js` (logic),
 `app/src/home-apartment-echo-aim.js` (Echo's aim host) and
-`app/src/home-apartment-named-aim.jsx` (UI and the view hook).
+`app/src/home-apartment-aim-library.jsx` (UI and the view hook). The Setup › Named aims mapper's geometry is the separate `home-apartment-named-aims.js` (`AptNamedAims`, #329).
 
 ## Echo: Save as named aim
 

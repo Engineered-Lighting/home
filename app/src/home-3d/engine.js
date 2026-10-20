@@ -57,6 +57,11 @@ export async function loadAimPresentation() {
     return sib('apartment-aim-presentation.mjs');
 }
 
+/* Beams and pools (APT-L02) use the same lazy, cache-busted ESM boundary. */
+export async function loadLightPools() {
+    return sib('apartment-light-pools.mjs');
+}
+
 /* Optional display evidence beside the unchanged marker API. All binding
  * checks are synchronous; no pending digest or private document survives reset. */
 export function bindEquipmentCutawayRegistration({ overlay, sceneIdentity, manifest,
@@ -170,7 +175,8 @@ export async function preloadModules({ includeRenderers = true } = {}) {
     ];
     if (includeRenderers) {
         jobs.push(import('three/addons/loaders/GLTFLoader.js'));
-        jobs.push(import('@sparkjsdev/spark'));
+        // Spark is WebGL-only; the ?renderer=webgpu build never loads it.
+        if (typeof THREE.WebGPURenderer !== 'function') jobs.push(import('@sparkjsdev/spark'));
     }
     const results = await Promise.allSettled(jobs);
     return {
@@ -260,7 +266,15 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     });
     const performanceSamplingSource = Symbol('apartment-renderer');
 
-    const renderer = new THREE.WebGLRenderer({
+    /* ?renderer=webgpu (index.html) maps 'three' to the r186 WebGPU build and
+     * this seam replaces WebGLRenderer with webgpu-renderer.mjs. With the flag
+     * off THREE has no WebGPURenderer and nothing below changes. */
+    const nodeRendererM = typeof THREE.WebGPURenderer === 'function' && window.HomeRendererFlag?.backend === 'webgpu'
+        ? await sib('webgpu-renderer.mjs') : null;
+    let emitNodeLoss = null;
+    const nodeRenderer = nodeRendererM && await nodeRendererM.createNodeRenderer({ canvas,
+        forceWebGL: window.HomeRendererFlag.forceWebGL === true, onLost: (info) => emitNodeLoss?.(info) });
+    const renderer = nodeRenderer ? nodeRenderer.renderer : new THREE.WebGLRenderer({
         canvas, antialias: true, alpha: true, powerPreference: 'high-performance',
     });
     renderer.setPixelRatio(Math.min(
@@ -273,6 +287,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     scene.background = null;
 
     const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 200);
+    if (nodeRenderer) {
+        // WebGPU clip z is 0..1. Set before the first render so every
+        // projection built from here on (rig, intrinsics) uses it.
+        camera.coordinateSystem = renderer.coordinateSystem;
+        camera.updateProjectionMatrix();
+    }
 
     // THE coordinate conversion: apartment frame is Z-up, three is Y-up.
     const apartmentRoot = new THREE.Group();
@@ -301,8 +321,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             ?? await readScenePlaceholder())?.pointsOnly === true,
         dollhouseCutaway: cutawayEligible,
         photoFloorSupport: cutawayEligible,
+        ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
     const overlay = markersM.createOverlay(apartmentRoot);
+    let litView = null, litUnsubscribe = () => {};
     const picking = pickingM.createPicking(camera, hostEl);
     let disposed = false, disposing = false;
     const uiLayers = new Set();
@@ -328,7 +350,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
 
     // GPU identity — the WebView2 dual-GPU gate (plan §12 / spike S1)
     let gpuName = 'unknown';
-    try {
+    if (nodeRenderer) gpuName = nodeRenderer.gpu;
+    else try {
         const gl = renderer.getContext();
         const ext = gl.getExtension('WEBGL_debug_renderer_info');
         if (ext) gpuName = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
@@ -352,6 +375,11 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     };
     canvas.addEventListener('webglcontextlost', onApartmentContextLost);
     canvas.addEventListener('webglcontextrestored', onApartmentContextRestored);
+    // WebGPU device loss has no restore: the engine must be recreated. The
+    // WebGL2 fallback's context loss reaches the canvas listeners above.
+    emitNodeLoss = (info) => {
+        if (info.api === 'WebGPU') emit('contextlost', { backend: 'webgpu', reason: info.reason, message: info.message });
+    };
 
     // ---- point cloud (progressive) ----
     let points = null;
@@ -360,6 +388,92 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     let lastFitBox = null;
     let lastFitLocalBox = null;
 
+    /* The visible canvas (SPEC Layout > Fitting). The host already sits left
+     * of the column and above the phone/tablet sheet; what still covers the
+     * room is chrome inside the canvas, such as the room toolbar. The host
+     * reports those as insets in CSS pixels. Fit frames the room in the rest,
+     * and the projection centre moves to the middle of that rest: the same
+     * principal-point shift setViewOffset makes, written as an off-axis term
+     * of the projection so camera.aspect, fov and zoom stay exactly the
+     * canvas's (other code reads them). One pixel keeps spanning the same
+     * angle, so an inset change shifts the room without rescaling it. With
+     * no insets (the default) the projection is exactly the plain camera's.
+     * A camera pose (snap or flight) owns the full canvas, so the shift is
+     * suspended while one is held. */
+    const NO_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 });
+    let viewInsets = NO_INSETS;
+    let viewSize = { width: 1, height: 1 };
+    let appliedViewKey = '';
+    let projectionShift = { x: 0, y: 0 };
+    const plainUpdateProjection = camera.updateProjectionMatrix.bind(camera);
+    camera.updateProjectionMatrix = function updateShiftedProjection() {
+        plainUpdateProjection();
+        if (!projectionShift.x && !projectionShift.y) return;
+        // x_ndc' = x_ndc + shift.x for every point: subtract it from the z term.
+        this.projectionMatrix.elements[8] -= projectionShift.x;
+        this.projectionMatrix.elements[9] -= projectionShift.y;
+        this.projectionMatrixInverse.copy(this.projectionMatrix).invert();
+    };
+
+    function normalizedInsets(value, width, height) {
+        const side = key => {
+            const n = Number(value?.[key]);
+            return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+        };
+        let { top, right, bottom, left } = { top: side('top'), right: side('right'), bottom: side('bottom'), left: side('left') };
+        // Never let chrome claim more than 60% of either axis.
+        const fitAxis = (a, b, span) => {
+            const max = Math.floor(span * 0.6);
+            if (a + b <= max) return [a, b];
+            const k = max / Math.max(1, a + b);
+            return [Math.floor(a * k), Math.floor(b * k)];
+        };
+        [left, right] = fitAxis(left, right, width);
+        [top, bottom] = fitAxis(top, bottom, height);
+        return { top, right, bottom, left };
+    }
+
+    // Every camera-pose transition is one of these synchronous rig calls, so
+    // the offset is suspended or restored before the next frame renders.
+    for (const name of ['flyToPose', 'returnToOverview', 'resetPose', 'restorePose', 'goEditPose']) {
+        const transition = rig[name];
+        rig[name] = (...args) => {
+            const result = transition(...args);
+            syncViewOffset();
+            return result;
+        };
+    }
+
+    function effectiveInsets() {
+        return rig.inCameraPose?.() ? NO_INSETS : normalizedInsets(viewInsets, viewSize.width, viewSize.height);
+    }
+
+    function syncViewOffset(force = false) {
+        const { width, height } = viewSize;
+        const insets = effectiveInsets();
+        const key = [width, height, insets.top, insets.right, insets.bottom, insets.left].join(',');
+        if (!force && key === appliedViewKey) return;
+        appliedViewKey = key;
+        // The visible centre sits dx px right and dy px down of the canvas centre.
+        const dx = (insets.left - insets.right) / 2;
+        const dy = (insets.top - insets.bottom) / 2;
+        projectionShift = { x: (2 * dx) / Math.max(1, width), y: (-2 * dy) / Math.max(1, height) };
+        camera.aspect = width / Math.max(1, height);
+        camera.updateProjectionMatrix();
+    }
+
+    /* The fit frame for the visible rect, or null when it is the whole canvas
+     * (which keeps the established fit arithmetic bit for bit). */
+    function visibleFitFrame() {
+        const { width, height } = viewSize;
+        const insets = effectiveInsets();
+        if (!insets.top && !insets.right && !insets.bottom && !insets.left) return null;
+        const visibleWidth = Math.max(1, width - insets.left - insets.right);
+        const visibleHeight = Math.max(1, height - insets.top - insets.bottom);
+        const halfV = Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * visibleHeight / Math.max(1, height));
+        return { fovV: 2 * halfV, aspect: visibleWidth / visibleHeight };
+    }
+
     function fitNow(options = {}) {
         if (!points) return;
         points.geometry.computeBoundingBox();
@@ -367,7 +481,15 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         lastFitLocalBox = { min: box.min.toArray(), max: box.max.toArray() };
         box.applyMatrix4(apartmentRoot.matrixWorld);
         lastFitBox = box.clone();
-        rig.fitBounds(box, options);
+        rig.fitBounds(box, { ...options, frame: visibleFitFrame() });
+    }
+
+    /* A layout change (resize, sheet, dock, toolbar inset). Before the owner
+     * orbits, tilts, zooms or pans, it refits; after, it keeps the owner's
+     * pose and only refreshes the fit the next zoom step uses. */
+    function layoutChanged() {
+        if (!points || rig.inCameraPose?.()) return;
+        fitNow({ dur: 0, keepPose: rig.ownerPose?.() === true });
     }
 
     function projectedFitBounds() {
@@ -385,11 +507,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             new THREE.Vector3(lastFitBox.max.x, lastFitBox.max.y, lastFitBox.max.z),
         ];
         camera.updateMatrixWorld(true);
+        const clipNear = camera.coordinateSystem === THREE.WebGPUCoordinateSystem ? 0 : -1;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         let outOfDepth = false;
         for (const corner of corners) {
             const p = corner.clone().project(camera);
-            if (p.z < -1 || p.z > 1) outOfDepth = true;
+            if (p.z < clipNear || p.z > 1) outOfDepth = true;
             const x = (p.x * 0.5 + 0.5) * canvasWidth;
             const y = (-p.y * 0.5 + 0.5) * canvasHeight;
             minX = Math.min(minX, x);
@@ -406,7 +529,17 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 bottom: canvasHeight - Math.min(130, Math.round(canvasHeight * 0.16)),
             }
             : { left: 4, right: canvasWidth - 4, top: 4, bottom: canvasHeight - 4 };
+        const insets = effectiveInsets();
+        const visible = {
+            left: insets.left, top: insets.top,
+            right: canvasWidth - insets.right, bottom: canvasHeight - insets.bottom,
+        };
         return {
+            insets,
+            visible,
+            visibleOk: !outOfDepth && minX >= visible.left - 1 && maxX <= visible.right + 1
+                && minY >= visible.top - 1 && maxY <= visible.bottom + 1,
+            ownerPose: rig.ownerPose?.() === true,
             viewport: { width: canvasWidth, height: canvasHeight, aspect: camera.aspect },
             bounds: {
                 minX: Math.round(minX),
@@ -479,10 +612,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         const oy = frame ? frame.offsetY : 0;
         const n = camera.near;
         const f = camera.far;
+        // Clip z: OpenGL's -1..1, or WebGPU's 0..1 on the WebGPU backend.
+        const webgpuClip = camera.coordinateSystem === THREE.WebGPUCoordinateSystem;
         return new THREE.Matrix4().set(
             sx * (2 * fx / p.w), 0, sx * (1 - 2 * cx / p.w) - ox, 0,
             0, sy * (2 * fy / p.h), sy * (2 * cy / p.h - 1) - oy, 0,
-            0, 0, -(f + n) / (f - n), -(2 * f * n) / (f - n),
+            0, 0, webgpuClip ? -f / (f - n) : -(f + n) / (f - n), webgpuClip ? -(f * n) / (f - n) : -(2 * f * n) / (f - n),
             0, 0, -1, 0,
         );
     }
@@ -525,6 +660,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             return result.points;
         }
         points = result.points;
+        nodeRenderer?.adoptPoints(points);
         apartmentRoot.add(points);
         fitNow();
         emit('loaded', { total: result.total });
@@ -675,6 +811,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         scene, camera, renderer, rig, modes, overlay, picking, apartmentRoot,
         pointsMaterial, pointsPromise,
         gpu: gpuName,
+        /* 'webgl', or 'webgpu' / 'webgpu-webgl2' behind ?renderer=webgpu. */
+        rendererBackend: nodeRenderer ? (nodeRenderer.backend === 'webgpu' ? 'webgpu' : 'webgpu-webgl2') : 'webgl',
+        webgpuReadback: () => nodeRenderer ? { backend: nodeRenderer.backend, gpu: nodeRenderer.gpu,
+            adapter: nodeRenderer.adapter, lost: nodeRenderer.lostInfo(), ports: nodeRenderer.ports.readback() } : null,
         siteId,
         contentRevision,
         sceneIdentity,
@@ -687,6 +827,54 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 acceptPoint: point => cutawayM.dollhouseKeep(point, policy) > .05,
             });
         },
+        /* The aim chip's ray from a light to an aim point (picking.beamPath),
+         * against the same collision proxy as displaySurfaceHit. Cut-away
+         * walls still block here: the dollhouse cutaway is a camera
+         * presentation and never changes world occlusion. Apartment-local
+         * Z-up metres in and out; null without a collision proxy. */
+        beamPath(originValue, pointValue, { toleranceM } = {}) {
+            const collision = modes.getCollision?.();
+            if (!collision) return null;
+            try { return picking.beamPath(apartmentRoot, [collision], originValue, pointValue, { toleranceM }); }
+            catch (_) { return null; }
+        },
+        /* `traceBeam` for the W2 aim presentation: { point_m, name, ... } of
+         * the first blocker, or null when the way is clear. */
+        traceBeam(originValue, pointValue) {
+            return pickingM.aimChipBlocker(engine.beamPath(originValue, pointValue));
+        },
+        /* Tier-0 Lit (lit-view.mjs): the scan mesh relit with simulated light
+         * from the virtual fixtures, disclosed as simulated, not photometric
+         * and with assumed output. Mesh only: it needs Mesh to be the current
+         * mode and turns itself off when the mode changes. Emits 'lit' with
+         * the state on every change, including a declared reduced quality. */
+        async setLit(on) {
+            if (!on) {
+                if (litView?.state().active) { litView.disable(); litUnsubscribe(); emit('lit', litView.state()); }
+                return litView ? litView.state() : null;
+            }
+            if (disposed || modes.mode !== 'mesh' || !modes.getMesh?.()) return litView ? litView.state() : null;
+            if (!litView) {
+                const litM = await sib('lit-view.mjs');
+                if (disposed) return null;
+                litView ||= litM.createLitView({ scene, renderer,
+                    getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
+                    getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
+                    getCollision: () => modes.getCollision?.() || null,
+                    spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
+            }
+            if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
+            litView.enable();
+            const offMode = modes.onChange(next => { if (next !== 'mesh') void engine.setLit(false); });
+            const offStats = engine.on('stats', stats => {
+                const before = litView.state().quality, after = litView.observeFrameRate(stats?.fps).quality;
+                if (after !== before) emit('lit', litView.state());
+            });
+            litUnsubscribe = () => { offMode(); offStats(); litUnsubscribe = () => {}; };
+            emit('lit', litView.state());
+            return litView.state();
+        },
+        litState() { return litView ? litView.state() : null; },
         async createUiOverlayLayer(options = {}) {
             const { host, isCurrent, signal: layerSignal, onPresentationFrame, onPresentationDispose } = options || {};
             if (typeof isCurrent !== 'function' || typeof layerSignal?.aborted !== 'boolean'
@@ -755,6 +943,13 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         scenePlaceholderPromise,
         get scenePlaceholder() { return scenePlaceholder; },
         async captureFrame({ scale = 0.25, signal } = {}) {
+            if (nodeRenderer) {
+                if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
+                await pointsPromise;
+                if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
+                const frame = await nodeRenderer.capture({ scene, camera, scale, signal });
+                return disposed || signal?.aborted ? null : frame;
+            }
             if (disposed || signal?.aborted || renderer.getContext().isContextLost()) return null;
             await pointsPromise;
             /* Before the render: the render and the read must share a task.
@@ -857,11 +1052,23 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         },
         setSize(w, h) {
             renderer.setSize(w, h, false);
-            camera.aspect = w / Math.max(1, h);
-            camera.updateProjectionMatrix();
+            viewSize = { width: Math.max(1, Number(w) || 1), height: Math.max(1, Number(h) || 1) };
+            syncViewOffset(true);
             pointsMaterial.uniforms.uPixelRatio.value = renderer.getPixelRatio();
-            if (points && !rig.inCameraPose?.()) fitNow({ dur: 0 });
+            layoutChanged();
         },
+        /* Chrome over the canvas, in CSS pixels from each edge (see
+         * syncViewOffset). Returns the insets in effect. */
+        setViewInsets(insets = NO_INSETS) {
+            const next = normalizedInsets(insets, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+            if (next.top === viewInsets.top && next.right === viewInsets.right
+                && next.bottom === viewInsets.bottom && next.left === viewInsets.left) return effectiveInsets();
+            viewInsets = Object.freeze(next);
+            syncViewOffset(true);
+            layoutChanged();
+            return effectiveInsets();
+        },
+        viewInsets() { return effectiveInsets(); },
         attachInput(el, options = {}) { return rigM.attachInput(el, rig, options); },
         async createApartmentBoundaryMomentum(options = {}) {
             const module = await sib('apartment-boundary-momentum.mjs');

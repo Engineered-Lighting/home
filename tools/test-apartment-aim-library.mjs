@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const P = require('../app/src/home-apartment-aim-proposals.js');
-const N = require('../app/src/home-apartment-named-aims.js');
+const N = require('../app/src/home-apartment-aim-library.js');
 const E = require('../app/src/home-apartment-echo-aim.js');
 const vendor = new URL('../app/src/vendor/three-0.180.0/three.module.js', import.meta.url).href;
 const source = fs.readFileSync(new URL('../app/src/home-3d/apartment-aim-presentation.mjs', import.meta.url), 'utf8');

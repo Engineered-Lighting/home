@@ -14,6 +14,7 @@ const read = name => fs.readFileSync(path.join(SRC, name), 'utf8');
 const sha = value => createHash('sha256').update(value).digest('hex');
 const babel = require(path.join(SRC, 'vendor/babel-7.29.0/babel.min.js'));
 const aim = read('home-apartment-aim.jsx'), shared = read('home-apartment-ui.jsx'), cssSource = read('home-tokens.css');
+const ladderSource = read('home-apartment-command-ladder.jsx');
 const css = cssSource.replace(/url\("(vendor\/fonts\/[a-z-]+\.woff2)"\)/g,
   (_, name) => `url("data:font/woff2;base64,${fs.readFileSync(path.join(SRC, name)).toString('base64')}")`);
 const scenarios = [
@@ -89,7 +90,7 @@ test('actual Aim inspector theme states keep readable text, focus and bounds', {
   const receipt = { schema: 'home-apartment-aim-theme-browser-1', authored_component: true, actual_aim_inspector: true,
     complete_home_app: false, room_assets: false, household_data: false, physical_commands: 0, model_saves: 0,
     camera_sessions: 0, model_sessions: 0, http_requests: [], websocket_attempts: [], errors: [], checks: [], screenshots: [],
-    sources: Object.fromEntries(['home-apartment-aim.jsx', 'home-apartment-aiming.js', 'home-apartment-data.js', 'home-apartment-ui.jsx', 'home-tokens.css']
+    sources: Object.fromEntries(['home-apartment-aim.jsx', 'home-apartment-command-ladder.jsx', 'home-apartment-aiming.js', 'home-apartment-data.js', 'home-apartment-ui.jsx', 'home-tokens.css']
       .map(name => [name, sha(read(name))])) };
   let browser;
   try {
@@ -118,6 +119,7 @@ test('actual Aim inspector theme states keep readable text, focus and bounds', {
         for (const name of ['vendor/react-18.3.1/react.production.min.js', 'vendor/react-18.3.1/react-dom.production.min.js',
           'home-apartment-aiming.js', 'home-apartment-data.js']) await page.addScriptTag({ content: read(name) });
         await page.addScriptTag({ content: babel.transform(shared, { presets: ['react'], sourceType: 'script' }).code });
+        await page.addScriptTag({ content: babel.transform(ladderSource, { presets: ['react'], sourceType: 'script' }).code });
         await page.addScriptTag({ content: babel.transform(aim, { presets: ['react'], sourceType: 'script' }).code });
         await page.addScriptTag({ content: `
           (()=>{
@@ -191,8 +193,9 @@ test('actual Aim inspector theme states keep readable text, focus and bounds', {
         await resetScroll();await inspect('light-both',page.locator('[data-apt-current-profile]'));
         await inspect('light-engineered',page.getByText('Engineered spotlight',{exact:true}));
         await page.getByText('Details & calibration status',{exact:false}).click();
-        await page.locator('details').evaluate(element=>element.scrollIntoView({block:'end'}));
-        await inspect('light-details',page.locator('details > summary'));
+        const details=page.locator('details',{hasText:'Details & calibration status'});
+        await details.evaluate(element=>element.scrollIntoView({block:'end'}));
+        await inspect('light-details',details.locator('summary'));
         await page.getByRole('tab',{name:'Radials',exact:true}).click();
         const radial = page.getByRole('button',{name:'Toggle radial zone 1',exact:true});
         assert.equal(await radial.getAttribute('aria-pressed'),'true');
@@ -216,6 +219,17 @@ test('actual Aim inspector theme states keep readable text, focus and bounds', {
         await page.getByRole('tab',{name:'Light',exact:true}).click();
         await page.evaluate(()=>window.__aimThemeProof.update({sim:true,destination:window.__aimThemeProof.runtime.current_destination}));
         await inspect('simulated-current',page.getByRole('button',{name:'Simulated aim set',exact:true}));
+        // APT-A06: Echo's ladder is collapsed to one line; expanded it stays blocked and reads in both themes.
+        const ladder=page.locator('[data-apt-command-ladder="simulated"]');
+        assert.equal(await ladder.locator('details').first().evaluate(element=>element.open),false);
+        assert.equal(await ladder.locator('[data-apt-command-status]').innerText(),'Simulated · execution blocked');
+        await ladder.locator('summary').first().click();
+        assert.equal(await ladder.locator('[data-apt-command-step="accepted"] .apt-ui-meta').innerText(),'blocked · no movement authority and no target-plane binding');
+        await ladder.getByText('Exact output',{exact:true}).click();
+        assert.equal(await ladder.getByRole('button',{name:'Copy request',exact:true}).isDisabled(),true);
+        assert.match(await ladder.locator('[data-apt-command-request]').innerText(),/"target_x_m": null/);
+        await inspect('simulated-ladder',ladder.locator('[data-apt-command-copy-blocked]'));
+        await ladder.locator('summary').first().click();
         await page.evaluate(()=>window.__aimThemeProof.update({sim:false,destination:null}));
         await page.getByLabel(/^fixture/).selectOption('authored-ordinary');
         await page.getByRole('button',{name:'Add Engineered profile',exact:true}).click();

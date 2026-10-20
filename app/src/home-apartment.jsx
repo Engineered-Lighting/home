@@ -6150,7 +6150,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     const retire = owned => {
       if (!owned || owned.retired) return;
       owned.retired = true;
-      if (aimPresentationRef.current === owned.presentation) aimPresentationRef.current = null;
+      if (aimPresentationRef.current === owned.presentation) {
+        aimPresentationRef.current = null;
+        // The owned HTML labels retire synchronously. Restore their canvas
+        // fallback in the same operation, including paused/manual captures.
+        try { engine.overlay.setRoomLabelledEquipment?.([]); } catch (_) { /* engine disposed */ }
+      }
       try { owned.presentation?.dispose(); } finally {
         owned.controller.abort(); owned.layer?.dispose();
         setAimPresentation(previous => previous === owned.presentation ? null : previous);

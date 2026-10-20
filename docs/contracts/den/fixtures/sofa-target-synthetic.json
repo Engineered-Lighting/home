@@ -1,0 +1,128 @@
+{
+  "schema": "home-registered-sofa-target-1",
+  "version": 1,
+  "scope": {
+    "site_id": "victoria",
+    "map_id": "victoria-den",
+    "room_id": "den"
+  },
+  "frame": "z_up_metric_floor0",
+  "unit": "m",
+  "binding": {
+    "canonical_collision_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_revision": "synthetic-den-r1",
+    "frame_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "manifest_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "registration_version": 1
+  },
+  "equipment_ref": {
+    "revision": 2,
+    "digest": "e185dd0a860ea645ca07cc97dbea73a7d12a6d58fbb243b9d7f1751410f467a7"
+  },
+  "zone": {
+    "kind": "polygon",
+    "vertices_m": [
+      [
+        1,
+        3.6,
+        0.45
+      ],
+      [
+        2.6,
+        3.6,
+        0.45
+      ],
+      [
+        2.6,
+        4.4,
+        0.45
+      ],
+      [
+        1,
+        4.4,
+        0.45
+      ]
+    ],
+    "centre_m": [
+      1.8,
+      4,
+      0.45
+    ],
+    "normal_unit": [
+      0,
+      0,
+      1
+    ],
+    "planarity": {
+      "max_distance_m": 0,
+      "qualified": false
+    }
+  },
+  "seat": {
+    "point_m": [
+      1.8,
+      4,
+      0.45
+    ],
+    "method": "zone_centre"
+  },
+  "selection": {
+    "method": "owner_selected_collision_surface",
+    "raw_corners": [
+      {
+        "point_m": [
+          1,
+          3.6,
+          0.45
+        ],
+        "normal_unit": [
+          0,
+          0,
+          1
+        ]
+      },
+      {
+        "point_m": [
+          2.6,
+          3.6,
+          0.45
+        ],
+        "normal_unit": [
+          0,
+          0,
+          1
+        ]
+      },
+      {
+        "point_m": [
+          2.6,
+          4.4,
+          0.45
+        ],
+        "normal_unit": [
+          0,
+          0,
+          1
+        ]
+      },
+      {
+        "point_m": [
+          1,
+          4.4,
+          0.45
+        ],
+        "normal_unit": [
+          0,
+          0,
+          1
+        ]
+      }
+    ],
+    "asset_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "confirmed": true,
+  "truth_role": "owner_marked_sofa_zone",
+  "qualification": null,
+  "physical_commands": false,
+  "digest": "cff81c731daa2fb74645e8fbb7cefb79df3345c40fcd89ad51f44960e3ad9bc7"
+}

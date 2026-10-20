@@ -1,0 +1,1492 @@
+{
+  "version": 1,
+  "families": [
+    {
+      "id": "detection",
+      "label": "Which detector sees the objects that matter?"
+    },
+    {
+      "id": "pose",
+      "label": "Does pose improve understanding?"
+    },
+    {
+      "id": "spatial",
+      "label": "What do depth and room knowledge add?"
+    },
+    {
+      "id": "segmentation",
+      "label": "Do masks improve interaction evidence?"
+    },
+    {
+      "id": "placement",
+      "label": "Where should this model run?"
+    },
+    {
+      "id": "evidence",
+      "label": "Would better inputs or history help?"
+    },
+    {
+      "id": "reasoning",
+      "label": "Which reasoning path understands best?"
+    },
+    {
+      "id": "preferences",
+      "label": "Does understanding improve the recommendation?"
+    }
+  ],
+  "baseline": {
+    "version": 1,
+    "note": "Every recipe feeds JEV these shared evidence families identically in both arms and varies only its declared lever. An absent per-arm grant means the family default.",
+    "families": {
+      "ha": {
+        "default": "granted",
+        "note": "Allowlisted Home Assistant device facts (per-arm key ha_evidence), duplicated to both arms from the same snapshots."
+      },
+      "ambient": {
+        "default": "granted",
+        "note": "Code-computed clock, daylight and weather priors (per-arm source_policy.ambient); one block per offer tick for both arms."
+      },
+      "caption": {
+        "default": "withheld",
+        "note": "Historical Qwen caption enum (per-arm key caption_evidence); outside the baseline, granted only as a lever."
+      },
+      "qwen_scene": {
+        "default": "granted",
+        "note": "Continuous structured Qwen scene facts and code-built history (per-arm source_policy.qwen_scene), one identical record per offer tick for both arms; coverage stays not_provisioned until the perceiver is configured and not_granted until the household policy lists lab-live-scene-1. Correlated with the camera, never independent, never refreshes freshness."
+      },
+      "temporal_encoder": {
+        "default": "withheld",
+        "note": "V-JEPA 2.1 den buckets (per-arm source_policy.temporal_encoder): uncalibrated posture, reading, zero-shot, motion and scene-change words from frozen probes run on LA over stored den preview clips, one identical record per offer tick for every granted arm. Outside the baseline, granted only as a lever (vjepa-onoff); coverage stays not_provisioned until the vjepa_live pump is configured and not_granted until the household policy lists vjepa-den-1. Correlated with the camera, calibration unvalidated, never independent, never refreshes freshness."
+      },
+      "spatial": {
+        "default": "not_provisioned",
+        "note": "Validated shared spatial facts; per-arm localization and room_map remain pipeline settings."
+      }
+    }
+  },
+  "experiments": [
+    {
+      "id": "detection",
+      "family_id": "detection",
+      "title": "Does YOLO26s see the book and phone better than YOLOX-L?",
+      "setup_name": "Detector \u00b7 YOLOX-L vs YOLO26s",
+      "description": "Two LA detectors on the same frames: YOLOX-L (A) and YOLO26s (B). Only the detector changes.",
+      "kind": "focused",
+      "changes": [
+        "detector"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolox-l",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "lever": {
+        "paths": [
+          "detector"
+        ],
+        "note": "Detector model only: YOLOX-L (A) vs YOLO26s (B) on the same frames."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "pose-added",
+      "family_id": "pose",
+      "title": "Does adding pose distinguish reading from phone use?",
+      "setup_name": "Pose \u00b7 detection vs detection + pose",
+      "description": "LA YOLO26s detections alone (A) versus the same detections plus RTMPose-m keypoints (B).",
+      "kind": "focused",
+      "changes": [
+        "pose"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": "rtmpose-m",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "lever": {
+        "paths": [
+          "pose"
+        ],
+        "note": "Pose stage only: none (A) vs RTMPose-m (B) on the same detector boxes."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "pose-crops",
+      "family_id": "pose",
+      "title": "Which estimator works better on the same person crops?",
+      "setup_name": "Pose on shared crops \u00b7 RTMW3D-x vs RTMPose-m",
+      "description": "RTMW3D-x (A) and RTMPose-m (B) estimate pose on the same shared person crops on LA.",
+      "kind": "focused",
+      "changes": [
+        "pose"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": "rtmw3d-x",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32",
+        "crop_source": "shared-humanart"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": "rtmpose-m",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32",
+        "crop_source": "shared-humanart"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "variants": [
+        "rtmw3d-x",
+        "rtmpose-m",
+        "keypoint-rcnn"
+      ],
+      "isolation": "Shared detector boxes and source crops; map common joints before scoring.",
+      "lever": {
+        "paths": [
+          "pose"
+        ],
+        "note": "Pose model only: RTMW3D-X (A) vs RTMPose-m (B) on shared detector crops."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "pose-pipelines",
+      "family_id": "pose",
+      "title": "Which complete detector and pose pipeline works better?",
+      "setup_name": "Pose pipeline \u00b7 HumanArt + RTMW3D vs YOLO26s + RTMPose",
+      "description": "Complete LA pipelines: YOLOX-m HumanArt with RTMW3D-x (A) versus YOLO26s with RTMPose-m (B).",
+      "kind": "complete_pipeline",
+      "changes": [
+        "detector",
+        "pose"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolox-m-humanart",
+        "pose": "rtmw3d-x",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": "rtmpose-m",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "variants": [
+        "rtmw3d-x-humanart",
+        "rtmpose-m-yolo26s",
+        "keypoint-rcnn"
+      ],
+      "isolation": "Complete pipeline comparison; not an isolated keypoint-model result.",
+      "lever": {
+        "paths": [
+          "detector",
+          "pose"
+        ],
+        "coupled": "pose_pipeline",
+        "note": "Complete detector+pose pipeline: YOLOX-M HumanArt with RTMW3D-X (A) vs YOLO26s with RTMPose-m (B); not attributable to one stage."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "depth",
+      "family_id": "spatial",
+      "title": "Does stereo depth improve where you are placed?",
+      "setup_name": "Position \u00b7 floor projection vs stereo depth",
+      "description": "YOLO26s person positions from a floor projection (A) versus stereo depth (B).",
+      "kind": "focused",
+      "changes": [
+        "localization"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "depth",
+        "calibration",
+        "room_registration"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "floor_projection",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "stereo",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "lever": {
+        "paths": [
+          "localization"
+        ],
+        "note": "Localization only: RGB floor projection (A) vs stereo depth (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "furniture",
+      "family_id": "spatial",
+      "title": "Does furniture knowledge improve understanding?",
+      "setup_name": "Room knowledge \u00b7 without vs with furniture map",
+      "description": "Stereo-localized people without (A) and with (B) a registered furniture map.",
+      "kind": "focused",
+      "changes": [
+        "room_map"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "depth",
+        "calibration",
+        "room_registration",
+        "furniture_map"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "stereo",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "stereo",
+        "room_map": true,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "lever": {
+        "paths": [
+          "room_map"
+        ],
+        "note": "Room-map relations only: off (A) vs on (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "spatial-combined",
+      "family_id": "spatial",
+      "title": "Does the combined spatial pipeline help?",
+      "setup_name": "Spatial pipeline \u00b7 floor projection vs stereo + map",
+      "description": "Floor projection without a room map (A) versus stereo depth with a registered furniture map (B).",
+      "kind": "complete_pipeline",
+      "changes": [
+        "localization",
+        "room_map"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "depth",
+        "calibration",
+        "room_registration",
+        "furniture_map"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "floor_projection",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "stereo",
+        "room_map": true,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "lever": {
+        "paths": [
+          "localization",
+          "room_map"
+        ],
+        "coupled": "spatial_pipeline",
+        "note": "Localization and room-map relations together: floor projection without map (A) vs stereo with map (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "masks",
+      "family_id": "segmentation",
+      "title": "Does using the same model's masks improve spatial evidence?",
+      "setup_name": "Masks \u00b7 withheld vs used",
+      "description": "One YOLO26s-seg output shared by both arms; masks are withheld from A and used by B.",
+      "kind": "focused",
+      "changes": [
+        "masks"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "depth",
+        "calibration"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s-seg",
+        "pose": null,
+        "masks": false,
+        "localization": "stereo",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s-seg",
+        "pose": null,
+        "masks": true,
+        "localization": "stereo",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "shared_computation": "segmentation",
+      "isolation": "One segmentation output is reused; only downstream mask access changes.",
+      "lever": {
+        "paths": [
+          "masks"
+        ],
+        "note": "Mask access only: off (A) vs on (B), from one shared segmentation output."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "segmentation-pipeline",
+      "family_id": "segmentation",
+      "title": "Is segmentation better than a complete box-based pipeline?",
+      "setup_name": "Segmentation \u00b7 boxes vs masks",
+      "description": "YOLO26s boxes (A) versus YOLO26s-seg masks (B), both with stereo depth.",
+      "kind": "complete_pipeline",
+      "changes": [
+        "detector",
+        "masks"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "depth",
+        "calibration"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "stereo",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s-seg",
+        "pose": null,
+        "masks": true,
+        "localization": "stereo",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "lever": {
+        "paths": [
+          "detector",
+          "masks"
+        ],
+        "coupled": "segmentation_pipeline",
+        "note": "Detector with masks as one pipeline: YOLO26s (A) vs YOLO26s-seg with masks (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "placement-same",
+      "family_id": "placement",
+      "title": "How does the same detector behave on Jetson and LA?",
+      "setup_name": "Detection \u00b7 Jetson vs LA",
+      "description": "The same YOLO26s FP32 detector on Victoria's Jetson (A) and on LA (B), fed the same RGB frames.",
+      "kind": "focused",
+      "changes": [
+        "device"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "network"
+      ],
+      "a": {
+        "input": "rgb-640",
+        "ha_evidence": true,
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "jetson",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-640",
+        "ha_evidence": true,
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "model_variants": [
+        "yolo26s"
+      ],
+      "isolation": "Same RGB frames, detector checkpoint and preprocessing on both hosts.",
+      "lever": {
+        "paths": [
+          "device"
+        ],
+        "note": "Detector placement only: Jetson (A) vs LA (B), same checkpoint and preprocessing."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); ha_evidence false -> true on both arms: HA state is a shared background input, identical for both arms, and stays inert until an HA source is provisioned.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "placement-best",
+      "family_id": "placement",
+      "title": "How does detector plus pose behave on Jetson and LA?",
+      "setup_name": "Detection + pose \u00b7 Jetson vs LA",
+      "description": "YOLO26s FP32 detection plus CPU RTMPose-m body7 pose on Victoria's Jetson (A) and on LA (B), fed the same RGB frames. Despite its id, this setup compares where the detector-plus-pose pipeline runs; it is not a search for the best deployment.",
+      "kind": "complete_pipeline",
+      "changes": [
+        "device"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "network"
+      ],
+      "a": {
+        "input": "rgb-640",
+        "detector": "yolo26s",
+        "pose": "rtmpose-m-body7-cpu",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "jetson",
+        "sampling_hz": 1,
+        "precision": "fp32",
+        "runtime_profile": "validated-local",
+        "ha_evidence": true,
+        "caption_evidence": false
+      },
+      "b": {
+        "input": "rgb-640",
+        "detector": "yolo26s",
+        "pose": "rtmpose-m-body7-cpu",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "la",
+        "sampling_hz": 1,
+        "precision": "fp32",
+        "runtime_profile": "validated-central",
+        "ha_evidence": true,
+        "caption_evidence": false
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "isolation": "Same RGB frames and checkpoints; GPU detector with CPU pose on both hosts.",
+      "lever": {
+        "paths": [
+          "device",
+          "runtime_profile"
+        ],
+        "coupled": "placement",
+        "note": "Detector+pose placement with each host's validated runtime profile: Jetson local (A) vs LA central (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); ha_evidence false -> true on both arms: HA state is a shared background input, identical for both arms, and stays inert until an HA source is provisioned; semantics unchanged: detector plus CPU pose placement despite the id.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "apartment-viewing",
+      "family_id": "placement",
+      "title": "Victoria Apartment live viewing",
+      "setup_name": "Apartment live analysis",
+      "description": "Owner-started viewing for at most five minutes. The existing detector and CPU body-pose pair reads the same camera owner; exact JPEG pixels live only in bounded RAM. No operational room geometry or physical lighting authority.",
+      "kind": "complete_pipeline",
+      "changes": [
+        "device"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "network",
+        "apartment_viewing_source"
+      ],
+      "a": {
+        "input": "rgb-640",
+        "detector": "yolo26s",
+        "pose": "rtmpose-m-body7-cpu",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "jetson",
+        "sampling_hz": 1,
+        "precision": "fp32",
+        "runtime_profile": "validated-local",
+        "ha_evidence": true,
+        "caption_evidence": false
+      },
+      "b": {
+        "input": "rgb-640",
+        "detector": "yolo26s",
+        "pose": "rtmpose-m-body7-cpu",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "la",
+        "sampling_hz": 1,
+        "precision": "fp32",
+        "runtime_profile": "validated-central",
+        "ha_evidence": true,
+        "caption_evidence": false
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "isolation": "Same RGB frames and checkpoints; GPU detector with CPU pose on both hosts.",
+      "lever": {
+        "paths": [
+          "device",
+          "runtime_profile"
+        ],
+        "coupled": "placement",
+        "note": "Detector+pose placement with each host's validated runtime profile: Jetson local (A) vs LA central (B)."
+      },
+      "revision": "2026-10-18: explicit opt-in bounded Apartment viewing; existing placement and assessment recipes unchanged."
+    },
+    {
+      "id": "vjepa-onoff",
+      "family_id": "evidence",
+      "title": "Does V-JEPA temporal evidence help JEV?",
+      "setup_name": "Detection + pose \u00b7 V-JEPA off vs on",
+      "description": "placement-best's detector-plus-pose pair (YOLO26s FP32 with CPU RTMPose-m body7 on Victoria's Jetson (A) and on LA (B), same RGB frames), with the V-JEPA 2.1 den evidence withheld from A and granted to B: uncalibrated posture, reading, zero-shot, motion and scene-change buckets from frozen probes that LA runs over stored den preview clips while the room is occupied.",
+      "kind": "focused",
+      "changes": [
+        "evidence"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "network",
+        "jev_household_egress",
+        "vjepa_worker"
+      ],
+      "a": {
+        "input": "rgb-640",
+        "detector": "yolo26s",
+        "pose": "rtmpose-m-body7-cpu",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "jetson",
+        "sampling_hz": 1,
+        "precision": "fp32",
+        "runtime_profile": "validated-local",
+        "ha_evidence": true,
+        "caption_evidence": false
+      },
+      "b": {
+        "input": "rgb-640",
+        "detector": "yolo26s",
+        "pose": "rtmpose-m-body7-cpu",
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": null,
+        "policy": null,
+        "device": "la",
+        "sampling_hz": 1,
+        "precision": "fp32",
+        "runtime_profile": "validated-central",
+        "ha_evidence": true,
+        "caption_evidence": false,
+        "source_policy": {
+          "temporal_encoder": true
+        }
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "isolation": "placement-best's arms verbatim, so its sessions are this experiment's placement baseline. The only evidence family that differs is temporal_encoder: one shared, never-visual record that never schedules a JEV call and is left out of the shared-context digest.",
+      "lever": {
+        "paths": [
+          "device",
+          "runtime_profile",
+          "source_policy.temporal_encoder"
+        ],
+        "coupled": "placement_with_temporal_encoder",
+        "note": "V-JEPA den evidence withheld (A) vs granted (B). The managed pair always runs A on the Jetson and B on LA with each host's validated runtime profile, exactly as placement-best, so the placement paths are declared too: compare against placement-best sessions to separate placement from V-JEPA. temporal_encoder is the only evidence family varied."
+      },
+      "revision": "2026-09-29: added (on/off experiment for the V-JEPA 2.1 den evidence source; placement-best arms unchanged plus source_policy.temporal_encoder on B)."
+    },
+    {
+      "id": "input-detail",
+      "family_id": "evidence",
+      "title": "Does more detail around the person help?",
+      "setup_name": "Input detail \u00b7 whole frame vs person crop",
+      "description": "The whole 640 px frame (A) versus a registered detailed person crop (B). Detail must come from the capture, never from upscaling.",
+      "kind": "focused",
+      "changes": [
+        "input"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "high_resolution_source"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "registered-person-crop",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "isolation": "Use a registered detailed source; do not fabricate detail by upscaling a preview.",
+      "lever": {
+        "paths": [
+          "input"
+        ],
+        "note": "Input only: 640 px RGB preview (A) vs registered person crop (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "sampling",
+      "family_id": "evidence",
+      "title": "Does sampling more often catch brief moments?",
+      "setup_name": "Sampling \u00b7 2 Hz vs 4 Hz",
+      "description": "The same LA YOLO26s detector sampled at 2 Hz (A) and at 4 Hz (B).",
+      "kind": "focused",
+      "changes": [
+        "sampling_hz"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "source_rate_4hz"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 4,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "isolation": "4 Hz respects the current sampled numerical path; higher-rate RGB needs a separately validated source profile.",
+      "lever": {
+        "paths": [
+          "sampling_hz"
+        ],
+        "note": "Specialist sampling rate only: 2 Hz (A) vs 4 Hz (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "history",
+      "family_id": "evidence",
+      "title": "Does recent history make judgments steadier?",
+      "setup_name": "History \u00b7 latest only vs 10 s",
+      "description": "JEV judges the latest observation only (A) or the last 10 s of observations (B).",
+      "kind": "focused",
+      "changes": [
+        "history"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 0,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "lever": {
+        "paths": [
+          "history"
+        ],
+        "note": "JEV evidence window only: latest observation (A) vs 10 s history (B)."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments; arm B history 20 s -> 10 s, the live JEV history bound; arm A stays latest-only.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "rules-jev",
+      "family_id": "reasoning",
+      "title": "Does JEV improve on rules using identical evidence?",
+      "setup_name": "Reasoning \u00b7 rules vs JEV",
+      "description": "Identical perception evidence judged by deterministic rules (A) and by JEV (B).",
+      "kind": "focused",
+      "changes": [
+        "reasoner"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "jev_household_egress"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "rules",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "shared_computation": "perception",
+      "lever": {
+        "paths": [
+          "reasoner"
+        ],
+        "note": "Reasoner only: transparent rules (A) vs JEV (B) on the same perception."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "qwen-evidence",
+      "family_id": "reasoning",
+      "title": "Does perception evidence improve Qwen beyond RGB and HA?",
+      "setup_name": "Saved Qwen \u00b7 RGB + HA vs + perception",
+      "description": "Saved-session Qwen analysis from RGB and HA (A) versus the same inputs plus YOLO26s evidence (B).",
+      "kind": "focused",
+      "changes": [
+        "evidence"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "saved_session",
+        "qwen_admission"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": null,
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "qwen-rgb-ha",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "qwen-with-evidence",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "mode": "saved",
+      "analysis_variants": [
+        "baseline",
+        "a",
+        "b"
+      ],
+      "lever": {
+        "paths": [
+          "detector",
+          "reasoner"
+        ],
+        "coupled": "qwen_detector_hints",
+        "note": "Saved Qwen analysis without (A) vs with (B) detector evidence; the reasoner label names that input."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "qwen-jev",
+      "family_id": "reasoning",
+      "title": "Do Qwen's observations help JEV?",
+      "setup_name": "Saved JEV \u00b7 recorded vs + Qwen captions",
+      "description": "Saved-session JEV on recorded evidence (A) versus JEV that also receives Qwen caption evidence (B).",
+      "kind": "focused",
+      "changes": [
+        "reasoner"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "saved_session",
+        "qwen_admission",
+        "jev_household_egress"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "recorded-jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": true,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "qwen-assisted-jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "mode": "saved",
+      "lever": {
+        "paths": [
+          "caption_evidence",
+          "reasoner"
+        ],
+        "coupled": "historical_caption",
+        "note": "Historical Qwen caption family withheld (A) vs granted (B) to recorded JEV; the reasoner label names that input."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (A false, B true); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    },
+    {
+      "id": "preference",
+      "family_id": "preferences",
+      "title": "Which lighting suggestion would you actually want?",
+      "setup_name": "Recommendation \u00b7 reviewed vs personal policy",
+      "description": "One shared judgment feeding the reviewed policy (A) and a personal reviewed policy (B). Recommendations only, never actuation.",
+      "kind": "focused",
+      "changes": [
+        "policy"
+      ],
+      "requirements": [
+        "source",
+        "model_artifacts",
+        "resource_admission",
+        "reviewed_preferences"
+      ],
+      "a": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "b": {
+        "input": "rgb-ha-640",
+        "caption_evidence": false,
+        "detector": "yolo26s",
+        "pose": null,
+        "masks": false,
+        "localization": "none",
+        "room_map": false,
+        "history": 10,
+        "reasoner": "jev",
+        "policy": "reviewed-personal",
+        "device": "la",
+        "sampling_hz": 2,
+        "precision": "fp32"
+      },
+      "try_this": [
+        "Read an open book",
+        "Use a phone",
+        "Sit, stand, and move between zones"
+      ],
+      "confusing_alternatives": [
+        "Reading an open book / holding a closed book",
+        "Working at a computer / sitting nearby",
+        "Reaching for an object / passing a hand over it",
+        "Sitting / standing behind a chair",
+        "Briefly standing / leaving the activity",
+        "Object removed / object occluded"
+      ],
+      "shared_computation": "judgment",
+      "isolation": "Both policies receive the same judgment; only recommendations, never actuation.",
+      "lever": {
+        "paths": [
+          "policy"
+        ],
+        "note": "Recommendation policy only: reviewed (A) vs reviewed-personal (B) on the same judgment."
+      },
+      "revision": "2026-09-28: setup_name and description added (display only); caption_evidence added (false on both arms); precision fp16 -> fp32 on both arms: the incumbent adapters and workers run FP32, FP32 detection with CPU pose is the baseline, and FP16, INT8 and GPU pose are separate optimization experiments.; 2026-09-29: lever declared (catalog metadata; arm settings unchanged); the evidence baseline grants HA and ambient context identically to both arms."
+    }
+  ]
+}

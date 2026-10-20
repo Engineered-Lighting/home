@@ -1,0 +1,19 @@
+{
+  "fact-1.schema.json": "80377e32660b2834f0c31de88a5110445def2170224a7fd7a5cdacf36cb4154c",
+  "home-relation-hypothesis-1.schema.json": "59d3cb545e893ad1e8e3af35929d39f7ea121f66c678ddaf2a9f8308e37fa719",
+  "home-geometry-1.schema.json": "4af1061e3708b042a0df2a0407b91502bb3cc12c8d47cf5a53e1e7a6a5480516",
+  "home-source-health-1.schema.json": "43f4171707542b2afbe91b9e17790b5352969aada1ae6e66ab12a01a0d1d4b90",
+  "home-coverage-1.schema.json": "1ba18b8120544a79e9cd4bb19bd51530948ad82acc39eb70f56facb6ee417f84",
+  "home-context-revocation-1.schema.json": "4633a32bc59e3d11d9fbb54e33d37f3bd89e32ecaed4433f19f37d65fa39d519",
+  "home-evidence-request-1.schema.json": "50ece40bcc7572cbd1d5ededfc5b63c997806be3cf0a8b3f982f20e2213a75e7",
+  "home-evidence-reply-1.schema.json": "26f89cd66031751c392f4a05bd5e191bedd94dce914c4ccbf417cfb9a7fd9c1e",
+  "home-context-consumer-feedback-1.schema.json": "ec740ecd45777d58f04d704966e67657c7ce78bb4c90a0e9d44a4071d8f102fa",
+  "home-intent-event-1.schema.json": "f8c724d2580c9483feb3d20283788abb099e70ee8f96ec055f38aa186799f577",
+  "home-intent-application-result-1.schema.json": "2ae5d9196dfa1ad1fe86ab6d87184d637feae7d739ac68eed9706feb70018994",
+  "home-context-publication-1.schema.json": "15035bf5e002db807e412538088e1be06ece3d636f73b50b40bae18956e1c952",
+  "home-engagement-state-1.schema.json": "ee48182f3cb3e86b8f980e2b3ec87357bb5d6cd03a521b34ab9adb1421347ec9",
+  "lighting-target-replay-2.schema.json": "450fd12ce6d66a1801829a58482515e780ff8492b7eb3697b592270dd0bc7a84",
+  "home-lighting-shadow-decision-1.schema.json": "b149506ee3cd82ac70258f8815a47977eb80ee3e38436581bb4e68ccc9243532",
+  "home-diagnostic-reference-1.schema.json": "15a14f684ccd33083e74d81697adffe97dd5852a1156309a66619b1ac366342d",
+  "lighting-target-truth-2.schema.json": "c8c706e4b747f610785b3a8bb1427b74333935c2f75625c3daf183fd6d07af60"
+}

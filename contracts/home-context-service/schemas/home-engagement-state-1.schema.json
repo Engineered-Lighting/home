@@ -1,0 +1,575 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-engagement-state-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-engagement-state-1"
+    },
+    "version": {
+      "const": 1
+    },
+    "site_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "room_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "t": {
+      "type": "number",
+      "minimum": 0
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "valid_until": {
+      "type": "number",
+      "minimum": 0
+    },
+    "persons": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "person_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "site_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "room_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "session_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "domain_epoch": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "track_epoch": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "pid": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "site_id",
+              "room_id",
+              "session_id",
+              "domain_epoch",
+              "track_epoch",
+              "pid"
+            ]
+          },
+          "track_status": {
+            "enum": [
+              "tracked",
+              "coasting",
+              "not_observed"
+            ]
+          }
+        },
+        "required": [
+          "person_ref",
+          "track_status"
+        ]
+      }
+    },
+    "relations": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "relation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "person_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "site_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "room_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "session_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "domain_epoch": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "track_epoch": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+              },
+              "pid": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "site_id",
+              "room_id",
+              "session_id",
+              "domain_epoch",
+              "track_epoch",
+              "pid"
+            ]
+          },
+          "surface_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "state": {
+            "enum": [
+              "unknown",
+              "candidate",
+              "supported",
+              "suspended",
+              "conflicted",
+              "ending"
+            ]
+          },
+          "started_at": {
+            "type": "number",
+            "minimum": 0
+          },
+          "supported_since": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_observed_at": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "valid_until": {
+            "type": "number",
+            "minimum": 0
+          },
+          "engaged_dwell_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "disengaged_dwell_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "gap_since": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chosen_clause": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "fact_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "maxItems": 128,
+                    "uniqueItems": true
+                  },
+                  "sensor_roots": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "maxItems": 128,
+                    "uniqueItems": true
+                  },
+                  "observation_roots": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "maxItems": 128,
+                    "uniqueItems": true
+                  },
+                  "progression_roots": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "maxItems": 128,
+                    "uniqueItems": true
+                  },
+                  "parent_evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "maxItems": 128,
+                    "uniqueItems": true
+                  },
+                  "observed_at": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "valid_until": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "qualification": {
+                    "enum": [
+                      "experimental_shadow",
+                      "qualified_shadow"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "fact_ids",
+                  "sensor_roots",
+                  "observation_roots",
+                  "progression_roots",
+                  "parent_evidence_ids",
+                  "observed_at",
+                  "valid_until",
+                  "qualification"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "support_clauses": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                },
+                "kind": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                },
+                "fact_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "maxItems": 128,
+                  "uniqueItems": true
+                },
+                "sensor_roots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "maxItems": 128,
+                  "uniqueItems": true
+                },
+                "observation_roots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "maxItems": 128,
+                  "uniqueItems": true
+                },
+                "progression_roots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "maxItems": 128,
+                  "uniqueItems": true
+                },
+                "parent_evidence_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                  },
+                  "maxItems": 128,
+                  "uniqueItems": true
+                },
+                "observed_at": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "valid_until": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "qualification": {
+                  "enum": [
+                    "experimental_shadow",
+                    "qualified_shadow"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "fact_ids",
+                "sensor_roots",
+                "observation_roots",
+                "progression_roots",
+                "parent_evidence_ids",
+                "observed_at",
+                "valid_until",
+                "qualification"
+              ]
+            }
+          },
+          "refinement": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "reading",
+                      "computer_work",
+                      "gaming",
+                      "hobby"
+                    ]
+                  },
+                  "state": {
+                    "enum": [
+                      "supported",
+                      "uncertain"
+                    ]
+                  },
+                  "fact_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "maxItems": 128,
+                    "uniqueItems": true
+                  },
+                  "sensor_roots": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+                    },
+                    "maxItems": 128,
+                    "uniqueItems": true
+                  },
+                  "observed_at": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "valid_until": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "value",
+                  "state",
+                  "fact_ids",
+                  "sensor_roots",
+                  "observed_at",
+                  "valid_until"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "maxItems": 128,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "relation_id",
+          "person_ref",
+          "surface_id",
+          "state",
+          "started_at",
+          "supported_since",
+          "last_observed_at",
+          "valid_until",
+          "engaged_dwell_s",
+          "disengaged_dwell_s",
+          "gap_since",
+          "chosen_clause",
+          "support_clauses",
+          "refinement",
+          "reason_codes"
+        ]
+      }
+    },
+    "blocked": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "maxItems": 128
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ]
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        "config_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "version",
+        "config_digest"
+      ]
+    },
+    "simulation_only": {
+      "const": true
+    },
+    "acceptance_eligible": {
+      "const": false
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "t",
+    "seq",
+    "valid_until",
+    "persons",
+    "relations",
+    "blocked",
+    "producer",
+    "simulation_only",
+    "acceptance_eligible"
+  ]
+}

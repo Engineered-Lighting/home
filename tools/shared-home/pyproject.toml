@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "home-shared-vllm"
+version = "0.1.0"
+description = "Explicit admission integration for the pinned Home vLLM runtime"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.entry-points."vllm.general_plugins"]
+home_shared_admission = "home_shared.vllm_plugin:register"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["home_shared*"]

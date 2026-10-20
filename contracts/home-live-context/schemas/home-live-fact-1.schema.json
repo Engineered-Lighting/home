@@ -1,0 +1,1450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-live-fact-1.schema.json",
+  "title": "home-live-fact-1: closed live producer input, experimental qualification is not supplied by shape",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "home-live-fact-1"
+    },
+    "version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "schema",
+    "version"
+  ],
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "home-live-fact-1"
+        },
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "manifest_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "person_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/person"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subject_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/subject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "association": {
+          "$ref": "#/$defs/association"
+        },
+        "head": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "payload_type": {
+                  "const": "home-live-fact-1"
+                },
+                "person_ref": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/person"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "subject_ref": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/subject"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "predicate": {
+                  "enum": [
+                    "person_presence",
+                    "material_state",
+                    "hand_material_relation",
+                    "object_interaction",
+                    "pc_input_interaction",
+                    "activity_refinement",
+                    "negative_engagement"
+                  ]
+                },
+                "method_ref": {
+                  "$ref": "#/$defs/pin"
+                }
+              },
+              "required": [
+                "source_id",
+                "payload_type",
+                "person_ref",
+                "subject_ref",
+                "predicate",
+                "method_ref"
+              ]
+            },
+            "position": {
+              "$ref": "#/$defs/source_position"
+            },
+            "supersedes": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/publication_ref"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "key",
+            "position",
+            "supersedes"
+          ]
+        },
+        "observed_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "available_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "valid_until": {
+          "type": "number",
+          "minimum": 0
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "sensor_roots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "observation_roots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "observation_root_times": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minProperties": 1,
+          "maxProperties": 32
+        },
+        "sensor_root_bindings": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true
+          },
+          "minProperties": 1,
+          "maxProperties": 32
+        },
+        "parent_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/publication_ref"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "original_receipt_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/original_receipt_ref"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "clock": {
+          "$ref": "#/$defs/clock"
+        },
+        "method_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "source_generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "layer": {
+          "enum": [
+            "observation",
+            "interpretation"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "person_presence",
+            "material_state",
+            "hand_material_relation",
+            "object_interaction",
+            "pc_input_interaction",
+            "activity_refinement",
+            "negative_engagement"
+          ]
+        },
+        "status": {
+          "enum": [
+            "supplied",
+            "missing",
+            "stale",
+            "unobservable",
+            "conflict"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "present",
+                "observed_absent",
+                "open",
+                "closed",
+                "visible_state_unknown",
+                "near",
+                "supported_holding",
+                "contact",
+                "manipulation",
+                "not_interacting",
+                "attributed_recent",
+                "active_unattributed",
+                "observed_inactive",
+                "computer_work",
+                "gaming",
+                "desk_hobby",
+                "reading",
+                "phone_use",
+                "listening",
+                "resting",
+                "sleeping_likely",
+                "cleaning",
+                "transition",
+                "other",
+                "unknown",
+                "observed_use_ended",
+                "observed_departure"
+              ]
+            }
+          ]
+        },
+        "assertion_basis": {
+          "enum": [
+            "measured",
+            "inferred"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "qualified_person_detection",
+            "qualified_per_observation_holding",
+            "per_capture_holding_without_motion_requirement",
+            "open_material_no_use_claim",
+            "proximity_only",
+            "fresh_covered_use_ending",
+            "qualified_coarse_bounds",
+            "qualified_material_state",
+            "qualified_hand_material_relation",
+            "qualified_object_interaction",
+            "qualified_pc_input_attribution",
+            "qualified_activity_refinement",
+            "qualified_observed_absence",
+            "qualified_per_observation_evidence",
+            "material_occluded",
+            "hand_occluded_no_enclosing_bound",
+            "association_ambiguous",
+            "person_association_ambiguous",
+            "subject_association_ambiguous",
+            "source_unavailable",
+            "model_unavailable",
+            "detector_unavailable",
+            "pose_unavailable",
+            "depth_unavailable",
+            "insufficient_coverage",
+            "missing_measurement_bound",
+            "missing_applicability",
+            "primitive_capacity_exceeded",
+            "stale_capture",
+            "conflicting_evidence",
+            "outside_coverage",
+            "front_back_ambiguous",
+            "required_part_unobservable",
+            "unsupported_distinction",
+            "capture_gap",
+            "registration_unavailable",
+            "calibration_unavailable"
+          ]
+        },
+        "model_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/pin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "probability": {
+          "$ref": "#/$defs/probability"
+        },
+        "conflicting_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/publication_ref"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "id",
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "manifest_ref",
+        "person_ref",
+        "subject_ref",
+        "association",
+        "head",
+        "observed_at",
+        "available_at",
+        "valid_until",
+        "source_id",
+        "sensor_roots",
+        "observation_roots",
+        "observation_root_times",
+        "sensor_root_bindings",
+        "parent_refs",
+        "original_receipt_refs",
+        "clock",
+        "method_ref",
+        "source_generation",
+        "layer",
+        "kind",
+        "status",
+        "value",
+        "assertion_basis",
+        "reason",
+        "model_ref",
+        "probability",
+        "conflicting_refs"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "association": {
+                "properties": {
+                  "person_status": {
+                    "const": "qualified"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "person_ref": {
+                "$ref": "#/$defs/person"
+              },
+              "association": {
+                "properties": {
+                  "candidate_person_refs": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "association": {
+                "properties": {
+                  "person_status": {
+                    "const": "unresolved"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "person_ref": {
+                "type": "null"
+              },
+              "association": {
+                "properties": {
+                  "candidate_person_refs": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "association": {
+                "properties": {
+                  "person_status": {
+                    "const": "not_applicable"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "person_ref": {
+                "type": "null"
+              },
+              "association": {
+                "properties": {
+                  "candidate_person_refs": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "association": {
+                "properties": {
+                  "subject_status": {
+                    "const": "qualified"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "subject_ref": {
+                "$ref": "#/$defs/subject"
+              },
+              "association": {
+                "properties": {
+                  "candidate_subject_refs": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "association": {
+                "properties": {
+                  "subject_status": {
+                    "const": "unresolved"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "subject_ref": {
+                "type": "null"
+              },
+              "association": {
+                "properties": {
+                  "candidate_subject_refs": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "association": {
+                "properties": {
+                  "subject_status": {
+                    "const": "not_applicable"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "subject_ref": {
+                "type": "null"
+              },
+              "association": {
+                "properties": {
+                  "candidate_subject_refs": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "qualified_person_detection",
+                  "qualified_per_observation_holding",
+                  "per_capture_holding_without_motion_requirement",
+                  "open_material_no_use_claim",
+                  "proximity_only",
+                  "fresh_covered_use_ending",
+                  "qualified_coarse_bounds",
+                  "qualified_material_state",
+                  "qualified_hand_material_relation",
+                  "qualified_object_interaction",
+                  "qualified_pc_input_attribution",
+                  "qualified_activity_refinement",
+                  "qualified_observed_absence",
+                  "qualified_per_observation_evidence"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "missing",
+                  "stale",
+                  "unobservable",
+                  "conflict"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "probability": {
+                "type": "null"
+              },
+              "reason": {
+                "enum": [
+                  "material_occluded",
+                  "hand_occluded_no_enclosing_bound",
+                  "association_ambiguous",
+                  "person_association_ambiguous",
+                  "subject_association_ambiguous",
+                  "source_unavailable",
+                  "model_unavailable",
+                  "detector_unavailable",
+                  "pose_unavailable",
+                  "depth_unavailable",
+                  "insufficient_coverage",
+                  "missing_measurement_bound",
+                  "missing_applicability",
+                  "primitive_capacity_exceeded",
+                  "stale_capture",
+                  "conflicting_evidence",
+                  "outside_coverage",
+                  "front_back_ambiguous",
+                  "required_part_unobservable",
+                  "unsupported_distinction",
+                  "capture_gap",
+                  "registration_unavailable",
+                  "calibration_unavailable"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "conflict"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "conflicting_refs": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "person_presence"
+              },
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "enum": [
+                  "present",
+                  "observed_absent"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "material_state"
+              },
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "enum": [
+                  "open",
+                  "closed",
+                  "visible_state_unknown"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "hand_material_relation"
+              },
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "enum": [
+                  "near",
+                  "supported_holding",
+                  "contact",
+                  "manipulation",
+                  "not_interacting"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "object_interaction"
+              },
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "pc_input_interaction"
+              },
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "enum": [
+                  "attributed_recent",
+                  "active_unattributed",
+                  "observed_inactive"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "activity_refinement"
+              },
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "enum": [
+                  "computer_work",
+                  "gaming",
+                  "desk_hobby",
+                  "reading",
+                  "phone_use",
+                  "listening",
+                  "resting",
+                  "sleeping_likely",
+                  "cleaning",
+                  "transition",
+                  "other",
+                  "unknown"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "negative_engagement"
+              },
+              "status": {
+                "const": "supplied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "enum": [
+                  "observed_use_ended",
+                  "observed_departure"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "home-live-fact-1"
+        },
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "manifest_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "source_generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "status": {
+          "const": "withdrawn"
+        },
+        "reason": {
+          "enum": [
+            "capture_clock_unavailable",
+            "source_unavailable",
+            "source_restarted",
+            "association_lost",
+            "registration_invalidated",
+            "grant_revoked",
+            "operator_withdrawal",
+            "camera_unavailable",
+            "depth_unavailable",
+            "clock_mapping_invalidated",
+            "capacity_exceeded"
+          ]
+        },
+        "observed_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "available_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "valid_until": {
+          "type": "number",
+          "minimum": 0
+        },
+        "control": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "source_barrier"
+            },
+            "asserted_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "clock": {
+              "$ref": "#/$defs/clock"
+            },
+            "expected_source_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "next_source_generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "expected_authority_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "retired_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/publication_ref"
+              },
+              "minItems": 0,
+              "maxItems": 128,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "kind",
+            "asserted_at",
+            "clock",
+            "expected_source_generation",
+            "next_source_generation",
+            "expected_authority_generation",
+            "retired_refs"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "id",
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "manifest_ref",
+        "source_id",
+        "source_generation",
+        "status",
+        "reason",
+        "observed_at",
+        "available_at",
+        "valid_until",
+        "control"
+      ]
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "person": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "domain_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "track_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "site_id",
+        "room_id",
+        "session_id",
+        "domain_epoch",
+        "track_epoch",
+        "pid"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "subject_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "subject_id",
+        "subject_epoch"
+      ]
+    },
+    "publication_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stream_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "producer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "component_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "stream_epoch",
+        "cursor",
+        "producer_id",
+        "id",
+        "payload_digest",
+        "component_id"
+      ]
+    },
+    "original_receipt_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "store_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "component_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "observed_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "available_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "clock_mapping_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "store_id",
+        "receipt_id",
+        "digest",
+        "component_id",
+        "observed_at",
+        "available_at",
+        "clock_mapping_id"
+      ]
+    },
+    "association": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "person_status": {
+          "enum": [
+            "qualified",
+            "unresolved",
+            "not_applicable"
+          ]
+        },
+        "subject_status": {
+          "enum": [
+            "qualified",
+            "unresolved",
+            "not_applicable"
+          ]
+        },
+        "association_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method_ref": {
+          "$ref": "#/$defs/pin"
+        },
+        "candidate_person_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/person"
+          },
+          "minItems": 0,
+          "maxItems": 8,
+          "uniqueItems": true
+        },
+        "candidate_subject_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subject"
+          },
+          "minItems": 0,
+          "maxItems": 8,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "person_status",
+        "subject_status",
+        "association_id",
+        "generation",
+        "method_ref",
+        "candidate_person_refs",
+        "candidate_subject_refs"
+      ]
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "commissioned"
+        },
+        "mapping_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "mapping_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "original_unit": {
+          "enum": [
+            "unix_ns",
+            "device_ns",
+            "monotonic_ns",
+            "unix_s"
+          ]
+        },
+        "original_value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$"
+        },
+        "uncertainty_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status",
+        "mapping_id",
+        "mapping_digest",
+        "source_epoch",
+        "original_unit",
+        "original_value",
+        "uncertainty_s"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "original_unit": {
+                "enum": [
+                  "unix_ns",
+                  "device_ns",
+                  "monotonic_ns"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "original_value": {
+                "pattern": "^[0-9]+$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source_position": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capture_epoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "capture_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        }
+      },
+      "required": [
+        "capture_epoch",
+        "capture_seq",
+        "revision"
+      ]
+    },
+    "probability": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "p": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "calibration_ref": {
+              "$ref": "#/$defs/pin"
+            },
+            "applicability_ref": {
+              "$ref": "#/$defs/pin"
+            }
+          },
+          "required": [
+            "p",
+            "calibration_ref",
+            "applicability_ref"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "support_ref": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/publication_ref"
+        },
+        {
+          "$ref": "#/$defs/original_receipt_ref"
+        }
+      ]
+    }
+  }
+}

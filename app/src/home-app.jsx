@@ -5232,7 +5232,7 @@ function HomeChatSurface({ children, unified, active, style }) {
     data-home-chat-surface="1" style={unified ? undefined : style}>{children}</div>;
 }
 
-function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelAction, onUndoAction, onControlAction, controlLifecycles, onWhy }) {
+function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelAction, onUndoAction, onControlAction, controlLifecycles, onWhy , aimBridge }) {
   const ChatEvent = window.EventContent;
   // Keep the same component and event path across layout switches. Remounting
   // an action or private review would discard its local lifecycle state.
@@ -5240,8 +5240,9 @@ function ApartmentChatTurn({ group, density, unified, onConfirmAction, onCancelA
     <TurnHeader speaker={group.speaker} time={group.time} tone={group.speaker === "system" ? "system" : group.speaker} />
     <TurnBody density={density}>{group.events.map(event =>
       <div key={event.id} className={unified ? "apt-ui-chat-event" : undefined} data-kind={event.kind}>
-        <ChatEvent e={event} onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction}
-          onControlAction={onControlAction} lifecycle={controlLifecycles ? controlLifecycles.get(event.id) : undefined} onWhy={onWhy} />
+        {event.kind === "apartment-aim-proposal" && window.AptChatAimCard ? <window.AptChatAimCard event={event} bridge={aimBridge} />
+          : <ChatEvent e={event} onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction}
+          onControlAction={onControlAction} lifecycle={controlLifecycles ? controlLifecycles.get(event.id) : undefined} onWhy={onWhy} />}
       </div>)}</TurnBody>
   </div>;
 }
@@ -5326,31 +5327,36 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
     rootRef: menuRef, trap: false, initialFocus: "first", onEscape: () => setMenuOpen(false) });
   const run = action => { setMenuOpen(false); action?.(); };
+  // APT-S02: every home that holds unsaved work keeps its mark, viewed or not.
+  const parkedUnsaved = window.HomeApartmentData?.dirtySites?.() || [];
+  const status = apartmentStatusRows(state);
+  const StatusBadge = window.HomeApartmentUI?.Badge;
   return <header className="apt-home-topbar">
     <span className="apt-home-wordmark">Home</span>
     <div className="apt-home-switcher" role="group" aria-label="Home">
       {!state?.sites?.length && <span className="apt-home-loading">Loading home…</span>}
       {(state?.sites || []).map(site => {
         const active = state?.siteId === site.id;
-        const unsaved = active && ["dirty", "saving", "conflict", "error"].includes(state?.saveState);
+        const unsaved = active ? APARTMENT_UNSAVED_STATES.includes(state?.saveState) : parkedUnsaved.includes(site.id);
         return <button type="button" key={site.id} aria-pressed={active}
-          disabled={!state?.selectHome} title={site.sceneAvailable ? site.shortName : `${site.shortName} · scene unavailable`}
+          disabled={!state?.selectHome} title={unsaved ? `${site.shortName} · unsaved work kept` : site.sceneAvailable ? site.shortName : `${site.shortName} · scene unavailable`}
           onClick={() => state?.selectHome?.(site.id)}>
           <span className="apt-home-site-dot" data-state={unsaved ? "unsaved" : site.sceneAvailable ? "available" : "unavailable"} />
-          {site.shortName}
+          {site.shortName}{unsaved && <span className="sr-only">, unsaved work kept</span>}
         </button>;
       })}
     </div>
     <details className="apt-home-status"><summary aria-label="Home status">
       <span className="apt-home-status-dot" data-state={state?.phase || "loading"} />
       <span className="apt-home-status-summary">{state?.sourceLabel || "Loading room"}</span>
+      <span className="apt-home-status-segment" data-optional="1">{status.find(row => row.key === "lights")?.title}</span>
       {state?.saveState && <span className="apt-home-status-save">{state.saveState}</span>}
-    </summary><div role="status">
-      <p>Room: {state?.phase || "loading"}</p>
-      <p>{state?.sourceLabel || "Source unavailable"}</p>
-      <p>Save: {state?.saveState || "unavailable"}{state?.saveDetail ? ` · ${state.saveDetail}` : ""}</p>
-      <p>{state?.physicalControls ? "Home Assistant connected · output guards apply" : "Physical controls unavailable for this home"}</p>
-      <p>Video, analyzed frames, pose and inference have separate states in Camera · JEV. Missing pose does not mean vacant.</p>
+    </summary><div role="status" aria-label="What this home is connected to">
+      {status.map(row => <div className="apt-home-status-row" key={row.key} data-system={row.key}>
+        <span className="apt-home-status-system">{row.system}</span>
+        <span className="apt-home-status-value">{StatusBadge && row.state ? <StatusBadge state={row.state}>{row.title}</StatusBadge> : row.title}</span>
+        {row.detail && <span className="apt-home-status-detail">{row.detail}</span>}
+      </div>)}
     </div></details>
     <div className="apt-home-top-actions">
     {state?.openSetup && <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
@@ -5380,6 +5386,94 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
         </div></>}
     </div></div>
   </header>;
+}
+
+/* The Apartment's save states that still hold work not saved to the home:
+ * edits, a save in flight or in conflict, and preserved local drafts. */
+const APARTMENT_UNSAVED_STATES = ["unsaved", "saving", "conflict", "offline", "reviewed", "validation"];
+
+/* APT-S02: one row per system, from facts the current home already reports.
+ * Capability rows wait on the agreed per-home capability contract (APT-F05). */
+function apartmentStatusRows(state) {
+  const phase = state?.phase || "loading";
+  const room = phase === "ready" ? ["current", "Room ready"] : phase === "error" ? ["blocked", "Room unavailable"] : ["loading", "Loading room"];
+  const fixtures = state?.modeledFixtures || 0;
+  const lights = state?.lightEntities > 0
+    ? state.haConnection === "online"
+      ? ["connected", "Home Assistant connected", state.physicalControls ? "Output guards apply." : "Physical controls are unavailable here."]
+      : ["disconnected", "Home Assistant not connected", "Light controls are disabled and nothing is queued."]
+    : fixtures > 0
+      ? ["modeled", `No light entities for ${state.lightsRoom || "these"} fixtures`, `${fixtures} modeled fixture${fixtures === 1 ? "" : "s"} · nothing is sent to hardware.`]
+      : ["unavailable", "No lights in this home's model", ""];
+  const save = { saved: ["saved", "Saved"], unsaved: ["unsaved", "Unsaved changes"], saving: ["loading", "Saving"],
+    conflict: ["conflict", "Save conflict"], offline: ["draft", "Local draft kept"], reviewed: ["draft", "Draft ready to publish"],
+    validation: ["invalid", "Can't save yet"] }[state?.saveState] || ["unavailable", "No changes"];
+  return [
+    { key: "room", system: "Room", state: room[0], title: room[1], detail: state?.sourceLabel || "" },
+    { key: "lights", system: "Lights", state: lights[0], title: lights[1], detail: lights[2] },
+    { key: "save", system: "Saved work", state: save[0], title: save[1], detail: state?.saveDetail || "" },
+    { key: "camera", system: "Camera", state: state?.hasPerception ? null : "unavailable",
+      title: state?.hasPerception ? "Camera · JEV" : "No analyzed-frame camera here",
+      detail: state?.hasPerception ? "Video, analyzed frames, pose and inference have separate states there. Missing pose does not mean vacant." : "" },
+    { key: "capabilities", system: "Capabilities", state: "unavailable", title: "Not available yet",
+      detail: "Fixture, bench and perception capabilities wait on the agreed capability contract." },
+  ];
+}
+
+/* APT-S05: the sheet handle. Drag moves between peek, half and full; a tap
+ * cycles them and Arrow Up/Down steps one, so dragging is never required.
+ * While dragging only the sheet follows the finger; the room refits once. */
+const APARTMENT_SHEET_DETENTS = ["peek", "half", "full"];
+function ApartmentSheetGrip({ detent, onDetent }) {
+  // A mouse drag ends in a click on the handle; only that click is ignored.
+  const dragRef = useRef(null), suppressClickUntilRef = useRef(0);
+  const shell = target => target.closest(".apt-home-shell");
+  const heights = root => { const h = root.getBoundingClientRect().height; return { peek: 150, half: h * .5, full: h - 52 }; };
+  const finish = (event, commit) => {
+    const drag = dragRef.current; dragRef.current = null;
+    if (!drag) return;
+    const root = shell(event.currentTarget);
+    root?.removeAttribute("data-sheet-dragging"); root?.style.removeProperty("--apt-sheet-drag-height");
+    if (!commit || !drag.moved || !root) return;
+    suppressClickUntilRef.current = performance.now() + 350;
+    const stops = heights(root), index = APARTMENT_SHEET_DETENTS.indexOf(drag.detent), travel = drag.start - event.clientY;
+    // A short deliberate flick steps one detent; otherwise the nearest detent wins.
+    let next = APARTMENT_SHEET_DETENTS.reduce((best, key) => Math.abs(stops[key] - drag.height) < Math.abs(stops[best] - drag.height) ? key : best, drag.detent);
+    if (next === drag.detent && Math.abs(travel) >= 32) next = APARTMENT_SHEET_DETENTS[Math.max(0, Math.min(2, index + Math.sign(travel)))];
+    onDetent(next);
+  };
+  return <button type="button" className="apt-home-sheet-grip" aria-label="Resize Home sheet" data-detent={detent}
+    aria-keyshortcuts="ArrowUp ArrowDown" title={`Sheet: ${detent}. Drag, tap or use the arrow keys.`}
+    onPointerDown={event => {
+      const root = shell(event.currentTarget), panel = root?.querySelector(".apt-home-panel");
+      if (event.button !== 0 || !root || !panel) return;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      const height = panel.getBoundingClientRect().height;
+      dragRef.current = { start: event.clientY, origin: height, height, detent, moved: false };
+    }}
+    onPointerMove={event => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const root = shell(event.currentTarget), stops = heights(root);
+      drag.height = Math.max(stops.peek, Math.min(stops.full, drag.origin + drag.start - event.clientY));
+      if (!drag.moved && Math.abs(drag.start - event.clientY) < 6) return;
+      drag.moved = true;
+      root.setAttribute("data-sheet-dragging", "1");
+      root.style.setProperty("--apt-sheet-drag-height", `${Math.round(drag.height)}px`);
+    }}
+    onPointerUp={event => finish(event, true)} onPointerCancel={event => finish(event, false)}
+    onKeyDown={event => {
+      if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      const index = APARTMENT_SHEET_DETENTS.indexOf(detent) + (event.key === "ArrowUp" ? 1 : -1);
+      onDetent(APARTMENT_SHEET_DETENTS[Math.max(0, Math.min(2, index))]);
+    }}
+    onClick={() => {
+      if (performance.now() < suppressClickUntilRef.current) return;
+      onDetent(APARTMENT_SHEET_DETENTS[(APARTMENT_SHEET_DETENTS.indexOf(detent) + 1) % 3]);
+    }}>
+    <span />
+  </button>;
 }
 
 function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
@@ -5695,6 +5789,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   shellTabRef.current = shellTab;
   const [shellDetent, setShellDetent] = useState("half");
   const [shellState, setShellState] = useState(null);
+  const shellStateRef = useRef(null);
+  shellStateRef.current = shellState;
   // Chat bound to the room (APT-C02/C03): Apartment only, read from the shell.
   const chatRoomBridge = unifiedHome ? shellState?.chatRoom || null : null;
   const chatRoom = chatRoomBridge && window.HomeApartmentChatContext
@@ -9768,6 +9864,12 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     }
     const cameraQueryClient = haClientRef.current;
     const cameraQueryGeneration = cameraQueryGenerationRef.current;
+    // Chat aim proposals (APT-C04) go to the Apartment's shared Set/Discard
+    // path and nowhere else: no lighting control, agent or service call.
+    if (window.HomeApartmentChatAim?.run(text, { addEvent, bridge: shellStateRef.current?.aimBridge })) {
+      window.HomeCameraQuery?.reset();
+      return;
+    }
     if (window.HomePersonalMemory?.run(text, {addEvent,
       isCurrent: () => haClientRef.current === cameraQueryClient && cameraQueryGenerationRef.current === cameraQueryGeneration,
     })) {
@@ -11812,40 +11914,6 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
             if (key === "labeler") { openVideoLabelerFeature("home-menu"); return; }
             openSurface(key, "home-menu");
           }} />
-        <aside className="apt-home-panel" aria-label="Home workspace">
-          <button type="button" className="apt-home-sheet-grip" aria-label="Resize Home sheet"
-            onClick={() => setShellDetent(value => value === "peek" ? "half" : value === "half" ? "full" : "peek")}>
-            <span />
-          </button>
-          <nav className="apt-home-tabs" aria-label="Home workspace tabs">
-            <div role="tablist" aria-label="Home panels">
-              {[["controls", "Controls"], ["camera", "Camera · JEV"], ["chat", "Chat"]].map(([key, label]) =>
-                <button type="button" role="tab" key={key} id={`apt-home-tab-${key}`}
-                  aria-selected={shellTab === key} aria-controls={`apt-home-panel-${key}`}
-                  aria-label={key === "chat" && shellChatUnread ? "Chat, unread replies" : undefined}
-                  tabIndex={shellTab === key ? 0 : -1}
-                  onKeyDown={event => {
-                    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
-                    event.preventDefault();
-                    const keys = ["controls", "camera", "chat"].filter(value => document.getElementById(`apt-home-tab-${value}`)?.getClientRects().length);
-                    const index = keys.indexOf(key);
-                    const next = event.key === "Home" ? keys[0] : event.key === "End" ? keys[keys.length - 1]
-                      : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length];
-                    showShellTab(next); document.getElementById(`apt-home-tab-${next}`)?.focus();
-                  }} onClick={() => showShellTab(key)}>{label}{key === "chat" && shellChatUnread
-                    && <span className="apt-home-unread" data-apartment-chat-unread="1" aria-hidden="true" />}</button>)}
-            </div>
-          </nav>
-          <div className="apt-home-controls" id="apt-home-panel-controls" role="tabpanel" aria-labelledby="apt-home-tab-controls"
-            hidden={shellTab !== "controls"} ref={setShellControlsHost} />
-          <div className="apt-home-camera" id="apt-home-panel-camera" role="tabpanel" aria-labelledby="apt-home-tab-camera" ref={setShellCameraHost}>
-            {!shellState?.hasPerception && <div className="apt-home-empty"><h2>Camera · JEV</h2>
-              <p>No analyzed-frame source is configured for this home.</p><p>Existing camera views remain available from the room.</p>
-              <p>Presence, video, pose and inference are independent. Presence sensors are not configured here.</p></div>}
-          </div>
-        </aside>
-        {shellMetricsOpen && <div ref={shellMetricsRef} className="apt-home-metrics" role="dialog" aria-modal="true" aria-label="Home metrics">
-          <button type="button" onClick={() => setShellMetricsOpen(false)}>Back</button>{metricsStrip}</div>}
       </>}
       {isSpatialWide && window.HomeApartmentView && (
         <div className={unifiedHome ? "apt-home-stage" : undefined} data-theme={unifiedHome ? theme : "dark"} style={{
@@ -11937,6 +12005,40 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           )}
         </div>
       )}
+      {/* The column follows the room in the DOM so Tab moves header → room → inspector → dock (SPEC › Keyboard). */}
+      {unifiedHome && <>
+        <aside className="apt-home-panel" aria-label="Home workspace">
+          <ApartmentSheetGrip detent={shellDetent} onDetent={setShellDetent} />
+          <nav className="apt-home-tabs" aria-label="Home workspace tabs">
+            <div role="tablist" aria-label="Home panels">
+              {[["controls", "Controls"], ["camera", "Camera · JEV"], ["chat", "Chat"]].map(([key, label]) =>
+                <button type="button" role="tab" key={key} id={`apt-home-tab-${key}`}
+                  aria-selected={shellTab === key} aria-controls={`apt-home-panel-${key}`}
+                  aria-label={key === "chat" && shellChatUnread ? "Chat, unread replies" : undefined}
+                  tabIndex={shellTab === key ? 0 : -1}
+                  onKeyDown={event => {
+                    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const keys = ["controls", "camera", "chat"].filter(value => document.getElementById(`apt-home-tab-${value}`)?.getClientRects().length);
+                    const index = keys.indexOf(key);
+                    const next = event.key === "Home" ? keys[0] : event.key === "End" ? keys[keys.length - 1]
+                      : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length];
+                    showShellTab(next); document.getElementById(`apt-home-tab-${next}`)?.focus();
+                  }} onClick={() => showShellTab(key)}>{label}{key === "chat" && shellChatUnread
+                    && <span className="apt-home-unread" data-apartment-chat-unread="1" aria-hidden="true" />}</button>)}
+            </div>
+          </nav>
+          <div className="apt-home-controls" id="apt-home-panel-controls" role="tabpanel" aria-labelledby="apt-home-tab-controls"
+            hidden={shellTab !== "controls"} ref={setShellControlsHost} />
+          <div className="apt-home-camera" id="apt-home-panel-camera" role="tabpanel" aria-labelledby="apt-home-tab-camera" ref={setShellCameraHost}>
+            {!shellState?.hasPerception && <div className="apt-home-empty"><h2>Camera · JEV</h2>
+              <p>No analyzed-frame source is configured for this home.</p><p>Existing camera views remain available from the room.</p>
+              <p>Presence, video, pose and inference are independent. Presence sensors are not configured here.</p></div>}
+          </div>
+        </aside>
+        {shellMetricsOpen && <div ref={shellMetricsRef} className="apt-home-metrics" role="dialog" aria-modal="true" aria-label="Home metrics">
+          <button type="button" onClick={() => setShellMetricsOpen(false)}>Back</button>{metricsStrip}</div>}
+      </>}
       {isSpatialWide && !window.HomeApartmentView && (
         <div className={unifiedHome ? "apt-home-stage" : undefined} data-theme={unifiedHome ? theme : "dark"} style={{
           position: "absolute",
@@ -12394,7 +12496,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
                   onConfirmAction={confirmAction} onCancelAction={cancelAction}
                   onUndoAction={undoAction}
                   onControlAction={onControlAction} controlLifecycles={controlLifecycles}
-                  onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} />
+                  onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} aimBridge={shellState?.aimBridge} />
                 {unifiedHome && <ApartmentChatRoomRefs group={g} room={chatRoom} bridge={chatRoomBridge} bindings={chatBindingsRef.current} />}
               </div>
             ))}

@@ -1,0 +1,18 @@
+{
+  "storage_root": "/srv/perception-lab/victoria",
+  "site_id": "victoria",
+  "quota_bytes": 68719476736,
+  "min_free_bytes": 2147483648,
+  "max_session_seconds": 1800,
+  "max_object_bytes": 16777216,
+  "max_read_bytes": 4194304,
+  "developer_fixture_mode": false,
+  "token_grants": [],
+  "cameras": [
+    {"id": "den-oak", "site_id": "victoria", "name": "Den OAK", "state": "uncommissioned", "modalities": ["rgb_h264", "sampled_numeric_depth"]}
+  ],
+  "devices": [
+    {"id": "victoria-den-jetson", "site_id": "victoria", "role": "recording", "admission": "required"}
+  ],
+  "sources": []
+}

@@ -1,0 +1,1228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-live-room-policy-2.schema.json",
+  "$comment": "Task policy4 is additionally validated by the unchanged closed independent semantic validators.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-live-room-policy-2"
+    },
+    "version": {
+      "const": 2
+    },
+    "policy_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registration_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "registration_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "geometry_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "geometry_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "mount_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "calibration_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "coverage_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "frame": {
+          "const": "z_up_metric_floor0"
+        },
+        "unit": {
+          "const": "m"
+        },
+        "transform_chain_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "id",
+              "digest"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "registration_ref",
+        "registration_digest",
+        "geometry_revision",
+        "geometry_digest",
+        "mount_digest",
+        "calibration_digest",
+        "coverage_refs",
+        "frame",
+        "unit",
+        "transform_chain_refs"
+      ]
+    },
+    "inventory_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "valid_until": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "ambient_timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fade_in_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30
+        },
+        "vacancy_delay_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30
+        },
+        "fade_out_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30
+        },
+        "source_loss_hold_s": {
+          "const": 0
+        }
+      },
+      "required": [
+        "fade_in_s",
+        "vacancy_delay_s",
+        "fade_out_s",
+        "source_loss_hold_s"
+      ]
+    },
+    "exposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assessment_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "id",
+            "digest"
+          ]
+        },
+        "reference_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "id",
+            "digest"
+          ]
+        },
+        "unit": {
+          "const": "normalized_modeled_exposure"
+        },
+        "max_total": {
+          "type": "number",
+          "minimum": 0
+        },
+        "valid_until": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "assessment_ref",
+        "reference_ref",
+        "unit",
+        "max_total",
+        "valid_until"
+      ]
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fixture_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "mount_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "profile_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "id",
+              "digest"
+            ]
+          },
+          "assessment": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pose_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "digest"
+                    ]
+                  },
+                  "valid_until": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "max_power_w": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "task": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "delivery_policy": {
+                            "type": "object",
+                            "properties": {
+                              "schema": {
+                                "const": "home-live-task-delivery-policy-4"
+                              },
+                              "version": {
+                                "const": 4
+                              }
+                            },
+                            "required": [
+                              "schema",
+                              "version"
+                            ],
+                            "additionalProperties": true,
+                            "maxProperties": 64
+                          },
+                          "power_w_at_full": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "exposure_upper_at_full": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "delivery_policy",
+                          "power_w_at_full",
+                          "exposure_upper_at_full"
+                        ]
+                      }
+                    ]
+                  },
+                  "ambient": {
+                    "type": "array",
+                    "minItems": 7,
+                    "maxItems": 7,
+                    "items": false,
+                    "prefixItems": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "domain": {
+                            "const": "radial1"
+                          },
+                          "assessment": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "origin_m": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "direction_unit": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "half_angle_rad": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "exclusiveMaximum": 1.5707963267948966
+                                  },
+                                  "range_m": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 100
+                                  },
+                                  "assessment_ref": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "digest": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "digest"
+                                    ]
+                                  },
+                                  "valid_until": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "level_scale": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "max_fraction": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "cct_min_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "cct_max_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "power_w_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exposure_upper_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "origin_m",
+                                  "direction_unit",
+                                  "half_angle_rad",
+                                  "range_m",
+                                  "assessment_ref",
+                                  "valid_until",
+                                  "level_scale",
+                                  "max_fraction",
+                                  "cct_min_k",
+                                  "cct_max_k",
+                                  "power_w_at_full",
+                                  "exposure_upper_at_full"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "assessment"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "domain": {
+                            "const": "radial2"
+                          },
+                          "assessment": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "origin_m": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "direction_unit": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "half_angle_rad": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "exclusiveMaximum": 1.5707963267948966
+                                  },
+                                  "range_m": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 100
+                                  },
+                                  "assessment_ref": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "digest": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "digest"
+                                    ]
+                                  },
+                                  "valid_until": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "level_scale": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "max_fraction": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "cct_min_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "cct_max_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "power_w_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exposure_upper_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "origin_m",
+                                  "direction_unit",
+                                  "half_angle_rad",
+                                  "range_m",
+                                  "assessment_ref",
+                                  "valid_until",
+                                  "level_scale",
+                                  "max_fraction",
+                                  "cct_min_k",
+                                  "cct_max_k",
+                                  "power_w_at_full",
+                                  "exposure_upper_at_full"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "assessment"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "domain": {
+                            "const": "radial3"
+                          },
+                          "assessment": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "origin_m": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "direction_unit": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "half_angle_rad": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "exclusiveMaximum": 1.5707963267948966
+                                  },
+                                  "range_m": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 100
+                                  },
+                                  "assessment_ref": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "digest": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "digest"
+                                    ]
+                                  },
+                                  "valid_until": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "level_scale": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "max_fraction": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "cct_min_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "cct_max_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "power_w_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exposure_upper_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "origin_m",
+                                  "direction_unit",
+                                  "half_angle_rad",
+                                  "range_m",
+                                  "assessment_ref",
+                                  "valid_until",
+                                  "level_scale",
+                                  "max_fraction",
+                                  "cct_min_k",
+                                  "cct_max_k",
+                                  "power_w_at_full",
+                                  "exposure_upper_at_full"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "assessment"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "domain": {
+                            "const": "radial4"
+                          },
+                          "assessment": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "origin_m": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "direction_unit": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "half_angle_rad": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "exclusiveMaximum": 1.5707963267948966
+                                  },
+                                  "range_m": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 100
+                                  },
+                                  "assessment_ref": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "digest": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "digest"
+                                    ]
+                                  },
+                                  "valid_until": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "level_scale": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "max_fraction": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "cct_min_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "cct_max_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "power_w_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exposure_upper_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "origin_m",
+                                  "direction_unit",
+                                  "half_angle_rad",
+                                  "range_m",
+                                  "assessment_ref",
+                                  "valid_until",
+                                  "level_scale",
+                                  "max_fraction",
+                                  "cct_min_k",
+                                  "cct_max_k",
+                                  "power_w_at_full",
+                                  "exposure_upper_at_full"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "assessment"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "domain": {
+                            "const": "radial5"
+                          },
+                          "assessment": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "origin_m": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "direction_unit": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "half_angle_rad": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "exclusiveMaximum": 1.5707963267948966
+                                  },
+                                  "range_m": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 100
+                                  },
+                                  "assessment_ref": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "digest": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "digest"
+                                    ]
+                                  },
+                                  "valid_until": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "level_scale": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "max_fraction": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "cct_min_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "cct_max_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "power_w_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exposure_upper_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "origin_m",
+                                  "direction_unit",
+                                  "half_angle_rad",
+                                  "range_m",
+                                  "assessment_ref",
+                                  "valid_until",
+                                  "level_scale",
+                                  "max_fraction",
+                                  "cct_min_k",
+                                  "cct_max_k",
+                                  "power_w_at_full",
+                                  "exposure_upper_at_full"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "assessment"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "domain": {
+                            "const": "radial6"
+                          },
+                          "assessment": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "origin_m": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "direction_unit": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "half_angle_rad": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "exclusiveMaximum": 1.5707963267948966
+                                  },
+                                  "range_m": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 100
+                                  },
+                                  "assessment_ref": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "digest": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "digest"
+                                    ]
+                                  },
+                                  "valid_until": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "level_scale": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "max_fraction": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "cct_min_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "cct_max_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "power_w_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exposure_upper_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "origin_m",
+                                  "direction_unit",
+                                  "half_angle_rad",
+                                  "range_m",
+                                  "assessment_ref",
+                                  "valid_until",
+                                  "level_scale",
+                                  "max_fraction",
+                                  "cct_min_k",
+                                  "cct_max_k",
+                                  "power_w_at_full",
+                                  "exposure_upper_at_full"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "assessment"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "domain": {
+                            "const": "downward"
+                          },
+                          "assessment": {
+                            "oneOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "origin_m": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "direction_unit": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                  },
+                                  "half_angle_rad": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "exclusiveMaximum": 1.5707963267948966
+                                  },
+                                  "range_m": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 100
+                                  },
+                                  "assessment_ref": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                                      },
+                                      "digest": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "digest"
+                                    ]
+                                  },
+                                  "valid_until": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "level_scale": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "max_fraction": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  },
+                                  "cct_min_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "cct_max_k": {
+                                    "type": "number",
+                                    "minimum": 1500,
+                                    "maximum": 6500
+                                  },
+                                  "power_w_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exposure_upper_at_full": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "origin_m",
+                                  "direction_unit",
+                                  "half_angle_rad",
+                                  "range_m",
+                                  "assessment_ref",
+                                  "valid_until",
+                                  "level_scale",
+                                  "max_fraction",
+                                  "cct_min_k",
+                                  "cct_max_k",
+                                  "power_w_at_full",
+                                  "exposure_upper_at_full"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "domain",
+                          "assessment"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "pose_ref",
+                  "valid_until",
+                  "max_power_w",
+                  "task",
+                  "ambient"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "fixture_id",
+          "mount_id",
+          "profile_ref",
+          "assessment"
+        ]
+      },
+      "minItems": 4,
+      "maxItems": 4
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "policy_ref",
+    "registration",
+    "inventory_ref",
+    "valid_until",
+    "ambient_timing",
+    "exposure",
+    "fixtures"
+  ]
+}

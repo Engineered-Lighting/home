@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-context-revocation-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-context-revocation-1"
+    },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "site_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "room_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "source_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        {
+          "const": "*"
+        }
+      ]
+    },
+    "revision": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        {
+          "const": "*"
+        }
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "available_at": {
+      "type": "number",
+      "minimum": 0
+    },
+    "revocation_generation": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "source_id",
+    "revision",
+    "reason",
+    "available_at"
+  ]
+}

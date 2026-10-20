@@ -281,7 +281,7 @@ function fixture({ mode = 'zones' } = {}) {
     directionalView: null, directionalViewRef: { current: null }, directionalProjectRef: { current: null },
     virtualFixturePreviewDirtyRef: { current: false }, publishVirtualFixturePreviewRef: { current: null },
     radialReadout: null, radialGestureActive: false, anchors: {},
-    virtualFixtureStatesRef: { current: { states: new Map(), targets: new Map() } },
+    virtualFixtureStatesRef: { current: { states: new Map(), targets: new Map() } }, denDeskAimPreviewRef: { current: null }, lightingBrainRef: { current: null }, releaseFixtureForHandChange: () => {},
     virtualAimHistoryRef: { current: { undo: [{ authored: 'previous aim' }], redo: [] } },
     virtualFixtureBindingKey: JSON.stringify(binding), hoverId: null, cardId: null, semanticDevicesForRoom: [],
     setVirtualFixturePreview: value => { state.previewPublications++; values.virtualFixtureItems = value.fixtures; },
@@ -307,7 +307,7 @@ function fixture({ mode = 'zones' } = {}) {
   for (const name of ['selectionEngine', 'selectionLifecycle']) context[name] = actual.initializer(name, context);
   for (const name of ['getDirectionalSnapshot', 'isDirectionalProjectionCurrent', 'projectDirectionalFixture', 'changeFixtureInteractionMode', 'changeVirtualInspectorTab', 'selectVirtualFixture', 'changeVirtualFixture',
     // Radial painting is a hand change: it reaches changeVirtualFixture through the one switch point.
-    'changeVirtualFixtureByHand']) actual.install(name, context);
+    'changeVirtualFixtureByHand', 'reapplyVirtualFixtureMemory']) actual.install(name, context);
   values.directionalProjectRef.current = context.projectDirectionalFixture;
   actual.assignment('publishVirtualFixturePreviewRef', context);
   const mount = signature => {

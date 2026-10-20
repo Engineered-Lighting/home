@@ -160,6 +160,13 @@
     return cloneState(workspaces.get(workspaceKey(scope)) || null);
   }
 
+  // Which homes hold parked unsaved work under the current authority, for the
+  // switcher's per-home mark. Site ids only; models never leave this closure.
+  function dirtySites() {
+    if (window.HomeLiveSceneShadow?.active || rehearsalIsolated()) return [];
+    return [...new Set([...workspaces.values()].filter(saved => saved.dirty === true).map(saved => saved.scope.siteId))].sort();
+  }
+
   function readViewPreference(input) {
     const scope = stateScope(input);
     if (!scope) return { ...DEFAULT_VIEW };
@@ -1387,7 +1394,7 @@
     spatialGeometrySnapshot, compareSpatialGeometry, reconcileFixtureEntityLink,
     getSavedLayoutSnapshot,
     getEquipmentRegistration,
-    captureWorkspace, restoreWorkspace, clearWorkspaces, setWorkspaceAuthority, ensureWorkspaceAuthority,
+    captureWorkspace, restoreWorkspace, dirtySites, clearWorkspaces, setWorkspaceAuthority, ensureWorkspaceAuthority,
     readViewPreference, saveViewPreference,
   };
 })();

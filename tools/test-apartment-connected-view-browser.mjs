@@ -4,10 +4,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { runFullUiShell } from './fixtures/home-full-ui-harness.mjs';
 const fixtureBytes = fs.readFileSync(new URL('./fixtures/apartment-connected-view.json', import.meta.url));
 const fixture = JSON.parse(fixtureBytes);
+const boundBrain = JSON.parse(fs.readFileSync(new URL('../docs/contracts/den/fixtures/brain-state-reading.json', import.meta.url)));
 const ids = ['victoria-den-proposed-fixture-01', 'victoria-den-proposed-fixture-02',
   'victoria-den-mount-03-virtual-fixture', 'victoria-den-mount-04-virtual-fixture'];
 const digest = value => createHash('sha256').update(Buffer.from(value, 'base64')).digest('hex');
@@ -19,11 +21,39 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     Object.assign(graph.arms.b.chain.find(row=>row.stage==='result'),{status:'completed',activity:'reading',
       request_id:'authored-jev-request',output_event_id:42,source_end_s:.4,available_at_s:.7,
       available_at:1800000000.7,valid_until:1800000002,freshness:'fresh',model_version:'authored-jev-v1'});
-    const brain = () => ({ schema: 'activity-lighting-state-1', home: 'victoria', room: 'den', brain: 'online',
-      generated_at: Date.now()/1000, mode: 'reading', why: 'Authored coordinator decision ' + state.brain,
-      fixtures: ids.map(id => ({fixture_id: id, ambient: {radial_level: .1, down_level: .1, cct_k: 3000, fade_s: 0},
+    // Each decision owns immutable source clocks. Repeated GET/SSE delivery
+    // must never mint a new lease from its arrival time.
+    const decisions = new Map();
+    const brain = () => {
+      if (decisions.has(state.brain)) return decisions.get(state.brain);
+      const doc = structuredClone(boundBrain), now = Date.now()/1000, shift = now - doc.generated_at;
+      for (const source of [doc.reading_evidence.activity, doc.reading_evidence.pose]) {
+        for (const key of ['interval_start','observed_at','available_at','valid_until']) source[key] += shift;
+      }
+      doc.generated_at = now; doc.state_revision += state.brain;
+      doc.decision_id = 'authored-brain:' + state.brain; doc.why = 'Authored coordinator decision ' + state.brain;
+      const lease = state.brain === 4 ? 2 : 10;
+      doc.reading_evidence.activity_valid_until = doc.reading_evidence.pose_valid_until = now + lease;
+      doc.reading_evidence.activity.valid_until = doc.reading_evidence.pose.valid_until = now + lease;
+      if (state.brain === 2) delete doc.reading_evidence;
+      doc.fixtures = ids.map(id => ({fixture_id: id, ambient: {radial_level: .1, down_level: .1, cct_k: 3000, fade_s: 0},
         spot: {on: true, level: state.brain ? .6 : .25, cct_k: 3000, fade_s: 0, target_m: [state.brain ? 2.5 : 1.5, 2, .7]},
-        paused_until: null, pause_reason: null})), decisions: [] });
+        paused_until: null, pause_reason: null}));
+      doc.decisions = []; decisions.set(state.brain, doc); return doc;
+    };
+    // A real open HTTP event stream: a finite fulfilled body would test a
+    // disconnection instead of coordinator following and original expiry.
+    const streams = new Set();
+    const streamServer = http.createServer((req,res) => {
+      assert.equal(req.method,'GET');
+      res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store'});
+      const send = () => res.write('event: state\ndata: ' + JSON.stringify(brain()) + '\n\n');
+      send(); const timer = setInterval(send,250); streams.add(res);
+      res.on('close',()=>{clearInterval(timer);streams.delete(res);});
+    });
+    await new Promise(resolve=>streamServer.listen(0,'127.0.0.1',resolve));
+    const streamUrl = 'http://127.0.0.1:' + streamServer.address().port + '/stream';
+    try {
     await page.context().route('**/api/**', async route => {
       const request = route.request(), url = new URL(request.url());
       if (url.origin !== origin) return route.fallback();
@@ -34,7 +64,7 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
       const json = (value, status = 200) => route.fulfill({status, contentType: 'application/json',
         headers: {'X-Home-Lab-Access': 'read-only'}, body: JSON.stringify(value)});
       if (p.endsWith('/homes/victoria/state')) return json(brain());
-      if (p.endsWith('/homes/victoria/stream')) return route.fulfill({status: 200, contentType: 'text/event-stream', body: 'event: state\ndata: ' + JSON.stringify(brain()) + '\n\n'});
+      if (p.endsWith('/homes/victoria/stream')) return route.continue({url:streamUrl});
       if (p === '/api/den-ops/v1/status') return json({schema:'den-ops-banner-1',banner:null});
       const name = p.slice('/api/perception-lab/v1/'.length);
       if (name === 'capabilities') return json({site_id:'victoria',cameras:[{id:'den'}],live_previews:{den:false},live_videos:{den:true},
@@ -73,7 +103,7 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     });
     receipt.connected = {authored_inputs:true,actual_producer_fixture:true,actual_camera_decoder:true,actual_renderer:true,
       household_data:false,physical_commands:false,fixture_sha256:createHash('sha256').update(fixtureBytes).digest('hex'),calls};
-    await openShell(); await waitSite('echo');
+    await openShell('?apartmentRedesign=1&worldZoom=off&den-lighting-evidence=1'); await waitSite('echo');
     await homes().getByRole('button',{name:'Victoria',exact:true}).click(); await waitSite('victoria');
     const scene = await page.evaluate(()=>window.__APT_ENGINE.sceneIdentity);
     for (const key of ['siteId','contentRevision','registrationVersion','frameDigest']) assert.equal(scene[key],fixture.scene[key], 'frozen producer fixture matches authored mounted scene ' + key);
@@ -112,7 +142,24 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     assert.notDeepEqual(second.target,first.target,'the actual follower changes virtual aim from coordinator messages');
     const capture = await page.evaluate(async()=>{const frame=await window.__APT_ENGINE.captureFrame({scale:.25});return frame&&{width:frame.width,height:frame.height,bytes:frame.pixels.length};});
     assert.ok(capture?.width>0&&capture.bytes===capture.width*capture.height*4,'the real renderer completes a frame after coordinator application');
-    checks.push({stage:'authored_coordinator_updates_virtual_state_aim_and_completed_render',capture});
+    await page.waitForFunction(()=>window.HomeDenLightingEvidence?.readback().events.some(row=>row.stage==='gpu_completed_frame'&&row.decision_id==='authored-brain:1'));
+    const renderEvidence = await page.evaluate(()=>window.HomeDenLightingEvidence.readback());
+    assert.ok(renderEvidence.events.filter(row=>row.stage==='gpu_completed_frame').every(row=>row.presentation_observed===false&&row.physical_commands===false));
+    checks.push({stage:'authored_coordinator_updates_virtual_state_aim_and_completed_render',capture,renderEvidence});
+    state.brain = 2;
+    await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.on===false,ids[0]);
+    await page.waitForFunction(()=>window.HomeDenLightingEvidence.readback().events.some(row=>row.stage==='offline_spot_stop'&&row.reason==='state_reading_evidence_unbound'));
+    state.brain = 3;
+    await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.on===true,ids[0]);
+    // A new decision with the same output must not renew an old render's lease.
+    state.brain = 4;
+    await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.on===false,ids[0]);
+    assert.ok(Date.now()/1000>=decisions.get(4).reading_evidence.pose_valid_until);
+    const replayed = structuredClone(decisions.get(4));
+    await page.waitForTimeout(500);
+    assert.deepEqual(decisions.get(4),replayed,'repeated stream messages retain the original evidence times');
+    assert.equal((await readFixture()).state.spotlight.on,false,'expired authority cannot be revived by replay');
+    checks.push({stage:'bound_reading_missing_expired_and_replayed_authority_refused',original:replayed});
     state.advanceQwen = true;
     const latest = fixture.qwen.at(-1).latest.receipt;
     await qwen.locator('[data-qwen-update="' + latest.request_id + '"]').waitFor({timeout:40000});
@@ -142,5 +189,9 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     await inViewport(page.getByRole('button',{name:/^Open Perception Lab/}));
     assert.equal(await page.locator('.pl-global-recording').count(),0,'recording status lives in the header and cannot cover dock or toolbar');
     checks.push({stage:'bounded_scoped_history_expiry_failure_phone_and_hidden_cleanup',lastOriginalExpiry:latest.valid_until,mediaDigest:digest(body.png_base64)});
+    } finally {
+      for (const response of streams) response.end();
+      streamServer.closeAllConnections(); await new Promise(resolve=>streamServer.close(resolve));
+    }
   });
 });

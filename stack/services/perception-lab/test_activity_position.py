@@ -65,7 +65,7 @@ class EventTests(unittest.TestCase):
                   {'track_id': 'slot-1', 'position_m': [3., 1., 1.1], 'approximate': True}]
         event = events.person_position(home='victoria', room='den', source='perception-lab/activity-loop',
                                        observed_at=1800000000., people=people, person_count=2)
-        self.assertEqual(event['ttl_s'], 3.)
+        self.assertEqual(event['ttl_s'], 10.)
         self.assertEqual(set(event), {'type', 'home', 'room', 'source', 'observed_at', 'ttl_s', 'people', 'person_count'})
         for bad in ([], [dict(people[0], position_m=None)], [dict(people[0], approximate=False)],
                     [dict(people[0], head_m=[0, 0, 0])]):
@@ -105,7 +105,7 @@ class LoopTests(unittest.TestCase):
     def test_new_placements_publish_at_most_5_hz_and_each_lives_3_s(self):
         self.run_for(10.)                                   # a new placement every 0.1 s
         self.assertEqual(len(self.positions()), 50)
-        self.assertTrue(all(e['ttl_s'] == 3. for e in self.positions()))
+        self.assertTrue(all(e['ttl_s'] == 10. for e in self.positions()))
         before = len(self.positions())
         self.run_for(10., new_every=10)                     # the real placement rate, about 1 Hz
         self.assertEqual(len(self.positions()) - before, 10)

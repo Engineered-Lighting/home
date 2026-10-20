@@ -3,7 +3,6 @@
  * in at P2 when device markers exist.
  */
 import * as THREE from 'three';
-const { dollhouseKeep } = await import(`./dollhouse-cutaway.mjs${new URL(import.meta.url).search}`);
 
 /* The aim chip's grazing note ("the pool will be long and dim") starts here,
  * matching the W2 aim presentation's threshold. */
@@ -294,13 +293,14 @@ export function createPicking(camera, hostEl) {
 /* Owner target selection against one independently pinned detailed display
  * mesh. This never supplies collision or perception/fixture authority. */
 export function createRegisteredDeskSurfacePicker({ apartmentRoot, modes, picking,
-    getManifest, sceneIdentity, digest } = {}) {
+    getManifest, sceneIdentity, digest, dollhouseKeep } = {}) {
     const need = (condition, reason) => { if (!condition) throw TypeError(reason); };
     const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
     const keys = ['content_revision', 'registration_version', 'manifest_digest', 'frame_digest', 'canonical_collision_digest'];
     need(apartmentRoot?.isObject3D && typeof modes?.getMesh === 'function'
         && typeof modes?.debugInfo === 'function' && typeof picking?.surfaceHit === 'function'
-        && typeof getManifest === 'function' && typeof digest === 'function', 'registered_desk_surface_unavailable');
+        && typeof getManifest === 'function' && typeof digest === 'function'
+        && typeof dollhouseKeep === 'function', 'registered_desk_surface_unavailable');
     function selection(binding) {
         need(binding && Object.keys(binding).length === keys.length && keys.every(key => Object.hasOwn(binding, key))
             && typeof binding.content_revision === 'string' && binding.content_revision.length > 0

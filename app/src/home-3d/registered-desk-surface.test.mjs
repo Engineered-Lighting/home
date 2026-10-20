@@ -10,6 +10,7 @@ registerHooks({ resolve(specifier, context, nextResolve) {
 } });
 const THREE = await import('three');
 const { createPicking, createRegisteredDeskSurfacePicker } = await import('./picking.js');
+const { dollhouseKeep } = await import('./dollhouse-cutaway.mjs');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const copy = value => JSON.parse(JSON.stringify(value));
 const near = (actual, expected) => actual.forEach((n, i) => assert.ok(Math.abs(n-expected[i]) < 1e-8, `${actual} != ${expected}`));
@@ -35,7 +36,7 @@ function fixture(name = 'mesh.glb') {
     const sceneIdentity = { siteId: 'victoria', contentRevision: manifest.revision,
         registrationVersion: manifest.registrationVersion, frameDigest: binding.frame_digest };
     const create = () => createRegisteredDeskSurfacePicker({ apartmentRoot: root, modes, picking,
-        getManifest: () => manifest, sceneIdentity, digest });
+        getManifest: () => manifest, sceneIdentity, digest, dollhouseKeep });
     const dispose = () => [mesh, proxy].forEach(value => { value.geometry.dispose(); value.material.dispose(); });
     return { root, mesh, proxy, camera, picking, manifest, binding, state, modes, sceneIdentity, create, dispose };
 }
@@ -123,7 +124,7 @@ test('missing, loading, fallback and foreign registered sources refuse without c
             assert.throws(() => picker.surfaceHit(400, 400, binding), /registered_desk_surface_binding_changed/);
         const changed = copy(f.manifest); changed.extra = true;
         const foreign = createRegisteredDeskSurfacePicker({ apartmentRoot: f.root, modes: f.modes,
-            picking: f.picking, getManifest: () => changed, sceneIdentity: f.sceneIdentity, digest });
+            picking: f.picking, getManifest: () => changed, sceneIdentity: f.sceneIdentity, digest, dollhouseKeep });
         assert.throws(() => foreign.reference(f.binding), /registered_desk_surface_binding_changed/);
     } finally { f.dispose(); }
 });
@@ -149,7 +150,7 @@ test('constructing an ordinary non-Victoria engine stays inert until an explicit
     try {
         f.sceneIdentity.siteId = 'echo-park';
         const picker = createRegisteredDeskSurfacePicker({ apartmentRoot: f.root, modes: f.modes,
-            picking: f.picking, getManifest: () => null, sceneIdentity: f.sceneIdentity, digest: () => undefined });
+            picking: f.picking, getManifest: () => null, sceneIdentity: f.sceneIdentity, digest: () => undefined, dollhouseKeep });
         assert.throws(() => picker.reference(f.binding), /registered_desk_surface_binding_changed/);
     } finally { f.dispose(); }
 });

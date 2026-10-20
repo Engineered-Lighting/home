@@ -48,6 +48,13 @@ export const AIM_OVERLAY_COPY = Object.freeze({
     barOutOfReach: 'Out of reach',
     fallbackTarget: 'this spot',
     surfaceFallback: 'Scan surface',
+    // The suggestion an invalid spot carries with its reason (SPEC › Gestures).
+    suggest: Object.freeze({
+        no_surface: 'Drag onto a wall, furniture or the floor.',
+        not_aimable: 'Choose another surface.',
+        blocked: 'Move the spot clear of it, or try another light.',
+        out_of_reach: 'Choose a spot closer to straight below the light.',
+    }),
 });
 
 const DEG = 180 / Math.PI, GRAZING_DEG = 80, SNAP_NORMAL_DOT = .9, MIN_SPAN_M = .015;
@@ -95,10 +102,21 @@ export function commissionedTiltLimit(limits) {
     return fromDown > 0 && fromDown < 180 ? fromDown : null;
 }
 
+// An engineered fixture profile's configured limits (Echo's simulated
+// engineered light) bound its simulated aim the same way. They describe the
+// profile, not commissioned travel, so they never stand in for Victoria's.
+function profileTiltLimit(limits) {
+    if (limits?.limit_role !== 'engineered_profile' || limits.physical_travel === 'commissioned' || !finite(limits.tilt_min_deg)) return null;
+    const fromDown = 90 - limits.tilt_min_deg;
+    return fromDown > 0 && fromDown < 180 ? fromDown : null;
+}
+const reachTiltLimit = limits => commissionedTiltLimit(limits) ?? profileTiltLimit(limits);
+
 export function aimDisclosures(descriptor, limits) {
     const origin = aimOrigin(descriptor), out = [];
     if (!origin || origin.modeled) out.push({ id: 'optical-origin', text: AIM_OVERLAY_COPY.opticalOrigin });
-    if (commissionedTiltLimit(limits) == null) out.push({ id: 'travel-limits', text: AIM_OVERLAY_COPY.travelLimits });
+    if (commissionedTiltLimit(limits) == null && limits?.limit_role !== 'engineered_profile')
+        out.push({ id: 'travel-limits', text: AIM_OVERLAY_COPY.travelLimits });
     return out.map(item => Object.freeze(item));
 }
 
@@ -121,7 +139,8 @@ function nearestNamedAim(namedAims, point, normal) {
  * way). Without a trace nothing is ever called blocked. */
 export function describeAimHit({ descriptor, limits, hit, namedAims, traceBeam } = {}) {
     const origin = aimOrigin(descriptor), disclosures = aimDisclosures(descriptor, limits);
-    const invalid = (reason, title, extra = {}) => freezeModel({ valid: false, reason, title, metrics: null, note: null,
+    const invalid = (reason, title, extra = {}) => freezeModel({ valid: false, reason, title, metrics: null,
+        note: AIM_OVERLAY_COPY.suggest[reason] || null,
         disclosures, surface: null, snap: null, point_m: null, normal_m: null, distance_m: null, tilt_deg: null,
         blocker_point_m: null, ...extra });
     if (!origin) return invalid('not_aimable', AIM_OVERLAY_COPY.notAimable);
@@ -145,7 +164,7 @@ export function describeAimHit({ descriptor, limits, hit, namedAims, traceBeam }
     const measured = { surface, snap, point_m: point, normal_m: normal, distance_m: distance, tilt_deg: tilt,
         metrics: AIM_OVERLAY_COPY.metrics(distance, shownTilt) };
     if (distance < MIN_SPAN_M) return invalid('not_aimable', AIM_OVERLAY_COPY.notAimable, measured);
-    const limit = commissionedTiltLimit(limits);
+    const limit = reachTiltLimit(limits);
     if (limit != null && tilt > limit) return invalid('out_of_reach', AIM_OVERLAY_COPY.outOfReach(shownTilt, Math.round(limit)), measured);
     let blocker = null;
     if (typeof traceBeam === 'function') {

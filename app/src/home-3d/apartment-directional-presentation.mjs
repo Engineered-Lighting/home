@@ -30,7 +30,20 @@ export function createDirectionalPresentation({ group, host, api, initial, getPr
     // hit area (36 px buttons, 3 px padding) clear of the stage edge.
     const PILL_EDGE = 5;
     let pillBox = null, pillObserver = null;
+    // Chromium's touch adjustment moves a fingertip to the nearest element
+    // that answers taps. The radial hit shapes take input through the host's
+    // pointer handlers, so on their own they do not count, and a finger on a
+    // lobe beside the mode pill was retargeted to the pill. A no-op click
+    // listener marks each hit shape as a tap target where it is drawn.
+    const tapTarget = () => {};
+    let tapTargets = [];
+    function markTapTargets(next) {
+        for (const node of tapTargets) node.removeEventListener?.('click', tapTarget);
+        tapTargets = next?.root ? [...next.root.querySelectorAll('[data-apt-radial-number]'), ...next.root.querySelectorAll('[data-apt-radial-hub="hit"]')] : [];
+        for (const node of tapTargets) node.addEventListener?.('click', tapTarget);
+    }
     function watchPill(next) {
+        markTapTargets(next);
         pillObserver?.disconnect(); pillObserver = null; pillBox = null;
         const View = next?.root?.ownerDocument?.defaultView;
         if (!next?.pill || typeof View?.ResizeObserver !== 'function') return;

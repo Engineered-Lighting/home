@@ -97,7 +97,9 @@ test("actual feed callsite keeps controller callbacks, group identity and one st
   const loaded = loadPresenter();
   const group = { speaker: "home", events: [{ ...events[0], turnKey: "stable-turn" }] }, explained = [];
   const bindings = { React, ApartmentChatTurn: loaded.render, unifiedHome: true, g: group, isSpatialWide: true, density: "normal", confirmAction: callbacks.onConfirmAction, cancelAction: callbacks.onCancelAction,
-    undoAction: callbacks.onUndoAction, onControlAction: callbacks.onControlAction, controlLifecycles: new Map(), openRightSlot: (slot, open) => { explained.push(slot); open(); }, setExplainConvId: id => explained.push(id) };
+    undoAction: callbacks.onUndoAction, onControlAction: callbacks.onControlAction, controlLifecycles: new Map(), openRightSlot: (slot, open) => { explained.push(slot); open(); }, setExplainConvId: id => explained.push(id),
+    // The Apartment aim bridge Chat aim cards use (APT-C04).
+    shellState: { aimBridge: { authored: "aim-bridge" } } };
   const call = vm.runInNewContext(babel.transform("(" + text(callsite) + ")", { presets: ["react"] }).code, bindings, { timeout: 1000 });
   const classic = vm.runInNewContext(babel.transform("(" + text(callsite) + ")", { presets: ["react"] }).code, { ...bindings, unifiedHome: false }, { timeout: 1000 });
   assert.equal(call.type, loaded.render); assert.equal(classic.type, call.type);
@@ -105,6 +107,7 @@ test("actual feed callsite keeps controller callbacks, group identity and one st
   assert.equal(call.props.group, group); assert.equal(call.props.density, "compact");
   for (const [prop, callback] of Object.entries(callbacks)) if (prop !== "onWhy") assert.equal(call.props[prop], callback);
   assert.equal(call.props.controlLifecycles, bindings.controlLifecycles);
+  assert.equal(call.props.aimBridge, bindings.shellState.aimBridge, "Chat aim cards receive the Apartment aim bridge");
   call.props.onWhy("authored-conversation"); assert.deepEqual(explained, ["explain", "authored-conversation"]);
   const key = (g, i) => vm.runInNewContext("(" + text(outerKey) + ")", { g, i }, { timeout: 1000 });
   assert.equal(key(group, 2), key({ ...group, events: [{ ...group.events[0], text: "stream completed", streaming: false }] }, 99));

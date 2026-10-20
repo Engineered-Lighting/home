@@ -1,0 +1,88 @@
+{
+  "schema": "den-reason-rows-example-1",
+  "synthetic": true,
+  "note": "One status row per vocabulary group, as a dock would render it.",
+  "rows": [
+    {
+      "group": "brain.mode",
+      "code": "reading",
+      "shown": "Reading light"
+    },
+    {
+      "group": "brain.rule",
+      "code": "reading_spot_on",
+      "shown": "Reading · spotlight on"
+    },
+    {
+      "group": "brain.status",
+      "code": "heartbeat_missed",
+      "shown": "No update from the brain for 15 s",
+      "severity": "warn"
+    },
+    {
+      "group": "brain.status",
+      "code": "state_http_503",
+      "shown": "Brain answered with an error",
+      "severity": "warn"
+    },
+    {
+      "group": "brain.refusal",
+      "code": "state_schema_unsupported",
+      "shown": "Brain state version not supported"
+    },
+    {
+      "group": "brain.aim",
+      "code": "beam_through_head",
+      "shown": "Every beam would cross the reader's head"
+    },
+    {
+      "group": "fixture.pause",
+      "code": "aim",
+      "shown": "Paused · aimed by hand"
+    },
+    {
+      "group": "den_ops.level",
+      "code": "deep_stack_paused",
+      "shown": "Deep sensing paused · ambient only",
+      "severity": "alert"
+    },
+    {
+      "group": "activity_loop.health",
+      "code": "jev_egress_blocked_indeterminate",
+      "shown": "JEV paused: an earlier request has an unknown outcome",
+      "severity": "warn"
+    },
+    {
+      "group": "activity_loop.health",
+      "code": "deep_stack_failed",
+      "shown": "Deep sensing not recording"
+    },
+    {
+      "group": "activity.label",
+      "code": "insufficient_evidence",
+      "shown": "Not enough to tell"
+    },
+    {
+      "group": "perception.age",
+      "code": "clock_unavailable",
+      "shown": "Age unavailable · clock not qualified"
+    },
+    {
+      "group": "perception.placement",
+      "code": "approximate_mount_signature_changed",
+      "shown": "Room or camera scene check changed"
+    },
+    {
+      "group": "legacy.desk_preview",
+      "code": "preview_no_person",
+      "shown": "No person visible (retired preview)",
+      "legacy": true
+    },
+    {
+      "group": "brain.status",
+      "code": "some_future_code",
+      "shown": "Unavailable",
+      "unknown": true
+    }
+  ]
+}

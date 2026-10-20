@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "home-lighting-shadow-decision-1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "home-lighting-shadow-decision-1"
+    },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "site_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "room_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "domain_epoch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "worker_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+    },
+    "t": {
+      "type": "number",
+      "minimum": 0
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "input_cursor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stream_epoch": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "input_receipts": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "payload_digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "received_at": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "cursor",
+          "id",
+          "payload_digest",
+          "received_at"
+        ]
+      }
+    },
+    "config_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "engagement": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "requests": {
+      "type": "object"
+    },
+    "allocation": {
+      "type": "object"
+    },
+    "execution": {
+      "type": "object"
+    },
+    "evidence_requests": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object"
+      }
+    },
+    "registered_targets": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "surface_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "approved": {
+            "const": true
+          },
+          "status": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          }
+        },
+        "required": [
+          "id",
+          "surface_id",
+          "approved",
+          "status"
+        ]
+      }
+    },
+    "input_results": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "disposition": {
+            "enum": [
+              "accepted",
+              "rejected"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          }
+        },
+        "required": [
+          "id",
+          "disposition",
+          "reason"
+        ]
+      }
+    },
+    "additional_input_result_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "intent_results": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "status": {
+            "enum": [
+              "applied",
+              "rejected"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "decision_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "reason",
+          "decision_ref"
+        ]
+      }
+    },
+    "actuated": {
+      "const": false
+    },
+    "acceptance_eligible": {
+      "const": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "ordinary",
+            "full_evidence",
+            "confirmed_context",
+            "desired_outcome"
+          ]
+        },
+        "truth_used_as_input": {
+          "type": "boolean"
+        },
+        "reference_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "bypassed_stages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "acceptance_eligible": {
+          "const": false
+        },
+        "training_eligible": {
+          "const": false
+        }
+      },
+      "required": [
+        "mode",
+        "truth_used_as_input",
+        "reference_ids",
+        "bypassed_stages",
+        "acceptance_eligible",
+        "training_eligible"
+      ]
+    },
+    "module_hashes": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "schema_pins": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "site_id",
+    "room_id",
+    "session_id",
+    "domain_epoch",
+    "worker_id",
+    "run_id",
+    "t",
+    "seq",
+    "input_cursor",
+    "stream_epoch",
+    "input_receipts",
+    "config_digest",
+    "engagement",
+    "requests",
+    "allocation",
+    "execution",
+    "evidence_requests",
+    "registered_targets",
+    "input_results",
+    "additional_input_result_count",
+    "intent_results",
+    "actuated",
+    "acceptance_eligible",
+    "diagnostic",
+    "module_hashes",
+    "schema_pins"
+  ]
+}

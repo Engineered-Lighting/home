@@ -326,6 +326,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
     const overlay = markersM.createOverlay(apartmentRoot);
     let litView = null, litUnsubscribe = () => {};
     const picking = pickingM.createPicking(camera, hostEl);
+    const deskSurfacePicking = pickingM.createRegisteredDeskSurfacePicker({
+        apartmentRoot, modes, picking, sceneIdentity,
+        getManifest: () => window.HomeContentPacks?.get?.(siteId, contentRevision)?.manifest,
+        digest: value => window.HomeEquipmentRegistration?.digest?.(value),
+        dollhouseKeep: cutawayM.dollhouseKeep,
+    });
     let disposed = false, disposing = false;
     const uiLayers = new Set();
     const presentationUiLayers = new Set();
@@ -819,6 +825,14 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         contentRevision,
         sceneIdentity,
         getEquipmentCutawayRegistrationStatus: () => equipmentCutaway.status(),
+        async prepareDeskTargetSurface(binding) {
+            await modes.preload(['mesh']);
+            return deskSurfacePicking.reference(binding);
+        },
+        deskTargetSurfaceReference(binding) { return deskSurfacePicking.reference(binding); },
+        deskTargetSurfaceHit(clientX, clientY, binding) {
+            return deskSurfacePicking.surfaceHit(clientX, clientY, binding);
+        },
         displaySurfaceHit(clientX, clientY) {
             const collision = modes.getCollision?.();
             if (!collision) return null;
@@ -860,7 +874,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 litView ||= litM.createLitView({ scene, renderer,
                     getMesh: () => (modes.mode === 'mesh' ? modes.getMesh?.() : null),
                     getFixtureRoots: () => overlay.virtualFixturesGroup?.children || [],
-                    getCollision: () => modes.getCollision?.() || null,
+                    // Named aims for the modeled lux readout, in their own frame.
+                    getNamedAims: () => [...(overlay.targetsById?.values() || [])].map(item => ({ id: item.target?.id,
+                        label: item.target?.name || item.target?.id, point: item.target?.pos, normal: item.target?.normal, frame: item.group?.parent })),
+                    isPresentationActive: () => overlay.virtualFixturesPresentationActive?.() === true,
+                    onStateChange: state => { if (state.active) emit('lit', state); },
+                    signal: lifetimeController.signal,
                     spotFwhmDeg: window.HomeDenFixtures?.defaultFixture?.()?.spot?.fwhm_deg });
             }
             if (modes.mode !== 'mesh' || litView.state().active) return litView.state();
@@ -875,6 +894,18 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             return litView.state();
         },
         litState() { return litView ? litView.state() : null; },
+        /* L2 (WebGPU path): the view operator ('agx', Reinhard as the
+         * fallback) or a comparison view ('neutral', 'linear') without the
+         * presentation effects. The WebGL path stays 'linear'. */
+        setLitTone(operator) {
+            if (!litView?.state().active) return litView ? litView.state() : null;
+            const state = litView.setTone(operator);
+            emit('lit', state);
+            return state;
+        },
+        /* L2 (WebGPU path): the lit mesh's scene-referred luminance in cd/m²,
+         * modeled from assumed output, for calibration; null elsewhere. */
+        litLinearReadback(options) { return litView?.state().active ? litView.readLinear(options) : Promise.resolve(null); },
         async createUiOverlayLayer(options = {}) {
             const { host, isCurrent, signal: layerSignal, onPresentationFrame, onPresentationDispose } = options || {};
             if (typeof isCurrent !== 'function' || typeof layerSignal?.aborted !== 'boolean'

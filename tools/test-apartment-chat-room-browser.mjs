@@ -176,7 +176,7 @@ test('Chat bound to the room changes only the modeled selected light and dispatc
     await page.waitForFunction(() => window.__HOME_APARTMENT_SITE_API?.readback().loadedContentRevision === 'authored-echo-r1');
     await check('Echo: the About chip names the selected light and Chat refuses without routing', async () => {
       await echoLight().click();
-      await page.getByRole('button', { name: 'close card', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Close light', exact: true }).waitFor();
       await chatTab().click();
       await aboutChip().waitFor();
       assert.equal(await aboutChip().locator('span').textContent(), 'About Authored Echo light');

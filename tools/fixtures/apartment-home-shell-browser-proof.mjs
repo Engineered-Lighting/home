@@ -436,14 +436,21 @@ export async function runShellBrowserProof({ part }) {
         await select.focus(); await select.selectOption('authored-echo-light');
         const open = page.locator('[data-apt-semantic-open="1"]');
         await open.focus(); await open.press('Enter');
-        const close = page.getByRole('button', { name: 'close card', exact: true });
+        // APT-L04: an Echo light opens the shared Light inspector, not the legacy card.
+        const close = page.locator('[data-apt-echo-light-inspector="1"]').getByRole('button', { name: 'Close light', exact: true });
         await close.waitFor();
         const bounds = await close.evaluate(button => {
-          const card = button.parentElement.parentElement, panel = document.querySelector('.apt-home-controls');
+          const inspector = button.closest('[data-apt-echo-light-inspector="1"]'), card = inspector.querySelector('.apt-ui-header');
+          const panel = document.querySelector('.apt-home-controls');
           return { card: card.getBoundingClientRect().toJSON(), panel: panel.getBoundingClientRect().toJSON(),
             close: button.getBoundingClientRect().toJSON(), inControls: !!button.closest('.apt-home-controls'),
-            name: card.innerText, panelScrollWidth: panel.scrollWidth, panelClientWidth: panel.clientWidth };
+            name: card.innerText, entity: inspector.querySelector('[data-apt-echo-entity="1"]')?.textContent,
+            blocked: inspector.querySelector('[data-apt-echo-blocked]')?.innerText || null,
+            powerDisabled: inspector.querySelector('input[type="checkbox"]')?.disabled === true,
+            panelScrollWidth: panel.scrollWidth, panelClientWidth: panel.clientWidth };
         });
+        assert.match(bounds.name, /Authored Echo light/); assert.equal(bounds.entity, 'light.authored_echo');
+        assert.ok(bounds.blocked && bounds.powerDisabled, 'without a connected Home Assistant the Echo controls are disabled with a reason');
         const inside = (inner, outer) => inner.width > 0 && inner.height > 0 && inner.left >= outer.left - 1
           && inner.right <= outer.right + 1 && inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1;
         const result = { stage: 'echo_generic_card_within_controls', viewport: { width, height }, ...bounds,
@@ -517,7 +524,7 @@ export async function runShellBrowserProof({ part }) {
       const roomScrollBefore = await page.locator('#apt-home-panel-controls').evaluate(panel => panel.scrollTop);
       assert.ok(roomScrollBefore > 0, 'the phone room list genuinely scrolls before selecting its fourth fixture');
       await roomFixtureButton.click();
-      await page.getByRole('button', { name: 'Back to room', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'All lights', exact: true }).waitFor();
       const selectedPhoneBounds = await page.locator('[aria-label="Fixture lighting inspector"] .apt-ui-title').evaluate(title => {
         const panel = document.getElementById('apt-home-panel-controls');
         return { title: title.getBoundingClientRect().toJSON(), panel: panel.getBoundingClientRect().toJSON(), scrollTop: panel.scrollTop };
@@ -525,7 +532,7 @@ export async function runShellBrowserProof({ part }) {
       assert.equal(selectedPhoneBounds.scrollTop, 0, 'phone list selection starts the inspector at its header');
       assert.ok(selectedPhoneBounds.title.top >= selectedPhoneBounds.panel.top - .5
         && selectedPhoneBounds.title.bottom <= selectedPhoneBounds.panel.bottom + .5, 'the selected phone fixture title is visible inside Controls');
-      await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+      await page.getByRole('button', { name: 'All lights', exact: true }).click();
       assert.equal(await page.locator('#apt-home-panel-controls').evaluate(panel => panel.scrollTop), 0, 'returning to the room starts at its header');
       checks.push({ stage: 'phone_scrolled_room_list_selection_starts_at_inspector_top', room_scroll_before: roomScrollBefore,
         selected_fixture_id: lastRoomFixture.fixture_id, ...selectedPhoneBounds });
@@ -719,8 +726,8 @@ export async function runShellBrowserProof({ part }) {
 
       const roomZeroId = fixtureIds[0];
       async function openFixtureFromRoom(id) {
-        if (await page.getByRole('button', { name: 'Back to room', exact: true }).isVisible()) {
-          await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+        if (await page.getByRole('button', { name: 'All lights', exact: true }).isVisible()) {
+          await page.getByRole('button', { name: 'All lights', exact: true }).click();
         }
         const fixture = overviewFixtures.find(item => item.fixture_id === id);
         await page.getByRole('button', { name: 'Select ' + (fixture.label || id), exact: true }).click();
@@ -728,7 +735,7 @@ export async function runShellBrowserProof({ part }) {
       }
       await openFixtureFromRoom(roomZeroId);
       await radialPanel.getByRole('button', { name: 'Off', exact: true }).press('Enter');
-      await page.getByRole('button', { name: 'Back to room', exact: true }).click();
+      await page.getByRole('button', { name: 'All lights', exact: true }).click();
       await page.getByRole('button', { name: 'All off', exact: true }).press('Enter');
       await page.getByRole('button', { name: 'All on', exact: true }).press('Enter');
       for (const id of fixtureIds) {
@@ -775,7 +782,43 @@ export async function runShellBrowserProof({ part }) {
       checks.push({ stage: 'same_fixture_click_from_chat_and_native_keyboard_selection_reveal_controls',
         keyboard_selected_fixture: await fixtureSelect.inputValue() });
       const directId = fixtureIds[2];
+      const rigPose = () => page.evaluate(() => { const pose = window.__APT_ENGINE.rig.snapshotPose();
+        return { az: pose.az, el: pose.el, zoom: pose.zoom, previewAz: pose.previewAz, previewEl: pose.previewEl, overshoot: pose.overshoot }; });
+      // APT-R01/A01: only the reticle starts an aim. A press on the fixture body
+      // selects it at pointer-down and never aims. This proof stays inside its
+      // retained 145 s deadline, so the native, ledger-witnessed body drag
+      // (no aim, no orbit, no proposal) runs in test-apartment-aim-wiring-browser.mjs.
+      async function bodyPressSelects() {
+        const aimBefore = await aimDescriptor(directId), poseBefore = await rigPose();
+        const cylinder = await fixturePoint(directId);
+        assert.equal(await page.evaluate(({ x, y }) => {
+          const engine = window.__APT_ENGINE;
+          return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
+        }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
+        await page.mouse.move(cylinder.x, cylinder.y); await page.mouse.down();
+        const selectedAfterDown = await waitForDirectionalReadiness(page, id => {
+          const label = document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent;
+          const matches = window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.filter(item => (item.label || item.fixture_id) === label);
+          return matches.length === 1 && matches[0].fixture_id === id ? id : false;
+        }, directId);
+        assert.equal(selectedAfterDown, directId, 'pointer-down selected the fixture being dragged');
+        await page.mouse.up();
+        assert.deepEqual(await aimDescriptor(directId), aimBefore, 'a body press selects but never moves the aim');
+        assert.deepEqual(await rigPose(), poseBefore, 'a body press never starts an orbit');
+      }
+      // The reticle's projected centre, from the overlay's actual DOM.
+      const reticlePoint = () => page.evaluate(() => {
+        const node = document.querySelector('[data-apt-aim-reticle]'), rect = node && !node.hidden ? node.getBoundingClientRect() : null;
+        return rect && rect.width > 0 ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+      });
       async function dragAndUndo(focusCase, expectedFocus) {
+        // A press on the body selects the dragged fixture when it isn't already selected.
+        if (await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).count()
+            && await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue() !== directId) await bodyPressSelects();
+        // A canvas press deliberately ends inspector focus. Give it back to the
+        // focus case's control, so the reticle drag below starts from it as the
+        // original drag did.
+        await page.locator(`[aria-label="${expectedFocus}"]`).focus();
         const scope = { id: receipt.native_drag_mouse.length + 1, focus_case: focusCase, native_witness_status: 'pending', observed: [], dragstarts: [] };
         receipt.native_drag_mouse.push(scope);
         const session = await context.newCDPSession(page), mouse = createDirectionalNativeMouse({
@@ -802,21 +845,22 @@ export async function runShellBrowserProof({ part }) {
             return { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') };
           });
           assert.equal(focusBefore.label, expectedFocus, 'the real inspector control retains focus before the drag');
-          let cylinder = await fixturePoint(directId);
-          await mouse.move(cylinder.x, cylinder.y);
+          // The reticle is the only aim start (APT-A01). The body-press case
+          // above keeps the fixture-pick readiness assertion for this fixture.
+          let reticle = await reticlePoint();
+          assert.ok(reticle, 'the selected fixture shows its reticle on the Spot tool');
+          await mouse.move(reticle.x, reticle.y);
           await waitAimViewport('fixture_hover_viewport_ready_before_drag');
-          cylinder = await fixturePoint(directId);
-          await mouse.move(cylinder.x, cylinder.y);
+          reticle = await reticlePoint();
+          await mouse.move(reticle.x, reticle.y);
           await waitAimViewport('final_fixture_hover_viewport_ready_before_drag');
-          assert.equal(await page.evaluate(({ x, y }) => {
-            const engine = window.__APT_ENGINE;
-            return engine.picking.pick(engine.overlay.virtualFixturePickObjects(), x, y)[0]?.object.userData.fixture_id;
-          }, cylinder), directId, 'the settled pointer is over the intended fixture before the actual drag');
+          assert.equal(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-apt-aim-reticle]') ? 'reticle' : null,
+            reticle), 'reticle', 'the settled pointer is over the selected fixture reticle before the actual drag');
           const target = await targetPoint([2.4,2.1,0]);
           assert.ok(target.hit, 'direct aim target comes from the actual registered authored collision mesh');
           assert.ok(target.display_hit && Math.hypot(...target.display_hit.point.map((value, axis) => value - target.hit.point[axis])) < 1e-6,
             'the expected collision hit is also a visible canonical display surface');
-          drag = { fixture_id: directId, focus_case: focusCase, focus_before: focusBefore, cylinder, expected: target };
+          drag = { fixture_id: directId, focus_case: focusCase, focus_before: focusBefore, reticle, aim_before: await aimDescriptor(directId), expected: target };
           receipt[focusCase === 'setup_keyboard' ? 'drag' : 'focused_spot_drag'] = drag;
           // Observe the actual input frame before the element's production capture
           // handler. Ambient camera motion is legitimate; the committed target must
@@ -896,6 +940,14 @@ export async function runShellBrowserProof({ part }) {
         assert.equal(drag.pointer_up?.current_engine, true, 'pointer-up belongs to the same actual engine');
         assert.equal(drag.pointer_up.selected_fixture_matches, 1, 'the rendered selected inspector identifies exactly one registered fixture');
         assert.equal(drag.pointer_up.selected_fixture_id, directId, 'pointer-up retains the fixture being dragged');
+        // The drop only proposes (APT-A01, A04); the aim moves at an explicit
+        // Set. Enter on the reticle, which kept focus from its press, is that Set.
+        drag.proposed = await waitForDirectionalReadiness(page, () => document.querySelector('[data-apt-aim-bar]')?.hidden === false
+          && document.querySelector('[data-apt-aim-bar]').getAttribute('data-state'));
+        assert.equal(drag.proposed, 'valid', 'the drop leaves a valid proposal with Set aim');
+        assert.deepEqual(await aimDescriptor(directId), drag.aim_before, 'the current aim stays exactly in place until Set aim');
+        assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-apt-aim-reticle')), true, 'the reticle keeps focus after the drop');
+        await page.keyboard.press('Enter');
         await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Setup', exact: true }).click();
         assert.equal(await page.getByRole('combobox', { name: 'Virtual fixture', exact: true }).inputValue(), directId);
         await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Aim', exact: true }).click();

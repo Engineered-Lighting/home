@@ -35,6 +35,18 @@ test('shared mounted UI and labeler fixtures select every affected browser consu
     const plan=planOf(['--files',file]);assert.ok(expected.every(name=>plan.includes(name)),'all mounted consumers are selected for '+file);
   }
 });
+
+test('People action browsers and both precision contracts are included in the complete plan',()=>{
+  const people=['run-people-agent-tray-ui-tests.cjs','run-people-bridge-ui-tests.cjs'];
+  const lighting=['test-apartment-lit-splats-browser.mjs','test-apartment-lit-splats-browser-part2.mjs',
+    'test-apartment-lit-splats-native-browser.mjs','test-apartment-lit-splats-native-browser-part2.mjs'];
+  const all=planOf(['--all']);assert.ok([...people,...lighting].every(name=>all.includes(name)));
+  assert.ok(people.every(name=>planOf(['--files','app/src/home-people.jsx']).includes(name)));
+  const argv=['--files','tools/fixtures/apartment-lit-splats-browser-proof.mjs'];
+  const shards=Array.from({length:8},(_,i)=>planOf([...argv,'--shard',`${i+1}/8`]));
+  const owners=lighting.map(name=>shards.findIndex(plan=>plan.includes(name)));
+  assert.ok(owners.every(index=>index>=0));assert.equal(new Set(owners).size,lighting.length);
+});
 function assertExactCover(argv, counts) {
   const full = planOf(argv);
   assert.equal(new Set(full).size, full.length, 'the unsharded plan names each item once');

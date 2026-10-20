@@ -224,12 +224,14 @@ async function scenario(browser,originServer,mode) {
   }));
   await new Promise((resolve,reject)=>{originServer.once("error",reject);originServer.listen(0,"127.0.0.1",resolve);});
   let browser;
+  const deadline=setTimeout(()=>{console.error('People bridge browser suite exceeded145s');process.exitCode=1;void browser?.close();},145000);
   try {
-    browser=await chromium.launch({headless:true});
+    browser=await chromium.launch({headless:true,args:['--disable-background-networking','--renderer-process-limit=2','--js-flags=--max-old-space-size=512']});
     const selected=MODES.filter(mode=>!process.argv[2] || process.argv[2]===mode);
     for(const mode of selected) await scenario(browser,originServer,mode);
     console.log(`${selected.length} People bridge scenarios passed`);
   } finally {
+    clearTimeout(deadline);
     await browser?.close();
     await new Promise(resolve=>originServer.close(resolve));
   }

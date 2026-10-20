@@ -54,21 +54,24 @@ function publicSources(root) {
   })(root);
   return result;
 }
-function browserOptions() {
+function browserOptions(precision) {
   const installed = fs.existsSync(chromium.executablePath());
   assert.ok(installed || process.platform === 'win32', 'pinned Chromium must exist on Linux');
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
   if (RENDERER === 'webgpu') args.push('--enable-unsafe-webgpu', '--ignore-gpu-blocklist');
-  if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
+  if (process.platform === 'win32') args.unshift(...(RENDERER==='webgl'&&precision==='exact'
+    ?['--use-angle=swiftshader','--enable-unsafe-swiftshader']:['--use-angle=d3d11']));
   else if (process.platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
   const channel = RENDERER === 'webgpu' ? process.env.HOME_LIT_WEBGPU_CHANNEL || null : null;
   return { headless: true, args, ...(channel ? { channel } : process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 const RENDERER_QUERY = RENDERER === 'webgpu' ? '&renderer=webgpu' : '';
 
-export async function runLitSplatsBrowserProof({ part, signal }) {
+export async function runLitSplatsBrowserProof({ part, signal, precision='exact' }) {
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
-  const run = path.join(ROOT, '.tmp/apartment-lit-splats-browser', 'part' + part + '-run-' + Date.now()); fs.mkdirSync(run, { recursive: true });
+  assert.ok(['exact','native'].includes(precision),'known frame precision contract');
+  const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
+  const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
   const echo = installPack(packs, 'echo'), victoria = installPack(packs, 'victoria');
   const layer = authoredLightingLayer(victoria);
@@ -78,7 +81,7 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
   const protectedFiles = [echo, victoria].flatMap(item => Object.keys(item.files).map(name => path.join(packs, item.site, item.revision, name)));
   const protectedHashes = Object.fromEntries(protectedFiles.map(file => [file, hash(fs.readFileSync(file))]));
   const sources = publicSources(SRC), receipt = { schema: 'home-apartment-lit-splats-authored-browser-1', authored_room: true, authored_layer: true,
-    real_renderer: true, household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], requests: [] };
+    real_renderer: true, frame_precision:precision, household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], requests: [] };
   const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
   // Opt-in stills of the authored room for local review; never part of the pass criteria.
   const still = async (page, name) => { if (process.env.HOME_LIT_SPLATS_STILLS === '1') await page.screenshot({ path: path.join(run, name + '.png') }); };
@@ -99,6 +102,16 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: WAIT_MS });
     await page.waitForFunction(() => window.__APT_ENGINE?.siteId === 'victoria'
       && window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.length === 4, null, { timeout: WAIT_MS });
+    const backend=await page.evaluate(()=>{
+      const gl=window.__APT_ENGINE.renderer.getContext?.(),extension=gl?.getExtension?.('WEBGL_debug_renderer_info');
+      return {renderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):gl?.getParameter?.(gl.RENDERER)||'unknown',unmasked:!!extension};
+    });
+    backend.software=/swiftshader|llvmpipe|software|Microsoft Basic/i.test(backend.renderer);
+    (receipt.renderer_backends||=[]).push({query,...backend});
+    if(RENDERER==='webgl'&&query===RENDERER_QUERY&&process.platform==='win32'){
+      assert.equal(backend.unmasked,true,'the selected graphics backend is observable');
+      assert.equal(backend.software,precision==='exact','strict software and native GPU proofs use their declared graphics backend');
+    }
     return { page, requested };
   }
   const frames = (page, n = 3) => page.evaluate(n => new Promise(resolve => { let k = 0; const step = () => (++k >= n ? resolve() : requestAnimationFrame(step)); requestAnimationFrame(step); }), n);
@@ -106,41 +119,58 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
    * name so two can be compared pixel by pixel (WebGPU's per-frame GPU sort
    * is not bit-reproducible, so that path compares within a noise floor). */
   const capture = (page, name = 'last') => page.evaluate(async name => {
+    const opacityAtCapture=window.__APT_ENGINE.pointsMaterial.uniforms.uOpacity.value;
     const frame = await window.__APT_ENGINE.captureFrame({ scale: .25 });
     let sum = 0; const n = frame.width * frame.height;
     for (let i = 0; i < n; i++) sum += .2126 * frame.pixels[i * 4] + .7152 * frame.pixels[i * 4 + 1] + .0722 * frame.pixels[i * 4 + 2];
     let h = 0; for (let i = 0; i < frame.pixels.length; i++) h = (Math.imul(h, 31) + frame.pixels[i]) | 0;
     (window.__litFrames ||= {})[name] = frame.pixels.slice();
+    (window.__litFrameMeta ||= {})[name] = {width:frame.width,height:frame.height,
+      camera:window.__APT_ENGINE.camera.matrixWorld.toArray(),projection:window.__APT_ENGINE.camera.projectionMatrix.toArray(),pointsOpacity:opacityAtCapture};
     return { width: frame.width, height: frame.height, luma: sum / n, digest: h };
   }, name);
   const frameDiff = (page, a, b) => page.evaluate(([a, b]) => {
     const x = window.__litFrames[a], y = window.__litFrames[b];
-    let total = 0, max = 0, over = 0;
-    for (let i = 0; i < x.length; i++) { const d = Math.abs(x[i] - y[i]); total += d; max = Math.max(max, d); if (d > 8) over++; }
-    return { mean: total / x.length, max, over8: over / x.length };
+    let total = 0, max = 0, over = 0; const samples=[];
+    for (let i = 0; i < x.length; i++) { const d = Math.abs(x[i] - y[i]); total += d; max = Math.max(max, d); if (d > 8) over++;
+      if(d&&samples.length<12)samples.push({pixel:Math.floor(i/4),channel:i%4,a:x[i],b:y[i]}); }
+    const ma=window.__litFrameMeta[a],mb=window.__litFrameMeta[b];
+    return { mean: total / x.length, max, over8: over / x.length,samples,
+      sameCamera:JSON.stringify(ma.camera)===JSON.stringify(mb.camera),sameProjection:JSON.stringify(ma.projection)===JSON.stringify(mb.projection),
+      dimensions:[ma.width,ma.height,mb.width,mb.height],pointsOpacity:[ma.pointsOpacity,mb.pointsOpacity] };
   }, [a, b]);
-  // WebGL: bit-identical. WebGPU: within the unlit path's own measured
-  // frame-to-frame noise (twice it, with a small floor).
+  // Preserve the bit-exact WebGL proof on deterministic software rendering.
+  // Native WebGL has measured one-level RGBA8 variation even with Lighting
+  // unloaded, identical camera/projection and Cloud opacity zero. It gets an
+  // additional proof with a calibrated, tightly bounded quantization envelope.
   const NOISE = { mean: 0.05, over8: 0.001 };
+  const NATIVE_QUANTIZATION = { max: 1, mean: 0.001 };
   let measuredNoise = null;
+  const nativeWebgl = RENDERER === 'webgl' && precision === 'native';
   async function assertSameFrame(page, a, b, message) {
     const diff = await frameDiff(page, a, b);
-    if (RENDERER === 'webgl') assert.equal(diff.max, 0, message + ' ' + JSON.stringify(diff));
-    else {
+    if (RENDERER === 'webgl' && !nativeWebgl) assert.equal(diff.max, 0, message + ' ' + JSON.stringify(diff));
+    else if (nativeWebgl) {
+      assert.ok(measuredNoise, 'native unlit variation is calibrated first');
+      assert.ok(diff.max <= NATIVE_QUANTIZATION.max
+        && diff.mean <= Math.max(NATIVE_QUANTIZATION.mean, 2 * measuredNoise.mean),
+        message + ' ' + JSON.stringify({diff,measuredNoise}));
+    } else {
       assert.ok(measuredNoise, 'the WebGPU noise floor is measured first');
       const mean = Math.max(NOISE.mean, 2 * measuredNoise.mean), over8 = Math.max(NOISE.over8, 2 * measuredNoise.over8);
       assert.ok(diff.mean <= mean && diff.over8 <= over8, message + ' ' + JSON.stringify({ diff, noise: measuredNoise }));
     }
     return diff;
   }
-  // A settled frame: two captures in a row, frames apart, are identical.
   async function stable(page, name = 'stable') {
     let previous = await capture(page, name + ':a');
     for (let i = 0; i < 40; i++) {
       await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
       const next = await capture(page, name);
       const diff = await frameDiff(page, name, name + ':a');
-      if (RENDERER === 'webgl' ? diff.max === 0 : diff.mean <= NOISE.mean && diff.over8 <= NOISE.over8) return next;
+      const equal = nativeWebgl ? diff.max <= NATIVE_QUANTIZATION.max && diff.mean <= NATIVE_QUANTIZATION.mean
+        : RENDERER === 'webgl' ? diff.max === 0 : diff.mean <= NOISE.mean && diff.over8 <= NOISE.over8;
+      if (equal) return next;
       previous = await capture(page, name + ':a');
     }
     throw new Error('the frame never settled: ' + JSON.stringify(previous));
@@ -196,7 +226,7 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     handler = createEquipmentRegistrationGateway({ env: { NODE_ENV: 'test', HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: '1',
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
-    browser = await chromium.launch(browserOptions());
+    browser = await chromium.launch(browserOptions(precision));
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block', reducedMotion: 'reduce' });
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
     await context.addInitScript(() => {
@@ -225,16 +255,29 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     assert.equal(await lighting.getAttribute('aria-pressed'), 'false', 'Lighting is off by default');
     await enterMode(page, 'Photo view', 'splat');
     const unlit = await stable(page, 'photo:unlit');
+    check('lighting_off_reference',{frame:unlit});
     await still(page, 'photo-unlit');
     await frames(page, 12);
     await stable(page, 'photo:unlit2');
     // Nothing lit runs while Lighting is off (no lit module or layer is even
     // requested): on WebGL that is the identical frame; on WebGPU this
     // difference is the unlit splat path's own noise, the floor used later.
-    const offDiff = RENDERER === 'webgl' ? await assertSameFrame(page, 'photo:unlit2', 'photo:unlit', 'Lighting off: the identical frame')
+    let offDiff;
+    if (nativeWebgl) {
+      measuredNoise = {mean:0,max:0};
+      for(let sample=0;sample<12;sample++) {
+        await frames(page,4);await capture(page,'photo:noise');
+        const noise=await frameDiff(page,'photo:noise','photo:unlit');
+        assert.ok(noise.max<=NATIVE_QUANTIZATION.max&&noise.mean<=NATIVE_QUANTIZATION.mean,
+          'unlit native precision stays inside one RGBA8 level: '+JSON.stringify(noise));
+        measuredNoise.mean=Math.max(measuredNoise.mean,noise.mean);measuredNoise.max=Math.max(measuredNoise.max,noise.max);
+      }
+      check('native_unlit_calibration',{samples:12,measuredNoise,bounds:NATIVE_QUANTIZATION});
+      offDiff=await assertSameFrame(page,'photo:unlit2','photo:unlit','Lighting off matches calibrated native precision');
+    } else offDiff = RENDERER === 'webgl' ? await assertSameFrame(page, 'photo:unlit2', 'photo:unlit', 'Lighting off: the identical frame')
       : (measuredNoise = await frameDiff(page, 'photo:unlit2', 'photo:unlit'));
     assert.deepEqual(on.requested.filter(pathname => LIT_MODULES.test(pathname)), [], 'Lighting off: no lit receiver module or layer is requested');
-    check('lighting_off_identical', { frame: unlit, diff: offDiff });
+    check(nativeWebgl?'lighting_off_native_precision':'lighting_off_identical', { frame: unlit, diff: offDiff });
 
     await lighting.click();
     await page.waitForFunction(() => window.__APT_ENGINE.litState?.()?.active === true, null, { timeout: WAIT_MS });
@@ -360,8 +403,9 @@ export async function runLitSplatsBrowserProof({ part, signal }) {
     await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 8);
     await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
     const restored = await stable(page, 'photo:restored');
-    const restoreDiff = await assertSameFrame(page, 'photo:restored', 'photo:unlit', 'leaving Lit restores the identical Photo frame');
-    check('photo_restored', { frame: restored, diff: restoreDiff });
+    const restoreDiff = await assertSameFrame(page, 'photo:restored', 'photo:unlit', nativeWebgl
+      ?'leaving Lit restores the Photo frame within calibrated native precision':'leaving Lit restores the identical Photo frame');
+    check('photo_restored', { frame: restored, diff: restoreDiff,precision });
 
     await page.close();
     } else {

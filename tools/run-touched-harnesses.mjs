@@ -89,6 +89,7 @@ const MAP = [
   [/^tools\/test-apartment-chat-header-(?:actions\.cjs|browser\.mjs)$/, ["test-apartment-chat-header-actions.cjs", "test-apartment-chat-header-browser.mjs"]],
   [/^app\/src\/home-lights\.jsx$/, ["run-lights-drawer-tests", "run-recovery-scenarios-tests"]],
   [/^app\/src\/home-people(\.jsx|-helpers\.js|-prewarm\.js)$/, ["run-people-tests"]],
+  [/^(?:app\/src\/(?:home-people(?:-helpers|-prewarm)?\.js[x]?|home-agent\/people-bridge\.(?:html|js))|stack\/services\/home-agent-origin\/src\/origin\.mjs|tools\/run-people-(?:agent-tray|bridge)-ui-tests\.cjs)$/, ["run-people-agent-tray-ui-tests.cjs", "run-people-bridge-ui-tests.cjs"]],
   [/^app\/src\/home-intelligence\.jsx$/, ["run-intelligence-tests"]],
   [/^app\/src\/home-apartment/, ["run-apartment-3d-contract-tests", "run-apartment-aiming-tests", "run-apartment-data-tests", "test-apartment-travel-guard.cjs"]],
   [/^app\/src\/home-apartment(?:-ui|-aim|-cards)?\.jsx$/, ["run-apartment-ui-tests.js", "test-apartment-ui-browser.mjs"]],
@@ -104,7 +105,7 @@ const MAP = [
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:lit-(?:model|view|frame|display|basis-blend)\.mjs|engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl)?\.mjs))|tools\/(?:test-apartment-lit-webgpu-browser(?:-part[2345])?|fixtures\/(?:apartment-lit-webgpu-browser-proof|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"]],
   // L4: lit splats and points (lit-receivers.mjs, lit-basis-blend.mjs, lit-layer-loader.mjs).
   [/^(?:app\/src\/home-3d\/lit-(?:basis-blend|layer-loader|bvh-bake|model|exposure)\.mjs|tools\/(?:test-lit-basis-blend|fixtures\/apartment-lit-layer-fixtures)\.mjs)$/, ["test-lit-basis-blend.mjs"]],
-  [/^(?:app\/src\/(?:home-3d\/(?:lit-[\w-]+\.mjs|engine\.js|modes\.js|pointcloud\.js|webgpu-material-ports\.mjs|gaussian-splat-webgpu\.mjs)|home-apartment\.jsx)|tools\/(?:test-apartment-lit-splats-browser(?:-part2)?|fixtures\/(?:apartment-lit-(?:splats-browser-proof|layer-fixtures)|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs"]],
+  [/^(?:app\/src\/(?:home-3d\/(?:lit-[\w-]+\.mjs|engine\.js|modes\.js|pointcloud\.js|webgpu-material-ports\.mjs|gaussian-splat-webgpu\.mjs)|home-apartment\.jsx)|tools\/(?:test-apartment-lit-splats-(?:native-)?browser(?:-part2)?|fixtures\/(?:apartment-lit-(?:splats-browser-proof|layer-fixtures)|lit-frame-proof))\.mjs)$/, ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs"]],
   [/^app\/src\/home-metrics-lab/, ["run-lab-tests"]],
   [/^app\/src\/home-metrics\.jsx$/, ["run-metrics-tests"]],
   [/^app\/src\/home-ai-stack\.jsx$/, ["run-ai-stack-card-tests"]],
@@ -236,6 +237,10 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
  * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
 const SHARD_WEIGHT_S = {
+  "run-people-agent-tray-ui-tests.cjs": 60,
+  "run-people-bridge-ui-tests.cjs": 45,
+  "test-apartment-lit-splats-native-browser.mjs": 90,
+  "test-apartment-lit-splats-native-browser-part2.mjs": 70,
   "test-home-full-ui-connection-browser.mjs": 35,
   "test-home-full-ui-simulation-browser.mjs": 60,
   "test-home-full-ui-labeler-browser.mjs": 45,
@@ -337,7 +342,7 @@ const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-
   ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"],
   ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
   ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"],
-  ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs"],
+  ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];
 function partitionPlan(plan, count) {
   const loads = Array(count).fill(0), owner = new Map();

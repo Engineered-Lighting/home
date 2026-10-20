@@ -251,7 +251,7 @@ export async function runLitSplatsBrowserProof({ part }) {
     await page.waitForFunction(() => document.querySelector('[data-apt-lit-disclosure]'), null, { timeout: WAIT_MS });
     assert.ok((await page.locator('[data-apt-lit-disclosure]').textContent()).trim().startsWith('Simulated · not photometric · assumed output'), 'disclosed in Photo');
     assert.equal((await page.locator('[data-apt-lit-bounce-limit]').textContent()).trim(),
-      'Precomputed light basis · live spots re-baked with shadows · capture sheen dropped · window daylight off', 'Photo states its own limits');
+      'Precomputed light basis · live spots re-baked with shadows · night ambient through the windows · capture sheen dropped', 'Photo states its own limits');
     const relit = await capture(page, 'photo:lit');
     await still(page, 'photo-lit');
     const relitDiff = await frameDiff(page, 'photo:lit', 'photo:unlit');

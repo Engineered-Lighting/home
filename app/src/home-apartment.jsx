@@ -2328,7 +2328,7 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
     <button type="button" className="apt-ui-button is-small" aria-label="Lighting" aria-pressed={!!lighting}
       title={!onLit ? "Lighting needs modeled fixtures in this home" : modeLockedReason || "Simulated light from the virtual fixtures · not photometric"}
       disabled={disabled || !onLit || !!modeLockedReason} onClick={() => onLit?.(!lighting)}>
-      <AptUnifiedIcon name="bulb" /><span className="apt-ui-toolbar-word">Lighting</span></button>
+      <AptUnifiedIcon name="bulb" /><span className="apt-ui-toolbar-word apt-ui-lighting-word">Lighting</span></button>
     <span className="apt-ui-toolbar-separator apt-ui-orbit" />
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled || !!viewLockedReason}
       title={viewLockedReason || undefined} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>

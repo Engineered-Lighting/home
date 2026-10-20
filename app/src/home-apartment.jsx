@@ -8854,11 +8854,39 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     disabledReason={model._equipment_registration ? "Named-aim editing is unavailable for this registration."
       : !apartmentPlacementControlsEnabled || !apartmentSceneControlsEnabled ? "Setup is unavailable for this room." : ""} />;
   const openUnifiedSetup = useCallback(() => {
+    // APT-U01: Setup is a pressed toggle; pressing it again leaves like Done.
+    if (editing) { setEditing(false); return; }
     if (!apartmentSceneControlsEnabled || !(apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled)) return;
     setEditorTargetEntry(null);
     setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true);
     onShowShellControls?.();
-  }, [apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  }, [editing, apartmentSceneControlsEnabled, apartmentDeviceControlsEnabled, apartmentPlacementControlsEnabled, onShowShellControls]);
+  // APT-U01: Setup › Cameras and sensors starts the existing calibration. It
+  // leaves Setup, flies to the camera view, and once that flight has ended
+  // (settled or timed out) runs the same steps as the camera-view calibrate
+  // button.
+  const setupCalibrationRef = useRef(null);
+  const calibrateFromSetup = useCallback(device => {
+    if (!device || simActive || mobile || !window.HomeApartmentCalibrate || !device.camera?.frigate_name) return false;
+    setupCalibrationRef.current = device.id;
+    setEditing(false);
+    if (flyToDeviceView(device)) return true;
+    setupCalibrationRef.current = null; return false;
+  }, [simActive, mobile, flyToDeviceView]);
+  useEffect(() => {
+    const pending = setupCalibrationRef.current;
+    if (!pending) return;
+    if (!liveCam || liveCam.id !== pending || calibCam || !apartmentSceneControlsEnabled) { setupCalibrationRef.current = null; return; }
+    if (liveFeedStatus === "flying") return;
+    setupCalibrationRef.current = null;
+    setLiveOn(false);
+    const e = engineRef.current;
+    if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
+    e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+    aptBeginDollhouseCalibration(e);
+    calibPairCountRef.current = 0; calibEscArmRef.current = 0;
+    setCalibCam(liveCam);
+  }, [liveCam, calibCam, liveFeedStatus, apartmentSceneControlsEnabled]);
   const unifiedSelectionLabel = virtualFixtureControlsOpen && selectedVirtualFixture
     ? selectedVirtualFixture.label || selectedVirtualFixture.fixture_id
     : (model.devices || []).find(device => device.id === cardId)?.name || null;
@@ -10532,6 +10560,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           liveComparison={liveComparison}
           onCompareLive={compareLiveModel}
           mobile={mobile}
+          inspectorHost={unifiedShell ? shellControlsHost : null}
+          homeName={selectedSiteName}
+          onCalibrateCamera={calibrateFromSetup}
         />
       )}
 

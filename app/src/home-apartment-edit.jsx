@@ -52,7 +52,17 @@ function uniqueZoneId(name, zones) {
   return `${base}_${suffix}`;
 }
 
+/* APT-U01: the Setup rail restyles these same controls. Behavior, handlers
+   and accessible names are unchanged, so rail saves match legacy saves. */
+const EdRailSkin = React.createContext(false);
+
 function EdButton({ label, onClick, active, danger, disabled, title, ariaLabel }) {
+  if (React.useContext(EdRailSkin)) return (
+    <button type="button" onClick={onClick} disabled={disabled} title={title} aria-label={ariaLabel}
+      className="hg-focusable hg-mobile-touch apt-ui-button is-small" data-active={active ? "true" : undefined}
+      style={danger ? { borderColor: "var(--apt-blocked)", color: "var(--apt-blocked)" }
+        : active ? { borderColor: "var(--hg-ice-bright)", background: "var(--apt-fill-2)", color: "var(--hg-fg-0)" } : undefined}><span className="apt-setup-caps">{label}</span></button>
+  );
   return (
     // hg-mobile-touch activates only inside the ≤699px media query: 44px
     // touch targets on phones, byte-identical rendering on desktop.
@@ -238,13 +248,23 @@ function EdMobileSheet({ mobile, children }) {
   );
 }
 
+/* APT-U01: in the unified shell the same two sections render in the right
+   column under the Setup header, restyled by EdRailSkin. Otherwise the legacy
+   side rails or phone sheet are unchanged. */
+function EdSetupFrame({ mobile, rail, header, children }) {
+  if (!rail) return <EdMobileSheet mobile={mobile}>{children}</EdMobileSheet>;
+  return <window.AptSetup.Inspector host={rail.host}><EdRailSkin.Provider value={true}>
+    {header}
+    <div className="apt-setup-body" data-setup-tool={rail.tool}>{children}</div>
+  </EdRailSkin.Provider></window.AptSetup.Inspector>;
+}
+
 const ED_EQUIPMENT_FIELD = { width: "100%", background: "var(--hg-bg-0)", border: "1px solid var(--hg-border-soft)",
   color: "var(--hg-fg-1)", fontFamily: ED_MONO, fontSize: 10, padding: "5px 6px" };
 const ED_EQUIPMENT_NOTE = { color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSize: 10, lineHeight: 1.5 };
 
-function EdEquipmentList({ document, selectedId, onSelect, onAddSocket, atCapacity, referenceId, onReference, onConfirm, disabled, heading, saveStatus }) {
+function EdEquipmentList({ document, selectedId, onSelect, onAddSocket, atCapacity, referenceId, onReference, onConfirm, disabled, heading, saveStatus, kinds = null }) {
   const references = document.references;
-  const fixtures = document.equipment.filter((record) => record.kind === "fixture");
   const renderRecord = (record) => <button key={record.id} type="button"
     data-equipment-id={record.id} onClick={() => onSelect(record.id)} className="hg-focusable"
     style={{ ...ED_EQUIPMENT_FIELD, textAlign: "left", cursor: "pointer", marginBottom: 5,
@@ -252,6 +272,23 @@ function EdEquipmentList({ document, selectedId, onSelect, onAddSocket, atCapaci
     <span style={{ color: record.kind === "mount" ? SURVEY_ORANGE : "var(--hg-ice)" }}>{record.kind === "mount" ? "◇" : record.kind === "camera" ? "◉" : "○"}</span> {record.label}
     <span style={{ display: "block", marginTop: 3, fontSize: 8, color: "var(--hg-fg-4)" }}>{record.kind === "fixture" ? `${record.installation_status} fixture · ` : ""}{record.position_status === "missing" ? "position unresolved" : record.position_status}</span>
   </button>;
+  // The Setup rail shows one record kind per tool (fixtures under Fixture
+  // position, the camera under Cameras): the same rows, fields and saves.
+  if (kinds) {
+    const records = document.equipment.filter((record) => kinds.includes(record.kind));
+    return <div data-equipment-registration="list" data-equipment-kinds={kinds.join(" ")}>
+      <div style={heading}>{kinds.includes("camera") ? "Camera" : "Fixtures at sockets"}</div>
+      <div style={ED_EQUIPMENT_NOTE}>{kinds.includes("camera")
+        ? "Measure the camera mount from two named walls and directly above the floor. Calibration is Den-owned and is not changed here."
+        : "These describe fixtures at existing sockets. Use Devices and sockets for another physical location."}</div>
+      <div role="status" style={{ ...ED_EQUIPMENT_NOTE, margin: "8px 0" }}>
+        revision {document.revision} · {saveStatus?.state || "unsaved"}
+      </div>
+      <div data-equipment-primary="1">{records.map(renderRecord)}</div>
+      {!records.length && <div style={ED_EQUIPMENT_NOTE}>None in this registration.</div>}
+    </div>;
+  }
+  const fixtures = document.equipment.filter((record) => record.kind === "fixture");
   return <div data-equipment-registration="list">
     <div style={heading}>Sockets and camera</div>
     <div style={ED_EQUIPMENT_NOTE}>Measure from two named walls and directly above the floor. Blank values keep a position unresolved.</div>
@@ -392,12 +429,19 @@ function HomeApartmentEdit({
   engine, model, onModel, seedModel, registry, onSave, onDirtyChange,
   onExit, sim, connection, sourceMeta, saveStatus, saving,
   liveReview, liveComparison, onCompareLive, mobile = false, initialTargetId = null,
+  inspectorHost = null, homeName = "", onCalibrateCamera = null,
 }) {
   // Initial navigation only: opening an existing target never places or saves it.
   // Later model updates must not reset this editor's selection or dirty history.
   const [entryTargetId] = useState(() => !model._equipment_registration && typeof initialTargetId === "string"
     && (model.targets || []).some(target => target.id === initialTargetId) ? initialTargetId : null);
   const [tool, setTool] = useState(entryTargetId ? "targets" : "select"); // select | add | targets | links | measure | zones
+  // APT-U01: in the unified shell the rail picks a Setup tool; `tool` stays
+  // the interaction mode every existing handler already reads.
+  const Setup = window.AptSetup;
+  const rail = !!(inspectorHost && Setup);
+  const [railTool, setRailTool] = useState(entryTargetId ? "targets" : "sockets");
+  const [originalNames] = useState(() => Object.fromEntries((model.devices || []).map((device) => [device.id, device.name])));
   const [placing, setPlacing] = useState(null);        // palette item being placed
   const [placingTarget, setPlacingTarget] = useState(null);
   const [selectedId, setSelectedId] = useState(null);  // device id
@@ -664,6 +708,72 @@ function HomeApartmentEdit({
     }
     return false;
   }, [tool, moveTargetId, placing, selectEditorTool]);
+
+  // The legacy toolbar and the Setup rail open tools through these same
+  // entries, so either path leaves identical editor state.
+  const openAddTool = () => {
+    setTool("add"); setSelectedTargetId(null); setPlacingTarget(null); setMoveTargetId(null);
+  };
+  const openTargetsTool = () => {
+    setTool("targets"); setPlacing(null); setSelectedId(null); setSelectedZone(null);
+    setMoveTargetId(null); setNotice("Step 1 · choose a target type");
+  };
+  const openLinksTool = () => {
+    setTool("links"); setPlacing(null); setPlacingTarget(null); setSelectedTargetId(null);
+    setSelectedZone(null); setMoveTargetId(null);
+    setSelectedId((current) => ceilingLights.some((light) => light.id === current)
+      ? current : (ceilingLights[0]?.id || null));
+    setNotice("geometry locked · reconcile identity without moving the saved layout");
+  };
+  const openMeasureTool = () => {
+    setTool("measure"); setPlacing(null); setPlacingTarget(null); setSelectedTargetId(null);
+    setSelectedZone(null); setMoveTargetId(null);
+    setSelectedId((current) => ceilingLights.some((light) => light.id === current)
+      ? current : (ceilingLights[0]?.id || null));
+    setNotice("");
+  };
+  const openZonesTool = () => {
+    setTool("zones"); setZoneDraft([]); setZoneDrawing(false); setZoneNaming(null);
+    setSelectedId(null); setSelectedTargetId(null); setMoveTargetId(null);
+    setSelectedZone((current) => current || model.zones?.[0]?.id || null);
+    setSelectedZoneVertex(null);
+    setNotice("select a shaded room · drag a round corner to reshape it, or drag inside to move it");
+  };
+
+  const cameraDevices = (model.devices || []).filter((device) => device.type === "camera");
+  const railAvailability = rail ? Setup.availability({ registration: isEquipmentRegistration }) : null;
+  const railKinds = isEquipmentRegistration ? (railTool === "position" ? ["fixture"] : railTool === "cameras" ? ["camera"] : null) : null;
+  const selectRailTool = (id) => {
+    if (!Setup?.isTool(id)) return;
+    setRailTool(id);
+    if (isEquipmentRegistration) {
+      const kinds = id === "position" ? ["fixture"] : id === "cameras" ? ["camera"] : null;
+      const current = equipmentDocument.equipment.find((record) => record.id === selectedId);
+      const first = kinds && equipmentDocument.equipment.find((record) => kinds.includes(record.kind));
+      if (first && !(current && kinds.includes(current.kind))) setSelectedId(first.id);
+      return;
+    }
+    if (id === "targets") openTargetsTool();
+    else if (id === "zones") openZonesTool();
+    else if (id === "position") openMeasureTool();
+    else if (id === "links") openLinksTool();
+    else {
+      selectEditorTool();
+      if (id === "cameras") setSelectedId((current) => cameraDevices.some((device) => device.id === current)
+        ? current : (cameraDevices[0]?.id || null));
+    }
+  };
+
+  // A tool can end on its own (Escape from Fixture position, a placed
+  // device returning to select); keep the rail on the tool that is open.
+  useEffect(() => {
+    if (!rail || isEquipmentRegistration) return;
+    const next = tool === "targets" ? "targets" : tool === "zones" ? "zones" : tool === "measure" ? "position"
+      : tool === "links" ? "links" : ["sockets", "names", "cameras"].includes(railTool) ? railTool : "sockets";
+    if (next !== railTool) setRailTool(next);
+  }, [rail, isEquipmentRegistration, tool]);
+
+  useEffect(() => { if (rail) Setup.installCss(); }, [rail]);
 
   /* canvas interactions while edit mode is active */
   useEffect(() => {
@@ -1310,8 +1420,11 @@ function HomeApartmentEdit({
       > selected.fixture_calibration.floor_to_ceiling_m;
 
   /* Desktop: two absolute 230px side rails. Mobile: the same sections become
-     static full-width blocks stacked inside the EdMobileSheet container. */
-  const panel = mobile ? {
+     static full-width blocks stacked inside the EdMobileSheet container. The
+     Setup rail stacks them in the unified right column instead. */
+  const panel = rail ? {
+    position: "relative", width: "100%", fontFamily: ED_SANS,
+  } : mobile ? {
     position: "relative", width: "100%",
     background: "transparent", border: 0,
     padding: "10px 14px",
@@ -1323,8 +1436,10 @@ function HomeApartmentEdit({
     backdropFilter: "blur(8px)", overflowY: "auto", padding: "10px 12px",
     fontFamily: ED_MONO,
   };
-  const heading = { fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase",
-                    color: "var(--hg-fg-4)", margin: "10px 0 6px" };
+  // "--ed-heading" only marks rail headings for the Setup stylesheet's sentence case.
+  const heading = rail ? { fontSize: 12.5, fontWeight: 560, color: "var(--hg-fg-2)", margin: "16px 0 6px", "--ed-heading": 1 }
+    : { fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase",
+        color: "var(--hg-fg-4)", margin: "10px 0 6px" };
   const draftOnline = !isEquipmentRegistration && !sim && sourceMeta?.kind === "local_draft" && connection === "online";
   const reviewedDraftReady = draftOnline && liveReview?.state === "ready" && liveComparison?.canPublish;
   const equipmentDirty = isEquipmentRegistration && (dirty
@@ -1345,12 +1460,124 @@ function HomeApartmentEdit({
         : connection === "online" ? "Save to the authoritative Home Assistant Apartment model"
           : "Home Assistant is offline; keep a local recovery draft";
 
+  const echoSourceStatus = isEquipmentRegistration ? null : <>
+    {!rail && <div role="status" data-apartment-source={sourceMeta?.kind || "empty"} style={{
+      margin: "0 0 8px", padding: "7px 8px", border: `1px solid ${sourceMeta?.live
+        ? "rgba(145,230,189,0.35)" : sourceMeta?.kind === "simulation"
+          ? "rgba(255,180,95,0.4)" : "var(--hg-border-soft)"}`,
+      color: sourceMeta?.live ? "#91e6bd" : sourceMeta?.kind === "simulation" ? SURVEY_ORANGE : "var(--hg-fg-3)",
+      fontSize: 8, lineHeight: 1.45,
+    }}>
+      source · {sourceMeta?.label || "No Apartment model"}<br />
+      revision · {Number.isFinite(model.revision) ? model.revision : "—"}
+      {!sim && <> · HA {connection === "online" ? "connected" : "offline"}</>}<br />
+      save · {sim ? "simulation cannot save" : saveStatus?.state || "idle"}
+    </div>}
+    {!sim && sourceMeta?.kind === "local_draft" && (
+      <div data-apartment-live-reconciliation={liveReview?.state || "idle"} style={{
+        margin: "0 0 10px", padding: "8px", border: `1px solid ${liveComparison?.canPublish
+          ? "rgba(145,230,189,0.4)" : saveStatus?.state === "conflict"
+            ? "var(--hg-crit)" : "rgba(255,180,95,0.38)"}`,
+        color: "var(--hg-fg-3)", fontSize: 8.5, lineHeight: 1.55,
+      }}>
+        <div style={{ color: liveComparison?.canPublish ? "#91e6bd" : SURVEY_ORANGE,
+          letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 5 }}>
+          local draft protection
+        </div>
+        {connection !== "online" ? (
+          <div>Connect Home Assistant with a long-lived token to compare this draft. The draft remains local and protected.</div>
+        ) : liveReview?.state === "loading" ? (
+          <div>Reading the authoritative Apartment model… no write is being performed.</div>
+        ) : liveReview?.state === "error" ? (
+          <>
+            <div style={{ color: "var(--hg-warn)", marginBottom: 6 }}>{liveReview.detail}</div>
+            <EdButton label="Retry live comparison" onClick={onCompareLive} />
+          </>
+        ) : liveReview?.state === "ready" && liveComparison ? (
+          <>
+            <div>draft rev {liveComparison.localRevision} · live rev {liveComparison.liveRevision}</div>
+            {Object.entries(liveComparison.collections).map(([name, result]) => (
+              <div key={name}>
+                {name} · draft {result.local} / live {result.live}
+                {` · +${result.added.length} ~${result.changed.length} −${result.removed.length}`}
+              </div>
+            ))}
+            <div style={{ margin: "6px 0", color: liveComparison.canPublish ? "#91e6bd" : "var(--hg-crit)" }}>
+              {liveComparison.canPublish
+                ? `Revisions match. Publish is explicit and will create Home Assistant revision ${liveComparison.liveRevision + 1}.`
+                : "Revisions differ. Publishing is blocked; the local draft remains unchanged."}
+            </div>
+            <EdButton label={liveComparison.canPublish ? "Publish reviewed draft" : "Refresh comparison"}
+              active={liveComparison.canPublish}
+              onClick={() => liveComparison.canPublish ? onSave({ reviewedDraft: true }) : onCompareLive()}
+              disabled={saving} />
+          </>
+        ) : (
+          <>
+            <div style={{ marginBottom: 6 }}>Compare the local draft with Home Assistant before any authoritative write.</div>
+            <EdButton label="Compare with live" onClick={onCompareLive} disabled={saving} />
+          </>
+        )}
+      </div>
+    )}
+  </>;
+
+  /* Rail tools without a legacy panel. Each one edits only fields and paths
+     the legacy editor already writes (device name, device placement). */
+  const railState = rail ? railAvailability[railTool] : null;
+  const railBlocked = !!(railState && !railState.available);
+  const unplacedCameras = rail && !isEquipmentRegistration
+    ? Object.values(palette).flat().filter((item) => item.domain === "camera") : [];
+  const railPalette = !rail ? null
+    : railBlocked ? <Setup.Unavailable homeName={homeName} reason={railState.reason} />
+    : isEquipmentRegistration ? null
+    : railTool === "names" ? <>{echoSourceStatus}<Setup.Names devices={model.devices || []} zones={model.zones || []}
+        originalNames={originalNames} selectedId={selectedId}
+        onFocusDevice={(id) => { setSelectedId(id); setSelectedTargetId(null); setSelectedZone(null); }}
+        onRename={(id, value) => mutate((m) => {
+          const d = m.devices.find((x) => x.id === id); if (d) d.name = value;
+        }, { undoable: false })} /></>
+    : railTool === "cameras" ? <>{echoSourceStatus}
+        <Setup.Cameras cameras={cameraDevices} selectedId={selectedId}
+          onSelect={(id) => { setSelectedId(id); setSelectedTargetId(null); setSelectedZone(null); }}
+          onCalibrate={onCalibrateCamera}
+          calibrateReasonFor={(camera) => sim ? "Simulation cannot calibrate a camera."
+            : mobile ? "Calibrate on a wider screen; the camera view needs room for its snapshot."
+            : !camera.camera?.frigate_name ? "This camera has no stream to calibrate against." : ""} />
+        {unplacedCameras.length > 0 && <>
+          <div style={heading}>Place a camera</div>
+          {unplacedCameras.map((item) => <div key={item.entity_id} style={{ padding: "5px 0" }} title={item.entity_id}>
+            <div style={{ fontSize: 12, color: "var(--hg-fg-2)" }}>{item.name}</div>
+            <EdButton label={placing?.entity_id === item.entity_id ? "click its location…" : "place"}
+              active={placing?.entity_id === item.entity_id}
+              onClick={() => {
+                openAddTool(); setPlacing({ ...item, placement_kind: "device" });
+                setNotice("click the device location");
+              }} />
+          </div>)}
+        </>}
+        {notice && tool === "add" && <div role="status" style={{ marginTop: 10, fontSize: 12, color: "var(--hg-fg-3)" }}>{notice}</div>}
+      </>
+    : null;
+
+  const historyAndSave = <>
+    <EdButton label="undo" onClick={undo} disabled={!undoRef.current.stack.length || (isEquipmentRegistration && equipmentDisabled)} />
+    <EdButton label="redo" onClick={redo} disabled={!undoRef.current.redo.length || (isEquipmentRegistration && equipmentDisabled)} />
+    {!rail && <span style={{ width: 12 }} />}
+    <EdButton label={saveLabel}
+              active={dirty || equipmentDirty || draftOnline || saveStatus?.state === "conflict"} disabled={saveDisabled}
+              onClick={() => reviewedDraftReady ? onSave({ reviewedDraft: true })
+                : draftOnline ? onCompareLive() : onSave()}
+              title={saveTitle} />
+  </>;
+
   return (
     <>
+      {rail && <Setup.Rail tool={railTool} onTool={selectRailTool} availability={railAvailability} />}
       {/* toolbar — centered on desktop; a full-width horizontally scrollable
           strip on phones (EdButton opts out of flex shrink, so the ~9 buttons
           scroll instead of wrapping or overlapping the canvas) */}
-      <div ref={editorToolbarRef} tabIndex={-1} className={mobile ? "hg-mobile-scroll" : undefined} style={mobile ? {
+      {!rail && <div ref={editorToolbarRef} tabIndex={-1} className={mobile ? "hg-mobile-scroll" : undefined} style={mobile ? {
         position: "absolute", top: "calc(8px + env(safe-area-inset-top, 0px))",
         left: 0, right: 0, padding: "0 10px",
         display: "flex", gap: 6, alignItems: "center", zIndex: 4,
@@ -1363,47 +1590,17 @@ function HomeApartmentEdit({
                        letterSpacing: "0.14em", marginRight: 8 }}>edit</span>
         <EdButton label="select" active={tool === "select"} onClick={selectEditorTool} />
         {!isEquipmentRegistration && <>
-        <EdButton label="+ smart device" active={tool === "add"} onClick={() => {
-          setTool("add"); setSelectedTargetId(null); setPlacingTarget(null); setMoveTargetId(null);
-        }} />
-        <EdButton label="+ target" active={tool === "targets"} onClick={() => {
-          setTool("targets"); setPlacing(null); setSelectedId(null); setSelectedZone(null);
-          setMoveTargetId(null); setNotice("Step 1 · choose a target type");
-        }} />
-        <EdButton label="fixture links" active={tool === "links"} onClick={() => {
-          setTool("links"); setPlacing(null); setPlacingTarget(null); setSelectedTargetId(null);
-          setSelectedZone(null); setMoveTargetId(null);
-          setSelectedId((current) => ceilingLights.some((light) => light.id === current)
-            ? current : (ceilingLights[0]?.id || null));
-          setNotice("geometry locked · reconcile identity without moving the saved layout");
-        }} />
+        <EdButton label="+ smart device" active={tool === "add"} onClick={openAddTool} />
+        <EdButton label="+ target" active={tool === "targets"} onClick={openTargetsTool} />
+        <EdButton label="fixture links" active={tool === "links"} onClick={openLinksTool} />
         <EdButton label="fixture position" title="Measure a ceiling light from two walls and set its fixture-bottom height"
-          active={tool === "measure"} onClick={() => {
-          setTool("measure"); setPlacing(null); setPlacingTarget(null); setSelectedTargetId(null);
-          setSelectedZone(null); setMoveTargetId(null);
-          setSelectedId((current) => ceilingLights.some((light) => light.id === current)
-            ? current : (ceilingLights[0]?.id || null));
-          setNotice("");
-        }} />
-        <EdButton label="zones" active={tool === "zones"} onClick={() => {
-          setTool("zones"); setZoneDraft([]); setZoneDrawing(false); setZoneNaming(null);
-          setSelectedId(null); setSelectedTargetId(null); setMoveTargetId(null);
-          setSelectedZone((current) => current || model.zones?.[0]?.id || null);
-          setSelectedZoneVertex(null);
-          setNotice("select a shaded room · drag a round corner to reshape it, or drag inside to move it");
-        }} />
+          active={tool === "measure"} onClick={openMeasureTool} />
+        <EdButton label="zones" active={tool === "zones"} onClick={openZonesTool} />
         </>}
         <span style={{ width: 12 }} />
-        <EdButton label="undo" onClick={undo} disabled={!undoRef.current.stack.length || (isEquipmentRegistration && equipmentDisabled)} />
-        <EdButton label="redo" onClick={redo} disabled={!undoRef.current.redo.length || (isEquipmentRegistration && equipmentDisabled)} />
-        <span style={{ width: 12 }} />
-        <EdButton label={saveLabel}
-                  active={dirty || equipmentDirty || draftOnline || saveStatus?.state === "conflict"} disabled={saveDisabled}
-                  onClick={() => reviewedDraftReady ? onSave({ reviewedDraft: true })
-                    : draftOnline ? onCompareLive() : onSave()}
-                  title={saveTitle} />
+        {historyAndSave}
         <EdButton label="done" onClick={onExit} />
-      </div>
+      </div>}
 
       {/* Bottom survey navigator: drag remains the fastest path; the arrows
           provide deterministic 45° orbit steps when precise wall selection
@@ -1411,7 +1608,7 @@ function HomeApartmentEdit({
           another primary toolbar. */}
       <div role="group" aria-label="Apartment edit orbit controls" data-apt-edit-ui="orbit-controls" style={{
         position: "absolute", left: "50%", transform: "translateX(-50%)",
-        bottom: mobile ? "calc(45dvh + 12px)" : 16,
+        bottom: mobile && !rail ? "calc(45dvh + 12px)" : 16,
         maxWidth: mobile ? "calc(100vw - 12px)" : "none",
         display: "flex", alignItems: "center", gap: 8, zIndex: 5,
         padding: "6px 8px", background: "rgba(10,12,16,0.86)",
@@ -1428,73 +1625,22 @@ function HomeApartmentEdit({
       </div>
 
       {/* left rail + right inspector — side panels on desktop, stacked inside
-          one fixed bottom sheet on phones */}
-      <EdMobileSheet mobile={mobile}>
+          one fixed bottom sheet on phones, or the Setup rail's column */}
+      <EdSetupFrame mobile={mobile} rail={rail ? { host: inspectorHost, tool: railTool } : null} header={rail && <Setup.Header
+        tool={railTool} homeName={homeName} dirty={dirty || equipmentDirty} saveState={saveStatus?.state}
+        detail={isEquipmentRegistration ? `Equipment registration · ${saveStatus?.state || "unsaved"}`
+          : `Revision ${Number.isFinite(model.revision) ? model.revision : "—"}${sim ? " · simulation cannot save"
+            : ` · Home Assistant ${connection === "online" ? "connected" : "offline"} · save ${saveStatus?.state || "idle"}`}`}
+        sourceLabel={isEquipmentRegistration ? `Registration revision ${equipmentDocument.revision}` : sourceMeta?.label}
+        sourceTone={isEquipmentRegistration ? "authored" : sourceMeta?.live ? "current" : sourceMeta?.kind === "simulation" ? "simulated" : "modeled"}
+        toolbarRef={editorToolbarRef} onDone={onExit}>{historyAndSave}</Setup.Header>}>
       {/* left: task rail */}
-      <div ref={editorPaletteRef} style={mobile ? panel : { ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
-        {isEquipmentRegistration ? <EdEquipmentList document={equipmentDocument} selectedId={selectedId}
+      <div ref={editorPaletteRef} style={rail || mobile ? panel : { ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
+        {railPalette || (isEquipmentRegistration ? <EdEquipmentList document={equipmentDocument} selectedId={selectedId}
           onSelect={setSelectedId} referenceId={equipmentReferenceId} onReference={setEquipmentReferenceId}
           onAddSocket={addEquipmentSocket} atCapacity={equipmentDocument.equipment.length >= window.HomeEquipmentRegistration.MAX_EQUIPMENT}
-          onConfirm={confirmEquipmentReferences} disabled={equipmentDisabled} heading={heading} saveStatus={saveStatus} /> : <>
-        <div role="status" data-apartment-source={sourceMeta?.kind || "empty"} style={{
-          margin: "0 0 8px", padding: "7px 8px", border: `1px solid ${sourceMeta?.live
-            ? "rgba(145,230,189,0.35)" : sourceMeta?.kind === "simulation"
-              ? "rgba(255,180,95,0.4)" : "var(--hg-border-soft)"}`,
-          color: sourceMeta?.live ? "#91e6bd" : sourceMeta?.kind === "simulation" ? SURVEY_ORANGE : "var(--hg-fg-3)",
-          fontSize: 8, lineHeight: 1.45,
-        }}>
-          source · {sourceMeta?.label || "No Apartment model"}<br />
-          revision · {Number.isFinite(model.revision) ? model.revision : "—"}
-          {!sim && <> · HA {connection === "online" ? "connected" : "offline"}</>}<br />
-          save · {sim ? "simulation cannot save" : saveStatus?.state || "idle"}
-        </div>
-        {!sim && sourceMeta?.kind === "local_draft" && (
-          <div data-apartment-live-reconciliation={liveReview?.state || "idle"} style={{
-            margin: "0 0 10px", padding: "8px", border: `1px solid ${liveComparison?.canPublish
-              ? "rgba(145,230,189,0.4)" : saveStatus?.state === "conflict"
-                ? "var(--hg-crit)" : "rgba(255,180,95,0.38)"}`,
-            color: "var(--hg-fg-3)", fontSize: 8.5, lineHeight: 1.55,
-          }}>
-            <div style={{ color: liveComparison?.canPublish ? "#91e6bd" : SURVEY_ORANGE,
-              letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 5 }}>
-              local draft protection
-            </div>
-            {connection !== "online" ? (
-              <div>Connect Home Assistant with a long-lived token to compare this draft. The draft remains local and protected.</div>
-            ) : liveReview?.state === "loading" ? (
-              <div>Reading the authoritative Apartment model… no write is being performed.</div>
-            ) : liveReview?.state === "error" ? (
-              <>
-                <div style={{ color: "var(--hg-warn)", marginBottom: 6 }}>{liveReview.detail}</div>
-                <EdButton label="Retry live comparison" onClick={onCompareLive} />
-              </>
-            ) : liveReview?.state === "ready" && liveComparison ? (
-              <>
-                <div>draft rev {liveComparison.localRevision} · live rev {liveComparison.liveRevision}</div>
-                {Object.entries(liveComparison.collections).map(([name, result]) => (
-                  <div key={name}>
-                    {name} · draft {result.local} / live {result.live}
-                    {` · +${result.added.length} ~${result.changed.length} −${result.removed.length}`}
-                  </div>
-                ))}
-                <div style={{ margin: "6px 0", color: liveComparison.canPublish ? "#91e6bd" : "var(--hg-crit)" }}>
-                  {liveComparison.canPublish
-                    ? `Revisions match. Publish is explicit and will create Home Assistant revision ${liveComparison.liveRevision + 1}.`
-                    : "Revisions differ. Publishing is blocked; the local draft remains unchanged."}
-                </div>
-                <EdButton label={liveComparison.canPublish ? "Publish reviewed draft" : "Refresh comparison"}
-                  active={liveComparison.canPublish}
-                  onClick={() => liveComparison.canPublish ? onSave({ reviewedDraft: true }) : onCompareLive()}
-                  disabled={saving} />
-              </>
-            ) : (
-              <>
-                <div style={{ marginBottom: 6 }}>Compare the local draft with Home Assistant before any authoritative write.</div>
-                <EdButton label="Compare with live" onClick={onCompareLive} disabled={saving} />
-              </>
-            )}
-          </div>
-        )}
+          onConfirm={confirmEquipmentReferences} disabled={equipmentDisabled} heading={heading} saveStatus={saveStatus} kinds={railKinds} /> : <>
+        {echoSourceStatus}
         {tool === "targets" ? (
           <>
             <div style={heading}>Add target · Step 1 of 2</div>
@@ -1519,7 +1665,7 @@ function HomeApartmentEdit({
               <div style={{ display: "flex", gap: 6, margin: "8px 0 12px" }}>
                 {targetDraftId && <EdButton label="Finish placement" active onClick={() => {
                   setTargetDraftId(null); setSelectedTargetId(null); setMoveTargetId(null);
-                  setPlacingTarget(null); setTool("select");
+                  setPlacingTarget(null); setTool(rail ? "targets" : "select"); // the rail stays on Named aims
                   setNotice(sim
                     ? "placement finished in simulation · the live model is untouched"
                     : connection === "online"
@@ -1817,14 +1963,14 @@ function HomeApartmentEdit({
               color: "var(--hg-fg-3)", fontSize: 8.5, lineHeight: 1.5 }}>{notice}</div>}
           </>
         )}
-        </>}
+        </>)}
       </div>
 
       {/* right: inspector */}
-      <div ref={editorInspectorRef} style={mobile
+      <div ref={editorInspectorRef} style={rail ? panel : mobile
         ? { ...panel, borderTop: "1px solid var(--hg-border-soft)" }
         : { ...panel, right: 12 }} data-apt-edit-ui="inspector">
-        {isEquipmentRegistration ? <EdEquipmentFields key={selectedId} record={selected?.equipment_record}
+        {railBlocked ? null : isEquipmentRegistration ? <EdEquipmentFields key={selectedId} record={selected?.equipment_record}
           document={equipmentDocument} onUpdate={updateEquipment} onReference={setEquipmentReferenceId}
           disabled={equipmentDisabled} heading={heading} error={equipmentError} /> : tool === "zones" && zoneDrawing && zoneNaming ? (
           <>
@@ -2217,7 +2363,7 @@ function HomeApartmentEdit({
               }} />
             </div>
           </>
-        ) : (
+        ) : rail ? null : (
           <>
             <div style={heading}>zones</div>
             {(model.zones || []).map((z) => (
@@ -2239,7 +2385,7 @@ function HomeApartmentEdit({
           </>
         )}
       </div>
-      </EdMobileSheet>
+      </EdSetupFrame>
     </>
   );
 }

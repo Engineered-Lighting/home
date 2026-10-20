@@ -5363,8 +5363,8 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
       {window.HomeApartmentStatusRows ? <window.HomeApartmentStatusRows state={state} />
         : <div role="status"><p>{state?.sourceLabel || "Loading room"}</p></div>}
     </details>
-    <div className="apt-home-top-actions">
-    {state?.openSetup && <span style={{ position: "relative", display: "inline-flex" }}>
+    <div className="apt-home-top-actions" style={{ position: "relative" }}>
+    {state?.openSetup && <>
       <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
         aria-disabled={setupBlocked ? "true" : undefined} aria-describedby={setupWhy ? "apt-home-setup-why" : undefined}
         style={setupBlocked ? { opacity: .6 } : undefined}
@@ -5373,7 +5373,7 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
         zIndex: 31, width: "max-content", maxWidth: 280, padding: "8px 10px", border: "1px solid var(--hg-border-strong)", borderRadius: 8,
         background: "var(--apt-surface-raised, var(--hg-bg-2))", color: "var(--apt-text, var(--hg-fg-1))", fontSize: 12.5, lineHeight: 1.45,
         whiteSpace: "normal" }}>{state.setupUnavailableReason || "Setup isn't available for this home here."}</span>}
-    </span>}
+    </>}
     <button type="button" className="apt-home-travel" onClick={() => onFeature("lights")}>Lights / Travel Mode</button>
     <div className="apt-home-menu" ref={menuRef}>
       <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"

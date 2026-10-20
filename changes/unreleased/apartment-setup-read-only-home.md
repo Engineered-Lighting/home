@@ -1,6 +1,6 @@
 ---
 title: Setup on a read-only home opens read-only instead of doing nothing
-target: frontend
+target: web
 type: fixed
 ---
 

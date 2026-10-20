@@ -50,6 +50,14 @@
  *       renderer.render for the engine's own scene while Lit is on.
  *
  * Night adaptation is presentation, not lux.
+ *
+ * L4 lit receivers (behind ?lit-splats=1, lit-receivers.mjs): in Photo and
+ * Cloud no mesh is relit and no light or shadow map is made. The engine hands
+ * Lit a receiver controller; each sync passes it the eased lights and the
+ * adaptation, and it re-blends the splat or point colours from L3's light
+ * basis. The scan mesh still feeds the bake (never displayed or swapped), which
+ * then re-bakes only the live spots and their columns for those receivers. The
+ * adaptation meters the relit receivers in view, on both renderers.
  */
 import * as THREE from 'three';
 
@@ -212,6 +220,7 @@ function cutawayMask(display) {
 
 export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotFwhmDeg = 20,
     getNamedAims = () => [], isPresentationActive = () => false, onStateChange = () => {}, createBakeEndpoint = defaultBakeEndpoint,
+    getBakeMesh = null, getReceivers = null,
     bakeQuality = mobileGpu() ? 'progressive' : null, signal = null,
     now = () => performance.now(), reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)') } = {}) {
     if (!scene?.isScene || !renderer?.shadowMap || typeof getMesh !== 'function' || typeof getFixtureRoots !== 'function')
@@ -234,6 +243,9 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     floor.groundColor.copy(floor.color).multiplyScalar(LIT_AMBIENT_FLOOR.groundRatio);
     group.add(floor);
     let active = false, quality = 'full', slow = 0, swapped = [], lights = [], signature = '', saved = null, mesh = null;
+    // L4: the receiver controller while Lit relights Photo or Cloud, and the
+    // mesh the bake traces (the displayed mesh, or in Photo/Cloud the scan).
+    let receivers = null, bakeSource = null, receiverMeterAt = -Infinity;
     // The 160 ms ease: what each light shows, and the clock of the last step.
     let placementSignature = '', shown = [], easedAt = null, easing = false;
     // Partial night adaptation (WebGPU path): EV above the design night, toward
@@ -417,15 +429,15 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
      * smooth normals (the unlit display never needed normals, and scan
      * exports may not carry them) and the lightmap's uv1 cells. The display
      * geometry is left exactly as it was. */
-    function swapMaterials(next) {
+    function swapMaterials(next, source = next) {
         restoreMaterials();
-        mesh = next;
+        mesh = next; bakeSource = source;
         lightmap?.dispose(); lightmap = null;
         bakeSignature = ''; bakePlacement = ''; deferredSince = null; lux = [];
-        if (!mesh) { bounce = { ...idleBounce(), backend: bounce.backend }; return; }
+        if (!source) { bounce = { ...idleBounce(), backend: bounce.backend }; return; }
         const nodes = [];
-        mesh.updateWorldMatrix(true, true);
-        mesh.traverse(node => { if (node.isMesh && node.geometry?.attributes?.position) nodes.push(node); });
+        source.updateWorldMatrix(true, true);
+        source.traverse(node => { if (node.isMesh && node.geometry?.attributes?.position) nodes.push(node); });
         const lit = nodes.map(node => {
             const original = node.geometry, addedNormals = !original.attributes.normal;
             if (addedNormals) original.computeVertexNormals();
@@ -450,6 +462,9 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
                 }
                 albedo.set(sample(t, geometry.attributes.uv), (first + t) * 3);
             }
+            first += count;
+            // Photo and Cloud: the scan only feeds the bake; nothing is swapped.
+            if (!mesh) { geometry.dispose(); continue; }
             const made = litMaterialFor(node.material);
             swapped.push({ node, material: node.material, geometry: node.geometry, castShadow: node.castShadow, receiveShadow: node.receiveShadow,
                 lit: made.material, depth: made.depth, cut: made.cut, layerAdded: !!pipeline && !node.layers.isEnabled(LIT_LAYER) });
@@ -457,13 +472,16 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             node.material = made.material;
             node.castShadow = true; node.receiveShadow = true;
             if (pipeline) node.layers.enable(LIT_LAYER);
-            first += count;
         }
         bounce = { ...idleBounce(), status: total ? 'building' : 'idle', triangles: total };
         if (!total) return;
         try {
-            baker ||= Bake.createBakeClient({ endpoint: createBakeEndpoint(), onScene, onLightmap, onLux, onError });
+            baker ||= Bake.createBakeClient({ endpoint: createBakeEndpoint(), onScene, onLightmap, onLux, onError, onReceiverLayer });
             bakeScene = baker.setScene(triangles, albedo);
+            if (receivers) {
+                const { set, positions, normals } = receivers.bakeReceivers();
+                baker.setReceivers(set, positions, normals);
+            }
         } catch (error) { bounce = { ...bounce, status: 'error', error: String(error?.message || error) }; }
     }
     function restoreMaterials() {
@@ -475,7 +493,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             entry.node.geometry = entry.geometry;
             entry.node.castShadow = entry.castShadow; entry.node.receiveShadow = entry.receiveShadow;
         }
-        swapped = []; mesh = null;
+        swapped = []; mesh = null; bakeSource = null;
     }
 
     function onScene(message) {
@@ -500,6 +518,13 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         lux = message.aims.slice(0, MAX_LUX_AIMS).map(row => Object.freeze({ ...row, modeled: true, measured: false }));
         changed();
     }
+    function onReceiverLayer(message) {
+        if (!active || !receivers || message.scene !== bakeScene) return;
+        if (receivers.setSpotColumn(message.key, message.version, message.data)) {
+            bounce = { ...bounce, receiverSpotMs: message.ms ?? null };
+            changed();
+        }
+    }
     function onError(message) {
         if (message.type === 'warning') { bounce = { ...bounce, warning: message.message }; return; }
         bounce = { ...bounce, status: 'error', error: message.message };
@@ -519,11 +544,14 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
      * still drawing (the 650 ms Set sweep) waits for it to land. */
     function syncBake(exact) {
         if (!baker || !bakeScene || bounce.status === 'building' || bounce.status === 'error') return;
-        const bakeLights = exact.map(source => ({
+        const allLights = exact.map(source => ({
             key: bakeKey(source), mode: source.kind === 'spot' ? 'vpl' : 'sky',
             origin: round(source.origin.toArray()), direction: round(source.direction.toArray()),
             cosOuter: Math.cos(source.halfAngle), cosInner: Math.cos(source.halfAngle * (1 - source.penumbra)),
             candela: quality === 'reduced' && source.kind === 'zone' ? 0 : source.candela, color: round(Model.cctToLinearRgb(source.kelvin)) }));
+        // L4: the basis already carries the downs' and zones' bounce for the
+        // receivers; only the live spots are baked (the lux readout keeps all).
+        const bakeLights = receivers ? allLights.filter(light => light.mode === 'vpl') : allLights;
         const aims = namedAims();
         const placement = bakeLights.filter(light => light.mode === 'vpl').map(light => light.key + light.origin.join(',') + light.direction.join(',')).join('|');
         const weights = Object.fromEntries(bakeLights.map(light => [light.key, light.color.map(c => c * light.candela)]));
@@ -535,7 +563,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         }
         deferredSince = null; bakeSignature = next; bakePlacement = placement;
         baker.update({ lights: bakeLights.map(({ candela, color, ...light }) => light), weights, exposure: LIT_EXPOSURE, quality: bakeQuality, aims,
-            luxLights: bakeLights.filter(light => light.candela > 0) });
+            luxLights: allLights.filter(light => light.candela > 0) });
         if (bounce.status === 'ready') bounce = { ...bounce, status: 'baking' };
     }
 
@@ -576,18 +604,19 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
      * own clock: it keeps easing after the lights settle. Until the first
      * meter the view shows the design night and reports itself adapting. */
     function adapt(at) {
-        if (!pipeline) return;
+        if (!pipeline && !receivers) return;
         if (metered === null) { adapting = true; return; }
         adaptTarget = Exposure.adaptationFromLuminance(metered, LIT_DESIGN_EV100);
         const elapsed = adaptedAt === null ? Infinity : at - adaptedAt;
         const step = Exposure.easeAdaptation(adaptEv, adaptTarget.adaptEv, elapsed, { snap: adaptEv === null || !!reducedMotion?.matches });
         adaptEv = step.ev; adapting = step.adapting; adaptedAt = at;
-        pipeline.gain.value = Exposure.adaptationGain(adaptEv);
+        if (pipeline && !receivers) pipeline.gain.value = Exposure.adaptationGain(adaptEv);
     }
 
     /* Follow the fixtures' current exact state. Cheap when nothing changed. */
-    function sync() {
+    function sync(camera = null) {
         if (!active) return false;
+        if (receivers) return syncReceivers(camera);
         const currentMesh = getMesh();
         if (currentMesh !== mesh) {
             swapMaterials(currentMesh); renderer.shadowMap.needsUpdate = true;
@@ -629,8 +658,46 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         return true;
     }
 
+    /* L4: Photo or Cloud. The same exact lights, bake and ease; the eased
+     * lights and the adaptation go to the receiver controller instead of
+     * three lights. The meter reads the relit receivers in view. */
+    function syncReceivers(camera) {
+        const source = getBakeMesh?.() || null;
+        if (source !== bakeSource) swapMaterials(null, source);
+        const exact = (getFixtureRoots() || []).flatMap(root => fixtureWorldLights(root, { spotFwhmDeg }));
+        syncBake(exact);
+        const at = now(), elapsed = easedAt === null ? Infinity : at - easedAt;
+        const step = Model.easeLights(exact, shown, elapsed, { snap: elapsed === Infinity || !!reducedMotion?.matches });
+        easedAt = at; shown = step.shown; easing = step.easing;
+        if (camera && at - receiverMeterAt >= Exposure.LIT_METER.periodMs) {
+            receiverMeterAt = at;
+            const luminance = receivers.meter(camera);
+            if (luminance !== null) { metered = luminance; meterSerial++; }
+        }
+        adapt(at);
+        receivers.sync({ lights: step.lights, gain: Exposure.adaptationGain(adaptEv ?? 0), operator });
+        return true;
+    }
+    /* L4: one Lit step for the receivers, from modes.js's splat tick (before
+     * renderer.render): follow the lights, then blend if anything changed. */
+    function tickReceivers(camera) {
+        if (!active || !receivers) return false;
+        try { sync(camera); } catch (_) { /* the frame still renders */ }
+        return receivers.flush();
+    }
+
     function enable() {
         if (active) return state();
+        const target = getMesh() ? null : getReceivers?.() || null;
+        if (target) {
+            // Photo or Cloud: no lights, shadow maps, render pass or scene hook.
+            receivers = target;
+            saved = { receiversOnly: true };
+            active = true; quality = 'full'; slow = 0; signature = ''; placementSignature = ''; shown = []; easedAt = null;
+            adaptEv = null; adaptedAt = null; adapting = false; metered = null; receiverMeterAt = -Infinity; operator = LIT_TONE.view;
+            sync();
+            return state();
+        }
         saved = { enabled: renderer.shadowMap.enabled, type: renderer.shadowMap.type, autoUpdate: renderer.shadowMap.autoUpdate,
             ownBeforeRender: Object.hasOwn(scene, 'onBeforeRender'), onBeforeRender: scene.onBeforeRender };
         renderer.shadowMap.enabled = true;
@@ -656,6 +723,15 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     function disable() {
         if (!active) return state();
         active = false;
+        if (saved?.receiversOnly) {
+            receivers = null; restoreMaterials();
+            baker?.dispose(); baker = null; bakeScene = 0; lightmap?.dispose(); lightmap = null; lux = [];
+            bakeSignature = ''; bakePlacement = ''; deferredSince = null; bounce = idleBounce();
+            shown = []; easedAt = null; easing = false;
+            adaptEv = null; adaptedAt = null; adapting = false; adaptTarget = { dropEv: 0, adaptEv: 0 }; metered = null;
+            saved = null;
+            return state();
+        }
         pipeline?.uninstall();
         restoreMaterials();
         for (const light of lights) { light.shadow?.map?.dispose?.(); light.dispose?.(); }
@@ -677,7 +753,8 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
      * the shadow maps and drops the radial lobes (and their bounce), and
      * says so. */
     function observeFrameRate(fps) {
-        if (!active || quality === 'reduced' || !Number.isFinite(fps)) return state();
+        // Lit receivers have no per-frame cost to shed (the blend runs on change).
+        if (!active || receivers || quality === 'reduced' || !Number.isFinite(fps)) return state();
         slow = fps < LIT_TARGET_FPS ? slow + 1 : 0;
         if (slow >= LIT_SLOW_SAMPLES) { quality = 'reduced'; applyQuality(); signature = ''; sync(); }
         return state();
@@ -686,32 +763,36 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
      * path has no tone pass: it is always 'linear'. */
     function setTone(next) {
         if (!LIT_TONE_OPERATORS.includes(next)) throw new RangeError('lit_tone_operator_unknown');
-        if (pipeline && next !== operator) { operator = next; pipeline.retone(); }
+        if (receivers && next !== operator) { operator = next; sync(); }
+        else if (pipeline && next !== operator) { operator = next; pipeline.retone(); }
         return state();
     }
     const readLinear = options => (pipeline ? pipeline.readLinear(options) : Promise.resolve(null));
     function state() {
-        const ev = pipeline && adaptEv !== null ? adaptEv : 0;
+        const adaptive = !!pipeline || !!receivers, ev = adaptive && adaptEv !== null ? adaptEv : 0;
         return Object.freeze({ active, quality, lights: lights.length,
             shadowLights: lights.filter(light => light.castShadow).length, shadowMapSizes: LIT_SHADOW_MAP_SIZES,
             meshSwapped: swapped.length, exposure: LIT_EXPOSURE,
             easing, easeTauMs: Model.LIT_EASE_TAU_MS, dimmingCurve: Model.LIT_DIMMING_CURVE.name,
-            pipeline: pipeline ? 'scene-referred-half-float' : 'display-direct',
-            designEv100: LIT_DESIGN_EV100, nightAdaptation: !!pipeline, adaptationEv: ev, adaptationTargetEv: pipeline ? adaptTarget.adaptEv : 0,
-            adaptationDropEv: pipeline ? adaptTarget.dropEv : 0, adapting, ev100: LIT_DESIGN_EV100 - ev,
-            meteredCdM2: pipeline ? metered : null, meterSerial,
-            tone: Object.freeze({ operator, available: pipeline ? LIT_TONE_OPERATORS : Object.freeze(['linear']),
-                presentation: !!pipeline && Exposure.litTonePresentation(operator) }),
+            pipeline: receivers ? 'per-receiver-display' : pipeline ? 'scene-referred-half-float' : 'display-direct',
+            designEv100: LIT_DESIGN_EV100, nightAdaptation: adaptive, adaptationEv: ev, adaptationTargetEv: adaptive ? adaptTarget.adaptEv : 0,
+            adaptationDropEv: adaptive ? adaptTarget.dropEv : 0, adapting, ev100: LIT_DESIGN_EV100 - ev,
+            meteredCdM2: adaptive ? metered : null, meterSerial,
+            tone: Object.freeze({ operator, available: adaptive ? LIT_TONE_OPERATORS : Object.freeze(['linear']),
+                presentation: adaptive && Exposure.litTonePresentation(operator) }),
+            receivers: receivers ? receivers.state() : null,
             cutaway: swapped.length > 0 && swapped.every(entry => entry.cut),
             ambientFloor: LIT_AMBIENT_FLOOR,
             bounce: Object.freeze({ ...bounce, lastBake: bounce.lastBake ? Object.freeze({ ...bounce.lastBake }) : null }),
-            bounceLimit: LIT_BOUNCE_LIMIT, assumedAlbedos: LIT_BOUNCE_ALBEDO,
+            // Photo and Cloud state their own limits (the relit receivers'), Mesh L5's.
+            bounceLimit: (receivers && receivers.state().limit) || LIT_BOUNCE_LIMIT, assumedAlbedos: LIT_BOUNCE_ALBEDO,
             lux: Object.freeze(lux.slice()), luxLabel: LIT_LUX_LABEL,
             assumedLumens: LIT_ASSUMED_LUMENS, assumptionSource: LIT_ASSUMPTION_SOURCE, measured: false,
             disclosure: LIT_DISCLOSURE,
-            disclosureDetail: LIT_DISCLOSURE_DETAIL + ' ' + Exposure.litExposureDisclosure({ adaptive: !!pipeline, designEv100: LIT_DESIGN_EV100 }) });
+            disclosureDetail: LIT_DISCLOSURE_DETAIL + ' ' + Exposure.litExposureDisclosure({ adaptive, designEv100: LIT_DESIGN_EV100 })
+                + (receivers ? ' ' + receivers.state().disclosure : '') });
     }
-    return { enable, disable, sync, observeFrameRate, setTone, readLinear, state, group };
+    return { enable, disable, sync, tickReceivers, observeFrameRate, setTone, readLinear, state, group };
 }
 
 /* WebGPU buffer rows are padded to 256 bytes; `channels` values per pixel. */

@@ -7002,13 +7002,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // state commits (a joined read), so it is cleared only when loading ends.
   useEffect(() => { if (!modeLoading) setModeProgress(null); }, [modeLoading]);
   /* Tier-0 Lit (engine.setLit): Mesh first, then the relit mesh. Session
-   * only and never restored, so Lit is off by default on every device. */
+   * only and never restored, so Lit is off by default on every device.
+   * With ?lit-splats=1 (L4) Photo and Cloud are relit in place instead. */
   const toggleLit = useCallback(async (next) => {
     const engine = engineRef.current;
     if (!engine?.setLit) return;
-    if (next && engine.modes.mode !== "mesh") await pickMode("mesh");
+    const litHere = mode => mode === "mesh" || engine.litAvailableIn?.(mode) === true;
+    if (next && !litHere(engine.modes.mode)) await pickMode("mesh");
     if (engineRef.current !== engine) return;
-    const state = await engine.setLit(!!next && engine.modes.mode === "mesh");
+    const state = await engine.setLit(!!next && litHere(engine.modes.mode));
     if (engineRef.current === engine) setLitState(state);
   }, [pickMode]);
   useEffect(() => {

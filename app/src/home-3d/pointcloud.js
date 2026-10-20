@@ -174,6 +174,37 @@ void main() {
 }
 `;
 
+/*
+ * L4 lit points (lit-receivers.mjs, behind ?lit-splats=1): a copy of the
+ * cloud's material whose colour is the relit, display-encoded colour of each
+ * point, read by vertex index from the blend's RGBA8 target. It shares every
+ * uniform object with `base`, so the engine's per-frame writes (fade, size,
+ * opacity, cutaway) reach it unchanged; only the colour differs.
+ */
+export function createLitPointsMaterial(base, { texture, width }) {
+    const vertex = base.vertexShader
+        .replace('varying float vIntensity;', 'varying float vIntensity;\nuniform sampler2D uLitColor;\nuniform int uLitWidth;\nvarying vec3 vLitColor;')
+        .replace('vIntensity = intensity;', 'vIntensity = intensity;\n    vLitColor = texelFetch(uLitColor, ivec2(gl_VertexID % uLitWidth, gl_VertexID / uLitWidth), 0).rgb;');
+    const fragment = base.fragmentShader
+        .replace('varying float vIntensity;', 'varying float vIntensity;\nvarying vec3 vLitColor;')
+        .replace('gl_FragColor = vec4(uGlowColor * brightness, glow * uOpacity * cutawayKeep);',
+            'gl_FragColor = vec4(vLitColor, glow * uOpacity * cutawayKeep);');
+    if (vertex === base.vertexShader || fragment === base.fragmentShader || !vertex.includes('vLitColor = texelFetch')
+        || !fragment.includes('vec4(vLitColor')) throw new Error('lit_points_shader_changed');
+    const mat = new THREE.ShaderMaterial({
+        name: 'apartment-points-lit',
+        uniforms: { ...base.uniforms, uLitColor: { value: texture }, uLitWidth: { value: width } },
+        vertexShader: vertex,
+        fragmentShader: fragment,
+        transparent: base.transparent,
+        blending: base.blending,
+        depthWrite: base.depthWrite,
+        depthTest: base.depthTest,
+    });
+    mat.userData.litPoints = true;
+    return mat;
+}
+
 const TUNABLES_KEY = 'apartment3d.shader';
 
 export function createPointsMaterial() {

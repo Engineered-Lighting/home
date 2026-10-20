@@ -40,7 +40,8 @@ def _finite(value):
 class ActivityLoop:
     def __init__(self, *, deep, occupancy, publisher, home='victoria', room='den', source=SOURCE, clock=time.time,
                  vacancy_pause_s=120., pose_interval_s=1., health_heartbeat_s=60., cost_interval_s=60.,
-                 jev_stale_s=30., pricing=None, zones=None):
+                 jev_stale_s=30., pricing=None, zones=None, position_interval_s=.2, position_stale_s=3.,
+                 person_position=True):
         if not callable(occupancy) or not all(callable(getattr(deep, k, None)) for k in ('start', 'stop', 'tick', 'observe')):
             raise ValueError('occupancy reading and deep-stack adapter required')
         if not (30 <= vacancy_pause_s <= 900 and 1 <= pose_interval_s <= 2 and 10 <= health_heartbeat_s <= 120
@@ -51,6 +52,14 @@ class ActivityLoop:
         self.clock = clock
         self.vacancy_pause_s, self.pose_interval_s = float(vacancy_pause_s), float(pose_interval_s)
         self.base_pose_interval_s, self.cadence = self.pose_interval_s, 'normal'
+        # v1.1 person_position: each new placement, at most 1/position_interval_s
+        # (5 Hz). It never waits on JEV; the placement rate is the real limit.
+        if not (.2 <= position_interval_s <= 1. and 1. <= position_stale_s <= 30.):
+            raise ValueError('bounded person_position timings required')
+        self.position_interval_s = self.base_position_interval_s = float(position_interval_s)
+        self.position_stale_s, self.person_position = float(position_stale_s), bool(person_position)
+        self.last_position_key = self.last_position_at = None
+        self.position_health = (False, 'position_not_started')
         self.health_heartbeat_s, self.cost_interval_s, self.jev_stale_s = health_heartbeat_s, cost_interval_s, jev_stale_s
         self.pricing = dict(pricing or {})
         self.zones = activity_pose.check_zones(zones, home=home, room=room)
@@ -63,7 +72,8 @@ class ActivityLoop:
         self.health_sent = {}
         self.cost_at = None
         self.usage_base = None
-        self.counts = dict(ticks=0, starts=0, pauses=0, activity=0, person_pose=0, health=0, cost=0, errors=0)
+        self.counts = dict(ticks=0, starts=0, pauses=0, activity=0, person_pose=0, person_position=0, health=0, cost=0,
+                           errors=0)
         self.thread = None
         self.halt = threading.Event()
 
@@ -93,6 +103,7 @@ class ActivityLoop:
         with self.lock:
             factor = CADENCE[level]
             self.cadence, self.pose_interval_s = level, self.base_pose_interval_s * factor
+            self.position_interval_s = min(1., self.base_position_interval_s * factor)
             scale = getattr(self.deep, 'set_cadence', None)
             if scale is not None:
                 scale(factor)
@@ -141,6 +152,7 @@ class ActivityLoop:
             running = self.running and seen.get('running', True)
             self._activity(seen if running else {}, now)
             self._pose(seen if running else {}, now)
+            self._position(seen if running else {}, now, running)
             self._health(seen, now, running)
             self._cost(seen, now)
         self.publisher.flush()
@@ -174,6 +186,24 @@ class ActivityLoop:
         count = seen.get('person_count')
         self._emit(activity_events.person_pose(**self.scope, observed_at=pose['observed_at'], people=people,
             person_count=count if type(count) is int else len(people)))
+
+    def _position(self, seen, now, running):
+        position = seen.get('position') if self.person_position else None
+        if position and position.get('key') != self.last_position_key and (
+                self.last_position_at is None or now - self.last_position_at >= self.position_interval_s - 1e-3):
+            count = seen.get('person_count')
+            people = list(position['people'])
+            self._emit(activity_events.person_position(**self.scope, observed_at=position['observed_at'],
+                people=people, person_count=count if type(count) is int and count >= len(people) else len(people)))
+            self.last_position_key, self.last_position_at = position.get('key'), now
+        if not self.person_position:
+            self.position_health = (False, 'position_disabled')
+        elif not running:
+            self.position_health = (False, (self.stopped and 'stopped_' + self.stopped) or 'paused_room_empty')
+        elif self.last_position_at is not None and now - self.last_position_at <= self.position_stale_s:
+            self.position_health = (True, None)
+        else:
+            self.position_health = (False, 'position_unavailable:' + str(seen.get('position_reason') or 'no_placement'))
 
     def _health(self, seen, now, running):
         reported = seen.get('health') or {}
@@ -251,7 +281,10 @@ class ActivityLoop:
         with self.lock:
             now = self.clock()
             return dict(schema=SCHEMA, state='stopped' if self.stopped else 'running' if self.running else 'paused',
-                stopped_reason=self.stopped, cadence=self.cadence, running_for_s=None if not self.running else now - self.started_at,
+                stopped_reason=self.stopped, cadence=self.cadence,
+                position=dict(enabled=self.person_position, ok=self.position_health[0], detail=self.position_health[1],
+                              interval_s=self.position_interval_s, last_published_age_s=None if self.last_position_at is None
+                              else now - self.last_position_at), running_for_s=None if not self.running else now - self.started_at,
                 last_occupied_age_s=None if self.last_occupied is None else now - self.last_occupied,
                 vacancy_pause_s=self.vacancy_pause_s, counts=dict(self.counts),
                 health={k: {'ok': v[0], 'detail': v[1]} for k, v in self.health_sent.items()},
@@ -272,9 +305,11 @@ def read_config(path, *, read_private):
 
 def check_config(value):
     keys = {'schema', 'enabled', 'home', 'room', 'camera_id', 'experiment_id', 'brain', 'timings', 'pricing', 'zones'}
-    if (not isinstance(value, dict) or not keys <= set(value) <= keys | {'jev_release', 'vjepa'} or value['schema'] != SCHEMA
+    if (not isinstance(value, dict) or not keys <= set(value) <= keys | {'jev_release', 'vjepa', 'person_position'} or value['schema'] != SCHEMA
             or type(value['enabled']) is not bool):
         raise ValueError('exact activity-loop config required')
+    if type(value.get('person_position', True)) is not bool:
+        raise ValueError('activity-loop person_position must be true or false')
     if type(value.get('vjepa', False)) is not bool:
         raise ValueError('activity-loop vjepa must be true or false (off for the MVP)')
     release = value.get('jev_release')
@@ -293,7 +328,8 @@ def check_config(value):
     import brain_publisher
     brain_publisher.origin_parts(brain['origin'])
     timings = value['timings']
-    allowed = {'vacancy_pause_s', 'pose_interval_s', 'health_heartbeat_s', 'cost_interval_s', 'jev_stale_s', 'roll_margin_s'}
+    allowed = {'vacancy_pause_s', 'pose_interval_s', 'health_heartbeat_s', 'cost_interval_s', 'jev_stale_s', 'roll_margin_s',
+               'position_interval_s', 'position_stale_s'}
     if not isinstance(timings, dict) or not set(timings) <= allowed or not all(_finite(v) for v in timings.values()):
         raise ValueError('bounded activity-loop timings required')
     pricing = value['pricing']

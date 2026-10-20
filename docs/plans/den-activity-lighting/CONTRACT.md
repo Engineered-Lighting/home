@@ -178,3 +178,31 @@ These came out of AL-3 and change no schema.
 - **`person_pose.head_pitch_deg` sign:** positive means looking **down**
   (towards the lap or a book), and 0 is level. AL-1 already assumes this. AL-3
   flips its sign to match (decided 2026-10-19).
+
+## v1.1 amendment (2026-10-20): whole-room occupancy and proximity ambient
+- **`zone` events become optional.** The Victoria bridge sends none. The
+  brain must work from `occupancy` alone.
+- **New event `person_position`** (producer: the Jetson quick position
+  source):
+  - extra fields: `people`, a list of `{track_id, position_m:[x,y,z],
+    approximate:true}`, and `person_count`;
+  - `position_m` is the room-frame chest point (the shoulder midpoint when
+    available), otherwise the depth-projected box centre;
+  - cadence 2–5 Hz while occupied; ttl 3 s.
+  - `person_pose` stays for the reading spot. The brain may also take a
+    position from a fresh `person_pose`.
+- **Rule `proximity_ambient` replaces `zone_ambient`.** All values are
+  settings.
+  - For each fixture, d = the distance from the nearest fresh person position
+    to the fixture's `aim_origin_m`.
+  - The level runs linearly from `prox_far_level` 0.10 at d ≥ `prox_far_m`
+    3.0 m up to `prox_near_level` 0.60 at d ≤ `prox_near_m` 1.0 m. Night
+    multiplies the level by 0.35 at 2200 K; otherwise 2700 K.
+  - Smoothing: fade 0.8 s, a 0.05 level deadband, and at most 4 state pushes
+    per second.
+  - With occupancy but no fresh position, every fixture sits at
+    `occupied_level` 0.30 (`occupied_ambient`).
+- **Reading spot precondition:** a fresh position within `pose_seat_max_m`
+  (1.5 m) of the sofa `seat_m`, or `zone_hint`=sofa, replaces "sofa zone
+  present".
+- **Unchanged:** `room_off`, `degraded_ambient`, `manual_pause`.

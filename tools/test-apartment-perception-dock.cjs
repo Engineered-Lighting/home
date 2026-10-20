@@ -147,6 +147,22 @@ test('rolling model history deduplicates age ticks, stays bounded and clears for
   assert.equal(row.age.status,'current','original projection is not mutated');
 });
 
+test('model history retains actual JEV/pose updates when the graph lists many unavailable source families',()=>{
+  const scope={siteId:'victoria',sessionId:'loop-one',generation:0};
+  const supplied={family:'jev',source_id:'reasoning_b',model_id:'authored-jev-v1',status:'completed',
+    available_at:100,valid_until:101,result:{activity:'reading'}};
+  const placeholders=Array.from({length:35},(_,i)=>({family:'family_'+i,source_id:'uncommissioned_'+i,model_id:null,
+    status:'not_provisioned',observed_at:null,available_at:null,valid_until:null,result:{summary:{value:'Not provisioned'}}}));
+  const view={status:'available',scope,sourceEpoch:'one',models:[supplied,...placeholders]};
+  const history=Dock.modelUpdates([],view);
+  assert.equal(history.length,1,'source-catalog rows do not evict actual inference results');
+  assert.equal(history[0].model.model_id,'authored-jev-v1');
+  assert.equal(Dock.modelUpdates(history,view),history,'identical polling does not churn an already bounded history');
+  const many={...view,models:Array.from({length:25},(_,i)=>({...supplied,model_id:'model-'+i,available_at:100+i}))};
+  const bounded=Dock.modelUpdates([],many);assert.equal(bounded.length,20);
+  assert.equal(Dock.modelUpdates(bounded,many),bounded,'more than twenty simultaneous originals have a stable deterministic retained set');
+});
+
 /* ---------- the dock component in jsdom ---------- */
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { pretendToBeVisual: true, runScripts: 'outside-only', url: 'http://127.0.0.1/' });
 for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'])
@@ -420,6 +436,7 @@ test('viewing the activity loop retires old observers on rolls and pause, recove
     await update({status:'running',session:second,producerEpoch:'epoch-two',rolls:1});
     assert.equal(m.appSource.subscriptions.length,3);
     assert.deepEqual(m.appSource.forbidden,[]);assert.equal(closed,0,'pause keeps the read-only watcher for recovery');
+    await update({status:'paused',session:null,reason:'vacant'});
     await click(m.container,'Hide camera dock');assert.equal(closed,1,'hiding the view stops its status reads');
   }finally{await m.unmount();}
 });

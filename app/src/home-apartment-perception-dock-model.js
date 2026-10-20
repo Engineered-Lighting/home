@@ -277,15 +277,27 @@
     if (!view || view.status !== 'available' || !view.scope) return previous || [];
     var context = JSON.stringify([view.scope, view.sourceEpoch]);
     var rows = (previous || []).filter(function (entry) { return entry.context === context; });
-    var changed = rows.length !== (previous || []).length;
+    var originals = new Map(rows.map(function (entry) { return [entry.key, entry]; }));
     (view.models || []).forEach(function (row) {
+      // The graph also lists uncommissioned source families. Those catalog
+      // rows are not model results and must not evict supplied inferences.
+      if (!row || !(typeof row.model_id === 'string' && row.model_id.length
+        || [row.observed_at, row.available_at, row.valid_until].some(finite))) return;
       var snapshot = Object.assign({}, row); delete snapshot.age;
       var key = JSON.stringify(snapshot);
-      if (rows.some(function (entry) { return entry.key === key; })) return;
-      rows.unshift({ context: context, key: key, scope: Object.assign({}, view.scope), model: snapshot });
-      changed = true;
+      if (!originals.has(key)) originals.set(key, { context: context, key: key, scope: Object.assign({}, view.scope), model: snapshot });
     });
-    return changed ? rows.slice(0, 20) : previous || [];
+    var time = function (row, key) { return finite(row.model[key]) ? row.model[key] : -Infinity; };
+    rows = Array.from(originals.values()).sort(function (a, b) {
+      var available = time(b, 'available_at') - time(a, 'available_at');
+      if (available && !Number.isNaN(available)) return available;
+      var observed = time(b, 'observed_at') - time(a, 'observed_at');
+      if (observed && !Number.isNaN(observed)) return observed;
+      return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+    }).slice(0, 20);
+    return rows.length === (previous || []).length && rows.every(function (row, index) {
+      return row.context === previous[index].context && row.key === previous[index].key;
+    }) ? previous || [] : rows;
   }
 
   /* Open in Lab: session always; time only from the frame's capture time

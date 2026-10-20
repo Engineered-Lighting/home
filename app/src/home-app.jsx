@@ -5321,7 +5321,7 @@ function apartmentChatAboutReply(text, about, current) {
     : { kind: "assistant", text: result.text, chatContext: result.outcome };
 }
 
-function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false }) {
+function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false, recordingBanner = null }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const firstItemRef = useRef(null);
@@ -5361,6 +5361,7 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
         : <div role="status"><p>{state?.sourceLabel || "Loading room"}</p></div>}
     </details>
     <div className="apt-home-top-actions">
+    {recordingBanner}
     <div className="apt-home-menu" ref={menuRef}
       data-setup={state?.openSetup ? state.setupActive ? "on" : setupBlocked ? "unavailable" : "off" : undefined}>
       <button type="button" aria-label="Home menu" aria-expanded={menuOpen} aria-haspopup="menu"
@@ -11914,6 +11915,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     }}>
       {unifiedHome && <>
         <ApartmentHomeBar state={shellState} theme={theme} simulationActive={!!sim.active} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+          recordingBanner={window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner inline labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
           onPreviousHome={() => chooseHomeLayout("classic")} onFeature={key => {
             if (key === "metrics") { setShellMetricsOpen(true); return; }
             if (key === "preferences") { showShellTab("chat"); setRemotePanelOpen(true); return; }
@@ -12134,7 +12136,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       )}
       {window.HomePerceptionLab && <window.HomePerceptionLab open={perceptionLabOpen} onClose={() => setPerceptionLabOpen(false)} spatialMode={spatialOverlayMode}
         intent={perceptionLabIntent} />}
-      {window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
+      {!unifiedHome && window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
       {perceptionLabOpen && !window.HomePerceptionLab && <FeatureLoadingSurface open={perceptionLabOpen} title="Perception Lab" status={featureStatusFor("perceptionLab")} error={featureLoadErrors.perceptionLab} onClose={() => setPerceptionLabOpen(false)} onRetry={() => ensureFeature("perceptionLab", "Perception Lab", "retry")} mobile={mobile} />}
       {intelligenceOpen && !window.HomeIntelligenceOverlay && (
         <FeatureLoadingSurface

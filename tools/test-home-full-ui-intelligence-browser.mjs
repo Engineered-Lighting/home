@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runFullUiShell } from './fixtures/home-full-ui-harness.mjs';
 
-test('full Home: real Intelligence reads packets, exposes packet failure and recovers on desktop and phone', { timeout: 180000 }, async () => {
+test('full Home: real Intelligence reads packets, exposes packet failure and recovers on desktop and phone', { timeout: 145000 }, async () => {
   await runFullUiShell('home-full-ui-intelligence-browser', async ({ page, openShell, menu, state, calls, checks, viewports, inViewport }) => {
     await openShell();
     const atlas = page.locator('[aria-label="Intelligence Atlas"]');

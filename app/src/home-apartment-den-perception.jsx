@@ -135,7 +135,7 @@
     useEffect(()=>()=>{generationRef.current++;loopRef.current?.();releaseAimPreview();discoveryRef.current?.abort();playerRef.current?.destroy();layerRef.current?.dispose();},[releaseAimPreview]);
     useEffect(()=>{stop('view_identity_changed');setSessionId('');setSessions([]);setOpened(false);},[engine,identityKey,active,source,stop]);
     // Hidden detaches the viewer (no invisible media). Collapsed keeps it.
-    useEffect(()=>{if(dock==='hidden'&&playerRef.current)stop('dock_hidden');},[dock,stop]);
+    useEffect(()=>{if(dock==='hidden'&&(playerRef.current||loopRef.current))stop('dock_hidden');},[dock,stop]);
     useEffect(()=>source?.watchAnalysis?.(setAnalysis),[source]);
     useEffect(()=>{
       analysisGenerationRef.current++;setAnalysisAvailability(null);

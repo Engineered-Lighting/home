@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runFullUiShell } from './fixtures/home-full-ui-harness.mjs';
 
-test('full Home: real People loads the household, distinguishes empty/refused and recovers on desktop and phone', { timeout: 180000 }, async () => {
+test('full Home: real People loads the household, distinguishes empty/refused and recovers on desktop and phone', { timeout: 145000 }, async () => {
   await runFullUiShell('home-full-ui-people-browser', async ({ page, openShell, menu, state, calls, checks, viewports, inViewport }) => {
     await openShell();
     const people = page.locator('[aria-label="People — relationships and identities"]');

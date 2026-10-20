@@ -39,6 +39,19 @@
     const scoped=value?.schema==='home-camera-structured-context-1'&&value.site_id==='victoria'&&value.camera_id==='den'
       &&value.scope?.kind==='perceiver_daily'&&value.scope.lab_session_id===null&&value.qualification===null&&value.physical_commands===false;
     const receipt=scoped?value.latest?.receipt:null,provider=scoped?value.provider:null;
+    const scopeId=scoped?value.scope.perceiver_session_id:null;
+    const [history,setHistory]=useState([]);
+    useEffect(()=>{
+      if(!scopeId||!receipt){setHistory(previous=>previous.length?[]:previous);return;}
+      const receivedAt=global.performance.now();
+      setHistory(previous=>{
+        const sameScope=previous.filter(row=>row.scopeId===scopeId);
+        const key=receipt.request_id+':'+receipt.fingerprint;
+        if(sameScope.some(row=>row.key===key))return sameScope.length===previous.length?previous:sameScope;
+        const gap=sameScope.length?receivedAt-sameScope[0].receivedAt:null;
+        return [{key,scopeId,receipt,receivedAt,gapMs:Number.isFinite(gap)&&gap>=0?gap:null},...sameScope].slice(0,20);
+      });
+    },[scoped,scopeId,receipt?.request_id,receipt?.fingerprint]);
     const current=scoped&&value.freshness==='current'&&receipt?.status==='valid',facts=receipt?.facts;
     const content=facts&&<dl style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'2px 12px',margin:'6px 0',fontSize:11}}>
       {factLabels.map(([key,label])=><React.Fragment key={key}><dt>{label}</dt><dd style={{margin:0}}>{words(facts[key])}</dd></React.Fragment>)}
@@ -46,14 +59,28 @@
     </dl>;
     return <section aria-label="Structured camera facts" style={{marginTop:10}}>
       <strong style={{fontSize:11}}>Structured camera facts</strong>
+      {receipt&&<div style={note}>Qwen · artifact {receipt.artifact_sha256?.slice(0,12)||'unavailable'} · engine {receipt.engine_epoch||'unavailable'}</div>}
       <div style={note}>Facts: {words(scoped?value.freshness:value?.reason?'invalid':'missing')}{value?.reason?` · ${words(value.reason)}`:''}</div>
       <div style={note}>Provider: {words(provider?.state)} · pump {words(provider?.pump_status)}
         {provider?.outstanding?' · request outstanding':''}{provider?.halted?' · halted':''}{provider?.last_reason?` · ${words(provider.last_reason)}`:''}</div>
       {current?content:<p style={{...note,margin:'5px 0'}}>No current validated structured facts.</p>}
       {!current&&facts&&<details style={note}><summary>Previous structured facts ({words(value.freshness)})</summary>{content}</details>}
       {receipt&&<div style={note}>Observed {instant(receipt.observed_at)} · available {instant(receipt.available_at)}<br/>
-        Expires {instant(receipt.valid_until)} · age {Number.isFinite(value.age_seconds)?value.age_seconds.toFixed(1)+' s':'unavailable'}</div>}
+        Expires {instant(receipt.valid_until)} · age estimate {Number.isFinite(value.age_seconds)?value.age_seconds.toFixed(1)+' s':'unavailable'} · clock uncertainty unavailable</div>}
       <div style={note}>Daily perceiver · separate from Lab recordings. Model interpretation; qualification unavailable.</div>
+      <details aria-label="Recent Qwen updates" style={{...note,marginTop:6}}>
+        <summary>Qwen updates received here ({history.length}/20)</summary>
+        <p>History only · original source times and expiry. These updates belong to the daily camera perceiver, independently of the Lab session.</p>
+        <ol style={{paddingLeft:18}}>{history.map(row=><li key={row.key} data-qwen-update={row.receipt.request_id}>
+          <details><summary>{words(row.receipt.facts?.activity_hypothesis||row.receipt.invalid_reason||row.receipt.status)} · {instant(row.receipt.observed_at)}</summary>
+            <div>Source scope: perceiver_daily · {row.scopeId} · camera den</div>
+            <div>Model artifact: {row.receipt.artifact_sha256} · engine {row.receipt.engine_epoch}</div>
+            <div>Window {instant(row.receipt.window_start)} → {instant(row.receipt.observed_at)}</div>
+            <div>Available {instant(row.receipt.available_at)} · expires {instant(row.receipt.valid_until)}</div>
+            <div>{row.gapMs===null?'First update received in this view':`Gap between updates received in this view: ${(row.gapMs/1000).toFixed(2)} s`}. This is browser receipt cadence, not capture or inference latency.</div>
+            <div>{row.receipt.facts?factLabels.map(([key,label])=>`${label}: ${words(row.receipt.facts[key])}`).join(' · '):`No validated facts · ${words(row.receipt.invalid_reason)}`}</div>
+          </details></li>)}</ol>
+      </details>
     </section>;
   }
 
@@ -123,7 +150,7 @@
         {!videoVisible&&!picture&&<div style={{...note,padding:12}}>Waiting for a current camera image</div>}
       </div>
       <div style={{...note,marginTop:6}}>{state?.mode==='video'?'Video · remux receipt only':'JPEG fallback · decode receipt only'} · exposure timing unverified</div>
-      <StructuredFacts value={state?.structuredContext}/>
+      <StructuredFacts key={identityKey} value={state?.structuredContext}/>
       <section aria-label="Saved camera description" style={{marginTop:10}}>
         <details style={note} open={context?.status==='current'}><summary style={{cursor:'pointer'}}>Saved description{context?.status==='current'?'':' · historical or unavailable'}</summary>
           <div>Saved description status: {words(context?.status)}</div>

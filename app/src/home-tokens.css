@@ -465,6 +465,8 @@ button.hg-no-press:active {
 }
 .apt-home-shell button { touch-action: manipulation; }
 .apt-home-shell button:disabled { cursor: default; }
+.apt-home-shell .pl-inline-recording { flex: 0 0 auto; }
+.apt-home-shell .pl-inline-recording > button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 9px; border: 1px solid var(--apt-border); border-radius: 8px; background: var(--apt-surface); color: var(--apt-text); font-size: 11px; white-space: nowrap; }
 .apt-home-shell .apt-home-topbar {
   position: absolute; inset: 0 0 auto; height: 52px; display: flex; align-items: center;
   gap: 14px; padding: 0 14px 0 18px; min-width: 0; z-index: 30;
@@ -714,6 +716,7 @@ button.hg-no-press:active {
 @container apartment-home (width < 600px) {
   .apt-home-shell .apt-home-topbar { gap: 8px; padding: 0 8px 0 12px; }
   .apt-home-shell .apt-home-wordmark { display: none; }
+  .apt-home-shell .pl-inline-recording-detail { display: none; }
   .apt-home-shell .apt-home-switcher > button { min-height: 36px; padding: 0 10px; }
   .apt-home-shell .apt-home-status { margin-right: auto; }
   .apt-home-shell .apt-home-status summary { gap: 0; width: 28px; min-width: 28px; padding: 0; justify-content: center; }

@@ -21,7 +21,10 @@ export async function runFullUiShell(name, steps) {
     const state = { people: 'populated', intelligence: 'populated', metrics: 'populated', lab: 'populated', detailError: false };
     const calls = [], writes = [], sockets = [];
     const sourceFiles = ['home-app.jsx', 'home-people.jsx', 'home-intelligence.jsx', 'home-perception-lab.jsx',
-      'home-perception-lab-data.js', 'home-perception-lab-transport.js', 'home-tokens.css'];
+      'home-perception-lab-data.js', 'home-perception-lab-transport.js', 'home-tokens.css',
+      'home-apartment-camera.jsx', 'home-apartment-camera-source.js', 'home-apartment-den-perception.jsx',
+      'home-apartment-perception-source.js', 'home-apartment-perception-player.js', 'home-apartment-perception-view.js',
+      'home-apartment-perception-dock-model.js', 'home-den-lab-stream.js', 'home-lighting-brain-client.js', 'home-lighting-brain-follower.js'];
     const sourceHashes = () => Object.fromEntries(sourceFiles.map(name => [name,
       createHash('sha256').update(fs.readFileSync(new URL('../../app/src/' + name, import.meta.url))).digest('hex')]));
     receipt.full_ui = { authored_services: true, source_components_replaced: false, source_sha256: sourceHashes(), calls, writes, sockets };
@@ -92,8 +95,8 @@ export async function runFullUiShell(name, steps) {
           reasoning: { available: false, reason: 'Authored read-only fixture' }, storage: { policy: 'Authored fixture only' } });
         if (routeName === 'sessions') return json({ site_id: site, version: 1, items: state.lab === 'empty' ? [] : [{ ...SESSION, site_id: site }] });
         if (routeName === 'sessions/' + SESSION.id) return json({ session: { ...SESSION, site_id: site },
-          annotations: [{ id: 'authored-reading-label', at_ms: 0, end_ms: 60000, activity: 'reading', reviewed: false,
-            revision: 1, time_basis: 'session' }], events: [], runs: [], frames: {} });
+          annotations: [{ id: 'authored-reading-label', start_s: 0, end_s: 60, activity: 'reading', reviewed: false,
+            origin: 'human', note: 'Authored interval', revision: 1, time_basis: 'session' }], events: [], runs: [], frames: {} });
         if (routeName === 'sessions/' + SESSION.id + '/media') return json({ generation: 1, items: [] });
         if (routeName === 'sessions/' + SESSION.id + '/findings') return json({ runs: [] });
         if (routeName === 'recordings') return json({ items: [] });

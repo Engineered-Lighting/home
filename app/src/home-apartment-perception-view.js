@@ -8,7 +8,7 @@
   'use strict';
 
   var SCOPE_FIELDS = Object.freeze(['siteId', 'contentRevision', 'frameDigest', 'registrationVersion', 'cameraId', 'sessionId', 'generation']);
-  var LIMITS = Object.freeze({ joints: 128, edges: 256, models: 32, resultDepth: 5, resultNodes: 512, resultArray: 64, resultKeys: 32, resultString: 2048 });
+  var LIMITS = Object.freeze({ joints: 128, edges: 256, models: 32, modelInputs: 512, resultDepth: 5, resultNodes: 512, resultArray: 64, resultKeys: 32, resultString: 2048 });
   function own(value, key) { return Object.prototype.hasOwnProperty.call(value || {}, key); }
   function object(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
   function number(value) { return typeof value === 'number' && Number.isFinite(value); }
@@ -649,7 +649,19 @@
     }
     if (Array.isArray(envelope.models)) {
       result.modelsTruncated = envelope.models.length > LIMITS.models;
-      envelope.models.slice(0, LIMITS.models).forEach(function (model) {
+      // Source catalogs can precede the arm outputs and exceed this bound.
+      // Keep typed model results and the metric refusal before catalog rows;
+      // selection changes neither source clocks nor result authority.
+      var modelPriority = function (model) {
+        if (!object(model)) return 4;
+        if (['pose', 'jev', 'metric_input'].includes(model.family)) return 0;
+        if (text(model.model_id)) return 1;
+        return [model.observed_at, model.available_at, model.valid_until].some(number) ? 2 : 3;
+      };
+      envelope.models.slice(0, LIMITS.modelInputs).map(function (model, index) { return {model:model,index:index}; }).sort(function (a, b) {
+        return modelPriority(a.model) - modelPriority(b.model) || a.index - b.index;
+      }).slice(0, LIMITS.models).forEach(function (entry) {
+        var model = entry.model;
         if (!object(model)) return;
         var output = bounded(model.result), row = {};
         ['family', 'source_id', 'model_id', 'model_revision', 'status', 'reason', 'frame_id', 'capture_id'].forEach(function (key) {

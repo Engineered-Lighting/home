@@ -25,6 +25,23 @@ const envelope = (extra = {}) => ({ schema: 'home-apartment-perception-1', scope
 const project = (env = envelope(), extra = {}) => View.project({ envelope: env, scope: scope(), clock: clock(), ...extra });
 const displayed = (descriptor = frame(), pin = scope()) => ({ descriptor, scope: pin, key: View.frameKey(descriptor, pin) });
 
+test('bounded model projection retains actual pose/JEV and metric refusal after a large source catalog',()=>{
+  const catalog=Array.from({length:40},(_,i)=>({family:'catalog_'+i,source_id:'source_'+i,model_id:null,status:'not_provisioned',
+    observed_at:null,available_at:null,valid_until:null,result:{summary:'Not provisioned'}}));
+  const jev={family:'jev',source_id:'reasoning_b',model_id:'authored-jev-v1',status:'completed',
+    observed_at:null,available_at:99.5,valid_until:101,result:{activity:'reading'}};
+  const poseRow={family:'pose',source_id:'specialist_b',model_id:'pose-one',status:'fresh',observed_at:99,available_at:99.2,valid_until:101,result:{frame:'frame-1'}};
+  const metric={family:'metric_input',source_id:'apartment_viewing_metric',model_id:null,status:'unavailable',reason:'source_missing',result:null};
+  const input=envelope({models:[...catalog,poseRow,jev,metric]}),original=JSON.stringify(input);
+  const out=project(input);
+  assert.equal(out.models.length,32);assert.equal(out.modelsTruncated,true);
+  assert.equal(out.models.find(row=>row.family==='jev')?.model_id,'authored-jev-v1');
+  assert.equal(out.models.find(row=>row.family==='jev')?.observed_at,null,'missing original source time stays missing');
+  assert.equal(out.models.find(row=>row.family==='pose')?.valid_until,101);
+  assert.equal(out.models.find(row=>row.family==='metric_input')?.reason,'source_missing');
+  assert.equal(JSON.stringify(input),original);
+});
+
 function personDetails(frameId = 'frame-1') {
   return {schema:'home-lab-frame-persons-1',version:1,frame_id:frameId,coordinate_space:'source_pixels',
     persons:['desk-instance','sofa-instance'].map((instance_id,index)=>({instance_id,

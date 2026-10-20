@@ -49,6 +49,9 @@ All of these ask for `qwen3-vl-30b`, so none needs a change for the swap:
 - the LA latency probes;
 - the Perception Lab live facts (`qwen_scene.py`, on the Den backend branch).
   These reject any reply whose `model` field differs.
+- the V-JEPA live scene memory (`vjepa-live-prototype.service`, a user unit
+  on LA). It counts tokens with a local Qwen3-VL tokenizer, so its context
+  budgets are approximate on Qwen3.6.
 
 **Live facts and the LA camera pilot need a re-pin.** The camera pilot pins
 the vLLM container incarnation in its `private/model-pin.json` (container id,
@@ -66,7 +69,7 @@ fallback.
 | --- | --- | --- |
 | `artifact_sha256` | LA `private/model-pin.json`, LA `private/live-scene.json`, Victoria `managed-live.json` `qwen_live` | The **vLLM image digest**, without the `sha256:` prefix (`70a098d9…`). It is not a model hash. The swap keeps the image, so the value **does not change**, and nobody hand-edits it. |
 | `engine_epoch` | pin (written by auto re-pin), `live-scene.json` | `hav-vllm-<container id[:12]>-<StartedAt without - and :>`, logged by the pilot as `engine re-pinned ... engine_epoch=<new>` |
-| `runtime_revision` | Victoria `managed-live.json` `qwen_live` | `vllm-0.20.2-<engine_epoch>` |
+| `runtime_revision` | Victoria `managed-live.json` `la_live_perceiver` (the active path) and `qwen_live` (disabled; kept equal) | `vllm-0.20.2-<engine_epoch>` |
 
 The ledger label `MODEL_REVISION` (`qwen3-vl-30b-f579e204-20260920`) is
 deliberately frozen: it is a label, not the engine identity. Since the alias
@@ -91,7 +94,13 @@ and camera chat continues. To reopen live facts (procedure from
 
 3. **Update the two files:**
    - LA `live-scene.json`: set `engine_epoch` to that value.
-   - Victoria `managed-live.json`: set `qwen_live.runtime_revision` to `vllm-0.20.2-<engine_epoch>`.
+   - Victoria `managed-live.json`: set `la_live_perceiver.runtime_revision`
+     (and the disabled `qwen_live.runtime_revision`) to `vllm-0.20.2-<engine_epoch>`.
+
+   If the pilot cannot re-pin by itself (for example its health check is
+   failing), hand-edit `model-pin.json` instead: `container_id`, `started_at`
+   and `engine_epoch` from `docker inspect hav-vllm`, with the epoch from
+   `home_shared.model_pin.repinned_epoch`.
 
    Leave `artifact_sha256` unchanged everywhere.
 4. **Check before restarting** (it runs every check, never re-pins and never
@@ -103,7 +112,10 @@ and camera chat continues. To reopen live facts (procedure from
    ```
 
 5. **Restart at idle:**
-   - LA: `systemctl --user restart victoria-camera-pilot.service`.
+   - LA: `systemctl --user restart victoria-camera-pilot.service`. If it
+     exits with `Address already in use` on :9446, the old connection is still
+     in TIME-WAIT; wait until `ss -tan | grep ':9446 '` is empty (under 60 s),
+     then start it.
    - Victoria: `systemctl --user restart perception-lab-managed.service`, with no recording running.
 6. **Verify:**
    - the LA log shows `live scene consumer enabled: ... epoch=<new>`;
@@ -243,3 +255,47 @@ clients are unaffected.
   1 fps clip is a prompt and output-shape change (a new `PROMPT_VERSION` and
   consumer policy digest). It lands with the Den backend after the benchmark
   in the den activity-lighting plan, not in this swap.
+
+## Hazards found in the 2026-10-20 run
+
+- **Any kernel OOM line trips two fail-closed guards**, even one confined to
+  a throwaway container's memory cgroup:
+  - The V-JEPA live observer stops and its preflight refuses restarts
+    (`new_kernel_faults_require_inspection`). Clear it with an owner-approved
+    `kernel-fault-inspection-<date>.json` receipt and by moving
+    `last-preflight.json` `at` past the fault, as on 2026-09-29.
+  - The LA camera pilot rejects every request: camera chat and live facts.
+    Its scan starts from `_KERNEL_BASELINE`, hard-coded in
+    `camera_pilot_service.py`, and a restart re-scans from there. The only fix
+    is a pilot release that moves that baseline past the inspected fault.
+
+  So cap downloads generously: the first run, with 8 workers under 4g, was
+  OOM-killed. The script now uses 2 workers under 8g.
+- **The V-JEPA observer needs 150 GiB free on `/`** (and 100 GiB on
+  `/srv/data`) to start. The 35 GB download took `/` under that. The
+  unused `Qwen/Qwen3.6-27B-FP8` cache was parked at `/srv/data/hf-parked/`
+  to make room; move it back into `hav_hf_cache` if it is ever needed.
+
+## Result (2026-10-20)
+
+**Go.** Qwen3.6 has served since 19:39 PDT. The override is persistent
+through `COMPOSE_FILE` in the host `.env`.
+
+| | Qwen3-VL-30B | Qwen3.6-35B-A3B |
+| --- | --- | --- |
+| Smoke, warm p50 / p95: text TTFT | 0.021 / 0.51* s | 0.042 / 0.044 s |
+| Tool call (10/10 correct) | 0.120 / 0.126 s | 0.155 / 0.157 s |
+| Image | 0.029 / 0.044 s | 0.051 / 0.054 s |
+| Live-facts-shaped JSON | 0.604 / 0.955 s | 0.504 / 0.507 s |
+| Video, 15 s at 1 fps (1,861 prompt tokens) | rejected (`video: 0`) | 0.054 / 0.055 s, 10/10 |
+| Live facts end to end, p50 / p95 | 1.16 / 1.95 s (1288/1289 valid) | 1.25 / 1.97 s (21/21 valid) |
+| vLLM VRAM / GPU free | 50.0 / 33.3 GB | 48.0 / 35.4 GB |
+| Cold start | | 3 min (weights 34.2 GiB, KV 10.25 GiB = 438k tokens) |
+
+\* The baseline p95 included a cold first request.
+
+- **Owner checks passed:** voice, STOP and Travel Mode.
+- **Sidecar checks passed:** `/look` (274 ms) and `/reason`. Qwen3.6 keeps
+  the `<ref>…</ref><box>…</box>` grounding format.
+- **Short requests are 20–35 ms slower.** vLLM warns that it has no tuned
+  fused-MoE config for this GPU and model.

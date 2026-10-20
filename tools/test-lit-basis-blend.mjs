@@ -215,3 +215,71 @@ test('L5\'s bake host posts each moved spot\'s column for a registered receiver 
     assert.ok(messages[1].version > messages[0].version);
     client.dispose();
 });
+
+test('the camera look: white balance toward the fixtures keeps exposure, highlights land at display 0.8', () => {
+    const warm = Model.cctToLinearRgb(3000), m = Exposure.whiteBalanceMatrix(warm);
+    const out = m.map(row => row[0] * warm[0] + row[1] * warm[1] + row[2] * warm[2]);
+    assert.ok(Math.abs(Exposure.lumaOf(out) - Exposure.lumaOf(warm)) < 1e-9, 'a white balance moves colour, not exposure');
+    const spread = rgb => Math.max(...rgb) / Math.min(...rgb);
+    assert.ok(spread(out) < spread(warm) && spread(out) > 1.02, 'D = 0.75: mostly neutral, a little warmth left');
+    const identity = Exposure.whiteBalanceMatrix(warm, 0);
+    // The published sRGB-XYZ matrices are inverses to about 1e-7.
+    identity.forEach((row, r) => row.forEach((v, c) => assert.ok(Math.abs(v - (r === c ? 1 : 0)) < 1e-5)));
+    // Highlights metered at L cd/m² move 60 % of the way (in EV) toward display
+    // 0.8 (L2's approved partial adaptation), so a dimmer room still reads dimmer.
+    const look = Exposure.LIT_CAMERA_LOOK, toTarget = L => Math.log2(Exposure.cameraHighlightLinear() / (L * Model.LIT_EXPOSURE));
+    for (const L of [0.05, 1, 9.3, 60]) {
+        const { adaptEv } = Exposure.cameraAdaptationFromLuminance(L, Model.LIT_EXPOSURE);
+        assert.ok(Math.abs(adaptEv - Math.min(look.maxEv, Math.max(look.minEv, look.fraction * toTarget(L)))) < 1e-12, String(L));
+        const full = toTarget(L), x = L * Model.LIT_EXPOSURE * 2 ** full;
+        assert.ok(Math.abs(Exposure.srgbEncode(Exposure.litCameraPixel([x, x, x])[1]) - look.highlightDisplay) < 1e-3, 'the target is display 0.8');
+    }
+    const shown = L => L * 2 ** Exposure.cameraAdaptationFromLuminance(L, Model.LIT_EXPOSURE).adaptEv;
+    assert.ok(shown(1) < shown(9.3) && shown(0.2) < shown(1), 'dimming still reads as dimmer');
+    // No toe lift, no Purkinje: black stays black and the chain is monotone in luminance.
+    assert.deepEqual(Exposure.litCameraPixel([0, 0, 0]).map(v => +v.toFixed(4)), [0, 0, 0]);
+    let previous = -1;
+    for (const x of [1e-4, 1e-3, 1e-2, 0.1, 1, 4, 16]) { const y = Exposure.lumaOf(Exposure.litCameraPixel([x, x, x])); assert.ok(y >= previous); previous = y; }
+});
+
+test('the night ambient follows the window column; exterior splats get the assumed night exterior', async () => {
+    const layer = await load(authoredLightingLayer(victoria).files), set = Blend.packReceiverSet(layer);
+    const window = layer.columnsMeta.findIndex(column => column.kind === 'window');
+    const median = 0.5, dark = lights({ down: 0, zone: 0 });
+    const { weights } = Blend.blendWeights({ lights: dark, columns: layer.columnsMeta, columnScale: layer.columnScale, look: 'camera', windowMedian: median });
+    const floor = Model.cctToLinearRgb(Exposure.LIT_AMBIENT_FLOOR.kelvin);
+    const lux = Exposure.LIT_AMBIENT_FLOOR.lux, share = Blend.LIT_WINDOW_AMBIENT.share;
+    for (let c = 0; c < 3; c++) {
+        assert.ok(Math.abs(weights[36 * 4 + c] - (1 - share) * lux * floor[c] * Model.LIT_EXPOSURE) < 1e-9, 'a uniform remainder');
+        assert.ok(Math.abs(weights[42 * 4 + c] - layer.columnScale[window] * share * lux / median * floor[c] * Model.LIT_EXPOSURE) < 1e-9,
+            'the rest through the window column, scaled to its median');
+        assert.equal(weights[window * 4 + c], 0, 'the window column is blended on its own, capped');
+    }
+    assert.ok(Math.abs(weights[42 * 4 + 3] - Blend.LIT_WINDOW_AMBIENT.capRatio * median / layer.columnScale[window]) < 1e-9, 'capped at 4x the median');
+    // The capped window term, receiver by receiver: never above 4x the median share.
+    const withWindow = { ...set, windowSlot: window };
+    const capped = Blend.blendWeights({ lights: dark, columns: layer.columnsMeta, columnScale: layer.columnScale, look: 'camera', windowMedian: 1e-6 }).weights;
+    const limit = (share * 4 + (1 - share)) * lux;
+    for (let i = 0; i < set.count; i += 37) {
+        const rgb = Blend.blendReceiver(withWindow, i, capped), word = set.meta[i * 4];
+        const rho = Exposure.lumaOf([word & 255, (word >>> 8) & 255, (word >>> 16) & 255].map(v => (v / 255 <= 0.04045 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4)));
+        if (rho > 0.05) assert.ok(Exposure.lumaOf(rgb) / Model.LIT_EXPOSURE / (rho / Math.PI) <= limit * 1.6, 'window ambient is capped near the glass');
+    }
+    // Without a window column the whole floor stays uniform (L4's behaviour).
+    const flat = Blend.blendWeights({ lights: dark, columns: layer.columnsMeta, columnScale: layer.columnScale }).weights;
+    assert.deepEqual(Array.from(flat.subarray(window * 4, window * 4 + 3)), [0, 0, 0]);
+    // An exterior splat (flag 4) shows the assumed night exterior, whatever the fixtures do.
+    const exterior = { ...set, meta: Uint32Array.from(set.meta) };
+    exterior.meta[0] = (exterior.meta[0] | (Blend.LIT_RECEIVER_FLAGS.emitter << 24)) >>> 0;
+    const on = Blend.blendWeights({ lights: lights(), columns: layer.columnsMeta, columnScale: layer.columnScale, look: 'camera' }).weights;
+    const allOff = Blend.blendWeights({ lights: dark, columns: layer.columnsMeta, columnScale: layer.columnScale, look: 'camera' }).weights;
+    assert.deepEqual(Blend.blendReceiver(exterior, 0, on), Blend.blendReceiver(exterior, 0, allOff));
+    const ext = Blend.blendReceiver(exterior, 0, on), cd = Exposure.lumaOf(ext) / Model.LIT_EXPOSURE;
+    assert.ok(cd > Blend.LIT_NIGHT_EXTERIOR.cdM2 * 0.5 && cd < Blend.LIT_NIGHT_EXTERIOR.cdM2 * 1.5, 'about the assumed exterior luminance: ' + cd);
+    assert.ok(ext[0] > ext[2], 'warm');
+    // The camera's CPU twin and the eye's differ only in presentation.
+    const camera = Blend.blendReceiverDisplay(set, 5, on, null, { look: 'camera' }), eye = Blend.blendReceiverDisplay(set, 5, on, null, { look: 'eye' });
+    assert.notDeepEqual(camera, eye);
+    assert.deepEqual(Blend.blendReceiverDisplay(set, 5, on, null, { look: 'camera', operator: 'linear' }), Blend.blendReceiverDisplay(set, 5, on, null, { operator: 'linear' }),
+        'the linear comparison view carries no look');
+});

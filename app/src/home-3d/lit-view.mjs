@@ -606,7 +606,8 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     function adapt(at) {
         if (!pipeline && !receivers) return;
         if (metered === null) { adapting = true; return; }
-        adaptTarget = Exposure.adaptationFromLuminance(metered, LIT_DESIGN_EV100);
+        // Photo and Cloud: the receivers' look decides (the camera meters the highlights).
+        adaptTarget = receivers?.adaptationFrom?.(metered, LIT_DESIGN_EV100) || Exposure.adaptationFromLuminance(metered, LIT_DESIGN_EV100);
         const elapsed = adaptedAt === null ? Infinity : at - adaptedAt;
         const step = Exposure.easeAdaptation(adaptEv, adaptTarget.adaptEv, elapsed, { snap: adaptEv === null || !!reducedMotion?.matches });
         adaptEv = step.ev; adapting = step.adapting; adaptedAt = at;

@@ -6048,6 +6048,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // keeps Chat open and raises a phone sheet to half (APT-A02).
   const startAimFromRoom = ({ fixture_id: id } = {}) => {
     if (id !== virtualFixtureId || !virtualFixtureControlsOpen) return;
+    // Grabbing the reticle is choosing Spot: no separate click on the tool,
+    // whichever tab or tool was showing.
+    if (fixtureInteractionModeRef.current !== "spot") changeFixtureInteractionMode("spot");
     setVirtualInspectorTab("aim");
     if (unifiedShell) (onShowShellAim || onShowShellControls)?.();
   };
@@ -6186,9 +6189,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const aimOverlaySelectedId = virtualFixtureControlsOpen ? virtualFixtureId : null;
   const aimOverlayPillId = directionalDisplay ? virtualFixtureId : null;
   const aimOverlayLimits = selectedVirtualFixture?.limits || null;
-  const aimOverlayAim = useMemo(() => aimSelectedDescriptor && fixtureInteractionMode === "spot"
+  // The reticle shows for the selected light on every tool; grabbing it
+  // switches to Spot (startAimFromRoom).
+  const aimOverlayAim = useMemo(() => aimSelectedDescriptor
     ? { descriptor: aimSelectedDescriptor, limits: aimOverlayLimits, namedAims: [] } : null,
-  [aimSelectedDescriptor, fixtureInteractionMode, aimOverlayLimits]);
+  [aimSelectedDescriptor, aimOverlayLimits]);
   const aimOverlayElement = useMemo(() => aimPresentation && window.AptRoomOverlay
     ? <window.AptRoomOverlay presentation={aimPresentation} store={aimProposals} siteId="victoria" fixtures={aimOverlayFixtures}
       selectedId={aimOverlaySelectedId} hoverId={hoverFixtureId} pillFixtureId={aimOverlayPillId} aim={aimOverlayAim} {...aimOverlayCallbacks} />

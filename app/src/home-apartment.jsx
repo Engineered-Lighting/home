@@ -8865,6 +8865,21 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // leaves Setup, flies to the camera view, and once that flight has ended
   // (settled or timed out) runs the same steps as the camera-view calibrate
   // button.
+  // APT-U03: Setup › Home Assistant Flash. The same Echo, authority and
+  // currentness gates as callSvc, then the shared guarded dispatch (site,
+  // rehearsal, Travel Mode read from Home Assistant). Never queued.
+  const flashFromSetup = useCallback(device => {
+    const engine = engineRef.current, operation = spatialTravelIntentRef.current, authority = workspaceAuthorityRef.current.key;
+    const current = () => engineRef.current === engine && spatialTravelIntentRef.current === operation
+      && workspaceAuthorityRef.current.key === authority && modelScopeRef.current?.authorityKey === authority
+      && window.HomeSpatialViewport?.getSelectedSiteId?.() === "echo" && isControlCurrent()
+      && window.HomeApartmentSiteSession.canControlEcho({ sceneSiteId: engineRef.current?.siteId,
+        selectedSiteId: window.HomeSpatialViewport?.getSelectedSiteId?.(),
+        transitioning: (interiorSessionRef.current?.readback?.().phase ?? "ready") !== "ready" });
+    if (!window.AptSetupLinks) return Promise.resolve({ ok: false, reason: "Flash is unavailable; nothing was sent." });
+    return window.AptSetupLinks.flash({ client: rehearsalIsolated || simActive || window.HomeMapRehearsalOfflineState?.active ? null : window.__hav_haClient,
+      entityId: device?.ha_entity_id, siteId: engine?.siteId, isCurrent: current });
+  }, [rehearsalIsolated, simActive, isControlCurrent]);
   const setupCalibrationRef = useRef(null);
   const calibrateFromSetup = useCallback(device => {
     if (!device || simActive || mobile || !window.HomeApartmentCalibrate || !device.camera?.frigate_name) return false;
@@ -10563,6 +10578,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           inspectorHost={unifiedShell ? shellControlsHost : null}
           homeName={selectedSiteName}
           onCalibrateCamera={calibrateFromSetup}
+          onFlashLight={flashFromSetup}
         />
       )}
 

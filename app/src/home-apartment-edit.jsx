@@ -429,7 +429,7 @@ function HomeApartmentEdit({
   engine, model, onModel, seedModel, registry, onSave, onDirtyChange,
   onExit, sim, connection, sourceMeta, saveStatus, saving,
   liveReview, liveComparison, onCompareLive, mobile = false, initialTargetId = null,
-  inspectorHost = null, homeName = "", onCalibrateCamera = null,
+  inspectorHost = null, homeName = "", onCalibrateCamera = null, onFlashLight = null,
 }) {
   // Initial navigation only: opening an existing target never places or saves it.
   // Later model updates must not reset this editor's selection or dirty history.
@@ -442,6 +442,10 @@ function HomeApartmentEdit({
   const rail = !!(inspectorHost && Setup);
   const [railTool, setRailTool] = useState(entryTargetId ? "targets" : "sockets");
   const [originalNames] = useState(() => Object.fromEntries((model.devices || []).map((device) => [device.id, device.name])));
+  const [originalLabels] = useState(() => Object.fromEntries((model.devices || []).map((device) => [device.id, device.label || ""])));
+  // Proposed stored fields (labels, hand placement, mmWave) stay behind the
+  // Setup proposal flag until the owner approves them.
+  const [proposal] = useState(() => !!(window.AptSetupDevices?.proposalEnabled(window)));
   const [placing, setPlacing] = useState(null);        // palette item being placed
   const [placingTarget, setPlacingTarget] = useState(null);
   const [selectedId, setSelectedId] = useState(null);  // device id
@@ -740,6 +744,20 @@ function HomeApartmentEdit({
     setNotice("select a shaded room · drag a round corner to reshape it, or drag inside to move it");
   };
 
+  // APT-U04: the mapper arms the same click-to-place gesture as the legacy
+  // target presets; a click lands in the mapper instead of the model.
+  const mapperPickRef = useRef(null);
+  const registerMapperPick = useCallback((pick) => { mapperPickRef.current = pick; }, []);
+  const beginRailPick = useCallback((owner) => {
+    setTool("targets"); setPlacingTarget({ mapper: true, owner, label: owner === "targets" ? "named aim" : "device" });
+    setMoveTargetId(null); setTargetDraftId(null); setNotice("");
+  }, []);
+  const beginMapperPlacing = useCallback(() => beginRailPick("targets"), [beginRailPick]);
+  const endMapperPlacing = useCallback(() => setPlacingTarget(null), []);
+  // The proposed camera and sensor placer uses the same exact mesh pick.
+  const beginDevicePick = useCallback(() => beginRailPick("cameras"), [beginRailPick]);
+  const endDevicePick = useCallback(() => { setPlacingTarget(null); setTool("select"); }, []);
+
   const cameraDevices = (model.devices || []).filter((device) => device.type === "camera");
   const railAvailability = rail ? Setup.availability({ registration: isEquipmentRegistration }) : null;
   const railKinds = isEquipmentRegistration ? (railTool === "position" ? ["fixture"] : railTool === "cameras" ? ["camera"] : null) : null;
@@ -768,10 +786,10 @@ function HomeApartmentEdit({
   // device returning to select); keep the rail on the tool that is open.
   useEffect(() => {
     if (!rail || isEquipmentRegistration) return;
-    const next = tool === "targets" ? "targets" : tool === "zones" ? "zones" : tool === "measure" ? "position"
+    const next = placingTarget?.owner ? placingTarget.owner : tool === "targets" ? "targets" : tool === "zones" ? "zones" : tool === "measure" ? "position"
       : tool === "links" ? "links" : ["sockets", "names", "cameras"].includes(railTool) ? railTool : "sockets";
     if (next !== railTool) setRailTool(next);
-  }, [rail, isEquipmentRegistration, tool]);
+  }, [rail, isEquipmentRegistration, tool, placingTarget]);
 
   useEffect(() => { if (rail) Setup.installCss(); }, [rail]);
 
@@ -801,6 +819,8 @@ function HomeApartmentEdit({
 
     const placeTargetAt = (clientX, clientY) => {
       if (tool !== "targets" || !placingTarget) return false;
+      // The Setup rail's named-aim mapper owns its own draft (APT-U04).
+      if (placingTarget.mapper) { mapperPickRef.current?.(clientX, clientY); return true; }
       const fp = engine.picking.floorPoint(engine.apartmentRoot, clientX, clientY);
       const mesh = engine.modes.getMesh?.();
       const hit = mesh
@@ -1408,6 +1428,31 @@ function HomeApartmentEdit({
     setNotice(`${selected.name} link removed · its position and calibration were preserved · geometry unchanged`);
   };
 
+  // Setup › Home Assistant re-matches a row through the same reconciliation
+  // as the legacy link inspector: geometry kept, new duplicates refused.
+  const relinkDevice = (deviceId, nextEntity) => {
+    const device = (model.devices || []).find((candidate) => candidate.id === deviceId);
+    if (!device || device.type !== "light") return;
+    const timestamp = new Date().toISOString();
+    const result = window.HomeApartmentData.reconcileFixtureEntityLink(model, deviceId, nextEntity, timestamp);
+    if (!result.ok) { setNotice(`${result.error} · no changes made`); return; }
+    mutate((m) => {
+      const applied = window.HomeApartmentData.reconcileFixtureEntityLink(m, deviceId, nextEntity, timestamp);
+      if (applied.ok) Object.assign(m, applied.model);
+    });
+    setSelectedId(deviceId);
+    setNotice(nextEntity ? `linked ${device.name} → ${nextEntity} · geometry unchanged`
+      : `${device.name} link removed · its position and calibration were preserved · geometry unchanged`);
+  };
+  const frameTimerRef = useRef(null);
+  const frameDevice = (deviceId) => {
+    setSelectedId(deviceId);
+    engine?.overlay?.setHover?.(deviceId);
+    clearTimeout(frameTimerRef.current);
+    frameTimerRef.current = setTimeout(() => engine?.overlay?.setHover?.(null), 3000);
+  };
+  useEffect(() => () => { clearTimeout(frameTimerRef.current); engine?.overlay?.setHover?.(null); }, [engine]);
+
   const wallAxisConflict = selected?.fixture_calibration?.wall_distances?.length >= 2
     && ["west", "east"].includes(selected.fixture_calibration.wall_distances[0]?.wall)
       === ["west", "east"].includes(selected.fixture_calibration.wall_distances[1]?.wall);
@@ -1526,13 +1571,37 @@ function HomeApartmentEdit({
      the legacy editor already writes (device name, device placement). */
   const railState = rail ? railAvailability[railTool] : null;
   const railBlocked = !!(railState && !railState.available);
+  // Home Assistant rows carry their own pickers, so the legacy link inspector
+  // would only repeat them.
+  const railHidesInspector = railBlocked || (rail && (railTool === "links" || (railTool === "targets" && !isEquipmentRegistration)));
+  const Links = window.AptSetupLinks;
   const unplacedCameras = rail && !isEquipmentRegistration
     ? Object.values(palette).flat().filter((item) => item.domain === "camera") : [];
   const railPalette = !rail ? null
     : railBlocked ? <Setup.Unavailable homeName={homeName} reason={railState.reason} />
+    : railTool === "links" && Links ? (isEquipmentRegistration
+      ? <Setup.Links registration homeName={homeName} rows={Links.registrationRows(equipmentDocument)} />
+      : <>{echoSourceStatus}<Setup.Links homeName={homeName} siteId={engine?.siteId || "echo"} sim={sim} connection={connection}
+          rows={Links.linkRows({ devices: model.devices || [], zones: model.zones || [], lights: fixtureMapping.allLights })}
+          onLink={relinkDevice} onFrame={frameDevice}
+          onFlash={(row) => {
+            const device = (model.devices || []).find((candidate) => candidate.id === row.id);
+            return onFlashLight && device ? onFlashLight(device) : Promise.resolve({ ok: false, reason: "Flash is unavailable here; nothing was sent." });
+          }} />
+        {notice && <div role="status" style={{ marginTop: 10, fontSize: 12, color: "var(--hg-fg-3)" }}>{notice}</div>}</>)
     : isEquipmentRegistration ? null
+    : railTool === "targets" && window.AptNamedAimMapper ? <>{echoSourceStatus}<window.AptNamedAimMapper engine={engine} model={model}
+        homeName={homeName} saveStatus={saveStatus} saving={saving} mutate={mutate} onSave={onSave} roomAt={roomAt}
+        placing={placingTarget?.owner === "targets"} beginPlacing={beginMapperPlacing} endPlacing={endMapperPlacing}
+        registerPick={registerMapperPick} selectedTargetId={selectedTargetId}
+        onSelectTarget={(id) => { setSelectedTargetId(id); if (id) { setSelectedId(null); setSelectedZone(null); } }} /></>
     : railTool === "names" ? <>{echoSourceStatus}<Setup.Names devices={model.devices || []} zones={model.zones || []}
-        originalNames={originalNames} selectedId={selectedId}
+        originalNames={originalNames} originalLabels={originalLabels} selectedId={selectedId} proposal={proposal}
+        onHoverDevice={(id) => engine?.overlay?.setHover?.(id)} onFindDevice={frameDevice}
+        onLabel={(id, value) => mutate((m) => {
+          const d = m.devices.find((x) => x.id === id); if (!d) return;
+          if (String(value || "").trim()) d.label = String(value).slice(0, window.AptSetupDevices?.LABEL_MAX || 10); else delete d.label;
+        }, { undoable: false })}
         onFocusDevice={(id) => { setSelectedId(id); setSelectedTargetId(null); setSelectedZone(null); }}
         onRename={(id, value) => mutate((m) => {
           const d = m.devices.find((x) => x.id === id); if (d) d.name = value;
@@ -1557,6 +1626,10 @@ function HomeApartmentEdit({
           </div>)}
         </>}
         {notice && tool === "add" && <div role="status" style={{ marginTop: 10, fontSize: 12, color: "var(--hg-fg-3)" }}>{notice}</div>}
+        {proposal && window.AptSetupDevicePlacer && <window.AptSetupDevicePlacer engine={engine} model={model} homeName={homeName}
+          registryIds={(registry?.entities || []).map((entity) => entity.entity_id)} mutate={mutate} onSave={onSave} saveStatus={saveStatus}
+          saving={saving} roomAt={roomAt} placing={placingTarget?.owner === "cameras"} beginPlacing={beginDevicePick}
+          endPlacing={endDevicePick} registerPick={registerMapperPick} />}
       </>
     : null;
 
@@ -1970,7 +2043,7 @@ function HomeApartmentEdit({
       <div ref={editorInspectorRef} style={rail ? panel : mobile
         ? { ...panel, borderTop: "1px solid var(--hg-border-soft)" }
         : { ...panel, right: 12 }} data-apt-edit-ui="inspector">
-        {railBlocked ? null : isEquipmentRegistration ? <EdEquipmentFields key={selectedId} record={selected?.equipment_record}
+        {railHidesInspector ? null : isEquipmentRegistration ? <EdEquipmentFields key={selectedId} record={selected?.equipment_record}
           document={equipmentDocument} onUpdate={updateEquipment} onReference={setEquipmentReferenceId}
           disabled={equipmentDisabled} heading={heading} error={equipmentError} /> : tool === "zones" && zoneDrawing && zoneNaming ? (
           <>

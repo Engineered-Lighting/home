@@ -88,10 +88,8 @@ test('rail saves are byte-identical to legacy saves and a registration conflict 
     await open('zones', 'zones');
     await palette.getByRole('button', { name: /Authored study/ }).click();
     await inspector.getByRole('spinbutton', { name: 'zone authored-study corner 3 x', exact: true }).fill('3.9');
-    await open('targets', '+ target');
-    await palette.getByRole('button', { name: /Authored wall art/ }).click();
-    await inspector.getByRole('button', { name: 'x +5cm', exact: true }).click();
-    await inspector.getByRole('spinbutton', { name: 'target z', exact: true }).fill('1.45');
+    // Named aims are redesigned in the rail (APT-U04) and saved through their
+    // own tests; the re-homed editors are what must save identically here.
     await p.toolbar.getByRole('button', { name: 'undo', exact: true }).click();
     await p.toolbar.getByRole('button', { name: 'redo', exact: true }).click();
     const saveButton = p.toolbar.locator('button[title*="Home Assistant"]');
@@ -133,12 +131,11 @@ test('rail saves are byte-identical to legacy saves and a registration conflict 
     stage('rail pass: Echo'); const rail = { echo: await echoEdits(railPass, 'rail') };
     stage('rail pass: Victoria'); await railPass.toVictoria(); rail.victoria = await victoriaEdits(railPass, 'rail');
 
-    await check('Echo: fixture position, rename, zone corner, aim nudge, undo and redo save the same apartment_model document', async () => {
+    await check('Echo: fixture position, rename, zone corner, undo and redo save the same apartment_model document', async () => {
       const doc = JSON.parse(rail.echo);
       assert.equal(doc.devices.find(device => device.id === 'authored-ceiling-a').fixture_calibration.status, 'calibrated');
       assert.equal(doc.devices.find(device => device.id === 'authored-ceiling-b').name, 'Reading light');
       assert.equal(doc.zones[0].floor_polygon[2][0], 3.9);
-      assert.equal(doc.targets.find(target => target.id === 'authored-wall-art').pos[2], 1.45);
       assert.equal(rail.echo, legacy.echo, 'byte-identical persisted Echo document');
       return { bytes: rail.echo.length, sha256: hash(rail.echo), identical: true };
     });

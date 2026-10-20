@@ -45,6 +45,57 @@ function authoredEchoModel(seed) {
     ] };
 }
 
+/** An authored GLB with one mesh per named node (untextured). Node names
+ * are what the named-aim mapper reads as the surface name. */
+function namedNodesGlb(nodes) {
+  const floats = [], accessors = [], views = [], meshes = [];
+  for (const node of nodes) {
+    const start = floats.length * 4;
+    floats.push(...node.triangles);
+    const count = node.triangles.length / 3, xs = [0, 1, 2].map(axis => node.triangles.filter((_, i) => i % 3 === axis));
+    views.push({ buffer: 0, byteOffset: start, byteLength: node.triangles.length * 4, target: 34962 });
+    accessors.push({ bufferView: views.length - 1, componentType: 5126, count, type: 'VEC3',
+      min: xs.map(values => Math.min(...values)), max: xs.map(values => Math.max(...values)) });
+    meshes.push({ name: node.name, primitives: [{ attributes: { POSITION: accessors.length - 1 }, material: 0 }] });
+  }
+  const binary = Buffer.alloc(floats.length * 4); floats.forEach((value, i) => binary.writeFloatLE(value, i * 4));
+  const document = { asset: { version: '2.0', generator: 'authored-setup-named-aims' }, scene: 0,
+    scenes: [{ nodes: nodes.map((_, i) => i) }], nodes: nodes.map((node, i) => ({ name: node.name, mesh: i })), meshes,
+    materials: [{ doubleSided: true, pbrMetallicRoughness: { baseColorFactor: [.62, .55, .46, 1], metallicFactor: 0, roughnessFactor: 1 } }],
+    accessors, bufferViews: views, buffers: [{ byteLength: binary.length }] };
+  const json = Buffer.from(JSON.stringify(document)), padded = Buffer.concat([json, Buffer.alloc((4 - json.length % 4) % 4, 32)]);
+  const head = Buffer.alloc(20), binHead = Buffer.alloc(8);
+  head.writeUInt32LE(0x46546c67, 0); head.writeUInt32LE(2, 4); head.writeUInt32LE(28 + padded.length + binary.length, 8);
+  head.writeUInt32LE(padded.length, 12); head.writeUInt32LE(0x4e4f534a, 16);
+  binHead.writeUInt32LE(binary.length, 0); binHead.writeUInt32LE(0x004e4942, 4);
+  return Buffer.concat([head, padded, binHead, binary]);
+}
+const quad = (a, b, c, d) => [...a, ...b, ...c, ...a, ...c, ...d];
+/** The authored study with a 1.70 × 0.60 m desk, top at 0.74 m, as its own
+ * "Desk" node, against the back wall. */
+const DESK = Object.freeze({ x0: 1.2, y0: 3.2, w: 1.7, d: 0.6, h: 0.74 });
+function deskRoomGlb() {
+  const { x0, y0, w, d, h } = DESK, x1 = x0 + w, y1 = y0 + d;
+  return namedNodesGlb([
+    { name: 'Room', triangles: [...quad([0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]), ...quad([0, 4, 0], [4, 4, 0], [4, 4, 2.5], [0, 4, 2.5]),
+      ...quad([0, 0, 0], [0, 4, 0], [0, 4, 2.5], [0, 0, 2.5])] },
+    { name: 'Desk', triangles: [...quad([x0, y0, h], [x1, y0, h], [x1, y1, h], [x0, y1, h]),
+      ...quad([x0, y0, 0], [x1, y0, 0], [x1, y0, h], [x0, y0, h]), ...quad([x0, y0, 0], [x0, y1, 0], [x0, y1, h], [x0, y0, h]),
+      ...quad([x1, y0, 0], [x1, y1, 0], [x1, y1, h], [x1, y0, h])] },
+  ]);
+}
+/** Echo with two engineered gimbal fixtures: A can reach the desk, B's
+ * authored tilt limit keeps it out of reach. The lamp cannot aim. */
+function deskEchoModel(seed) {
+  const model = authoredEchoModel(seed);
+  model.devices = model.devices.map(device => device.id === 'authored-ceiling-a'
+    ? { ...device, fixture_kind: 'engineered_gimbal_v1' }
+    : device.id === 'authored-ceiling-b'
+      ? { ...device, fixture_kind: 'engineered_gimbal_v1', gimbal: { limits: { pan_min_deg: -180, pan_max_deg: 180, tilt_min_deg: 70, tilt_max_deg: 90, tilt_positive: 'down' } } }
+      : device);
+  return model;
+}
+
 function writePack(packs, pack, overrides = {}) {
   for (const [name, value] of Object.entries(overrides)) {
     pack.files[name] = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value));
@@ -196,6 +247,58 @@ async function openSetupContext(browser, origin, log, { viewport = { width: 1366
   return { context, page };
 }
 
+/** An authored Home Assistant WebSocket for one context: auth, registries,
+ * states with the Travel Mode helper, and a spy on every call_service. The
+ * app connects through its remembered-login path to `${origin}/proxy/ha`.
+ * Nothing leaves the browser; no real Home Assistant is involved. */
+async function mockHomeAssistant(context, origin, { travel = 'off', lights = [], registry = lights, online = true } = {}) {
+  // With online: false, authentication is held (the app stays connecting, so
+  // it reads Home Assistant as offline) until goOnline().
+  const ha = { travel, online, frames: [], calls: [], sockets: [], subscriptions: [], held: [] };
+  const states = () => [
+    ...(ha.travel === null ? [] : [{ entity_id: 'input_boolean.living_lights_travel_mode', state: ha.travel, attributes: {} }]),
+    ...lights.map(light => ({ entity_id: light.entity_id, state: 'off', attributes: { friendly_name: light.name, supported_color_modes: ['brightness'] },
+      last_updated: '2026-10-19T00:00:00.000Z' })),
+  ];
+  await context.addInitScript(base => {
+    localStorage.setItem('hg-prefs', JSON.stringify({ endpoint: base + '/proxy/ha' }));
+    localStorage.setItem('home.ha.remembered-login.v1', JSON.stringify({ endpoint: base + '/proxy/ha', token: 'authored-test-token' }));
+  }, origin);
+  await context.routeWebSocket(new RegExp('^ws://' + new URL(origin).host.replace(/[.]/g, '\\.') + '/proxy/ha/api/websocket$'), socket => {
+    ha.sockets.push(socket);
+    socket.send(JSON.stringify({ type: 'auth_required', ha_version: '2026.10.0' }));
+    socket.onMessage(raw => {
+      const message = JSON.parse(raw); ha.frames.push(message);
+      if (message.type === 'auth') {
+        if (ha.online) socket.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.10.0' })); else ha.held.push(socket);
+        return;
+      }
+      let result = null;
+      if (message.type === 'get_states') result = states();
+      else if (message.type === 'config/entity_registry/list') result = registry.map(light => ({ entity_id: light.entity_id, name: light.name, platform: 'authored', area_id: null, device_id: null }));
+      else if (message.type === 'config/area_registry/list' || message.type === 'config/device_registry/list') result = [];
+      else if (message.type === 'subscribe_events') ha.subscriptions.push({ socket, id: message.id, event_type: message.event_type });
+      else if (message.type === 'call_service') ha.calls.push({ domain: message.domain, service: message.service, service_data: message.service_data, target: message.target });
+      socket.send(JSON.stringify({ id: message.id, type: 'result', success: true, result }));
+    });
+  });
+  ha.goOnline = () => {
+    ha.online = true;
+    for (const socket of ha.held.splice(0)) { try { socket.send(JSON.stringify({ type: 'auth_ok', ha_version: '2026.10.0' })); } catch { /* closed */ } }
+  };
+  /** Changes the helper in Home Assistant; `announce` also pushes the
+   * state_changed event the app subscribes to. */
+  ha.setTravel = (state, { announce = true } = {}) => {
+    ha.travel = state;
+    if (!announce) return;
+    for (const subscription of ha.subscriptions.filter(item => !item.event_type || item.event_type === 'state_changed')) {
+      subscription.socket.send(JSON.stringify({ id: subscription.id, type: 'event', event: { event_type: 'state_changed',
+        data: { entity_id: 'input_boolean.living_lights_travel_mode', new_state: state === null ? null : { entity_id: 'input_boolean.living_lights_travel_mode', state, attributes: {} } } } }));
+    }
+  };
+  return ha;
+}
+
 /** Real Home shell navigation used by every Setup suite. */
 function homeShell(page, origin) {
   const waitSite = site => page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
@@ -222,4 +325,4 @@ function homeShell(page, origin) {
   };
 }
 
-export { authoredEchoModel, resetRegistration, installSetupRooms, startSetupServer, openSetupContext, browserOptions, homeShell, STAMP, hash };
+export { authoredEchoModel, deskEchoModel, deskRoomGlb, DESK, resetRegistration, installSetupRooms, startSetupServer, openSetupContext, mockHomeAssistant, browserOptions, homeShell, STAMP, hash };

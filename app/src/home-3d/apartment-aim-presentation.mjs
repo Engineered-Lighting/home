@@ -53,7 +53,11 @@ export const AIM_OVERLAY_COPY = Object.freeze({
 const DEG = 180 / Math.PI, GRAZING_DEG = 80, SNAP_NORMAL_DOT = .9, MIN_SPAN_M = .015;
 // A press that moves less than this is a click on the reticle, not an aim.
 const DRAG_THRESHOLD_PX = 5;
-const RETICLE_RADIUS_PX = 22, LABEL_LIFT_PX = 22, LABEL_STEP_PX = 20, FEW_FIXTURES = 6;
+const RETICLE_RADIUS_PX = 22, LABEL_LIFT_PX = 22, FEW_FIXTURES = 6;
+// A label pill is 24 px tall; on a coarse pointer its hit area is 44 px.
+const LABEL_HEIGHT_PX = 24, LABEL_HIT_PX = 44, LABEL_GAP_PX = 4, LABEL_MIN_WIDTH_PX = 44, LABEL_SHORT_MAX = 18;
+// In-room chrome a label must not cover (DIRECTION › Canvas overlays).
+export const LABEL_AVOID_ATTRIBUTE = 'data-apt-label-avoid';
 const CHIP_OFFSET_PX = 18, CHIP_BOX = Object.freeze({ width: 240, height: 72 });
 const BAR_HALF_WIDTH_PX = 110, BAR_DROP_PX = 38, BAR_TOP_PX = 40, BAR_BOTTOM_PX = 70;
 const UNAIMABLE = Object.freeze(['blocked', 'out_of_reach', 'no_surface', 'not_aimable']);
@@ -184,22 +188,63 @@ export function aimKeyIntent({ key, dragging = false, proposal = null } = {}) {
     return null;
 }
 
-/* Prototype label rules: every label shows when there are few fixtures,
- * otherwise only hover and selection; overlapping labels stack upward. */
-export function placeFixtureLabels(entries, { selectedId = null, hoverId = null, pillFixtureId = null, bounds } = {}) {
-    const list = Array.isArray(entries) ? entries : [], few = list.length <= FEW_FIXTURES, placed = [];
-    return list.map(entry => {
+/* The short name an idle label shows when every label is on screen
+ * (prototype `short`). It only trims the registered name, never invents one:
+ * a trailing "fixture" goes, and a long name ends in an ellipsis. */
+export function shortFixtureLabel(label) {
+    const text = typeof label === 'string' ? label.trim() : '';
+    const trimmed = text.replace(/\s+fixture$/i, '') || text;
+    return trimmed.length > LABEL_SHORT_MAX ? trimmed.slice(0, LABEL_SHORT_MAX - 1).trimEnd() + '…' : trimmed;
+}
+
+const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+/* Prototype label rules (scene.js _placeLabels) on the bridge projection.
+ * Every label shows when there are few fixtures, otherwise only hover and
+ * selection; idle labels then use short names. A label sits above its fixture
+ * and climbs past anything it would touch: another label, or a box in
+ * `avoid` (the mode pill, the room toolbar, the hint bar, a body label). With
+ * no room above it drops below the fixture instead, and it never leaves the
+ * visible canvas. On a coarse pointer each label keeps its whole 44 px hit
+ * area clear. Selection and hover are placed first; an idle label with no
+ * room left is hidden rather than drawn over another. */
+export function placeFixtureLabels(entries, { selectedId = null, hoverId = null, pillFixtureId = null, bounds,
+    avoid = [], coarse = false } = {}) {
+    const list = Array.isArray(entries) ? entries : [], few = list.length <= FEW_FIXTURES;
+    const height = coarse ? LABEL_HIT_PX : LABEL_HEIGHT_PX, half = height / 2;
+    const box = bounds || { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+    const taken = (Array.isArray(avoid) ? avoid : []).filter(item => item && [item.left, item.top, item.right, item.bottom].every(finite));
+    const rank = entry => entry.id === selectedId ? 0 : entry.id === hoverId ? 1 : 2;
+    const order = list.map((entry, index) => ({ entry, index })).sort((a, b) => rank(a.entry) - rank(b.entry) || a.index - b.index);
+    const out = new Array(list.length);
+    for (const { entry, index } of order) {
         const selected = entry.id === selectedId, hover = entry.id === hoverId;
-        const screen = entry.screen, inside = screen && (!bounds || screen.x >= bounds.left && screen.x <= bounds.right
-            && screen.y >= bounds.top && screen.y <= bounds.bottom);
-        const visible = !!inside && (few || selected || hover) && entry.id !== pillFixtureId;
+        const screen = entry.screen, inside = !!screen && screen.x >= box.left && screen.x <= box.right
+            && screen.y >= box.top && screen.y <= box.bottom;
         const state = selected ? 'selected' : hover ? 'hover' : 'idle';
-        if (!visible) return { id: entry.id, visible: false, state, ring: inside && (selected || hover) ? screen : null };
-        let y = screen.y - LABEL_LIFT_PX;
-        for (const other of placed) if (Math.abs(other.x - screen.x) < 90 && Math.abs(other.y - y) < LABEL_STEP_PX) y = other.y - LABEL_STEP_PX;
-        placed.push({ x: screen.x, y });
-        return { id: entry.id, visible: true, state, x: screen.x, y, full: selected || hover || !few, ring: selected || hover ? screen : null };
-    });
+        const ring = inside && (selected || hover) ? screen : null;
+        if (!inside || !(few || selected || hover) || entry.id === pillFixtureId) { out[index] = { id: entry.id, visible: false, state, ring }; continue; }
+        const width = Math.max(LABEL_MIN_WIDTH_PX, finite(entry.width) ? entry.width : 0);
+        const room = box.right - box.left;
+        const x = room <= width ? (box.left + box.right) / 2 : clamp(screen.x, box.left + width / 2, box.right - width / 2);
+        const at = y => ({ left: x - width / 2 - LABEL_GAP_PX / 2, right: x + width / 2 + LABEL_GAP_PX / 2, top: y - half, bottom: y + half });
+        const settle = (y, step) => {
+            for (let tries = 0; tries <= taken.length; tries++) {
+                if (y - half < box.top || y + half > box.bottom) return null;
+                const blocker = taken.find(item => overlaps(at(y), item));
+                if (!blocker) return y;
+                y = step < 0 ? blocker.top - LABEL_GAP_PX - half : blocker.bottom + LABEL_GAP_PX + half;
+            }
+            return null;
+        };
+        let y = settle(clamp(screen.y - LABEL_LIFT_PX, box.top + half, box.bottom - half), -1);
+        if (y == null) y = settle(clamp(screen.y + LABEL_LIFT_PX, box.top + half, box.bottom - half), 1);
+        if (y == null && (selected || hover)) y = clamp(screen.y - LABEL_LIFT_PX, box.top + half, box.bottom - half);
+        if (y == null) { out[index] = { id: entry.id, visible: false, state, ring }; continue; }
+        taken.push(at(y));
+        out[index] = { id: entry.id, visible: true, state, x, y, full: selected || hover || !few, ring };
+    }
+    return out;
 }
 
 // The bar sits below the proposed spot, kept inside the visible canvas (left
@@ -283,6 +328,32 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
         return { left: inset('left'), top: inset('top'), right: width - inset('right'), bottom: height - inset('bottom') };
     }
     const project = point => { try { return vector(point) ? layer.project(point) : null; } catch (_) { return null; } };
+    let coarsePointer = null;
+    try { coarsePointer = host.ownerDocument.defaultView?.matchMedia?.('(pointer: coarse)') || null; } catch (_) { coarsePointer = null; }
+    // A hidden label has no layout, so it keeps the width it last showed
+    // with the same text; a label never shown is estimated from its text.
+    const widths = new WeakMap();
+    function labelWidth(element) {
+        if (!element) return null;
+        const text = element.textContent || '', measured = element.hidden ? 0 : element.offsetWidth;
+        if (measured > 0) { widths.set(element, { text, width: measured }); return measured; }
+        const last = widths.get(element);
+        return last && last.text === text ? last.width : 30 + text.length * 6.6;
+    }
+    // The room chrome a label yields to, in host coordinates.
+    function avoidBoxes() {
+        const scope = host.closest?.('[data-home-apartment-view]') || host.parentElement || host;
+        const nodes = scope.querySelectorAll?.(`[${LABEL_AVOID_ATTRIBUTE}]`) || [];
+        if (!nodes.length) return [];
+        const origin = host.getBoundingClientRect(), out = [];
+        for (const node of nodes) {
+            if (node.hidden || node.closest?.('[hidden]')) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) out.push({ left: rect.left - origin.left, top: rect.top - origin.top,
+                right: rect.right - origin.left, bottom: rect.bottom - origin.top });
+        }
+        return out;
+    }
     const within = (screen, box) => screen && box && screen.x >= box.left && screen.x <= box.right && screen.y >= box.top && screen.y <= box.bottom;
     function write(element, hidden, x, y) {
         if (!element) return;
@@ -348,8 +419,10 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
         // Every projection reads layout, so all of them run before any style
         // write; one frame then costs at most one layout, not one per element.
         const placed = placeFixtureLabels(state.fixtures.map(fixture => ({ id: fixture.fixture_id,
+            width: labelWidth(elements.labels.get(fixture.fixture_id)),
             screen: project(vector(fixture.display_anchor_m) ? [fixture.display_anchor_m[0], fixture.display_anchor_m[1], fixture.display_anchor_m[2] + .02] : null) })),
-        { selectedId: state.selectedId, hoverId: state.hoverId, pillFixtureId: state.pillFixtureId, bounds: box });
+        { selectedId: state.selectedId, hoverId: state.hoverId, pillFixtureId: state.pillFixtureId, bounds: box,
+            avoid: avoidBoxes(), coarse: !!coarsePointer?.matches });
         const aim = aimFixture(), reticleAt = drag ? drag.cursor : aim ? project(reticlePoint()) : null;
         const chipAt = drag?.model && placeDragChip(drag.cursor, box);
         const blockerAt = drag?.model?.blocker_point_m && project(drag.model.blocker_point_m);
@@ -463,6 +536,7 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
         // Pure helpers for the classic-script overlay, which cannot import.
         vocabulary: AIM_OVERLAY_VOCABULARY,
         describeProposalBar,
+        shortLabel: shortFixtureLabel,
         proposalTarget: proposalTargetFromModel,
         keyIntent: aimKeyIntent,
         subscribe(listener) { if (typeof listener !== 'function') return () => {}; listeners.add(listener); return () => listeners.delete(listener); },

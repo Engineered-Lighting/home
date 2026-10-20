@@ -185,7 +185,7 @@ function AptRoomOverlay({ presentation, store, siteId, fixtures = [], selectedId
           onClick={event => { event.stopPropagation(); onSelect?.(id); }}
           onPointerEnter={() => onHover?.(id)} onPointerLeave={() => onHover?.(null)}>
           <span className="dot" aria-hidden="true" />
-          <span>{full ? fixture.label || id : fixture.short_label || fixture.label || id}</span>
+          <span>{full ? fixture.label || id : fixture.short_label || presentation.shortLabel?.(fixture.label || id) || fixture.label || id}</span>
         </button>
       </React.Fragment>;
     })}

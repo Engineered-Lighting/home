@@ -142,7 +142,7 @@
    * action that Escape also performs carries the dimmable `esc` hint. */
   function HintBar({ kind, icon = null, children, detail, actions = [], ...attributes }) {
     // Extra attributes (for example a suite's data-* hook) land on the bar itself.
-    return <div {...attributes} className="apt-ui-hint" data-apt-hint={kind || "hint"} role="status" aria-live="polite">
+    return <div {...attributes} className="apt-ui-hint" data-apt-hint={kind || "hint"} data-apt-label-avoid="" role="status" aria-live="polite">
       {icon && <span className="apt-ui-hint-icon" aria-hidden="true">{icon}</span>}
       <span className="apt-ui-hint-text">{children}{detail && <span className="apt-ui-hint-detail"> · {detail}</span>}</span>
       {actions.filter(Boolean).map((action) => <button type="button" key={action.label}

@@ -24,8 +24,8 @@
  * output pass instead would blend the translucent cloud in linear light and
  * visibly change it.
  *
- * Photo (Spark) is WebGL-only. On this path Photo reports unavailable until
- * the WebGPU splat pipeline lands.
+ * Photo: Spark is WebGL-only. On this path Photo is Home's own splat
+ * renderer (gaussian-splat-webgpu.mjs) through gaussian-splat-modes.mjs.
  */
 import * as THREE from 'three';
 import { texture, uv } from 'three/tsl';
@@ -33,7 +33,9 @@ import { texture, uv } from 'three/tsl';
 const cb = new URL(import.meta.url).search;
 const { installMaterialPorts, displayOutputContext, createPointSpriteMaterial, PORT_FINGERPRINTS,
     shaderMaterialFingerprint } = await import(`./webgpu-material-ports.mjs${cb}`);
+const { createSplatModeAdapters } = await import(`./gaussian-splat-modes.mjs${cb}`);
 
+/* Kept for callers of the foundation preview; Photo no longer refuses. */
 export const PHOTO_UNAVAILABLE = 'photo_unavailable_on_webgpu_preview';
 
 /*
@@ -130,12 +132,11 @@ export async function createNodeRenderer({ canvas, forceWebGL = false, antialias
         if (captureSmall.width !== targetWidth || captureSmall.height !== targetHeight) captureSmall.setSize(targetWidth, targetHeight);
     }
 
-    const photoUnavailable = async () => { throw new Error(PHOTO_UNAVAILABLE); };
     const seam = {
         renderer,
         backend,
-        /* modes.js load adapters: Photo is Spark, and Spark is WebGL-only. */
-        modeAdapters: Object.freeze({ loadSplat: photoUnavailable, createSparkRenderer: photoUnavailable }),
+        /* modes.js load adapters: Photo through Home's splat renderer, not Spark. */
+        modeAdapters: createSplatModeAdapters({ renderer }),
         gpu: identity.name,
         adapter: identity.adapter,
         coordinateSystem: renderer.coordinateSystem,

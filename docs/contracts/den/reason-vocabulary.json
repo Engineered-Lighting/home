@@ -1,0 +1,220 @@
+{
+  "schema": "den-reason-vocabulary-1",
+  "version": 1,
+  "status": "proposed",
+  "updated": "2026-10-20",
+  "note": "Public reason and status codes Den producers emit and Home may show verbatim beside its own text. Codes are stable identifiers; text is the default user-facing wording. A code not listed here is shown as 'Unavailable' with the raw code in Details. Patterns use {n} for an integer and {state} for a listed value.",
+  "groups": [
+    {
+      "id": "brain.mode",
+      "source": "lighting brain (AL-1), activity-lighting-state-1 `mode`",
+      "codes": [
+        {"code": "off", "text": "Lights off"},
+        {"code": "ambient", "text": "Ambient"},
+        {"code": "night_ambient", "text": "Night ambient"},
+        {"code": "reading", "text": "Reading light"},
+        {"code": "degraded_ambient", "text": "Ambient only (sensing degraded)"}
+      ]
+    },
+    {
+      "id": "brain.rule",
+      "source": "lighting brain (AL-1), `decisions[].rule`",
+      "codes": [
+        {"code": "room_off", "text": "Room empty · all off"},
+        {"code": "zone_ambient", "text": "Zone occupied · ambient"},
+        {"code": "night_ambient", "text": "Night · dim ambient"},
+        {"code": "reading_spot_on", "text": "Reading · spotlight on"},
+        {"code": "reading_spot_off", "text": "Reading stopped · spotlight off"},
+        {"code": "degraded_ambient", "text": "Sensing degraded · ambient only"},
+        {"code": "manual_pause", "text": "Paused after a manual change"}
+      ]
+    },
+    {
+      "id": "brain.status",
+      "source": "Home brain client readback (`status`, `reason`)",
+      "codes": [
+        {"code": "online", "text": "Brain online"},
+        {"code": "connecting", "text": "Connecting to the lighting brain"},
+        {"code": "offline", "text": "Brain offline · holding the last state", "severity": "warn"},
+        {"code": "stopped", "text": "Brain not connected"},
+        {"code": "heartbeat_missed", "text": "No update from the brain for 15 s", "severity": "warn"},
+        {"code": "state_unreachable", "text": "Brain unreachable", "severity": "warn"},
+        {"code": "stream_unavailable", "text": "Live updates unavailable", "severity": "warn"},
+        {"pattern": "state_http_{n}", "text": "Brain answered with an error", "severity": "warn"},
+        {"pattern": "brain_{state}", "text": "Brain reports it is not online", "severity": "warn"}
+      ]
+    },
+    {
+      "id": "brain.refusal",
+      "source": "Home brain client schema check (`refused_reason`); the document is ignored",
+      "codes": [
+        {"code": "state_not_object", "text": "Brain state unreadable"},
+        {"code": "state_json_invalid", "text": "Brain state unreadable"},
+        {"code": "state_too_large", "text": "Brain state too large"},
+        {"code": "state_schema_unsupported", "text": "Brain state version not supported"},
+        {"code": "state_scope_mismatch", "text": "Brain state is for another room"},
+        {"code": "state_generated_at_invalid", "text": "Brain state has no valid time"},
+        {"code": "state_header_invalid", "text": "Brain state header invalid"},
+        {"code": "state_fixtures_incomplete", "text": "Brain state is missing fixtures"},
+        {"code": "state_fixtures_duplicate", "text": "Brain state repeats a fixture"},
+        {"code": "state_decisions_invalid", "text": "Brain decision log invalid"},
+        {"code": "state_detail_invalid", "text": "Brain state detail invalid"},
+        {"code": "fixture_id_unknown", "text": "Brain named an unknown fixture"},
+        {"code": "fixture_ambient_invalid", "text": "Brain ambient values out of range"},
+        {"code": "fixture_spot_invalid", "text": "Brain spotlight values out of range"},
+        {"code": "fixture_pause_invalid", "text": "Brain pause values invalid"}
+      ]
+    },
+    {
+      "id": "brain.aim",
+      "source": "lighting brain (AL-1) over-shoulder aim planner; shown in decision `why`",
+      "codes": [
+        {"code": "shoulders_missing", "text": "Pose has no shoulders"},
+        {"code": "shoulders_too_close", "text": "Shoulders too close to place the light"},
+        {"code": "beam_through_head", "text": "Every beam would cross the reader's head"},
+        {"code": "pan_limit", "text": "Outside the fixture's pan range"},
+        {"code": "tilt_limit", "text": "Outside the fixture's tilt range"},
+        {"code": "too_far", "text": "Target too far from the fixture"},
+        {"code": "no_registered_position", "text": "Fixture has no registered position"},
+        {"code": "vertical_target_pan_indeterminate", "text": "Target directly below the fixture"}
+      ]
+    },
+    {
+      "id": "fixture.pause",
+      "source": "Home follower (local pause) and brain `pause_reason`",
+      "codes": [
+        {"code": "change", "text": "Paused · changed by hand"},
+        {"code": "aim", "text": "Paused · aimed by hand"},
+        {"code": "undo", "text": "Paused · aim undone"},
+        {"code": "redo", "text": "Paused · aim redone"},
+        {"code": "override_unsent", "text": "Paused here; the brain was not told", "severity": "warn"},
+        {"pattern": "override_http_{n}", "text": "Paused here; the brain refused the override", "severity": "warn"}
+      ]
+    },
+    {
+      "id": "den_ops.level",
+      "source": "always-on monitor (AL-5), den-ops-banner-1 `level` / `step`",
+      "codes": [
+        {"code": "normal", "level": 0, "text": "Monitoring normal"},
+        {"code": "cadence_reduced", "level": 1, "text": "Activity checks slowed to cool down", "severity": "warn"},
+        {"code": "deep_stack_paused", "level": 2, "text": "Deep sensing paused · ambient only", "severity": "alert"},
+        {"code": "loop_stopped", "level": 3, "text": "Activity sensing stopped", "severity": "alert"},
+        {"code": "monitor_silent", "text": "Ops monitor silent", "severity": "warn", "note": "Banner text 'Ops monitor silent on <host>' at level 0 when a host stops reporting."}
+      ]
+    },
+    {
+      "id": "activity_loop.health",
+      "source": "activity loop (AL-3) `health` event `detail`, per component (jev, deep_stack, camera)",
+      "codes": [
+        {"code": "jev_starting", "component": "jev", "text": "JEV starting"},
+        {"code": "jev_failed", "component": "jev", "text": "JEV request failed", "severity": "warn"},
+        {"code": "jev_egress_blocked_indeterminate", "component": "jev", "text": "JEV paused: an earlier request has an unknown outcome", "severity": "warn"},
+        {"code": "jev_resuming", "component": "jev", "text": "JEV released · resuming", "aliases": ["jev_released_resuming"]},
+        {"code": "jev_stale", "component": "jev", "text": "No recent JEV answer", "severity": "warn"},
+        {"pattern": "jev_{state}", "component": "jev", "text": "JEV not ready"},
+        {"pattern": "deep_stack_{state}", "component": "deep_stack", "text": "Deep sensing not recording", "states": ["requested", "starting", "stopping", "stopped", "failed", "interrupted", "blocked", "indeterminate"]},
+        {"code": "deep_stack_no_recent_output", "component": "deep_stack", "text": "Deep sensing has no recent output", "severity": "warn"},
+        {"code": "camera_no_viewing_source", "component": "camera", "text": "Den camera not connected", "severity": "warn"},
+        {"code": "camera_no_frames_yet", "component": "camera", "text": "Waiting for the first camera frame"},
+        {"code": "not_reported", "text": "Not reported yet"},
+        {"code": "paused_room_empty", "text": "Paused while the room is empty"},
+        {"code": "stopped_operator_stop", "text": "Stopped by the operator"},
+        {"code": "stopped_monitor_backoff", "text": "Stopped by the monitor to cool down", "severity": "alert"}
+      ]
+    },
+    {
+      "id": "activity.label",
+      "source": "activity loop (AL-3) `activity.label`",
+      "codes": [
+        {"code": "reading", "text": "Reading"},
+        {"code": "computer_work", "text": "Computer work"},
+        {"code": "phone_use", "text": "Using a phone"},
+        {"code": "resting", "text": "Resting"},
+        {"code": "transition", "text": "Moving"},
+        {"code": "other", "text": "Other activity"},
+        {"code": "insufficient_evidence", "text": "Not enough to tell"}
+      ]
+    },
+    {
+      "id": "perception.age",
+      "source": "Home perception view `age.status` / `age.reason`",
+      "codes": [
+        {"code": "current", "text": "Current"},
+        {"code": "expired", "text": "Expired", "note": "status stale, reason expired"},
+        {"code": "clock_unavailable", "text": "Age unavailable · clock not qualified"},
+        {"code": "expiry_unavailable", "text": "Age unavailable · no expiry supplied"},
+        {"code": "original_time_unavailable", "text": "Age unavailable · no original time"},
+        {"code": "available_time_unavailable", "text": "Age unavailable · no availability time"},
+        {"code": "invalid_original_time", "text": "Original time invalid"},
+        {"code": "time_order_invalid", "text": "Times out of order"},
+        {"code": "future", "text": "Time is in the future"},
+        {"code": "future_or_clock_overlap", "text": "Time overlaps the clock uncertainty"}
+      ]
+    },
+    {
+      "id": "perception.placement",
+      "source": "Home perception view: room, diagnostic and approximate placement",
+      "codes": [
+        {"code": "approximate_pose_unavailable", "text": "Approximate room placement unavailable"},
+        {"code": "diagnostic_pose_unavailable", "text": "Diagnostic room pose unavailable"},
+        {"code": "approximate_mount_signature_changed", "text": "Room or camera scene check changed"},
+        {"code": "approximate_mount_signature_unknown", "text": "Room or camera scene check unavailable"},
+        {"code": "approximate_camera_epoch_changed", "text": "Camera restarted · placement withdrawn"},
+        {"code": "approximate_camera_epoch_unverified", "text": "Camera session unverified"},
+        {"code": "approximate_camera_identity_changed", "text": "A different camera is connected"},
+        {"code": "approximate_camera_calibration_changed", "text": "Camera calibration changed"},
+        {"code": "approximate_mount_identity_required", "text": "Camera mount not identified"},
+        {"code": "approximate_scene_or_mount_identity_changed", "text": "Room scan or camera mount changed"},
+        {"code": "approximate_observed_instance_unavailable", "text": "The placed person is not in this frame"},
+        {"code": "approximate_matrix_digest_changed", "text": "Camera-to-room alignment changed"},
+        {"code": "approximate_original_source_pin_changed", "text": "Camera source changed"},
+        {"code": "approximate_successor_calibration_changed", "text": "Camera calibration changed since alignment"},
+        {"code": "approximate_successor_mount_identity_changed", "text": "Camera mount changed since alignment"},
+        {"code": "approximate_successor_scope_changed", "text": "Camera scope changed since alignment"},
+        {"code": "approximate_successor_predecessor_changed", "text": "Alignment history changed"},
+        {"code": "approximate_successor_matrix_changed", "text": "Alignment changed"},
+        {"code": "approximate_successor_verification_required", "text": "Alignment needs verification"},
+        {"code": "approximate_successor_mount_check_required", "text": "Camera mount check needed"},
+        {"code": "approximate_scene_scope_required", "text": "Room scan not selected"},
+        {"code": "approximate_scope_mismatch", "text": "Placement is for another room or scan"},
+        {"code": "approximate_source_epoch_mismatch", "text": "Placement is from another camera session"},
+        {"code": "approximate_view_alignment_invalid", "text": "Camera-to-room alignment invalid"}
+      ]
+    },
+    {
+      "id": "legacy.desk_preview",
+      "source": "retired fixed-desk aim preview (Home den perception panel); replaced by the lighting brain on 2026-10-19",
+      "legacy": true,
+      "codes": [
+        {"code": "preview_disabled", "text": "Desk preview off", "legacy": true},
+        {"code": "preview_awaiting_observation", "text": "Waiting for one visible person", "legacy": true},
+        {"code": "preview_no_person", "text": "No person visible", "legacy": true},
+        {"code": "preview_multiple_people", "text": "More than one person visible", "legacy": true},
+        {"code": "preview_no_feasible_fixture", "text": "No fixture can reach the desk", "legacy": true},
+        {"code": "preview_aim_refused", "text": "Desk aim refused", "legacy": true},
+        {"code": "preview_manual_takeover", "text": "Stopped by a manual change", "legacy": true},
+        {"code": "preview_expired", "text": "Preview expired", "legacy": true},
+        {"code": "preview_withdrawn", "text": "Preview withdrawn", "legacy": true},
+        {"code": "preview_source_stopped", "text": "Camera analysis stopped", "legacy": true},
+        {"code": "preview_support_timeout", "text": "No supporting observation in time", "legacy": true},
+        {"code": "preview_clock_unavailable", "text": "Clock unavailable", "legacy": true},
+        {"code": "preview_scene_changed", "text": "Room scan changed", "legacy": true},
+        {"code": "preview_equipment_changed", "text": "Equipment changed", "legacy": true},
+        {"code": "preview_equipment_unavailable", "text": "Equipment unavailable", "legacy": true},
+        {"code": "preview_fixture_changed", "text": "Fixture changed", "legacy": true},
+        {"code": "preview_ownership_changed", "text": "Fixture taken over", "legacy": true},
+        {"code": "preview_camera_identity_changed", "text": "Camera changed", "legacy": true},
+        {"code": "preview_evidence_contrary", "text": "Newer evidence disagrees", "legacy": true},
+        {"code": "preview_evidence_integrity", "text": "Evidence integrity check failed", "legacy": true},
+        {"code": "preview_evidence_unavailable", "text": "Evidence unavailable", "legacy": true},
+        {"code": "preview_input_invalid", "text": "Preview input invalid", "legacy": true},
+        {"code": "preview_input_unavailable", "text": "Preview input unavailable", "legacy": true},
+        {"code": "preview_original_changed", "text": "Original observation changed", "legacy": true},
+        {"code": "preview_context_unavailable", "text": "View context unavailable", "legacy": true},
+        {"code": "preview_timing_policy_changed", "text": "Timing policy changed", "legacy": true},
+        {"code": "preview_disposed", "text": "Preview closed", "legacy": true},
+        {"pattern": "desk_preview_{state}", "text": "Desk preview unavailable", "legacy": true}
+      ]
+    }
+  ]
+}

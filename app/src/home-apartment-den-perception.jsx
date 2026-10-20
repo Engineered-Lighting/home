@@ -5,6 +5,7 @@
   const {useState,useRef,useEffect,useCallback}=React;
   const mono='"Geist Mono", "JetBrains Mono", monospace';
   const words=value=>String(value||'unavailable').replaceAll('_',' ');
+  const shortRef=value=>value.length>12?`${value.slice(0,12)}…`:value;
   const approximateProblem=reason=>({approximate_mount_signature_changed:'Room or camera scene check changed',
     approximate_mount_signature_unknown:'Room or camera scene check unavailable'}[reason]||words(reason));
   const button={minHeight:40,padding:'6px 10px',border:'1px solid var(--hg-border-soft, #35404a)',
@@ -30,10 +31,13 @@
   const defaultLayer=()=>global.HomeApartmentPerceptionPlayer.loadLayer();
 
   function PoseOverlay({pose,frame}){
-    if(!pose?.renderable||!pose.keypoints.length||!frame)return null;
+    if(!pose?.renderable||!frame||(!pose.keypoints.length&&!pose.boxes?.length))return null;
     const byId=new Map(pose.keypoints.map(point=>[point.id,point]));
     return <svg aria-label="Exact-frame pose overlay" viewBox={`0 0 ${frame.width} ${frame.height}`}
       style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>
+      {(pose.boxes||[]).map((box,index)=><rect key={box.instance_id||index} data-person-instance={box.instance_id||''}
+        x={box.x} y={box.y} width={box.w} height={box.h} fill="none" stroke="#85d6af" strokeWidth="2">
+        <title>{`Frame-local person box ${index+1}`}</title></rect>)}
       {pose.edges.map(([a,b],index)=>{const start=byId.get(a),end=byId.get(b);return start&&end?
         <line key={index} x1={start.x} y1={start.y} x2={end.x} y2={end.y} stroke="#b8d8ff" strokeWidth="2"/>:null;})}
       {pose.keypoints.map(point=><circle key={point.id} cx={point.x} cy={point.y} r="3" fill="#b8d8ff"/>)}
@@ -56,29 +60,40 @@
   }
 
   function HomeApartmentDenPerception({engine,active=true,mobile=false,source:injectedSource,
-    loadLayer=defaultLayer,onReturnToHome}){
+    loadLayer=defaultLayer,onReturnToHome,onAimPreviewController,onAimPreviewChange,legacyDeskAimPreview=false}){
     const source=injectedSource||global.HomeApartmentPerceptionSource;
     const [expanded,setExpanded]=useState(false),[sessions,setSessions]=useState([]),[sessionId,setSessionId]=useState(''),
       [arm,setArm]=useState('B'),[notice,setNotice]=useState(''),[discovering,setDiscovering]=useState(false),
       [state,setState]=useState(null),[anchor,setAnchor]=useState(null),[following,setFollowing]=useState(false),
       [followPaused,setFollowPaused]=useState(false),[layerReady,setLayerReady]=useState(false),
       [analysis,setAnalysis]=useState(()=>source?.analysisState?.()||{status:'idle',owned:false}),
+      [aimPreview,setAimPreview]=useState({enabled:false,active:false,status:'disabled',reason:null}),
       [analysisAvailability,setAnalysisAvailability]=useState(null);
     const playerRef=useRef(null),layerRef=useRef(null),discoveryRef=useRef(null),generationRef=useRef(0);
     const engineRef=useRef(engine),lastViewRef=useRef(null),analysisGenerationRef=useRef(0),analysisBindingRef=useRef(null),activeRef=useRef(active);
+    const aimPreviewRef=useRef(null),aimPreviewEngineRef=useRef(null),aimRegistrationRef=useRef(onAimPreviewController),aimChangeRef=useRef(onAimPreviewChange);
+    // The owner's arm survives only a reconnect; every other stop disarms.
+    const aimArmedRef=useRef(false);
     engineRef.current=engine;activeRef.current=active;
+    aimRegistrationRef.current=onAimPreviewController;aimChangeRef.current=onAimPreviewChange;
     const identity=engine?.sceneIdentity;
     const identityKey=[identity?.siteId,identity?.contentRevision,identity?.frameDigest,identity?.registrationVersion].join('|');
 
+    const releaseAimPreview=useCallback(()=>{
+      const controller=aimPreviewRef.current,previewEngine=aimPreviewEngineRef.current;
+      aimPreviewRef.current=null;aimPreviewEngineRef.current=null;
+      if(controller){aimRegistrationRef.current?.(controller,false);controller.dispose();aimChangeRef.current?.(previewEngine,controller.readback());}
+    },[]);
     const stop=useCallback((reason='viewer_disconnected')=>{
-      generationRef.current++;
+      generationRef.current++;if(reason!=='new_connection')aimArmedRef.current=false;
+      releaseAimPreview();setAimPreview({enabled:false,active:false,status:'disabled',reason:null});
       discoveryRef.current?.abort();discoveryRef.current=null;setDiscovering(false);
       playerRef.current?.destroy();playerRef.current=null;
       layerRef.current?.dispose();layerRef.current=null;
       lastViewRef.current=null;setState(null);setAnchor(null);setFollowing(false);setFollowPaused(false);setLayerReady(false);
       setNotice(reason==='viewer_disconnected'?'Disconnected from this view. The Lab session is unchanged.':'');
-    },[]);
-    useEffect(()=>()=>{generationRef.current++;discoveryRef.current?.abort();playerRef.current?.destroy();layerRef.current?.dispose();},[]);
+    },[releaseAimPreview]);
+    useEffect(()=>()=>{generationRef.current++;releaseAimPreview();discoveryRef.current?.abort();playerRef.current?.destroy();layerRef.current?.dispose();},[releaseAimPreview]);
     useEffect(()=>{stop('view_identity_changed');setSessionId('');setSessions([]);setExpanded(false);},[engine,identityKey,active,source,stop]);
     useEffect(()=>source?.watchAnalysis?.(setAnalysis),[source]);
     useEffect(()=>{
@@ -132,7 +147,7 @@
         setSessions(rows);
         const activeRows=rows.filter(row=>['recording','running','starting'].includes(row.state));
         if(!sessionId&&activeRows.length===1)setSessionId(activeRows[0].id);
-        if(!rows.length)setNotice('No existing Den session. Start a five-minute live analysis here when available, or select a session from Perception Lab.');
+        if(!rows.length)setNotice('No existing Den session. Start a 90-second live analysis here when available, or select a session from Perception Lab.');
       }catch(error){if(!abort.signal.aborted&&token===generationRef.current)setNotice(error.message||'Session discovery unavailable');}
       finally{if(discoveryRef.current===abort){discoveryRef.current=null;if(!abort.signal.aborted)setDiscovering(false);}}
     }
@@ -145,13 +160,31 @@
         const projection=global.HomeApartmentPerceptionView,players=global.HomeApartmentPerceptionPlayer;
         if(!projection||!players||typeof source?.subscribe!=='function')throw Error('Perception viewer modules unavailable');
         const scope=projection.createScope(engine.sceneIdentity,session);
-        const scopedSource={subscribe:args=>source.subscribe({...args,arm:selectedArm}),sampleClock:()=>source.sampleClock(),
+        const scopedSource={subscribe:args=>source.subscribe({...args,arm:selectedArm,previewArmed:()=>aimArmedRef.current===true}),sampleClock:()=>source.sampleClock(),
           readFrame:(frame,options)=>source.readFrame(frame,options)};
         const collisionDigest=global.HomeContentPacks?.get?.(identity.siteId,identity.contentRevision)?.manifest?.assets?.['collision.glb']?.sha256||null;
+        // Retired by the lighting brain (AL-4): the fixed-desk preview runs only when explicitly opted in.
+        if(legacyDeskAimPreview&&global.HomeApartmentDeskAimPreview?.create&&global.HomeApartmentAiming?.solveAim&&engine.overlay){
+          try{
+            const current=()=>token===generationRef.current&&engineRef.current===engine;
+            const committed=()=>(engine.apartmentRoot?.children||[]).some(group=>group.visible!==false&&
+              (group.name==='committed-room-fixtures'||group.name==='home-live-geometry-owned'&&
+                group.children?.some(child=>child.visible!==false&&child.userData?.truth_role==='virtual_execution')));
+            const controller=global.HomeApartmentDeskAimPreview.create({overlay:engine.overlay,
+              solveAim:global.HomeApartmentAiming.solveAim,
+              getContext:()=>({active:current()&&activeRef.current,identity:engine.sceneIdentity,
+                hidden:global.document.hidden,committedOwnerActive:committed()}),
+              nowMs:()=>global.performance.now(),setTimeout:(fn,ms)=>global.setTimeout(fn,ms),clearTimeout:id=>global.clearTimeout(id),
+              onChange:next=>{if(current()){aimArmedRef.current=next.enabled===true;setAimPreview(next);aimChangeRef.current?.(engine,next);}}});
+            aimPreviewRef.current=controller;aimPreviewEngineRef.current=engine;aimRegistrationRef.current?.(controller,true);
+            if(aimArmedRef.current)controller.setEnabled(true);
+          }catch(_){setAimPreview({enabled:false,active:false,status:'unavailable',reason:'desk_preview_controls_unavailable'});}
+        }
         const player=players.create({source:scopedSource,scope,collisionDigest,onChange:next=>{
           if(token!==generationRef.current||engineRef.current!==engine)return;
           lastViewRef.current=next.view;setState(next);
           layerRef.current?.draw(next.view);
+          aimPreviewRef.current?.update(next.view?.virtualTargetPreview,next.view?.deskPreviewEvidence);
           const readback=layerRef.current?.readback();setFollowing(readback?.following===true);setFollowPaused(readback?.followPaused===true);
         }});
         playerRef.current=player;player.start();
@@ -173,11 +206,19 @@
     }
     async function stopOwnAnalysis(){
       const ownerId=analysis.session?.id;
+      aimPreviewRef.current?.setEnabled(false);
       try{await source.stopAnalysis();if(ownerId&&ownerId===sessionId)stop('owned_analysis_stopped');}
       catch(error){setNotice(error.message||'Owned analysis stop not confirmed. Retry Stop own analysis.');}
     }
     function changeSelection(value,kind){stop('selection_changed');if(kind==='arm')setArm(value);else setSessionId(value);}
     function close(){stop();if(analysisBindingRef.current)source?.releaseAnalysis?.(analysisBindingRef.current);setExpanded(false);}
+    function toggleAimPreview(){
+      const controller=aimPreviewRef.current;if(!controller)return;
+      const enabled=!controller.readback().enabled;
+      controller.setEnabled(enabled);
+      if(enabled&&lastViewRef.current)controller.update(lastViewRef.current.virtualTargetPreview,lastViewRef.current.deskPreviewEvidence);
+      setAimPreview(controller.readback());
+    }
     if(!active||engine?.siteId!=='victoria')return null;
     const view=state?.view,room=view?.roomPose,diagnosticRoom=view?.diagnosticRoomPose,approximateRoom=view?.approximateRoomPose,
       approximateActive=approximateRoom?.renderable===true&&room?.admitted!==true&&diagnosticRoom?.renderable!==true,
@@ -210,11 +251,11 @@
         {global.HomeApartmentOwnerCamera && <global.HomeApartmentOwnerCamera active={active && expanded} identityKey={identityKey} />}
         <div style={{marginTop:12,paddingTop:10,borderTop:'1px solid var(--hg-border, #35404a)'}}>
           <strong>Analyzed frame and model results</strong>
-          <p style={note}>The analyzed image and pose are separate from the live camera above. A live analysis runs for five minutes and does not renew automatically.</p>
+          <p style={note}>The analyzed image, person boxes and skeletons are separate from the live camera above. Own analysis stops after 90 seconds and does not renew automatically.</p>
         </div>
         {typeof source?.startAnalysis==='function'&&<section aria-label="Live analysis" style={{margin:'10px 0',paddingBottom:10,borderBottom:'1px solid #35404a'}}>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            <button type="button" style={button} disabled={!analysisAvailability?.available||analysis.owned} onClick={()=>ownAnalysis()}>Start live analysis (5 min)</button>
+            <button type="button" style={button} disabled={!analysisAvailability?.available||analysis.owned} onClick={()=>ownAnalysis()}>Start live analysis (90 s)</button>
             <button type="button" style={button} disabled={!analysis.owned} onClick={stopOwnAnalysis}>Stop own analysis</button>
             {analysis.owned&&analysis.requestId&&['uncertain','stop_failed','unavailable','stopping'].includes(analysis.status)&&
               <button type="button" style={button} onClick={()=>ownAnalysis(true)}>Check analysis status</button>}
@@ -240,6 +281,23 @@
         <div role="status" aria-live="polite" style={{...note,marginTop:8}}>{words(state?.connection||'disconnected')}{state?.reason?` · ${words(state.reason)}`:''}</div>
         {state?.mediaReason && state.mediaReason !== state.reason && <div role="status" style={note}>{words(state.mediaReason)} · waiting for the next analyzed frame</div>}
         {notice&&<p role="status" style={note}>{notice}</p>}
+        {!legacyDeskAimPreview&&<p data-desk-aim-preview-retired="1" style={{...note,marginTop:10,paddingTop:8,borderTop:'1px solid #35404a'}}>
+          The den's virtual fixtures follow the lighting brain. See Virtual spotlights for why each light changed.</p>}
+        {legacyDeskAimPreview&&<section aria-label="Virtual desk aim preview" data-desk-aim-preview="1" style={{marginTop:10,paddingTop:8,borderTop:'1px solid #35404a'}}>
+          <strong>Virtual desk aim preview</strong>
+          <p style={note}>One visible person and your configured desk. Approximate placement; virtual controls only.</p>
+          <button type="button" style={button} aria-pressed={aimPreview.enabled===true}
+            disabled={!aimPreview.enabled&&!aimPreviewRef.current}
+            onClick={toggleAimPreview}>{aimPreview.enabled?'Stop desk preview':'Preview desk aim'}</button>
+          <div role="status" aria-live="polite" style={{...note,marginTop:5}}>
+            {aimPreview.active?(aimPreview.holding&&aimPreview.lastSeenLabel?`Previewing configured desk · ${aimPreview.lastSeenLabel}`:'Previewing configured desk')
+              :aimPreview.enabled?'Armed · waiting for one visible person':words(aimPreview.status)}
+            {aimPreview.fixtureId?` · ${aimPreview.fixtureId}`:''}
+            {aimPreview.reason&&!(aimPreview.active&&aimPreview.holding)?` · ${words(aimPreview.reason)}`:''}
+          </div>
+          {aimPreview.enabled===true&&aimPreview.policy==='development'&&<div data-desk-preview-development="1" style={note}>
+            Development timing · strict limits deferred · {aimPreview.warningsRecorded||0} warnings recorded</div>}
+        </section>}
         {!sessions.length&&onReturnToHome&&<button type="button" style={button} onClick={()=>{close();onReturnToHome();}}>Back to Home / Perception Lab</button>}
         <div style={{position:'relative',marginTop:10,background:'#05090c',aspectRatio:frame?`${frame.width} / ${frame.height}`:'16 / 9'}}>
           {state?.imageUrl&&frame?<><img src={state.imageUrl} alt={`Analyzed Den camera frame ${frame.frame_id}`} style={{display:'block',width:'100%',height:'100%',objectFit:'contain'}}/>
@@ -248,6 +306,44 @@
         <div style={{...note,marginTop:5}}>{frame?`Frame ${frame.frame_id} · Pose: ${ageText(view?.pose2d?.age)}`:'No decoded frame'}</div>
         {frame&&view?.pose2d?.renderable&&view.pose2d.keypoints.length===0&&
           <div role="status" style={{...note,marginTop:5}}>No supported person joints in this analyzed frame</div>}
+        {frame&&view?.pose2d?.renderable&&<section data-apartment-persons="1" aria-label="People in this analyzed frame" style={{...note,marginTop:6}}>
+          {view.pose2d.personAssociation?.status==='unavailable'&&<div data-person-association-status="unavailable">
+            Anonymous association unavailable · {words(view.pose2d.personAssociation.reason)}</div>}
+          {view.pose2d.personAssociation?.timing_status==='unverified'&&<div>Association timing unverified · viewing only</div>}
+          {view.pose2d.personSemantics?.scene&&<div data-person-scene-facts="1">Scene people · {words(view.pose2d.personSemantics.scene.people_visible)}</div>}
+          {view.pose2d.personSemantics?.timing_status==='unverified'&&<div>Interpretation timing unverified · viewing only</div>}
+          {view.pose2d.personJudgments?.timing_status==='unverified'&&<div>Judgment timing unverified · viewing only</div>}
+          {view.pose2d.personSemantics&&<div data-person-decision-status="unavailable">Decision unavailable · {words(view.pose2d.personSemantics.decision.reason)}</div>}
+          {(view.pose2d.personAssociation?.retired||[]).map(item=><div key={item.track_ref} data-retired-anonymous-ref={item.track_ref}>
+            Anonymous reference <span title={item.track_ref}>{shortRef(item.track_ref)}</span> retired · {words(item.reason)}</div>)}
+          {view.pose2d.personsReason?<div>Per-person detail unavailable · {words(view.pose2d.personsReason)}</div>:
+            !view.pose2d.persons.length?<div>No detected people in this analyzed frame</div>:
+            view.pose2d.persons.map((person,index)=>{
+              const missing=person.joints.filter(joint=>joint.status!=='supported');
+              return <details key={person.instance_id} data-person-instance={person.instance_id}>
+                <summary>Person {index+1} · {person.pose_status==='available'?`${person.joints.length-missing.length}/${person.joints.length} joints supported`:'Pose unavailable'}</summary>
+                <div>Frame-local reference {person.instance_id} · {ageText(view.pose2d.age)}</div>
+                {person.association?<div data-person-track-epoch={person.association.track_epoch} data-person-track-ref={person.association.track_ref||''}>
+                  {person.association.track_ref?<span>Anonymous reference <span title={person.association.track_ref}>{shortRef(person.association.track_ref)}</span> · </span>:null}
+                  {words(person.association.status)} · epoch <span title={person.association.track_epoch}>{shortRef(person.association.track_epoch)}</span> · viewing only
+                  {person.association.reason?` · ${words(person.association.reason)}`:''}</div>:<div>Anonymous continuity unavailable</div>}
+                {person.interpretation?.status==='available'?<div data-person-interpretation="available">
+                  <div>Activity hypothesis · {words(person.interpretation.facts.activity_hypothesis)}</div>
+                  <div>Posture · {words(person.interpretation.facts.subject_posture)} · Held object · {words(person.interpretation.facts.held_object)}</div>
+                  <div>Book · {words(person.interpretation.facts.book_state)} · Gaze · {words(person.interpretation.facts.gaze_target)}</div>
+                  <div>Typing visible · {words(person.interpretation.facts.typing_visible)} · Screen facing subject · {words(person.interpretation.facts.screen_facing_subject)}</div>
+                  <div>Visible basis · {person.interpretation.facts.visible_basis.map(words).join(', ')||'none supplied'}</div>
+                </div>:<div data-person-interpretation="unknown">Interpretation unknown · {words(person.interpretation?.reason||'person_semantics_missing')}</div>}
+                {person.judgment?.status==='available'?<div data-person-judgment="available">
+                  JEV judge · {words(person.judgment.judgment.activity)} · probability {Math.round(person.judgment.judgment.probabilities[person.judgment.judgment.activity]*100)}% · uncalibrated · viewing only
+                </div>:<div data-person-judgment="unknown">JEV judgment unknown · {words(person.judgment?.reason||'person_judgments_missing')}</div>}
+                {person.pose_reason&&<div>{words(person.pose_reason)}</div>}
+                {person.score_semantics&&<div>Raw model responses; not calibrated probabilities</div>}
+                {missing.map(joint=><div key={joint.joint_id}>{words(joint.name)} · {words(joint.reason||joint.status)}{Number.isFinite(joint.score)?` · raw ${joint.score}`:''}</div>)}
+              </details>;
+            })}
+          {view.pose2d.boxesReason&&<div>Person boxes unavailable · {words(view.pose2d.boxesReason)}</div>}
+        </section>}
         {approximateActive&&<div data-apartment-approximate-note="1" style={{...note,marginTop:5,color:'#e9bd7e'}}>
           Approximate room placement - timing unverified - no Follow or lighting authority</div>}
         {state?.heldFrame&&<div style={note}>Showing the preceding analyzed frame while the next exact frame decodes.</div>}

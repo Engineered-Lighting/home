@@ -8,7 +8,8 @@ const loadSpark = () => (sparkModule ??= import('@sparkjsdev/spark'));
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 const vector = (value, length) => Array.isArray(value) && value.length === length && value.every(finite);
 
-function validatedSnapshot(policy, matrix) {
+/** Validated, copied cutaway inputs; shared with the WebGPU splat node (splat-cutaway-tsl.mjs). */
+export function validatedSnapshot(policy, matrix) {
     if (!policy || typeof policy.enabled !== 'boolean'
         || !vector(policy.center, 3) || !vector(policy.halfExtent, 3)
         || !policy.halfExtent.every((value) => value > 0)

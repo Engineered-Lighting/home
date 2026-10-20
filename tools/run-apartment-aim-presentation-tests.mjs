@@ -193,13 +193,56 @@ test('labels show for few fixtures, stack instead of overlapping and yield to th
   const entries = [{ id: 'a', screen: { x: 100, y: 200 } }, { id: 'b', screen: { x: 130, y: 205 } }, { id: 'c', screen: { x: 900, y: 200 } }];
   const placed = A.placeFixtureLabels(entries, { selectedId: 'a', hoverId: 'b', bounds });
   assert.deepEqual(placed.map(item => [item.id, item.visible, item.state]), [['a', true, 'selected'], ['b', true, 'hover'], ['c', false, 'idle']]);
-  assert.equal(placed[0].y, 178); assert.equal(placed[1].y, 158, 'the second label stacks above the first');
+  assert.equal(placed[0].y, 178, 'the selected label sits 22 px above its fixture');
+  assert.equal(placed[1].y, 150, 'the second label climbs clear of the first: 24 px pill plus a 4 px gap');
   assert.deepEqual(placed[0].ring, { x: 100, y: 200 }); assert.deepEqual(placed[1].ring, { x: 130, y: 205 });
   const pill = A.placeFixtureLabels(entries, { selectedId: 'a', pillFixtureId: 'a', bounds });
   assert.equal(pill[0].visible, false, 'the pill carries the selected name'); assert.deepEqual(pill[0].ring, { x: 100, y: 200 });
   const many = Array.from({ length: 7 }, (_, index) => ({ id: 'f' + index, screen: { x: index * 100 + 20, y: 300 } }));
   const sparse = A.placeFixtureLabels(many, { hoverId: 'f3', bounds });
   assert.deepEqual(sparse.filter(item => item.visible).map(item => item.id), ['f3']);
+  // Selection is placed first, whatever its order in the list.
+  const late = A.placeFixtureLabels(entries, { selectedId: 'b', bounds });
+  assert.equal(late[1].y, 183, 'the selected label keeps its own spot'); assert.ok(late[0].y < late[1].y - 24);
+});
+
+test('labels never cover each other, the pill, the toolbar or the canvas edge, and keep 44 px on touch', { timeout: DEADLINE_MS.unit }, () => {
+  let seed = 7;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const touches = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  let shown = 0, dropped = 0;
+  for (let run = 0; run < 400; run++) {
+    const coarse = run % 2 === 1, width = [390, 768, 1026][run % 3], height = [380, 520, 716][run % 3];
+    const bounds = { left: 0, top: run % 5 === 0 ? 30 : 0, right: width, bottom: height };
+    const count = 2 + Math.floor(random() * 5);
+    const entries = Array.from({ length: count }, (_, index) => ({ id: 'f' + index, width: 50 + Math.floor(random() * 130),
+      screen: { x: width * (.2 + random() * .6), y: height * (.08 + random() * .6) } }));
+    const pill = { left: entries[0].screen.x - 80, right: entries[0].screen.x + 80, top: entries[0].screen.y - 70, bottom: entries[0].screen.y - 26 };
+    const toolbar = { left: width / 2 - 180, right: width / 2 + 180, top: height - 56, bottom: height - 12 };
+    const avoid = [pill, toolbar];
+    const placed = A.placeFixtureLabels(entries, { selectedId: run % 3 ? 'f1' : null, pillFixtureId: 'f0', bounds, avoid, coarse });
+    const half = coarse ? 22 : 12, boxes = [];
+    for (const item of placed) {
+      if (!item.visible) { if (item.id !== 'f0') dropped++; continue; }
+      shown++;
+      const entry = entries.find(candidate => candidate.id === item.id);
+      const box = { left: item.x - entry.width / 2, right: item.x + entry.width / 2, top: item.y - half, bottom: item.y + half };
+      assert.ok(box.left >= bounds.left - 1e-9 && box.right <= bounds.right + 1e-9 && box.top >= bounds.top - 1e-9 && box.bottom <= bounds.bottom + 1e-9,
+        `run ${run}: ${item.id} stays inside the canvas`);
+      for (const other of [...boxes, ...avoid]) assert.equal(touches(box, other), false, `run ${run}: ${item.id} covers nothing`);
+      boxes.push(box);
+    }
+    if (run % 3) assert.equal(placed[1].visible, true, `run ${run}: the selected label always shows`);
+  }
+  assert.ok(shown > dropped * 4, `labels are placed far more often than dropped (${shown} shown, ${dropped} dropped)`);
+});
+
+test('short names trim the registered name and never invent one', { timeout: DEADLINE_MS.unit }, () => {
+  assert.equal(A.shortFixtureLabel('Authored socket 3 fixture'), 'Authored socket 3');
+  assert.equal(A.shortFixtureLabel('Proposed fixture 1'), 'Proposed fixture 1');
+  assert.equal(A.shortFixtureLabel('Fixture'), 'Fixture');
+  assert.equal(A.shortFixtureLabel('A rather long registered fixture name'), 'A rather long reg…');
+  assert.equal(A.shortFixtureLabel(null), '');
 });
 
 test('the bar stays inside the visible canvas with Chat open or the sheet raised', { timeout: DEADLINE_MS.unit }, () => {

@@ -1,0 +1,25 @@
+[Unit]
+Description=Home Perception Lab recording controller
+After=network.target mediamtx.service
+
+[Service]
+Type=simple
+User=@JETSON_USER@
+Group=@JETSON_USER@
+WorkingDirectory=@RELEASE@/service
+Environment=PERCEPTION_LAB_CAPTURE_CONFIG=/etc/perception-lab/capture.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@VENV@/bin/python -m uvicorn capture_app:create_capture_app --factory --host 127.0.0.1 --port 8788 --workers 1 --no-access-log
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=@STORAGE@
+MemoryMax=@REVIEWED_MEMORY_MAX@
+CPUQuota=@REVIEWED_CPU_QUOTA@
+TasksMax=@REVIEWED_TASKS_MAX@
+KillMode=mixed
+TimeoutStopSec=30
+
+# No Install section: first commissioning starts explicitly, not at boot.

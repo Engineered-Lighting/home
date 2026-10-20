@@ -144,7 +144,7 @@ test('pre-exposure: Filament exposure = 1 / (1.2 x 2^EV100), applied to lights o
   assert.equal(M.preExpose(NaN, 1), 0);
 });
 
-test('fixture lights and bounce use the dimmed flux, never the raw slider level', () => {
+test('fixture lights use the dimmed flux, never the raw slider level', () => {
   const lights = M.fixtureLights({ spot: { origin: [0, 0, 2], direction: [0, 0, -1], channel: { on: true, brightness: .5, color_temp_kelvin: 3000 } },
     down: { origin: [0, 0, 1.9], channel: { on: true, brightness: .5 } }, center: [0, 0, 2],
     zones: [{ number: 1, azimuth_deg: 0, channel: { on: false, brightness: 1 } }] }, { spotFwhmDeg: 20 });
@@ -155,11 +155,11 @@ test('fixture lights and bounce use the dimmed flux, never the raw slider level'
   }
   assert.equal(lights[0].level, .5, 'level stays the set brightness'); near(lights[0].peakCandela, M.candelaFromLumens(450, M.spotHalfAngle(20)), 1e-12, 'spot peak');
   assert.equal(lights[2].candela, 0, 'an off zone adds no light');
-  const hit = { point: [0, 0, 0], normal: [0, 0, 1] };
-  const patches = M.bouncePatches([{ kind: 'down', level: .5, kelvin: 3000 }], [hit]);
-  near(patches[0].reflected, 350 * M.litDimmingFraction(.5) * .8 * .35, 1e-9, 'a half-level down reflects its dimmed flux');
-  const given = M.bouncePatches([{ kind: 'down', level: .5, fluxFraction: .25, kelvin: 3000 }], [hit]);
-  near(given[0].reflected, 350 * .25 * .8 * .35, 1e-9, 'an eased flux fraction wins when the caller supplies one');
+  // L5 retired #319's instant radiosity: the bounce is traced in lit-bvh-bake.mjs,
+  // weighted by each light's dimmed candela.
+  assert.equal(M.bouncePatches, undefined);
+  assert.doesNotMatch(M.LIT_BOUNCE_LIMIT, /leak/, 'the bounce is shadowed now');
+  assert.match(M.LIT_BOUNCE_LIMIT, /assumed albedos/); assert.equal(M.LIT_BOUNCE_ALBEDO.measured, false);
 });
 
 test('easeLights steps fixture lights toward their set level and Kelvin, snapping when asked', () => {

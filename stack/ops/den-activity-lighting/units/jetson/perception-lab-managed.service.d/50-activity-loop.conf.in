@@ -7,8 +7,13 @@
 # drop-in. Install as
 #   ~/.config/systemd/user/perception-lab-managed.service.d/50-activity-loop.conf
 #
-# @ENV_FILE@ (0600, owned by @SERVICE_USER@) holds the private value:
+# @ENV_FILE@ (0600, owned by @SERVICE_USER@) holds the private values:
 #   PERCEPTION_LAB_ACTIVITY_LOOP_CONFIG=<absolute path to the loop config>
+#   JETSON_HOME=<home directory of @SERVICE_USER@>
+# Without JETSON_HOME the Den backend code falls back to the placeholder
+# /home/jetson-user (RUNBOOK J0). Verify after a restart with
+#   systemctl --user show perception-lab-managed.service -p Environment -p EnvironmentFiles
+# and the running process's /proc/<MainPID>/environ.
 # The config file itself must be 0600 and owned by @SERVICE_USER@
 # (private_json refuses anything else). Check it offline before a restart:
 # a malformed config stops the whole managed service, camera chat included.

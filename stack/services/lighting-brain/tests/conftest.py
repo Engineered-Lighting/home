@@ -70,7 +70,8 @@ def brain(geometry, settings, clock):
 
 # ------------------------------------------------------------ event builders
 
-DEFAULT_TTL = {"occupancy": 90, "zone": 90, "activity": 12, "person_pose": 10, "health": 150, "cost": 300}
+DEFAULT_TTL = {"occupancy": 90, "zone": 90, "activity": 12, "person_pose": 10, "person_position": 3,
+               "health": 150, "cost": 300}
 
 
 def event(kind, t, ttl=None, **fields):
@@ -101,6 +102,11 @@ def pose(t, people=None, count=None, **kw):
     return event("person_pose", t, people=people, person_count=len(people) if count is None else count, **kw)
 
 
+def position(t, *points, count=None, **kw):
+    people = [{"track_id": f"slot-{i}", "position_m": list(p), "approximate": True} for i, p in enumerate(points)]
+    return event("person_position", t, people=people, person_count=len(people) if count is None else count, **kw)
+
+
 def health(t, component, ok=True, detail=None, **kw):
     return event("health", t, component=component, ok=ok, detail=detail, **kw)
 
@@ -117,6 +123,11 @@ def healthy(t):
     return [health(t, c) for c in ("jev", "deep_stack", "frigate", "camera")]
 
 
-def reading_scene(t):
-    """Everything reading_spot_on needs, observed at t."""
-    return [occupancy(t), zone(t), activity(t), pose(t), *healthy(t)]
+# The reader's chest point (shoulder midpoint) on the synthetic sofa.
+SOFA_MID = (1.6, 0.75, 0.95)
+
+
+def reading_scene(t, zone_hint=None):
+    """Everything reading_spot_on needs, observed at t (v1.1: no zone events;
+    the pose places the reader at the sofa seat)."""
+    return [occupancy(t), activity(t, zone_hint=zone_hint), pose(t), *healthy(t)]

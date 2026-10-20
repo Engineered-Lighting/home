@@ -12,3 +12,4 @@
 *.pdf binary
 *.sqlite binary
 *.db binary
+tools/fixtures/apartment-live-repair-20261018/** -text

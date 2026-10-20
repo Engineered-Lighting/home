@@ -225,7 +225,7 @@ assert("edit mode offers table, island, art, custom point, and custom surface ta
     && EDIT.includes('{ category: "art"') && EDIT.includes('label: "custom point"')
     && EDIT.includes('label: "custom surface"'));
 assert("target placement uses an exact mesh point and face normal", EDIT.includes("engine.picking.surfaceHit")
-  && /surfaceHit\(apartmentRoot,\s*objects,\s*clientX,\s*clientY(?:,\s*\{\s*acceptPoint\s*=\s*null\s*\}\s*=\s*\{\s*\})?\)/.test(PICKING)
+  && /surfaceHit\(apartmentRoot,\s*objects,\s*clientX,\s*clientY(?:,\s*\{\s*acceptPoint\s*=\s*null(?:,\s*doubleSided\s*=\s*false)?\s*\}\s*=\s*\{\s*\})?\)/.test(PICKING)
   && PICKING.includes("apartmentRoot.worldToLocal(candidate.point.clone())")
   && PICKING.includes("transformDirection(hit.object.matrixWorld)")
   && PICKING.includes("normal.applyQuaternion(rootQ.invert()).normalize()"));

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lighting-target-replay-2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "lighting-target-replay-2"
+    },
+    "version": {
+      "const": 2
+    },
+    "registry": {
+      "type": "object"
+    },
+    "manifest": {
+      "type": "object"
+    },
+    "ticks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "registry",
+    "manifest",
+    "ticks"
+  ]
+}

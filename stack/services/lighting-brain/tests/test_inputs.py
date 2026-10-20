@@ -115,3 +115,28 @@ def test_cost_events_accumulate():
     inputs.apply(cost(NOON, 4, 0.02), NOON, S)
     inputs.apply(cost(NOON, 5, None), NOON, S)  # same timestamp is not "stale" for cost
     assert [c[1] for c in inputs.cost] == [4, 5]
+
+
+def test_person_position_validation(geometry):
+    from conftest import position
+
+    good = position(NOON, (1.0, 2.0, 1.2), (3.0, 1.0, 1.1))
+    assert validate_batch(batch(good), HOME, geometry) == [good]
+    for bad in (
+        position(NOON, (1.0, 2.0, 1.2)) | {"person_count": None},
+        {**position(NOON), "people": [{"track_id": "slot-0", "position_m": None, "approximate": True}]},
+        {**position(NOON), "people": [{"track_id": "slot-0", "position_m": [1, 2], "approximate": True}]},
+        {**position(NOON), "people": [{"track_id": "slot-0", "position_m": [1, 2, 3], "approximate": False}]},
+    ):
+        assert refused(batch(bad), geometry).status == 422
+
+
+def test_person_position_is_fresh_for_three_seconds_and_is_evidence():
+    from conftest import position
+
+    inputs = Inputs()
+    assert inputs.apply(position(NOON, (1.0, 1.0, 1.0)), NOON, S) is None
+    assert inputs.position.expires_at == NOON + 3
+    assert inputs.last_person_evidence_at == NOON
+    assert inputs.apply(position(NOON + 1, count=0), NOON + 1, S) is None
+    assert inputs.last_person_evidence_at == NOON  # an empty frame is not evidence

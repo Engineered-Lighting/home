@@ -123,6 +123,13 @@ test('surface picking uses the real canonical raycaster and names its actual sca
   const result = layer.pick(440, 360); assert.ok(result); result.point.forEach((value, i) => close(value, [0, 0, 0][i]));
   result.normal.forEach((value, i) => close(value, [0, 0, 1][i])); assert.equal(result.surfaceName, 'Authored scan face');
   scan.name = ''; assert.equal(layer.pick(440, 360).surfaceName, 'Scan surface');
+  // Exporter-made names of unnamed scan nodes never reach the owner.
+  for (const generated of ['geometry_0', 'Mesh', 'mesh_12', 'Object_3', 'node0', 'Scene', 'group-2', '7']) {
+    scan.name = generated; assert.equal(layer.pick(440, 360).surfaceName, 'Scan surface', generated);
+  }
+  for (const authored of ['Floor', 'Back wall', 'Mesh shelf', 'Object table']) {
+    scan.name = authored; assert.equal(layer.pick(440, 360).surfaceName, authored);
+  }
   layer.dispose(); geometry.dispose(); material.dispose();
 });
 

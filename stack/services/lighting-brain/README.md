@@ -1,12 +1,14 @@
 # lighting-brain
 
 The den activity-aware lighting brain (AL-1, Engineered-Lighting/home#321).
-It is a central, explainable rule service. It takes occupancy, zone, activity,
-pose, health and cost events from the edge producers and decides what Home's
-four virtual den fixtures do. Every change carries a "why" and lands in a
-20-item decision log.
+It is a central, explainable rule service. It takes whole-room occupancy,
+person positions, activity, pose, health and cost events from the edge
+producers and decides what Home's four virtual den fixtures do. Every change
+carries a "why" and lands in a 20-item decision log.
 
-It builds to the den activity-lighting interface contract v1 (schemas
+It builds to the den activity-lighting interface contract v1 with the v1.1
+amendment (2026-10-20): zone events are optional, and ambient follows how
+close people are to each fixture (schemas
 `activity-lighting-events-1`, `activity-lighting-override-1` and
 `activity-lighting-state-1`).
 
@@ -64,8 +66,9 @@ All tests run offline with an injectable clock and no sleeps:
 |---|---|
 | `tests/test_aim.py` | The solver port, hand point, facing, fixture choice, head-sphere rejection |
 | `tests/test_inputs.py` | Validation (422s), expired, future and stale events, the reading-run tracking |
-| `tests/test_rules.py` | Each rule in the table, the night window, purity, settings |
-| `tests/test_timeline.py` | Replays of every MVP "Done" case through a real `Brain` with producers at contract cadences |
+| `tests/test_rules.py` | Each rule in the table (including proximity levels, deadband and the nearest-name hysteresis), the night window, purity, settings |
+| `tests/test_timeline.py` | Replays of every MVP "Done" case without zones through a real `Brain`, plus walking toward and away from each fixture, jitter and the push-rate bound |
+| `tests/test_producer_notes.py` | The contract "Producer notes": Frigate-down hold, the sofa without zones, null counts, JEV egress block and release |
 | `tests/test_service.py` | The state document shape, SSE framing, config files, and the HTTP API on an ephemeral loopback port |
 
 ## Configuration
@@ -123,10 +126,12 @@ its corners, marked `"synthetic": true`.
   check then matches the renderer exactly. `aim_origin_m: null` means the
   fixture can still do ambient, but never the spot.
 - **`limits`:** optional; the default is the virtual ±180° pan, ±90° tilt.
-- **`zones.<zone>.near_fixtures`:** the fixtures whose ambient that zone
-  lights.
-- **`zones.sofa.seat_m`:** the sofa mark from Home's selector. A posed person
-  more than `pose_seat_max_m` (1.5 m) from it horizontally gets no spot.
+- **`zones.<zone>.near_fixtures`:** still parsed and validated, but unused
+  since v1.1 (proximity lights every fixture by distance).
+- **`zones.sofa.seat_m`:** the sofa mark from Home's selector. "At the sofa"
+  means a fresh position within `pose_seat_max_m` (1.5 m) of it,
+  horizontally; a posed reader farther away gets no spot. Without a seat mark,
+  only JEV's `zone_hint=sofa` places the reader.
 - **`camera_m`:** the OAK camera position. It settles the facing direction:
   facing points away from the camera. Without it, the brain uses the
   anatomical shoulder labels.
@@ -156,7 +161,7 @@ returns 404.
   - `expired`: now is past `observed_at + ttl_s`.
   - `future`: `observed_at` is more than 5 s ahead of the brain's clock.
   - `stale`: older than the newest event already applied for the same input
-    (the occupancy, zone, activity, pose or health component).
+    (the occupancy, zone, activity, pose, position or health component).
 - **Other statuses:**
   - 400: invalid JSON.
   - 401: missing or unknown token.
@@ -178,16 +183,33 @@ data: {"schema":"activity-lighting-state-1",…}
   fields.
 - When nothing changes, a full state is still pushed every
   `stream_period_s` (5 s).
+- Changes reach the stream at most `max_push_hz` (4) times a second. A change
+  inside the interval goes out with the next ingest or tick (`tick_s`
+  0.25 s).
 
-## Rules v1
+### `person_position` (v1.1)
+
+```json
+{"type": "person_position", "home": "victoria", "room": "den", "source": "...",
+ "observed_at": 0.0, "sent_at": 0.0, "ttl_s": 3,
+ "people": [{"track_id": "slot-0", "position_m": [x, y, z], "approximate": true}],
+ "person_count": 1}
+```
+
+The brain also takes a position from every fresh `person_pose` person with
+both shoulders (the shoulder midpoint). `person_count` from either event
+counts toward the people count, and `person_count` ≥ 1 is person evidence.
+
+## Rules v1.1
 
 `RULES` in `rules.py` is the table. Rules run in this order, each owning its
 outputs and its "why".
 
 | Rule | Condition | Output | Settings |
 |---|---|---|---|
-| `room_off` | No occupancy (room or zone) for 120 s; also at startup. While occupancy is unknown, it needs 30 min with no person evidence instead. | All off, 3 s fade | `room_off_after_s`, `room_off_fade_s`, `unknown_occupancy_off_s` |
-| `zone_ambient` | Zone present. It holds for `zone_hold_s` after the zone empties while the room is occupied, and freezes when the room empties so `room_off` ends the scene. | Nearby fixtures' radial and down at 0.30 / 2700 K, 2 s fade. Night (23:00–06:00 local) is 0.10 / 2200 K. | `ambient_*`, `night_*`, `zone_hold_s`, `timezone` |
+| `room_off` | No occupancy for 120 s (zone events, if any, also count as presence); also at startup. While occupancy is unknown, it needs 30 min with no person evidence instead. | All off, 3 s fade | `room_off_after_s`, `room_off_fade_s`, `unknown_occupancy_off_s` |
+| `proximity_ambient` | The room isn't off and there is a fresh person position | Every fixture's radial and down at a level set by d, the distance from the nearest fresh position to its `aim_origin_m`: 0.10 at d ≥ 3.0 m, rising linearly to 0.60 at d ≤ 1.0 m. 2700 K, 0.8 s fade. Night (23:00–06:00 local) multiplies the level by 0.35 at 2200 K. A level only moves by more than 0.05 (deadband). Why: "Near fixture 03 · brighter". | `prox_*`, `ambient_cct_k`, `night_*`, `timezone` |
+| `occupied_ambient` | The room isn't off but no position is fresh (the fallback inside the same rule) | Every fixture at 0.30, 2 s fade (night ×0.35). Why: "Room occupied · ambient", or "Room just emptied · ambient until off" during the 120 s before `room_off`. | `occupied_level`, `ambient_fade_s` |
 | `degraded_ambient` | The `jev` or `deep_stack` health event is not ok (including `jev_egress_blocked_indeterminate`), has expired, or has not been received yet. Also: occupancy is unknown (see below). | Ambient only, never a new spot. For unknown occupancy: hold, with the why "Occupancy sensor offline · holding". | (health ttl) |
 | `reading_spot_on` | All of the conditions listed below this table | Spot at 0.8 / 3500 K, 1.5 s fade, on the hand point, from the best fixture behind and above the reader with no beam through the head | `reading_hold_on_s`, `spot_*`, `hand_*`, `head_*`, `min_behind_cos`, `max_beam_m`, `pose_seat_max_m` |
 | `reading_spot_off` | No `reading` for 10 s, or any precondition lost (which turns the spot off at once) | The spot fades out over 1.5 s | `reading_off_after_s`, `spot_fade_s` |
@@ -196,30 +218,28 @@ outputs and its "why".
 `reading_spot_on` needs all of these:
 
 - JEV has said `reading` for at least 3 s, measured on `observed_at`.
-- The sofa zone is present. If the sofa zone is unknown, JEV's `zone_hint`
-  must be `sofa`, or, with no hint, the pose must pass the seat check.
+- The room is occupied (or occupancy is unknown, see below).
+- The reader is at the sofa: a fresh position within 1.5 m of the sofa
+  `seat_m`, or JEV's `zone_hint` is `sofa`. Zone events are not used.
 - The best known people count is exactly 1. It is the largest count across
-  occupancy, zone, activity and pose.
+  occupancy, zone (if sent), activity, pose and position.
 - The activity's `zone_hint` is not `desk`.
 - JEV and the deep stack are healthy.
 - A fresh pose has both shoulders.
 
 **Unknown, not absent** (CONTRACT "Producer notes"):
 
-- **Zone states:** a zone is `present`, `absent` or `unknown`. It is unknown
-  when it has never been reported (not drawn yet, cold start), or when its
-  event expired while Frigate is unhealthy.
-- **Unknown zones:** an unknown zone is lit when JEV's `zone_hint` names it.
 - **Unknown occupancy:** occupancy is unknown when Frigate reported
   unhealthy (`health` `frigate` not ok or no longer fresh) and no occupancy or
   zone event is fresh. Then the brain:
-  - holds the zone lighting as it was when the bridge's last word expired;
+  - keeps the ambient going: proximity while positions are fresh, otherwise
+    the flat occupied level;
   - reports `degraded_ambient` with "Occupancy sensor offline · holding";
   - keeps a spot that was already on while its reading preconditions hold,
     but starts no new spot;
   - turns the room off only after `unknown_occupancy_off_s` (30 min) with no
     person evidence. Evidence is an occupancy or zone `present`, or a fresh
-    `activity` or `person_pose` with `person_count` ≥ 1.
+    `activity`, `person_pose` or `person_position` with `person_count` ≥ 1.
 - **JEV auto-release:** after `jev` `ok:false` (for example
   `jev_egress_blocked_indeterminate`), `ok:true` lets the spot return once a
   fresh 3 s reading hold passes.
@@ -261,10 +281,13 @@ conventions:
 - a straight-down target leaves pan indeterminate and is not executable.
 
 **Decisions.** One entry is made per evaluation that changes something
-visible: the mode, a fixture's ambient level or CCT, spot on or off, or a
-pause. It is attributed to the most significant rule among the changes, in
-this order: `manual_pause`, `room_off`, `degraded_ambient`, `reading_spot_on`,
-`reading_spot_off`, `zone_ambient`. Each entry has
+meaningful: the mode, a fixture's ambient switching on or off, changing CCT
+or changing rule, spot on or off, a pause, or the named nearest fixture.
+Proximity levels move as people walk; those steps reach the state and stream
+but not the log, so the 20 entries stay readable. A decision is attributed to
+the most significant rule among the changes, in this order: `manual_pause`,
+`room_off`, `degraded_ambient`, `reading_spot_on`, `reading_spot_off`,
+`proximity_ambient`, `occupied_ambient`. Each entry has
 `{at, rule, why, inputs, change}`. The log keeps the newest 20, newest first.
 
 ## For AL-5/6: gateway route and deployment
@@ -353,7 +376,7 @@ TTLs compare the producer's `observed_at` with the brain's clock. The Pi,
 the Jetson and the LA box need NTP. An event more than 5 s in the future is
 ignored as `future`.
 
-## Assumptions to confirm (contract v1 is silent)
+## Assumptions to confirm (the contract is silent)
 
 - **`head_pitch_deg` sign:** positive means looking down (the solver's tilt
   convention).
@@ -370,5 +393,13 @@ ignored as `future`.
   Only a vacancy that starts after the override ends it early.
 - **Unknown occupancy in the state:** `occupancy.present` is `false` and
   `people_count` is `null`, and the why line says the sensor is offline.
-- **Room with no zone:** an occupied room with no zone lit stays off
-  (`zone_ambient`: "Room occupied · no zone yet").
+- **Proximity distance** is 3D, from the position (a chest point) to the
+  fixture's `aim_origin_m`. A person standing right under a ceiling fixture
+  is about 1 m from it, which is the "near" end.
+- **Ambient covers every fixture** whenever the room isn't off. The far floor
+  is 0.10, never 0.
+- **The nearest-fixture name** in the why line only switches when another
+  fixture is 0.25 m closer (`prox_nearest_hysteresis_m`), so it doesn't
+  flicker between two fixtures.
+- **`inputs.position_age_s`** is added to the state's `inputs` (additive).
+- **`settings_version`** is now `v1.1`.

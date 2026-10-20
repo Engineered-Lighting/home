@@ -8987,6 +8987,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       dockState: selectedSiteId === "victoria" && window.HomeApartmentDenPerception
         ? unifiedDockCollapsed ? "collapsed" : unifiedDockExpanded ? "expanded" : "default" : "hidden",
       selectionLabel: unifiedSelectionLabel, setupActive: editing,
+      haConnection: connection, haLastReportedAt: selectedSiteId === "echo" ? window.HomeApartmentStates?.latestReport(statesRef.current, window.HomeApartmentQuick?.echoLightEntityIds(model.devices)) ?? null : null,
       canSetup: apartmentSceneControlsEnabled && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled),
       openSetup: openUnifiedSetup,
       selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });

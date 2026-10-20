@@ -116,6 +116,10 @@ const MAP = [
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
+  // APT-F06/S02: the shared data states, the status rows that read them, and Quick, which delegates to them.
+  [/^(?:app\/src\/(?:home-apartment-(?:states\.js|status\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)|tools\/(?:test-apartment-states\.cjs|test-apartment-status-rows-browser\.mjs|fixtures\/den-contracts\/.+))$/,
+    ["test-apartment-states.cjs", "test-apartment-status-rows-browser.mjs"]],
+  [/^app\/src\/home-apartment-states\.js$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-light-pools\.mjs|tools\/test-apartment-light-pools\.mjs)$/, ["test-apartment-light-pools.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-directional\.js|-cards\.jsx|\.jsx)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
   [/^tools\/(?:test-apartment-directional(?:-integration|-browser(?:-part2)?)?\.mjs|fixtures\/apartment-directional-browser-proof\.mjs)$/, ["test-apartment-directional.mjs", "test-apartment-directional-integration.mjs", "test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"]],
@@ -198,6 +202,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-chat-header-browser.mjs": 5,
   "test-apartment-unread-integration.mjs": 5,
   "test-apartment-escape-browser.mjs": 4,
+  "test-apartment-status-rows-browser.mjs": 6,
   "test-apartment-echo-inspector-browser.mjs": 4,
   "test-apartment-directional-integration.mjs": 4,
   "check-jsx.js": 4,

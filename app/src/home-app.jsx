@@ -5345,13 +5345,10 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
       <span className="apt-home-status-dot" data-state={state?.phase || "loading"} />
       <span className="apt-home-status-summary">{state?.sourceLabel || "Loading room"}</span>
       {state?.saveState && <span className="apt-home-status-save">{state.saveState}</span>}
-    </summary><div role="status">
-      <p>Room: {state?.phase || "loading"}</p>
-      <p>{state?.sourceLabel || "Source unavailable"}</p>
-      <p>Save: {state?.saveState || "unavailable"}{state?.saveDetail ? ` · ${state.saveDetail}` : ""}</p>
-      <p>{state?.physicalControls ? "Home Assistant connected · output guards apply" : "Physical controls unavailable for this home"}</p>
-      <p>Video, analyzed frames, pose and inference have separate states in Camera · JEV. Missing pose does not mean vacant.</p>
-    </div></details>
+    </summary>{/* APT-S02: one row per system, from the shared states (APT-F06). */}
+      {window.HomeApartmentStatusRows ? <window.HomeApartmentStatusRows state={state} />
+        : <div role="status"><p>{state?.sourceLabel || "Loading room"}</p></div>}
+    </details>
     <div className="apt-home-top-actions">
     {state?.openSetup && <button type="button" className="apt-home-setup" aria-pressed={!!state?.setupActive}
       onClick={state.openSetup}>Setup</button>}

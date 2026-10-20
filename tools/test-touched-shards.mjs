@@ -172,3 +172,19 @@ test('the two directional browser parts are both planned together and run on dif
     }
   }
 });
+
+test('all three WebGPU lighting proof parts are planned together and use separate workers', () => {
+  const parts = ['test-apartment-lit-webgpu-browser.mjs', 'test-apartment-lit-webgpu-browser-part2.mjs',
+    'test-apartment-lit-webgpu-browser-part3.mjs'];
+  for (const file of ['app/src/home-3d/lit-exposure.mjs', 'tools/fixtures/apartment-lit-webgpu-browser-proof.mjs',
+    'tools/test-apartment-lit-webgpu-browser-part3.mjs']) {
+    const argv = ['--files', file], full = planOf(argv);
+    assert.ok(parts.every(name => full.includes(name)), 'the complete lighting proof guards ' + file);
+    for (const count of [3, 6, 8]) {
+      const shards = Array.from({ length: count }, (_, index) => planOf([...argv, '--shard', `${index + 1}/${count}`]));
+      const owners = parts.map(name => shards.flatMap((plan, index) => plan.includes(name) ? [index] : []));
+      assert.ok(owners.every(list => list.length === 1), 'each proof part has exactly one worker');
+      assert.equal(new Set(owners.flat()).size, parts.length, 'lighting proof parts use separate workers with ' + count + ' shards');
+    }
+  }
+});

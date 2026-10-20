@@ -387,13 +387,15 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             try {
                 // A splat load timeout cancels network IO; a decoder completing
                 // later is released by runAssetLoad before it can join the scene.
-                splat = await runAssetLoad('splat', url, adapters.loadSplat,
+                // The node renderer's splat sizes its sort and SH from the budget.
+                const budget = performanceController?.getBudget?.() ?? null;
+                splat = await runAssetLoad('splat', url, (load) => adapters.loadSplat({ ...load, budget }),
                     loadTimeoutMs ?? (mobile ? 45000 : 90000));
                 assertLive();
                 applyRegistration(splat, frame);
-                splatCutaway = await adapters.createSplatCutaway({ splat });
+                splatCutaway = await adapters.createSplatCutaway({ splat, dollhouseCutaway });
                 assertLive();
-                if (scene && renderer && !state.sparkRenderer) {
+                if (scene && renderer && !state.sparkRenderer && adapters.createSparkRenderer) {
                     const sr = await runAssetLoad('sparkRenderer', 'spark-renderer',
                         ({ signal: rendererSignal }) => adapters.createSparkRenderer({ renderer, signal: rendererSignal }),
                         loadTimeoutMs ?? (mobile ? 45000 : 90000));
@@ -665,6 +667,25 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         setPointsVisible(mode === 'points' || !!state.fading);
     }
 
+    function tickNodeSplat(cam) {
+        const splat = state.splat;
+        sparkUpdateCounts.started += 1;
+        try {
+            state.splatCutaway?.update(desiredCutaway.policy, desiredCutaway.inverse, exteriorBounds);
+            const degree = performanceController?.getBudget?.()?.splatMaxShDegree;
+            if (Number.isInteger(degree)) splat.setMaxShDegree(degree);
+            const result = splat.update(renderer, cam);
+            sparkUpdateCounts.completed += 1;
+            lastSparkError = null;
+            sparkIdlePromise = Promise.resolve({ status: 'updated', sort: result.status });
+        } catch (error) {
+            sparkUpdateCounts.failed += 1;
+            lastSparkError = String(error?.message || error);
+            sparkIdlePromise = Promise.resolve({ status: 'failed', error: lastSparkError });
+        }
+        return sparkIdlePromise;
+    }
+
     const modes = {
         get mode() { return state.mode; },
         onChange(cb) {
@@ -736,10 +757,14 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             listeners.forEach((cb) => cb(next, prev));
         },
 
-        /* One owned async Spark update; busy frames do not queue more work. */
-        tickSpark(cam, time) {
+        /* The per-frame splat tick, before renderer.render(). Spark: one owned
+         * async update; busy frames do not queue more work. The node
+         * renderer's splat (?renderer=webgpu): a synchronous cutaway commit
+         * and sort (gaussian-splat-webgpu.mjs update()). */
+        tickSplat(cam, time) {
             if (disposed) return null;
             const splatActive = !!state.fading || state.mode === 'splat' || state.targetMode === 'splat';
+            if (state.splat?.isHomeGaussianSplat) return splatActive ? tickNodeSplat(cam) : null;
             if (!state.sparkRenderer || !splatActive || (!state.splat && !state.fading)) return null;
             if (sparkUpdateJob) {
                 sparkUpdateCounts.coalescedTicks += 1;
@@ -788,6 +813,12 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         // Settles after the owned update and any terminal lease cleanup. A
         // hung vendor operation remains pending; no timeout reports false zero.
         whenSparkIdle() { return sparkIdlePromise; },
+
+        /**
+         * Lit's per-splat colour buffer (lighting report L4), or null without
+         * a node-renderer splat. See HomeGaussianSplat.colorHook().
+         */
+        splatColorHook() { return state.splat?.colorHook?.() ?? null; },
 
         getMesh() { return state.mesh; },
         getCollision() { return state.collision; },
@@ -858,6 +889,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 sparkVisible: state.sparkRenderer ? state.sparkRenderer.visible : null,
                 splatSource: state.splatSource,
                 numSplats: state.splat ? (state.splat.numSplats ?? null) : null,
+                splatPipeline: state.splat?.pipelineReadback?.() ?? null,
                 srParent: state.sparkRenderer ? (state.sparkRenderer.parent?.type || 'none') : 'none',
                 meshSource: state.meshSource,
                 meshFallback: state.meshFallback,
@@ -920,6 +952,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             }
         },
     };
+    // The engine and older callers still say tickSpark.
+    modes.tickSpark = modes.tickSplat;
     const onLifetimeAbort = () => modes.dispose();
     signal?.addEventListener?.('abort', onLifetimeAbort, { once: true });
     if (signal?.aborted) modes.dispose();

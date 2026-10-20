@@ -906,6 +906,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
                 await pointsPromise;
                 if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
+                // The same per-frame splat work as frame(): sort for this camera.
+                modes.tickSplat?.(camera, performance.now() / 1000);
                 const frame = await nodeRenderer.capture({ scene, camera, scale, signal });
                 return disposed || signal?.aborted ? null : frame;
             }

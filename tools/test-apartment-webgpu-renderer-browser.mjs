@@ -168,7 +168,9 @@ async function proofInPage() {
   const result = { backend: e.rendererBackend, gpu: e.gpu, poses: [], picks: [], projections: [], errors };
   const poses = [['home', () => {}], ['orbit+2', () => { e.rig.stepAzimuth(1, 0); e.rig.stepAzimuth(1, 0); }],
     ['zoom+2', () => { e.rig.stepZoom(1, 0); e.rig.stepZoom(1, 0); }]];
-  for (const mode of ['points', 'mesh']) {
+  // Photo is Spark on WebGL and Home's splat renderer on the node renderer;
+  // on Victoria it carries the dollhouse cut, exterior cleanup and photo floor.
+  for (const mode of ['points', 'mesh', 'splat']) {
     await e.modes.setMode(mode, { duration: 0 });
     for (const [name, apply] of poses) {
       e.rig.snapHome(0); await settle(); apply(); await settle();
@@ -201,7 +203,7 @@ async function proofInPage() {
     descriptors: ids.map(id => overlay.virtualFixtureInteractionDescriptor(id)) };
   const aim = overlay.aimVirtualFixtureAtTarget(ids[0], { point: [2, 2, 0.5], normal: [0, 0, 1], kind: 'authored_floor' });
   result.fixtures.aim = { ok: aim?.ok ?? null, descriptor: overlay.virtualFixtureInteractionDescriptor(ids[0]) };
-  // Photo: Spark on WebGL; on the node renderer it reports unavailable.
+  // Photo loads on every backend (Spark on WebGL, the splat fork on the node renderer).
   try { await e.modes.setMode('splat', { duration: 0 }); result.photo = { ok: true, mode: e.modes.mode }; }
   catch (error) { result.photo = { ok: false, error: String(error?.message || error) }; }
   await e.modes.setMode('points', { duration: 0 });
@@ -330,7 +332,7 @@ test('WebGPU renderer foundation matches the WebGL engine in Cloud and Mesh', { 
         fixtures: assertNumericallyEqual(candidate.fixtures, reference.fixtures, 'fixture readback, descriptors and aim'),
       };
       assert.equal(reference.photo.ok, true, 'Photo loads on WebGL: ' + reference.photo.error);
-      assert.deepEqual(candidate.photo, { ok: false, error: 'photo_unavailable_on_webgpu_preview' });
+      assert.equal(candidate.photo.ok, true, 'Photo loads on the node renderer: ' + candidate.photo.error);
       assert.ok(candidate.capture && candidate.capture.width > 0 && candidate.capture.length === candidate.capture.width * candidate.capture.height * 4,
         'captureFrame returns a frame');
       const comparisons = [];

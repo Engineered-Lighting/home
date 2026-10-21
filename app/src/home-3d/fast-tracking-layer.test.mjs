@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateTrackingPacket,trackingPacketValidity,attachFastTracking} from './fast-tracking-layer.mjs';
+import {validateTrackingPacket,trackingPacketValidity,trackingGpuLatency,attachFastTracking} from './fast-tracking-layer.mjs';
 import * as THREE from 'three';
 import {bodyPerson} from '../../../tools/fixtures/body-form-fixtures.mjs';
 const scene={siteId:'victoria',contentRevision:'pack',frameDigest:'a'.repeat(64),registrationVersion:1,collisionDigest:'b'.repeat(64),cameraId:'den'};
@@ -83,4 +83,54 @@ test('diagnostic reasons preserve clock and original evidence expiry limits',()=
   assert.equal(trackingPacketValidity(fresh,scene,{clock,nowMs:26201}).reason,'clock_expired');
   assert.equal(trackingPacketValidity(packet(),scene,{clock,nowMs:11800}).reason,'evidence_expired');
   assert.equal(trackingPacketValidity(packet(),scene,{clock:null,nowMs:11200}).reason,'clock_missing');
+});
+
+test('a GPU-completed draw retains broad timing uncertainty when its raw interval crosses zero',async()=>{
+  const priorWindow=globalThis.window,priorPerformance=Object.getOwnPropertyDescriptor(globalThis,'performance');
+  let nowMs=0,streamController,layer;
+  Object.defineProperty(globalThis,'performance',{configurable:true,value:{now:()=>nowMs}});
+  globalThis.window={HomeContentPacks:{get:()=>({manifest:{assets:{'collision.glb':{sha256:scene.collisionDigest}}}})}};
+  const engine={sceneIdentity:scene,siteId:'victoria',contentRevision:'pack',apartmentRoot:new THREE.Group(),
+    renderer:{backend:{device:{queue:{onSubmittedWorkDone:async()=>{}}}}}};
+  const stream=new ReadableStream({start(c){streamController=c;}});
+  const fetchImpl=async url=>{
+    if(url.endsWith('/clock')){nowMs=800;return new Response(JSON.stringify({attempt_id:'c'.repeat(32),monotonic_s:100.4}));}
+    return new Response(stream,{headers:{'content-type':'text/event-stream'}});
+  };
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  try{
+    layer=attachFastTracking(engine,{fetchImpl,documentObject:{hidden:false}});await flush();
+    const p=packet();p.people=[bodyPerson()];p.source_la_monotonic_interval_s=[100.6,100.65];p.expires_monotonic_s=101.35;
+    nowMs=820;streamController.enqueue(new TextEncoder().encode('data: '+JSON.stringify(p)+'\n\n'));await flush();
+    assert.ok(engine.apartmentRoot.children[0].children.length,'the original expiry check still admits this fresh packet');
+    nowMs=850;engine.apartmentRoot.children[0].children[0].onAfterRender();await flush();
+    const receipt=layer.readback().receipts.at(-1);
+    assert.ok(receipt,'a real completed draw must not vanish merely because a valid uncertainty interval crosses zero');
+    assert.equal(receipt.camera_to_gpu_timing,'causality_bounded');
+    assert.ok(Math.abs(receipt.camera_to_gpu_raw_ms[0]+200)<1e-6);
+    assert.ok(Math.abs(receipt.camera_to_gpu_raw_ms[1]-650)<1e-6);
+    assert.equal(receipt.camera_to_gpu_ms[0],0);
+    assert.ok(Math.abs(receipt.camera_to_gpu_ms[1]-650)<1e-6);
+    assert.equal(receipt.expired_at_completion,false);
+    assert.equal(layer.readback().diagnostics.counts.gpu_receipt_invalid_clock||0,0);
+  }finally{
+    layer?.dispose();streamController?.close();globalThis.window=priorWindow;
+    Object.defineProperty(globalThis,'performance',priorPerformance);
+  }
+});
+
+test('GPU timing preserves positive intervals and rejects impossible or malformed bounds',()=>{
+  const good=trackingGpuLatency([10,10.01],{offsetLow:1,offsetHigh:1.02},11200);
+  assert.equal(good.valid,true);assert.equal(good.qualification,'clock_bounded');
+  assert.deepEqual(good.rawMs,good.boundsMs);
+  assert.ok(Math.abs(good.boundsMs[0]-170)<1e-6);assert.ok(Math.abs(good.boundsMs[1]-200)<1e-6);
+  for(const [source,sample,completed,reason] of [
+    [[10,10.01],{offsetLow:1,offsetHigh:1.02},10900,'wholly_negative_bounds'],
+    [[10.01,10],{offsetLow:1,offsetHigh:1.02},11200,'inverted_bounds'],
+    [[10,10.01],{offsetLow:1.02,offsetHigh:1},11200,'inverted_bounds'],
+    [[10,Infinity],{offsetLow:1,offsetHigh:1.02},11200,'nonfinite_bounds'],
+    [[10,10.01],{offsetLow:NaN,offsetHigh:1.02},11200,'nonfinite_bounds'],
+    [[10,10.01],{offsetLow:1,offsetHigh:1.02},Infinity,'nonfinite_bounds']]){
+    assert.deepEqual(trackingGpuLatency(source,sample,completed),{valid:false,reason});
+  }
 });

@@ -12,6 +12,21 @@ EXPECTED_UNITS = {
     "victoria-jetson": {("victoria-ha-bridge.service", "user"), ("perception-lab-managed.service", "user"), ("lab-jetson-detector-trial.service", "user")},
 }
 COMPONENTS = {"la-host": {"brain", "gateway", "ops"}, "victoria-jetson": {"bridge", "lab", "detector", "ops"}}
+LA_ONLY_PROFILE = 'den-continuous-la-1'
+
+
+def required_inventory(profile=None):
+    if profile is None:
+        return EXPECTED_UNITS, COMPONENTS
+    if profile != LA_ONLY_PROFILE:
+        raise ValueError('unknown deployment execution profile')
+    return ({
+        'la-host': EXPECTED_UNITS['la-host'] | {('lab-la-detector-trial.service', 'user')},
+        'victoria-jetson': EXPECTED_UNITS['victoria-jetson'] - {('lab-jetson-detector-trial.service', 'user')},
+    }, {
+        'la-host': COMPONENTS['la-host'] | {'detector'},
+        'victoria-jetson': COMPONENTS['victoria-jetson'] - {'detector'},
+    })
 
 
 def execution_identity(value):
@@ -49,10 +64,11 @@ def validate(doc):
         raise ValueError("invalid deployment manifest")
     if set(doc.get("hosts", {})) != HOSTS:
         raise ValueError("deployment needs exactly LA and Jetson")
+    units_required, components_required = required_inventory(doc.get('execution_profile'))
     for name, spec in doc["hosts"].items():
         if not isinstance(spec.get("components"), dict) or not spec["components"] or any(not isinstance(v, str) or not v for v in spec["components"].values()):
             raise ValueError("actual component release identities required")
-        if not COMPONENTS[name] <= set(spec["components"]):
+        if not components_required[name] <= set(spec["components"]):
             raise ValueError("required component identities missing")
         for key in ("monitor_config_sha256", "soak_config_sha256"):
             if not re.fullmatch(r"[0-9a-f]{64}", str(spec.get(key, ""))):
@@ -76,7 +92,7 @@ def validate(doc):
             raise ValueError("deployment unit inventory missing")
         if len({(u.get("name"), u.get("scope")) for u in units}) != len(units):
             raise ValueError("duplicate deployment unit")
-        if {(u.get("name"), u.get("scope")) for u in units} != EXPECTED_UNITS[name]:
+        if {(u.get("name"), u.get("scope")) for u in units} != units_required[name]:
             raise ValueError("required unit inventory/scope differs")
         for unit in units:
             if unit.get("scope") not in ("user", "system") or not str(unit.get("name", "")).endswith(".service") or not os.path.isabs(unit.get("working_directory", "")) or not unit.get("exec_start"):
@@ -88,6 +104,8 @@ def verify(doc, cfg, monitor_cfg, host):
     validate(doc)
     spec = doc["hosts"][cfg["host"]]
     errors = []
+    if cfg.get('execution_profile') != doc.get('execution_profile'):
+        errors.append('execution profile mismatch')
     if digest(cfg) != spec["soak_config_sha256"] or digest(monitor_cfg) != spec["monitor_config_sha256"]:
         errors.append("configuration digest mismatch")
     actual_units = {(u["name"], u.get("scope", "system")) for u in cfg.get("units", [])}

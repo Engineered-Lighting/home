@@ -7,6 +7,10 @@ import {bodyPerson,estimatedLowerBody} from './fixtures/body-form-fixtures.mjs';
 import {bodyFormTrackingService} from './fixtures/body-form-tracking-service.mjs';
 
 const renderer=process.env.HOME_BODY_RENDERER||'webgl',fixture=bodyFormTrackingService();
+// Keep the native full-size proof. The CPU renderer gets the same desktop
+// layout at 960x600 so a large software canvas does not invalidate every
+// clock probe before the stream can open. All timing/expiry gates stay intact.
+const softwareFixture=process.platform==='linux'||process.env.HOME_BODY_SOFTWARE==='1';
 test('mounted Home body forms preserve controls, actual drawing, partial evidence and withdrawal',{timeout:FILE_TIMEOUT_MS},()=>
   aimWiringProof('body-form-'+renderer,async({page,check,until,artifactDir,receipt,ids})=>{
     const actual=await page.evaluate(()=>({backend:window.__APT_ENGINE.rendererBackend,gpu:window.__APT_ENGINE.gpu,node:window.__APT_ENGINE.webgpuReadback?.()}));
@@ -17,34 +21,61 @@ test('mounted Home body forms preserve controls, actual drawing, partial evidenc
     const still=async name=>{if(process.env.HOME_BODY_STILLS==='1'){
       receipt.screenshots=true;await page.screenshot({path:path.join(artifactDir,name+'.png')});}};
     await check('standing and seated authored poses reach actual GPU-completed Home draws',async()=>{
-      await until('body GPU receipt',()=>window.__APT_ENGINE.fastTrackingReadback?.().receipts.some(r=>r.bodyForm?.status==='complete'));
+      await until('body GPU receipt',()=>window.__APT_ENGINE.fastTrackingReadback?.().receipts.some(r=>r.bodyForm?.status==='complete'&&!r.expired_at_completion));
       assert.equal(await page.locator('[data-fast-tracking]').isVisible(),true,'the real camera-dock status mounts');
       assert.match(await page.locator('[data-fast-tracking]').innerText(),/Body form/);
       const pixels=()=>page.evaluate(async()=>{const frame=await window.__APT_ENGINE.captureFrame({scale:.5});
         if(!frame)throw Error('actual Home frame unavailable');return {width:frame.width,height:frame.height,pixels:[...frame.pixels]};});
-      const shown=await pixels();let absent;
+      const shown=await pixels();let absent;const beforeReference=(await read()).sequence;
       await page.evaluate(async()=>{
         const THREE=await import('three'),engine=window.__APT_ENGINE;
-        const wall=new THREE.Mesh(new THREE.PlaneGeometry(20,20),new THREE.MeshBasicMaterial({color:0x135724,side:THREE.DoubleSide}));
+        // One large triangle avoids testing an MSAA crack along a quad's
+        // internal diagonal instead of testing the body's depth behavior.
+        const geometry=new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute([-20,-20,0,60,-20,0,-20,60,0],3));
+        const wall=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:0x135724,side:THREE.DoubleSide}));
         wall.position.copy(engine.camera.getWorldPosition(new THREE.Vector3())).addScaledVector(engine.camera.getWorldDirection(new THREE.Vector3()),.5);
         wall.quaternion.copy(engine.camera.getWorldQuaternion(new THREE.Quaternion()));
+        // Isolate the depth experiment from animated survey glows (which
+        // intentionally draw through depth). Full-room visibility is checked
+        // separately above/below, with every object restored afterward.
+        wall.userData.restoreVisibility=[];
+        for(const object of [...engine.apartmentRoot.parent.children,...engine.apartmentRoot.children]){
+          if(object===engine.apartmentRoot||object.name==='home-fast-tracking-owned')continue;
+          wall.userData.restoreVisibility.push([object,object.visible]);object.visible=false;
+        }
         engine.apartmentRoot.parent.add(wall);window.__authoredBodyOccluder=wall;
       });
       try{
-        const coveredShown=await pixels();fixture.setMode('unavailable');
-        await until('body withdrawn for pixel reference',()=>window.__APT_ENGINE.fastTrackingReadback().bodyForm.parts===0);
+        const coveredShown=await pixels();
+        // Change only body drawing, not producer/UI state or camera layout.
+        await page.evaluate(()=>{window.__APT_ENGINE.apartmentRoot.getObjectByName('home-fast-tracking-owned').visible=false;});
         const coveredAbsent=await pixels();
+        assert.equal(coveredShown.width,coveredAbsent.width);assert.equal(coveredShown.height,coveredAbsent.height);
         const max=coveredShown.pixels.reduce((n,v,i)=>Math.max(n,Math.abs(v-coveredAbsent.pixels[i])),0);
+        if(max>1){
+          const channelMax=[0,0,0,0],counts=[0,0,0,0],samples=[];
+          for(let i=0;i<coveredShown.pixels.length;i++){
+            const d=Math.abs(coveredShown.pixels[i]-coveredAbsent.pixels[i]);channelMax[i%4]=Math.max(channelMax[i%4],d);
+            if(d>1){counts[i%4]++;if(samples.length<24&&i%4===0)samples.push({pixel:i/4,a:coveredShown.pixels.slice(i,i+4),b:coveredAbsent.pixels.slice(i,i+4)});}
+          }
+          fs.writeFileSync(path.join(artifactDir,'depth-diff.json'),JSON.stringify({width:coveredShown.width,height:coveredShown.height,channelMax,counts,samples},null,2));
+        }
         assert.ok(max<=1,'an opaque room-depth surface must fully occlude the body: '+max);
       }finally{
-        await page.evaluate(()=>{const wall=window.__authoredBodyOccluder;wall.removeFromParent();wall.geometry.dispose();wall.material.dispose();delete window.__authoredBodyOccluder;});
+        await page.evaluate(()=>{const wall=window.__authoredBodyOccluder;
+          window.__APT_ENGINE.apartmentRoot.getObjectByName('home-fast-tracking-owned').visible=true;
+          for(const [object,visible] of wall.userData.restoreVisibility)object.visible=visible;
+          wall.removeFromParent();wall.geometry.dispose();wall.material.dispose();delete window.__authoredBodyOccluder;});
       }
-      absent=await pixels();assert.equal(shown.width,absent.width);assert.equal(shown.height,absent.height);
+      await page.evaluate(()=>{window.__APT_ENGINE.apartmentRoot.getObjectByName('home-fast-tracking-owned').visible=false;});
+      try{absent=await pixels();}finally{await page.evaluate(()=>{window.__APT_ENGINE.apartmentRoot.getObjectByName('home-fast-tracking-owned').visible=true;});}
+      assert.equal(shown.width,absent.width);assert.equal(shown.height,absent.height);
       const changed=shown.pixels.reduce((n,v,i)=>n+(i%4!==3&&Math.abs(v-absent.pixels[i])>8?1:0),0);
       assert.ok(changed>75,'body changes actual rendered pixels, not just scene state: '+changed);
-      fixture.setPeople([bodyPerson({offset:[1.2,1.4,0]})]);
-      await until('body draw after pixel reference',()=>window.__APT_ENGINE.fastTrackingReadback().receipts.at(-1)?.bodyForm?.status==='complete'
-        &&window.__APT_ENGINE.fastTrackingReadback().bodyForm.parts>0);
+      await until('body draw after pixel reference',n=>window.__APT_ENGINE.fastTrackingReadback().receipts.at(-1)?.bodyForm?.status==='complete'
+        &&window.__APT_ENGINE.fastTrackingReadback().receipts.at(-1).sequence>n
+        &&!window.__APT_ENGINE.fastTrackingReadback().receipts.at(-1).expired_at_completion
+        &&window.__APT_ENGINE.fastTrackingReadback().bodyForm.parts>0,beforeReference);
       await still('standing-home');
       const before=(await read()).sequence;fixture.setPeople([bodyPerson({seated:true,offset:[1.2,1.4,0]})]);
       await until('seated body GPU receipt',n=>window.__APT_ENGINE.fastTrackingReadback().receipts.some(r=>r.sequence>n&&r.bodyForm?.status==='complete'),before);
@@ -101,4 +132,5 @@ test('mounted Home body forms preserve controls, actual drawing, partial evidenc
       await page.evaluate(()=>{delete window.__bodyPriorEngine;});
       return {prior_engine_disposed:true,current_room_only:true};
     });
-  },{trackingFixture:fixture,renderer,browserChannel:process.env.HOME_BODY_BROWSER_CHANNEL||null}));
+  },{trackingFixture:fixture,renderer,browserChannel:process.env.HOME_BODY_BROWSER_CHANNEL||null,
+    viewport:softwareFixture?{width:960,height:600}:{width:1366,height:768}}));

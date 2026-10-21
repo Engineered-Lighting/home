@@ -56,7 +56,7 @@ function browserOptions(renderer='webgl',browserChannel=null) {
 }
 
 // Runs one suite's checks inside the shared, fenced Home shell proof.
-export async function aimWiringProof(suite, checks, {trackingFixture=null,renderer='webgl',browserChannel=null}={}) {
+export async function aimWiringProof(suite, checks, {trackingFixture=null,renderer='webgl',browserChannel=null,viewport={width:1366,height:768}}={}) {
   assert.ok(['webgl','webgpu','webgpu-webgl'].includes(renderer));
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'proof serves only this worktree');
   const run = path.join(ROOT, '.tmp/apartment-aim-wiring-browser', 'run-' + suite + '-' + Date.now());
@@ -130,7 +130,8 @@ export async function aimWiringProof(suite, checks, {trackingFixture=null,render
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
     browser = await chromium.launch(receipt.browser);
-    context = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
+    context = await browser.newContext({ viewport, deviceScaleFactor: 1, serviceWorkers: 'block' });
+    receipt.viewport={...viewport};
     receipt.runtime = { node: process.version, playwright: require('playwright/package.json').version, browser: browser.version() };
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
     await context.addInitScript(() => { localStorage.setItem('apartment3d.site', 'echo'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true; });

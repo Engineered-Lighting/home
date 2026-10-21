@@ -78,6 +78,15 @@ camera-clock-to-GPU bounds. These are actual submitted/GPU-completed updates,
 not producer cadence, display-photon timing or interpolated animation speed.
 Captured pixels and private visual inspection additionally verify visibility.
 
+Authored native-GPU checks use a 1366 x 768 desktop viewport. The software
+renderer uses the same desktop layout at 960 x 600; a larger CPU canvas made
+otherwise valid hosted clock responses take 1.24–1.37 seconds, correctly
+failing the unchanged one-second clock gate before streaming. This fixture
+load reduction changes no production setting, evidence expiry, 15-second
+receipt wait or GPU deadline. The first qualified receipt must be unexpired.
+Depth comparisons toggle only body drawing while preserving the source/UI
+state, isolating normal depth from animated survey decoration and layout.
+
 ## Ownership and acceptance
 
 UI owns `body-form-model.mjs`, `body-form-renderer.mjs`, the narrow body

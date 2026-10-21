@@ -635,10 +635,11 @@ def check(cfg, host, *, dry_run=False):
             loop = cfg['loop']
             code, doc = host.http('GET', loop['status_url'], token=read_token(loop['token_file']),
                                  ca_file=loop.get('ca_file'), timeout_s=loop.get('timeout_s', 10))
+            received_at = host.now()
             cleanup = doc['deep_stack']['media_cleanup'] if code == 200 else None
             checked = cleanup.get('checked_at') if isinstance(cleanup, dict) else None
             if (not isinstance(cleanup, dict) or cleanup.get('enabled') is not True or cleanup.get('ok') is not True
-                    or type(checked) not in (int, float) or not 0 <= now - checked <= 90
+                    or type(checked) not in (int, float) or not 0 <= received_at - checked <= 90
                     or type(cleanup.get('age_s')) not in (int, float) or not 300 <= cleanup['age_s'] <= 86400):
                 raise ValueError('cleanup status missing, failed or stale')
         except (OSError, ValueError, TypeError, KeyError):

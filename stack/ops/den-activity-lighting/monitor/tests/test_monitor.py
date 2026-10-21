@@ -54,6 +54,24 @@ def test_fresh_required_cleanup_is_accepted(jetson):
     assert not any(r['signal'] == 'activity.media_cleanup' for r in status['reasons'])
 
 
+@pytest.mark.parametrize('age_at_receipt,accepted', [(0, True), (90, True), (90.01, False), (-.01, False)])
+def test_cleanup_freshness_uses_response_receipt_time(jetson, age_at_receipt, accepted):
+    j = jetson; j.cfg['require_media_cleanup'] = True
+
+    def reply(_):
+        # Cleanup may finish while the monitor is collecting other evidence.
+        j.host.advance(2)
+        return 200, {'deep_stack': {'media_cleanup': {
+            'enabled': True, 'ok': True, 'checked_at': j.host.now() - age_at_receipt, 'age_s': 3600}}}
+
+    j.host.responses[('GET', LAB)] = reply
+    _, status, report = mon.check(j.cfg, j.host, dry_run=True)
+    missing = any(r['signal'] == 'activity.media_cleanup' for r in status['reasons'])
+    assert missing is not accepted
+    if not accepted:
+        assert status['level'] == 3 and report['evidence']['ok'] is False
+
+
 def test_only_la_other_room_observer_is_outside_den_dependencies(jetson):
     j = jetson; j.cfg['host'] = 'la-host'
     path = j.cfg['sources']['failed_units']['baseline']

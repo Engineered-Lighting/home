@@ -39,6 +39,7 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^(?:app\/src\/(?:home-apartment-den-perception\.jsx|home-3d\/(?:body-form-(?:model|renderer)(?:\.test)?|fast-tracking-layer(?:\.test)?)\.mjs)|tools\/(?:test-body-form(?:-browser)?|fixtures\/body-form-[\w-]+)\.mjs)$/, ["test-body-form.mjs", "test-body-form-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-lights)\.jsx|tools\/test-home-full-ui-lights-browser\.mjs)$/, ["test-home-full-ui-lights-browser.mjs"]],
   [/^(?:tools\/fixtures\/home-full-ui-harness\.mjs|app\/src\/home-overlay\.js)$/, ["test-home-full-ui-lights-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs", "test-home-full-ui-connection-browser.mjs", "test-home-full-ui-simulation-browser.mjs", "test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
   [/^(?:app\/src\/home-app\.jsx|tools\/test-home-full-ui-connection-browser\.mjs)$/, ["test-home-full-ui-connection-browser.mjs"]],

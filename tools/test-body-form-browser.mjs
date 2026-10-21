@@ -9,8 +9,9 @@ import {bodyFormTrackingService} from './fixtures/body-form-tracking-service.mjs
 const renderer=process.env.HOME_BODY_RENDERER||'webgl',fixture=bodyFormTrackingService();
 test('mounted Home body forms preserve controls, actual drawing, partial evidence and withdrawal',{timeout:FILE_TIMEOUT_MS},()=>
   aimWiringProof('body-form-'+renderer,async({page,check,until,artifactDir,receipt,ids})=>{
-    const actual=await page.evaluate(()=>({backend:window.__APT_ENGINE.rendererBackend,node:window.__APT_ENGINE.webgpuReadback?.()}));
+    const actual=await page.evaluate(()=>({backend:window.__APT_ENGINE.rendererBackend,gpu:window.__APT_ENGINE.gpu,node:window.__APT_ENGINE.webgpuReadback?.()}));
     assert.equal(actual.backend,renderer==='webgpu-webgl'?'webgpu-webgl2':renderer,'qualify the actual renderer, not the requested backend');
+    if(process.env.HOME_BODY_SOFTWARE==='1')assert.match(actual.gpu,/SwiftShader|llvmpipe|software/i,'the controlled software repro must actually use software rendering');
     receipt.body_renderer=actual;
     const read=()=>page.evaluate(()=>window.__APT_ENGINE.fastTrackingReadback());
     const still=async name=>{if(process.env.HOME_BODY_STILLS==='1'){

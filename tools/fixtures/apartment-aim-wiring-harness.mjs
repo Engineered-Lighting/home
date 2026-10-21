@@ -48,8 +48,8 @@ function browserOptions(renderer='webgl',browserChannel=null) {
   const installed = fs.existsSync(chromium.executablePath());
   assert.ok(installed || process.platform === 'win32', 'pinned Chromium must exist on Linux');
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
-  if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
-  else if (process.platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  if (process.platform === 'linux'||process.env.HOME_BODY_SOFTWARE==='1') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  else if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
   if(renderer!=='webgl')args.push('--enable-unsafe-webgpu','--ignore-gpu-blocklist');
   if(browserChannel){assert.ok(['msedge','chrome','chromium'].includes(browserChannel));return {headless:true,args,channel:browserChannel};}
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
@@ -134,7 +134,24 @@ export async function aimWiringProof(suite, checks, {trackingFixture=null,render
     receipt.runtime = { node: process.version, playwright: require('playwright/package.json').version, browser: browser.version() };
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
     await context.addInitScript(() => { localStorage.setItem('apartment3d.site', 'echo'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true; });
-    if(trackingFixture)await context.addInitScript(()=>{window.__HOME_FAST_TRACKING_ENABLED=true;});
+    if(trackingFixture)await context.addInitScript(()=>{
+      window.__HOME_FAST_TRACKING_ENABLED=true;
+      const original=window.fetch,events=window.__bodyFixtureClock=[];
+      window.fetch=async function(...args){
+        const url=new URL(args[0]?.url||args[0],location.href);
+        if(url.origin!==location.origin||url.pathname!=='/api/perception-tracking/v1/clock')return original.apply(this,args);
+        const event={start_ms:performance.now()};events.push(event);if(events.length>64)events.shift();
+        try{
+          const response=await original.apply(this,args);event.headers_ms=performance.now();event.status=response.status;
+          const json=response.json.bind(response);response.json=async()=>{try{
+            const value=await json();event.json_ms=performance.now();event.elapsed_ms=event.json_ms-event.start_ms;
+            event.attempt_valid=typeof value.attempt_id==='string'&&/^[a-f0-9]{32}$/.test(value.attempt_id);
+            event.monotonic_finite=Number.isFinite(value.monotonic_s);return value;
+          }catch(error){event.json_error=error.name;throw error;}};
+          return response;
+        }catch(error){event.failed_ms=performance.now();event.error=error.name;throw error;}
+      };
+    });
     await context.route('**/*', route => {
       const request = route.request(), url = new URL(request.url());
       if (['data:', 'blob:'].includes(url.protocol)) return route.continue();
@@ -251,6 +268,8 @@ export async function aimWiringProof(suite, checks, {trackingFixture=null,render
       bar: document.querySelector('[data-apt-aim-bar]')?.outerHTML?.slice(0, 600),
       reticle: document.querySelector('[data-apt-aim-reticle]')?.outerHTML?.slice(0, 400),
       debug: window.__aptAimDebug,
+      tracking:window.__APT_ENGINE?.fastTrackingReadback?.(),
+      fixtureClock:window.__bodyFixtureClock,
     })).catch(() => null);
     save(); throw error;
   }

@@ -22,8 +22,13 @@ test('aim wiring: the phone sheet and slider power-on through the mounted Home s
       const grip = page.getByRole('button', { name: 'Resize Home sheet', exact: true });
       for (let tries = 0; tries < 3 && await page.locator('.apt-home-shell').getAttribute('data-sheet') !== 'peek'; tries++) await grip.click();
       assert.equal(await page.locator('.apt-home-shell').getAttribute('data-sheet'), 'peek');
-      await until('phone reticle', () => !document.querySelector('[data-apt-aim-reticle]')?.hidden);
-      await page.locator('[data-apt-aim-reticle]').focus(); await page.keyboard.press('ArrowLeft');
+      const reticle = page.locator('[data-apt-aim-reticle]');
+      // Resize/peek can retire and recreate the room overlay. A false hidden
+      // attribute alone does not establish that its button can receive focus.
+      await reticle.waitFor({ state: 'visible' });
+      await reticle.focus();
+      await until('phone reticle focused', () => document.activeElement?.matches('[data-apt-aim-reticle]') === true);
+      await page.keyboard.press('ArrowLeft');
       await until('half', () => document.querySelector('.apt-home-shell')?.getAttribute('data-sheet') === 'half');
       assert.equal(await page.getByRole('tab', { name: 'Chat', exact: true }).getAttribute('aria-selected'), 'true');
       await until('phone bar', () => !document.querySelector('[data-apt-aim-bar]')?.hidden);

@@ -5,6 +5,16 @@ its explicit owner checklist. A source test, complete-looking JSON, idle room,
 or monitor level 0 cannot substitute for the evidence below. Physical output
 remains disabled. Resource/service/model changes require a new attempt.
 
+For continuous commissioning, use the Lab's `continuous_app:create_app` entry
+point. It sets operator Stop before lifespan startup and refuses a loop without
+healthy enabled media cleanup. Append the final private managed/loop paths in a
+dedicated `EnvironmentFile` after existing environment files; systemd environment
+files override `Environment=` assignments regardless of drop-in filename order.
+Preserve all incumbent environment files and credentials. Verify the effective
+paths in `/proc/<MainPID>/environ`, the actual Store root and cleanup status before
+monitor recovery or loop resume. A unit file containing the desired paths alone
+does not prove that the running process uses them.
+
 ## Commission evidence before sampling
 
 Use the current AGENTS maintenance admission checks immediately before each

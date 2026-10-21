@@ -122,8 +122,8 @@
     const body = !victoria || !hasPerception ? [{ id: "body", label: "Body layers", available: false, reason: "Need pose data" }] : [
       { id: "body-observed", label: "Observed joints", detail: "solid", available: false, reason: "Shown with the analyzed frame in Camera · JEV" },
       { id: "body-inferred", label: "Inferred completion", detail: "dashed", available: false, reason: "Shown with the analyzed frame in Camera · JEV" },
-      { id: "body-volume", label: "Nominal volume", detail: "not measured", available: false, reason: "Needs a body-shape record" },
-      { id: "body-uncertainty", label: "Uncertainty", available: false, reason: "Needs a body-shape record" },
+      { id: "body-volume", label: "Nominal volume", detail: "not measured", available: false, reason: "Deferred · skeletal tracking only" },
+      { id: "body-uncertainty", label: "Uncertainty", available: false, reason: "Deferred · skeletal tracking only" },
       { id: "frame-pose", label: "2D pose on frame", available: false, reason: "Shown with the analyzed frame in Camera · JEV" },
       { id: "follow", label: "Follow", available: false, reason: "Needs continuous tracking · planned" },
     ];
@@ -137,15 +137,17 @@
           victoria ? "Drawn with each modeled light; hide them with Virtual spotlights" : "Drawn with each light marker"),
         bound("beams", { label: "Beams", control: "segment",
           options: [["selected", "Selected beam"], ["all", "All beams"], ["off", "No beams"]] }, NO_SEAM),
-        bound("named-aims", { label: "Named aims always labeled", detail: "else while aiming" }, "Named aims are planned"),
+        bound("light-details", { label: "Light details", detail: "modeled channel labels" }, NO_SEAM),
+        bound("named-aims", { label: "Named aims always labeled", detail: "else while aiming" },
+          victoria ? "This home's named-aim store is not available here" : "Labels follow the existing Named aims tool; no independent always-on toggle"),
         bound("labels", { label: "All fixture labels", detail: fixtureCount > 6 ? "else on hover" : undefined }, NO_SEAM),
         bound("cameras", { label: "Camera positions" }, NO_SEAM),
       ] },
       { id: "body", title: !victoria || !hasPerception ? "Body · not available here" : "Body · approximate room placement", rows: body },
-      { id: "shadows", title: "Shadows and occlusion · planned", rows: [
-        { id: "beam-blocking", label: "Beam blocking by furniture", available: false, reason: "Planned" },
-        { id: "furniture-shadows", label: "Furniture shadows", available: false, reason: "Planned" },
-        { id: "body-shadows", label: "Body shadows", available: false, reason: "Planned" },
+      { id: "shadows", title: "Shadows and occlusion · simulated", rows: [
+        { id: "beam-blocking", label: "Beam blocking by scan geometry", available: false, reason: "Included in modeled beams; bounded to the current scan and registered room surfaces" },
+        { id: "furniture-shadows", label: "Scan shadows", available: false, reason: "Included when Lighting is on; support depends on the view and its verified lighting layer" },
+        { id: "body-shadows", label: "Body shadows", available: false, reason: "Deferred · skeletal tracking only" },
       ] },
     ];
   }

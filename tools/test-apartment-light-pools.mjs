@@ -41,12 +41,14 @@ test('a selected light whose spot is off shows a grey dashed ring at its last ai
   assert.deepEqual(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', floor }).rings, [], 'a lit spot has no last-aim ring');
 });
 
-test('each lit Down channel pools on the floor below its socket; labels say modeled', () => {
+test('Down pools stay independent; modeled channel labels require Details', () => {
   const plan = Pools.lightPoolsPlan({ fixtures, selectedId: 'a', floor });
   assert.deepEqual(plan.downPools.map(pool => pool.fixture_id), ['a', 'b'], 'an off Down channel draws no pool');
   assert.deepEqual(plan.downPools[0].center, [1, 2, .008]);
   assert.ok(Math.abs(plan.downPools[0].radius - 2.4 * Math.tan(30 * Math.PI / 180)) < 1e-12);
-  assert.deepEqual(plan.labels.map(label => label.text), ['Spot · modeled', 'Down · modeled'], 'only the selected light is labelled');
+  assert.deepEqual(plan.labels, [], 'ordinary view has no redundant channel labels');
+  assert.deepEqual(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', floor, details: true }).labels.map(label => label.text),
+    ['Spot · modeled', 'Down · modeled'], 'Details labels only the selected light truthfully');
   assert.deepEqual(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', pools: false, floor }).downPools, []);
   assert.deepEqual(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', floor: null }).downPools, [], 'no floor reference, no invented pool');
   const tilted = { normal: [0, Math.sin(.1), Math.cos(.1)], offset_m: .2 };
@@ -67,7 +69,7 @@ test('the drawer owns only its group, reuses anchors and disposes cleanly', () =
     'one thin axis; no spokes or rim over the fixture’s own beam volume');
   const root = group.children[0];
   assert.equal(root.getObjectByName('light-pools-axis:a').material.opacity, .75, 'the selected axis is bright');
-  readback = view.update(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', beams: 'all', floor }));
+  readback = view.update(Pools.lightPoolsPlan({ fixtures, selectedId: 'a', beams: 'all', floor, details: true }));
   assert.deepEqual(readback.objects.filter(name => /axis/.test(name)), ['light-pools-axis:a', 'light-pools-axis:b']);
   assert.equal(root.getObjectByName('light-pools-axis:b').material.opacity, .3, 'other lights draw a dim axis');
   assert.deepEqual(anchors.map(anchor => anchor.label), ['Spot · modeled', 'Down · modeled']);

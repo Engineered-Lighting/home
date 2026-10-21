@@ -459,7 +459,13 @@ function buildFixture(item, state, depth, reducedMotion) {
         layer.visible = channel.on && channel.brightness > 0;
         layer.material.color.copy(displayWhite(channel.color_temp_kelvin)); layer.material.opacity = ORB_HALO_CHANNEL_OPACITY * channel.brightness;
     };
-    let selected = false;
+    let selected = false, beamActive = false, spotPoolActive = false;
+    let display = { beams: true, pools: true };
+    function paintDisplay() {
+        spotBeam.volume.visible = spotBeam.glow.visible = beamActive && display.beams;
+        spotBeam.disc.visible = spotPoolActive && display.pools;
+        radialViews.forEach((view, index) => { view.patch.visible = shownLevels[index] > 0 && display.pools; });
+    }
 
     function updateBeam(view, channel, origin, direction, fullAngle, target) {
         const worldOrigin = origin.clone().add(item.anchor);
@@ -477,7 +483,9 @@ function buildFixture(item, state, depth, reducedMotion) {
     function drawBeam(view, channel, origin, direction, fullAngle, reach, hit) {
         const active = channel.on && channel.brightness > 0 && reach > .001;
         view.update(origin, direction, reach, fullAngle, channel);
-        view.disc.visible = active && !!hit;
+        beamActive = active; spotPoolActive = active && !!hit;
+        view.volume.visible = view.glow.visible = active && display.beams;
+        view.disc.visible = spotPoolActive && display.pools;
         if (!active) return;
         const color = Spotlight.displaySpotlightWhite(channel.color_temp_kelvin), radius = Aiming.beamRadius(reach, fullAngle);
         if (hit) {
@@ -541,7 +549,7 @@ function buildFixture(item, state, depth, reducedMotion) {
             view.port.material.color.copy(active ? view.tone : RADIAL_OFF_COLOR);
             view.port.material.opacity = active ? .4 + level * .6 : .65;
             view.sector.visible = active; view.sector.material.color.copy(view.tone); view.sector.material.opacity = .10 * level;
-            view.patch.visible = active; view.patch.material.color.copy(view.tone); view.patch.material.opacity = .06 * level;
+            view.patch.visible = active && display.pools; view.patch.material.color.copy(view.tone); view.patch.material.opacity = .06 * level;
             if (!haloLayers.includes(view.sector)) haloLayers.push(view.sector);
         }
         sizeHalo();
@@ -624,7 +632,8 @@ function buildFixture(item, state, depth, reducedMotion) {
     root.traverse(node => { if (node !== root) node.userData = { ...metadata, ...node.userData, fixture_id: item.id, mount_id: item.mountId, origin_role: item.originRole, aim_source: item.aimSource, optical_origin_m: null }; });
     update(state);
     return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving || !!sweep,
-        pick, handlePick, setSelected(value) { selected = value; handle.visible = value; } };
+        pick, handlePick, setSelected(value) { selected = value; handle.visible = value; },
+        setDisplay(value) { display = value; spotBeam.setDisplayGain(value.beamGain); paintDisplay(); } };
 }
 
 export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) {
@@ -638,7 +647,14 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
     const visibilityDocument = globalThis.document;
     let disposed = false, signature = null, scopeIdentity = null, status = 'empty', reason = null, omitted = [], revision = null, digest = null;
     let fixtures = [], views = new Map(), states = new Map(), targets = new Map(), generation = 0, selectedId = null;
-    let presentationActive = false;
+    let presentationActive = false, displayRules = { beams: 'all', pools: true, beamGain: 1 };
+    const paintDisplay = () => {
+        for (const [id, view] of views) view.setDisplay({
+            beams: displayRules.beams === 'all' || displayRules.beams === 'selected' && id === selectedId,
+            pools: displayRules.pools,
+            beamGain: displayRules.beamGain,
+        });
+    };
     const snapPresentation = nowMs => {
         for (const view of views.values()) view.snapPresentation(nowMs);
         presentationActive = false;
@@ -693,6 +709,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
                 catch (error) { for (const view of nextViews.values()) disposeChildren(view.root); throw error; }
                 clear(); states = nextStates; targets = nextTargets; views = nextViews; fixtures = next.fixtures;
                 root.add(...[...views.values()].map(view => view.root)); signature = nextSignature; scopeIdentity = nextScope;
+                paintDisplay();
             }
             revision = next.revision; digest = next.digest; omitted = next.omitted;
             status = next.fixtures.length ? 'ready' : 'empty'; reason = null;
@@ -702,6 +719,11 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
         return readback();
     };
     return { root, setDocument, readback, interactionDescriptor,
+        displayReadback: () => ({ ...displayRules }),
+        setDisplay({ beams = displayRules.beams, pools = displayRules.pools, beamGain = displayRules.beamGain } = {}) {
+            if (!['selected', 'all', 'off'].includes(beams) || typeof pools !== 'boolean' || !Number.isFinite(beamGain) || beamGain < 0 || beamGain > 1) throw TypeError('equipment_preview_display_rules_invalid');
+            displayRules = { beams, pools, beamGain }; paintDisplay(); return readback();
+        },
         advancePresentation(nowMs) {
             // The settled RAF path creates no arrays, iterators or snapshots.
             if (disposed || !presentationActive || !finite(nowMs)) return false;
@@ -720,6 +742,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
         setSelected(fixtureId) {
             selectedId = views.has(fixtureId) ? fixtureId : null;
             for (const [id, view] of views) view.setSelected(id === selectedId);
+            paintDisplay();
             return interactionDescriptor(selectedId);
         },
         /* `sweep: true` (Set aim) draws the AIM_SWEEP_MS beam sweep; every

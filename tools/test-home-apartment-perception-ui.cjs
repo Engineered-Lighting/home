@@ -488,7 +488,10 @@ test('no-session path offers a working Open in Lab and invalid timestamp metadat
   const appSource = source(); appSource.rows = []; const opened = [];
   const m = await mount({ appSource, onOpenLab: intent => opened.push(intent) });
   try {
-    await click(m.container, 'View perception'); assert.match(m.container.textContent, /No existing Den session/);
+    await click(m.container, 'View perception'); assert.match(m.container.textContent, /No perception session/);
+    assert.equal(m.container.querySelectorAll('[data-dock-empty="no-session"]').length, 1, 'one accurate empty state');
+    assert.doesNotMatch(m.container.textContent, /Own analysis:|Live analysis availability not confirmed/);
+    assert.equal(m.container.querySelector('section[aria-label="Analyzed frame"]'), null, 'no empty analyzed frame beside the no-session callout');
     assert.equal(button(m.container, 'Back to Home / Perception Lab'), undefined, 'the dead control is gone');
     await click(m.container, 'Open in Lab'); assert.deepEqual(copy(opened), [{ session_id: null, t_s: null }]);
     appSource.rows = sessions(); await click(m.container, 'Refresh sessions'); await choose(m.container, 'Den Lab session', 'den-session-one'); await click(m.container, 'Connect');

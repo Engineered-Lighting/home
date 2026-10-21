@@ -516,6 +516,9 @@ button.hg-no-press:active {
   font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
 }
 .apt-home-shell .apt-home-menu { position: relative; }
+.apt-home-shell .apt-home-controls-short { display: none; }
+.apt-home-shell .apt-radial-zone-picker { display: none; }
+.apt-home-shell .apt-ui-mobile-navigation { display: none; }
 .apt-home-shell .apt-home-setup-toggle[aria-pressed="true"] { background: var(--hg-bg-3); border-color: var(--hg-border-strong); color: var(--hg-fg-0); }
 .apt-home-shell .apt-home-setup-toggle[aria-disabled="true"] { color: var(--hg-fg-2); }
 .apt-home-shell .apt-home-top-actions > .apt-home-simulation { color: var(--hg-warn); border-color: currentColor; }
@@ -677,10 +680,15 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-chat-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
 .apt-home-shell .apt-ui-chat-header-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 26px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--hg-fg-2); font-size: 12px; cursor: pointer; }
 .apt-home-shell .apt-ui-chat-header-actions > button:hover { border-color: var(--apt-border); color: var(--hg-fg-0); }
-.apt-home-shell .apt-ui-chat-conversation-actions { display: flex; flex: 1 0 100%; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding-top: 6px; }
+.apt-home-shell .apt-ui-chat-heading { display: flex; flex-direction: column; flex: 1 1 90px; min-width: 0; }
+.apt-home-shell .apt-ui-chat-conversation-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; min-width: 0; }
 .apt-home-shell .apt-ui-chat-conversation-actions > button { flex: 1 1 0; min-width: 0; min-height: 32px; }
+.apt-home-shell .apt-ui-chat-conversation-actions[data-compact] > button { flex: 0 0 32px; width: 32px; padding: 0; border-color: transparent; background: transparent; }
+.apt-home-shell .apt-ui-chat-warning { flex-basis: 100%; }
 .apt-home-shell .apt-ui-chat-transcript-scope, .apt-home-shell .apt-ui-chat-copy-status { flex: 1 0 100%; color: var(--hg-fg-3); font: 400 11px/1.5 'Geist', sans-serif; overflow-wrap: anywhere; }
 @media (pointer: coarse) { .apt-home-shell .apt-ui-chat-conversation-actions > button { min-width: 44px; min-height: 44px; } }
+@media (pointer: coarse) { .apt-home-shell .apt-ui-chat-conversation-actions[data-compact] > button { flex-basis: 44px; }
+  .apt-home-shell .apt-ui-chat-header-actions button { min-width: 44px!important; min-height: 44px!important; } }
 .apt-home-shell .apt-ui-chat-warning { flex: 0 0 auto; padding: 8px 16px; border-bottom: 1px solid var(--apt-border-soft); color: var(--apt-attn); font-size: 12px; line-height: 1.5; }
 .apt-home-shell .apt-ui-chat-feed { padding: 14px 16px!important; font-family: 'Geist', sans-serif; font-size: 13.5px; line-height: 1.55; }
 .apt-home-shell .apt-ui-composer { position: relative; display: grid; grid-template-columns: minmax(0,1fr); gap: 7px; flex: 0 0 auto; margin: 0!important; padding: 10px 12px!important; border-top: 1px solid var(--apt-border-soft); background: var(--apt-surface); }
@@ -737,6 +745,8 @@ button.hg-no-press:active {
 @container apartment-home (width < 600px) {
   .apt-home-shell .apt-home-topbar { gap: 8px; padding: 0 8px 0 12px; }
   .apt-home-shell .apt-home-wordmark { display: none; }
+  .apt-home-shell .apt-home-controls-long { display: none; }
+  .apt-home-shell .apt-home-controls-short { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .apt-home-shell .apt-home-setup-label { display: none; }
   .apt-home-shell .apt-home-top-actions > .apt-home-setup-toggle { width: 44px; min-width: 44px; padding: 0; }
   .apt-home-shell .apt-home-simulation-label { display: none; }
@@ -827,11 +837,14 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-dock-header > .apt-ui-grow { flex: 1 1 auto; min-width: 0; }
 .apt-home-shell .apt-ui-dock-header > button { flex: 0 0 auto; }
 .apt-home-shell .apt-ui-advanced-aim > [data-apt-aim-inspector="1"] { position: relative!important; inset: auto!important; width: 100%!important; max-width: none!important; height: auto!important; max-height: none!important; border: 0!important; border-radius: 0!important; box-shadow: none!important; background: var(--apt-surface)!important; }
+.apt-home-shell .apt-ui-advanced-aim :is(div, span, label, p, button, input, select, summary) { font-size: 12px!important; letter-spacing: normal!important; line-height: 1.45!important; }
+@media (pointer: coarse) { .apt-home-shell .apt-ui-advanced-aim :is(button, input, select) { min-height: 44px!important; } }
 
 /* APT-P01..P06: the camera dock. It shares the column with the inspector,
  * scrolls on its own and never covers the inspector or the room. */
 .apt-home-shell .apt-dock { display: flex; flex-direction: column; min-width: 0; font: 400 12.5px/1.5 'Geist', sans-serif; }
-.apt-home-shell .apt-dock-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.apt-home-shell .apt-dock-title { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+.apt-home-shell .apt-dock-title .apt-ui-badge { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apt-home-shell .apt-dock-title > h2 { margin: 0; white-space: nowrap; }
 .apt-home-shell .apt-dock .mono { font-family: 'Geist Mono', monospace; font-size: 11.5px; }
 .apt-home-shell .apt-dock-body { display: flex; flex-direction: column; gap: 12px; padding: 0 16px 14px; }
@@ -1017,10 +1030,9 @@ button.hg-no-press:active {
   .apt-home-shell .apt-home-chat :is(button, select, input:not([type="checkbox"]):not([type="radio"]), .hg-mobile-touch) { min-width: 44px!important; min-height: 44px!important; }
   .apt-home-shell .apt-ui-composer-box :is(input, textarea) { min-height: 44px; }
   .apt-home-shell .apt-ui-composer-box > button { min-width: 44px; height: 44px; }
-  /* Radial zone sectors are 23 px thick at 118 px; on touch the ring stacks
-   * above its readout at 240 px so each sector takes a 44 px fingertip. */
-  .apt-home-shell .apt-directional-ring { grid-template-columns: minmax(0,1fr)!important; }
-  .apt-home-shell .apt-directional-ring > svg { justify-self: center; width: min(100%, 240px)!important; height: auto!important; aspect-ratio: 1; }
+  /* Keep the authored 118 px diagram. The same zone choices also have a
+   * separate native 44 px picker, so small sectors are never the only target. */
+  .apt-home-shell .apt-radial-zone-picker { display: block; min-height: 44px; max-width: 100%; font-size: 12.5px; }
 }
 @container apartment-home (600px <= width < 900px) {
   @media (pointer: coarse) { .apt-home-shell .apt-home-panel { grid-template-rows: 44px 44px minmax(0,1fr); } }
@@ -1043,18 +1055,18 @@ button.hg-no-press:active {
   .apt-home-shell[data-sheet-dragging] .apt-home-panel { height: var(--apt-sheet-drag-height); transition: none; }
   .apt-home-shell[data-sheet-dragging] .apt-home-chat { height: calc(var(--apt-sheet-drag-height) - 66px); }
 }
-/* Touch keeps a non-drag way to zoom, turn and refit the room (Q02): the zoom
- * pair returns under 900 px, and the phone toolbar wraps to a second row with
- * ‹ › and Fit instead of hiding them. */
+/* Tablet touch retains the side zoom pair. Phone navigation lives in Layers
+ * so the authored single-row toolbar keeps every 44 px primary target. */
 @media (pointer: coarse) {
   @container apartment-home (width < 900px) {
     .apt-home-shell .apt-home-stage [aria-label="apartment zoom controls"] { display: flex!important; }
     .apt-home-shell[data-sheet-dragging] .apt-home-chat { height: calc(var(--apt-sheet-drag-height) - 88px); }
   }
-  @container apartment-home (width < 600px) {
-    .apt-home-shell .apt-ui-room-toolbar { flex-wrap: wrap; justify-content: center; row-gap: 4px; width: max-content; }
-    .apt-home-shell .apt-ui-room-toolbar .apt-ui-orbit:not(.apt-home-toolbar-detent) { display: inline-flex; }
-    .apt-home-shell .apt-ui-room-toolbar .apt-ui-toolbar-separator.apt-ui-orbit { flex-basis: 100%; width: auto; height: 0; margin: 0; background: none; }
-    .apt-home-shell .apt-ui-room-toolbar [aria-label="Fit room"] { display: inline-flex; font-size: 0; gap: 0; }
-  }
+}
+@container apartment-home (width < 600px) {
+  .apt-home-shell .apt-ui-room-toolbar { flex-wrap: nowrap; width: max-content; }
+  .apt-home-shell .apt-ui-room-toolbar .apt-ui-orbit { display: none!important; }
+  .apt-home-shell .apt-home-stage [aria-label="apartment zoom controls"] { display: none!important; }
+  .apt-home-shell .apt-ui-mobile-navigation { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--hg-border-soft); }
+  .apt-home-shell .apt-ui-mobile-navigation button { min-width: 44px; min-height: 44px; }
 }

@@ -133,7 +133,7 @@ function destinationKey(destination) {
 function HomeApartmentAim({
   model, registry, states, sim, connection, engine, fixtureId, onFixtureId,
   destination, onDestination, onModel, onDirty, onStateReadback, onClose, mobile,
-  onSave, saveStatus, saving, isControlCurrent, aimRows = null,
+  onSave, saveStatus, saving, isControlCurrent, aimRows = null, unified = false, onLight, onSetup,
 }) {
   const A = window.HomeApartmentAiming;
   const fixtures = useMemo(() => (model.devices || []).filter((d) => window.HomeApartmentData.isCeilingLight(d)), [model]);
@@ -617,6 +617,7 @@ function HomeApartmentAim({
     "Product adoption is false",
   ];
 
+  const ProfileFrame = unified ? "details" : "div";
   return <aside data-apt-aim-inspector="1" role="dialog" aria-label="Engineered fixture aiming inspector"
     style={{ position: "absolute", zIndex: 8, pointerEvents: "auto", overflow: "hidden",
       ...(mobile ? { left: 10, right: 10, bottom: "calc(10px + env(safe-area-inset-bottom, 0px))", maxHeight: "52dvh", borderRadius: 16 }
@@ -627,7 +628,7 @@ function HomeApartmentAim({
     <div style={{ padding: "15px 15px 12px", borderBottom: "1px solid var(--hg-border-soft)", display: "grid", gap: 11 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: AIM_SANS, fontSize: 17, fontWeight: 560, letterSpacing: "-0.025em" }}>Lighting</div>
+          <h2 style={{ margin: 0, fontFamily: AIM_SANS, fontSize: 17, fontWeight: 560, letterSpacing: "-0.025em" }}>{unified ? fixture?.name || "Lighting" : "Lighting"}</h2>
           <div style={{ fontFamily: AIM_MONO, fontSize: 9, color: "var(--hg-fg-3)", letterSpacing: "0.08em", marginTop: 3 }}>
             {sim ? "simulation · saved layout · controls simulated" : "live model · fixture-bottom origin"}
           </div>
@@ -638,6 +639,13 @@ function HomeApartmentAim({
         </AimButton>}
         <AimButton onClick={onClose} title="Close lighting" style={{ minHeight: 36, width: 36, padding: 0, borderRadius: 18 }}>×</AimButton>
       </div>
+      {unified && <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">
+        <button type="button" role="tab" aria-selected="false" onClick={() => onLight?.(fixture?.id)}>Light</button>
+        <button type="button" role="tab" aria-selected="true">Aim</button>
+        <button type="button" role="tab" aria-selected="false" onClick={onSetup}>Setup</button>
+      </div>}
+      <ProfileFrame className={unified ? "apt-ui-details" : undefined}>
+      {unified && <summary>Profiles and shared mount</summary>}
       <AimSelect label="fixture" value={fixture?.id} onChange={onFixtureId} disabled={aimTransitioning}>
         {fixtures.map((f) => <option key={f.id} value={f.id}>{f.name}{f.fixture_kind === A.ENGINEERED_KIND ? " · engineered" : " · ordinary"}</option>)}
       </AimSelect>
@@ -656,7 +664,7 @@ function HomeApartmentAim({
               title={!engineeredConfigured && ["engineered", "both"].includes(mode)
                 ? "Add an Engineered profile at this mount first" : undefined}
               onClick={() => setProfileView(mode)} style={{ minHeight: 32, padding: "6px 4px", border: 0,
-                borderRadius: 7, fontSize: 9 }}>{label}</AimButton>)}
+                borderRadius: 7, fontSize: unified ? 12 : 9 }}>{label}</AimButton>)}
         </div>
         <div style={{ display: "grid", gap: 6 }}>
           <ProfileStatus label={currentProfileName} {...currentProfileStatus} />
@@ -668,6 +676,7 @@ function HomeApartmentAim({
               : `${profileView === "current" ? "Current light" : "Engineered lighting"} view selected.`}
         </div>
       </section>}
+      </ProfileFrame>
       <div role="tablist" aria-label="Lighting inspector sections"
         onKeyDown={(e) => {
           if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
@@ -683,7 +692,7 @@ function HomeApartmentAim({
         }}
         style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 5,
         padding: 3, borderRadius: 11, background: "var(--hg-bg-2)" }}>
-        {[["aim", "Light"], ["zones", "Radials"], ["setup", "Setup"]].map(([name, label]) =>
+        {[["aim", unified ? "Spotlight" : "Light"], ["zones", "Radials"], ["setup", unified ? "Fixture details" : "Setup"]].map(([name, label]) =>
           <AimButton key={name} active={tab === name} role="tab" aria-selected={tab === name} onClick={() => {
             setTab(name);
             if (name === "zones" && engineeredConfigured) setProfileView("engineered");

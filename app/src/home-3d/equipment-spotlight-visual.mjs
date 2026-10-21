@@ -249,13 +249,16 @@ export function createEquipmentSpotlightVisual(parent, depth, item) {
         glow.parent.getWorldQuaternion(parentRotation).invert(); camera.getWorldQuaternion(cameraRotation);
         glow.quaternion.copy(parentRotation).multiply(cameraRotation); glow.updateWorldMatrix(false, false);
     };
+    let displayGain = 1, channelLevel = 0;
+    const paintLevel = () => { uniforms.uLevel.value = channelLevel * displayGain; glowMaterial.uniforms.uLevel.value = uniforms.uLevel.value; };
     return { volume, glow,
+        setDisplayGain(value) { displayGain = Math.max(0, Math.min(1, value)); paintLevel(); },
         update(origin, direction, reach, fullAngle, channel) {
             const length = Math.max(.001, reach), tanAngle = Math.tan(fullAngle*Math.PI/360), radius = length*tanAngle;
             volume.position.copy(origin).addScaledVector(direction, length/2);
             volume.quaternion.setFromUnitVectors(new THREE.Vector3(0,-1,0), direction); volume.scale.set(radius,length,radius);
             uniforms.uLength.value = length; uniforms.uRadius.value = radius; uniforms.uTanAngle.value = tanAngle;
-            uniforms.uLevel.value = channel.on ? channel.brightness : 0;
+            channelLevel = channel.on ? channel.brightness : 0; paintLevel();
             uniforms.uLightColor.value.copy(displaySpotlightWhite(channel.color_temp_kelvin));
             uniforms.uBeamToRoom.value.compose(volume.position.clone().add(item.anchor), volume.quaternion, new THREE.Vector3(1,1,1));
             glow.position.copy(origin); glowMaterial.uniforms.uColor.value.copy(uniforms.uLightColor.value);

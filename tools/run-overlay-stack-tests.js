@@ -233,6 +233,24 @@ process.stdout.write("\noverlay_deferred_focus_test\n");
   assert("closing the wrapped menu restores its opener", ctx.document.activeElement === opener);
   ctx.window.requestAnimationFrame = originalRaf;
 }
+process.stdout.write("\noverlay_non_text_input_escape_test\n");
+{
+  const root = stubEl("layers"), input = stubEl("layer-control");
+  input.tagName = "INPUT"; root.children.push(input);
+  let calls = 0;
+  const h = O.push({ key: "layers", onEscape: () => { calls++; }, getRoot: () => root });
+  for (const type of ["checkbox", "radio", "range", "button", "submit", "reset", "image"]) {
+    input.type = type; const before = calls, event = escEvent(input);
+    O._handleKeydown(event);
+    assert(type + " inside an overlay lets Escape dismiss it", calls === before + 1 && event.defaultPrevented);
+  }
+  for (const type of ["text", "number", "search", "date", "color", "file"]) {
+    input.type = type; const before = calls, event = escEvent(input);
+    O._handleKeydown(event);
+    assert(type + " retains owned editing/picker Escape", calls === before && !event.defaultPrevented);
+  }
+  h.pop();
+}
 process.stdout.write("\noverlay_subscribe_test\n");
 {
   const seen = [];

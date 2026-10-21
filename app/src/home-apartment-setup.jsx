@@ -97,9 +97,12 @@
       </div>
       <div className="apt-ui-actions apt-setup-badges">
         {Badge && <Badge state={status} />}
-        {Badge && sourceLabel && <Badge state={sourceTone || "modeled"}>{sourceLabel}</Badge>}
       </div>
-      {detail && <p className="apt-ui-meta" data-setup-detail="1">{detail}</p>}
+      {(sourceLabel || detail) && <details className="apt-ui-details apt-setup-source">
+        <summary>Source details</summary>
+        {Badge && sourceLabel && <Badge state={sourceTone || "modeled"}>{sourceLabel}</Badge>}
+        {detail && <p className="apt-ui-meta" data-setup-detail="1">{detail}</p>}
+      </details>}
       {notice && <p className="apt-ui-meta apt-setup-proposal" role="note" data-setup-read-only="1">{notice}</p>}
       <div className="apt-ui-actions apt-setup-toolbar">{children}</div>
     </header>;
@@ -335,9 +338,12 @@
 .apt-setup-body > [data-apt-edit-ui="inspector"]:empty { display: none; }
 .apt-setup-body [data-apt-edit-ui] :is(div, span, label, button, input, select, summary, fieldset, p, option) {
   font-size: max(12px, 1em) !important; letter-spacing: normal !important; text-transform: none !important; line-height: 1.45 !important; font-family: inherit !important; }
-.apt-setup-body [data-apt-edit-ui] :is(input, select):not(.apt-ui-input) { font-family: 'Geist Mono', ui-monospace, monospace !important; min-height: 30px; border-radius: 6px; }
+.apt-setup-body [data-apt-edit-ui] :is(input, select):not(.apt-ui-input) { font-family: 'Geist Mono', ui-monospace, monospace !important; min-height: 32px; border-radius: 7px; }
 .apt-setup-body [data-apt-edit-ui] [data-setup-heading] { font-size: 12.5px !important; font-weight: 560; color: var(--hg-fg-2) !important; margin: 16px 0 6px !important; }
 .apt-setup-body [data-apt-edit-ui] button { border-radius: 7px; }
+.apt-setup-source { margin: 0; }
+.apt-setup-source > summary { color: var(--apt-muted); font-size: 12px; }
+@media (pointer: coarse) { .apt-setup-body [data-apt-edit-ui] :is(button, input:not([type="checkbox"]):not([type="radio"]), select) { min-height: 44px!important; } }
 `;
   function installSetupCss() {
     if (typeof document === "undefined" || document.querySelector("style[data-source='home-apartment-setup']")) return;

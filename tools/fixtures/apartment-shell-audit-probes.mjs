@@ -87,6 +87,17 @@ export function auditTargets() {
   const rows = [];
   for (const control of shell.querySelectorAll(selector)) {
     if (control.closest('[hidden], [inert], [aria-hidden="true"]') || control.matches(':disabled, [aria-disabled="true"]')) continue;
+    // WCAG equivalent-target exception: a compact radial diagram offers the
+    // exact same choices through a visible, native, full-sized zone picker.
+    const equivalentId = control.getAttribute('data-equivalent-target');
+    const equivalent = equivalentId && document.getElementById(equivalentId);
+    if (equivalent?.matches('select[aria-label="Radial zone"]') && !equivalent.disabled && getComputedStyle(equivalent).visibility === 'visible') {
+      const box = equivalent.getBoundingClientRect();
+      if (box.width >= 44 && box.height >= 44 && equivalent.options.length === 7) {
+        rows.push({ element: describe(control), ok: true, equivalentTarget: describe(equivalent), width: box.width, height: box.height });
+        continue;
+      }
+    }
     // A checkbox or radio wrapped in its label is hit through the whole label.
     const element = control.matches('input[type="checkbox"], input[type="radio"]') && control.closest('label:not(.apt-ui-switch)') || control;
     if (element.tagName === 'CANVAS') continue;

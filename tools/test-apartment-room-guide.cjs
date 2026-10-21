@@ -173,7 +173,11 @@ test('layer rows: unavailable rows explain why, and fixtures have one setter', (
     for (const id of ['pools', 'beams', 'named-aims', 'labels', 'cameras']) assert.ok(rows.some(row => row.id === id), `${id} row is listed`);
     assert.deepEqual(rows.filter(row => row.available).map(row => row.id).filter(id => id !== 'legend'),
       input.seams ? ['fixtures'] : [], 'no layer is enabled without its owner seam');
-    assert.ok(groups.find(group => group.id === 'shadows').rows.every(row => !row.available && row.reason === 'Planned'));
+    const shadows = groups.find(group => group.id === 'shadows');
+    assert.equal(shadows.title, 'Shadows and occlusion · simulated');
+    assert.ok(shadows.rows.every(row => !row.available && row.reason.length > 3));
+    assert.match(shadows.rows.find(row => row.id === 'beam-blocking').reason, /current scan/);
+    assert.match(shadows.rows.find(row => row.id === 'body-shadows').reason, /Deferred · skeletal tracking only/);
   }
   const victoria = Guide.layerGroups(cases[1]).flatMap(group => group.rows);
   assert.equal(victoria.find(row => row.id === 'fixtures').set, setter, 'Layers calls the owner setter itself');
@@ -218,7 +222,7 @@ test('toolbar mount passes the single fixture setter and existing facts only', (
   const toolbar = apartment.ast.body.find(node => node.type === 'FunctionDeclaration' && node.id?.name === 'AptUnifiedRoomToolbar');
   const body = text(apartment, toolbar);
   assert.equal((body.match(/onVirtualVisible/g) || []).length, 2, 'the toolbar only forwards the fixture setter as the Layers seam');
-  assert.match(body, /seams=\{hasVirtualFixtures \? \{ fixtures: \{ value: virtualVisible, set: onVirtualVisible \} \} : \{\}\}/);
+  assert.match(body, /seams=\{\{ \.\.\.layerSeams, \.\.\.\(hasVirtualFixtures \? \{ fixtures: \{ value: virtualVisible, set: onVirtualVisible \} \} : \{\}\) \}\}/);
   assert.doesNotMatch(body, /pinch/i, 'gesture help lives in the guide, not in toolbar copy');
 });
 

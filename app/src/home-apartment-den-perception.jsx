@@ -189,7 +189,7 @@
         setSessions(rows);
         const activeRows=rows.filter(row=>['recording','running','starting'].includes(row.state));
         if(!sessionId&&activeRows.length===1)setSessionId(activeRows[0].id);
-        if(!rows.length)setNotice('No existing Den session.');
+        if(!rows.length)setNotice('');
       }catch(error){if(!abort.signal.aborted&&token===generationRef.current)setNotice(error.message||'Session discovery unavailable');}
       finally{if(discoveryRef.current===abort){discoveryRef.current=null;if(!abort.signal.aborted)setDiscovering(false);}}
     }
@@ -337,27 +337,27 @@
     const header=<header className="apt-ui-dock-header" data-collapsed={dock==='collapsed'?'true':'false'}>
       <div className="apt-ui-grow apt-dock-title"><h2 className="apt-ui-heading">Den camera</h2>
         <DockBadge state={badge.state}>{badge.label}</DockBadge></div>
-      <button type="button" className="apt-ui-button is-icon" aria-label={dock==='expanded'?'Restore camera dock size':'Expand camera dock'}
-        aria-pressed={dock==='expanded'} onClick={()=>setDock(dock==='expanded'?'default':'expanded')}>
-        <Glyph Icon={Icon} name={dock==='expanded'?'collapse':'expand'} text={dock==='expanded'?'Restore':'Expand'}/></button>
-      <button type="button" className="apt-ui-button is-icon" aria-label={dock==='collapsed'?'Show camera dock':'Collapse camera dock'}
-        aria-expanded={dock!=='collapsed'} onClick={()=>setDock(dock==='collapsed'?'default':'collapsed')}>
-        <Glyph Icon={Icon} name={dock==='collapsed'?'chevU':'chevD'} text={dock==='collapsed'?'Open':'Collapse'}/></button>
-      {isOpen&&<button type="button" className="apt-ui-button is-icon" data-dock-details="1" aria-label={detailed?'Hide details':'Show details'}
+      {isOpen&&<button type="button" className="apt-ui-button is-icon is-small" data-dock-details="1" aria-label={detailed?'Hide details':'Show details'}
         aria-pressed={detailed} title="Details: detector, pose and JEV values, frame metadata and raw results" onClick={()=>setDetail(detailed?'simple':'detailed')}>
         <Glyph Icon={Icon} name="info" text="Details"/></button>}
-      <button type="button" className="apt-ui-button is-icon" aria-label="Hide camera dock" onClick={()=>setDock('hidden')}>
+      <button type="button" className="apt-ui-button is-icon is-small" aria-label={dock==='expanded'?'Restore camera dock size':'Expand camera dock'}
+        aria-pressed={dock==='expanded'} onClick={()=>setDock(dock==='expanded'?'default':'expanded')}>
+        <Glyph Icon={Icon} name={dock==='expanded'?'collapse':'expand'} text={dock==='expanded'?'Restore':'Expand'}/></button>
+      <button type="button" className="apt-ui-button is-icon is-small" aria-label={dock==='collapsed'?'Show camera dock':'Collapse camera dock'}
+        aria-expanded={dock!=='collapsed'} onClick={()=>setDock(dock==='collapsed'?'default':'collapsed')}>
+        <Glyph Icon={Icon} name={dock==='collapsed'?'chevU':'chevD'} text={dock==='collapsed'?'Open':'Collapse'}/></button>
+      <button type="button" className="apt-ui-button is-icon is-small is-ghost" aria-label="Hide camera dock" onClick={()=>setDock('hidden')}>
         <Glyph Icon={Icon} name="close" text="Hide"/></button>
     </header>;
 
-    const sessionControls=opened&&<section aria-label="Den session" className="apt-dock-section">
-      {typeof source?.watchActivityLoop==='function'&&<div className="apt-dock-analysis" aria-label="Existing activity loop">
+    const sessionControls=opened&&(sessions.length>0||detailed||analysis.owned)&&<section aria-label="Den session" className="apt-dock-section">
+      {(detailed||loopState)&&typeof source?.watchActivityLoop==='function'&&<div className="apt-dock-analysis" aria-label="Existing activity loop">
         <button type="button" style={button} className="apt-ui-button" onClick={viewActivityLoop}>View activity loop</button>
         <p style={note}>Views the existing analysis and follows its recording rolls. No recording or model starts here.</p>
         {loopState&&<p role="status" data-activity-loop-status={loopState.status}>{words(loopState.status)}
           {loopState.reason?` · ${words(loopState.reason)}`:''}{Number.isSafeInteger(loopState.rolls)?` · roll ${loopState.rolls}`:''}</p>}
       </div>}
-      {typeof source?.startAnalysis==='function'&&<div aria-label="Live analysis" role="group" className="apt-dock-analysis">
+      {(detailed||analysis.owned)&&typeof source?.startAnalysis==='function'&&<div aria-label="Live analysis" role="group" className="apt-dock-analysis">
         {(analysisAvailability?.available===true||analysis.owned)&&<div className="apt-dock-row">
           <button type="button" style={button} className="apt-ui-button" disabled={!analysisAvailability?.available||analysis.owned} onClick={()=>ownAnalysis()}>Start live analysis (90 s)</button>
           <button type="button" style={button} className="apt-ui-button" disabled={!analysis.owned} onClick={stopOwnAnalysis}>Stop own analysis</button>
@@ -384,18 +384,21 @@
       <div className="apt-dock-row"><button type="button" style={button} className="apt-ui-button" aria-label="Close camera view" onClick={close}>Close</button></div>
       {(state||sessions.length>0)&&<div role="status" aria-live="polite" style={note}>{words(state?.connection||'disconnected')}{state?.reason?` · ${words(state.reason)}`:''}</div>}
       {state?.mediaReason&&state.mediaReason!==state.reason&&<div role="status" style={note}>{words(state.mediaReason)} · waiting for the next analyzed frame</div>}
-      {notice&&<p role="status" style={note}>{notice}</p>}
+      {notice&&sessions.length>0&&<p role="status" style={note}>{notice}</p>}
     </section>;
 
-    const emptyState=opened&&!discovering&&!sessions.length&&<section className="apt-dock-callout" data-dock-empty="no-session" aria-label="No perception session">
+    const emptyState=opened&&!discovering&&!sessions.length&&!connected&&<section className="apt-dock-callout" data-dock-empty="no-session" aria-label="No perception session">
       <h3 className="apt-ui-heading">No perception session</h3>
       <p className="apt-ui-copy">Home isn't viewing a Den camera session. Sessions are recorded and reviewed in Perception Lab; this dock only shows their analyzed frames.</p>
       <div className="apt-dock-row"><button type="button" style={button} className="apt-ui-button" disabled={!onOpenLab} onClick={()=>openLab({session_id:null,t_s:null})}>Open in Lab</button>
-        <button type="button" style={button} className="apt-ui-button" onClick={discover}>Refresh sessions</button></div>
+        <button type="button" style={button} className="apt-ui-button" onClick={discover}>Refresh sessions</button>
+        <button type="button" className="apt-ui-button" aria-label="Close camera view" onClick={close}>Close</button>
+        {LiveCamera&&frameSource!=='live'&&<button type="button" className="apt-ui-button" onClick={()=>setFrameSource('live')}>View live camera</button>}</div>
+      {notice&&<p role="status" style={note}>{notice}</p>}
       {!onOpenLab&&<p style={note}>Perception Lab isn't available from this view.</p>}
     </section>;
 
-    const frameView=opened&&(connected||LiveCamera)&&<section aria-label="Analyzed frame" className="apt-dock-section">
+    const frameView=opened&&(connected||LiveCamera&&frameSource==='live')&&<section aria-label="Analyzed frame" className="apt-dock-section">
       <div className="apt-dock-row" role="radiogroup" aria-label="Frame source">
         {[['analyzed','Analyzed frame'],['live','Live camera']].map(([value,label])=><button key={value} type="button" role="radio" style={button}
           className="apt-ui-button apt-dock-seg" aria-checked={frameSource===value} disabled={value==='live'&&!LiveCamera}
@@ -592,6 +595,10 @@
             <div className="apt-dock-row"><button type="button" style={button} className="apt-ui-button" onClick={discover}>View perception</button></div>
           </section>}
           {!connected&&sessionControls}
+          {opened&&discovering&&<section className="apt-dock-section" aria-label="Reading camera sessions">
+            <p role="status" className="apt-ui-meta">Reading existing sessions…</p>
+            <button type="button" className="apt-ui-button" aria-label="Close camera view" onClick={close}>Close</button>
+          </section>}
           {emptyState}
           {frameView}
           {traceView}
@@ -606,7 +613,7 @@
           </section>}
           {details}
           {connected&&sessionControls}
-          {labRow}
+          {!emptyState&&labRow}
           {brainNote}
           {legacyPreview}
         </div>}

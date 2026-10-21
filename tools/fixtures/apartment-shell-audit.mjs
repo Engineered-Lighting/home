@@ -40,7 +40,7 @@ function launchOptions(platform = process.platform) {
 }
 
 const PARTS = {
-  echo: 'Echo Park shell text, targets and surfaces meet the design at every size in both themes',
+  echo: 'Echo Park shell text, targets and surfaces meet the dark-only design at every size',
   victoria: 'Victoria shell text, targets and surfaces, the Phone example and the designed Tab order meet the design',
   behaviour: 'shell motion, status rows, unsaved-work isolation and the sheet handle behave as designed',
 };
@@ -84,11 +84,9 @@ test(PARTS[part], { timeout: 145000 }, async () => {
     await waitSite(site); await settle();
   }
   async function setTheme(theme) {
-    if (await page.locator('.apt-home-shell').getAttribute('data-theme') === theme) return;
-    await page.getByRole('button', { name: 'Home menu', exact: true }).click();
-    await page.getByRole('menuitem', { name: theme === 'light' ? 'Light theme' : 'Dark theme', exact: true }).click();
-    await waitForDirectionalReadiness(page, theme => document.querySelector('.apt-home-shell')?.getAttribute('data-theme') === theme, theme);
-    await settle();
+    assert.equal(theme, 'dark', 'the owner deferred Light appearance for this release');
+    assert.equal(await page.locator('.apt-home-shell').getAttribute('data-theme'), 'dark');
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   }
   async function setProfile(profile) {
     await page.setViewportSize(profile.viewport);
@@ -152,6 +150,26 @@ test(PARTS[part], { timeout: 145000 }, async () => {
           nonDrag: { zoomIn: can('zoom in'), zoomOut: can('zoom out'), orbitLeft: can('Orbit left'), orbitRight: can('Orbit right'), fit: can('Fit room') } };
       });
       expect(!overlays.overlaps.length && !overlays.outside.length, 'room overlays never collide and stay on the stage · ' + label, overlays);
+      if (profile.viewport.width < 600) {
+        const layersWasOpen = await page.getByRole('dialog', { name: 'Room layers', exact: true }).isVisible();
+        if (!layersWasOpen) {
+          await page.getByRole('button', { name: 'Layers', exact: true }).click();
+          await page.getByRole('dialog', { name: 'Room layers', exact: true }).waitFor({ state: 'visible' });
+          await settle();
+        }
+        const navigation = page.locator('.apt-ui-mobile-navigation');
+        overlays.nonDrag = Object.fromEntries(await Promise.all([
+          ['zoomIn', 'Zoom in'], ['zoomOut', 'Zoom out'], ['orbitLeft', 'Orbit left'], ['orbitRight', 'Orbit right'], ['fit', 'Fit room'],
+        ].map(async ([key, name]) => {
+          const control = navigation.getByRole('button', { name, exact: true });
+          return [key, await control.isVisible() && await control.isEnabled()];
+        })));
+        if (!layersWasOpen) {
+          await page.getByRole('button', { name: 'Close layers', exact: true }).click();
+          await page.getByRole('dialog', { name: 'Room layers', exact: true }).waitFor({ state: 'detached' });
+          await settle();
+        }
+      }
       expect(Object.values(overlays.nonDrag).every(Boolean), 'the room can be zoomed, turned and refit without dragging · ' + label, overlays.nonDrag);
       // No toolbar control is cut off by the bar or the stage at any size.
       state.toolbar_clipped = await page.evaluate(() => {
@@ -244,7 +262,7 @@ test(PARTS[part], { timeout: 145000 }, async () => {
     expect(!!(layout.toolbar && layout.sheet) && layout.toolbar.bottom <= layout.sheet.top + .5, 'the room toolbar sits above the sheet', layout);
     expect(!layout.overflow, 'no horizontal page scroll on the phone', layout);
     const phoneTargets = receipt.states.filter(state => state.profile === 'phone-390x844' && !KNOWN['phone-390x844 ' + state.surface]);
-    expect(phoneTargets.length >= 8 && phoneTargets.every(state => state.small_targets?.length === 0),
+    expect(phoneTargets.length >= 5 && phoneTargets.every(state => state.small_targets?.length === 0),
       'every audited phone control is at least 44 px', phoneTargets.map(state => [state.site, state.theme, state.surface, state.small_targets?.length]));
     await page.screenshot({ path: path.join(run, 'evidence', 'phone-390x844-victoria-dark.png') });
     layout.screenshot = 'evidence/phone-390x844-victoria-dark.png';
@@ -255,7 +273,7 @@ test(PARTS[part], { timeout: 145000 }, async () => {
   // Home Assistant state.
   async function statusRows() {
     receipt.status_rows = {};
-    for (const [profile, theme] of [[PROFILES[0], 'dark'], [PROFILES[1], 'light']]) {
+    for (const [profile, theme] of [[PROFILES[0], 'dark'], [PROFILES[1], 'dark']]) {
       await setProfile(profile); await setTheme(theme);
       for (const site of ['echo', 'victoria']) {
         await selectHome(site);
@@ -451,7 +469,7 @@ test(PARTS[part], { timeout: 145000 }, async () => {
     for (const profile of PROFILES) {
       await phase(part + ' ' + profile.name, async () => {
         await setProfile(profile);
-        for (const theme of ['dark', 'light']) { await setTheme(theme); await surfaces(profile, part, theme); }
+        await setTheme('dark'); await surfaces(profile, part, 'dark');
       });
     }
     if (part === 'victoria') {

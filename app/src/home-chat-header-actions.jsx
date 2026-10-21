@@ -27,7 +27,10 @@
     }
   }
 
-  function HomeChatHeaderActions({ onExplain, onCopy, onNewConversation,
+  // Paths from the supplied ui-kit.jsx; keep the handoff's icon vocabulary.
+  const actionPaths = { explain: "M8 7v5M8 4.5V5M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14z",
+    copy: "M5 5h8v8H5zM3 11V3h8", new: "M8 3v10M3 8h10" };
+  function HomeChatHeaderActions({ onExplain, onCopy, onNewConversation, compact = false,
     explainDisabledReason, copyDisabledReason, newConversationDisabledReason }) {
     const actions = [
       { key: "explain", label: "Explain the last answer", text: "Explain", callback: onExplain,
@@ -37,16 +40,17 @@
       { key: "new", label: "New conversation", text: "New", callback: onNewConversation,
         reason: newConversationDisabledReason, unavailable: "Starting a new conversation is unavailable." },
     ];
-    return <span className="apt-ui-chat-conversation-actions" role="group" aria-label="Conversation actions">
+    return <span className="apt-ui-chat-conversation-actions" data-compact={compact ? "true" : undefined} role="group" aria-label="Conversation actions">
       {actions.map(action => {
         const disabled = typeof action.callback !== "function" || !!action.reason;
-        const description = disabled ? action.reason || action.unavailable : undefined;
+        const description = disabled ? action.reason || action.unavailable
+          : compact && action.key === "copy" ? "Conversation text only" : undefined;
         return <button key={action.key} type="button" className="apt-ui-button is-small"
           data-chat-header-action={action.key} aria-label={action.label} aria-description={description}
-          title={description || action.label} disabled={disabled}
-          onClick={disabled ? undefined : action.callback}>{action.text}</button>;
+          title={compact && description ? `${action.label} · ${description}` : description || action.label} disabled={disabled}
+          onClick={disabled ? undefined : action.callback}>{compact ? <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d={actionPaths[action.key]} /></svg> : action.text}</button>;
       })}
-      <span className="apt-ui-chat-transcript-scope">Conversation text only</span>
+      {!compact && <span className="apt-ui-chat-transcript-scope">Conversation text only</span>}
     </span>;
   }
 

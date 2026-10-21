@@ -215,6 +215,8 @@ export function aimKeyIntent({ key, dragging = false, proposal = null } = {}) {
  * a trailing "fixture" goes, and a long name ends in an ellipsis. */
 export function shortFixtureLabel(label) {
     const text = typeof label === 'string' ? label.trim() : '';
+    const numbered = /\b(socket|fixture)\s*#?\s*(\d+)\b/i.exec(text);
+    if (numbered) return `${numbered[1].toLowerCase() === 'socket' ? 'S' : 'F'}${numbered[2]}`;
     const trimmed = text.replace(/\s+fixture$/i, '') || text;
     return trimmed.length > LABEL_SHORT_MAX ? trimmed.slice(0, LABEL_SHORT_MAX - 1).trimEnd() + '…' : trimmed;
 }

@@ -94,7 +94,8 @@
           {engineered && (Badge ? <Badge state="simulated">Engineered · simulated preview</Badge>
             : <span className="apt-ui-badge" data-state="simulated">Engineered · simulated preview</span>)}</div>
         <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">{[["light", "Light"], ["aim", "Aim"], ["setup", "Setup"]].map(([key, label]) =>
-          <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-echo-${key}`} onClick={() => setTab(key)}>{label}</button>)}
+          <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-echo-${key}`}
+            onClick={() => { if (key === "aim" && engineered && !aimDisabledReason && onAim) onAim(); else setTab(key); }}>{label}</button>)}
         </div>
       </header>
       {tab === "light" && light}

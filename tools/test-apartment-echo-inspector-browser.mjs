@@ -173,7 +173,6 @@ test('Echo light inspector and Quick: HA offline example, guarded controls and e
         assert.deepEqual(await page.evaluate(() => window.__echoProof.calls[0]),
           { domain: 'light', service: 'turn_on', data: { entity_id: 'light.front_left', brightness_pct: 71 } });
         await inspector.getByRole('tab', { name: 'Aim', exact: true }).click();
-        await inspector.getByRole('button', { name: 'Open engineered aim', exact: true }).click();
         assert.equal(await page.evaluate(() => window.__echoProof.aimOpened), 1, 'the retained engineered aim panel stays reachable');
         await inspector.getByRole('tab', { name: 'Light', exact: true }).click();
         await page.evaluate(() => window.__echoProof.set({ deviceId: 'desk-lamp' }));

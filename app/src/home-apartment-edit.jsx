@@ -1679,7 +1679,7 @@ function HomeApartmentEdit({
           provide deterministic 45° orbit steps when precise wall selection
           matters. Keep this visually quiet so it reads as an instrument, not
           another primary toolbar. */}
-      <div role="group" aria-label="Apartment edit orbit controls" data-apt-edit-ui="orbit-controls" style={{
+      {!rail && <div role="group" aria-label="Apartment edit orbit controls" data-apt-edit-ui="orbit-controls" style={{
         position: "absolute", left: "50%", transform: "translateX(-50%)",
         bottom: mobile && !rail ? "calc(45dvh + 12px)" : 16,
         maxWidth: mobile ? "calc(100vw - 12px)" : "none",
@@ -1695,7 +1695,7 @@ function HomeApartmentEdit({
           textOverflow: "ellipsis" }}>{isEquipmentRegistration ? "drag canvas to orbit · select equipment to measure" : "drag canvas to orbit · click surface to place"}</span>
         <EdButton label="→" ariaLabel="Orbit room right" title="Orbit room 45° right"
           onClick={() => engine?.rig.stepAzimuth(1)} />
-      </div>
+      </div>}
 
       {/* left rail + right inspector — side panels on desktop, stacked inside
           one fixed bottom sheet on phones, or the Setup rail's column */}

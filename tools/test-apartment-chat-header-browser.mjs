@@ -168,7 +168,8 @@ test('actual unified header delegates guarded actions and truthfully copies curr
         await check('all three native actions and the local text scope remain visible without overflow', async () => {
           assert.equal(await page.getByRole('group',{name:'Conversation actions'}).count(),1);
           for(const key of ['explain','copy','new']){assert.equal(await button(key).isVisible(),true);assert.equal(await button(key).isEnabled(),true);}
-          assert.equal(await page.getByText('Conversation text only',{exact:true}).isVisible(),true);
+          assert.equal(await button('copy').getAttribute('aria-description'),'Conversation text only');
+          assert.match(await button('copy').getAttribute('title'), /Copy transcript.*Conversation text only/);
           const bounds=await page.evaluate(()=>{
             const shell=document.querySelector('.apt-home-shell'),header=document.querySelector('.apt-ui-chat-header');
             return {shell: shell.getBoundingClientRect().toJSON(),header:header.getBoundingClientRect().toJSON(),scroll:document.documentElement.scrollWidth,width:innerWidth,

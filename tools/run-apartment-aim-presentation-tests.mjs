@@ -246,9 +246,9 @@ test('labels never cover each other, the pill, the toolbar or the canvas edge, a
   assert.ok(shown > dropped * 4, `labels are placed far more often than dropped (${shown} shown, ${dropped} dropped)`);
 });
 
-test('short names trim the registered name and never invent one', { timeout: DEADLINE_MS.unit }, () => {
-  assert.equal(A.shortFixtureLabel('Authored socket 3 fixture'), 'Authored socket 3');
-  assert.equal(A.shortFixtureLabel('Proposed fixture 1'), 'Proposed fixture 1');
+test('short names derive numbered tags from the existing label and otherwise trim it', { timeout: DEADLINE_MS.unit }, () => {
+  assert.equal(A.shortFixtureLabel('Authored socket 3 fixture'), 'S3');
+  assert.equal(A.shortFixtureLabel('Proposed fixture 1'), 'F1');
   assert.equal(A.shortFixtureLabel('Fixture'), 'Fixture');
   assert.equal(A.shortFixtureLabel('A rather long registered fixture name'), 'A rather long reg…');
   assert.equal(A.shortFixtureLabel(null), '');

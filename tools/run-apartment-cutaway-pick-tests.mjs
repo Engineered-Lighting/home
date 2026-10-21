@@ -118,7 +118,12 @@ const same = grid.every(([x, y]) => JSON.stringify(strip(picking.surfaceHitUnder
   && JSON.stringify(strip(picking.surfaceHitUnderCutaway(root, [collision], x, y, { acceptPoint: keepFront }))) === JSON.stringify(strip(picking.surfaceHit(root, [collision], x, y, { acceptPoint: keepFront }))));
 check("with no filters the cut-away pick equals surfaceHit exactly", same);
 const pickingSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../app/src/home-3d/picking.js"), "utf8");
-check("surfaceHit itself is unchanged", pickingSource.includes("surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false } = {}) {" + String.fromCharCode(10) + "            const hits = this.pick(objects || [], clientX, clientY, { doubleSided });"));
+check("surfaceHit retains its query contract and updates the mesh transform before raycasting", (() => {
+  const start=pickingSource.indexOf("surfaceHit(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false } = {}) {");
+  const end=pickingSource.indexOf("\n        },",start),body=pickingSource.slice(start,end);
+  return start>=0&&body.indexOf("apartmentRoot.updateWorldMatrix(true, true);")<body.indexOf("const hits = this.pick(objects || [], clientX, clientY, { doubleSided });")
+    &&body.includes("if (acceptPoint && !acceptPoint([local.x, local.y, local.z], candidate)) continue;");
+})());
 check("pick() bounds are untouched by the gap search", picking.raycaster.near === 0 && picking.raycaster.far === Infinity);
 
 /* ---- filter rules ---------------------------------------------------------------- */

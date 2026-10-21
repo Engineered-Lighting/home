@@ -271,8 +271,8 @@ export function createPicking(camera, hostEl) {
          * `floorGap` bridges hairline floor cracks. The result has the same
          * { point, normal, object } shape as surfaceHit. */
         surfaceHitUnderCutaway(apartmentRoot, objects, clientX, clientY, { acceptPoint = null, doubleSided = false, rejectHit = null, floorGap = null } = {}) {
+            apartmentRoot.updateWorldMatrix(true, true);
             const hits = this.pick(objects || [], clientX, clientY, { doubleSided });
-            apartmentRoot.updateMatrixWorld(true);
             const rootQInverse = apartmentRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
             const eyeLocal = apartmentRoot.worldToLocal(raycaster.ray.origin.clone());
             const eye = [eyeLocal.x, eyeLocal.y, eyeLocal.z];

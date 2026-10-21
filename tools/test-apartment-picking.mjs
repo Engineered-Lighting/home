@@ -174,7 +174,7 @@ test('intersections without a point are ignored before presentation filtering', 
 });
 
 
-test('a surface pick uses a newly attached mesh transform before its first rendered frame', () => {
+for (const method of ['surfaceHit','surfaceHitUnderCutaway']) test(`${method} uses a newly attached mesh transform before its first rendered frame`, () => {
   const root = new THREE.Group();
   root.position.set(3, 1, -2);root.rotation.x=-Math.PI/2;
   const fresh = new THREE.Group();fresh.position.set(.4,.2,.3);
@@ -188,7 +188,7 @@ test('a surface pick uses a newly attached mesh transform before its first rende
     const normal=new THREE.Vector3(0,0,1).applyQuaternion(root.quaternion);
     const camera=cameraAt(target.clone().addScaledVector(normal,6),target);
     const picking=createPicking(camera,host),before=geometrySnapshot(mesh);
-    const hit=picking.surfaceHit(root,[fresh],...center);
+    const hit=picking[method](root,[fresh],...center);
     assert.ok(hit,'the just-loaded mesh is pickable before a render');
     closeVector(hit.point,expected);closeVector(hit.normal,[0,0,1]);
     assert.deepEqual(geometrySnapshot(mesh),before,'picking does not change mesh geometry or material');

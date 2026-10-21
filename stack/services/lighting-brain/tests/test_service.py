@@ -29,7 +29,8 @@ def test_state_matches_the_contract_shape(brain, clock):
     brain.ingest("victoria", batch(activity(NOON + 4)))
     state = brain.state("victoria")
     assert set(state) == {"schema", "home", "room", "generated_at", "brain", "mode", "why", "occupancy", "activity",
-                          "fixtures", "decisions", "cost", "inputs", "settings_version"}
+                          "fixtures", "decisions", "cost", "inputs", "settings_version",
+                          "state_revision", "decision_id", "reading_evidence"}
     assert state["schema"] == "activity-lighting-state-1"
     assert (state["home"], state["room"], state["brain"]) == ("victoria", "den", "online")
     assert state["generated_at"] == NOON + 4 and state["settings_version"] == "v1.1"
@@ -49,6 +50,7 @@ def test_state_matches_the_contract_shape(brain, clock):
     assert state["cost"] == {"jev_calls_last_hour": 0, "est_usd_last_hour": None}
     assert state["inputs"] == {"occupancy_age_s": 4.0, "activity_age_s": 0.0, "pose_age_s": 4.0,
                                "position_age_s": 4.0,
+                               "at_sofa": True,
                                "health": {"jev": True, "deep_stack": True, "frigate": True, "camera": True}}
     json.dumps(state, allow_nan=False)
 

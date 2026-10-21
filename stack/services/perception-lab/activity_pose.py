@@ -159,6 +159,10 @@ def check_zones(value, *, home=None, room=None):
             raise bad
         zones = {}
         for name, target in targets.items():
+            # An unmarked optional target has no polygon or normal. An explicit
+            # null/partial/invalid polygon is a malformed mark and stays refused.
+            if isinstance(target, dict) and 'zone_vertices_m' not in target and 'zone_normal_unit' not in target:
+                continue
             raw = target.get('zone_vertices_m') if isinstance(target, dict) else None
             vertices = [_xyz(v) for v in raw] if isinstance(raw, list) and 3 <= len(raw) <= 64 else None
             normal = _xyz(target.get('zone_normal_unit')) if isinstance(target, dict) else None

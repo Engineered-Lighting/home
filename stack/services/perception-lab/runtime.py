@@ -13,6 +13,7 @@ import threading
 import time
 from presentation import arm_snapshot
 from view_person_association import ViewPersonAssociator
+from activity_reading import SoleReaderBank
 
 
 def _json(value):
@@ -102,6 +103,7 @@ class PairedRunner:
         self.pending = {"a": None, "b": None}
         self.closed = False
         self.view_person_associations = {arm: ViewPersonAssociator() for arm in ('a', 'b')}
+        self.reading_sources = {arm: SoleReaderBank() for arm in ('a', 'b')}
         self.stopping = threading.Event()
         self.reconcile_delay = 1.5
         self.lookup_attempts = 5
@@ -349,6 +351,26 @@ class PairedRunner:
                 delivery["proof_source"] = proof_source
             association_bank = self.view_person_associations[request['arm']]
             association_preview = association_bank.preview(None, None, None)
+            reading_bank = self.reading_sources[request['arm']]
+            # Sampling/development holds belong to the viewing presentation.
+            # Reading authority must never inherit their extended deadline.
+            # Consult the registered original, not caller fields or a remote
+            # worker's result. Development timing warnings permit inspection,
+            # but cannot grant reading authority. Missing originals fail closed
+            # without discarding the worker's terminal completion receipt.
+            from apartment_viewing_source import registered_media
+            from store import LabError
+            try:
+                timing_qualified = all(registered_media(self.store, self.session_id, mid)
+                    .get('metadata', {}).get('reading_timing_qualified', True) is True
+                    for mid in request['frame']['media_ids'])
+            except (LabError, ValueError):
+                timing_qualified = False
+            reading_preview = reading_bank.preview(
+                {**output, 'valid_until': original_frame(request)['valid_until'],
+                 'current': current and timing_qualified}, session)
+            if state == 'completed':
+                output['reading_binding'] = reading_preview[0]
             if state=="completed":
                 output["arm_snapshot"]=arm_snapshot(self.store,request,receipt.get("result"),completed_at=now,current=current)
                 # A rendering projection is bounded separately from raw evidence.
@@ -389,6 +411,7 @@ class PairedRunner:
                     self.store._event(db,self.session_id,"perception.output",output)
             # No anonymous state advances if immutable output storage rolled back.
             association_bank.commit(association_preview)
+            reading_bank.commit(reading_preview)
             if self.active[request["arm"]] == request_id:
                 self.active[request["arm"]] = None
             if state == 'completed' and self.evidence_ready is not None:

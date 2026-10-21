@@ -81,7 +81,13 @@ class ActivityLoop:
     def stop(self, reason='operator_stop'):
         """Operator Stop: end the deep stack now and hold until resume()."""
         with self.lock:
-            self.stopped = reason if isinstance(reason, str) and reason else 'operator_stop'
+            reason = reason if isinstance(reason, str) and reason else 'operator_stop'
+            if not (self.stopped == 'operator_stop' and reason == 'monitor_backoff'):
+                self.stopped = reason
+            if reason == 'monitor_backoff':
+                backoff = getattr(self.deep, 'set_monitor_backoff', None)
+                if backoff is not None:
+                    backoff(True)  # also while vacant: no recording owns Qwen
             if self.running:
                 self.deep.stop(self.stopped)
                 self.running = False
@@ -93,6 +99,9 @@ class ActivityLoop:
         with self.lock:
             if only_reason is not None and self.stopped is not None and self.stopped != only_reason:
                 raise ResumeRefused('activity_loop_stopped_by_' + self.stopped)
+            backoff = getattr(self.deep, 'set_monitor_backoff', None)
+            if backoff is not None:
+                backoff(False)
             self.stopped = None
         return self.snapshot()
 
@@ -112,8 +121,12 @@ class ActivityLoop:
     def cadence_status(self):
         with self.lock:
             jev = getattr(self.deep, 'cadence_status', None)
-            return {'level': self.cadence, 'factor': CADENCE[self.cadence], 'pose_interval_s': self.pose_interval_s,
-                    'jev': jev() if jev is not None else None}
+            result = {'level': self.cadence, 'factor': CADENCE[self.cadence], 'pose_interval_s': self.pose_interval_s,
+                      'jev': jev() if jev is not None else None}
+            qwen = getattr(self.deep, 'qwen_control_status', None)
+            if qwen is not None and (control := qwen()) is not None:
+                result['qwen'] = control
+            return result
 
     # --- one step ----------------------------------------------------------
     def _reading(self):
@@ -170,10 +183,11 @@ class ActivityLoop:
         if answer.get('label') not in activity_events.LABELS:
             return
         person = ((seen.get('pose') or {}).get('people') or [None])[0]
+        bound = {k: answer[k] for k in ('binding', 'valid_until') if k in answer}
         self._emit(activity_events.activity(**self.scope, observed_at=answer['observed_at'], label=answer['label'],
             confidence=answer.get('confidence'), person_count=seen.get('person_count'),
             model=answer.get('model') or 'jev-1.13.0', facts_key=answer.get('facts_key') or 'request:%s' % answer['event_id'],
-            zone_hint=activity_pose.zone_hint(person, self.zones)))
+            zone_hint=activity_pose.zone_hint(person, self.zones), **bound))
 
     def _pose(self, seen, now):
         pose = seen.get('pose')
@@ -184,8 +198,9 @@ class ActivityLoop:
         self.last_pose_key, self.last_pose_at = pose['key'], now
         people = list(pose.get('people') or [])
         count = seen.get('person_count')
+        bound = {k: pose[k] for k in ('binding', 'valid_until') if k in pose}
         self._emit(activity_events.person_pose(**self.scope, observed_at=pose['observed_at'], people=people,
-            person_count=count if type(count) is int else len(people)))
+            person_count=count if type(count) is int else len(people), **bound))
 
     def _position(self, seen, now, running):
         position = seen.get('position') if self.person_position else None
@@ -280,7 +295,8 @@ class ActivityLoop:
     def snapshot(self):
         with self.lock:
             now = self.clock()
-            return dict(schema=SCHEMA, state='stopped' if self.stopped else 'running' if self.running else 'paused',
+            return dict(schema=SCHEMA, monitor_control_version=2,
+                state='stopped' if self.stopped else 'running' if self.running else 'paused',
                 stopped_reason=self.stopped, cadence=self.cadence,
                 position=dict(enabled=self.person_position, ok=self.position_health[0], detail=self.position_health[1],
                               interval_s=self.position_interval_s, last_published_age_s=None if self.last_position_at is None

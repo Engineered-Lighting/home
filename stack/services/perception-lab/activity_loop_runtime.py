@@ -18,6 +18,7 @@ import time
 import uuid
 
 import activity_pose
+from activity_reading import reader_key
 
 TERMINAL = ('stopped', 'failed', 'interrupted', 'blocked', 'indeterminate')
 OPEN = ('requested', 'starting', 'recording', 'stopping')
@@ -134,7 +135,7 @@ class EgressRelease:
 
 class ManagedDeepStack:
     def __init__(self, controller, *, camera_id='den', experiment_id='apartment-viewing', roll_margin_s=20.,
-                 output_fresh_s=10., retry_s=10., name='Activity loop', clock=None, release=None):
+                 output_fresh_s=10., retry_s=10., retry_max_s=160., name='Activity loop', clock=None, release=None):
         self.controller, self.store, self.runtime = controller, controller.store, controller.runtime
         self.camera_id, self.experiment_id, self.name = camera_id, experiment_id, name
         self.clock = clock or self.store.clock
@@ -143,6 +144,10 @@ class ManagedDeepStack:
             raise ValueError('roll margin must leave most of each recording')
         self.limit, self.roll_margin_s = float(limit), float(roll_margin_s)
         self.output_fresh_s, self.retry_s = output_fresh_s, retry_s
+        if not 1 <= retry_s <= retry_max_s <= 600:
+            raise ValueError('bounded recording retry backoff required')
+        self.retry_max_s, self.retry_failures = retry_max_s, 0
+        self.producer_epoch = uuid.uuid4().hex
         self.lock = threading.RLock()
         self.sid = None
         self.wanted = False
@@ -196,6 +201,22 @@ class ManagedDeepStack:
         with self.lock:
             self.cadence_factor = factor
             self._apply_cadence()
+        perceiver = getattr(self.runtime, 'la_live_perceiver', None)
+        if perceiver is not None:
+            perceiver.set_cadence(factor)
+
+    def set_monitor_backoff(self, blocked):
+        perceiver = getattr(self.runtime, 'la_live_perceiver', None)
+        if perceiver is not None:
+            perceiver.set_monitor_backoff(blocked)
+
+    def qwen_control_status(self):
+        perceiver = getattr(self.runtime, 'la_live_perceiver', None)
+        return perceiver.monitor_status() if perceiver is not None else None
+
+    def qwen_workload_status(self):
+        perceiver = getattr(self.runtime, 'la_live_perceiver', None)
+        return perceiver.workload_status() if perceiver is not None else None
 
     def _apply_cadence(self):
         runtime = self._inner()
@@ -243,9 +264,16 @@ class ManagedDeepStack:
             if session['state'] in TERMINAL:
                 self._count(self.sid)
                 if self.sid in self.ours or session.get('reason') == 'duration_limit':
+                    self.ours.discard(self.sid)
+                    self.rolls += 1
                     self.sid = None  # our roll, or the budget expired first: reopen
                     self._open()
+                elif session['state'] != 'stopped' or session.get('reason') in (
+                        'worker_preparation_failed', 'worker_failed', 'runtime_failed', 'recording_failed'):
+                    self._retry(session.get('reason') or session['state'])
                 else:
+                    # A stopped recording with an unknown reason may be an
+                    # intentional external stop. Never guess that it can resume.
                     self.ended_externally, self.wanted, self.sid = True, False, None
                 return
             started = session.get('started_at')
@@ -260,14 +288,17 @@ class ManagedDeepStack:
         try:
             session = self.controller.start(body)
         except Exception as error:
-            self.sid, self.retry_at = None, self.clock() + self.retry_s
-            self.last_error = getattr(error, 'code', None) or type(error).__name__
+            self._retry(getattr(error, 'code', None) or type(error).__name__)
             return
         if session['state'] in TERMINAL:
-            self.sid, self.retry_at = None, self.clock() + self.retry_s
-            self.last_error = session.get('reason') or session['state']
+            self._retry(session.get('reason') or session['state'])
             return
         self.sid, self.retry_at, self.last_error = session['id'], None, None
+
+    def _retry(self, reason):
+        delay = min(self.retry_max_s, self.retry_s * 2 ** min(self.retry_failures, 16))
+        self.retry_failures += 1
+        self.sid, self.retry_at, self.last_error = None, self.clock() + delay, reason
 
     def _close(self, reason):
         if self.sid is None:
@@ -331,6 +362,7 @@ class ManagedDeepStack:
             deep = (False, 'deep_stack_no_recent_output')
         else:
             deep = (True, None)
+            self.retry_failures = 0  # preparation alone is not a successful recovery
         source = (getattr(inner, 'apartment_viewing_sessions', None) or {}).get(session['id'])
         camera = (False, 'camera_no_viewing_source') if source is None else (
             (True, None) if source.status().get('accepted_frames', 0) > 0 else (False, 'camera_no_frames_yet'))
@@ -350,13 +382,24 @@ class ManagedDeepStack:
                     'health': self._health(session, now, output), 'usage': dict(self.usage),
                     'person_count': activity_pose.person_count(result) if isinstance(result, dict) else None}
             answer_id, answer = self._latest(sid, 'reasoning.output')
-            if answer is not None:
+            binding = (output or {}).get('reading_binding')
+            current_binding = (isinstance(binding, dict) and binding.get('status') == 'available'
+                               and binding.get('session_id') == sid and binding.get('valid_until', 0) > now)
+            context = (answer or {}).get('reading_context')
+            answer_ok = (isinstance(context, dict) and current_binding
+                         and reader_key(context.get('binding')) == reader_key(binding)
+                         and answer.get('status') == 'ready' and answer.get('fresh_on_arrival') is True
+                         and answer.get('provider_status') == 'ready'
+                         and isinstance(answer.get('available_at_s'), (int, float))
+                         and min(answer.get('valid_until', 0), context.get('valid_until', 0)) > now)
+            if answer_ok:
                 judgment = answer.get('judgment') or {}
                 start = session.get('started_at') or 0
                 seen['activity'] = {'event_id': answer_id, 'label': judgment.get('activity'),
                     'confidence': judgment.get('probability', judgment.get('confidence')),
                     'model': judgment.get('model_version'), 'facts_key': answer.get('facts_key') or (judgment.get('diagnostics') or {}).get('facts_key'),
-                    'observed_at': start + answer['source_end_s'] if isinstance(answer.get('source_end_s'), (int, float)) else now}
+                    'observed_at': start + answer['source_end_s'],
+                    'binding': context['binding'], 'valid_until': min(answer['valid_until'], context['valid_until'])}
             self._apply_cadence()
             source = (getattr(self._inner(sid), 'apartment_viewing_sessions', None) or {}).get(sid)
             metric = getattr(source, 'metric', None)
@@ -369,24 +412,55 @@ class ManagedDeepStack:
             else:
                 seen['position_reason'] = ('approximate_placement_unavailable' if metric is None
                                            else (placement or {}).get('reason') or 'approximate_no_placement')
-            if isinstance(placement, dict) and placement.get('renderable'):
+            if current_binding and isinstance(placement, dict) and placement.get('renderable'):
                 provenance = placement['approximate_pose']['provenance']
                 raw = None
-                if output_id == provenance.get('source_event_id') and isinstance(result, dict):
-                    poses = result.get('pose_instances') or []
-                    raw = poses[placement['approximate_pose'].get('instance_index', 0)] if poses else None
-                person = activity_pose.placed_person(placement, raw)
+                frame = placement.get('frame') or {}
+                placed = placement['approximate_pose']
+                # Placement completes asynchronously. Join its exact immutable
+                # source, while the latest raw observation remains the veto for
+                # ambiguity, discontinuity and a changed reader. Never borrow
+                # the newest detector's binding for an older placed frame.
+                placed_id = provenance.get('source_event_id')
+                row = None
+                with self.store.lock:
+                    if type(placed_id) is int and placed_id > 0:
+                        row = self.store.db.execute(
+                            "SELECT payload FROM events WHERE session_id=? AND id=? AND kind='perception.output' "
+                            "AND json_extract(payload,'$.arm')='b'", (sid, placed_id)).fetchone()
+                placed_output = json.loads(row[0]) if row else {}
+                placed_binding = placed_output.get('reading_binding') or {}
+                placed_result = placed_output.get('result') or {}
+                if (placed_binding.get('status') == 'available'
+                        and reader_key(placed_binding) == reader_key(binding)
+                        and placed_binding.get('valid_until', 0) > now
+                        and placed_output.get('status') == 'completed'
+                        and placed_output.get('current') is True
+                        and frame.get('frame_id') == placed_binding.get('source_frame_id')
+                        and frame.get('source_epoch') == placed_binding.get('capture_epoch')):
+                    poses = placed_result.get('pose_instances') or []
+                    index = placed.get('instance_index')
+                    selected = poses[index] if type(index) is int and 0 <= index < len(poses) else None
+                    if selected is not None and selected.get('instance_id') == placed_binding.get('instance_id'):
+                        raw = selected
+                person = activity_pose.placed_person(placement, raw) if raw is not None else None
                 if person is not None:
-                    times = placement['frame'].get('original_times') or {}
+                    bound = dict(placed_binding, source_event_id=placed_id)
                     seen['pose'] = {'key': provenance.get('source_event_id'), 'people': [person],
-                                    'observed_at': times.get('observed_at') or now}
+                                    'observed_at': placed_binding['observed_at'], 'binding': bound,
+                                    'valid_until': placed_binding['valid_until']}
+            if 'pose' not in seen:
+                seen['pose'] = dict(key='unbound:%s:%s' % (sid, output_id), people=[], observed_at=now,
+                                    binding=None, valid_until=now + 1.)
             return seen
 
     def snapshot(self):
         with self.lock:
-            return dict(session_id=self.sid, wanted=self.wanted, rolls=self.rolls, last_error=self.last_error,
+            return dict(session_id=self.sid, producer_epoch=self.producer_epoch, wanted=self.wanted, rolls=self.rolls,
+                        last_error=self.last_error, retry_at=self.retry_at, retry_failures=self.retry_failures,
                         ended_externally=self.ended_externally, usage=dict(self.usage), budget_s=self.limit,
-                        roll_margin_s=self.roll_margin_s, jev_release=self.release.snapshot())
+                        roll_margin_s=self.roll_margin_s, jev_release=self.release.snapshot(),
+                        qwen_control=self.qwen_control_status(), qwen_workload=self.qwen_workload_status())
 
 
 def recipe_vjepa_arms(experiment_id, catalog_path=None):

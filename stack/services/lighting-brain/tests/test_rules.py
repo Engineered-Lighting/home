@@ -281,7 +281,7 @@ def test_each_precondition_drops_the_spot_at_once(geometry, change, why):
 def test_stale_pose_drops_the_spot(geometry):
     inputs = reading_inputs()
     feed([activity(NOON + 12), zone(NOON + 12), occupancy(NOON + 12)], NOON + 12, inputs=inputs)
-    assert run(geometry, inputs, NOON + 14).mode == "reading"  # pose from +4, ttl 10
+    assert run(geometry, inputs, NOON + 13.999).mode == "reading"  # bound source expires at +14, exclusive
     ev = run(geometry, inputs, NOON + 14.5)
     assert ev.mode == "ambient" and ev.rule_whys["reading_spot_off"] == "Pose stale · no spotlight"
 

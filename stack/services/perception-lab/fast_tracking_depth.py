@@ -81,11 +81,24 @@ class DepthProjector:
             lifter=DepthLifter(value['depth'],self.model,rgb_roi=roi)
         instances=[]
         for pose in poses:
-            joints=[]
+            joints=[];observations=[]
             for joint in pose['joints']:
-                if joint['status']!='supported':continue
+                # Preserve every COCO slot and its reason. A missing 3D point
+                # must not conflate a weak/out-of-frame image detection with
+                # a supported image point lacking stereo depth.
+                supported=joint['status']=='supported'
+                observation=dict(id=joint['joint_id'],image_status=joint['status'],image_reason=joint.get('reason'),
+                    pixel=list(joint['pixel']) if joint.get('pixel') is not None else None,
+                    response=joint.get('score'),response_semantics='SimCC_response_not_probability',
+                    depth_status='not_attempted',depth_reason='image_joint_unsupported',
+                    depth_support=0,depth_spread_m=None,camera_xyz_m=None)
+                observations.append(observation)
+                if not supported:continue
                 sample=lifter.lift(*joint['pixel'],radius_px=4,min_support=3)
+                observation.update(depth_status=sample['status'],depth_reason=sample.get('reason'),
+                    depth_support=sample['support'],depth_spread_m=sample.get('spread_m'))
                 if sample['status']=='measured':joints.append(dict(id=joint['joint_id'],camera_xyz_m=sample['xyz'],
                     depth_support=sample['support'],depth_spread_m=sample.get('spread_m'),pixel=joint['pixel']))
-            instances.append(dict(instance_id=pose['instance_id'],joints=joints))
+                if sample['status']=='measured':observation['camera_xyz_m']=list(sample['xyz'])
+            instances.append(dict(instance_id=pose['instance_id'],joints=joints,joint_observations=observations))
         return instances

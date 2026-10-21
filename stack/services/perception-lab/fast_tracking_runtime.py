@@ -191,6 +191,18 @@ class TrackingPump:
             model=self.receiver.profile,inference_ms=inference_ms,inference_and_projection_ms=(now-started)*1000,stage_timings_ms=proof['result'].get('stage_timings_ms'),
             dropped=self.drops,lighting_authority=False,physical_permission=False,identity_authority=False,
             alignment_sha256=digest(self.alignment),mount_check='mount_check_skipped_development')
+        # Opt-in diagnostic evidence travels with this exact packet and its
+        # original expiry. It supplies neither a fitted body nor a temporal
+        # person track. Keep coordinates out of the journal trace path.
+        instances=projected['instances']
+        if (os.environ.get('DEN_FAST_TRACKING_BODY_DIAGNOSTICS')=='1'
+                and all('joint_observations' in instance for instance in instances)):
+            packet['pose_observations']=dict(schema='home-body-observations-1',frame_key=key,
+                association='frame_scoped_detection',image_size=[640,360],
+                camera_coordinate_space='rectified_left_x_right_y_down_z_forward_m',
+                point_semantics='visible_depth_surface_not_anatomical_joint_center',
+                people=[dict(instance_id=instance['instance_id'],joints=deepcopy(instance['joint_observations']))
+                        for instance in instances])
         with self.lock:self.latest=packet;self.reason=None
         tracking_trace('worker_model_completed',packet,at_s=model_completed)
         tracking_trace('worker_published',packet,at_s=now,people=len(people),joints=sum(len(p['joints']) for p in people),

@@ -270,11 +270,11 @@ class JevProvider:
             raise ProviderFailure("household_egress_not_authorized:"+code) from None
 
     def evaluate(self, records, *, request_id, site_id, session_id, arm, generation,
-                 cutoff, deadline, window_seconds=10, shared_context=None, context_snapshot=None):
+                 cutoff, deadline, window_seconds=10, shared_context=None, context_snapshot=None, reading_context=None):
         if self.wire is not None:
             return self._evaluate_facts(records, request_id=request_id, site_id=site_id, session_id=session_id, arm=arm,
                                         generation=generation, cutoff=cutoff, deadline=deadline, window_seconds=window_seconds,
-                                        shared_context=shared_context, context_snapshot=context_snapshot)
+                                        shared_context=shared_context, context_snapshot=context_snapshot, reading_context=reading_context)
         started = time.perf_counter()
         try:
             if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
@@ -326,7 +326,7 @@ class JevProvider:
             'shared_context_digest':context_snapshot.get('shared_context_digest') if isinstance(context_snapshot,dict) else None})
 
     def _evaluate_facts(self, records, *, request_id, site_id, session_id, arm, generation,
-                        cutoff, deadline, window_seconds=10, shared_context=None, context_snapshot=None):
+                        cutoff, deadline, window_seconds=10, shared_context=None, context_snapshot=None, reading_context=None):
         """The v6 build: facts-only state, local sidecar bound by its digest."""
         import jev_wire as wire
         started = time.perf_counter()
@@ -340,7 +340,15 @@ class JevProvider:
             block = project_context(context_snapshot)
             dropped = [f for f, v in (block or {}).get("ha_facts", {}).items() if v != "supplied"]
             bound = dict(ha_bindings=granted_bindings(self.ha_bindings, dropped), zone_bindings=self.zone_bindings)
-            ring = self.rings.setdefault((session_id, arm, generation), wire.FrameRing())
+            ring_key = (session_id, arm, generation)
+            from activity_reading import reader_key
+            epoch = reader_key((reading_context or {}).get('binding'))
+            epochs = getattr(self, '_reading_ring_epochs', {})
+            if ring_key in epochs and epochs[ring_key] != epoch:
+                self.rings.pop(ring_key, None)
+            epochs[ring_key] = epoch
+            self._reading_ring_epochs = epochs
+            ring = self.rings.setdefault(ring_key, wire.FrameRing())
             local, packet, binding = wire.prepare(project(records, **bound), project(shared_context or [], **bound), block,
                 site_id=site_id, session_id=session_id, arm=arm, generation=generation, cutoff=cutoff,
                 window_seconds=window_seconds, model=self.model, storyline_seconds=self.storyline_seconds, ring=ring,

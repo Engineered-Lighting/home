@@ -11,6 +11,7 @@ import threading
 import uuid
 
 import jev_smoothing
+import activity_reading
 from jev_provider import ProviderFailure
 from reasoning import canonical, causal_evidence, shared_evidence, QUESTIONS, recommendation, digest, finite
 
@@ -43,6 +44,7 @@ class LiveReasoning:
         self.session = store.get_session(session_id)
         self.policy = json.loads(canonical(policy or {}))
         self.lock = threading.RLock()
+        self.reading_qwen_source = None
         self.closed = False
         self.timers = {}
         self.futures = set()
@@ -73,6 +75,16 @@ class LiveReasoning:
             # walked each earlier request of the session through its payload.
             db.execute("""CREATE INDEX IF NOT EXISTS reasoning_arm_dispatched
                 ON lab_reasoning_requests(session_id,arm,dispatched_at)""")
+
+    def bind_reading_qwen(self, source):
+        """Attach only the incumbent controller's trusted original receipt bank."""
+        from la_qwen_context import LaQwenReceipts
+        if type(source) is not LaQwenReceipts:
+            raise ValueError('trusted original Qwen receipt source required')
+        with self.lock:
+            if self.closed or self.reading_qwen_source is not None and self.reading_qwen_source is not source:
+                raise ValueError('reading Qwen source already retired or bound')
+            self.reading_qwen_source = source
 
     def _generation(self, db):
         row = db.execute("SELECT generation FROM lab_experiment_state WHERE session_id=?", (self.sid,)).fetchone()
@@ -296,9 +308,17 @@ class LiveReasoning:
             # Independent of this arm's window and retained history; strictly valid.
             context = [] if person_mode else shared_evidence(shared.get(arm), site_id=self.session["site_id"], session_id=self.sid,
                 arm=arm, generation=generation, cutoff=cutoff)
+            bound_loop = (arm == 'b' and not person_mode
+                          and self.session.get('request_id', '').startswith('activity-loop-'))
+            if bound_loop:
+                evidence, context, reading_context = activity_reading.freeze_context(
+                    self.store, self.session, evidence, context, cutoff,
+                    qwen_source=self.reading_qwen_source)
+                request['records'] = evidence
+                request['reading_context'] = reading_context
             if context:
                 request["shared_context"] = context
-            if snapshot and not person_mode:
+            if snapshot and not person_mode and not bound_loop:
                 request["context_snapshot"] = snapshot[arm]
             # One canonical encoding per request: budget, admission and row.
             encoded[request["request_id"]] = canonical(request)
@@ -478,6 +498,16 @@ class LiveReasoning:
                 "end":expiry-start, "available_at":now-start, "valid_until":expiry-start,
                 "activities":[] if status == "abstain" else [activity],
                 "confidence":judgment["probabilities"][activity], "mode":"live"}}
+        if 'reading_context' in req:
+            context = req['reading_context']
+            output['reading_context'] = deepcopy(context)
+            if context is not None:
+                expiry = min(expiry, context['valid_until'])
+                output['valid_until'] = expiry
+                output['prediction']['valid_until'] = expiry - start
+                output['prediction']['end'] = expiry - start
+                output['status'] = status if expiry > now else 'stale'
+                output['fresh_on_arrival'] = expiry > now
         # The redundant kind IN term names the events_output_time partial index,
         # which serves source_end_s order: a few rows instead of every output.
         row = self.store.db.execute("""SELECT payload FROM events WHERE session_id=?

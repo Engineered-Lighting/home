@@ -8,6 +8,8 @@ import math
 import re
 
 SCHEMA = 'activity-lighting-events-1'
+BOUND_SCHEMA = 'activity-lighting-events-2'
+BOUND_FIELDS = ('evidence_version', 'binding', 'valid_until')
 COMMON = ('type', 'home', 'room', 'source', 'observed_at', 'sent_at', 'ttl_s')
 TTL_S = {'activity': 12., 'person_pose': 10., 'health': 150., 'cost': 300., 'person_position': 10.}
 LABELS = ('reading', 'computer_work', 'phone_use', 'resting', 'transition', 'other', 'insufficient_evidence')
@@ -55,16 +57,24 @@ def _common(kind, *, home, room, source, observed_at):
     return dict(type=kind, home=home, room=room, source=source, observed_at=float(observed_at), ttl_s=TTL_S[kind])
 
 
-def activity(*, home, room, source, observed_at, label, confidence, person_count, model, facts_key, zone_hint):
+def activity(*, home, room, source, observed_at, label, confidence, person_count, model, facts_key, zone_hint,
+             binding=None, valid_until=None):
     event = _common('activity', home=home, room=room, source=source, observed_at=observed_at)
     event.update(label=label, confidence=None if confidence is None else float(confidence),
                  person_count=person_count, model=model, facts_key=facts_key, zone_hint=zone_hint)
-    return check(event, sent=False)
+    return _bound(event, binding, valid_until)
 
 
-def person_pose(*, home, room, source, observed_at, people, person_count):
+def person_pose(*, home, room, source, observed_at, people, person_count, binding=None, valid_until=None):
     event = _common('person_pose', home=home, room=room, source=source, observed_at=observed_at)
     event.update(people=people, person_count=person_count)
+    return _bound(event, binding, valid_until)
+
+
+def _bound(event, binding, valid_until):
+    if valid_until is not None:
+        event.update(evidence_version=2, binding=binding, valid_until=valid_until)
+        event['ttl_s'] = min(TTL_S[event['type']], valid_until - event['observed_at'])
     return check(event, sent=False)
 
 
@@ -94,12 +104,34 @@ def check(event, *, sent=True):
     _need(isinstance(event, dict) and event.get('type') in EXTRA, 'activity_event_type_unknown')
     kind = event['type']
     keys = set(COMMON) | set(EXTRA[kind])
+    bound = event.get('evidence_version') == 2
+    if bound:
+        _need(kind in ('activity', 'person_pose'), 'activity_bound_type_invalid')
+        keys.update(BOUND_FIELDS)
     _need(set(event) == (keys if sent else keys - {'sent_at'}), 'activity_event_keys_invalid')
     _need(all(isinstance(event[k], str) and _NAME.fullmatch(event[k]) for k in ('home', 'room', 'source')),
           'activity_event_scope_invalid')
     _need(_finite(event['observed_at']) and event['observed_at'] >= 0, 'activity_event_time_invalid')
     _need(not sent or (_finite(event['sent_at']) and event['sent_at'] >= 0), 'activity_event_time_invalid')
-    _need(event['ttl_s'] == TTL_S[kind], 'activity_event_ttl_invalid')
+    if bound:
+        _need(_finite(event['valid_until']) and 0 < event['ttl_s'] <= TTL_S[kind]
+              and event['observed_at'] + event['ttl_s'] <= event['valid_until'] + 1e-6, 'activity_event_ttl_invalid')
+        binding = event['binding']
+        if binding is None:
+            pass  # Explicitly unbound observation retires reading authority.
+        else:
+            _need(isinstance(binding, dict) and binding.get('schema') == 'den-sole-reader-source-1'
+                  and binding.get('status') == 'available' and binding.get('reason') is None
+                  and all(_text(binding.get(k), 256) for k in ('session_id', 'capture_epoch', 'engine_epoch',
+                        'reader_epoch', 'instance_id', 'source_frame_id', 'source_request_id'))
+                  and type(binding.get('generation')) is int and binding['generation'] >= 1
+                  and type(binding.get('source_event_id')) is int and binding['source_event_id'] > 0
+                  and all(_finite(binding.get(k)) for k in ('observed_at', 'available_at', 'valid_until', 'interval_start'))
+                  and binding['interval_start'] <= binding['observed_at'] <= binding['available_at'] < binding['valid_until']
+                  and event['valid_until'] <= binding['valid_until']
+                  and event['person_count'] == 1, 'activity_bound_binding_invalid')
+    else:
+        _need(event['ttl_s'] == TTL_S[kind], 'activity_event_ttl_invalid')
     count = event.get('person_count')
     if kind == 'activity':
         _need(event['label'] in LABELS, 'activity_label_invalid')
@@ -139,4 +171,5 @@ def check(event, *, sent=True):
 
 def envelope(events):
     """The POST body; every event must already carry sent_at."""
-    return {'schema': SCHEMA, 'events': [check(e) for e in events]}
+    return {'schema': BOUND_SCHEMA if any(e.get('evidence_version') == 2 for e in events) else SCHEMA,
+            'events': [check(e) for e in events]}

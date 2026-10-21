@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
@@ -123,6 +124,34 @@ async function following(initial, { configure = () => {}, ...options } = {}) {
   return { t, brain, room, views, applied, wired, view: () => wired.follower.readback() };
 }
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `${a} != ${b}`);
+
+test('authored reading observations pass through the real publisher/brain into moving Home virtual aims',async()=>{
+  const run=spawnSync(process.env.PYTHON||'python',['tools/fixtures/den-reading-coordinator.py'],{
+    cwd:fileURLToPath(new URL('../',import.meta.url)),encoding:'utf8',timeout:15000,windowsHide:true});
+  assert.ifError(run.error);assert.equal(run.status,0,run.stderr);
+  const fixture=JSON.parse(run.stdout);assert.deepEqual(fixture.schemas,['activity-lighting-events-2']);
+  assert.equal(fixture.camera_calls,0);assert.equal(fixture.model_calls,0);
+  const f=await following(fixture.states[0].state);let previousTarget=null,moved=false;
+  try{
+    for(const row of fixture.states){
+      await f.brain.push(row.state);await f.t.advance(3100);
+      const lit=row.state.fixtures.filter(x=>x.spot.on);
+      assert.equal(f.view().physical_commands,false);
+      for(const state of row.state.fixtures){
+        assert.equal(f.room.state(state.fixture_id).spotlight.on,state.spot.on,row.phase);
+      }
+      if(lit.length){
+        assert.equal(lit.length,1);
+        const selected=lit[0],target=f.room.preview.interactionDescriptor(selected.fixture_id).target;
+        assert.equal(target.kind,'lighting_brain_target');
+        assert.deepEqual(target.point,selected.spot.target_m);
+        if(previousTarget){assert.notDeepEqual(target.point,previousTarget,'a moved shoulder pose must move the virtual aim');moved=true;}
+        previousTarget=target.point;
+      }
+    }
+    assert.equal(moved,true);assert.ok(f.room.calls.aim>=2);
+  }finally{f.wired.dispose();}
+});
 
 /* ---------- schema ---------- */
 test('activity-lighting-state-1 is accepted and malformed documents are refused with a reason', () => {

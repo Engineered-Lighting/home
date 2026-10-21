@@ -197,6 +197,69 @@ run remains under `final-mapped/`; the full recheck is separate under
 `final-mapped-recheck/`. An earlier 97-item run was aborted when the phone bug
 was found and does not count as a completed combined verification.
 
+## Direct Setup, room header and compact Lit follow-up
+
+Source predecessor: `f22912312fed3d15d85f7ab2254d1fb22c0fc38f` (#411).
+Canonical ZIP: `4f7fdb568481517e0e34e58459fcdd48f6111aac6b57c8c145c55d57091466c3`.
+This is partial #401, not final whole-app acceptance.
+
+The Home header now has the supplied Setup glyph and a direct pressed Setup
+toggle. It shares the menu entry's existing controller, read-only behavior and
+unavailable explanation. Lit is presented as the compact fourth segment but
+still toggles independent lighting across Cloud, Photo and Mesh. The fixture
+header uses the registered room, actual powered channel levels and compact
+back/ghost-close controls. No registration or fixture values are rewritten.
+
+A real short-screen defect was fixed: the Home menu now has a viewport-bounded
+height and scrolls. The controlled CSS-removal experiment failed its unclipped
+390x460 menu assertion; the corrected coarse-pointer proof passes, including
+44px direct Setup, final-action keyboard scrolling, refusal and opener focus.
+The Setup read-only proof has seven checks. Lit relighting/restoration and
+the one-label/room/channel summary proofs pass. Both-home Setup rail and the
+Victoria shell audit pass, retaining contrast, touch and keyboard assertions
+and checking compact 7px as well as regular 8px button radii.
+
+Private authored comparisons were reviewed at desktop 1366x768 and phone
+390x844, dark and light, plus desktop active Setup and a 390x460 menu image.
+Exact-size CDP image clips were verified; earlier screenshots that ignored
+device emulation were rejected and excluded. The manual short-screen image
+uses a fine pointer; coarse-pointer scrolling is established by the browser
+proof. Prototype/app geometry, channel values and camera states are different
+authored inputs, not installed home evidence. Setup internals in the two
+images are different tools; only header state is compared there. All images
+and registrations remain private under `.tmp/header-toolbar-qa/`.
+
+The complete combined 126-item mapped suite passes at
+`86d2fd85f5f45e0aa579d990ae877ce4488fe6cb`: twelve green disjoint receipts,
+two local workers, longest shard 142 seconds. The union matches the
+unsharded plan; 145-second browser, 180-second file and 600-second worker
+limits are unchanged. Runtime/source hashes and private image hashes are
+sealed in the local acceptance receipt. Exact-head hosted CI remains separate.
+The first full 126-item attempt at `d7217761` failed on two obsolete expectations
+and the native WebGL initial lit reference (RGB18, mean2.5477). Those logs remain
+in `combined-mapped/`. The stale Setup-only-in-menu assertion and regular-only
+button sample are corrected without reducing touch, contrast or focus coverage.
+Five private diagnostic/original native reruns passed at unchanged thresholds;
+they do not prove a renderer fix. That intermittent condition remains unresolved.
+
+A subsequent run at `c49fad64` was interrupted after the phone Aim action
+timed out. Its failure receipt showed focus still on the sheet grip after the
+test tried to focus the reticle. The test now waits for a visible reticle and
+requires actual focus before sending the arrow key. Its original half-sheet,
+Chat retention, full-sheet Set/Discard/Undo and no-output assertions remain.
+The focused proof passes; no runtime fix is claimed for this test precondition.
+The interrupted run and `ABORTED.md` remain in `final-combined-mapped/` and do
+not count as completed qualification.
+
+Remaining #401 scope includes Echo advanced-Aim consolidation and the Setup
+normal-toolbar presentation, which remains the legacy orbit strip. Phone
+labels/tabs/toolbar spacing, camera dock, coarse radial layout and remaining
+#398-#409 clauses remain open. The owner has explicitly deferred body shape,
+mesh fitting and body occlusion; use skeletal tracking for now. #412 stays
+shelved/draft and #276/#277 retain their deferred requirements. This work adds
+no body code or tracking-producer changes. No merge, deployment, installed scan,
+live connection, physical command or photometric acceptance is claimed.
+
 ## Remaining acceptance work
 
 - #398: finish the complete every-state/orbit/theme fixture visual matrix on
@@ -206,8 +269,10 @@ was found and does not count as a completed combined verification.
   against the ZIP; compact Aim hierarchy and radial preset styling are now
   implemented locally, alongside the prior Light label/track/output fixes.
 - #399: restrained beams and redundant modeled annotations.
-- #401, #403, #404: header/Setup/toolbar, phone label/tab collisions and camera
-  dock fidelity remain outside this correction batch.
+- #401: direct Setup, compact Lit and room/header details are implemented
+  locally; Echo advanced Aim consolidation and Setup normal-toolbar fidelity
+  remain open.
+- #403, #404: phone label/tab/toolbar collisions and camera dock fidelity remain.
 - #405-#409 retain their audit scope, including gated Setup tools, Chat density,
   the theme decision, capability copy and complete acceptance evidence.
 

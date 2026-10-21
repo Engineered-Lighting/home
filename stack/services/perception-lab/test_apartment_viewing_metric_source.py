@@ -21,12 +21,15 @@ class MetricSourceTests(unittest.TestCase):
             def _read(_,path):
                 owner.reads.append(path)
                 if block is not None and path=='/frame.npz':block[0].set();block[1].wait(2)
+                if path=='/frame.jpg':return owner.originals['anchor_b'],owner.headers['b']
                 return owner.originals['npz' if path=='/frame.npz' else 'calibration'],''
         class Clock:
             def begin(_,receipt):
                 owner.assertTrue(_CAPTURE_LOCK.locked(),'same commissioned capture turn must be held')
                 return 'authored-qualified-clock-start'
-            def finish(_,value):return deepcopy(owner.proof)
+            def finish(_,value):
+                owner.assertTrue(_CAPTURE_LOCK.locked(),'clock proof must finish before another commissioned capture publishes a new clock')
+                return deepcopy(owner.proof)
         self.reads=[]
         return MetricInputFactory(Client(),clock=Clock())
     def approximate_configuration(self):
@@ -44,21 +47,25 @@ class MetricSourceTests(unittest.TestCase):
         first=pump.consume(self.originals['anchor_a'],self.headers['a'])
         second=pump.consume(self.originals['anchor_b'],self.headers['b'])
         return first,second
-    def test_original_npz_is_acquired_between_its_actual_jpeg_anchors(self):
-        configured=self.factory();runtime=self.build(metric_factory=configured)
-        self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
-        first=pump.consume(self.originals['anchor_a'],self.headers['a'])
-        self.assertEqual(first['state'],'awaiting_metric_frame')
-        self.assertEqual(self.reads,['/frame.npz','/calibration'],
-            'NPZ must already exist before the upper JPEG anchor is acquired')
-        source=runtime.apartment_viewing_sessions[self.session['id']]
-        self.assertGreater(source.status()['resident_bytes'],len(self.originals['anchor_a']))
-        second=pump.consume(self.originals['anchor_b'],self.headers['b'])
-        self.assertEqual(self.reads,['/frame.npz','/calibration'])
-        self.assertTrue(second['media_ids'])
-        self.assertEqual(dict(source.metric.lease._originals)['anchor_a'],self.originals['anchor_a'])
+    def test_upper_anchor_is_fetched_after_npz_within_the_same_clock_turn(self):
+        runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.anchors(runtime)
+        self.assertEqual(self.reads,['/frame.npz','/calibration','/frame.jpg'])
+        self.assertIsNotNone(source.metric.lease)
         self.assertEqual(dict(source.metric.lease._originals)['anchor_b'],self.originals['anchor_b'])
-
+    def test_upper_anchor_from_another_clock_receipt_cannot_be_rebound(self):
+        configured=self.factory();read=configured.client._read
+        def changed(path):
+            data,header=read(path)
+            if path=='/frame.jpg':
+                receipt=json.loads(base64.urlsafe_b64decode(header));receipt['host_clock_validation_id']='changed-clock-receipt'
+                header=base64.urlsafe_b64encode(json.dumps(receipt).encode()).decode()
+            return data,header
+        configured.client._read=changed
+        runtime=self.build(metric_factory=configured);source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.anchors(runtime)
+        self.assertIsNone(source.metric.lease);self.assertEqual(source.metric.prepared,0)
+        self.assertEqual(source.metric.reason,'bundled_receiver_proof_invalid')
     def test_exact_metric_result_is_projected_even_after_a_newer_jpeg_result(self):
         runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
         original=runtime.executor
@@ -66,8 +73,7 @@ class MetricSourceTests(unittest.TestCase):
             value=original(request);value['result']=deepcopy(self.event['payload']['result'])
             value['result']['frame_id']=request['frame']['frame_id'];return value
         runtime.executor=runtime.runners[self.session['id']].executor=pose
-        _,frame=self.anchors(runtime)
-        deadline=time.monotonic()+2
+        self.anchors(runtime);deadline=time.monotonic()+2
         while time.monotonic()<deadline:
             events=[e for e in self.store.list_events(self.session['id'],0,100)
                 if e['kind']=='perception.output' and e['payload']['arm']=='b']
@@ -77,44 +83,20 @@ class MetricSourceTests(unittest.TestCase):
         newer=deepcopy(events[0]['payload']);newer.update(media_ids=['newer-jpeg'],frame_id='newer-frame')
         self.store.append_event(self.session['id'],'perception.output',newer)
         source.metric.finalize()
-        self.assertEqual(source.metric.projected,1,'latest unrelated RGB must not hide the exact leased result')
+        self.assertEqual(source.metric.projected,1)
         self.assertIsNone(source.metric.lease)
-    def test_pending_original_expires_without_relabeling_or_retaining_its_bytes(self):
-        runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
-        self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
-        pump.consume(self.originals['anchor_a'],self.headers['a'])
-        pending=source.metric.pending_capture;self.assertIsNotNone(pending)
-        self.now=pending['valid_until'];source.prune()
-        self.assertIsNone(source.metric.pending_capture);self.assertIsNone(source.metric.lease)
-        self.assertEqual(source.metric.prepared,0);self.assertEqual(source.status()['resident_bytes'],0)
-        self.assertEqual(self.seen,[])
-    def test_duplicate_anchor_cannot_finish_pending_capture_or_renew_it(self):
-        runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
-        self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
-        pump.consume(self.originals['anchor_a'],self.headers['a'])
-        pending=source.metric.pending_capture
-        self.now+=.1;pump.consume(self.originals['anchor_a'],self.headers['a'])
-        self.assertIs(source.metric.pending_capture,pending);self.assertIsNone(source.metric.lease)
-        self.assertEqual(self.reads,['/frame.npz','/calibration']);self.assertEqual(self.seen,[])
     def test_metric_clock_refusal_keeps_successive_exact_jpeg_outputs_available(self):
         configured=self.factory()
         configured.clock.begin=lambda _:(_ for _ in ()).throw(ValueError('receiver_clock_anchor_changed'))
         runtime=self.build(metric_factory=configured);source=runtime.apartment_viewing_sessions[self.session['id']]
         self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
         first=pump.consume(self.originals['anchor_a'],self.headers['a'])
-        self.assertIn('media_ids',first)
-        deadline=time.monotonic()+2
-        while time.monotonic()<deadline:
-            if len([e for e in self.store.list_events(self.session['id'],0,100)
-                if e['kind']=='perception.output' and e['payload']['media_ids']==first['media_ids']])==2:break
-            time.sleep(.005)
+        self.assertEqual(first['state'],'awaiting_metric_frame')
         outputs=[]
         later_header=viewing.capture.header(self.jpeg,sequence=17,observed_ns=int((viewing.capture.NOW+1.5)*1e9))
-        # The first A now attempts capture and already uses the source cadence
-        # slot on refusal. The next independent JPEG must be >= one slot later.
-        frames=((self.jpeg,later_header),)
+        frames=((self.originals['anchor_b'],self.headers['b']),(self.jpeg,later_header))
         for index,(jpeg,header) in enumerate(frames):
-            self.now=1800000000.59+index+1
+            self.now=1800000000.59+index
             reply=pump.consume(jpeg,header)
             self.assertIn('media_ids',reply,'optional metric refusal hid an otherwise valid exact RGB frame')
             deadline=time.monotonic()+2
@@ -179,7 +161,7 @@ class MetricSourceTests(unittest.TestCase):
         runtime.executor=runtime.runners[self.session['id']].executor=pose
         first,second=self.anchors(runtime)
         self.assertEqual(first['state'],'awaiting_metric_frame')
-        self.assertTrue(second['media_ids']);self.assertEqual(self.reads,['/frame.npz','/calibration'])
+        self.assertTrue(second['media_ids']);self.assertEqual(self.reads,['/frame.npz','/calibration','/frame.jpg'])
         deadline=time.monotonic()+2
         while time.monotonic()<deadline:
             completed=[e for e in self.store.list_events(self.session['id'],0,100) if e['kind']=='perception.output']
@@ -206,9 +188,10 @@ class MetricSourceTests(unittest.TestCase):
         entered,release=threading.Event(),threading.Event();self.addCleanup(release.set)
         runtime=self.build(metric_factory=self.factory(block=(entered,release)))
         self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
+        pump.consume(self.originals['anchor_a'],self.headers['a'])
         failures=[]
         def capture():
-            try:pump.consume(self.originals['anchor_a'],self.headers['a'])
+            try:pump.consume(self.originals['anchor_b'],self.headers['b'])
             except Exception as e:failures.append(type(e).__name__)
         thread=threading.Thread(target=capture);thread.start();self.assertTrue(entered.wait(1))
         started=time.monotonic();runtime.stop_session(self.session);self.assertLess(time.monotonic()-started,.5)

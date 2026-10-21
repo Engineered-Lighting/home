@@ -24,10 +24,10 @@ class PumpGridFreshnessTests(unittest.TestCase):
 
     def test_real_grid_wakes_for_current_completion_and_retires_at_original_expiry(self):
         h=self.h;runtime=h.build()
-        h.consume(.5,.59);h.outputs(2)
-        h.capture_index=1;h.consume(1,1.59);h.consume(1.5,1.59)
+        h.consume(0,.59);h.consume(.5,.59);h.outputs(2)
+        h.capture_index=1;h.consume(1.5,1.59)
         self.assertIsNone(h.source.metric.lease)
-        h.capture_index=2;h.consume(2,2.59)
+        h.consume(2,2.09);h.capture_index=2
         runner=runtime.runners[h.f.session['id']]
         entered=threading.Event();release=threading.Event();lock=threading.Lock();starts=[]
         self.addCleanup(release.set)

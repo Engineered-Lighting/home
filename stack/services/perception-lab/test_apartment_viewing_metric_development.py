@@ -47,13 +47,6 @@ class DevelopmentTimingTests(unittest.TestCase):
                 patch.object(bootstrap,'_read_private',side_effect=lambda p:by_path[p]):
             configured=bootstrap.load_factory(config,client=base.client)
         configured.clock=base.clock
-        if late=='capture':
-            finish=configured.clock.finish
-            def slow(started):
-                value=finish(started)
-                f.now+=3  # original proof expires during validation before prepare
-                return value
-            configured.clock.finish=slow
         self.token='authored-development-'+'d'*40
         f.store.settings=replace(f.store.settings,token_grants=({'subject':'viewer','site_id':'victoria',
             'token_sha256':sha(self.token.encode()),'capabilities':['read']},))
@@ -70,6 +63,9 @@ class DevelopmentTimingTests(unittest.TestCase):
         runtime.executor=runtime.runners[f.session['id']].executor=execute
         prepare=apartment_viewing_metric.prepare_metric_frame
         def delayed(**kwargs):
+            if late=='capture':
+                f.now+=3  # original proof expires during preparation, after actual receipt
+                kwargs['now_s']=f.now
             lease=prepare(**kwargs)
             if late=='registration':f.now=lease.descriptor['retirement_deadline']+.05
             return lease

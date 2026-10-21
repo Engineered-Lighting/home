@@ -107,9 +107,9 @@ class MetricWakeGuards(unittest.TestCase):
         self.addCleanup(self.h.doCleanups)
     def ready(self):
         h=self.h;runtime=h.build()
-        h.consume(.5,.59);h.outputs(2)
-        h.capture_index=1;h.consume(1,1.59);h.consume(1.5,1.59)
-        h.capture_index=2;h.consume(2,2.59);h.consume(2.5,2.59);h.outputs(4)
+        h.consume(0,.59);h.consume(.5,.59);h.outputs(2)
+        h.capture_index=1;h.consume(1.5,1.59);h.consume(2,2.09)
+        h.capture_index=2;h.consume(2.5,2.59);h.outputs(4)
         self.assertIsNotNone(h.source.metric.lease)
         self.assertTrue(h.pump.wake_event.wait(1))
         h.pump.fetch=lambda:(_ for _ in ()).throw(AssertionError('idle wake cannot fetch'))

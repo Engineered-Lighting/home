@@ -66,6 +66,11 @@ class CleanupTests(unittest.TestCase):
             with self.subTest(patch=patch), self.assertRaises(ValueError):
                 ActivityMediaCleanup(self.controller, {**self.config, **patch})
 
+    def test_workstation_can_validate_absolute_linux_deployment_path(self):
+        ActivityMediaCleanup.check_config({**self.config, 'root': '/home/service/continuous-data/attempt'})
+        with self.assertRaises(ValueError):
+            ActivityMediaCleanup.check_config({**self.config, 'root': 'relative/store'})
+
     def test_deletion_failure_is_visible_and_retried_without_touching_other_media(self):
         ours = self.session('activity-loop-new'); self.now[0] += 3601
         cleanup = ActivityMediaCleanup(self.controller, self.config)

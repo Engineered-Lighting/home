@@ -35,10 +35,11 @@ class ActivityMediaCleanup:
     """
     @staticmethod
     def check_config(config):
-        from pathlib import Path
+        from pathlib import Path, PurePosixPath
         from occupancy_gate import _finite
         if (not isinstance(config, dict) or set(config) != {'root', 'created_after', 'age_s'}
-                or not isinstance(config['root'], str) or not Path(config['root']).is_absolute()
+                or not isinstance(config['root'], str)
+                or not (Path(config['root']).is_absolute() or PurePosixPath(config['root']).is_absolute())
                 or not _finite(config['created_after']) or config['created_after'] <= 0
                 or not _finite(config['age_s']) or not 300 <= config['age_s'] <= 86400):
             raise ValueError('exact root, commissioning cutoff and 5-minute to 24-hour media age required')

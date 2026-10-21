@@ -1,0 +1,10 @@
+[Unit]
+Description=Run ha-reachable periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=120s
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

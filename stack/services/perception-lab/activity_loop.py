@@ -156,6 +156,9 @@ class ActivityLoop:
             maintain = getattr(self.deep, 'maintain', None)
             if maintain is not None:
                 maintain()         # the bounded JEV egress release, even while paused
+            maintenance_ok = getattr(self.deep, 'maintenance_ok', None)
+            if maintenance_ok is not None and not maintenance_ok():
+                self.stop('monitor_backoff')
             if self.running:
                 self.deep.tick()
             seen = self.deep.observe() or {}
@@ -321,9 +324,12 @@ def read_config(path, *, read_private):
 
 def check_config(value):
     keys = {'schema', 'enabled', 'home', 'room', 'camera_id', 'experiment_id', 'brain', 'timings', 'pricing', 'zones'}
-    if (not isinstance(value, dict) or not keys <= set(value) <= keys | {'jev_release', 'vjepa', 'person_position'} or value['schema'] != SCHEMA
+    if (not isinstance(value, dict) or not keys <= set(value) <= keys | {'jev_release', 'vjepa', 'person_position', 'media_cleanup'} or value['schema'] != SCHEMA
             or type(value['enabled']) is not bool):
         raise ValueError('exact activity-loop config required')
+    if 'media_cleanup' in value:
+        from activity_loop_runtime import ActivityMediaCleanup
+        ActivityMediaCleanup.check_config(value['media_cleanup'])
     if type(value.get('person_position', True)) is not bool:
         raise ValueError('activity-loop person_position must be true or false')
     if type(value.get('vjepa', False)) is not bool:

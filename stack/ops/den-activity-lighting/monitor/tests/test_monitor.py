@@ -16,6 +16,55 @@ HA = "https://ha.example.invalid"
 JOURNAL = ("journalctl", "-k", "-o", "json", "-q", "--no-pager")
 
 
+def test_first_user_scope_is_separate_and_cannot_override_history(jetson, private):
+    j = jetson
+    path = j.cfg['sources']['failed_units']['baseline']
+    original = json.loads(read_private(path)); original['units'].pop('user')
+    with open(path, 'w') as file: json.dump(original, file)
+    before = read_private(path)
+    extra = private('user-only.json', json.dumps({
+        'schema': 'den-ops-failed-units-baseline-1', 'host': 'victoria-jetson', 'recorded_at': 1,
+        'units': {'user': []}}))
+    spec = j.cfg['sources']['failed_units']; spec['scope_baselines'] = {'user': extra}
+    notices, _ = mon.failed_unit_notices(j.cfg, j.host)
+    assert not any(n.get('evidence_error') for n in notices)
+    assert read_private(path) == before
+    spec['scope_baselines']['system'] = extra
+    notices, _ = mon.failed_unit_notices(j.cfg, j.host)
+    assert any(n['signal'] == 'units.baseline' for n in notices)
+
+
+def test_jetson_metadata_failure_is_visible_but_unknown_and_user_failures_still_block(jetson):
+    j = jetson
+    j.host.commands[('systemctl',)] = (0, 'fwupd-refresh.service loaded failed failed metadata\n')
+    notices, current = mon.failed_unit_notices(j.cfg, j.host)
+    assert mon.evidence_report(notices)['ok'] is True
+    assert any(n.get('notice') and 'fwupd-refresh' in n['detail'] for n in notices)
+    j.host.commands[('systemctl', '--user')] = (0, 'fwupd-refresh.service loaded failed failed unexpected\n')
+    notices, _ = mon.failed_unit_notices(j.cfg, j.host)
+    assert mon.evidence_report(notices)['ok'] is False
+
+
+def test_fresh_required_cleanup_is_accepted(jetson):
+    j = jetson; j.cfg['require_media_cleanup'] = True
+    j.host.responses[('GET', LAB)] = (200, {'deep_stack': {'media_cleanup':
+        {'enabled': True, 'ok': True, 'checked_at': j.host.now(), 'age_s': 3600}}})
+    mon.validate_config(j.cfg)
+    _, status, _ = mon.check(j.cfg, j.host, dry_run=True)
+    assert not any(r['signal'] == 'activity.media_cleanup' for r in status['reasons'])
+
+
+@pytest.mark.parametrize('cleanup', [None, {'enabled': False},
+    {'enabled': True, 'ok': False, 'checked_at': 1000, 'age_s': 3600},
+    {'enabled': True, 'ok': True, 'checked_at': 0, 'age_s': 3600}])
+def test_required_cleanup_failure_latches_monitor(jetson, cleanup):
+    j = jetson; j.cfg['require_media_cleanup'] = True
+    j.host.responses[('GET', LAB)] = (200, {'deep_stack': {'media_cleanup': cleanup}})
+    _, status, _ = mon.check(j.cfg, j.host, dry_run=True)
+    assert status['level'] == 3
+    assert any(r['signal'] == 'activity.media_cleanup' for r in status['reasons'])
+
+
 class FakeLoop:
     """Legacy AL-3 routes: a stop records its reason and overwrites an earlier one; a
     resume that names a reason refuses another reason's stop with 409; the
@@ -445,7 +494,8 @@ def test_new_failed_units_latch_and_alert_once(jetson):
     jetson.host.commands[("systemctl",)] = (0, fixture_text("systemctl-failed.txt"))
     _, status, _ = jetson.check()
     assert status["level"] == 3 and status["latched"]
-    assert [r["signal"] for r in status["reasons"]] == ["unit.lighting-brain.service"]   # fwupd is in the baseline
+    assert [r["signal"] for r in status["reasons"] if r['level'] > 0] == ["unit.lighting-brain.service"]
+    assert any(r['signal'] == 'unit.non_dependency.fwupd-refresh.service' for r in status['reasons'])
     assert "system unit lighting-brain.service failed (not in the recorded baseline)" in status["message"]
     assert len(jetson.ha_posts()) == 1 and jetson.ha_posts()[0]["body"]["title"] == "Den lighting: loop stopped"
     for _ in range(3):

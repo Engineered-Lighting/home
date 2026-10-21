@@ -239,6 +239,7 @@ class Inputs:
     cost: list[tuple[float, int, float | None]] = field(default_factory=list)
     latest: dict[str, float] = field(default_factory=dict)
     bound_reader: tuple | None = None
+    reading_reset_at: float = -math.inf
     # Newest activity/pose answer that saw at least one person (AL-3 evidence,
     # independent of the Frigate bridge).
     last_person_evidence_at: float | None = None
@@ -272,6 +273,9 @@ class Inputs:
         if kind == "occupancy":
             self.occupancy_last_present_at = _last_present(self.occupancy, obs, self.occupancy_last_present_at)
             self.occupancy = obs
+            if not event["present"] or event.get("people_count") != 1:
+                self.reading, self.bound_reader = None, None
+                self.reading_reset_at = observed
         elif kind == "zone":
             zone = event["zone"]
             self.zone_last_present_at[zone] = _last_present(
@@ -301,7 +305,11 @@ class Inputs:
         data = obs.data
         confidence = data.get("confidence")
         key = reader_key(data)
-        if (key is None or data.get('person_count') != 1
+        occupancy_blocks = (self.occupancy is not None and self.occupancy.fresh(obs.observed_at)
+                            and (not self.occupancy.data['present']
+                                 or self.occupancy.data.get('people_count') not in (None, 1)))
+        if (occupancy_blocks or obs.observed_at < self.reading_reset_at
+                or key is None or data.get('person_count') != 1
                 or self.bound_reader is not None and key != self.bound_reader
                 or data['label'] == 'insufficient_evidence'):
             self.reading = None

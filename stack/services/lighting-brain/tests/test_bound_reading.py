@@ -84,3 +84,27 @@ def test_diagnostics_correlate_without_changing_decision_on_evidence_refresh(bra
     assert after['reading_evidence']['activity']['source_frame_id'] != before['reading_evidence']['activity']['source_frame_id']
     assert after['inputs']['at_sofa'] is True
     assert brain.health()['reading_requires_bound_evidence'] is True
+
+@pytest.mark.parametrize('present,people', [(True, 2), (True, None), (False, 0)])
+def test_occupancy_discontinuity_requires_a_new_reading_hold(brain, clock, present, people):
+    qualify(brain, clock)
+    feed(brain, clock, NOON + 5, occupancy(NOON + 5, present=present, people=people))
+    assert brain.inputs.reading is None
+    feed(brain, clock, NOON + 6, occupancy(NOON + 6))
+    assert brain.state()['mode'] == 'ambient'
+    # A delayed pre-discontinuity answer cannot restart an old hold.
+    feed(brain, clock, NOON + 6, activity(NOON + 4.5), pose(NOON + 6))
+    assert brain.inputs.reading is None
+    feed(brain, clock, NOON + 7, activity(NOON + 7), pose(NOON + 7))
+    assert brain.state()['mode'] == 'ambient'
+    feed(brain, clock, NOON + 11, activity(NOON + 11), pose(NOON + 11))
+    assert brain.state()['mode'] == 'reading'
+
+
+def test_reading_answers_during_multiple_occupancy_do_not_qualify(brain, clock):
+    qualify(brain, clock)
+    feed(brain, clock, NOON + 5, occupancy(NOON + 5, people=2))
+    feed(brain, clock, NOON + 6, activity(NOON + 6), pose(NOON + 6))
+    assert brain.inputs.reading is None
+    feed(brain, clock, NOON + 10, occupancy(NOON + 10))
+    assert brain.state()['mode'] == 'ambient'

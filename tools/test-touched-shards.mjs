@@ -40,6 +40,12 @@ test('shared mounted UI and labeler fixtures select every affected browser consu
   }
 });
 
+test('gateway socket changes select the real process upgrade reset regressions',()=>{
+  for(const file of ['web-gateway/server.mjs','web-gateway/home-location.mjs','tools/test-web-gateway-upgrade-reset.mjs']){
+    assert.ok(planOf(['--files',file]).includes('test-web-gateway-upgrade-reset.mjs'),file);
+  }
+});
+
 test('People action browsers and both precision contracts are included in the complete plan',()=>{
   const people=['run-people-agent-tray-ui-tests.cjs','run-people-bridge-ui-tests.cjs'];
   const lighting=['test-apartment-lit-splats-browser.mjs','test-apartment-lit-splats-browser-part2.mjs',

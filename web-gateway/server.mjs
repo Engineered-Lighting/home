@@ -1786,6 +1786,9 @@ function proxyUpgrade(req, socket, head, route) {
     if (head?.length) upstream.write(head);
     socket.pipe(upstream);
   });
+  // A browser can reset an upgraded connection without an HTTP request error.
+  // Retire its paired tunnel even when HA auth rewriting is not enabled.
+  socket.once("close", () => upstream.destroy());
   upstream.on("error", () => {
     socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
     socket.destroy();
@@ -2006,6 +2009,9 @@ server.maxRequestsPerSocket = 100;
 server.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS);
 
 server.on("upgrade", (req, socket, head) => {
+  // HTTP's default socket error handling no longer owns upgraded sockets.
+  // A connection reset must retire this client, not terminate the gateway.
+  socket.on("error", () => socket.destroy());
   const browserAgentUpgrade = classifyAgentOrigin(req.headers, agentOriginBoundary);
   const nativeAgentUpgrade = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
   if (browserAgentUpgrade.agentHost || nativeAgentUpgrade.agentHost) {

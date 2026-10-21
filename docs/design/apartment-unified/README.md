@@ -30,3 +30,17 @@ Serve the repository root with any static server and open `docs/design/apartment
 ## Not reachable in this session
 The local checkout's Victoria, perception and Oct 15–17 planning sources. INVENTORY.md lists them, and HANDOFF.md says what to verify and how to swap in real material.
 - `LIGHT-AND-BODY-RESEARCH.md`: light simulation and body volume research, with the recommended pipeline
+- `tickets/INDEX.md`: the build broken into ordered tickets with dependencies, prototype references and acceptance checks (`tickets.json` has the same data)
+
+## Escape has no Close
+Apartment is the main view and has no Close. In [SPEC.md](SPEC.md) › Cancel, Return and Escape, Escape with nothing active does nothing, and **Back** (leaving Lab or metrics) replaces Close as the third phrase; the HANDOFF.md "Escape order" example ends the same way. That rule supersedes these leftover Close mentions, which stay as written:
+
+- [tickets/A-aiming.md](tickets/A-aiming.md) and `tickets/tickets.json`, APT-A09: `"Return to Auto", "Return to room" and "Close" never share wording`. Read Back for Close.
+- [tickets/R-selection-and-room-inspector.md](tickets/R-selection-and-room-inspector.md) and `tickets/tickets.json`, APT-R01: `passes (without "offers Close")`. No example says "offers Close" any more.
+- [SPEC.md](SPEC.md) › Keyboard and touch, Tab order: "Setup → Close → canvas labels". There is no Close stop.
+- [HANDOFF.md](HANDOFF.md) › Shared component map, `TopBar`: "Setup toggle, Close". The top bar has no Close.
+- This README's file table: "Escape/Return/Close". The SPEC section is Cancel, Return and Escape.
+- [DIRECTION.md](DIRECTION.md) › Information architecture: "[Setup] [Close esc]" and "Close names the destination and shows `esc`".
+- [prototype/app.jsx](prototype/app.jsx) `closeApp`: "Close returns to Home." Dialog, Tweaks and light-inspector close buttons only dismiss a panel and are unaffected.
+
+Tickets that describe Close as removed (APT-S01, APT-F04 and COVERAGE.md) already agree.

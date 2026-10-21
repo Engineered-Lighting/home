@@ -109,12 +109,51 @@ def state_dir(cfg):
     return cfg.get("state_dir") or os.environ.get("DEN_OPS_STATE_DIR") or os.path.join(os.getcwd(), "state")
 
 
+def _validate_state_fields(state):
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+
+    for key in ('since', 'below_since', 'last_check_at'):
+        if state.get(key) is not None and not number(state[key]):
+            raise ValueError('invalid state timestamp')
+    if type(state.get('pending', 0)) is not int or state.get('pending', 0) < 0:
+        raise ValueError('invalid pending count')
+    for key in ('stopped_by_monitor', 'cadence_reduced', 'loop_cadence_reduced'):
+        if key in state and type(state[key]) is not bool:
+            raise ValueError('invalid control state')
+    if not isinstance(state.get('history', []), list):
+        raise ValueError('invalid incident history')
+    for key in ('journal', 'fault_hold', 'notified'):
+        if not isinstance(state.get(key, {}), dict):
+            raise ValueError('invalid nested state')
+    journal = state.get('journal', {})
+    for key in ('cursor', 'boot_id'):
+        if journal.get(key) is not None and (not isinstance(journal[key], str) or not journal[key]):
+            raise ValueError('invalid journal identity')
+    if journal.get('since') is not None and not number(journal['since']):
+        raise ValueError('invalid journal time')
+    matches = journal.get('baseline_matches', 0)
+    if type(matches) is not int or matches < 0:
+        raise ValueError('invalid baseline count')
+    held = state.get('fault_hold', {})
+    if held and (type(held.get('level')) is not int or not 0 <= held['level'] <= 3
+                 or not number(held.get('until')) or not isinstance(held.get('classes'), list)
+                 or any(not isinstance(v, str) for v in held['classes'])):
+        raise ValueError('invalid held fault')
+    notified = state.get('notified', {})
+    if not number(notified.get('at', 0)) or not isinstance(notified.get('notices', []), list) or any(
+            not isinstance(v, str) for v in notified.get('notices', [])):
+        raise ValueError('invalid notification state')
+
+
 def load_state(path, cfg):
+    state = None
     try:
         with open(path, encoding="utf-8") as handle:
             state = json.load(handle)
         if not isinstance(state, dict) or state.get("schema") != STATE_SCHEMA or state.get("host") != cfg["host"] or type(state.get("level")) is not int or not 0 <= state["level"] <= 3 or type(state.get("latched")) is not bool:
             raise ValueError("invalid monitor state")
+        _validate_state_fields(state)
         return state
     except FileNotFoundError:
         pass
@@ -122,7 +161,8 @@ def load_state(path, cfg):
         return {"schema": STATE_SCHEMA, "host": cfg["host"], "level": 3, "step": STEPS[3], "latched": True,
                 "since": None, "pending": 0, "below_since": None, "fault_hold": {}, "journal": {},
                 "stopped_by_monitor": False, "cadence_reduced": False, "notified": {}, "history": [],
-                "state_error": "existing monitor state unreadable or malformed"}
+                "state_error": "existing monitor state unreadable or malformed",
+                "invalid_state": state}
     return {"schema": STATE_SCHEMA, "host": cfg["host"], "level": 0, "step": STEPS[0], "latched": False,
             "since": None, "pending": 0, "below_since": None, "fault_hold": {}, "journal": {},
             "stopped_by_monitor": False, "cadence_reduced": False, "notified": {}, "history": []}

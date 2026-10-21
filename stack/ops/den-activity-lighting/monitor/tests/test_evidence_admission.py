@@ -228,3 +228,28 @@ def test_sofa_check_uses_fresh_near_position_without_frigate_zones():
     assert not predicate(missing)
     state["occupancy"]["present"]=False
     assert not predicate(state)
+
+@pytest.mark.parametrize('key,value', [('journal', {'cursor':17}), ('journal', [1]), ('pending','bad'), ('fault_hold',{'until':'bad'}), ('notified',{'at':'bad'}), ('history',{})])
+def test_malformed_nested_monitor_state_stops_loop(tmp_path, private, key, value):
+    from pathlib import Path
+    j = Jetson(tmp_path, private)
+    j.check()
+    path = Path(mon.state_dir(j.cfg)) / 'state.json'
+    saved = json.loads(path.read_text(encoding='utf8'))
+    saved[key] = value
+    path.write_text(json.dumps(saved), encoding='utf8')
+    state, status, report = j.check()
+    assert status['level'] == 3 and state['latched']
+    assert j.loop_state == 'stopped'
+    assert report['evidence']['ok'] is False
+    assert state['invalid_state'] == saved
+
+
+def test_missing_restart_counter_is_not_readable_or_admissible():
+    host = FakeHost()
+    host.commands[('systemctl',)] = (0, 'ActiveState=active\nMemoryCurrent=42\nMemoryMax=268435456\n')
+    assert soak.read_unit(host, 'test.service', 'system')['readable'] is False
+    cfg, monitor = configs()
+    rows = make_samples()
+    rows[10]['units'][cfg['units'][0]['name']]['n_restarts'] = None
+    assert criterion(soak.evaluate(cfg, monitor, rows, checklist=PASSING_CHECKLIST), 'restarts')['result'] == 'fail'

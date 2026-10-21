@@ -1,9 +1,9 @@
 """The supervised soak (SOAK.md): sample, evaluate the written criteria, and
 write a receipt (JSON plus a short markdown summary).
 
-Run on each host for at least 3 h:
+Run on each host for at least 3 h 10 min:
     python -m den_ops soak run --config soak.json --out <dir>
-The owner's scripted MVP checklist runs alongside it on the LA host:
+The owner's scripted MVP checklist runs after the completed soak on the LA host:
     python -m den_ops soak checklist --config soak.json --out <dir>
 Then ``soak evaluate`` (re)builds a host receipt from its samples, and
 ``soak combine`` merges the hosts' receipts into the release verdict.
@@ -105,12 +105,13 @@ def read_unit(host, name, scope):
     code, text = host.run(argv)
     props = dict(line.split("=", 1) for line in str(text or "").splitlines() if "=" in line)
     current, limit = _int_or_none(props.get("MemoryCurrent")), _int_or_none(props.get("MemoryMax"))
+    restarts = _int_or_none(props.get("NRestarts"))
     return {
         "active": props.get("ActiveState"),
-        "n_restarts": _int_or_none(props.get("NRestarts")),
+        "n_restarts": restarts,
         "memory_mib": None if current is None or current >= 2 ** 63 else current / 1048576.0,
         "memory_max_mib": None if limit is None or limit >= 2 ** 63 else limit / 1048576.0,
-        "readable": code == 0 and current is not None and 0 <= current < 2**63 and limit is not None and 0 < limit < 2**63 and props.get("ActiveState") in ("active", "inactive", "failed", "activating", "deactivating"),
+        "readable": code == 0 and restarts is not None and restarts >= 0 and current is not None and 0 <= current < 2**63 and limit is not None and 0 < limit < 2**63 and props.get("ActiveState") in ("active", "inactive", "failed", "activating", "deactivating"),
         "working_directory": props.get("WorkingDirectory"), "exec_start": props.get("ExecStart"),
     }
 
@@ -397,8 +398,11 @@ def evaluate(cfg, monitor_cfg, samples, *, checklist=None, min_duration_s=MIN_DU
     ok, notes, measured = True, [], {}
     for unit in cfg.get("units", []):
         name = unit["name"]
-        counts = [s["units"][name]["n_restarts"] for s in samples
-                  if s.get("units", {}).get(name, {}).get("n_restarts") is not None]
+        counts = [s.get("units", {}).get(name, {}).get("n_restarts") for s in samples]
+        if any(type(count) is not int or count < 0 for count in counts):
+            ok = False
+            notes.append("%s restart counters missing or malformed" % name)
+            counts = []
         restarts = (counts[-1] - counts[0]) if len(counts) >= 2 else None
         active = _fraction(s.get("units", {}).get(name, {}).get("active") == "active" for s in samples)
         measured[name] = {"restarts": restarts, "active_fraction": active}

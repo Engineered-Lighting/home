@@ -1,5 +1,44 @@
 # Home body-form consumer v1
 
+## Visual acceptance correction
+
+The owner rejected the current capsule/ellipsoid screenshot. The implementation
+below is a diagnostic volume prototype, not the accepted human appearance.
+Passing its transport, geometry, pixel and GPU checks does not establish visual
+acceptance. Draft PR #412 must not be presented as completing the body-form goal.
+
+The target is a continuous, anatomically plausible human surface in monochrome,
+roughly sized to the person, without requiring their likeness or skin texture.
+The replacement must use an appropriately licensed anatomical mesh with a skin
+rig or a parametric human body model. Increasing capsule tessellation, merging
+primitives or changing their material alone does not satisfy this correction.
+
+Local acceptance requires all of the following:
+
+- Inspect the actual rendered mesh in neutral standing, seated, crouched and
+  raised-arm poses from front, side and three-quarter views. The neck,
+  shoulders, armpits, elbows, hips and knees must deform continuously without
+  the disconnected mannequin silhouette or gross self-intersections.
+- Verify approximate scale and plausible proportions from supported inputs;
+  disclose nominal shape and unresolved size. A generic high-quality mesh can
+  precede camera-based shape fitting, but must not be called a measured fit.
+- Drive the mesh through the real mounted Home consumer with authored poses,
+  then separately qualify supported live poses. Sparse surface observations do
+  not supply a complete anatomical rig or hidden-body evidence by themselves.
+- Keep unavailable or inferred pose evidence explicit. Do not retain limbs,
+  identity or shape between unrelated frame-scoped detector IDs. A future
+  persistent fit requires the producer continuity contract first.
+- Verify the body responds to the actual modeled spotlight direction, intensity
+  and occlusion path. A fixed matcap only proves shape readability. Normal room
+  depth alone does not prove dynamic shadows on the scan/splat or body-aware
+  aiming; track those integrations separately until they have rendered evidence.
+- Capture visible-motion/deformation evidence and compare GPU costs against the
+  same scene without the body. Do not trade source expiry or timing admission
+  for smoother appearance, or equate an authored room with actual-room acceptance.
+
+No replacement mesh, fitted-shape producer or spotlight integration is delivered
+by this acceptance correction. Existing runtime bytes are unchanged.
+
 This is a frame-scoped renderer contract, not measured anatomy or tracking
 identity. It builds on the explicit unmerged #410 source
 `7d513c002280a4463ea917aada11bda7c87a3330`. The producer's separate

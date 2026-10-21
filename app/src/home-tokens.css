@@ -1081,3 +1081,14 @@ button.hg-no-press:active {
   .apt-equipment-unavailable { top: 8px; left: 8px; right: 8px; max-width: none; gap: 8px; padding: 8px; }
   .apt-equipment-unavailable > div { flex: 1; }
 }
+
+/* Keep retained production cards compact inside the ZIP's narrow Chat column. */
+.apt-home-shell .apt-ui-chat-event:is([data-kind="action"], [data-kind="perception"], [data-kind="tool"], [data-kind="personal-memory-review"]) { min-width: 0; padding: 10px 12px; border: 1px solid var(--apt-border-soft); border-radius: 10px; background: var(--apt-fill); }
+.apt-home-shell .apt-ui-chat-event[data-kind="perception"] > div { grid-template-columns: minmax(0, 1fr)!important; row-gap: 4px!important; }
+.apt-home-shell .apt-ui-chat-event[data-kind="perception"] > div > span { min-width: 0; overflow-wrap: anywhere; }
+
+.apt-home-shell .apt-ui-chat-event[data-kind="action"] > div > div:first-child { grid-template-columns: max-content minmax(0,1fr) auto max-content!important; align-items: center!important; }
+.apt-home-shell .apt-ui-chat-event[data-kind="action"] > div > div:first-child > span:nth-child(2) { display: none; }
+.apt-home-shell .apt-ui-chat-event[data-kind="action"] > div > div:first-child > span:nth-child(3) { min-width: 0; overflow-wrap: anywhere; }
+.apt-home-shell .apt-ui-chat-event[data-kind="tool"] > div > button { grid-template-columns: max-content minmax(0,1fr) auto!important; align-items: center!important; }
+.apt-home-shell .apt-ui-chat-event[data-kind="tool"] > div > button > span:nth-child(2) { display: none; }

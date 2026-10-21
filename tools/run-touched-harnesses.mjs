@@ -220,6 +220,7 @@ const MAP = [
   // APT-P01..P06 camera dock: its own suite plus Den's two suites that mount the dock JSX.
   [/^(?:app\/src\/(?:home-apartment-den-perception\.jsx|home-apartment-perception-(?:dock-model|view|player)\.js|home-den-reason-vocabulary\.js|home-lighting-brain-panel\.jsx|home-perception-lab\.jsx|home-apartment\.jsx|home-app\.jsx|home-feature-loader\.js)|docs\/contracts\/den\/(?:reason-vocabulary\.json|fixtures\/[^/]+\.json)|tools\/test-(?:apartment-perception-dock|home-apartment-perception-ui|apartment-desk-preview-ui)\.cjs)$/,
     ["test-apartment-perception-dock.cjs", "test-home-apartment-perception-ui.cjs", "test-apartment-desk-preview-ui.cjs"]],
+  [/^(?:app\/src\/(?:home-app\.jsx|home-events\.jsx|home-tokens\.css)|tools\/test-apartment-chat-cards-browser\.mjs)$/, ["test-apartment-chat-cards-browser.mjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
   [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-shell-tests.js", "run-apartment-data-tests.js", "test-apartment-travel-guard.cjs", "test-home-app-source-contracts.cjs"]],

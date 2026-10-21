@@ -4407,6 +4407,7 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, m
 function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false, theme = "dark", unified = false }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   // HomeApp bumps `focusToken` to pull focus here (e.g. when the chat feed
   // becomes the live surface after boot). The `if (focusToken)` guard makes
   // the mount run (initial focusToken === 0) a no-op — InputRow is always
@@ -4417,7 +4418,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   const firstTok = value.split(/\s+/)[0];
   const slashCommands = availableSlashCommands({ mobile });
   const matches = isSlash ? slashCommands.filter((c) => c.cmd.startsWith(firstTok)) : [];
-  const showMenu = isSlash && matches.length > 0 && !value.includes(" ");
+  const showMenu = isSlash && matches.length > 0 && !value.includes(" ") && !slashDismissed;
   const spatialMode = !!(typeof window !== "undefined" && window.__HOME_SPATIAL_MODE);
   const lightTheme = theme === "light";
   const menuSurface = lightTheme
@@ -4438,6 +4439,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   };
   const handleKey = (e) => {
     if (showMenu) {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setSlashDismissed(true); return; }
       if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => (s + 1) % matches.length); return; }
       if (e.key === "ArrowUp")   { e.preventDefault(); setSel((s) => (s - 1 + matches.length) % matches.length); return; }
       if (e.key === "Tab")       { e.preventDefault(); complete(matches[sel].cmd); return; }
@@ -4549,7 +4551,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             aria-autocomplete="list"
             placeholder={isSlash ? "" : unified ? "Ask your home, or type /" : "type or /command"}
             value={value}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => { setSlashDismissed(false); onChange(e.target.value); }}
             onKeyDown={handleKey}
             style={{
               fontFamily: isSlash ? "'Geist Mono', monospace" : "'Geist', system-ui, sans-serif",

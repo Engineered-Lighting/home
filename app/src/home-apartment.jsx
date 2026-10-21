@@ -5654,7 +5654,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     pools: roomPools, details: roomLightDetails };
   useEffect(() => {
     const engine = selectionEngine, host = hostRef.current;
-    if (!engine || !host || !virtualFixtureDocument || !apartmentSceneControlsEnabled) return undefined;
+    if (!engine || !host || !virtualFixtureDocument || !apartmentSceneControlsEnabled || !virtualSpotlightsVisible) return undefined;
     let closed = false, poolLease = null;
     const admitted = () => !closed && document.visibilityState !== "hidden" && engineRef.current === engine
       && engine.siteId === "victoria" && host.isConnected;
@@ -5717,7 +5717,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     document.addEventListener("visibilitychange", onVisibility);
     void start();
     return () => { closed = true; unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(poolLease); };
-  }, [selectionEngine, virtualFixtureBindingKey, apartmentSceneControlsEnabled, virtualFixtureControlsOpen]);
+  }, [selectionEngine, virtualFixtureBindingKey, apartmentSceneControlsEnabled, virtualFixtureControlsOpen, virtualSpotlightsVisible]);
   useEffect(() => { lightPoolsDrawRef.current?.(); },
     [virtualFixturePreview, virtualFixtureId, virtualFixtureControlsOpen, virtualSpotlightsVisible, roomBeams, roomPools, roomLightDetails]);
 

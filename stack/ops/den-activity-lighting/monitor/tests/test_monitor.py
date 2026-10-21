@@ -17,8 +17,7 @@ JOURNAL = ("journalctl", "-k", "-o", "json", "-q", "--no-pager")
 
 
 class FakeLoop:
-    """The AL-3 activity-loop routes (activity_loop_runtime.install) with the
-    real semantics: a stop records its reason and overwrites an earlier one; a
+    """Legacy AL-3 routes: a stop records its reason and overwrites an earlier one; a
     resume that names a reason refuses another reason's stop with 409; the
     cadence is normal or reduced; nothing survives a service restart."""
 
@@ -64,6 +63,83 @@ class FakeLoop:
         host.responses[("POST", LAB + "/cadence")] = self.set_cadence
 
 
+class ResourceControlledLoop(FakeLoop):
+    """v2 contract: actual Qwen control and the owner's stop are independent."""
+    def __init__(self):
+        super().__init__()
+        self.qwen_blocked = False
+        self.qwen_factor = 1
+
+    def view(self):
+        return {**super().view(), 'monitor_control_version': 2,
+                'deep_stack': {'qwen_control': {'blocked': self.qwen_blocked, 'factor': self.qwen_factor,
+                                               'interval_seconds': 4. * self.qwen_factor}}}
+
+    def set_cadence(self, body):
+        code, reply = super().set_cadence(body)
+        if code != 200:
+            return code, reply
+        self.qwen_factor = reply['factor']
+        return code, {**reply, 'qwen': self.view()['deep_stack']['qwen_control']}
+
+    def stop(self, body):
+        if self.reason == 'operator_stop' and body == {'reason': 'monitor_backoff'}:
+            self.qwen_blocked = True
+            return 200, self.view()
+        return super().stop(body)
+
+
+def test_monitor_quiesces_actual_qwen_while_preserving_an_existing_owner_stop(jetson):
+    jetson.loop = ResourceControlledLoop()
+    jetson.loop.owner_stop()
+    jetson.loop.serve(jetson.host)
+    state = {'level': 3}
+    effects, notices = mon.enforce(jetson.cfg, state, jetson.host)
+    assert jetson.loop.qwen_blocked
+    assert jetson.loop.reason == 'operator_stop'
+    assert 'qwen_backoff' in effects and not state.get('stopped_by_monitor')
+    effects, _ = mon.enforce(jetson.cfg, state, jetson.host)
+    assert 'qwen_backoff' not in effects
+    state['level'] = 0
+    mon.enforce(jetson.cfg, state, jetson.host)
+    assert not jetson.host.posts(LAB + '/resume')
+    assert jetson.loop.qwen_blocked and jetson.loop.reason == 'operator_stop'
+
+
+@pytest.mark.parametrize('blocked', [False, None, 'unknown'])
+def test_monitor_does_not_accept_an_unconfirmed_qwen_backoff(jetson, blocked):
+    jetson.loop = ResourceControlledLoop()
+    jetson.loop.qwen_blocked = blocked
+    jetson.loop.owner_stop()
+    jetson.loop.serve(jetson.host)
+    jetson.host.responses[('POST', LAB + '/stop')] = lambda body: (200, jetson.loop.view())
+    effects, notices = mon.enforce(jetson.cfg, {'level': 3}, jetson.host)
+    assert 'qwen_backoff' not in effects
+    assert any(n['signal'] == 'actuator.qwen_backoff_failed' for n in notices)
+
+
+def test_monitor_reasserts_cadence_when_actual_qwen_does_not_match_the_loop_label(jetson):
+    jetson.loop = ResourceControlledLoop()
+    jetson.loop.cadence = 'reduced'
+    jetson.loop.serve(jetson.host)
+    effects, _ = mon.enforce(jetson.cfg, {'level': 1}, jetson.host)
+    assert jetson.loop.qwen_factor == 2
+    assert 'cadence_reduce' in effects
+    assert len(jetson.host.posts(LAB + '/cadence')) == 1
+
+
+@pytest.mark.parametrize('confirmation', [None, {'factor': 1, 'interval_seconds': 4.},
+    {'factor': True, 'interval_seconds': 8.}, {'factor': 2, 'interval_seconds': float('nan')}])
+def test_monitor_requires_actual_qwen_cadence_confirmation(jetson, confirmation):
+    jetson.loop = ResourceControlledLoop()
+    jetson.loop.serve(jetson.host)
+    jetson.host.responses[('POST', LAB + '/cadence')] = (200, {'level': 'reduced', 'qwen': confirmation})
+    state = {'level': 1}
+    effects, notices = mon.enforce(jetson.cfg, state, jetson.host)
+    assert 'cadence_reduce' not in effects and not state.get('loop_cadence_reduced')
+    assert any(n['signal'] == 'actuator.cadence_failed' for n in notices)
+
+
 class Jetson:
     """A Jetson monitor wired to a FakeHost, with a writable fake sysfs."""
 
@@ -81,7 +157,7 @@ class Jetson:
             "schema": "den-ops-monitor-1", "host": "victoria-jetson", "role": "jetson",
             "state_dir": str(tmp_path / "state"),
             "policy": {"escalate_checks": 2, "recover_after_s": 600, "fault_hold_s": 1800},
-            "sources": {"thermal_zones": {"root": self.root}, "meminfo": "/proc/meminfo",
+            "sources": {"thermal_zones": {"root": self.root, "required_types": ["cpu-thermal", "gpu-thermal"]}, "meminfo": "/proc/meminfo",
                         "failed_units": {"scopes": ["system", "user"], "baseline": baseline},
                         "faults": {"baseline": faults}},
             "rules": [
@@ -102,12 +178,12 @@ class Jetson:
         mon.validate_config(self.cfg)
         self.host = FakeHost()
         self.host.files["/proc/meminfo"] = fixture_text("meminfo.jetson.txt")
-        self.host.files["/proc/sys/kernel/random/boot_id"] = "boot-a\n"
+        self.host.files["/proc/sys/kernel/random/boot_id"] = "00000000-0000-0000-0000-000000000001\n"
         self.host.commands[("systemctl",)] = (0, "")
         self.host.commands[("systemctl", "--user")] = (0, "")
-        self.host.commands[JOURNAL] = (0, "")
+        self.host.commands[JOURNAL] = (0, '{"__CURSOR":"anchor","__REALTIME_TIMESTAMP":"1800000000000000","MESSAGE":"Linux version"}\n')
         self.loop = FakeLoop()
-        self.remote = {"schema": "den-ops-banner-1", "level": 0, "hosts": []}
+        self.remote = {"schema": "den-ops-banner-1", "level": 0, "hosts": [{"host":"la-host","level":0,"stale":False}]}
         self.loop.serve(self.host)
         self.host.responses[("GET", GATEWAY + "/status")] = lambda body: (200, self.remote)
         self.host.responses[("POST", GATEWAY + "/hosts/victoria-jetson/status")] = (200, {"ok": True})
@@ -238,7 +314,7 @@ def test_kernel_mce_latches_level_three_until_the_owner_releases(jetson):
     mce = '{"__CURSOR": "c2", "__REALTIME_TIMESTAMP": "1800000100000000", "MESSAGE": "mce: [Hardware Error]: CPU 0: Machine Check: 0 Bank 5"}\n'
     jetson.host.commands[JOURNAL] = (0, mce)
     state, status, report = jetson.check()
-    assert any(a[-1].startswith("--since=@") for a in jetson.host.ran)   # anchored on the last check time
+    assert any(a[-1] == "--after-cursor=anchor" for a in jetson.host.ran)
     assert status["level"] == 3 and status["latched"] and report["effects"] == ["cadence_reduce", "loop_stop"]
     assert report["faults"][0]["class"] == "mce"
     assert "held until the owner releases it" in status["message"]
@@ -258,13 +334,13 @@ def test_kernel_mce_latches_level_three_until_the_owner_releases(jetson):
 
 
 def test_journal_cursor_is_followed_and_a_reboot_reads_the_whole_boot(jetson):
-    jetson.host.commands[JOURNAL] = (0, '{"__CURSOR": "c1", "MESSAGE": "Linux version"}\n')
+    jetson.host.commands[JOURNAL] = (0, '{"__CURSOR": "c1", "__REALTIME_TIMESTAMP": "1800000000000000", "MESSAGE": "Linux version"}\n')
     jetson.check()
-    assert jetson.host.ran[[a[0] for a in jetson.host.ran].index("journalctl")][-2:] == ("-n", "1")
+    assert jetson.host.ran[[a[0] for a in jetson.host.ran].index("journalctl")][-1:] == ("-b",)
     jetson.check()
     assert any(a[-1] == "--after-cursor=c1" for a in jetson.host.ran)
     assert not any(a[-1].startswith("--since=") for a in jetson.host.ran)
-    jetson.host.files["/proc/sys/kernel/random/boot_id"] = "boot-b\n"
+    jetson.host.files["/proc/sys/kernel/random/boot_id"] = "00000000-0000-0000-0000-000000000002\n"
     jetson.host.ran.clear()
     _, status, _ = jetson.check()
     assert JOURNAL in jetson.host.ran
@@ -364,14 +440,14 @@ def test_a_monitor_stop_found_after_lost_state_is_adopted(jetson):
     assert jetson.loop_state == "running" and len(jetson.host.posts(LAB + "/resume")) == 1
 
 
-def test_new_failed_units_are_notices_and_alert_once(jetson):
+def test_new_failed_units_latch_and_alert_once(jetson):
     jetson.check()
     jetson.host.commands[("systemctl",)] = (0, fixture_text("systemctl-failed.txt"))
     _, status, _ = jetson.check()
-    assert status["level"] == 0
+    assert status["level"] == 3 and status["latched"]
     assert [r["signal"] for r in status["reasons"]] == ["unit.lighting-brain.service"]   # fwupd is in the baseline
-    assert status["message"] == "Den lighting notice: system unit lighting-brain.service failed (not in the recorded baseline)"
-    assert len(jetson.ha_posts()) == 1 and jetson.ha_posts()[0]["body"]["title"] == "Den lighting notice"
+    assert "system unit lighting-brain.service failed (not in the recorded baseline)" in status["message"]
+    assert len(jetson.ha_posts()) == 1 and jetson.ha_posts()[0]["body"]["title"] == "Den lighting: loop stopped"
     for _ in range(3):
         jetson.check()
     assert len(jetson.ha_posts()) == 1
@@ -394,7 +470,8 @@ def test_a_cleared_notice_alerts_again_when_it_returns_after_the_interval(jetson
     jetson.check(advance=1000)
     jetson.host.commands[("systemctl",)] = failed
     jetson.check()
-    assert len(jetson.ha_posts()) == 2
+    assert len(jetson.ha_posts()) == 1
+    assert jetson.check()[1]["latched"]  # a cleared failed unit cannot release its own latch
 
 
 def test_the_la_level_reaches_the_acting_monitor_through_the_gateway(jetson):
@@ -406,7 +483,7 @@ def test_the_la_level_reaches_the_acting_monitor_through_the_gateway(jetson):
     assert status["reasons"][0]["signal"] == "remote.la-host"
     jetson.remote["hosts"][0]["stale"] = True                       # a silent LA monitor does not hold the level
     levels = [jetson.check()[1]["level"] for _ in range(30)]
-    assert levels[-1] == 0
+    assert levels[-1] == 3  # a blind remote monitor cannot release the acting host
 
 
 def test_status_matches_the_gateway_schema(jetson):
@@ -439,7 +516,7 @@ def test_unreachable_loop_and_unreadable_sensors_are_notices(jetson):
     jetson.check()
     _, status, report = jetson.check()
     signals = [r["signal"] for r in status["reasons"]]
-    assert status["level"] == 2 and report["effects"] == []
+    assert status["level"] == 3 and report["effects"] == []
     assert "actuator.loop_unreachable" in signals and "mem.unreadable" in signals
 
 
@@ -448,7 +525,7 @@ def test_failed_unit_baseline_is_recorded_once(tmp_path, private):
     target = str(tmp_path / "new-baseline.json")
     j.cfg["sources"]["failed_units"]["baseline"] = target
     j.host.commands[("systemctl",)] = (0, fixture_text("systemctl-failed.txt"))
-    doc = mon.record_units_baseline(j.cfg, j.host, write=True, now=1.0)
+    doc = mon.record_units_baseline(j.cfg, j.host, write=True, now=1.0, reviewed_units=["system:fwupd-refresh.service", "system:lighting-brain.service"])
     assert doc["units"]["system"] == ["fwupd-refresh.service", "lighting-brain.service"]
     with pytest.raises(SystemExit):
         mon.record_units_baseline(j.cfg, j.host, write=True, now=2.0)

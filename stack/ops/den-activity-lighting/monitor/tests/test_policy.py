@@ -32,9 +32,9 @@ def test_lower_is_worse_rules():
     assert ladder.evaluate_rule({"mem.available_mib": 5000}, MEM)["hold"] == 0
 
 
-def test_missing_signal_is_a_notice_not_a_back_off():
+def test_missing_required_signal_latches_but_optional_does_not():
     r = ladder.evaluate_rule({}, GPU)
-    assert r["level"] == 0 and r["notice"] and r["detail"] == "GPU unreadable"
+    assert r["level"] == 3 and r["notice"] and r["immediate"] and r["evidence_error"] and r["detail"] == "GPU unreadable"
     assert not ladder.evaluate_rule({}, {**GPU, "required": False})["notice"]
 
 

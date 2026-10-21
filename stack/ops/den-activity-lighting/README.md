@@ -88,7 +88,7 @@ pass:
    | Level | Step | Action |
    |---|---|---|
    | 0 | normal | none |
-   | 1 | `cadence_reduced` | `POST …/activity-loop/cadence {"level":"reduced"}`: the JEV interval doubles and the pose rate halves |
+   | 1 | `cadence_reduced` | `POST …/activity-loop/cadence {"level":"reduced"}`: JEV and the actual always-on Qwen intervals double; the pose publication rate halves |
    | 2 | `deep_stack_paused` | as 1, plus `POST …/activity-loop/stop {"reason":"monitor_backoff"}`; the brain then holds ambient only |
    | 3 | `loop_stopped` | as 2, and latched until the owner runs `den_ops release --confirm` |
 
@@ -97,12 +97,21 @@ pass:
    - **Every check:** the monitor reads `GET …/activity-loop` (`state`,
      `stopped_reason`, `cadence`) and re-asserts the cadence and the stop,
      because neither survives a service restart.
+     The v2 response includes `deep_stack.qwen_control` for the actual attached
+     always-on producer. Its factor/interval must confirm the requested cadence;
+     the loop's label or an HTTP 200 alone cannot certify Qwen back-off.
+     Monitor stop blocks new Qwen capture/inference without closing its receipt
+     log or discarding an outstanding request. Release still requires the
+     original household switch; it cannot grant model execution by itself.
    - **On recovery:** it sends `POST …/resume {"reason":"monitor_backoff"}` and
      `POST …/cadence {"level":"normal"}`. It sends the cadence call only if the
      monitor reduced the cadence itself.
    - **The owner's stop wins.**
-     - The monitor never POSTs a stop over an `operator_stop`, because a
-       stop overwrites the reason.
+     - Legacy actors never receive a monitor stop over an `operator_stop`.
+       With `monitor_control_version: 2`, a monitor stop can independently
+       quiesce the actual Qwen producer while preserving `operator_stop`.
+       The monitor requires confirmation of both the retained reason and
+       Qwen's blocked state before reporting that action as successful.
      - It only resumes a `monitor_backoff` stop. The loop refuses anything
        else with 409.
      - When the owner's stop outlives a back-off, the monitor records
@@ -142,9 +151,11 @@ fight over the loop.
 
 - **Latches propagate.** A latched level 3 on LA latches the Jetson too.
   Release both after checking.
-- **Stale hosts drop out.** A host whose status is stale (silent over 300 s)
-  no longer holds the other host's level; the banner shows "monitor silent"
-  instead.
+- **Missing/stale required hosts fail closed.** The acting Jetson monitor
+  latches until the required LA monitor is visible and the owner releases it.
+  Incomplete required sensors/journal/boot/unit/baseline evidence also latches;
+  informational optional sensor notices remain distinct. See [SOAK.md](SOAK.md)
+  for commissioned sensor exclusions, manifest binding and v2 admission.
 
 ### Limits (the thresholds in the example configs)
 

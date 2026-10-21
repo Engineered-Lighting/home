@@ -1,6 +1,7 @@
 # Den activity lighting: go-live runbook (draft for AL-6)
 
-**Status:** draft. Nothing here has been run. Every step is a host operation
+**Status:** commissioning instructions. This source is not a live-operation receipt.
+The current admission and artifact/checklist commands are in [SOAK.md](SOAK.md). Every step is a host operation
 for AL-6 (#326), and each one needs the owner's approval in the planning
 session. Physical output stays disabled: everything here drives Home's
 virtual fixtures only.
@@ -25,7 +26,7 @@ placeholder.
   right before the LA steps. Abort on any failure.
 
   ```bash
-  systemctl is-system-running                 # running
+  systemctl is-system-running                 # reconcile known degraded state under current AGENTS policy
   systemctl --failed --no-legend              # nothing new
   nvidia-smi --query-gpu=temperature.gpu,memory.used,memory.total --format=csv
   sensors | grep -E 'Tctl|Tccd|Composite'     # normal temperatures
@@ -123,7 +124,7 @@ curl -s http://127.0.0.1:8101/healthz          # ok:true, synthetic_geometry:fal
 ```bash
 sudo install -m 0644 <scratch>/units/den-ops-monitor.service units/la/den-ops-monitor.timer /etc/systemd/system/
 cd <release root>/current/stack/ops/den-activity-lighting/monitor
-sudo -u <monitor user> python3 -m den_ops --config <monitor private dir>/monitor.json baseline-units --write   # once, ever
+sudo -u <monitor user> python3 -m den_ops --config <monitor private dir>/monitor.json baseline-units   # inspect; create only if absent with exact --reviewed-unit entries after diagnosis
 sudo -u <monitor user> python3 -m den_ops --config <monitor private dir>/monitor.json validate                # dry run
 sudo systemctl daemon-reload && sudo systemctl enable --now den-ops-monitor.timer
 ```
@@ -190,11 +191,11 @@ unrelated release.
 python3 -m venv <bridge venv>
 <bridge venv>/bin/pip install -r <release root>/current/stack/services/lighting-brain-bridges/victoria-ha/requirements.txt
 cd <release root>/current/stack/services/lighting-brain-bridges/victoria-ha
-sudo -u <bridge user> <bridge venv>/bin/python -m victoria_ha_bridge --config <bridge private dir>/bridge.json --dry-run   # Ctrl-C after a batch prints
+<bridge venv>/bin/python -m victoria_ha_bridge --config <bridge private dir>/bridge.json --dry-run   # Ctrl-C after a batch prints
 cd <release root>/current/stack/ops/den-activity-lighting
 python3 render_units.py --values <private>/values.json --host jetson --out <scratch>/units
-sudo install -m 0644 <scratch>/units/victoria-ha-bridge.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now victoria-ha-bridge.service
+install -m 0644 <scratch>/units/victoria-ha-bridge.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now victoria-ha-bridge.service
 ```
 
 Verify through the gateway:
@@ -227,7 +228,7 @@ curl -s --cacert <lab ca> -H "Authorization: Bearer $(cat <lab private dir>/lab-
 id -nG | grep -Eq '\b(adm|systemd-journal)\b'     # needed to read the kernel journal
 install -m 0644 <scratch>/units/den-ops-monitor.service <release root>/current/stack/ops/den-activity-lighting/units/jetson/den-ops-monitor.timer ~/.config/systemd/user/
 cd <release root>/current/stack/ops/den-activity-lighting/monitor
-python3 -m den_ops --config <monitor private dir>/monitor.json baseline-units --write   # once, ever
+python3 -m den_ops --config <monitor private dir>/monitor.json baseline-units   # inspect; create only if absent with exact --reviewed-unit entries after diagnosis
 python3 -m den_ops --config <monitor private dir>/monitor.json validate
 systemctl --user daemon-reload && systemctl --user enable --now den-ops-monitor.timer
 loginctl show-user "$USER" -p Linger            # Linger=yes (already needed by the managed service)
@@ -235,8 +236,11 @@ loginctl show-user "$USER" -p Linger            # Linger=yes (already needed by 
 
 ### Both hosts
 
-**S. The soak.** Follow [SOAK.md](SOAK.md): at least 3 h on both hosts, with
-the owner checklist on LA, then `soak combine`. Record
+**S. The soak.** Follow [SOAK.md](SOAK.md): a new immutable 3 h 10 min attempt
+on each host bound to the same private deployment manifest, common occupied
+exposure and ten recording rolls, then the explicit owner checklist on LA in a
+separate window and manifest-bound `soak combine`. Include the detector user
+unit alongside bridge and managed Lab; confirm all memory caps are finite. Record
 `soak-release.{json,md}` with the release.
 
 ## 3. Post-deploy checks
@@ -249,7 +253,7 @@ the owner checklist on LA, then `soak combine`. Record
 | Producer auth | the bridge and loop logs | no 401/403 from the gateway or the brain |
 | `JETSON_HOME` in every Jetson unit that runs perception-lab/`home_shared` code (J0), including `perception-lab-managed.service` with the AL-3 drop-in | `systemctl --user show perception-lab-managed.service -p Environment -p EnvironmentFiles`, then `tr '\0' '\n' < /proc/<MainPID>/environ \| grep -E '^JETSON_(HOME\|USER)='` | `JETSON_HOME` is the real home of the perception-lab user, never `/home/jetson-user`; `JETSON_USER` is set wherever `activate-victoria-recording.sh` runs; the drop-in's env file is listed under `EnvironmentFiles` |
 | Banner | `GET /api/den-ops/v1/status` with the session | `level: 0`, both hosts listed and not stale |
-| HA notify | the HA notifications panel | test once: run `den_ops check` on a host with a temporary rule set low, or wait for the first notice |
+| HA notify | the HA notifications panel | verify route/config using fake-host tests; confirm a naturally occurring notice under supervision; do not inject live faults or lower production rules |
 | Monitor timers | `systemctl list-timers den-ops-monitor.timer` (LA), and `systemctl --user list-timers` (Jetson) | firing every minute |
 | No new failed units | `systemctl --failed` on both | only the baseline's units |
 | Home | the Apartment/Victoria view | brain **online**, why line, decision log; the fixtures follow the MVP "Done" list |
@@ -257,8 +261,11 @@ the owner checklist on LA, then `soak combine`. Record
 ## 4. Rollback
 
 Each piece rolls back on its own. Stopping the brain or the producers is
-always safe: Home shows "brain offline" and holds the fixtures, and the real
-den lights keep following the HA automation.
+bounded to virtual output: Home shows "brain offline", disables automatic
+spotlights, holds ambient, and preserves manually paused fixtures. A stop that
+cannot be confirmed is shown as unconfirmed. The real den lights keep following
+the HA automation. Source-evidence expiry also disables automatic spots even
+if the stream has not yet declared a disconnect.
 
 | Piece | Rollback |
 |---|---|

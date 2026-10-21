@@ -3,22 +3,105 @@
   "_note": "Victoria Jetson. Copy to a private path and replace every <placeholder>. This monitor acts on the activity loop and takes the LA host's level from the gateway. The thresholds are the existing Jetson limits (README: Limits). Step 1 uses the loop's cadence route; the cadence block can add further plain calls.",
   "host": "victoria-jetson",
   "role": "jetson",
-  "policy": {"escalate_checks": 2, "recover_after_s": 600, "fault_hold_s": 1800},
+  "policy": {
+    "escalate_checks": 2,
+    "recover_after_s": 600,
+    "fault_hold_s": 1800
+  },
   "sources": {
-    "thermal_zones": {"root": "/sys/class/thermal", "exclude_types": []},
+    "thermal_zones": {
+      "root": "/sys/class/thermal",
+      "exclude_types": [
+        "cv0-thermal",
+        "cv1-thermal",
+        "cv2-thermal"
+      ],
+      "required_types": [
+        "cpu-thermal",
+        "gpu-thermal",
+        "soc0-thermal",
+        "soc1-thermal",
+        "soc2-thermal",
+        "tj-thermal"
+      ],
+      "exclusion_reasons": {
+        "cv0-thermal": "Unsupported channel on the commissioned Jetson; functional CPU/GPU/SoC/TJ sensors remain required; recheck on hardware/driver change.",
+        "cv1-thermal": "Unsupported channel on the commissioned Jetson; functional CPU/GPU/SoC/TJ sensors remain required; recheck on hardware/driver change.",
+        "cv2-thermal": "Unsupported channel on the commissioned Jetson; functional CPU/GPU/SoC/TJ sensors remain required; recheck on hardware/driver change."
+      }
+    },
     "hwmon": null,
     "meminfo": "/proc/meminfo",
     "nvidia_smi": false,
     "tegrastats": true,
-    "disks": {"recordings": "<perception-lab data dir>"},
-    "failed_units": {"scopes": ["system", "user"], "baseline": "<private dir>/failed-units-baseline.json"},
-    "faults": {"baseline": "<private dir>/fault-baseline.json", "levels": {}}
+    "disks": {
+      "recordings": "<perception-lab data dir>"
+    },
+    "failed_units": {
+      "scopes": [
+        "system",
+        "user"
+      ],
+      "baseline": "<private dir>/failed-units-baseline.json"
+    },
+    "faults": {
+      "baseline": "<private dir>/fault-baseline.json",
+      "levels": {}
+    }
   },
   "rules": [
-    {"id": "soc.temp", "signal": "temp.zone_max", "op": ">=", "levels": [75, 78, 80], "clear_margin": 5, "label": "Jetson max zone", "unit": "°C"},
-    {"id": "mem.available", "signal": "mem.available_mib", "op": "<=", "levels": [4096, 3584, 3072], "clear_margin": 512, "label": "RAM available", "unit": " MiB"},
-    {"id": "swap.used", "signal": "swap.used_pct", "op": ">=", "levels": [40, 60, 80], "clear_margin": 10, "label": "Swap used", "unit": "%"},
-    {"id": "disk.recordings", "signal": "disk.recordings.free_gib", "op": "<=", "levels": [30, 25, 20], "clear_margin": 5, "label": "Recording disk free", "unit": " GiB"}
+    {
+      "id": "soc.temp",
+      "signal": "temp.zone_max",
+      "op": ">=",
+      "levels": [
+        75,
+        78,
+        80
+      ],
+      "clear_margin": 5,
+      "label": "Jetson max zone",
+      "unit": "°C"
+    },
+    {
+      "id": "mem.available",
+      "signal": "mem.available_mib",
+      "op": "<=",
+      "levels": [
+        4096,
+        3584,
+        3072
+      ],
+      "clear_margin": 512,
+      "label": "RAM available",
+      "unit": " MiB"
+    },
+    {
+      "id": "swap.used",
+      "signal": "swap.used_pct",
+      "op": ">=",
+      "levels": [
+        40,
+        60,
+        80
+      ],
+      "clear_margin": 10,
+      "label": "Swap used",
+      "unit": "%"
+    },
+    {
+      "id": "disk.recordings",
+      "signal": "disk.recordings.free_gib",
+      "op": "<=",
+      "levels": [
+        30,
+        25,
+        20
+      ],
+      "clear_margin": 5,
+      "label": "Recording disk free",
+      "unit": " GiB"
+    }
   ],
   "loop": {
     "status_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop",

@@ -6,37 +6,56 @@ import pytest
 
 from conftest import CONFIG, FakeHost, fixture_json, fixture_text
 from den_ops import monitor as mon
-from den_ops import soak
+from den_ops import soak, deployment
 
 START = 1_800_000_000.0
+
+
+def qwen_workload(profile, completed):
+    return dict(schema='den-qwen-workload-1', producer_epoch='qwen-epoch', state='running',
+                blocked=False, completed=completed, model=copy.deepcopy(profile))
 
 
 def configs():
     soak_cfg = soak.load_soak_config(os.path.join(CONFIG, "soak.la.example.json"))
     monitor_cfg = mon.load_config(os.path.join(CONFIG, "monitor.la.example.json"))
+    soak_cfg["_deployment"] = manifest_fixture()
     return soak_cfg, monitor_cfg
 
 
+def manifest_fixture():
+    hosts = {}
+    for name in ("la", "jetson"):
+        cfg = soak.load_soak_config(os.path.join(CONFIG, "soak." + name + ".example.json"))
+        mon_cfg = mon.load_config(os.path.join(CONFIG, "monitor." + name + ".example.json"))
+        hosts[cfg["host"]] = {"components": {component: "test-source" for component in deployment.COMPONENTS[cfg["host"]]}, "monitor_config_sha256": deployment.digest(mon_cfg),
+                              "soak_config_sha256": deployment.digest(cfg), "artifacts": [{"path": "/source/"+component, "sha256": "0"*64, "component":component} for component in deployment.COMPONENTS[cfg["host"]]],
+                              "units": [{"name": u["name"], "scope": u["scope"], "working_directory": "/source", "exec_start": "python -m test"} for u in cfg["units"]]}
+    return {"schema": deployment.SCHEMA, "deployment_id": "test-deployment", "hosts": hosts}
+
+
 def occupied(minute):
-    return 30 <= minute < 90 or 120 <= minute < 150
+    return 30 <= minute <= 90 or 120 <= minute < 150
 
 
-def make_samples(hours=3.05, interval=60.0):
+def make_samples(hours=3.2, interval=60.0):
     samples = []
     for i in range(int(hours * 3600 / interval) + 1):
         minute = i * interval / 60
         present = occupied(minute)
         samples.append({
-            "at": START + i * interval,
+            "at": START + i * interval, "monotonic_at": START + i * interval,
+            "run_id": "test-run", "manifest_sha256": deployment.digest(manifest_fixture()),
+            "evidence": {"ok": True, "errors": []}, "boot_id": "00000000-0000-0000-0000-000000000001",
             "signals": {"gpu.temp_c": 55.0, "temp.hwmon.k10temp.tctl": 70.0, "temp.hwmon.k10temp.tccd1": 66.0,
                         "temp.hwmon.nvme.composite": 45.0, "mem.available_mib": 98304.0, "swap.used_pct": 0.0,
                         "gpu.mem_used_mib": 70218.0 + (i % 3), "gpu.mem_free_mib": 27669.0, "disk.root.free_gib": 500.0},
             "faults": [], "notices": [], "rebooted": False,
             "units": {
                 "lighting-brain.service": {"active": "active", "n_restarts": 0, "memory_mib": 41.0 + (i % 2) * 0.5,
-                                           "memory_max_mib": 256.0, "readable": True},
+                                           "memory_max_mib": 256.0, "readable": True, "working_directory": None, "exec_start": None},
                 "home-web-gateway.service": {"active": "active", "n_restarts": 0, "memory_mib": 90.0,
-                                             "memory_max_mib": None, "readable": True},
+                                             "memory_max_mib": 256.0, "readable": True, "working_directory": None, "exec_start": None},
             },
             "brain": {"healthz_ok": True, "reachable": True, "online": True, "mode": "ambient" if present else "off",
                       "present": present, "people_count": 1 if present else 0, "occupancy_age_s": 12.0,
@@ -48,8 +67,9 @@ def make_samples(hours=3.05, interval=60.0):
     return samples
 
 
-PASSING_CHECKLIST = {"schema": "den-ops-soak-checklist-1", "results": [
-    {"id": step[0], "result": "pass", "optional": step[5]} for step in soak.CHECKLIST]}
+PASSING_CHECKLIST = {"schema": soak.CHECKLIST_SCHEMA, "host": "la-host", "run_id": "test-run",
+                     "manifest_sha256": deployment.digest(manifest_fixture()), "started_at": START + 13000, "ended_at": START + 14000, "results": [
+    {"id": step[0], "result": "pass", "optional": step[5], "confirmed_by":"owner", "elapsed_s":step[4], "evidence":{"mode":"observed","last_rule":"fixture"}} for step in soak.CHECKLIST]}
 
 
 def results(criteria):
@@ -61,7 +81,7 @@ def test_a_clean_soak_with_the_checklist_passes():
     criteria = soak.evaluate(soak_cfg, monitor_cfg, make_samples(), checklist=PASSING_CHECKLIST)
     assert results(criteria) == {"duration": "pass", "faults": "pass", "temperatures": "pass",
                                  "resource_limits": "pass", "memory_flat": "pass", "restarts": "pass",
-                                 "monitor": "pass", "brain_inputs": "pass", "mvp_checklist": "pass"}
+                                 "monitor": "pass", "brain_inputs": "pass", "mvp_checklist": "pass", "identity": "pass", "evidence": "pass"}
     assert soak.verdict(criteria) == "pass"
 
 
@@ -226,10 +246,11 @@ def test_receipt_markdown_and_combine(tmp_path):
     soak.write_receipt(str(tmp_path), la, "soak-la-host")
     text = (tmp_path / "soak-la-host.md").read_text(encoding="utf-8")
     assert "Verdict: **PASS**" in text and "| Owner MVP behaviour checklist | pass |" in text
-    assert json.loads((tmp_path / "soak-la-host.json").read_text(encoding="utf-8"))["schema"] == "den-ops-soak-receipt-1"
+    assert json.loads((tmp_path / "soak-la-host.json").read_text(encoding="utf-8"))["schema"] == "den-ops-soak-receipt-4"
 
     jetson_cfg = soak.load_soak_config(os.path.join(CONFIG, "soak.jetson.example.json"))
     jetson_monitor = mon.load_config(os.path.join(CONFIG, "monitor.jetson.example.json"))
+    jetson_cfg["_deployment"] = manifest_fixture()
     jetson_samples = make_samples()
     for sample in jetson_samples:
         sample["signals"] = {"temp.zone_max": 52.0, "mem.available_mib": 5000.0, "swap.used_pct": 10.0,
@@ -238,15 +259,22 @@ def test_receipt_markdown_and_combine(tmp_path):
                                                           "memory_max_mib": 128.0},
                            "perception-lab-managed.service": {"active": "active", "n_restarts": 5, "memory_mib": 600.0,
                                                               "memory_max_mib": 2048.0}}
+        sample["units"]["lab-jetson-detector-trial.service"] = {"active":"active","n_restarts":0,"memory_mib":1024.,"memory_max_mib":2048.,"readable":True}
+        sample["loop"] = {"state":"running","occupancy_age_s":0.,"session_id": "s" if sample["brain"]["present"] else None, "rolls": int((sample["at"] - START) // 280), "producer_epoch": "epoch"}
+        sample['loop']['qwen_workload'] = qwen_workload(jetson_cfg['loop']['qwen_profile'], int(sample['at'] - START))
+        for unit in sample["units"].values():
+            unit["readable"] = True
         sample.pop("brain")
     jetson = soak.receipt(jetson_cfg, soak.evaluate(jetson_cfg, jetson_monitor, jetson_samples), jetson_samples)
     assert jetson["verdict"] == "pass"
     assert "mvp_checklist" not in results(jetson["criteria"])            # the LA host runs the checklist
     jetson["release"] = la["release"]
-    combined = soak.combine([la, jetson])
+    for doc in (la,jetson):
+        doc["criteria"].append(soak._criterion("attempt_complete", "Attempt complete", True, "test"))
+    combined = soak.combine([la, jetson], manifest=manifest_fixture())
     assert combined["verdict"] == "pass" and combined["hosts"] == ["la-host", "victoria-jetson"]
     jetson["release"] = "something-else"
-    assert soak.combine([la, jetson])["verdict"] == "fail"               # one release per receipt
+    assert soak.combine([la, jetson], manifest=manifest_fixture())["verdict"] == "fail"               # one release per receipt
 
 
 def scripted_states(sequence):
@@ -289,7 +317,10 @@ def test_checklist_verifies_each_step_against_brain_state():
     current = {"id": None}
 
     def fetch_state():
-        return fetchers[current["id"]]()
+        result = copy.deepcopy(fetchers[current["id"]]())
+        result["generated_at"] = tick()
+        result["inputs"].update(at_sofa=True, position_age_s=1)
+        return result
 
     steps = []
     for step in soak.CHECKLIST:
@@ -329,7 +360,7 @@ def test_sample_once_and_run_with_a_fake_host(tmp_path):
     monitor_cfg["sources"].update(thermal_zones=None, hwmon=None, disks={}, faults={"baseline": str(tmp_path / "missing.json")})
     host = FakeHost(now=START)
     host.files["/proc/meminfo"] = fixture_text("meminfo.la.txt")
-    host.files["/proc/sys/kernel/random/boot_id"] = "b1"
+    host.files["/proc/sys/kernel/random/boot_id"] = "00000000-0000-0000-0000-000000000001"
     host.files["/var/lib/den-ops-monitor/status.json"] = json.dumps({"level": 0, "step": "normal", "checked_at": START - 20})
     host.commands[("nvidia-smi",)] = (0, fixture_text("nvidia-smi.normal.csv"))
     host.commands[("journalctl",)] = (0, "")
@@ -338,12 +369,13 @@ def test_sample_once_and_run_with_a_fake_host(tmp_path):
     host.commands[("systemctl", "show", "home-web-gateway.service")] = (
         0, "ActiveState=active\nNRestarts=0\nMemoryCurrent=[not set]\nMemoryMax=infinity\n")
     host.responses[("GET", soak_cfg["brain"]["healthz_url"])] = (200, {"ok": True})
-    host.responses[("GET", soak_cfg["brain"]["state_url"])] = (200, fixture_json("brain-state.json"))
+    state = fixture_json("brain-state.json"); state["generated_at"] = START
+    host.responses[("GET", soak_cfg["brain"]["state_url"])] = (200, state)
 
     sample = soak.sample_once(soak_cfg, monitor_cfg, host, {"journal": {}})
     assert sample["signals"]["gpu.temp_c"] == 52 and sample["signals"]["mem.available_mib"] == 98304
     assert sample["units"]["lighting-brain.service"] == {"active": "active", "n_restarts": 0, "memory_mib": 42.0,
-                                                         "memory_max_mib": 256.0, "readable": True}
+                                                         "memory_max_mib": 256.0, "readable": True, "working_directory": None, "exec_start": None}
     assert sample["units"]["home-web-gateway.service"]["memory_mib"] is None
     brain = sample["brain"]
     assert brain["online"] and brain["present"] and brain["spot_on"] and brain["health"]["jev"]
@@ -352,11 +384,9 @@ def test_sample_once_and_run_with_a_fake_host(tmp_path):
 
     def sleep(seconds):
         host.advance(seconds)
-    path = soak.run(soak_cfg, monitor_cfg, host, str(tmp_path / "out"), sleep=sleep, duration_s=600, log=lambda t: None)
-    samples = soak.read_samples(path)
-    assert len(samples) == 11 and samples[-1]["at"] - samples[0]["at"] == 600
-    assert all(cmd[0] in ("nvidia-smi", "journalctl", "systemctl") for cmd in host.ran)
-    assert {cmd[1] for cmd in host.ran if cmd[0] == "systemctl"} == {"show"}
+    with pytest.raises(ValueError, match="deployment preflight"):
+        soak.run(soak_cfg, monitor_cfg, host, str(tmp_path / "out"), sleep=sleep, duration_s=600, log=lambda t: None)
+    assert not (tmp_path / "out").exists()
 
 
 def test_soak_config_validation(tmp_path):

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import math
 
 from . import CONFIG_SCHEMA, STATE_SCHEMA, STATUS_SCHEMA, STEPS, UNITS_BASELINE_SCHEMA
 from . import policy as ladder
@@ -40,11 +41,19 @@ def validate_config(cfg):
         raise ValueError("unknown config keys: %s" % ", ".join(sorted(unknown)))
     if not re.match(r"^[a-z0-9][a-z0-9-]{0,63}$", str(cfg.get("host", ""))):
         raise ValueError("host must be a short lower-case name (it is the gateway status key)")
+    if not isinstance(cfg.get("rules"), list) or not cfg["rules"]:
+        raise ValueError("required safety rules missing")
+    if not isinstance(cfg.get("sources"), dict):
+        raise ValueError("required sources missing")
     for rule in cfg.get("rules", []):
+        if not isinstance(rule, dict):
+            raise ValueError("bad rule")
         if set(rule) - _RULE_KEYS or rule.get("op") not in (">=", "<=") or not isinstance(rule.get("levels"), list) \
                 or len(rule["levels"]) != 3 or not rule.get("signal"):
             raise ValueError("bad rule: %r" % (rule,))
         limits = [v for v in rule["levels"] if v is not None]
+        if not limits or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in limits):
+            raise ValueError("rule thresholds must be finite")
         ordered = sorted(limits) if rule["op"] == ">=" else sorted(limits, reverse=True)
         if limits != ordered:
             raise ValueError("rule %s: levels must get stricter step by step" % rule["signal"])
@@ -63,7 +72,32 @@ def validate_config(cfg):
     if ha and not (_secure_url(ha.get("url", "")) or (ha.get("allow_plain_http") is True
                                                        and str(ha.get("url", "")).startswith("http://"))):
         raise ValueError("home_assistant.url must be https (or set allow_plain_http for a LAN/tailnet-only path)")
+    zones = cfg["sources"].get("thermal_zones")
+    if zones:
+        if not isinstance(zones, dict) or not isinstance(zones.get("required_types", []), list) or not isinstance(zones.get("exclude_types", []), list):
+            raise ValueError("thermal inventory must be explicit lists")
+        if set(zones.get("required_types", [])) & set(zones.get("exclude_types", [])):
+            raise ValueError("a required thermal sensor cannot be excluded")
+    hwmon = cfg['sources'].get('hwmon')
+    if hwmon:
+        _hwmon_inputs(hwmon)
     return cfg
+
+
+def _hwmon_inputs(spec):
+    rows=spec.get('required_inputs',[]) if isinstance(spec,dict) else None
+    if not isinstance(rows,list) or len(rows)>128:
+        raise ValueError('bounded required hwmon inventory needed')
+    paths=[]
+    for row in rows:
+        if (not isinstance(row,dict) or set(row)!={'path','chip','label'}
+                or not isinstance(row['path'],str) or not re.fullmatch(r'hwmon[0-9]+/temp[0-9]+_input',row['path'])
+                or any(not isinstance(row[k],str) or not 0<len(row[k])<=64 for k in ('chip','label'))):
+            raise ValueError('hwmon input identity required')
+        paths.append(row['path'])
+    if len(paths)!=len(set(paths)):
+        raise ValueError('duplicate required hwmon input')
+    return rows
 
 
 def _secure_url(url):
@@ -79,13 +113,29 @@ def load_state(path, cfg):
     try:
         with open(path, encoding="utf-8") as handle:
             state = json.load(handle)
-        if state.get("schema") == STATE_SCHEMA and state.get("host") == cfg["host"]:
-            return state
-    except (OSError, ValueError):
+        if not isinstance(state, dict) or state.get("schema") != STATE_SCHEMA or state.get("host") != cfg["host"] or type(state.get("level")) is not int or not 0 <= state["level"] <= 3 or type(state.get("latched")) is not bool:
+            raise ValueError("invalid monitor state")
+        return state
+    except FileNotFoundError:
         pass
+    except (OSError, ValueError, TypeError):
+        return {"schema": STATE_SCHEMA, "host": cfg["host"], "level": 3, "step": STEPS[3], "latched": True,
+                "since": None, "pending": 0, "below_since": None, "fault_hold": {}, "journal": {},
+                "stopped_by_monitor": False, "cadence_reduced": False, "notified": {}, "history": [],
+                "state_error": "existing monitor state unreadable or malformed"}
     return {"schema": STATE_SCHEMA, "host": cfg["host"], "level": 0, "step": STEPS[0], "latched": False,
             "since": None, "pending": 0, "below_since": None, "fault_hold": {}, "journal": {},
             "stopped_by_monitor": False, "cadence_reduced": False, "notified": {}, "history": []}
+
+
+def _evidence_error(signal, detail):
+    return {"signal": signal, "level": 3, "hold": 3, "immediate": True, "notice": True,
+            "evidence_error": True, "detail": detail}
+
+
+def evidence_report(reasons):
+    errors = [{"source": r["signal"], "detail": r["detail"]} for r in reasons if r.get("evidence_error")]
+    return {"ok": not errors, "errors": errors}
 
 
 def _notice(signal, detail, alert=True):
@@ -106,6 +156,15 @@ def collect_signals(cfg, host):
     hwmon = sources.get("hwmon")
     if hwmon:
         out.update(sig.read_hwmon(hwmon.get("root", "/sys/class/hwmon")))
+        try:
+            inventory=_hwmon_inputs(hwmon)
+            if not inventory and any(r['signal'].startswith('temp.hwmon.') and r.get('required',True) for r in cfg['rules']):
+                notices.append(_evidence_error('hwmon.inventory','required hwmon input inventory missing'))
+            for row in inventory:
+                if not sig.hwmon_input_available(hwmon.get('root','/sys/class/hwmon'),row):
+                    notices.append(_evidence_error('hwmon.'+sig._key(row['path']),'required hwmon input unreadable or identity changed'))
+        except ValueError:
+            notices.append(_evidence_error('hwmon.inventory','required hwmon input inventory invalid'))
     if sources.get("meminfo"):
         try:
             out.update(sig.parse_meminfo(host.read_text(sources["meminfo"])))
@@ -127,6 +186,21 @@ def collect_signals(cfg, host):
             notices.append(_notice("tegrastats.unreadable", "tegrastats unreadable"))
     if sources.get("disks"):
         out.update(sig.read_disks(sources["disks"]))
+    # An aggregate maximum cannot prove every commissioned critical sensor survived.
+    if zones and any(r["signal"].startswith("temp.zone") and r.get("required", True) for r in cfg.get("rules", [])):
+        required = zones.get("required_types", [])
+        if not required:
+            notices.append(_evidence_error("thermal.inventory", "critical thermal sensor inventory missing"))
+        for kind in required:
+            if "temp.zone." + sig._key(kind) not in out:
+                notices.append(_evidence_error("thermal." + sig._key(kind), "required thermal sensor unreadable: " + kind))
+        for kind in zones.get("exclude_types", []):
+            if not (zones.get("exclusion_reasons") or {}).get(kind):
+                notices.append(_evidence_error("thermal.exclusions", "sensor exclusion has no reviewed reason: " + kind))
+    for rule in cfg.get("rules", []):
+        reason = ladder.evaluate_rule(out, rule)
+        if reason.get("evidence_error"):
+            notices.append(reason)
     return out, notices
 
 
@@ -137,24 +211,31 @@ def failed_unit_notices(cfg, host):
     baseline, notices = {}, []
     try:
         doc = json.loads(read_private(spec["baseline"]))
-        if doc.get("schema") != UNITS_BASELINE_SCHEMA:
+        if not isinstance(doc, dict) or doc.get("schema") != UNITS_BASELINE_SCHEMA or doc.get("host") != cfg["host"] or not isinstance(doc.get("units"), dict):
             raise ValueError("schema")
+        for scope in spec.get("scopes", ["system"]):
+            if not isinstance(doc["units"].get(scope), list) or any(not isinstance(u, str) or not u for u in doc["units"][scope]):
+                raise ValueError("baseline scope missing or malformed")
         baseline = {scope: set(doc.get("units", {}).get(scope, [])) for scope in ("system", "user")}
-    except (OSError, ValueError, PermissionError) as error:
-        notices.append(_notice("units.baseline", "failed-unit baseline unreadable (%s); every failed unit is reported"
+    except (OSError, ValueError, TypeError, PermissionError) as error:
+        notices.append(_evidence_error("units.baseline", "failed-unit baseline unreadable (%s); every failed unit is reported"
                                % type(error).__name__))
         baseline = {"system": set(), "user": set()}
     current = {}
     for scope in spec.get("scopes", ["system"]):
         argv = ("systemctl",) + (("--user",) if scope == "user" else ()) + sig.SYSTEMCTL_FAILED_ARGS
         code, text = host.run(argv)
-        if code not in (0, 1) and not text:
-            notices.append(_notice("units.%s.unreadable" % scope, "%s failed units unreadable" % scope))
+        if code != 0:
+            notices.append(_evidence_error("units.%s.unreadable" % scope, "%s failed units unreadable (exit %s)" % (scope, code)))
             continue
-        current[scope] = sig.parse_failed_units(text)
+        try:
+            current[scope] = sig.parse_failed_units(text, strict=True)
+        except ValueError:
+            notices.append(_evidence_error("units.%s.malformed" % scope, "%s failed-unit output malformed" % scope))
+            continue
         for unit in current[scope]:
             if unit not in baseline.get(scope, set()):
-                notices.append(_notice("unit.%s" % unit, "%s unit %s failed (not in the recorded baseline)" % (scope, unit)))
+                notices.append(_evidence_error("unit.%s" % unit, "%s unit %s failed (not in the recorded baseline)" % (scope, unit)))
     return notices, current
 
 
@@ -167,12 +248,14 @@ def fault_records(cfg, host, state, now=None):
     journal = dict(state.get("journal") or {})
     try:
         boot_id = host.read_text(spec.get("boot_id", "/proc/sys/kernel/random/boot_id")).strip()
-    except OSError:
-        boot_id = None
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot_id):
+            raise ValueError("invalid boot ID")
+    except (OSError, ValueError):
+        return [], [_evidence_error("host.boot_id", "boot ID unreadable or malformed")]
     try:
-        baseline = sig.load_fault_baseline(spec["baseline"])
-    except (OSError, ValueError) as error:
-        notices.append(_notice("faults.baseline", "fault baseline unreadable (%s); no record is ignored"
+        baseline = sig.load_fault_baseline(spec["baseline"], cfg["host"])
+    except (OSError, ValueError, TypeError) as error:
+        notices.append(_evidence_error("faults.baseline", "fault baseline unreadable (%s); no record is ignored"
                                % type(error).__name__))
         baseline = []
     base = ("journalctl", "-k", "-o", "json", "-q", "--no-pager")
@@ -183,19 +266,23 @@ def fault_records(cfg, host, state, now=None):
         argv = base  # the whole current boot is new
         notices.append(_notice("host.rebooted", "host rebooted since the last check"))
     elif first:
-        argv = base + ("-n", "1")
+        argv = base + ("-b",)  # inspect the current boot; never discard unreviewed pre-monitor faults
     elif journal.get("cursor"):
         argv = base + ("--after-cursor=" + journal["cursor"],)
     else:  # watching, but the journal had no record yet to anchor a cursor
         argv = base + ("--since=@%d" % int(journal["since"]),)
     code, text = host.run(argv)
     if code != 0:
-        notices.append(_notice("faults.unreadable", "kernel journal unreadable (exit %s)" % code))
+        notices.append(_evidence_error("faults.unreadable", "kernel journal unreadable (exit %s)" % code))
         return [], notices
-    entries = sig.parse_journal_json(text)
-    faults, ignored, cursor = sig.new_faults(entries, baseline, spec.get("levels"))
-    if first and not rebooted:
-        faults, ignored = [], 0  # start watching from now; earlier records predate the monitor
+    try:
+        entries = sig.parse_journal_json(text, strict=True)
+        if first and not entries:
+            raise ValueError("initial kernel journal has no anchor record")
+    except (ValueError, TypeError):
+        return [], notices + [_evidence_error("faults.malformed", "kernel journal malformed or initial anchor absent")]
+    # Historical patterns apply only to the initial inspected boot, not recurring new events.
+    faults, ignored, cursor = sig.new_faults(entries, baseline if first and not rebooted else [], spec.get("levels"))
     journal.update({"cursor": cursor or journal.get("cursor"), "boot_id": boot_id or journal.get("boot_id"),
                     "since": now,
                     "baseline_matches": int(journal.get("baseline_matches", 0)) + ignored})
@@ -210,13 +297,22 @@ def remote_reasons(cfg, host):
     try:
         token = read_token(remote["token_file"])
     except (OSError, ValueError, PermissionError):
-        return [_notice("remote.token", "remote status token unreadable")]
+        return [_evidence_error("remote.token", "remote status token unreadable")]
     code, doc = host.http("GET", remote["url"], token=token, ca_file=remote.get("ca_file"),
                           timeout_s=float(remote.get("timeout_s", 10)))
     if code != 200 or not isinstance(doc, dict):
-        return [_notice("remote.unreachable", "other hosts' status unreachable (HTTP %s)" % code, alert=False)]
+        return [_evidence_error("remote.unreachable", "other hosts' status unreachable (HTTP %s)" % code)]
     reasons = []
-    for status in doc.get("hosts", []):
+    statuses = doc.get("hosts")
+    if not isinstance(statuses, list):
+        return [_evidence_error("remote.malformed", "other hosts status malformed")]
+    for expected in remote.get("required_hosts", ["la-host"]):
+        matches = [s for s in statuses if isinstance(s, dict) and s.get("host") == expected]
+        if len(matches) != 1 or matches[0].get("stale") is not False or type(matches[0].get("level")) is not int:
+            reasons.append(_evidence_error("remote." + expected, "required host status missing, stale or malformed"))
+    for status in statuses:
+        if not isinstance(status, dict):
+            continue
         if status.get("host") == cfg["host"] or status.get("stale") or not isinstance(status.get("level"), int):
             continue
         level = max(0, min(3, status["level"]))
@@ -288,14 +384,29 @@ def enforce(cfg, state, host):
         return effects, notices
     loop_state, reason = doc.get("state"), doc.get("stopped_reason")
 
+    def qwen_control(value):
+        deep = value.get('deep_stack') if isinstance(value, dict) else None
+        return deep.get('qwen_control') if isinstance(deep, dict) else None
+
+    qwen = qwen_control(doc)
+    controlled_qwen = (type(doc.get('monitor_control_version')) is int
+                       and doc['monitor_control_version'] == 2 and isinstance(qwen, dict))
+
+    def cadence_confirmed(value, want):
+        return (isinstance(value, dict) and type(value.get('factor')) is int
+                and value['factor'] == (2 if want == 'reduced' else 1)
+                and type(value.get('interval_seconds')) in (int, float)
+                and .5 <= value['interval_seconds'] <= 20.)
+
     # Step 1: cadence. Re-asserted every check (a restarted service comes back
     # at normal); restored only if the monitor reduced it.
     if loop.get("cadence_url"):
         want = CADENCE_FOR_LEVEL[level]
-        applied = doc.get("cadence") == want
+        applied = doc.get("cadence") == want and (not controlled_qwen or cadence_confirmed(qwen, want))
         if (level >= 1 or state.get("loop_cadence_reduced")) and not applied:
-            code, _ = post(loop["cadence_url"], {"level": want})
-            applied = code == 200
+            code, reply = post(loop["cadence_url"], {"level": want})
+            applied = code == 200 and (not controlled_qwen or cadence_confirmed(
+                reply.get('qwen') if isinstance(reply, dict) else None, want))
             if applied:
                 effects.append("cadence_reduce" if want == "reduced" else "cadence_restore")
             else:
@@ -304,7 +415,7 @@ def enforce(cfg, state, host):
         if applied:
             state["loop_cadence_reduced"] = want == "reduced"
 
-    # Steps 2-3: stop with the monitor's reason; never over the owner's stop.
+    # Steps 2-3: stop with the monitor's reason, preserving the owner's stop.
     if level >= 2:
         if loop_state != "stopped":
             code, _ = post(loop["stop_url"], MONITOR_STOP)
@@ -318,6 +429,18 @@ def enforce(cfg, state, host):
         else:
             state["stopped_by_monitor"] = False
             state["owner_held"] = "activity_loop_stopped_by_%s" % reason   # reported after recovery too
+            # v2 can independently quiesce the controller-owned Qwen pump while
+            # retaining operator_stop. Legacy actors must not receive this call.
+            if controlled_qwen and qwen.get('blocked') is not True:
+                code, reply = post(loop['stop_url'], MONITOR_STOP)
+                confirmed = qwen_control(reply)
+                if (code == 200 and isinstance(reply, dict) and reply.get('state') == 'stopped'
+                        and reply.get('stopped_reason') == reason and isinstance(confirmed, dict)
+                        and confirmed.get('blocked') is True):
+                    effects.append('qwen_backoff')
+                else:
+                    notices.append(_notice('actuator.qwen_backoff_failed',
+                        'Qwen back-off did not confirm the preserved owner stop (HTTP %s)' % code))
             notices.append(_notice("actuator.owner_stop", "activity loop already stopped by the owner (%s)" % reason,
                                    alert=False))
     elif state.get("stopped_by_monitor"):
@@ -428,6 +551,11 @@ def check(cfg, host, *, dry_run=False):
     unit_notices, failed = failed_unit_notices(cfg, host)
     faults, fault_notices = fault_records(cfg, host, state)
     reasons = ladder.evaluate_rules(signals, cfg.get("rules", [])) + notices + unit_notices + fault_notices
+    if state.get("state_error"):
+        reasons.append(_evidence_error("monitor.state", state["state_error"]))
+    for source in ("faults", "failed_units"):
+        if not (cfg.get("sources") or {}).get(source):
+            reasons.append(_evidence_error("source." + source, "required source not configured: " + source))
     fault_rs, state["fault_hold"] = ladder.fault_reasons(state, faults, now, policy)
     reasons += fault_rs + remote_reasons(cfg, host)
 
@@ -435,7 +563,8 @@ def check(cfg, host, *, dry_run=False):
     effects, action_notices = ([], []) if dry_run else enforce(cfg, state, host)
     reasons += action_notices
     status = build_status(cfg, state, reasons, now)
-    report = {"transition": transition, "effects": effects, "faults": faults, "failed_units": failed}
+    report = {"transition": transition, "effects": effects, "faults": faults, "failed_units": failed,
+              "evidence": evidence_report(reasons)}
     if not dry_run:
         report["gateway"] = post_status(cfg, host, status)
         quiet = {_safe_signal(r["signal"]) for r in reasons if r.get("quiet")}
@@ -456,13 +585,14 @@ def release(cfg, *, confirm):
     path = os.path.join(state_dir(cfg), "state.json")
     state = load_state(path, cfg)
     released = ladder.release(state, cfg.get("policy"))
+    released.pop("state_error", None)
     released["history"] = (state.get("history", []) + [{"at": None, "transition": {"kind": "release",
                            "from": state["level"], "to": released["level"]}, "effects": [], "message": "owner release"}])[-50:]
     write_atomic(path, released)
     return released
 
 
-def record_units_baseline(cfg, host, *, write, now):
+def record_units_baseline(cfg, host, *, write, now, reviewed_units=()):
     """Record the failed-unit baseline once, at install (``den_ops baseline-units --write``).
     Refuses to overwrite an existing baseline: the monitor never rewrites it."""
     spec = (cfg.get("sources") or {}).get("failed_units")
@@ -471,7 +601,13 @@ def record_units_baseline(cfg, host, *, write, now):
     units = {}
     for scope in spec.get("scopes", ["system"]):
         argv = ("systemctl",) + (("--user",) if scope == "user" else ()) + sig.SYSTEMCTL_FAILED_ARGS
-        units[scope] = sig.parse_failed_units(host.run(argv)[1])
+        code, text = host.run(argv)
+        if code != 0:
+            raise SystemExit("cannot baseline unreadable failed units")
+        units[scope] = sig.parse_failed_units(text, strict=True)
+    actual = {scope + ":" + u for scope, names in units.items() for u in names}
+    if write and actual != set(reviewed_units):
+        raise SystemExit("--reviewed-unit entries must exactly match individually diagnosed failed units")
     doc = {"schema": UNITS_BASELINE_SCHEMA, "host": cfg["host"], "recorded_at": now, "units": units}
     if write:
         if os.path.exists(spec["baseline"]):

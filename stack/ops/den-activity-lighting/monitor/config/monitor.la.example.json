@@ -3,26 +3,175 @@
   "_note": "LA AI host. Copy to a private path and replace every <placeholder>. This host senses and alerts; the Jetson monitor acts on the activity loop. The thresholds are the existing LA limits (README: Limits).",
   "host": "la-host",
   "role": "la",
-  "policy": {"escalate_checks": 2, "recover_after_s": 600, "fault_hold_s": 1800},
+  "policy": {
+    "escalate_checks": 2,
+    "recover_after_s": 600,
+    "fault_hold_s": 1800
+  },
   "sources": {
-    "thermal_zones": {"root": "/sys/class/thermal", "exclude_types": []},
-    "hwmon": {"root": "/sys/class/hwmon"},
+    "thermal_zones": {
+      "root": "/sys/class/thermal",
+      "exclude_types": []
+    },
+    "hwmon": {
+      "root": "/sys/class/hwmon",
+      "required_inputs": [
+        {
+          "path": "hwmon0/temp1_input",
+          "chip": "k10temp",
+          "label": "Tctl"
+        },
+        {
+          "path": "hwmon0/temp3_input",
+          "chip": "k10temp",
+          "label": "Tccd1"
+        },
+        {
+          "path": "hwmon0/temp4_input",
+          "chip": "k10temp",
+          "label": "Tccd2"
+        },
+        {
+          "path": "hwmon1/temp1_input",
+          "chip": "nvme",
+          "label": "Composite"
+        },
+        {
+          "path": "hwmon1/temp2_input",
+          "chip": "nvme",
+          "label": "Sensor 1"
+        },
+        {
+          "path": "hwmon2/temp1_input",
+          "chip": "nvme",
+          "label": "Composite"
+        }
+      ],
+      "_note": "Synthetic example paths only: commission every required input against current chip/label identity before enabling. Document unsupported optional channels separately; never exclude a newly failed critical input."
+    },
     "meminfo": "/proc/meminfo",
     "nvidia_smi": true,
     "tegrastats": false,
-    "disks": {"root": "/"},
-    "failed_units": {"scopes": ["system"], "baseline": "<private dir>/failed-units-baseline.json"},
-    "faults": {"baseline": "<private dir>/fault-baseline.json", "levels": {}}
+    "disks": {
+      "root": "/"
+    },
+    "failed_units": {
+      "scopes": [
+        "system",
+        "user"
+      ],
+      "baseline": "<private dir>/failed-units-baseline.json"
+    },
+    "faults": {
+      "baseline": "<private dir>/fault-baseline.json",
+      "levels": {}
+    }
   },
   "rules": [
-    {"id": "gpu.temp", "signal": "gpu.temp_c", "op": ">=", "levels": [74, 77, 79], "clear_margin": 4, "label": "GPU", "unit": "°C"},
-    {"id": "cpu.tctl", "signal": "temp.hwmon.k10temp.tctl", "op": ">=", "levels": [85, 88, 90], "clear_margin": 5, "label": "CPU Tctl", "unit": "°C"},
-    {"id": "cpu.tccd", "signal": "temp.hwmon.k10temp.tccd*", "op": ">=", "levels": [84, 86, 88], "clear_margin": 5, "label": "CPU Tccd", "unit": "°C"},
-    {"id": "nvme.temp", "signal": "temp.hwmon.nvme.composite", "op": ">=", "levels": [65, 70, 75], "clear_margin": 5, "label": "NVMe", "unit": "°C"},
-    {"id": "mem.available", "signal": "mem.available_mib", "op": "<=", "levels": [12288, 10240, 8192], "clear_margin": 1024, "label": "RAM available", "unit": " MiB"},
-    {"id": "swap.used", "signal": "swap.used_pct", "op": ">=", "levels": [25, 50, 75], "clear_margin": 10, "label": "Swap used", "unit": "%"},
-    {"id": "gpu.mem_free", "signal": "gpu.mem_free_mib", "op": "<=", "levels": [16384, 12288, 8192], "clear_margin": 2048, "label": "GPU memory free", "unit": " MiB"},
-    {"id": "disk.root", "signal": "disk.root.free_gib", "op": "<=", "levels": [100, 75, 50], "clear_margin": 10, "label": "Disk free", "unit": " GiB"}
+    {
+      "id": "gpu.temp",
+      "signal": "gpu.temp_c",
+      "op": ">=",
+      "levels": [
+        74,
+        77,
+        79
+      ],
+      "clear_margin": 4,
+      "label": "GPU",
+      "unit": "\u00b0C"
+    },
+    {
+      "id": "cpu.tctl",
+      "signal": "temp.hwmon.k10temp.tctl",
+      "op": ">=",
+      "levels": [
+        85,
+        88,
+        90
+      ],
+      "clear_margin": 5,
+      "label": "CPU Tctl",
+      "unit": "\u00b0C"
+    },
+    {
+      "id": "cpu.tccd",
+      "signal": "temp.hwmon.k10temp.tccd*",
+      "op": ">=",
+      "levels": [
+        84,
+        86,
+        88
+      ],
+      "clear_margin": 5,
+      "label": "CPU Tccd",
+      "unit": "\u00b0C"
+    },
+    {
+      "id": "nvme.temp",
+      "signal": "temp.hwmon.nvme.composite",
+      "op": ">=",
+      "levels": [
+        65,
+        70,
+        75
+      ],
+      "clear_margin": 5,
+      "label": "NVMe",
+      "unit": "\u00b0C"
+    },
+    {
+      "id": "mem.available",
+      "signal": "mem.available_mib",
+      "op": "<=",
+      "levels": [
+        12288,
+        10240,
+        8192
+      ],
+      "clear_margin": 1024,
+      "label": "RAM available",
+      "unit": " MiB"
+    },
+    {
+      "id": "swap.used",
+      "signal": "swap.used_pct",
+      "op": ">=",
+      "levels": [
+        25,
+        50,
+        75
+      ],
+      "clear_margin": 10,
+      "label": "Swap used",
+      "unit": "%"
+    },
+    {
+      "id": "gpu.mem_free",
+      "signal": "gpu.mem_free_mib",
+      "op": "<=",
+      "levels": [
+        16384,
+        12288,
+        8192
+      ],
+      "clear_margin": 2048,
+      "label": "GPU memory free",
+      "unit": " MiB"
+    },
+    {
+      "id": "disk.root",
+      "signal": "disk.root.free_gib",
+      "op": "<=",
+      "levels": [
+        100,
+        75,
+        50
+      ],
+      "clear_margin": 10,
+      "label": "Disk free",
+      "unit": " GiB"
+    }
   ],
   "loop": null,
   "cadence": null,

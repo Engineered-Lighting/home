@@ -3,14 +3,48 @@
   "_note": "Victoria Jetson soak (SOAK.md). Run it as the perception-lab user so its user units are visible.",
   "host": "victoria-jetson",
   "release": "<release id: commit or tag>",
-  "duration_s": 10800,
+  "duration_s": 11400,
   "interval_s": 60,
   "warmup_s": 1800,
   "units": [
-    {"name": "victoria-ha-bridge.service", "scope": "system", "max_restarts": 0, "memory_growth_mib_per_h": 4, "memory_peak_fraction": 0.85},
-    {"name": "perception-lab-managed.service", "scope": "user", "max_restarts": 0, "memory_growth_mib_per_h": 48, "memory_peak_fraction": 0.85}
+    {
+      "name": "victoria-ha-bridge.service",
+      "scope": "user",
+      "max_restarts": 0,
+      "memory_growth_mib_per_h": 4,
+      "memory_peak_fraction": 0.85
+    },
+    {
+      "name": "perception-lab-managed.service",
+      "scope": "user",
+      "max_restarts": 0,
+      "memory_growth_mib_per_h": 48,
+      "memory_peak_fraction": 0.85
+    },
+    {
+      "name": "lab-jetson-detector-trial.service",
+      "scope": "user",
+      "max_restarts": 0,
+      "memory_growth_mib_per_h": 48,
+      "memory_peak_fraction": 0.85
+    }
   ],
   "brain": null,
   "monitor_status": "<home>/.local/state/den-ops-monitor/status.json",
-  "bounds": {"host_mem_available_slope_mib_per_h": -128}
+  "bounds": {
+    "host_mem_available_slope_mib_per_h": -128
+  },
+  "loop": {
+    "qwen_profile": {
+      "model_version": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+      "served_model": "qwen3-vl-30b",
+      "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "engine_epoch": "<actual commissioned engine epoch>",
+      "runtime_revision": "<actual commissioned runtime revision>",
+      "adapter_revision": "lab-live-scene-prompt-1"
+    },
+    "status_url": "https://<jetson lab origin>/api/perception-lab/v1/activity-loop",
+    "token_file": "<private dir>/lab-monitor.token",
+    "ca_file": "<private dir>/lab-ca.pem"
+  }
 }

@@ -4,4 +4,4 @@ target: web
 type: fixed
 ---
 
-Modeled fixtures show a channel-tinted orb without the socket survey marker showing through it. Light controls use compact color-temperature rows and channel summaries, and radial readouts show zero output when switched off while retaining their levels for the next switch-on.
+Modeled fixtures use channel-tinted orb centers and the designed glow falloff, without the socket survey marker showing through them. Light controls use compact color-temperature rows and channel summaries, and radial readouts show zero output when switched off while retaining their levels for the next switch-on.

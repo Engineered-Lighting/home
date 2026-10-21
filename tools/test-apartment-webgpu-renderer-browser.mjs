@@ -363,7 +363,17 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       if (proofPhase !== 'frames') {
       console.log('Authored renderer contract context: ' + JSON.stringify({backend,reference:reference.contractScene,
         candidate:candidate.contractScene,referenceFit:reference.fit,candidateFit:candidate.fit}));
-      assertNumericallyEqual(candidate.contractScene, reference.contractScene, 'camera and viewport');
+      const expectedScene = structuredClone(reference.contractScene);
+      if (backend === 'webgpu') {
+        // Native WebGPU clips depth to [0,1], WebGL to [-1,1]. The vendored
+        // Matrix4.makePerspective changes only the projection's Z row:
+        // z_gpu = (z_gl + w_gl) / 2. Keep every matrix element checked, with
+        // the existing tolerance, instead of treating correct depth as drift.
+        const projection = reference.contractScene.cameraProjection;
+        for (let column = 0; column < 4; column++)
+          expectedScene.cameraProjection[column * 4 + 2] = (projection[column * 4 + 2] + projection[column * 4 + 3]) / 2;
+      }
+      assertNumericallyEqual(candidate.contractScene, expectedScene, 'camera and viewport');
       contracts = {
         picks: assertNumericallyEqual(candidate.picks, reference.picks, 'surface picks'),
         projections: assertNumericallyEqual(candidate.projections, reference.projections, 'overlay projection'),

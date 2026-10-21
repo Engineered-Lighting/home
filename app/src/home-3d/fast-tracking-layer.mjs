@@ -3,6 +3,21 @@ import * as THREE from 'three';
 const EDGES=[[0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
 const sceneKeys=['siteId','contentRevision','frameDigest','registrationVersion'];
 const finite=value=>typeof value==='number'&&Number.isFinite(value);
+export function trackingGpuLatency(source,clock,completedMs){
+  const invalid=reason=>({valid:false,reason});
+  if(!Array.isArray(source)||source.length!==2||!source.every(finite)
+      ||!clock||![clock.offsetLow,clock.offsetHigh,completedMs].every(finite))return invalid('nonfinite_bounds');
+  if(source[1]<source[0]||clock.offsetHigh<clock.offsetLow)return invalid('inverted_bounds');
+  const rawMs=[completedMs/1000-clock.offsetHigh-source[1],completedMs/1000-clock.offsetLow-source[0]].map(v=>v*1000);
+  if(!rawMs.every(finite))return invalid('nonfinite_bounds');
+  if(rawMs[1]<rawMs[0])return invalid('inverted_bounds');
+  if(rawMs[1]<0)return invalid('wholly_negative_bounds');
+  // The draw is causally after its source observation. A broad valid clock
+  // interval may straddle zero; retain that raw uncertainty and intersect it
+  // with causality rather than discarding an actual GPU-completed update.
+  return {valid:true,rawMs,boundsMs:[Math.max(0,rawMs[0]),rawMs[1]],
+    qualification:rawMs[0]<0?'causality_bounded':'clock_bounded'};
+}
 export function validateTrackingPacket(packet,scene,{attempt=null,sequence=0,clock=null,nowMs=performance.now()}={}) {
   return trackingPacketValidity(packet,scene,{attempt,sequence,clock,nowMs}).valid;
 }
@@ -130,18 +145,21 @@ export function attachFastTracking(engine,{isCurrent=()=>true,onStatus=()=>{},fe
         gpuCompletion(renderer).then(()=>{
           if(!current()||!drawClock||attempt!==packet.attempt_id||completedSequence>=packet.sequence){trace('gpu_receipt_retired',packet);return;}
           const completed=performance.now();completedSequence=packet.sequence;
-          const bounds=packet.source_la_monotonic_interval_s;
-          const latency=[completed/1000-drawClock.offsetHigh-bounds[1],completed/1000-drawClock.offsetLow-bounds[0]].map(v=>v*1000);
-          if(latency[0]<-1||latency[1]<latency[0]){trace('gpu_receipt_invalid_clock',packet);return;}
-          trace('gpu_completed',packet,{expired_at_completion:completed/1000-drawClock.offsetLow>=packet.expires_monotonic_s});
+          const timing=trackingGpuLatency(packet.source_la_monotonic_interval_s,drawClock,completed);
+          if(!timing.valid){trace('gpu_receipt_invalid_clock',packet,{reason:timing.reason});return;}
+          const latency=timing.boundsMs;
+          trace('gpu_completed',packet,{expired_at_completion:completed/1000-drawClock.offsetLow>=packet.expires_monotonic_s,
+            timing_qualification:timing.qualification});
           receipts.push({attempt_id:attempt,sequence:packet.sequence,frame_key:packet.frame_key,submitted_ms:submitted,completed_ms:completed,
-            camera_to_gpu_ms:latency,source_clock:packet.source_clock,exposure_accuracy:packet.exposure_accuracy,
+            camera_to_gpu_ms:latency,camera_to_gpu_raw_ms:timing.rawMs,camera_to_gpu_timing:timing.qualification,
+            source_clock:packet.source_clock,exposure_accuracy:packet.exposure_accuracy,
             expired_at_completion:completed/1000-drawClock.offsetLow>=packet.expires_monotonic_s,
             people:packet.people.length,joints:packet.people.reduce((n,p)=>n+p.joints.length,0)});
           if(receipts.length>600)receipts.shift();
           const span=receipts.length>1?(completed-receipts[0].completed_ms)/1000:0;
           const live=!!latest&&completed/1000-clock.offsetLow<latest.expires_monotonic_s;
-          publish({active:live,status:live?'tracking':'expired',updateHz:span>0?(receipts.length-1)/span:null,cameraToGpuMs:latency});
+          publish({active:live,status:live?'tracking':'expired',updateHz:span>0?(receipts.length-1)/span:null,cameraToGpuMs:latency,
+            cameraToGpuRawMs:timing.rawMs,cameraToGpuTiming:timing.qualification});
         }).catch(()=>{trace('gpu_timing_failed',packet);publish({active:true,status:'gpu_timing_unavailable'});});
       });
     };

@@ -6,7 +6,7 @@ outside the runtime and source locks; source Stop retires retained references
 synchronously. Original clocks and both arms' common input remain unchanged.
 """
 from copy import deepcopy
-import hashlib,json,re
+import hashlib,json,re,time
 
 MAX_CAPTURE_BYTES=6*1024**2
 MIN_CAPTURE_INTERVAL_S=1.
@@ -25,6 +25,16 @@ def failure_reason(error,phase):
     if isinstance(error,ValueError) and re.fullmatch(r'(metric|bundled|receiver_clock|execution_clock|fixed_camera|qualified_receiver_clock|approximate)_[a-z0-9_]{1,90}',code):
         return code
     return 'metric_'+phase+'_'+type(error).__name__
+
+def after_anchor(raw,receipt):
+    # Use the incumbent bounded decoder, never packaging/arrival time, to
+    # choose the closest actual lower anchor for this original RGB plane.
+    from bundle_rgb_input import decode_bundle
+    from decimal import Decimal
+    depth,nv12,meta=decode_bundle(raw);rgb=meta['frames']['rgb']
+    return (meta['session']==receipt['session'] and rgb['sequence']>receipt['sequence']
+        and Decimal(str(rgb['device_timestamp_seconds']))*10**9
+            >receipt['frame_device_ns']+receipt['timestamp_quantization_ns']+1000)
 
 class MetricInputFactory:
     def __init__(self,client,*,clock=None,projection_factory=None,desk_preview=None,timing_policy='strict'):
@@ -305,6 +315,16 @@ class MetricInputSession:
             self._current();phase='receiver_clock';started=self.factory.clock.begin(receipt)
             phase='npz_read'
             raw,_=self.factory.client._read('/frame.npz');self._current()
+            newer=after_anchor(raw,receipt)
+            if not newer:
+                # The bundle endpoint may still expose a plane from before
+                # the latest commissioned JPEG. Wait one bounded frame turn,
+                # then read once more; retain only one NPZ and never resend a
+                # model request. If it still lags, keep the older real anchor.
+                time.sleep(.05);self._current();del raw
+                raw,_=self.factory.client._read('/frame.npz');self._current()
+                newer=after_anchor(raw,receipt)
+            if newer:prior=(jpeg,header.encode())
             phase='calibration_read'
             calibration,_=self.factory.client._read('/calibration');self._current()
             # Read the upper JPEG after NPZ under the SAME commissioned clock

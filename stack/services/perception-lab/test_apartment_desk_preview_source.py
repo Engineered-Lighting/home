@@ -83,7 +83,7 @@ class DeskPreviewSourceTests(unittest.TestCase):
         if finalize:
             source.metric.finalize()
         self.assertEqual(f.reads, before, 'projection must not acquire another NPZ')
-        self.assertEqual(f.reads.count('/frame.npz'), 1)
+        self.assertEqual(f.reads.count('/frame.npz'), 2)
         self.assertLessEqual(source.status()['resident_bytes'], 8388608)
         return runtime, source, configured, token
 
@@ -202,7 +202,7 @@ class DeskPreviewSourceTests(unittest.TestCase):
         latest = runtime.live(self.f.session)['arms']['B']
         self.assertNotEqual(latest['observation']['frame_id'], previous['frame_id'])
         self.assertFalse(latest['virtual_target_preview']['available'])
-        self.assertEqual(self.f.reads.count('/frame.npz'), 1)
+        self.assertEqual(self.f.reads.count('/frame.npz'), 2)
         runtime.stop_session(self.f.session)
         self.assertEqual(source.status()['resident_bytes'], 0)
 

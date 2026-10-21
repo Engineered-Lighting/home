@@ -50,9 +50,54 @@ class MetricSourceTests(unittest.TestCase):
     def test_upper_anchor_is_fetched_after_npz_within_the_same_clock_turn(self):
         runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
         self.anchors(runtime)
-        self.assertEqual(self.reads,['/frame.npz','/calibration','/frame.jpg'])
+        self.assertEqual(self.reads,['/frame.npz','/frame.npz','/calibration','/frame.jpg'])
         self.assertIsNotNone(source.metric.lease)
         self.assertEqual(dict(source.metric.lease._originals)['anchor_b'],self.originals['anchor_b'])
+    def test_fresh_npz_uses_the_closest_actual_lower_anchor_without_extending_it(self):
+        runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
+        older=viewing.capture.header(self.originals['anchor_a'],sequence=4,observed_ns=int((viewing.capture.NOW-.5)*1e9))
+        pump.consume(self.originals['anchor_a'],older)
+        pump.consume(self.originals['anchor_a'],self.headers['a'])
+        lease=source.metric.lease;self.assertIsNotNone(lease,source.metric.reason)
+        self.assertEqual(dict(lease._originals)['anchor_a'],self.originals['anchor_a'])
+        headers=json.loads(lease._headers_json)
+        self.assertEqual(headers['a'],self.headers['a'],'a fresh original must not inherit the older pump bracket')
+        from assessment_existing_api import _receipt
+        from bundle_rgb_input import anchor_metadata
+        original=anchor_metadata(_receipt(self.originals['anchor_a'],self.headers['a']),site_id='victoria',camera_id='den',available_at=self.now,started_at=self.session['started_at'])
+        self.assertLessEqual(lease.image_metadata['valid_until'],original['valid_until'])
+        self.assertTrue(lease.image_metadata['reading_timing_qualified'])
+        self.assertEqual(self.reads,['/frame.npz','/calibration','/frame.jpg'])
+    def test_single_retry_replaces_a_lagging_bundle_with_the_fresh_original(self):
+        import io
+        import numpy as np
+        configured=self.factory();read=configured.client._read
+        with np.load(io.BytesIO(self.originals['npz']),allow_pickle=False) as bundle:
+            arrays={name:bundle[name].copy() for name in bundle.files}
+        meta=json.loads(arrays['metadata_json'].tobytes())
+        meta['frames']['rgb'].update(sequence=7,device_timestamp_seconds=999.9)
+        arrays['metadata_json']=np.frombuffer(json.dumps(meta).encode(),dtype=np.uint8)
+        buffer=io.BytesIO();np.savez_compressed(buffer,**arrays);lagging=buffer.getvalue()
+        reads=0
+        def delayed(path):
+            nonlocal reads
+            data,header=read(path)
+            if path=='/frame.npz':
+                reads+=1
+                if reads==1:return lagging,header
+            return data,header
+        configured.client._read=delayed
+        runtime=self.build(metric_factory=configured);source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
+        older=viewing.capture.header(self.originals['anchor_a'],sequence=4,observed_ns=int((viewing.capture.NOW-.5)*1e9))
+        pump.consume(self.originals['anchor_a'],older)
+        pump.consume(self.originals['anchor_a'],self.headers['a'])
+        lease=source.metric.lease;self.assertIsNotNone(lease,source.metric.reason)
+        self.assertEqual(reads,2,'one bounded retry, no polling loop')
+        self.assertEqual(dict(lease._originals)['npz'],self.originals['npz'])
+        self.assertEqual(json.loads(lease._headers_json)['a'],self.headers['a'])
+        self.assertTrue(lease.image_metadata['reading_timing_qualified'])
     def test_upper_anchor_from_another_clock_receipt_cannot_be_rebound(self):
         configured=self.factory();read=configured.client._read
         def changed(path):
@@ -161,7 +206,7 @@ class MetricSourceTests(unittest.TestCase):
         runtime.executor=runtime.runners[self.session['id']].executor=pose
         first,second=self.anchors(runtime)
         self.assertEqual(first['state'],'awaiting_metric_frame')
-        self.assertTrue(second['media_ids']);self.assertEqual(self.reads,['/frame.npz','/calibration','/frame.jpg'])
+        self.assertTrue(second['media_ids']);self.assertEqual(self.reads,['/frame.npz','/frame.npz','/calibration','/frame.jpg'])
         deadline=time.monotonic()+2
         while time.monotonic()<deadline:
             completed=[e for e in self.store.list_events(self.session['id'],0,100) if e['kind']=='perception.output']

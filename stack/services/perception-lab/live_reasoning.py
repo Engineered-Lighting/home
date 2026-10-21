@@ -423,7 +423,7 @@ class LiveReasoning:
     def _complete(self, request):
         state = "completed"
         try:
-            args = {k: v for k, v in request.items() if k != "records"}
+            args = {k: v for k, v in request.items() if k not in {"records", "reading_evidence_validity"}}
             result = self.provider.evaluate(request["records"], **args)
         except ProviderFailure as error:
             state = "indeterminate" if error.indeterminate else "failed"

@@ -166,7 +166,7 @@ class DevelopmentTimingTests(unittest.TestCase):
         packet=self.live(runtime)['arms']['B']['virtual_target_preview']
         self.assertTrue(packet['available'],packet)
         self.assertIn('proof_expired',{item['check'] for item in packet['timing']['warnings']})
-        self.assertEqual(self.f.reads.count('/frame.npz'),1)
+        self.assertEqual(self.f.reads.count('/frame.npz'),2)
         runtime.stop_session(self.f.session)
 
     def test_anchor_stage_clock_refusal_is_a_warning_only_under_development(self):
@@ -174,6 +174,9 @@ class DevelopmentTimingTests(unittest.TestCase):
         packet=self.live(runtime)['arms']['B']['virtual_target_preview']
         self.assertTrue(packet['available'],packet)
         self.assertIn('clock_uncertainty',{item['check'] for item in packet['timing']['warnings']})
+        record=source.entries[packet['frame']['media_id']]['record']
+        self.assertFalse(record['metadata']['reading_timing_qualified'])
+        self.assertEqual(self.outputs('b')[-1]['payload']['reading_binding']['status'],'unavailable')
         runtime.stop_session(self.f.session);runtime.close()
         self.setUp()
         with self.assertRaisesRegex(ValueError,'bundled_anchor_clock_refused'):

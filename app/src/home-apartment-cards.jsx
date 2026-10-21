@@ -420,7 +420,7 @@ function AptDirectionalComposer({ view, onMode, spotBadge = null, spotName = nul
       .apt-directional-toolpill button::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
       .apt-directional-toolpill button:hover{color:#fff}
       .apt-directional-toolpill button[aria-pressed="true"]{background:rgba(255,255,255,.15);color:#fff}
-      @media(pointer:coarse){.apt-directional-toolpill button{height:44px;min-width:44px}}
+      @media(pointer:coarse){.apt-directional-toolpill button{height:36px;min-width:44px}}
     `}</style>
     <svg className="apt-directional-hits" aria-hidden="true" width="100%" height="100%"
       style={{ display: "block", overflow: "hidden", pointerEvents: "none" }}>

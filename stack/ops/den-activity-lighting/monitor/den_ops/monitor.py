@@ -29,11 +29,14 @@ DEN_NON_DEPENDENCY_UNITS = {
     "home-agent-lighting-egress-verify.service": "Core-to-HA physical lighting boundary; Den publishes virtual intent only",
     "fwupd-refresh.service": "Firmware metadata refresh; hardware faults remain guarded by kernel and sensors"
 }
+LA_OTHER_ROOM_OBSERVER_UNITS = {
+    'vjepa-live-prototype.service': 'Other-room scene-memory observer; Den activity uses separate bounded Lab workers'
+}
 
 _SIGNAL_SAFE = re.compile(r"[^a-z0-9_.:-]+")
 _RULE_KEYS = {"id", "signal", "op", "levels", "clear_margin", "label", "unit", "required"}
 _TOP_KEYS = {"schema", "host", "role", "state_dir", "policy", "sources", "rules", "loop", "cadence", "remote",
-             "gateway", "home_assistant", "_note"}
+             "gateway", "home_assistant", "_note", "require_media_cleanup"}
 
 
 def load_config(path):
@@ -49,6 +52,10 @@ def validate_config(cfg):
     unknown = set(cfg) - _TOP_KEYS
     if unknown:
         raise ValueError("unknown config keys: %s" % ", ".join(sorted(unknown)))
+    if type(cfg.get('require_media_cleanup', False)) is not bool:
+        raise ValueError('require_media_cleanup must be boolean')
+    if cfg.get('require_media_cleanup') and not isinstance(cfg.get('loop'), dict):
+        raise ValueError('required cleanup needs the bound activity-loop status route')
     if not re.match(r"^[a-z0-9][a-z0-9-]{0,63}$", str(cfg.get("host", ""))):
         raise ValueError("host must be a short lower-case name (it is the gateway status key)")
     if not isinstance(cfg.get("rules"), list) or not cfg["rules"]:
@@ -263,10 +270,23 @@ def failed_unit_notices(cfg, host):
         doc = json.loads(read_private(spec["baseline"]))
         if not isinstance(doc, dict) or doc.get("schema") != UNITS_BASELINE_SCHEMA or doc.get("host") != cfg["host"] or not isinstance(doc.get("units"), dict):
             raise ValueError("schema")
+        supplements = spec.get('scope_baselines', {})
+        if not isinstance(supplements, dict) or set(supplements) - set(spec.get('scopes', ['system'])):
+            raise ValueError('invalid first-scope baseline mapping')
+        units = dict(doc['units'])
+        for scope, path in supplements.items():
+            if scope not in ('system', 'user') or scope in units:
+                raise ValueError('an existing baseline scope cannot be replaced or extended')
+            extra = json.loads(read_private(path))
+            if (not isinstance(extra, dict) or extra.get('schema') != UNITS_BASELINE_SCHEMA
+                    or extra.get('host') != cfg['host'] or not isinstance(extra.get('units'), dict)
+                    or set(extra['units']) != {scope}):
+                raise ValueError('invalid first-scope baseline')
+            units[scope] = extra['units'][scope]
         for scope in spec.get("scopes", ["system"]):
-            if not isinstance(doc["units"].get(scope), list) or any(not isinstance(u, str) or not u for u in doc["units"][scope]):
+            if not isinstance(units.get(scope), list) or any(not isinstance(u, str) or not u for u in units[scope]):
                 raise ValueError("baseline scope missing or malformed")
-        baseline = {scope: set(doc.get("units", {}).get(scope, [])) for scope in ("system", "user")}
+        baseline = {scope: set(units.get(scope, [])) for scope in ("system", "user")}
     except (OSError, ValueError, TypeError, PermissionError) as error:
         notices.append(_evidence_error("units.baseline", "failed-unit baseline unreadable (%s); every failed unit is reported"
                                % type(error).__name__))
@@ -284,9 +304,15 @@ def failed_unit_notices(cfg, host):
             notices.append(_evidence_error("units.%s.malformed" % scope, "%s failed-unit output malformed" % scope))
             continue
         for unit in current[scope]:
-            if cfg['host'] == 'la-host' and scope == 'system' and unit in DEN_NON_DEPENDENCY_UNITS:
+            non_dependency = ((scope == 'system' and
+                ((cfg['host'] == 'la-host' and unit in DEN_NON_DEPENDENCY_UNITS) or
+                 (cfg['host'] == 'victoria-jetson' and unit == 'fwupd-refresh.service'))) or
+                (cfg['host'] == 'la-host' and scope == 'user' and unit in LA_OTHER_ROOM_OBSERVER_UNITS))
+            if non_dependency:
+                explanation = (LA_OTHER_ROOM_OBSERVER_UNITS[unit] if unit in LA_OTHER_ROOM_OBSERVER_UNITS
+                               else DEN_NON_DEPENDENCY_UNITS[unit])
                 notices.append(_notice('unit.non_dependency.' + unit,
-                    unit + ' failed (outside Den inference dependency scope): ' + DEN_NON_DEPENDENCY_UNITS[unit]))
+                    unit + ' failed (outside Den inference dependency scope): ' + explanation))
             elif unit not in baseline.get(scope, set()):
                 notices.append(_evidence_error("unit.%s" % unit, "%s unit %s failed (not in the recorded baseline)" % (scope, unit)))
     return notices, current
@@ -604,6 +630,19 @@ def check(cfg, host, *, dry_run=False):
     unit_notices, failed = failed_unit_notices(cfg, host)
     faults, fault_notices = fault_records(cfg, host, state)
     reasons = ladder.evaluate_rules(signals, cfg.get("rules", [])) + notices + unit_notices + fault_notices
+    if cfg.get('require_media_cleanup') is True:
+        try:
+            loop = cfg['loop']
+            code, doc = host.http('GET', loop['status_url'], token=read_token(loop['token_file']),
+                                 ca_file=loop.get('ca_file'), timeout_s=loop.get('timeout_s', 10))
+            cleanup = doc['deep_stack']['media_cleanup'] if code == 200 else None
+            checked = cleanup.get('checked_at') if isinstance(cleanup, dict) else None
+            if (not isinstance(cleanup, dict) or cleanup.get('enabled') is not True or cleanup.get('ok') is not True
+                    or type(checked) not in (int, float) or not 0 <= now - checked <= 90
+                    or type(cleanup.get('age_s')) not in (int, float) or not 300 <= cleanup['age_s'] <= 86400):
+                raise ValueError('cleanup status missing, failed or stale')
+        except (OSError, ValueError, TypeError, KeyError):
+            reasons.append(_evidence_error('activity.media_cleanup', 'required automatic recording cleanup is missing, failed or stale'))
     if state.get("state_error"):
         reasons.append(_evidence_error("monitor.state", state["state_error"]))
     for source in ("faults", "failed_units"):

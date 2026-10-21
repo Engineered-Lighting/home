@@ -39,6 +39,30 @@ entry, exactly matching the observed set; it refuses an existing file. Do not
 recreate an existing baseline. `validate` returns nonzero on unsafe or incomplete
 evidence. Observe complete healthy level-0 checks for ten minutes before a soak.
 
+When an existing baseline predates collection of user scope, retain that file
+unchanged. Create the first user-only baseline with a separate commissioning
+configuration (`scopes: ["user"]`, a new path) and individually reviewed units.
+The monitoring configuration can reference it under
+`sources.failed_units.scope_baselines.user`. A supplement cannot override or
+extend a scope present in the original file, and a host/scope mismatch fails.
+Include both files in the deployment manifest. This cannot add new failures to
+an already commissioned scope. On the Jetson, only the system
+`fwupd-refresh.service` metadata downloader is classified outside Den's execution
+dependencies; it stays visible and never suppresses kernel or sensor faults.
+The LA user `vjepa-live-prototype.service` belongs to the separate other-room
+scene-memory observer. Its diagnosed startup refusal is also visible outside
+Den dependencies. This is not an exception for `lab-vjepa-worker.service` or any
+other Den model worker, and it does not certify the other-room observer.
+
+Commission continuous Lab with `media_cleanup` naming its exact dedicated root,
+the creation cutoff for this deployment, and `age_s` (300–86400 seconds; use
+3600 for commissioning). Cleanup runs every 30 seconds, through the existing
+runtime deletion guards, for automatic Den recordings only. It preserves
+structured records and refuses live/pending execution. A failure stops activity
+and is exposed in `deep_stack.media_cleanup`; investigate before the 48-hour
+diagnostic-media cap. Set `require_media_cleanup: true` on its monitor so failed,
+missing or stale cleanup evidence also latches the existing monitor stop.
+
 The loaded hour requires fresh occupancy (at most 90 seconds old), a running activity loop, advancing actual Qwen completions and ten recording rolls. A missing sampling interval resets that occupied span on either host; collection jitter is bounded to 1.5 times the configured interval, capped at 120 seconds. Unknown occupancy is incomplete exposure. These checks do not change resource thresholds.
 
 ## Bind the actual deployment

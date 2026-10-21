@@ -26,6 +26,67 @@ REQUEST_PREFIX = 'activity-loop-'
 RELEASE_REASON = 'activity_loop_auto_release_indeterminate'
 
 
+class ActivityMediaCleanup:
+    """Opt-in deletion of this commissioned loop's media; structured rows survive.
+
+    The exact dedicated root and commissioning cutoff are explicit. Deletion
+    goes through Controller so pending local/remote work retains its existing
+    refusal guards. This is not permission to clean unrelated Lab recordings.
+    """
+    @staticmethod
+    def check_config(config):
+        from pathlib import Path, PurePosixPath
+        from occupancy_gate import _finite
+        if (not isinstance(config, dict) or set(config) != {'root', 'created_after', 'age_s'}
+                or not isinstance(config['root'], str)
+                or not (Path(config['root']).is_absolute() or PurePosixPath(config['root']).is_absolute())
+                or not _finite(config['created_after']) or config['created_after'] <= 0
+                or not _finite(config['age_s']) or not 300 <= config['age_s'] <= 86400):
+            raise ValueError('exact root, commissioning cutoff and 5-minute to 24-hour media age required')
+        return config
+
+    def __init__(self, controller, config):
+        from pathlib import Path
+        self.config = dict(self.check_config(config))
+        self.controller, self.store = controller, controller.store
+        root = Path(config['root'])
+        if root.is_symlink() or root.resolve() != self.store.root:
+            raise ValueError('cleanup must name the exact commissioned Store root')
+        self.next_at, self.deleted, self.error, self.checked_at = 0., 0, None, None
+
+    def tick(self):
+        now = self.store.clock()
+        if now < self.next_at:
+            return
+        self.next_at = now + 30.
+        try:
+            with self.store.lock:
+                rows = self.store.db.execute(
+                    "SELECT s.id,s.revision,s.state FROM sessions s WHERE s.request_id GLOB 'activity-loop-*' "
+                    "AND s.camera_id='den' AND s.experiment_id='apartment-viewing' AND s.fixture=0 "
+                    "AND s.created_at>=? AND s.created_at<=? "
+                    "AND s.state!='deleted' "
+                    "AND NOT EXISTS (SELECT 1 FROM media_deletions d WHERE d.session_id=s.id AND d.state='completed') "
+                    "ORDER BY s.created_at LIMIT 16",
+                    (self.config['created_after'], now - self.config['age_s'])).fetchall()
+            for sid, revision, state in rows:
+                if state not in ('stopped', 'failed', 'interrupted', 'blocked'):
+                    raise ValueError('expired automatic recording still requires execution reconciliation')
+                self.controller.delete(sid, revision)
+                self.store.append_event(sid, 'activity.media_retention',
+                    {'policy': 'commissioned_activity_loop', 'age_s': self.config['age_s'],
+                     'media_deleted': True, 'structured_records_preserved': True})
+                self.deleted += 1
+            self.error = None
+        except Exception as error:
+            self.error = type(error).__name__  # never expose private paths or transport details
+        self.checked_at = now
+
+    def snapshot(self):
+        return dict(enabled=True, ok=self.error is None, error=self.error,
+                    checked_at=self.checked_at, deleted=self.deleted, age_s=self.config['age_s'])
+
+
 class EgressRelease:
     """Bounded auto-release of the JEV egress freeze, for the always-on loop only.
 
@@ -135,7 +196,8 @@ class EgressRelease:
 
 class ManagedDeepStack:
     def __init__(self, controller, *, camera_id='den', experiment_id='apartment-viewing', roll_margin_s=20.,
-                 output_fresh_s=10., retry_s=10., retry_max_s=160., name='Activity loop', clock=None, release=None):
+                 output_fresh_s=10., retry_s=10., retry_max_s=160., name='Activity loop', clock=None, release=None,
+                 media_cleanup=None):
         self.controller, self.store, self.runtime = controller, controller.store, controller.runtime
         self.camera_id, self.experiment_id, self.name = camera_id, experiment_id, name
         self.clock = clock or self.store.clock
@@ -159,10 +221,13 @@ class ManagedDeepStack:
         self.usage = dict(calls=0, input_tokens=0, output_tokens=0)
         self.counted = {}          # sid -> last counted reasoning event id
         self.release = release if release is not None else EgressRelease(self.store, clock=self.clock)
+        self.media_cleanup = ActivityMediaCleanup(controller, media_cleanup) if media_cleanup is not None else None
 
     # --- control -----------------------------------------------------------
     def start(self):
         with self.lock:
+            if self.media_cleanup is not None and not self.media_cleanup.snapshot()['ok']:
+                raise ValueError('activity media cleanup requires recovery')
             self.wanted, self.ended_externally = True, False
             if self.sid is None:
                 self._open()
@@ -250,7 +315,13 @@ class ManagedDeepStack:
     def maintain(self):
         """Every loop tick, running or paused: the bounded egress release."""
         with self.lock:
-            return self.release.tick()
+            receipts = self.release.tick()
+            if self.media_cleanup is not None:
+                self.media_cleanup.tick()
+            return receipts
+
+    def maintenance_ok(self):
+        return self.media_cleanup is None or self.media_cleanup.snapshot()['ok']
 
     def tick(self):
         with self.lock:
@@ -460,6 +531,7 @@ class ManagedDeepStack:
                         last_error=self.last_error, retry_at=self.retry_at, retry_failures=self.retry_failures,
                         ended_externally=self.ended_externally, usage=dict(self.usage), budget_s=self.limit,
                         roll_margin_s=self.roll_margin_s, jev_release=self.release.snapshot(),
+                        media_cleanup=self.media_cleanup.snapshot() if self.media_cleanup is not None else {'enabled': False},
                         qwen_control=self.qwen_control_status(), qwen_workload=self.qwen_workload_status())
 
 
@@ -490,7 +562,8 @@ def build(config, *, controller, occupancy, read_token, post=None, read_json=Non
     timings = dict(config['timings'])
     release = EgressRelease(controller.store, **{'enabled': True, **(config.get('jev_release') or {})})
     deep = ManagedDeepStack(controller, camera_id=config['camera_id'], experiment_id=config['experiment_id'],
-                            roll_margin_s=timings.pop('roll_margin_s', 20.), release=release)
+                            roll_margin_s=timings.pop('roll_margin_s', 20.), release=release,
+                            media_cleanup=config.get('media_cleanup'))
     brain = config['brain']
     publisher = BrainPublisher(origin=brain['origin'], home=config['home'], ca_file=brain['ca_file'], post=post,
                                token=lambda path=brain['token_file']: read_token(path))

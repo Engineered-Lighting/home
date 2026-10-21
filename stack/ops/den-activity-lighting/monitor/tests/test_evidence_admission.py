@@ -253,3 +253,23 @@ def test_missing_restart_counter_is_not_readable_or_admissible():
     rows = make_samples()
     rows[10]['units'][cfg['units'][0]['name']]['n_restarts'] = None
     assert criterion(soak.evaluate(cfg, monitor, rows, checklist=PASSING_CHECKLIST), 'restarts')['result'] == 'fail'
+
+
+@pytest.mark.parametrize('unit', ['ha-health.service', 'ha-reachable.service', 'haos-precious-sync.service',
+    'home-agent-bff-egress-verify.service', 'home-agent-lighting-egress-verify.service', 'fwupd-refresh.service'])
+def test_la_non_dependency_failures_are_visible_but_do_not_stop_den(tmp_path, private, unit):
+    j = Jetson(tmp_path, private)
+    j.cfg['host'] = 'la-host'
+    path = j.cfg['sources']['failed_units']['baseline']
+    doc = json.loads(open(path, encoding='utf8').read())
+    doc['host'] = 'la-host'
+    with open(path, 'w', encoding='utf8') as f: json.dump(doc, f)
+    j.host.commands[('systemctl',)] = (0, unit+' loaded failed failed unrelated\n')
+    notices, current = mon.failed_unit_notices(j.cfg, j.host)
+    assert unit in current['system']
+    assert mon.evidence_report(notices)['ok'] is True
+    assert any(n['level'] == 0 and n['notice'] and unit in n['detail'] for n in notices)
+    # The identical name on another host is not an exception.
+    j.cfg['host'] = 'victoria-jetson'
+    notices, _ = mon.failed_unit_notices(j.cfg, j.host)
+    assert mon.evidence_report(notices)['ok'] is False

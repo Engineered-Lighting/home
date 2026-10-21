@@ -161,6 +161,58 @@ class HostHealthTests(HostFixture, unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
 
+    def test_unrelated_haos_failures_do_not_close_den_inference(self):
+        failures = ('ha-health.service', 'ha-reachable.service', 'haos-precious-sync.service',
+                    'home-agent-bff-egress-verify.service', 'home-agent-lighting-egress-verify.service',
+                    'fwupd-refresh.service')
+        for unit in failures:
+            with self.subTest(unit=unit), self.host():
+                original = self.host_command
+                def command(args, **kwargs):
+                    if args[0] == 'systemctl':
+                        return SimpleNamespace(stdout=unit+' loaded failed failed unrelated dependency\n')
+                    return original(args, **kwargs)
+                with patch.object(service.subprocess, 'run', command):
+                    service._host_health()
+                self.assertTrue(self.journals())
+
+    def test_unrelated_failures_never_skip_the_safety_checks(self):
+        with self.host(gpu='20000, 81'):
+            original = self.host_command
+            def command(args, **kwargs):
+                if args[0] == 'systemctl':
+                    return SimpleNamespace(stdout='ha-health.service loaded failed failed HA offline\n')
+                return original(args, **kwargs)
+            with patch.object(service.subprocess, 'run', command):
+                with self.assertRaisesRegex(ValueError, 'resource guard closed'):
+                    service._host_health()
+        with self.host(journal=(0, 'kernel: soft lockup\n', '')):
+            original = self.host_command
+            def command(args, **kwargs):
+                if args[0] == 'systemctl':
+                    return SimpleNamespace(stdout='ha-health.service loaded failed failed HA offline\n')
+                return original(args, **kwargs)
+            with patch.object(service.subprocess, 'run', command):
+                with self.assertRaisesRegex(ValueError, 'kernel fault'):
+                    service._host_health()
+
+    def test_ops_and_inference_dependency_classification_match(self):
+        import ast
+        path = Path(__file__).resolve().parents[3] / 'stack/ops/den-activity-lighting/monitor/den_ops/monitor.py'
+        tree = ast.parse(path.read_text())
+        assigned = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                        and any(isinstance(t, ast.Name) and t.id == 'DEN_NON_DEPENDENCY_UNITS' for t in n.targets))
+        self.assertEqual(service.DEN_NON_DEPENDENCY_UNITS, ast.literal_eval(assigned))
+
+    def test_unknown_or_den_failures_still_close_inference(self):
+        for unit in ('lighting-brain.service', 'victoria-camera-pilot.service', 'ssh.service',
+                     'ha-health-impostor.service'):
+            with self.subTest(unit=unit), self.host():
+                with patch.object(service.subprocess, 'run', return_value=SimpleNamespace(
+                        stdout=unit+' loaded failed failed failure\n')):
+                    with self.assertRaisesRegex(ValueError, 'failed system unit'):
+                        service._host_health()
+
     def test_readings_include_gpu_temperature_and_tctl(self):
         readings = {}
         with self.host():

@@ -20,6 +20,16 @@ from . import policy as ladder
 from . import signals as sig
 from .hostio import read_private, read_token, write_atomic
 
+# Exact LA system non-dependencies; mirrored by home_shared.camera_pilot_service.
+DEN_NON_DEPENDENCY_UNITS = {
+    "ha-health.service": "LA HAOS availability; Den uses Victoria occupancy and direct model transport",
+    "ha-reachable.service": "LA HAOS availability; no Den model or camera dependency",
+    "haos-precious-sync.service": "LA HAOS backup; no Den execution dependency",
+    "home-agent-bff-egress-verify.service": "Home BFF OAuth boundary; Den model transport does not traverse BFF",
+    "home-agent-lighting-egress-verify.service": "Core-to-HA physical lighting boundary; Den publishes virtual intent only",
+    "fwupd-refresh.service": "Firmware metadata refresh; hardware faults remain guarded by kernel and sensors"
+}
+
 _SIGNAL_SAFE = re.compile(r"[^a-z0-9_.:-]+")
 _RULE_KEYS = {"id", "signal", "op", "levels", "clear_margin", "label", "unit", "required"}
 _TOP_KEYS = {"schema", "host", "role", "state_dir", "policy", "sources", "rules", "loop", "cadence", "remote",
@@ -274,7 +284,10 @@ def failed_unit_notices(cfg, host):
             notices.append(_evidence_error("units.%s.malformed" % scope, "%s failed-unit output malformed" % scope))
             continue
         for unit in current[scope]:
-            if unit not in baseline.get(scope, set()):
+            if cfg['host'] == 'la-host' and scope == 'system' and unit in DEN_NON_DEPENDENCY_UNITS:
+                notices.append(_notice('unit.non_dependency.' + unit,
+                    unit + ' failed (outside Den inference dependency scope): ' + DEN_NON_DEPENDENCY_UNITS[unit]))
+            elif unit not in baseline.get(scope, set()):
                 notices.append(_evidence_error("unit.%s" % unit, "%s unit %s failed (not in the recorded baseline)" % (scope, unit)))
     return notices, current
 

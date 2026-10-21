@@ -11,12 +11,16 @@ on:
     paths:
       - ".github/workflows/den-activity-lighting-ops.yml"
       - "stack/ops/den-activity-lighting/**"
+      - "stack/services/perception-lab/activity_loop*.py"
+      - "stack/services/perception-lab/test_activity*.py"
       - "tools/shared-home/**"
   push:
     branches: [main]
     paths:
       - ".github/workflows/den-activity-lighting-ops.yml"
       - "stack/ops/den-activity-lighting/**"
+      - "stack/services/perception-lab/activity_loop*.py"
+      - "stack/services/perception-lab/test_activity*.py"
       - "tools/shared-home/**"
   workflow_dispatch:
 
@@ -61,6 +65,13 @@ jobs:
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/den-ops/bin/python" -m pytest -p no:cacheprovider -q tests
+
+      - name: Verify automatic recording cleanup and continuous loop offline
+        shell: bash
+        working-directory: stack/services/perception-lab
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/den-ops/bin/python" -B -m unittest test_activity_media_cleanup test_activity_loop.LoopTests test_activity_loop_runtime -q
 
   inference-health-tests:
     runs-on: ubuntu-24.04

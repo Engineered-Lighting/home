@@ -1,5 +1,19 @@
 # Home body-form consumer v1
 
+## Shelved by owner: skeletal tracking only for now
+
+The owner rejected the continuous human-mesh candidate and explicitly chose to
+stick with skeletal tracking for now. This supersedes the body appearance work
+below as an active requirement. Do not integrate, package, merge or deploy the
+capsule or human-mesh presentation in draft #412. Retain the research, prototypes
+and scoped evidence for possible future use; they are not accepted appearance.
+
+The skeletal producer/consumer lane in #410 remains the active path, including
+its independent timing and coalesced-stream fixes. Body fitting, volume/shadow
+integration and the rejected capsule depth comparison are deferred; they do not
+block current skeletal work unless a defect also reproduces in that renderer.
+Deployment remains on hold. The remainder of this document is historical.
+
 ## Visual acceptance correction
 
 The owner rejected the current capsule/ellipsoid screenshot. The implementation

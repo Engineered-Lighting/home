@@ -1,5 +1,14 @@
 # Continuous body surface replacement
 
+## Owner scope change: shelved
+
+The owner rejected this candidate as unnatural and chose skeletal tracking only
+for now. Stop body fitting, mesh integration and body shadow work. Keep #410's
+skeletal presentation and its independent delivery/timing fixes. Draft #412 and
+the isolated human preview are not eligible for integration or deployment.
+Research and private evidence remain retained. The following is historical
+candidate documentation, not an active implementation plan or acceptance.
+
 ## Decision and current status
 
 The owner rejected the capsule/ellipsoid screenshot. The requested appearance is

@@ -17,6 +17,7 @@ def test_committed_release_is_sealed_repeatable_and_non_overwriting(tmp_path):
     git('init','-q')
     for name,text in {
         'stack/services/perception-lab/managed_detector_app.py':'pass\n',
+        'stack/services/perception-lab/continuous_app.py':'def create_app(): pass\n',
         'stack/services/perception-lab/activity_reading.py':'SCHEMA="fixture"\n',
         'stack/services/perception-lab/test_fixture.py':'excluded\n',
         'tools/la-detector-trial/lifecycle.py':'pass\n',
@@ -32,6 +33,7 @@ def test_committed_release_is_sealed_repeatable_and_non_overwriting(tmp_path):
     assert builder.build(repo,revision,second)==manifest
     assert first.read_bytes()==second.read_bytes()
     assert manifest['source_ref']==revision and manifest['deployment_authorized'] is False
+    assert 'continuous_app:create_app' in manifest['entrypoints']
     with tarfile.open(first) as archive:
         assert 'service/test_fixture.py' not in archive.getnames()
         for name,digest in manifest['files'].items():

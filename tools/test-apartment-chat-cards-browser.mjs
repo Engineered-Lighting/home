@@ -32,9 +32,15 @@ test('populated Chat keeps unavailable media captions readable in its narrow pan
     }
     const perception=page.locator('.apt-ui-chat-event[data-kind="perception"]'),caption=perception.getByText(seeded[3].text,{exact:true});
     await caption.waitFor();
-    const row=await perception.boundingBox(),body=await caption.boundingBox(),status=await perception.getByRole('status').boundingBox();
+    // One DOM read: a resize/scroll between separate boundingBox calls can
+    // move the feed and compare rectangles from different layout frames.
+    const {row,body,status}=await perception.evaluate((node,text)=>({
+      row:node.getBoundingClientRect().toJSON(),
+      body:[...node.querySelectorAll('span')].find(span=>span.textContent===text).getBoundingClientRect().toJSON(),
+      status:node.querySelector('[role="status"]').getBoundingClientRect().toJSON(),
+    }),seeded[3].text);
     assert.ok(body.width>=row.width*.85,'the caption uses the Chat pane width: '+JSON.stringify({viewport,row,body}));
-    assert.ok(status.y>=body.y+body.height-1,'the unavailable status follows the caption instead of squeezing it');
+    assert.ok(status.y>=body.y+body.height-1,'the unavailable status follows the caption instead of squeezing it: '+JSON.stringify({viewport,body,status}));
     const action=page.getByRole('button',{name:'Study light details',exact:true});await action.click();
     await page.getByText('light.turn_off',{exact:true}).waitFor();await action.click();
     const cmd=page.getByRole('combobox',{name:'Command input',exact:true});await cmd.fill('/');

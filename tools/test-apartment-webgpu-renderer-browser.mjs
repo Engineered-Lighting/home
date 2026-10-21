@@ -192,7 +192,13 @@ async function proofInPage({modes, phase}) {
       result.poses.push({ mode, pose: name, frame: await capture() });
     }
   }
-  if (phase === 'frames') { result.webgpu = e.webgpuReadback(); return result; }
+  if (phase === 'frames') {
+    // The original combined Cloud proof built the floor shader when its
+    // contract phase loaded Mesh. Keep that same port assertion in the split
+    // frame phase by drawing Mesh once after all Cloud images are captured.
+    if (modes.every(mode => mode === 'points')) { await e.modes.setMode('mesh', { duration: 0 }); await settle(); }
+    result.webgpu = e.webgpuReadback(); return result;
+  }
   // Picking and projection: CPU paths, identical on both backends.
   await e.modes.setMode('mesh', { duration: 0 });
   // Mesh display and its collision proxy are separate lazy assets. A fixed

@@ -233,7 +233,7 @@ test('all five WebGPU lighting proof parts are planned together and use separate
 });
 
 test('renderer parity always selects Cloud, Mesh and Photo on separate workers', () => {
-  const formats = ['test-apartment-webgpu-renderer-browser.mjs', 'test-apartment-webgpu-mesh-browser.mjs',
+  const formats = ['test-apartment-webgpu-cloud-browser.mjs', 'test-apartment-webgpu-cloud-browser-part2.mjs', 'test-apartment-webgpu-mesh-browser.mjs',
     'test-apartment-webgpu-mesh-browser-part2.mjs',
     'test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
   for (const file of ['app/src/home-apartment.jsx', 'app/src/home-3d/markers.js', 'app/src/home-3d/engine.js',
@@ -264,7 +264,7 @@ test('all Setup rail phases are selected together and distributed across workers
   }
 });
 
-for (const [format, mode] of [['photo', 'splat'], ['mesh', 'mesh']]) test(`the two ${format} parity parts retain frames and contracts without dropping either phase`, () => {
+for (const [format, mode] of [['photo', 'splat'], ['mesh', 'mesh'], ['cloud', 'points']]) test(`the two ${format} parity parts retain frames and contracts without dropping either phase`, () => {
   const files = [`test-apartment-webgpu-${format}-browser.mjs`, `test-apartment-webgpu-${format}-browser-part2.mjs`];
   const phases = files.map(file => {
     const source = fs.readFileSync(path.join(root, 'tools', file), 'utf8');

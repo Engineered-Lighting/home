@@ -29,6 +29,9 @@ DEN_NON_DEPENDENCY_UNITS = {
     "home-agent-lighting-egress-verify.service": "Core-to-HA physical lighting boundary; Den publishes virtual intent only",
     "fwupd-refresh.service": "Firmware metadata refresh; hardware faults remain guarded by kernel and sensors"
 }
+LA_OTHER_ROOM_OBSERVER_UNITS = {
+    'vjepa-live-prototype.service': 'Other-room scene-memory observer; Den activity uses separate bounded Lab workers'
+}
 
 _SIGNAL_SAFE = re.compile(r"[^a-z0-9_.:-]+")
 _RULE_KEYS = {"id", "signal", "op", "levels", "clear_margin", "label", "unit", "required"}
@@ -301,12 +304,15 @@ def failed_unit_notices(cfg, host):
             notices.append(_evidence_error("units.%s.malformed" % scope, "%s failed-unit output malformed" % scope))
             continue
         for unit in current[scope]:
-            non_dependency = (scope == 'system' and
+            non_dependency = ((scope == 'system' and
                 ((cfg['host'] == 'la-host' and unit in DEN_NON_DEPENDENCY_UNITS) or
-                 (cfg['host'] == 'victoria-jetson' and unit == 'fwupd-refresh.service')))
+                 (cfg['host'] == 'victoria-jetson' and unit == 'fwupd-refresh.service'))) or
+                (cfg['host'] == 'la-host' and scope == 'user' and unit in LA_OTHER_ROOM_OBSERVER_UNITS))
             if non_dependency:
+                explanation = (LA_OTHER_ROOM_OBSERVER_UNITS[unit] if unit in LA_OTHER_ROOM_OBSERVER_UNITS
+                               else DEN_NON_DEPENDENCY_UNITS[unit])
                 notices.append(_notice('unit.non_dependency.' + unit,
-                    unit + ' failed (outside Den inference dependency scope): ' + DEN_NON_DEPENDENCY_UNITS[unit]))
+                    unit + ' failed (outside Den inference dependency scope): ' + explanation))
             elif unit not in baseline.get(scope, set()):
                 notices.append(_evidence_error("unit.%s" % unit, "%s unit %s failed (not in the recorded baseline)" % (scope, unit)))
     return notices, current

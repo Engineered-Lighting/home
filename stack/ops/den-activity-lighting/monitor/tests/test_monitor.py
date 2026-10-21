@@ -54,6 +54,20 @@ def test_fresh_required_cleanup_is_accepted(jetson):
     assert not any(r['signal'] == 'activity.media_cleanup' for r in status['reasons'])
 
 
+def test_only_la_other_room_observer_is_outside_den_dependencies(jetson):
+    j = jetson; j.cfg['host'] = 'la-host'
+    path = j.cfg['sources']['failed_units']['baseline']
+    original = json.loads(read_private(path)); original['host'] = 'la-host'
+    with open(path, 'w') as f:json.dump(original, f)
+    j.host.commands[('systemctl', '--user')] = (0, 'vjepa-live-prototype.service loaded failed failed other-room observer\n')
+    notices, _ = mon.failed_unit_notices(j.cfg, j.host)
+    assert mon.evidence_report(notices)['ok'] is True
+    assert any('Other-room scene-memory' in n['detail'] for n in notices)
+    j.host.commands[('systemctl', '--user')] = (0, 'lab-vjepa-worker.service loaded failed failed Den worker\n')
+    notices, _ = mon.failed_unit_notices(j.cfg, j.host)
+    assert mon.evidence_report(notices)['ok'] is False
+
+
 @pytest.mark.parametrize('cleanup', [None, {'enabled': False},
     {'enabled': True, 'ok': False, 'checked_at': 1000, 'age_s': 3600},
     {'enabled': True, 'ok': True, 'checked_at': 0, 'age_s': 3600}])

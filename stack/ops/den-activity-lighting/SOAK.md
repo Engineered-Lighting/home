@@ -49,6 +49,10 @@ Include both files in the deployment manifest. This cannot add new failures to
 an already commissioned scope. On the Jetson, only the system
 `fwupd-refresh.service` metadata downloader is classified outside Den's execution
 dependencies; it stays visible and never suppresses kernel or sensor faults.
+The LA user `vjepa-live-prototype.service` belongs to the separate other-room
+scene-memory observer. Its diagnosed startup refusal is also visible outside
+Den dependencies. This is not an exception for `lab-vjepa-worker.service` or any
+other Den model worker, and it does not certify the other-room observer.
 
 Commission continuous Lab with `media_cleanup` naming its exact dedicated root,
 the creation cutoff for this deployment, and `age_s` (300–86400 seconds; use

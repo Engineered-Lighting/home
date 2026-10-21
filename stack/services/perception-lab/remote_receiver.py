@@ -25,7 +25,7 @@ class ExecutionNotFound(ValueError):
 
 
 class RemoteReceiver:
-    def __init__(self, store, worker, profile, authorize):
+    def __init__(self, store, worker, profile, authorize, *, viewing_jpeg=False):
         if not isinstance(worker,(KeypointWorker,YoloXWorker,UltralyticsWorker,RTMPoseWorker,DetectorPoseWorker)) or not callable(authorize):
             raise ValueError('fixed admitted worker required')
         if isinstance(worker,DetectorPoseWorker) and (worker.store is not store or worker.reservation_kind!='remote'):
@@ -33,6 +33,7 @@ class RemoteReceiver:
         if profile != {**worker.manifest,'artifact_sha256':worker.manifest['sha256']}:
             raise ValueError('exact worker profile required')
         self.store,self.worker,self.profile,self.authorize=store,worker,deepcopy(profile),authorize
+        self.viewing_jpeg=viewing_jpeg is True
         with store.transaction() as db:
             db.execute('CREATE TABLE IF NOT EXISTS remote_execution (site TEXT NOT NULL, id TEXT NOT NULL, body_sha TEXT NOT NULL, reference TEXT NOT NULL, state TEXT NOT NULL, proof TEXT, PRIMARY KEY(site,id))')
             db.execute('CREATE TABLE IF NOT EXISTS remote_inputs (site TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(site,id))')
@@ -75,7 +76,7 @@ class RemoteReceiver:
         # then persist the terminal cancellation below without invoking a model.
         # An HTTP validation error supplies no completion proof to the sender.
         if (not finite(frame.get('valid_until'))
-                or image.get('encoding')!='png' or image.get('channel_order')!='RGB'
+                or image.get('encoding') not in ({'png','jpeg'} if self.viewing_jpeg else {'png'}) or image.get('channel_order')!='RGB'
                 or image.get('decoded_worker_order')!='BGR'
                 or image.get('source_media_id') not in frame.get('media_ids',[])
                 or type(image.get('width')) is not int or not 0<image['width']<=3840
@@ -87,10 +88,11 @@ class RemoteReceiver:
         from PIL import Image
         import numpy as np
         with Image.open(io.BytesIO(data)) as decoded:
-            if decoded.format!='PNG' or decoded.size!=(image['width'],image['height']) or getattr(decoded,'n_frames',1)!=1:
+            if decoded.format!=('JPEG' if image['encoding']=='jpeg' else 'PNG') or decoded.size!=(image['width'],image['height']) or getattr(decoded,'n_frames',1)!=1:
                 raise ValueError('remote image dimensions/type mismatch')
             pixels=np.ascontiguousarray(np.asarray(decoded.convert('RGB'),dtype=np.uint8)[:,:,::-1])
-        if hashlib.sha256(pixels.tobytes()).hexdigest()!=image['bgr_sha256']:
+        if (image['encoding']=='jpeg' and image.get('bgr_sha256') is not None
+                or image['encoding']=='png' and hashlib.sha256(pixels.tobytes()).hexdigest()!=image['bgr_sha256']):
             raise ValueError('remote decoded pixel integrity failure')
         crops=None
         if isinstance(self.worker,RTMPoseWorker):

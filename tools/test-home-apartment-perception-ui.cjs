@@ -176,6 +176,14 @@ test('ordinary panel does not auto-load or acquire; discovery filters exact Den 
   } finally { await m.unmount(); }
 });
 
+test('an explicitly configured fast observer attaches once without acquiring a Lab session',async()=>{
+  let attached=0,disposed=0;w.__HOME_FAST_TRACKING_ENABLED=true;
+  const m=await mount({loadLayer:async()=>({attachFastTracking(){attached++;return {dispose(){disposed++;}};}})});
+  try{assert.equal(attached,1);assert.equal(m.appSource.listCalls.length,0);assert.equal(m.appSource.subscriptions.length,0);assert.deepEqual(m.appSource.forbidden,[]);}
+  finally{await m.unmount();delete w.__HOME_FAST_TRACKING_ENABLED;}
+  assert.equal(disposed,1);
+});
+
 test('actual decoded image and supplied 2D overlay render with JEV below, original model/source times and unavailable 3D', async () => {
   const m = await mount();
   try {

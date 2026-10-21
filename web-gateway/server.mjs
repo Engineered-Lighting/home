@@ -23,6 +23,7 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
+import { createFastTrackingHandler, FAST_TRACKING_PREFIX } from "./fast-tracking-route.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -1221,7 +1222,7 @@ function sendIndex(req, res, filePath) {
     const haProxyRuntime = haTokenProxy.enabled
       ? `window.__HOME_WEB_HA_TOKEN_PROXY=true;window.__HOME_WEB_HA_TOKEN=${jsString(HA_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}</script>`;
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};window.__HOME_FAST_TRACKING_ENABLED=${!!trackingCa&&!!process.env.HOME_WEB_DEN_TRACKING_READ_TOKEN_FILE};${stackProxyRuntime}${haProxyRuntime}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -1785,6 +1786,9 @@ function proxyUpgrade(req, socket, head, route) {
     if (head?.length) upstream.write(head);
     socket.pipe(upstream);
   });
+  // A browser can reset an upgraded connection without an HTTP request error.
+  // Retire its paired tunnel even when HA auth rewriting is not enabled.
+  socket.once("close", () => upstream.destroy());
   upstream.on("error", () => {
     socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
     socket.destroy();
@@ -1867,6 +1871,11 @@ const perceptionLabReadHandler = createPerceptionLabReadHandler({
   credential: () => readLabConfigFile(process.env.HOME_WEB_DEN_LAB_READ_TOKEN_FILE, 1024, true).toString("utf8").trim(),
   authenticate: req => hasValidAuth(req).ok, timeoutMs: 5000, maxConcurrent: 4,
 });
+let trackingCa=null;
+try { trackingCa=readLabConfigFile(process.env.HOME_WEB_DEN_TRACKING_CA_FILE,65536); } catch { /* Opt-in route fails closed. */ }
+const fastTrackingHandler=createFastTrackingHandler({ca:trackingCa,
+  credential:()=>readLabConfigFile(process.env.HOME_WEB_DEN_TRACKING_READ_TOKEN_FILE,1024,true).toString('utf8').trim(),
+  authenticate:req=>hasValidAuth(req).ok});
 function labReadOriginAllowed(req) {
   if (["same-site", "cross-site"].includes(req.headers["sec-fetch-site"])) return false;
   if (!req.headers.origin) return true;
@@ -1977,6 +1986,10 @@ const server = http.createServer({
     && !labReadOriginAllowed(req)) {
     sendJson(res, 403, { error: { code: "lab_origin_denied" } }); return;
   }
+  if (String(req.url).startsWith(FAST_TRACKING_PREFIX) && !labReadOriginAllowed(req)) {
+    sendJson(res,403,{error:'tracking_origin_denied'});return;
+  }
+  if (fastTrackingHandler(req,res)) return;
   if (perceptionLabReadHandler(req, res)) return;
   if (lightingLayerHandler(req, res) || contentPackHandler(req, res)) return;
   if (await equipmentRegistrationHandler(req, res)) return;
@@ -1996,6 +2009,9 @@ server.maxRequestsPerSocket = 100;
 server.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS);
 
 server.on("upgrade", (req, socket, head) => {
+  // HTTP's default socket error handling no longer owns upgraded sockets.
+  // A connection reset must retire this client, not terminate the gateway.
+  socket.on("error", () => socket.destroy());
   const browserAgentUpgrade = classifyAgentOrigin(req.headers, agentOriginBoundary);
   const nativeAgentUpgrade = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
   if (browserAgentUpgrade.agentHost || nativeAgentUpgrade.agentHost) {

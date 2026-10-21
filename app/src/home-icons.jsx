@@ -31,6 +31,14 @@ function IconSun({ size = 14, stroke = "currentColor" }) {
   );
 }
 
+/* Existing Setup glyph from the canonical Apartment design handoff. */
+function IconSetup({ size = 16, stroke = "currentColor" }) {
+  return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={stroke}
+    strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 4h10M3 8h10M3 12h10M6 2.5v3M10 6.5v3M5 10.5v3" />
+  </svg>;
+}
+
 function IconMoon({ size = 14, stroke = "currentColor" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -207,7 +215,7 @@ function IconNeuralNetwork({ size = 16, stroke = "currentColor" }) {
 }
 
 Object.assign(window, {
-  IconMic, IconSend, IconSun, IconMoon, IconStop, IconLogo,
+  IconMic, IconSend, IconSun, IconMoon, IconStop, IconLogo, IconSetup,
   IconWaveStatic, IconWaveLive, StatusDot,
   IconBulb, IconPlay, IconPause, IconSkipNext, IconSkipPrev, IconVolume, IconSpeaker,
   IconNeuralNetwork,

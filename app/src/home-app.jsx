@@ -5329,14 +5329,18 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const firstItemRef = useRef(null);
-  // Setup lives in the Home menu, and is never a dead item: when the home
-  // can't open it, a press says why and the menu stays open.
+  // Direct Setup and its retained menu entry share the same controller action.
+  // An unavailable press opens the existing explanation instead of a dead end.
   const [setupWhy, setSetupWhy] = useState(false);
   const setupBlocked = state?.canSetup === false && !state?.setupActive;
   useEffect(() => { if (!setupBlocked || !menuOpen) setSetupWhy(false); }, [setupBlocked, menuOpen, state?.siteId]);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
     rootRef: menuRef, trap: false, initialFocus: firstItemRef, onEscape: () => setMenuOpen(false) });
   const run = action => { setMenuOpen(false); action?.(); };
+  const toggleSetup = () => {
+    if (setupBlocked) { setSetupWhy(true); setMenuOpen(true); return; }
+    run(state.openSetup);
+  };
   // APT-S02: every home that holds unsaved work keeps its mark, viewed or not.
   const parkedUnsaved = window.HomeApartmentData?.dirtySites?.() || [];
   const status = apartmentStatusRows(state);
@@ -5366,6 +5370,13 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
     </details>
     <div className="apt-home-top-actions">
     {recordingBanner}
+    {state?.openSetup && <button type="button" className="apt-home-setup-toggle" aria-label="Setup"
+      aria-pressed={!!state.setupActive} aria-disabled={setupBlocked ? "true" : undefined}
+      aria-describedby={setupWhy && menuOpen ? "apt-home-setup-why" : undefined}
+      title={setupBlocked ? state.setupUnavailableReason || "Setup isn't available for this home here."
+        : "Placement, aims, devices and Home Assistant links"} onClick={toggleSetup}>
+      <IconSetup /><span className="apt-home-setup-label">Setup</span>
+    </button>}
     {simulationActive && <button type="button" className="apt-home-simulation"
       aria-label="Simulation active — open controls" title="Simulation: authored data, not live observations"
       onClick={() => run(() => onFeature?.("simulation"))}>
@@ -5389,7 +5400,7 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
             <button type="button" role="menuitemcheckbox" className="apt-home-setup" ref={firstItemRef}
               aria-checked={state.setupActive ? "true" : "false"} aria-disabled={setupBlocked ? "true" : undefined}
               aria-describedby={setupWhy ? "apt-home-setup-why" : undefined}
-              onClick={() => { if (setupBlocked) { setSetupWhy(true); return; } run(state.openSetup); }}>
+              onClick={toggleSetup}>
               Setup<span className="apt-home-menu-check" aria-hidden="true">{state.setupActive ? "On" : ""}</span>
             </button>
             {setupWhy && <p id="apt-home-setup-why" role="status" className="apt-home-menu-note" data-apt-setup-unavailable="1">

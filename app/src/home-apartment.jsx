@@ -2319,18 +2319,19 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
   return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view" data-apt-label-avoid="">
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
-    <div className="apt-ui-seg" role="group" aria-label="Scene mode">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
+    <div className="apt-ui-seg" role="group" aria-label="Scene display">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
       <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key}
         title={key !== "points" && pointsOnlyReason ? pointsOnlyReason : undefined}
         disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)}
         onClick={() => onMode(key)}>{label}</button>)}
-    </div>
     {/* Lighting is a property of the room, not a view: it relights whichever
-      * view is shown (Cloud, Photo or Mesh) and stays on across them. */}
-    <button type="button" className="apt-ui-button is-small" aria-label="Lighting" aria-pressed={!!lighting}
-      title={!onLit ? "Lighting needs modeled fixtures in this home" : modeLockedReason || "Simulated light from the virtual fixtures · not photometric"}
+      * view is shown (Cloud, Photo or Mesh) and stays on across them. Lit keeps
+      * the handoff's compact fourth segment without becoming a fourth mode. */}
+    <button type="button" aria-label="Lighting" aria-pressed={!!lighting}
+      title={!onLit ? "Lighting needs modeled fixtures in this home" : modeLockedReason || "Simulated lighting across Cloud, Photo and Mesh · not photometric"}
       disabled={disabled || !onLit || !!modeLockedReason} onClick={() => onLit?.(!lighting)}>
-      <AptUnifiedIcon name="bulb" /><span className="apt-ui-toolbar-word apt-ui-lighting-word">Lighting</span></button>
+      Lit</button>
+    </div>
     <span className="apt-ui-toolbar-separator apt-ui-orbit" />
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled || !!viewLockedReason}
       title={viewLockedReason || undefined} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
@@ -2491,7 +2492,7 @@ function aptUnifiedRadialPowerPatch(radials, on) {
 const aptEmptySubscribe = () => () => {};
 const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
-function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
+function AptUnifiedVirtualInspector({ homeName, roomName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, setupReadOnly = false, deskControls,
   tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, commandBinding,
   aimControls, aimNamedAims }) {
@@ -2559,14 +2560,14 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   };
   return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Fixture lighting inspector">
     <header className="apt-ui-header"><div className="apt-ui-header-row">
-      <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
+      <button type="button" className="apt-ui-button is-icon is-small" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
       <div className="apt-ui-grow"><h2 className="apt-ui-title">{fixture.label || fixture.fixture_id}</h2>
-        <div className="apt-ui-sub">{homeName} · {[
+        <div className="apt-ui-sub">{roomName || homeName} · {[
           state.spotlight?.on && `Spot ${Math.round((state.spotlight.brightness ?? 1) * 100)}%`,
           state.downward?.on && `Down ${Math.round((state.downward.brightness ?? 1) * 100)}%`,
           radials.some(item => item.on) && `Radial ${Math.round(radials.reduce((sum, item) => sum + (item.on ? item.brightness ?? 1 : 0), 0) / 6 * 100)}%`,
         ].filter(Boolean).join(" · ") || "Off"}</div></div>
-      <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
+      <button type="button" className="apt-ui-button is-icon is-small is-ghost" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
       <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled fixture</span><span className="apt-ui-badge">Not commissioned</span></div>
       <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">{[["light", "Light"], ["aim", "Aim"], ["setup", "Setup"]].map(([key, label]) =>
         <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-virtual-${key}`} onClick={() => setTab(key)}>{label}</button>)}
@@ -10633,6 +10634,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       {unifiedShell && virtualFixtureDocument && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn && (
         <AptHomePanelSlot enabled={true} target={shellControlsHost}>
           <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
+            roomName={virtualFixtureDocument.binding?.room_id?.replace(/(^|[-_\s]+)(\w)/g, (_, space, letter) => `${space ? " " : ""}${letter.toUpperCase()}`)}
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
             tab={virtualInspectorTab} onTabChange={changeVirtualInspectorTab} onSelect={selectVirtualFixture}
             onBack={clearVirtualFixtureSelection} commandBinding={virtualFixtureDocument.binding}

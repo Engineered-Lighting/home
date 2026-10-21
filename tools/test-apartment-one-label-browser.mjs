@@ -96,12 +96,16 @@ test('Den fixture orbs replace survey decoration, keep one label and report radi
     const descriptor = () => page.evaluate(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), fixtureId);
     const retained = (await descriptor()).state.radials;
     assert.ok(retained.every(zone=>zone.on && zone.brightness>0), 'authored initial radial levels are powered');
+    assert.match((await panel.locator('.apt-ui-sub').textContent()).trim(), /^Den · Spot 100% · Down 75% · Radial 75%$/,
+      'selected-light context names the registered room and actual channel output');
     await power.uncheck();
     await waitForDirectionalReadiness(page,id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials.every(zone=>!zone.on),fixtureId);
     assert.deepEqual((await descriptor()).state.radials,retained.map(zone=>({...zone,on:false})), 'Off retains every individual level and CCT');
     assert.equal(await radial.getByRole('slider',{name:'Radial brightness',exact:true}).inputValue(),'0','brightness reports output zero');
     assert.equal(await radial.locator('svg text').first().textContent(),'0%','the ring reports output zero');
     assert.equal(await radial.getByRole('button',{name:'Off',exact:true}).getAttribute('aria-pressed'),'true');
+    assert.match((await panel.locator('.apt-ui-sub').textContent()).trim(), /^Den · Spot 100% · Down 75%$/,
+      'header omits powered-off radial output while its stored level is retained');
     await power.check();
     await waitForDirectionalReadiness(page,id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials.every(zone=>zone.on),fixtureId);
     assert.deepEqual((await descriptor()).state.radials,retained,'On restores the exact saved levels and CCT');

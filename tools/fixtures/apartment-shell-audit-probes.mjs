@@ -152,6 +152,7 @@ export function auditSurfaces() {
     copy: pick('.apt-ui-copy, .apt-ui-sub', ['fontSize']),
     value: pick('.apt-ui-value', ['fontSize', 'fontFamily']),
     button: pick('.apt-ui-button:not(.is-small)', ['borderTopLeftRadius']),
+    smallButton: pick('.apt-ui-button.is-small', ['borderTopLeftRadius']),
     segment: pick('.apt-ui-seg', ['borderTopLeftRadius']),
     group: pick('.apt-ui-channel, .apt-ui-callout', ['borderTopLeftRadius']),
     badge: pick('.apt-ui-badge', ['fontSize', 'fontFamily', 'borderTopLeftRadius']),

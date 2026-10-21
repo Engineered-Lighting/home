@@ -177,10 +177,11 @@ test(PARTS[part], { timeout: 145000 }, async () => {
       if (s.copy) expect(parseFloat(s.copy.fontSize) >= 12.5 && parseFloat(s.copy.fontSize) <= 13.5, 'body is 12.5–13.5 px · ' + label, s.copy);
       if (s.value) expect(/Geist Mono/.test(s.value.fontFamily) && ['11.5px', '12px'].includes(s.value.fontSize), 'values are Geist Mono 11.5–12 · ' + label, s.value);
       if (s.button) expect(s.button.borderTopLeftRadius === '8px', 'controls have 8 px radii · ' + label, s.button);
+      if (s.smallButton) expect(s.smallButton.borderTopLeftRadius === '7px', 'compact controls have 7 px radii · ' + label, s.smallButton);
       if (s.segment) expect(s.segment.borderTopLeftRadius === '10px', 'segmented groups have 10 px radii · ' + label, s.segment);
       if (s.group) expect(s.group.borderTopLeftRadius === '10px', 'cards that own on/off have 10 px radii · ' + label, s.group);
       if (s.badge) expect(!/Mono/.test(s.badge.fontFamily) && s.badge.fontSize === '11.5px', 'badges use the sans UI font at 11.5 px · ' + label, s.badge);
-      if (surface === 'light') expect(!!(s.title && s.section && s.button && s.segment && s.group && s.badge), 'the light inspector exposes every audited surface · ' + label, s);
+      if (surface === 'light') expect(!!(s.title && s.section && (s.button || s.smallButton) && s.segment && s.group && s.badge), 'the light inspector exposes every audited surface · ' + label, s);
     }
     if (STATE_SHOTS) await page.screenshot({ path: path.join(run, 'evidence', label.replace(/ /g, '-') + '.png') });
     receipt.states.push(state); save();

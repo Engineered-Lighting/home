@@ -58,9 +58,11 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
     await shell.waitSetupState('off');
     await check('Setup opens one rail and its inspector in the right column; tabs, chat and dock are hidden', async () => {
       assert.equal(await shell.setupState(), 'off');
-      assert.equal(await page.locator('.apt-home-topbar > .apt-home-top-actions > button').count(), 0, 'the top bar holds only Menu');
+      const setupToggle = page.getByRole('button', { name: 'Setup', exact: true });
+      assert.equal(await setupToggle.getAttribute('aria-pressed'), 'false', 'the direct Setup toggle reads the shared off state');
       assert.equal(await (await shell.openMenu()).getAttribute('aria-checked'), 'false');
       await shell.openSetup(); await shell.waitSetupState('on');
+      assert.equal(await setupToggle.getAttribute('aria-pressed'), 'true', 'the direct toggle reflects Setup opened through Menu');
       assert.equal(await shell.homeMenu().count(), 0, 'choosing Setup closes the menu');
       assert.equal(await (await shell.openMenu()).getAttribute('aria-checked'), 'true', 'Setup reads as on in the menu');
       await page.keyboard.press('Escape'); await shell.homeMenu().waitFor({ state: 'detached' });

@@ -35,6 +35,20 @@ artifact invalidates that comparison.
 
 ## Live result to earn
 
+For a bounded rollout from an operator-stopped baseline, explicitly select
+`tools/den-activity-loop-start-stopped.py` as the Uvicorn factory before resuming
+through the authenticated route. The old service keeps Stop only in memory;
+an ordinary restart loses it. A reviewed recovery may retain this startup
+guard with the baseline source and configuration, keeping Home reads available
+without automatically starting a recording. Removing that guard is a separate
+reviewed service change. The helper is inert unless selected by the unit.
+
+Diagnostic trial recordings can use a fresh private tmpfs Store with an explicit
+quota, preserving the original free-space floor. After stopping the trial Lab,
+delete that entire disposable Store, including request payloads and its ledger;
+retain only separately collected structured measurements. Historical recordings
+and the ordinary Store are outside that cleanup scope.
+
 Correlate the actual model answer and original evidence with accepted brain
 events, the selected fixture/target, successful Home aim/application and an
 actual completed-render receipt. During normal Den reading, judge beam placement

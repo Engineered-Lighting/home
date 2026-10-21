@@ -16,7 +16,7 @@ that every matched historical-looking record was previously reviewed. The
 operator must reconcile timestamps and incident history before admission.
 
 The monitor now latches at level 3 for missing required sensors, malformed or
-unreadable journal/boot/unit/baseline data, unexpected failed units, corrupt
+unreadable journal/boot/unit/baseline data, unexpected failed Den dependencies, corrupt
 persisted state, or missing/stale required LA monitor status. Evidence failure
 is reported separately from hardware faults. Diagnose, then use the existing
 owner release command; never delete state, clear system failures, change
@@ -172,3 +172,23 @@ matching manifest identities, common windows and actual occupied exposure.
 receipts remain historical evidence and cannot establish new admission. Keep
 samples, metadata, both host receipts, explicit checklist and combined receipt
 with the release. Local/fake-host test PASS establishes software behavior only.
+
+## Den dependency scope
+
+The LA inference gateway and ops monitor use the same fixed, exact-name
+classification. LA HAOS availability (`ha-health.service`, `ha-reachable.service`),
+HAOS backup (`haos-precious-sync.service`), Home BFF OAuth and Core physical-lighting
+verification (`home-agent-bff-egress-verify.service`,
+`home-agent-lighting-egress-verify.service`) and firmware metadata refresh
+(`fwupd-refresh.service`) do not execute Den camera/model requests. Failures in
+these six LA system units remain visible notices in logs, status and soak samples;
+they do not veto Den inference. They are not exemptions on the Jetson or in user
+scope. Every other unexpected failed unit still blocks admission.
+
+This does not certify or enable the failed services' paths. Their own health,
+OAuth/firewall checks and physical-action refusals remain in force. Den keeps its
+existing mTLS/grants, pinned model/incarnation checks, resource thresholds,
+thermal gates, complete journal and required sensor evidence, source expiry,
+manual controls and monitor latch. Never clear failures, rewrite incident
+baselines or expand the classification merely to pass admission. Deployment of
+this policy change requires a new reviewed artifact and continuous soak.

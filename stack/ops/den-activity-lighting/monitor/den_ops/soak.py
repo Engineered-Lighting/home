@@ -169,7 +169,7 @@ def sample_once(cfg, monitor_cfg, host, journal_state):
         "boot_id": (journal_state.get("journal") or {}).get("boot_id"),
         "evidence": mon.evidence_report(reasons), "failed_units": failed,
         "faults": faults,
-        "notices": [n["detail"] for n in notices + fault_notices],
+        "notices": [n["detail"] for n in notices + fault_notices + unit_notices],
         "rebooted": any(n["signal"] == "host.rebooted" for n in fault_notices),
         "units": {u["name"]: read_unit(host, u["name"], u.get("scope", "system")) for u in cfg.get("units", [])},
     }

@@ -73,6 +73,17 @@ _KERNEL_LOCK = threading.Lock()
 _KERNEL_BASELINE_TIMEOUT = 180
 _KERNEL_SCAN_TIMEOUT = 15
 HWMON = Path('/sys/class/hwmon')
+# Exact LA system units outside the Den inference path. Keep in sync with
+# den_ops.monitor; neither classification clears failures or grants HA actions.
+DEN_NON_DEPENDENCY_UNITS = {
+    "ha-health.service": "LA HAOS availability; Den uses Victoria occupancy and direct model transport",
+    "ha-reachable.service": "LA HAOS availability; no Den model or camera dependency",
+    "haos-precious-sync.service": "LA HAOS backup; no Den execution dependency",
+    "home-agent-bff-egress-verify.service": "Home BFF OAuth boundary; Den model transport does not traverse BFF",
+    "home-agent-lighting-egress-verify.service": "Core-to-HA physical lighting boundary; Den publishes virtual intent only",
+    "fwupd-refresh.service": "Firmware metadata refresh; hardware faults remain guarded by kernel and sensors"
+}
+_NON_DEPENDENCY_FAILED = ()
 
 def _engine():
     if ENGINE is None:
@@ -144,8 +155,15 @@ def _host_health(readings=None):
     readings = {} if readings is None else readings
     failed = subprocess.run(['systemctl','list-units','--failed','--plain','--no-legend'],
                             capture_output=True,text=True,timeout=2,check=True).stdout
-    if any(line.split()[0] not in {'observer-health.service','observer-recover.service','home-agent-preference-offhost-20260928.service','home-agent-preference-offhost-20260928-r2.service'}
-           for line in failed.splitlines() if line.strip()):
+    global _NON_DEPENDENCY_FAILED
+    names = tuple(sorted(line.split()[0] for line in failed.splitlines() if line.strip()))
+    unrelated = tuple(name for name in names if name in DEN_NON_DEPENDENCY_UNITS)
+    if unrelated != _NON_DEPENDENCY_FAILED:
+        print('Den inference non-dependency failures: '+(', '.join(unrelated) or 'recovered'),
+              file=sys.stderr, flush=True)
+        _NON_DEPENDENCY_FAILED = unrelated
+    if any(name not in DEN_NON_DEPENDENCY_UNITS and name not in {'observer-health.service','observer-recover.service','home-agent-preference-offhost-20260928.service','home-agent-preference-offhost-20260928-r2.service'}
+           for name in names):
         raise ValueError('new failed system unit')
     gpu = subprocess.run(['nvidia-smi','--query-gpu=memory.free,temperature.gpu','--format=csv,noheader,nounits'],
                          capture_output=True,text=True,timeout=2,check=True).stdout

@@ -10634,7 +10634,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       {unifiedShell && virtualFixtureDocument && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn && (
         <AptHomePanelSlot enabled={true} target={shellControlsHost}>
           <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
-            roomName={virtualFixtureDocument.binding?.room_id?.replace(/(^|[-_\s]+)(\w)/g, (_, space, letter) => `${space ? " " : ""}${letter.toUpperCase()}`)}
+            roomName={virtualFixtureDocument.scope?.room_id?.replace(/(^|[-_\s]+)(\w)/g, (_, space, letter) => `${space ? " " : ""}${letter.toUpperCase()}`)}
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
             tab={virtualInspectorTab} onTabChange={changeVirtualInspectorTab} onSelect={selectVirtualFixture}
             onBack={clearVirtualFixtureSelection} commandBinding={virtualFixtureDocument.binding}

@@ -67,6 +67,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Install hash-pinned synthetic-image fixture dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/den-inference-health"
+          "${RUNNER_TEMP}/den-inference-health/bin/python" -m pip install --no-cache-dir --disable-pip-version-check --require-hashes --no-deps -r tools/shared-home/requirements-test.lock
       - name: Verify Den inference health and model boundaries offline
         working-directory: tools/shared-home/tests
         shell: bash
@@ -75,4 +81,4 @@ jobs:
         run: |
           set -euo pipefail
           export PYTHONPATH="${GITHUB_WORKSPACE}/tools/shared-home"
-          python3 -B -m unittest test_pilot_health test_model_pin test_camera_pilot_service test_lab_live_guards test_lab_live_pilot test_lab_live_scene -q
+          "${RUNNER_TEMP}/den-inference-health/bin/python" -B -m unittest test_pilot_health test_model_pin test_camera_pilot_service test_lab_live_guards test_lab_live_pilot test_lab_live_scene -q

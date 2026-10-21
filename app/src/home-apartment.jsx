@@ -2252,11 +2252,11 @@ function AptHomePanelSlot({ enabled, target, children, className }) {
   return target ? ReactDOM.createPortal(className ? <div className={className}>{children}</div> : children, target) : null;
 }
 
-function AptUnifiedRange({ label, ariaLabel, value, min = 0, max = 100, step = 1, suffix = "%", onChange }) {
-  return <label className="apt-ui-slider">
+function AptUnifiedRange({ label, ariaLabel, value, min = 0, max = 100, step = 1, suffix = "%", hint, onChange }) {
+  return <label className="apt-ui-slider" title={hint}>
     <span className="apt-ui-row"><span className="grow">{label}</span><span className="apt-ui-value">{Math.round(value || 0)}{suffix}</span></span>
     <input className={`apt-ui-range${String(suffix).trim() === "K" ? " is-temperature" : ""}`} type="range" aria-label={ariaLabel || label} min={min} max={max} step={step}
-      value={value ?? min} onChange={event => onChange(Number(event.target.value))} />
+      value={value ?? min} aria-description={hint} onChange={event => onChange(Number(event.target.value))} />
   </label>;
 }
 
@@ -2264,6 +2264,7 @@ function AptUnifiedRange({ label, ariaLabel, value, min = 0, max = 100, step = 1
 function AptUnifiedIcon({ name }) {
   const paths = {
     back: "M10 3L5 8l5 5", close: "M4 4l8 8M12 4l-8 8", chevL: "M10 3L5 8l5 5", chevR: "M6 3l5 5-5 5",
+    aim: "M8 1v3M8 12v3M1 8h3M12 8h3M12 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0z",
     chevD: "M3 6l5 5 5-5", chevU: "M3 10l5-5 5 5",
     layers: "M8 2l6 3-6 3-6-3 6-3zM2 8l6 3 6-3M2 11l6 3 6-3", help: "M6 6a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.2V10M8 12.5v.5",
     fit: "M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4", info: "M8 7v5M8 4.5V5M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14z",
@@ -2538,7 +2539,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   const state = fixture.state || {}, radials = radialSnapshot?.descriptor.fixture_id === fixture.fixture_id
     ? radialSnapshot.descriptor.state.radials : state.radials || [];
   const selectedRadials = zone == null ? radials : radials.filter(item => item.number === zone);
-  const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.brightness ?? 1), 0) / selectedRadials.length : 0;
+  const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.on ? item.brightness ?? 1 : 0), 0) / selectedRadials.length : 0;
   const patchRadials = patch => onPatch({ radials: selectedRadials.map(item => ({ number: item.number, ...patch })) });
   // Profile ranges are assumed until the Den confirms them; a moved slider powers its channel on.
   const range = (key, fallback) => Array.isArray(fixture.color_temp_ranges?.[key]) ? fixture.color_temp_ranges[key] : fallback;
@@ -2552,19 +2553,23 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
           onChange={event => onPatch({ [key]: { on: event.target.checked } })} /><span>{current.on ? "On" : "Off"}</span></label></div>
       <AptUnifiedRange label="Brightness" ariaLabel={brightnessLabel} value={(current.brightness ?? 1) * 100}
         onChange={value => onPatch({ [key]: { brightness: value / 100, ...powered(value) } })} />
-      <AptUnifiedRange label="Color temp · assumed range" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
+      <AptUnifiedRange label="Color temp" hint="Color-temperature range is assumed, not measured." ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
         min={low} max={high} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value, ...powered(1) } })} />
       {key === "spotlight" && <div className="apt-ui-row"><span className="apt-ui-meta grow">Where it points is set in Aim.</span>
-        <button type="button" className="apt-ui-button is-small" onClick={() => setTab("aim")}>Aim</button></div>}
+        <button type="button" className="apt-ui-button is-small" onClick={() => setTab("aim")}><AptUnifiedIcon name="aim" />Aim</button></div>}
     </section>;
   };
   return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Fixture lighting inspector">
     <header className="apt-ui-header"><div className="apt-ui-header-row">
       <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
       <div className="apt-ui-grow"><h2 className="apt-ui-title">{fixture.label || fixture.fixture_id}</h2>
-        <div className="apt-ui-sub">{homeName} · {isLit(fixture) ? "Light on" : "Light off"}</div></div>
+        <div className="apt-ui-sub">{homeName} · {[
+          state.spotlight?.on && `Spot ${Math.round((state.spotlight.brightness ?? 1) * 100)}%`,
+          state.downward?.on && `Down ${Math.round((state.downward.brightness ?? 1) * 100)}%`,
+          radials.some(item => item.on) && `Radial ${Math.round(radials.reduce((sum, item) => sum + (item.on ? item.brightness ?? 1 : 0), 0) / 6 * 100)}%`,
+        ].filter(Boolean).join(" · ") || "Off"}</div></div>
       <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
-      <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled</span><span className="apt-ui-badge">Virtual channels</span></div>
+      <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled fixture</span><span className="apt-ui-badge">Not commissioned</span></div>
       <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">{[["light", "Light"], ["aim", "Aim"], ["setup", "Setup"]].map(([key, label]) =>
         <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-virtual-${key}`} onClick={() => setTab(key)}>{label}</button>)}
       </div>
@@ -2574,7 +2579,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <button type="button" key={String(on)} className="apt-ui-button is-small" onClick={() => onPatch({
           spotlight: { on }, downward: { on }, radials: aptUnifiedRadialPowerPatch(radials, on) })}>All {on ? "on" : "off"}</button>)}</div>
       {channel("spotlight", "Spot", "Hidden robotic spotlight", "Brightness", "Color temperature", 2700)}
-      {channel("downward", "Down", "Soft pool below the socket", "Down brightness", "Down color temperature", 2200)}
+      {channel("downward", "Down", "Downward LED · soft pool below the socket", "Down brightness", "Down color temperature", 2200)}
       <section className="apt-ui-channel" aria-label="Radial channel"><div className="apt-ui-channel-head">
         <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser film</div></div>
         <label className="apt-ui-switch"><input type="checkbox" aria-label="Radial power" checked={radials.some(item => item.on)}
@@ -2590,11 +2595,11 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <div className="apt-ui-actions"><span className="apt-ui-meta grow">Light only</span>{["Toward walls", "Into the room"].map(label =>
           <button key={label} type="button" className="apt-ui-button is-small" disabled title="Available after radial heading commissioning">{label}</button>)}</div>
         <AptUnifiedRange label="Brightness" ariaLabel="Radial brightness" value={radialLevel * 100} onChange={value => patchRadials({ on: value > 0, brightness: value / 100 })} />
-        <AptUnifiedRange label="Color temp · assumed range" ariaLabel="Radial color temperature" min={range("radials", [2200, 5000])[0]}
+        <AptUnifiedRange label="Color temp" hint="Color-temperature range is assumed, not measured." ariaLabel="Radial color temperature" min={range("radials", [2200, 5000])[0]}
           max={range("radials", [2200, 5000])[1]} step={100} suffix=" K"
           value={selectedRadials[0]?.color_temp_kelvin ?? 3000} onChange={value => patchRadials({ color_temp_kelvin: value })} />
       </section>
-      <p className="apt-ui-meta">Virtual preview · no hardware command sent.</p>
+      <p className="apt-ui-meta">Virtual preview · no hardware command sent. Channel ranges are assumed.</p>
     </section>}
     {tab === "aim" && <section className="apt-ui-section" id="apt-ui-virtual-aim" role="tabpanel" aria-label="Fixture aim">
       <h3 className="apt-ui-heading">Spotlight aim</h3>

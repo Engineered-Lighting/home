@@ -222,11 +222,15 @@ function equipmentReceiver(nodeMaterial, { placeholderDepth, material }) {
     nodeMaterial.alphaTestNode = float(0.0005);
 }
 
-/* equipment-virtual-fixtures.mjs orbHaloShader (ORB_HALO_FALLOFF 2.5). */
+/* equipment-virtual-fixtures.mjs orbHaloShader: the ZIP's radial gradient. */
 function equipmentOrbHalo(nodeMaterial) {
     // GLSL's normalMatrix is view space; three's modelNormalMatrix is world.
     const view = varying(positionView.negate(), 'vOrbHaloView');
-    nodeMaterial.opacityNode = materialOpacity.mul(pow(clamp(dot(normalViewGeometry, normalize(view)), 0, 1), 2.5));
+    const facing = clamp(dot(normalViewGeometry, normalize(view)), 0, 1);
+    const radius = pow(max(0, float(1).sub(facing.mul(facing))), .5);
+    const falloff = select(radius.lessThan(.16), mix(1, .6, radius.div(.16)),
+        select(radius.lessThan(.45), mix(.6, .14, radius.sub(.16).div(.29)), mix(.14, 0, radius.sub(.45).div(.55))));
+    nodeMaterial.opacityNode = materialOpacity.mul(falloff).mul(harvestedUniform('uOrbHaloGain', 'float'));
 }
 
 // ---- ShaderMaterial ports (a NodeMaterial built for code generation) -------

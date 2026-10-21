@@ -629,7 +629,8 @@ button.hg-no-press:active {
 .apt-home-shell input[type="range"].apt-ui-range { -webkit-appearance: none; appearance: none; width: 100%; height: 3px; margin: 10px 0; border: 0; border-radius: 2px; background: var(--hg-border-strong); outline: none; }
 .apt-home-shell input[type="range"].apt-ui-range::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border: 1px solid var(--hg-bg-0); border-radius: 50%; background: var(--hg-ice-bright); box-shadow: 0 0 6px var(--hg-ice-glow); }
 .apt-home-shell input[type="range"].apt-ui-range::-moz-range-thumb { width: 13px; height: 13px; border: 1px solid var(--hg-bg-0); border-radius: 50%; background: var(--hg-ice-bright); }
-.apt-home-shell input[type="range"].apt-ui-range.is-temperature { background: linear-gradient(90deg,#ffb66b 0%,#fff 55%,#bcd4ff 100%); }
+.apt-home-shell input[type="range"].apt-ui-range.is-temperature { background: var(--apt-temperature-track, linear-gradient(90deg,#ffb66b 0%,#fff 55%,#bcd4ff 100%)); }
+[data-theme="light"] .apt-home-shell, .apt-home-shell[data-theme="light"] { --apt-temperature-track: linear-gradient(90deg,#d98a3c 0%,#e7e0cf 55%,#7fa0cf 100%); }
 .apt-home-shell input[type="range"].apt-ui-range:disabled { opacity: .4; }
 .apt-home-shell .apt-ui-switch { position: relative; width: 34px; height: 20px; flex: 0 0 auto; padding: 0; border: 1px solid var(--hg-border-strong); border-radius: 10px; background: var(--apt-fill-2); }
 .apt-home-shell .apt-ui-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--hg-fg-3); transition: transform .16s ease, background .16s ease; }
@@ -990,7 +991,7 @@ button.hg-no-press:active {
   .apt-home-shell :is(.apt-ui-button.is-small, .apt-home-toolbar-source, .apt-ui-toolbar-source) { min-width: 44px; min-height: 44px; }
   .apt-home-shell [aria-label="apartment zoom controls"] button { width: 44px!important; min-width: 44px!important; height: 44px!important; min-height: 44px!important; }
   .apt-home-shell input[type="range"].apt-ui-range { height: 44px; margin: 0; background: linear-gradient(var(--hg-border-strong), var(--hg-border-strong)) center / 100% 3px no-repeat; }
-  .apt-home-shell input[type="range"].apt-ui-range.is-temperature { background: linear-gradient(90deg,#ffb66b 0%,#fff 55%,#bcd4ff 100%) center / 100% 3px no-repeat; }
+  .apt-home-shell input[type="range"].apt-ui-range.is-temperature { background: var(--apt-temperature-track, linear-gradient(90deg,#ffb66b 0%,#fff 55%,#bcd4ff 100%)) center / 100% 3px no-repeat; }
   .apt-home-shell label:has(> input[type="checkbox"]):not(.apt-ui-switch) { min-height: 44px; }
   /* The classic Chat pane content sizes its controls inline. */
   .apt-home-shell .apt-home-chat :is(button, select, input:not([type="checkbox"]):not([type="radio"]), .hg-mobile-touch) { min-width: 44px!important; min-height: 44px!important; }

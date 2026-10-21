@@ -56,7 +56,7 @@ export const PORT_FINGERPRINTS = Object.freeze({
     'scan-display-floor-0': 'be8a8d1f',
     'scan-display-floor-1': '2cbf54a2',
     'equipment-receiver': '00703afb',
-    'equipment-orb-halo': '4d7af393',
+    'equipment-orb-halo': 'aac05a60',
     'equipment-beam': 'a35832a8',
     'equipment-glow': '7f6790f3',
     'directional-fill': '85fab0ed',

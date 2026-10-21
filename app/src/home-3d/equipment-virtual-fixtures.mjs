@@ -29,7 +29,7 @@ const DISPLAY_PIVOT_Z = -.14;
 // Orb cosmetics only (SPEC: a small orb with a glow tinted by the channels
 // that are on). None of these moves a source, pick, handle or receiver.
 const ORB_CORE_RADIUS = .03, ORB_CORE_COLOR = 0x3d3f43;
-const ORB_HALO_RADIUS = .15, ORB_HALO_FALLOFF = 2.5, ORB_HALO_CHANNEL_OPACITY = .3, ORB_HALO_MIN_RADIUS = .10, ORB_HALO_GROWTH = .16, ORB_HALO_FULL_SUM = 1.4;
+const ORB_HALO_RADIUS = .15, ORB_HALO_CHANNEL_OPACITY = .3, ORB_HALO_MIN_RADIUS = .10, ORB_HALO_GROWTH = .16, ORB_HALO_FULL_SUM = 1.4;
 // Halo size follows how much light the socket gives (prototype scene.js
 // _styleFixtures): level = min(1, (spot + down + mean radial) / 1.4) grows
 // the glow from a 10 cm to a 26 cm radius. Drawing only: every layer keeps
@@ -282,11 +282,21 @@ function featherMap() {
 // the camera and fading to the silhouette, so the orb reads as one glow from
 // any orbit angle. The shell sits in front of the core, so it lights it.
 function orbHaloShader(shader) {
+    shader.uniforms.uOrbHaloGain = this.userData.orbHaloGain;
     const varyings = '#include <common>\nvarying vec3 vOrbHaloNormal;\nvarying vec3 vOrbHaloView;';
     shader.vertexShader = shader.vertexShader.replace('#include <common>', varyings).replace('#include <project_vertex>',
         '#include <project_vertex>\nvOrbHaloNormal = normalize( normalMatrix * normal );\nvOrbHaloView = - mvPosition.xyz;');
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', varyings).replace('#include <opaque_fragment>',
-        `diffuseColor.a *= pow( clamp( dot( normalize( vOrbHaloNormal ), normalize( vOrbHaloView ) ), 0.0, 1.0 ), ${ORB_HALO_FALLOFF.toFixed(2)} );\n#include <opaque_fragment>`);
+    // The ZIP sprite has radial stops (0,1), (.16,.6), (.45,.14), (1,0).
+    // Project the sphere normal to screen radius to reproduce that profile
+    // at every orbit without changing the source or introducing a billboard.
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', varyings + '\nuniform float uOrbHaloGain;').replace('#include <opaque_fragment>',
+        `float orbFacing = clamp( dot( normalize( vOrbHaloNormal ), normalize( vOrbHaloView ) ), 0.0, 1.0 );
+float orbRadius = sqrt( max( 0.0, 1.0 - orbFacing * orbFacing ) );
+float orbFalloff = orbRadius < 0.16 ? mix( 1.0, 0.6, orbRadius / 0.16 )
+    : orbRadius < 0.45 ? mix( 0.6, 0.14, ( orbRadius - 0.16 ) / 0.29 )
+    : mix( 0.14, 0.0, ( orbRadius - 0.45 ) / 0.55 );
+diffuseColor.a *= orbFalloff * uOrbHaloGain;
+#include <opaque_fragment>`);
 }
 
 function buildFixture(item, state, depth, reducedMotion) {
@@ -321,6 +331,7 @@ function buildFixture(item, state, depth, reducedMotion) {
     const halo = (parent, name, opacity) => {
         const layer = mesh(parent, name, haloGeometry, 0xffdfab, opacity, true);
         layer.material.side = THREE.FrontSide; layer.material.onBeforeCompile = orbHaloShader;
+        layer.material.userData.orbHaloGain = { value: 0 };
         layer.material.customProgramCacheKey = () => 'equipment-orb-halo-1';
         layer.position.z = -TUBE_HEIGHT / 2; layer.raycast = () => {};
         return layer;
@@ -420,10 +431,28 @@ function buildFixture(item, state, depth, reducedMotion) {
     const spotlightHalo = halo(roboticGroup, 'orb-halo-spotlight', ORB_HALO_CHANNEL_OPACITY);
     spotlightHalo.userData = { orb_halo_layer: 'spotlight' };
     const haloLayers = [];
-    let haloSpot = 0, haloDown = 0;
+    let haloSpot = 0, haloDown = 0, haloSpotKelvin = state.spotlight.color_temp_kelvin, haloDownKelvin = state.downward.color_temp_kelvin;
     const sizeHalo = () => {
         const scale = orbHaloRadius(haloSpot, haloDown, shownLevels) / ORB_HALO_RADIUS;
         for (const layer of haloLayers) if (layer.scale.x !== scale) layer.scale.setScalar(scale);
+        // Match the prototype's lit center: a brightness-weighted channel
+        // mix, including the radial mean. This changes no source or pick.
+        const total = haloSpot + haloDown + shownLevels.reduce((sum, level) => sum + level, 0) / 6;
+        const gain = total > 0 ? (.4 + .5 * Math.min(1, total / ORB_HALO_FULL_SUM)) / (ORB_HALO_CHANNEL_OPACITY * total) : 0;
+        // Preserve each channel's level/visibility carrier while normalizing
+        // their additive sum to the prototype's one halo. Six radials count
+        // as their mean, with the same weight as Spot or Down.
+        for (const layer of haloLayers) layer.material.userData.orbHaloGain.value = gain * (layer.userData.orb_halo_layer === 'radial' ? .5 : 1);
+        if (total > 0) {
+            const mixed = displayWhite(haloSpotKelvin).multiplyScalar(haloSpot)
+                .add(displayWhite(haloDownKelvin).multiplyScalar(haloDown));
+            for (let i = 0; i < radialViews.length; i++) {
+                mixed.r += radialViews[i].tone.r * shownLevels[i] / 6;
+                mixed.g += radialViews[i].tone.g * shownLevels[i] / 6;
+                mixed.b += radialViews[i].tone.b * shownLevels[i] / 6;
+            }
+            core.material.color.setRGB(.6 + .4 * mixed.r / total, .6 + .4 * mixed.g / total, .6 + .4 * mixed.b / total);
+        } else core.material.color.set(ORB_CORE_COLOR);
     };
     const paintHalo = (layer, channel) => {
         if (!haloLayers.includes(layer)) haloLayers.push(layer);
@@ -564,6 +593,7 @@ function buildFixture(item, state, depth, reducedMotion) {
     function update(next, target = null, { sweep: sweepAim = false } = {}) {
         const lit = channel => channel.on && channel.brightness > 0 ? channel.brightness : 0;
         haloSpot = lit(next.spotlight); haloDown = lit(next.downward);
+        haloSpotKelvin = next.spotlight.color_temp_kelvin; haloDownKelvin = next.downward.color_temp_kelvin;
         updateRadials(next.radials);
         downwardEmitter.material.color.copy(next.downward.on && next.downward.brightness > 0 ? displayWhite(next.downward.color_temp_kelvin) : new THREE.Color(0x283039));
         downwardEmitter.material.opacity = next.downward.on && next.downward.brightness > 0 ? .4 + .6 * next.downward.brightness : .65;

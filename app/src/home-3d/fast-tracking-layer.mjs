@@ -1,6 +1,6 @@
 // Independent presentation lane. No video decode, Qwen/JEV or actuation API.
 import * as THREE from 'three';
-const EDGES=[[0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
+import {createBodyFormRenderer} from './body-form-renderer.mjs';
 const sceneKeys=['siteId','contentRevision','frameDigest','registrationVersion'];
 const finite=value=>typeof value==='number'&&Number.isFinite(value);
 export function trackingGpuLatency(source,clock,completedMs){
@@ -85,6 +85,7 @@ export function attachFastTracking(engine,{isCurrent=()=>true,onStatus=()=>{},fe
   const resident=engine.apartmentRoot,renderer=engine.renderer;
   if(pin.siteId!=='victoria'||!pin.collisionDigest||!resident||!renderer)return {dispose(){},readback:()=>({active:false})};
   const root=new THREE.Group();root.name='home-fast-tracking-owned';root.userData.noLightingAuthority=true;root.userData.approximateLabel='Approximate room placement';resident.add(root);
+  const bodyRenderer=createBodyFormRenderer(root);
   let controller=new AbortController();let disposed=false,clock=null,attempt=null,sequence=0,pending=null,latest=null,completedSequence=0,streamRunning=false,retryTimer=null;
   let clockInFlight=false,clockRetryTimer=null,clockFailures=0,streamId=null;
   const receipts=[],events=[],counts={};let status={active:false,status:'connecting'};
@@ -97,10 +98,10 @@ export function attachFastTracking(engine,{isCurrent=()=>true,onStatus=()=>{},fe
     if(!engine.camera||!root.children.length)return null;
     root.updateWorldMatrix(true,true);
     const frustum=new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(engine.camera.projectionMatrix,engine.camera.matrixWorldInverse));
-    return root.children.some(child=>frustum.intersectsObject(child));
+    return root.children.some(child=>child.visible&&frustum.intersectsObject(child));
   }
   function clear(reason='replaced'){if(pending)trace(pending.submitted?'retired_after_submit':'retired_before_submit',pending.packet,{reason,in_view:pending.submitted?null:inView()});
-    for(const child of [...root.children]){child.geometry?.dispose();child.material?.dispose();root.remove(child);}pending=null;latest=null;}
+    bodyRenderer.clear();pending=null;latest=null;}
   function publish(value){status={...value,receipts:receipts.length};onStatus(status);}
   async function sampleClock(){
     const start=performance.now()/1000,parent=controller.signal,requestController=new AbortController();
@@ -154,27 +155,19 @@ export function attachFastTracking(engine,{isCurrent=()=>true,onStatus=()=>{},fe
             camera_to_gpu_ms:latency,camera_to_gpu_raw_ms:timing.rawMs,camera_to_gpu_timing:timing.qualification,
             source_clock:packet.source_clock,exposure_accuracy:packet.exposure_accuracy,
             expired_at_completion:completed/1000-drawClock.offsetLow>=packet.expires_monotonic_s,
-            people:packet.people.length,joints:packet.people.reduce((n,p)=>n+p.joints.length,0)});
+            people:packet.people.length,joints:packet.people.reduce((n,p)=>n+p.joints.length,0),bodyForm:body});
           if(receipts.length>600)receipts.shift();
           const span=receipts.length>1?(completed-receipts[0].completed_ms)/1000:0;
           const live=!!latest&&completed/1000-clock.offsetLow<latest.expires_monotonic_s;
           publish({active:live,status:live?'tracking':'expired',updateHz:span>0?(receipts.length-1)/span:null,cameraToGpuMs:latency,
-            cameraToGpuRawMs:timing.rawMs,cameraToGpuTiming:timing.qualification});
-        }).catch(()=>{trace('gpu_timing_failed',packet);publish({active:true,status:'gpu_timing_unavailable'});});
+            cameraToGpuRawMs:timing.rawMs,cameraToGpuTiming:timing.qualification,bodyForm:body});
+        }).catch(()=>{trace('gpu_timing_failed',packet);publish({active:true,status:'gpu_timing_unavailable',bodyForm:body});});
       });
     };
-    for(const person of packet.people){
-      const points=new Map(person.joints.map(j=>[j.id,j.position_m]));
-      if(!points.size)continue;
-      const vertices=[...points.values()].flat();
-      const geometry=new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
-      const dots=new THREE.Points(geometry,new THREE.PointsMaterial({color:0xf0c278,size:.065,depthTest:false,depthWrite:false}));dots.onAfterRender=observed;dots.renderOrder=26;root.add(dots);
-      const lines=EDGES.filter(([a,b])=>points.has(a)&&points.has(b)).flatMap(([a,b])=>[...points.get(a),...points.get(b)]);
-      if(lines.length){const geo=new THREE.BufferGeometry().setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
-        const mesh=new THREE.LineSegments(geo,new THREE.LineBasicMaterial({color:0xf0c278,depthTest:false,depthWrite:false}));mesh.onAfterRender=observed;mesh.renderOrder=25;root.add(mesh);}
-    }
-    trace('scene_applied',packet,{people:packet.people.length,joints:packet.people.reduce((n,p)=>n+p.joints.length,0),expires_monotonic_s:packet.expires_monotonic_s,in_view:inView()});
-    if(!root.children.length){trace('no_supported_body',packet);publish({active:true,status:'no_supported_body'});}
+    const body=bodyRenderer.update(packet,observed);
+    trace('scene_applied',packet,{people:packet.people.length,joints:packet.people.reduce((n,p)=>n+p.joints.length,0),expires_monotonic_s:packet.expires_monotonic_s,
+      body_form_status:body.status,body_parts:body.parts,in_view:inView()});
+    if(!body.parts){trace('no_supported_body',packet);publish({active:true,status:'no_supported_body',bodyForm:body});}
   }
   async function stream(){
     if(streamRunning||!current())return;
@@ -215,7 +208,7 @@ export function attachFastTracking(engine,{isCurrent=()=>true,onStatus=()=>{},fe
   const staleTimer=setInterval(()=>{if(latest&&(!current()||!clock||performance.now()-clock.checkedAtMs>15000||performance.now()/1000-clock.offsetLow>=latest.expires_monotonic_s)){trace('evidence_withdrawn',latest);clear('evidence_expired');publish({active:false,status:'expired'});}},50);
   const visibility=()=>{if(documentObject.hidden){controller.abort();clear();publish({active:false,status:'hidden'});}else if(current())stream();};
   documentObject.addEventListener?.('visibilitychange',visibility);
-  const readback=()=>({...status,attempt,sequence,receipts:receipts.map(r=>({...r})),diagnostics:{schema:'home-fast-tracking-trace-1',clock_domain:'browser_performance',counts:{...counts},events:events.map(e=>({...e}))}});
+  const readback=()=>({...status,bodyForm:bodyRenderer.readback(),attempt,sequence,receipts:receipts.map(r=>({...r,bodyForm:{...r.bodyForm}})),diagnostics:{schema:'home-fast-tracking-trace-1',clock_domain:'browser_performance',counts:{...counts},events:events.map(e=>({...e}))}});
   engine.fastTrackingReadback=readback;stream();
-  return {readback,dispose(){if(disposed)return;disposed=true;controller.abort();clearTimeout(retryTimer);clearTimeout(clockRetryTimer);clearInterval(clockTimer);clearInterval(staleTimer);documentObject.removeEventListener?.('visibilitychange',visibility);clear('disposed');root.removeFromParent();if(engine.fastTrackingReadback===readback)delete engine.fastTrackingReadback;}};
+  return {readback,dispose(){if(disposed)return;disposed=true;controller.abort();clearTimeout(retryTimer);clearTimeout(clockRetryTimer);clearInterval(clockTimer);clearInterval(staleTimer);documentObject.removeEventListener?.('visibilitychange',visibility);clear('disposed');bodyRenderer.dispose();root.removeFromParent();if(engine.fastTrackingReadback===readback)delete engine.fastTrackingReadback;}};
 }

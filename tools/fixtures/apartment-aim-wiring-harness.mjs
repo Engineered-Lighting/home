@@ -44,22 +44,26 @@ function publicSources(root) {
   visit(root); return result;
 }
 
-function browserOptions() {
+function browserOptions(renderer='webgl',browserChannel=null) {
   const installed = fs.existsSync(chromium.executablePath());
   assert.ok(installed || process.platform === 'win32', 'pinned Chromium must exist on Linux');
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
-  if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
-  else if (process.platform === 'linux') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  if (process.platform === 'linux'||process.env.HOME_BODY_SOFTWARE==='1') args.unshift('--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader');
+  else if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
+  if(renderer!=='webgl')args.push('--enable-unsafe-webgpu','--ignore-gpu-blocklist');
+  if(browserChannel){assert.ok(['msedge','chrome','chromium'].includes(browserChannel));return {headless:true,args,channel:browserChannel};}
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
 // Runs one suite's checks inside the shared, fenced Home shell proof.
-export async function aimWiringProof(suite, checks) {
+export async function aimWiringProof(suite, checks, {trackingFixture=null,renderer='webgl',browserChannel=null,viewport={width:1366,height:768}}={}) {
+  assert.ok(['webgl','webgpu','webgpu-webgl'].includes(renderer));
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'proof serves only this worktree');
   const run = path.join(ROOT, '.tmp/apartment-aim-wiring-browser', 'run-' + suite + '-' + Date.now());
   fs.mkdirSync(run, { recursive: true });
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
   const echo = installPack(packs, 'echo'), victoria = installPack(packs, 'victoria');
+  trackingFixture?.bind(victoria.manifest);
   fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1,
     packs: [echo, victoria].map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
   initRegistration(privateRoot, authoredDocument(readActiveBinding(packs), Core), { contentPacksDir: packs });
@@ -73,7 +77,7 @@ export async function aimWiringProof(suite, checks) {
       .map(name => [name, hash(fs.readFileSync(path.join(SRC, name)))])),
     deadlines: { browser_ms: BROWSER_DEADLINE_MS, file_ms: FILE_TIMEOUT_MS },
     physical_commands: 0, saves: 0, camera_sessions: 0, model_sessions: 0,
-    checks: [], requests: [], forbidden: [], websocket_sends: [], blocked_read_subscriptions: [], missing_code: [], errors: [], served: {}, browser: browserOptions() };
+    checks: [], requests: [], forbidden: [], websocket_sends: [], blocked_read_subscriptions: [], missing_code: [], errors: [], served: {}, browser: browserOptions(renderer,browserChannel) };
   let server, handler, origin, browser, context, page, timer;
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
@@ -94,6 +98,7 @@ export async function aimWiringProof(suite, checks) {
         if (!['GET', 'HEAD'].includes(req.method) || /\/api\/services\/|call_service|\/capture(?:\/|$)|\/acquisition(?:\/|$)|\/control(?:\/|$)|\/sessions\/[^/]+\/(?:start|stop)(?:\/|$)/.test(url.pathname)) {
           receipt.forbidden.push({ path: url.pathname, method: req.method }); res.writeHead(403); res.end(); return;
         }
+        if(trackingFixture?.handle(req,res,url.pathname))return;
         if (url.pathname.startsWith('/api/apartment/v1/')) return handler(req, res);
         let body, type = 'application/octet-stream';
         if (url.pathname.startsWith('/api/perception-lab/v1/')) {
@@ -125,10 +130,29 @@ export async function aimWiringProof(suite, checks) {
       HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_CONTENT_PACKS_DIR: packs },
       authenticate: req => req.headers.cookie?.includes('authored_owner_session=1') === true });
     browser = await chromium.launch(receipt.browser);
-    context = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
+    context = await browser.newContext({ viewport, deviceScaleFactor: 1, serviceWorkers: 'block' });
+    receipt.viewport={...viewport};
     receipt.runtime = { node: process.version, playwright: require('playwright/package.json').version, browser: browser.version() };
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
     await context.addInitScript(() => { localStorage.setItem('apartment3d.site', 'echo'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true; });
+    if(trackingFixture)await context.addInitScript(()=>{
+      window.__HOME_FAST_TRACKING_ENABLED=true;
+      const original=window.fetch,events=window.__bodyFixtureClock=[];
+      window.fetch=async function(...args){
+        const url=new URL(args[0]?.url||args[0],location.href);
+        if(url.origin!==location.origin||url.pathname!=='/api/perception-tracking/v1/clock')return original.apply(this,args);
+        const event={start_ms:performance.now()};events.push(event);if(events.length>64)events.shift();
+        try{
+          const response=await original.apply(this,args);event.headers_ms=performance.now();event.status=response.status;
+          const json=response.json.bind(response);response.json=async()=>{try{
+            const value=await json();event.json_ms=performance.now();event.elapsed_ms=event.json_ms-event.start_ms;
+            event.attempt_valid=typeof value.attempt_id==='string'&&/^[a-f0-9]{32}$/.test(value.attempt_id);
+            event.monotonic_finite=Number.isFinite(value.monotonic_s);return value;
+          }catch(error){event.json_error=error.name;throw error;}};
+          return response;
+        }catch(error){event.failed_ms=performance.now();event.error=error.name;throw error;}
+      };
+    });
     await context.route('**/*', route => {
       const request = route.request(), url = new URL(request.url());
       if (['data:', 'blob:'].includes(url.protocol)) return route.continue();
@@ -148,7 +172,7 @@ export async function aimWiringProof(suite, checks) {
     });
     page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => receipt.errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') (receipt.console_errors ||= []).push(message.text().slice(0, 400)); });
-    await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
+    await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off'+(renderer==='webgl'?'':'&renderer='+renderer), { waitUntil: 'domcontentloaded' });
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: 45000 });
     const waitSite = async site => page.waitForFunction(site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === site, site);
     await waitSite('echo');
@@ -229,7 +253,7 @@ export async function aimWiringProof(suite, checks) {
     }
 
     await checks({ page, context, check, fixtures, ids, descriptor, pose, blur, inspector, fixtureInspector, selectedTab, title,
-      overlayState, until, canvasPoint, surfaceHit, near, settle, reticleDrag, save, receipt });
+      overlayState, until, canvasPoint, surfaceHit, near, settle, reticleDrag, save, receipt,artifactDir:run });
     for (const [file, expected] of Object.entries(protectedHashes)) assert.equal(hash(fs.readFileSync(file)), expected, 'authored pack and registration bytes stay exact');
     assert.deepEqual(receipt.forbidden, []); assert.deepEqual(receipt.websocket_sends, []);
     assert.deepEqual(receipt.missing_code, []); assert.deepEqual(receipt.errors, []);
@@ -245,12 +269,14 @@ export async function aimWiringProof(suite, checks) {
       bar: document.querySelector('[data-apt-aim-bar]')?.outerHTML?.slice(0, 600),
       reticle: document.querySelector('[data-apt-aim-reticle]')?.outerHTML?.slice(0, 400),
       debug: window.__aptAimDebug,
+      tracking:window.__APT_ENGINE?.fastTrackingReadback?.(),
+      fixtureClock:window.__bodyFixtureClock,
     })).catch(() => null);
     save(); throw error;
   }
   finally {
     clearTimeout(timer); save();
-    for (const [name, close] of [['context', () => context?.close()], ['browser', () => browser?.close()],
+    for (const [name, close] of [['tracking fixture',()=>trackingFixture?.close()],['context', () => context?.close()], ['browser', () => browser?.close()],
       ['server', async () => { server?.closeAllConnections(); if (server) await new Promise(resolve => server.close(resolve)); }]]) {
       try { await close(); } catch (error) { (receipt.cleanup_errors ||= []).push({ name, message: error.message }); }
     }

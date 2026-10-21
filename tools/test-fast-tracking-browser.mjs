@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
+import {bodyPerson} from './fixtures/body-form-fixtures.mjs';
 const require=createRequire(import.meta.url),{chromium}=require('playwright');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../app/src');
 const now=()=>Number(process.hrtime.bigint())/1e9;
@@ -26,8 +27,7 @@ test('actual Home joint draw produces GPU-completed receipts at the authored str
           identity:{epoch:'authored-capture'},scene:{siteId:'victoria',contentRevision:'authored',registrationVersion:1,frameDigest:'a'.repeat(64),collisionDigest:'b'.repeat(64),cameraId:'den'},
           lighting_authority:false,physical_permission:false,identity_authority:false,projection:'unqualified_nominal_eeprom',label:'Approximate room placement',
           source_la_monotonic_interval_s:[time-.04,time-.03],expires_monotonic_s:time+.71,
-          source_clock:'authored_test_clock',exposure_accuracy:'authored',people:[{instance_id:'local',joints:[
-            {id:5,position_m:[Math.sin(sequence)*.2,0,0],visible:true},{id:6,position_m:[Math.sin(sequence)*.2+.3,.2,0],visible:true}]}]};
+          source_clock:'authored_test_clock',exposure_accuracy:'authored',people:[bodyPerson({offset:[Math.sin(sequence)*.2,0,0]})]};
         res.write('data: '+JSON.stringify(packet)+'\n\n');
       },100);req.on('close',()=>clearInterval(timer));return;
     }
@@ -37,7 +37,7 @@ test('actual Home joint draw produces GPU-completed receipts at the authored str
         const renderer=${backend==='webgl'?'new THREE.WebGLRenderer({antialias:false})':`new THREE.WebGPURenderer({antialias:false,forceWebGL:${backend==='webgpu-webgl'}})`};
         ${backend==='webgl'?'':'await renderer.init();'}renderer.setSize(500,400);document.body.append(renderer.domElement);
         const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(50,1.25,.1,10);camera.position.z=3;
-        const apartmentRoot=new THREE.Group();scene.add(apartmentRoot);
+        camera.lookAt(0,.8,0);const apartmentRoot=new THREE.Group();apartmentRoot.rotation.x=-Math.PI/2;scene.add(apartmentRoot);
         const identity={siteId:'victoria',contentRevision:'authored',registrationVersion:1,frameDigest:'a'.repeat(64)};
         window.HomeContentPacks={get:()=>({manifest:{assets:{'collision.glb':{sha256:'b'.repeat(64)}}}})};
         const engine={siteId:'victoria',contentRevision:'authored',sceneIdentity:identity,apartmentRoot,renderer};
@@ -46,7 +46,7 @@ test('actual Home joint draw produces GPU-completed receipts at the authored str
       </script></html>`);return;
     }
     const pathname=new URL(req.url,'http://localhost').pathname;
-    if(!/^\/(?:home-3d\/fast-tracking-layer\.mjs|vendor\/three-0\.(?:180\.0|186\.1)\/three\.(?:module|core|webgpu)\.js)$/.test(pathname)){res.writeHead(404);res.end();return;}
+    if(!/^\/(?:home-3d\/(?:fast-tracking-layer|body-form-model|body-form-renderer)\.mjs|vendor\/three-0\.(?:180\.0|186\.1)\/three\.(?:module|core|webgpu)\.js)$/.test(pathname)){res.writeHead(404);res.end();return;}
     const bytes=fs.readFileSync(path.join(root,pathname));res.writeHead(200,{'Content-Type':'application/javascript'});res.end(bytes);
   });
   server.on('connection',socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));});
@@ -64,9 +64,9 @@ test('actual Home joint draw produces GPU-completed receipts at the authored str
     // The source interval is 30--40 ms before send. A clock probe adds its
     // full RTT to the uncertainty, so its conservative lower bound may be
     // below 30 ms; asserting a 25 ms lower bound would discard honest clocks.
-    assert.ok(result.readback.receipts.every(r=>r.joints===2&&r.camera_to_gpu_ms[0]>=0
+    assert.ok(result.readback.receipts.every(r=>r.joints===17&&r.bodyForm.status==='complete'&&r.camera_to_gpu_ms[0]>=0
       &&r.camera_to_gpu_ms[1]>=30&&r.camera_to_gpu_ms[1]<500&&r.camera_to_gpu_ms[1]>=r.camera_to_gpu_ms[0]),
-      JSON.stringify(result.readback.receipts.filter(r=>r.joints!==2||r.camera_to_gpu_ms[0]<0||r.camera_to_gpu_ms[1]>=500)));
+      JSON.stringify(result.readback.receipts.filter(r=>r.joints!==17||r.camera_to_gpu_ms[0]<0||r.camera_to_gpu_ms[1]>=500)));
     console.log(JSON.stringify({evidence:'authored_data_real_browser_gpu_only',backend,rendered_updates:result.readback.receipts.length,render_hz:result.readback.updateHz,live_camera_proof:false}));
     await page.evaluate(()=>window.layer.dispose());
   }finally{await browser?.close();clearInterval(timer);for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));}

@@ -350,9 +350,12 @@
 
     const header=<header className="apt-ui-dock-header" data-collapsed={dock==='collapsed'?'true':'false'}>
       <div className="apt-ui-grow apt-dock-title"><h2 className="apt-ui-heading">Den camera</h2>
-        {fastStatus?.active&&<span role="status" data-fast-tracking="1" title="SDK camera timestamp to GPU completion. Bounds include clock mapping; exposure synchronization remains unqualified." style={note}>Skeleton {Number.isFinite(fastStatus.updateHz)?`${fastStatus.updateHz.toFixed(1)} Hz`:'connected'}
-          {Array.isArray(fastStatus.cameraToGpuMs)?` · ${Math.round(fastStatus.cameraToGpuMs[0])}–${Math.round(fastStatus.cameraToGpuMs[1])} ms camera clock to GPU`:''}
-          <span style={{display:'block'}}>Approximate room placement</span></span>}
+        {fastStatus?.active&&<span role="status" data-fast-tracking="1" title="Approximate body volume, not measured anatomy. Wireframe parts are estimated. SDK camera timestamp to GPU completion includes clock uncertainty; exposure synchronization remains unqualified." style={note}>
+          {fastStatus.bodyForm?.status==='unavailable'?'Body unavailable':`Body form${fastStatus.bodyForm?.status==='partial'?' · partial':fastStatus.bodyForm?.status==='estimated'?' · estimated pose':''}`}
+          {detailed&&Number.isFinite(fastStatus.updateHz)?` · ${fastStatus.updateHz.toFixed(1)} drawn updates/s`:''}
+          {detailed&&Array.isArray(fastStatus.cameraToGpuMs)?` · ${Math.round(fastStatus.cameraToGpuMs[0])}–${Math.round(fastStatus.cameraToGpuMs[1])} ms camera clock to GPU`:''}
+          <span style={{display:'block'}}>Approximate size and room placement</span>
+          {detailed&&<span style={{display:'block'}}>Wireframe: estimated shape. Frame-scoped observations; no person continuity.</span>}</span>}
         <DockBadge state={badge.state}>{badge.label}</DockBadge></div>
       <button type="button" className="apt-ui-button is-icon" aria-label={dock==='expanded'?'Restore camera dock size':'Expand camera dock'}
         aria-pressed={dock==='expanded'} onClick={()=>setDock(dock==='expanded'?'default':'expanded')}>

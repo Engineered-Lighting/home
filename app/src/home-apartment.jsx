@@ -2960,6 +2960,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const aimActionsRef = useRef(null);
   const [hoverFixtureId, setHoverFixtureId] = useState(null);
   const [tapAim, setTapAim] = useState(null);
+  const tapAimScopeRef = useRef(null);
   const [deskTargetSelection, setDeskTargetSelection] = useState(null);
   const deskTargetCaptureRef = useRef(null);
   const virtualFixtureStatesRef = useRef({ key: null, states: new Map(), targets: new Map() });
@@ -6233,9 +6234,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     overlay.setRoomLabelledEquipment(aimOverlayMountKey ? aimOverlayMountKey.split("|") : []);
     return () => { try { overlay.setRoomLabelledEquipment([]); } catch (_) { /* engine disposed */ } };
   }, [aimPresentation, aimOverlayMountKey]);
-  const aimSelectedDescriptor = useMemo(() => aimPresentation && virtualFixtureControlsOpen && virtualFixtureId
-    ? engineRef.current?.overlay.virtualFixtureInteractionDescriptor?.(virtualFixtureId) || null : null,
-  [aimPresentation, virtualFixtureControlsOpen, virtualFixtureId, virtualFixturePreview]);
+  // The inspector reads the fenced resident model even when a full phone
+  // sheet pauses the drawing lease. Set/Discard keep their existing fence.
+  const aimSelectedDescriptor = useMemo(() => aimOverlayWanted && virtualFixtureControlsOpen && virtualFixtureId
+    ? getVirtualFixtureSelectionContext()?.engine.overlay.virtualFixtureInteractionDescriptor?.(virtualFixtureId) || null : null,
+  [aimOverlayWanted, aimPresentation, getVirtualFixtureSelectionContext, virtualFixtureControlsOpen, virtualFixtureId, virtualFixturePreview]);
   const aimSelectedScope = aimSelectedDescriptor && aimProposals ? aimProposals.scopeFromDescriptor("victoria", aimSelectedDescriptor) : null;
   const aimSelectedProposal = aimSelectedScope ? aimProposals.current(aimSelectedScope) : null;
   // One stable overlay element: the host re-renders often, and each overlay
@@ -6301,9 +6304,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // Tap to aim (APT-A08): one tap on a surface proposes, as a drop would.
   // While it is on, the tap belongs to it, so it neither orbits nor deselects.
   useEffect(() => {
-    if (tapAim && (tapAim !== virtualFixtureId || !virtualFixtureControlsOpen || fixtureInteractionMode !== "spot" || !aimPresentation))
+    // A room reveal may briefly have no drawing lease. Keep the request only
+    // in its exact scene/fixture scope; hidden documents still cancel it.
+    if (tapAim && (tapAim !== virtualFixtureId || !virtualFixtureControlsOpen || fixtureInteractionMode !== "spot"
+      || !aimOverlayWanted || document.visibilityState === "hidden" || !aimSelectedScope
+      || JSON.stringify(aimSelectedScope) !== tapAimScopeRef.current))
       setTapAim(null);
-  }, [tapAim, virtualFixtureId, virtualFixtureControlsOpen, fixtureInteractionMode, aimPresentation]);
+  }, [tapAim, virtualFixtureId, virtualFixtureControlsOpen, fixtureInteractionMode, aimPresentation, aimOverlayWanted, aimSelectedDescriptor]);
   useEffect(() => {
     const presentation = aimPresentation, canvas = selectionEngine?.renderer?.domElement;
     if (!tapAim || !presentation || !canvas) return undefined;
@@ -10634,11 +10641,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}
             onPatch={patchVirtualFixtureFromInspector} onPatchAll={setVirtualQuickPower} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
             canUndo={aimHistoryLength("undo") > 0} canRedo={aimHistoryLength("redo") > 0}
-            aimControls={aimPresentation && aimSelectedDescriptor ? <AptAimProposalRows descriptor={aimSelectedDescriptor}
+            aimControls={aimSelectedDescriptor ? <AptAimProposalRows descriptor={aimSelectedDescriptor}
               limits={selectedVirtualFixture?.limits} proposal={aimSelectedProposal} tapAim={!!tapAim}
               onSet={() => setAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
               onDiscard={() => discardAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
-              onTapAim={() => setTapAim(value => value ? null : virtualFixtureId)} /> : null}
+              onTapAim={() => {
+                if (tapAim) { setTapAim(null); return; }
+                tapAimScopeRef.current = JSON.stringify(aimSelectedScope);
+                if (unifiedShell) (onShowShellAim || onShowShellControls)?.();
+                setTapAim(virtualFixtureId);
+              }} /> : null}
             aimNamedAims={window.AptDenNamedAims && <window.AptDenNamedAims registrationRevision={virtualFixtureDocument?.binding?.registration_version ?? null} />}
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
             canSetup={apartmentPlacementControlsEnabled || apartmentSetupReadOnly} setupReadOnly={apartmentSetupReadOnly}

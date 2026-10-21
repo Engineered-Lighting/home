@@ -5836,8 +5836,12 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   }, []);
   const showShellControls = useCallback(() => showShellTab("controls"), [showShellTab]);
   // Aiming from the room keeps Chat open if it was open (APT-A02); the room
-  // bar carries Set aim there. A phone sheet still rises from peek to half.
-  const showShellAim = useCallback(() => showShellTab(shellTabRef.current === "chat" ? "chat" : "controls"), [showShellTab]);
+  // bar carries Set aim there. Phone aim actions reveal the room at half.
+  const showShellAim = useCallback(() => {
+    showShellTab(shellTabRef.current === "chat" ? "chat" : "controls");
+    // Tap-to-aim needs a visible room when started from a full phone sheet.
+    setShellDetent(value => value === "full" ? "half" : value);
+  }, [showShellTab]);
   useEffect(() => {
     if (!unifiedHome) return;
     const resize = () => { if (window.innerWidth >= 600) setShellTab(tab => tab === "camera" ? "controls" : tab); };

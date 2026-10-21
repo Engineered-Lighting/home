@@ -28,6 +28,27 @@ test('aim wiring: the phone sheet and slider power-on through the mounted Home s
       assert.equal(await page.getByRole('tab', { name: 'Chat', exact: true }).getAttribute('aria-selected'), 'true');
       await until('phone bar', () => !document.querySelector('[data-apt-aim-bar]')?.hidden);
       await page.keyboard.press('Escape'); await until('phone discard', () => document.querySelector('[data-apt-aim-bar]')?.hidden === true);
+      await page.getByRole('tab', { name: 'Controls', exact: true }).click();
+      await page.locator('[data-apt-aim-reticle]').focus(); await page.keyboard.press('ArrowLeft');
+      await until('phone proposal before full', () => !document.querySelector('[data-apt-aim-bar]')?.hidden);
+      for (let tries=0;tries<3&&await page.locator('.apt-home-shell').getAttribute('data-sheet')!=='full';tries++) await grip.click();
+      await until('full sheet retires the drawing lease',()=>document.querySelector('.apt-home-shell')?.getAttribute('data-sheet')==='full'
+        &&document.querySelectorAll('[data-apt-fixture-label]:not([hidden])').length===0);
+      assert.equal(await fixtureInspector().locator('[data-apt-aim-row="current"]').isVisible(),true,'current aim remains in a full sheet');
+      assert.equal(await fixtureInspector().locator('[data-apt-aim-row="proposed"]').isVisible(),true,'pending aim remains when drawing pauses');
+      assert.deepEqual(await descriptor(id),original,'expanding the sheet cannot change the actual aim');
+      await fixtureInspector().locator('[data-apt-aim-tab-action="set"]').click();
+      await until('full sheet Set',id=>!!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).target,id);
+      await fixtureInspector().getByRole('button',{name:'Undo aim',exact:true}).click();
+      await until('full sheet Undo',id=>!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).target,id);
+      assert.deepEqual(await descriptor(id),original,'Undo works while the room is paused');
+      await fixtureInspector().locator('[data-apt-aim-tab-action="discard"]').click();
+      assert.equal(await fixtureInspector().locator('[data-apt-aim-row="proposed"]').count(),0,'Discard works while drawing is paused');
+      await fixtureInspector().getByRole('button',{name:'Tap to aim',exact:true}).click();
+      await until('tap reveals the room',()=>document.querySelector('.apt-home-shell')?.getAttribute('data-sheet')==='half'
+        &&!!document.querySelector('[data-apt-tap-aim-hint]'));
+      await blur(); await page.keyboard.press('Escape');
+      await page.locator('[data-apt-tap-aim-hint]').waitFor({state:'detached'});
       await page.setViewportSize({ width: 1366, height: 768 });
       await page.getByRole('tab', { name: 'Controls', exact: true }).click();
       return { sheet: 'half' };

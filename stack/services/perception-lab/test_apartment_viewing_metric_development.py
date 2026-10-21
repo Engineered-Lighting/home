@@ -48,12 +48,12 @@ class DevelopmentTimingTests(unittest.TestCase):
             configured=bootstrap.load_factory(config,client=base.client)
         configured.clock=base.clock
         if late=='capture':
-            read=configured.client._read
-            def slow(path):
-                value=read(path)
-                if path=='/calibration':f.now+=3  # the proof expires before prepare checks it
+            finish=configured.clock.finish
+            def slow(started):
+                value=finish(started)
+                f.now+=3  # original proof expires during validation before prepare
                 return value
-            configured.client._read=slow
+            configured.clock.finish=slow
         self.token='authored-development-'+'d'*40
         f.store.settings=replace(f.store.settings,token_grants=({'subject':'viewer','site_id':'victoria',
             'token_sha256':sha(self.token.encode()),'capabilities':['read']},))

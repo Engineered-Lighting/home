@@ -44,7 +44,7 @@ class MetricInputFactory:
 class MetricInputSession:
     def __init__(self,owner,factory):
         self.owner,self.factory=owner,factory
-        self.previous=None;self.previous_expiry=None;self.lease=None;self.image_record=None;self.reserved_bytes=0
+        self.previous=None;self.previous_expiry=None;self.pending_capture=None;self.lease=None;self.image_record=None;self.reserved_bytes=0
         self.reason='awaiting_anchor';self.closed=False;self.last_capture_at=None;self.last_npz_identity=None
         self.projection=factory.projection_factory(owner) if factory.projection_factory else None
         self.packet=None;self.packet_bytes=None;self.prepared=0;self.projected=0;self.in_flight=False
@@ -57,6 +57,7 @@ class MetricInputSession:
         # another cache. The owner accounts their union with registered pixels.
         values=[]
         if self.previous:values.extend(self.previous)
+        if self.pending_capture:values.extend(self.pending_capture['bytes'])
         if self.lease:values.extend(self.lease.retained_byte_allocations)
         if self.packet_bytes:values.append(self.packet_bytes)
         if self.preview_packet_bytes:values.append(self.preview_packet_bytes)
@@ -64,7 +65,7 @@ class MetricInputSession:
         if self.projection is not None:values.extend(self.projection.retained_byte_allocations)
         return tuple(values)
     def clear_locked(self):
-        self.closed=True;self.previous=None;self.previous_expiry=None;self.lease=None;self.image_record=None
+        self.closed=True;self.previous=None;self.previous_expiry=None;self.pending_capture=None;self.lease=None;self.image_record=None
         self.packet=None;self.packet_bytes=None;self.reserved_bytes=0
         self.preview_packet=None;self.preview_packet_bytes=None;self.desk_preview=None
         self.lease_until=None;self.lease_warnings=[];self.frame_warnings={};self.latest_png=None
@@ -73,6 +74,8 @@ class MetricInputSession:
         self.projection=None
     def prune_locked(self,now):
         if self.previous_expiry is not None and now>=self.previous_expiry:self.previous=None;self.previous_expiry=None
+        if self.pending_capture is not None and now>=self.pending_capture['retire_at']:
+            self.pending_capture=None;self.reason='metric_original_expired'
         if self.lease is not None and now>=self._lease_deadline():
             self.lease=None;self.image_record=None;self.reason='metric_original_expired'
         for mid in [mid for mid in self.frame_warnings if mid not in self.owner.entries]:del self.frame_warnings[mid]
@@ -183,7 +186,8 @@ class MetricInputSession:
             if self.closed or lease is None:return
         session,runner=self._current()
         with self.owner.store.lock:
-            row=self.owner.store.db.execute("SELECT id,payload FROM events WHERE session_id=? AND kind='perception.output' AND json_extract(payload,'$.arm')='b' AND json_extract(payload,'$.generation')=? ORDER BY id DESC LIMIT 1",(session['id'],runner.generation)).fetchone()
+            row=self.owner.store.db.execute("SELECT id,payload FROM events WHERE session_id=? AND kind='perception.output' AND json_extract(payload,'$.arm')='b' AND json_extract(payload,'$.generation')=? AND json_extract(payload,'$.media_ids')=? AND json_extract(payload,'$.frame_id')=? ORDER BY id DESC LIMIT 1",
+                (session['id'],runner.generation,json.dumps([record['id']],separators=(',',':')),lease.image_metadata['frame_id'])).fetchone()
         if row:
             payload=json.loads(row[1])
             if payload.get('media_ids')==[record['id']]:
@@ -288,26 +292,47 @@ class MetricInputSession:
             # Development: an anchor clock refusal becomes a warning on the next capture.
             stamp=self.owner.store.clock()
             with self.owner.lock:self.pending_warnings.extend(dict(item,at=stamp) for item in anchored)
-        prior=self._set_anchor(jpeg,header,anchor['valid_until'])
-        if prior is None:return None
+        self._set_anchor(jpeg,header,anchor['valid_until'])
         now=self.owner.store.clock()
         with self.owner.lock:
             if self.lease is not None:self.reason='awaiting_metric_result';return None
-            if self.last_capture_at is not None and now-self.last_capture_at<MIN_CAPTURE_INTERVAL_S:return None
-            if self.owner._resident_bytes_locked()+MAX_CAPTURE_BYTES>8388608:
+            pending=self.pending_capture
+            if pending is not None and now>=pending['retire_at']:
+                self.pending_capture=None;pending=None
+            if pending is None and self.last_capture_at is not None and now-self.last_capture_at<MIN_CAPTURE_INTERVAL_S:return None
+            if pending is None and self.owner._resident_bytes_locked()+MAX_CAPTURE_BYTES>8388608:
                 self.reason='metric_capture_budget_unavailable';return None
-            self.reserved_bytes=MAX_CAPTURE_BYTES;self.in_flight=True;self.last_capture_at=now
+            self.reserved_bytes=MAX_CAPTURE_BYTES if pending is None else 0;self.in_flight=True
+            if pending is None:self.last_capture_at=now
         locked=False;phase='capture_lock'
         try:
-            locked=self.factory.capture_lock.acquire(timeout=1)
-            if not locked:raise ValueError('commissioned camera capture busy')
-            self._current();phase='receiver_clock';started=self.factory.clock.begin(receipt)
-            phase='npz_read'
-            raw,_=self.factory.client._read('/frame.npz');proof=self.factory.clock.finish(started)
-            available=self.owner.store.clock();self._current()
-            phase='calibration_read'
-            calibration,_=self.factory.client._read('/calibration');self._current()
-            self.factory.capture_lock.release();locked=False
+            if pending is None:
+                locked=self.factory.capture_lock.acquire(timeout=1)
+                if not locked:raise ValueError('commissioned camera capture busy')
+                self._current();phase='receiver_clock';started=self.factory.clock.begin(receipt)
+                phase='npz_read';raw,_=self.factory.client._read('/frame.npz');self._current()
+                phase='calibration_read';calibration,_=self.factory.client._read('/calibration');self._current()
+                self.factory.capture_lock.release();locked=False
+                # A is already received; NPZ is captured now; B will arrive on
+                # the next incumbent pump turn. Do not invent a past bracket
+                # from two JPEGs received before the NPZ fetch. Retain one
+                # bounded pending original, with its original A expiry.
+                pending=dict(bytes=(raw,calibration,jpeg,header.encode()),started=started,
+                    valid_until=anchor['valid_until'],binding=self._binding(session,runner),
+                    retire_at=now+DEVELOPMENT_LEASE_S if self.development else anchor['valid_until'])
+                if sum(len(v) for v in pending['bytes'])>MAX_CAPTURE_BYTES:raise ValueError('metric capture reservation exceeded')
+                with self.owner.lock:
+                    if self.closed or self.owner.closed:raise ValueError('metric source stopped')
+                    self.reserved_bytes=0;self.pending_capture=pending
+                    if self.owner._resident_bytes_locked()>8388608:
+                        self.pending_capture=None;raise ValueError('metric RAM budget exhausted')
+                    self.reason='awaiting_anchor'
+                return None
+            if pending['binding']!=self._binding(session,runner):raise ValueError('metric_fixed_binding_required')
+            available=self.owner.store.clock()
+            phase='receiver_clock';proof=self.factory.clock.finish(pending['started']);self._current()
+            raw,calibration,prior_jpeg,prior_header=pending['bytes']
+            prior=(prior_jpeg,prior_header)
             originals={'npz':raw,'calibration':calibration,'anchor_a':prior[0],'anchor_b':jpeg}
             headers={'a':prior[1].decode(),'b':header}
             from apartment_viewing_metric import prepare_metric_frame
@@ -329,7 +354,7 @@ class MetricInputSession:
             self._current()
             with self.owner.lock:
                 if self.closed or self.owner.closed:raise ValueError('metric source stopped')
-                self.reserved_bytes=0;self.lease=lease
+                self.reserved_bytes=0;self.pending_capture=None;self.lease=lease
                 self.lease_until=self.owner.store.clock()+DEVELOPMENT_LEASE_S if self.development else None
                 if self.owner._resident_bytes_locked()>8388608:
                     self.lease=None;raise ValueError('metric RAM budget exhausted')
@@ -354,6 +379,7 @@ class MetricInputSession:
             return {**lease.image_metadata,'session_id':session['id'],'media_ids':[record['id']]}
         except Exception as error:
             with self.owner.lock:
+                self.pending_capture=None
                 if self.image_record is None:self.lease=None
                 self.reason=failure_reason(error,phase)
             return None

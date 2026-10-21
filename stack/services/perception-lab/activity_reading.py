@@ -75,12 +75,15 @@ class SoleReaderBank:
         self.state = preview[1]
 
 
-def freeze_context(store, session, records, shared, cutoff, *, qwen_source=None):
+def freeze_context(store, session, records, shared, cutoff, *, qwen_source=None, validity=None):
     """Freeze raw originals; no presentation packet can supply a binding.
 
     Legacy/unbound inputs still support Lab inspection but cannot earn reading
     authority. History and Qwen summaries are trimmed to this sole-reader epoch.
     """
+    def refuse(reason):
+        if validity is not None:validity.update(status='unavailable',reason=reason)
+        return records,shared,None
     qwen_required = any(r.get('source_kind') == 'qwen.observation' for r in shared)
     visuals = [r for r in records if r.get('source_kind') == 'perception.output']
     bound = []
@@ -95,13 +98,13 @@ def freeze_context(store, session, records, shared, cutoff, *, qwen_source=None)
                     and raw.get('capture_epoch') == record.get('capture_epoch')):
                 bound.append((record, dict(binding, source_event_id=int(record['id']))))
     if not bound:
-        return records, shared, None
+        return refuse('reader_binding_unavailable')
     latest_record, latest = max(bound, key=lambda row: (row[0]['observed_at'], int(row[0]['id'])))
     newest = max(visuals, key=lambda r: (r['observed_at'], int(r['id'])))
     if newest['id'] != latest_record['id']:
-        return records, shared, None  # latest invalid evidence never falls back
+        return refuse('latest_reader_binding_unavailable')  # never fall back
     if not cutoff < latest['valid_until']:
-        return records, shared, None
+        return refuse('original_detector_evidence_expired')
     key = reader_key(latest)
     allowed = {r['id'] for r, b in bound if reader_key(b) == key}
     # Room-derived words need a source binding too; omit them for this bounded v2.
@@ -111,7 +114,7 @@ def freeze_context(store, session, records, shared, cutoff, *, qwen_source=None)
     # Original-cache access must not undo withholding or qualify the configured
     # always-on path while its semantic dependency is missing.
     if qwen_source is not None and not qwen_required:
-        return records, shared, None
+        return refuse('qwen_context_withheld')
     from qwen_live import QwenSceneLedger
     import qwen_scene as scene
     receipts, conflicts = QwenSceneLedger(store).receipts(session, cutoff) if qwen_required else ([], [])
@@ -119,15 +122,15 @@ def freeze_context(store, session, records, shared, cutoff, *, qwen_source=None)
         try:
             originals = qwen_source.reading_receipts(session, latest, cutoff)
             if not originals:
-                return records, shared, None
+                return refuse('compatible_qwen_original_unavailable')
             receipts += originals
         except Exception:
-            return records, shared, None  # unavailable source cannot be silently omitted
+            return refuse('qwen_original_source_unavailable')
     known = scene.known_receipts(receipts, cutoff, conflicts=conflicts)
     if known and (known[-1].get('capture_epoch') != latest['capture_epoch']
             or not finite(known[-1].get('window_start')) or known[-1]['window_start'] < latest['interval_start']
             or known[-1]['observed_at'] > latest['observed_at']):
-        return records, shared, None
+        return refuse('qwen_reader_interval_incompatible')
     receipts = [r for r in receipts if r.get('capture_epoch') == latest['capture_epoch']
                 and finite(r.get('window_start')) and r['window_start'] >= latest['interval_start']
                 and finite(r.get('observed_at')) and r['observed_at'] <= latest['observed_at']]
@@ -137,7 +140,7 @@ def freeze_context(store, session, records, shared, cutoff, *, qwen_source=None)
         last = known[-1]
         if (last.get('status') != 'valid' or not cutoff < last['valid_until']
                 or (last.get('facts') or {}).get('people_visible') != 'one'):
-            return records, shared, None
+            return refuse('latest_qwen_original_invalid_expired_or_ambiguous')
         projected = scene.projection(receipts, cutoff, conflicts=conflicts)
         qwen = scene.scene_record(projected, receipts, cutoff, site_id=session['site_id'], camera_id=session['camera_id'],
                                  session_id=session['id'], conflicts=conflicts)
@@ -147,6 +150,8 @@ def freeze_context(store, session, records, shared, cutoff, *, qwen_source=None)
     # If Qwen was supplied upstream but cannot be bound, do not silently drop
     # that semantic dependency and claim an equivalent answer.
     elif qwen_required:
-        return records, shared, None
+        return refuse('compatible_qwen_original_unavailable')
     context = dict(binding=latest, valid_until=expiry, input_digest=digest([records, shared]))
+    if validity is not None:validity.update(status='available',reason=None,valid_until=expiry,
+        source_event_id=latest['source_event_id'],remaining_s=expiry-cutoff)
     return records, shared, context

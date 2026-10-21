@@ -311,11 +311,13 @@ class LiveReasoning:
             bound_loop = (arm == 'b' and not person_mode
                           and self.session.get('request_id', '').startswith('activity-loop-'))
             if bound_loop:
+                validity={}
                 evidence, context, reading_context = activity_reading.freeze_context(
                     self.store, self.session, evidence, context, cutoff,
-                    qwen_source=self.reading_qwen_source)
+                    qwen_source=self.reading_qwen_source,validity=validity)
                 request['records'] = evidence
                 request['reading_context'] = reading_context
+                request['reading_evidence_validity'] = validity
             if context:
                 request["shared_context"] = context
             if snapshot and not person_mode and not bound_loop:
@@ -472,6 +474,8 @@ class LiveReasoning:
         visual=[r for r in req['records'] if r.get('source_kind')!='ha.observation' and (r.get('objects') or r.get('pose_instances'))]
         latest=max(visual,key=lambda r:r['observed_at']) if visual else None
         expiry = latest['valid_until'] if latest else req['cutoff']
+        context=req.get('reading_context')
+        if context is not None:expiry=min(expiry,context['valid_until'])
         observed = latest['observed_at'] if latest else req['cutoff']
         status = result.get("status")
         if status not in {"ready", "abstain"} or now > req["deadline"]:
@@ -499,15 +503,13 @@ class LiveReasoning:
                 "activities":[] if status == "abstain" else [activity],
                 "confidence":judgment["probabilities"][activity], "mode":"live"}}
         if 'reading_context' in req:
-            context = req['reading_context']
             output['reading_context'] = deepcopy(context)
+            validity=deepcopy(req.get('reading_evidence_validity') or {})
             if context is not None:
-                expiry = min(expiry, context['valid_until'])
-                output['valid_until'] = expiry
-                output['prediction']['valid_until'] = expiry - start
-                output['prediction']['end'] = expiry - start
-                output['status'] = status if expiry > now else 'stale'
-                output['fresh_on_arrival'] = expiry > now
+                validity.update(status='available' if expiry>now else 'expired',
+                    reason=None if expiry>now else 'original_evidence_expired_before_answer',
+                    valid_until=expiry,remaining_s=expiry-now)
+            output['reading_evidence_validity']=validity
         # The redundant kind IN term names the events_output_time partial index,
         # which serves source_end_s order: a few rows instead of every output.
         row = self.store.db.execute("""SELECT payload FROM events WHERE session_id=?

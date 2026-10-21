@@ -417,21 +417,38 @@ class ManagedDeepStack:
                 raw = None
                 frame = placement.get('frame') or {}
                 placed = placement['approximate_pose']
-                if (output_id == provenance.get('source_event_id') and isinstance(result, dict)
-                        and frame.get('frame_id') == binding.get('source_frame_id')
-                        and frame.get('source_epoch') == binding.get('capture_epoch')):
-                    poses = result.get('pose_instances') or []
+                # Placement completes asynchronously. Join its exact immutable
+                # source, while the latest raw observation remains the veto for
+                # ambiguity, discontinuity and a changed reader. Never borrow
+                # the newest detector's binding for an older placed frame.
+                placed_id = provenance.get('source_event_id')
+                row = None
+                with self.store.lock:
+                    if type(placed_id) is int and placed_id > 0:
+                        row = self.store.db.execute(
+                            "SELECT payload FROM events WHERE session_id=? AND id=? AND kind='perception.output' "
+                            "AND json_extract(payload,'$.arm')='b'", (sid, placed_id)).fetchone()
+                placed_output = json.loads(row[0]) if row else {}
+                placed_binding = placed_output.get('reading_binding') or {}
+                placed_result = placed_output.get('result') or {}
+                if (placed_binding.get('status') == 'available'
+                        and reader_key(placed_binding) == reader_key(binding)
+                        and placed_binding.get('valid_until', 0) > now
+                        and placed_output.get('status') == 'completed'
+                        and placed_output.get('current') is True
+                        and frame.get('frame_id') == placed_binding.get('source_frame_id')
+                        and frame.get('source_epoch') == placed_binding.get('capture_epoch')):
+                    poses = placed_result.get('pose_instances') or []
                     index = placed.get('instance_index')
                     selected = poses[index] if type(index) is int and 0 <= index < len(poses) else None
-                    if selected is not None and selected.get('instance_id') == binding.get('instance_id'):
+                    if selected is not None and selected.get('instance_id') == placed_binding.get('instance_id'):
                         raw = selected
                 person = activity_pose.placed_person(placement, raw) if raw is not None else None
                 if person is not None:
-                    times = placement['frame'].get('original_times') or {}
-                    bound = dict(binding, source_event_id=output_id)
+                    bound = dict(placed_binding, source_event_id=placed_id)
                     seen['pose'] = {'key': provenance.get('source_event_id'), 'people': [person],
-                                    'observed_at': binding['observed_at'], 'binding': bound,
-                                    'valid_until': binding['valid_until']}
+                                    'observed_at': placed_binding['observed_at'], 'binding': bound,
+                                    'valid_until': placed_binding['valid_until']}
             if 'pose' not in seen:
                 seen['pose'] = dict(key='unbound:%s:%s' % (sid, output_id), people=[], observed_at=now,
                                     binding=None, valid_until=now + 1.)

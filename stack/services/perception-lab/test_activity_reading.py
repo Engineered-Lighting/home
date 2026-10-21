@@ -176,6 +176,21 @@ class BoundDeepStackTests(unittest.TestCase):
         self.assertEqual(seen['pose']['binding']['source_event_id'], event_id)
         self.assertEqual(reader_key(seen['activity']['binding']), reader_key(seen['pose']['binding']))
 
+    def test_async_placement_keeps_its_exact_fresh_source_under_same_reader(self):
+        self.deep.start()
+        first, first_id = self.output()
+        placed = deepcopy(self.placement.packet)
+        self.now[0] += .5
+        latest, latest_id = self.output()
+        self.answer(latest, latest_id)
+        self.placement.packet = placed
+        seen = self.deep.observe()
+        self.assertEqual(len(seen['pose']['people']), 1,
+                         'a newer observation must not erase a still-fresh compatible placed pose')
+        self.assertEqual(seen['pose']['binding']['source_event_id'], first_id)
+        self.assertEqual(seen['pose']['valid_until'], first['valid_until'])
+        self.assertEqual(reader_key(seen['activity']['binding']), reader_key(seen['pose']['binding']))
+
     def test_stale_abstained_late_and_wrong_frame_replies_never_publish_reading(self):
         self.deep.start(); value, event_id = self.output()
         for changes in (dict(status='stale'), dict(status='abstain'), dict(provider_status='abstain'),
@@ -185,6 +200,23 @@ class BoundDeepStackTests(unittest.TestCase):
         self.answer(value, event_id)
         self.placement.packet['frame']['frame_id'] = 'wrong-frame'
         self.assertEqual(self.deep.observe()['pose']['people'], [])
+
+    def test_async_pose_cannot_survive_expiry_reader_change_or_ambiguous_latest(self):
+        self.deep.start();first,first_id=self.output();placed=deepcopy(self.placement.packet)
+        self.now[0]+=.5;latest,latest_id=self.output()
+        for field,value in (('valid_until',self.now[0]),('reader_epoch','other-reader'),
+                            ('instance_id','different-instance')):
+            changed=deepcopy(first);changed['reading_binding'][field]=value
+            with self.store.lock:
+                self.store.db.execute('UPDATE events SET payload=? WHERE id=?',(json.dumps(changed),first_id))
+            self.placement.packet=deepcopy(placed)
+            self.assertEqual(self.deep.observe()['pose']['people'],[],field)
+        with self.store.lock:
+            self.store.db.execute('UPDATE events SET payload=? WHERE id=?',(json.dumps(first),first_id))
+        ambiguous=deepcopy(latest);ambiguous['reading_binding']=dict(status='unavailable',reason='ambiguous_people')
+        self.store.append_event(self.deep.sid,'perception.output',ambiguous)
+        self.assertEqual(self.deep.observe()['pose']['people'],[])
+        self.assertNotIn('activity',self.deep.observe())
 
     def test_worker_failure_retries_but_operator_and_monitor_stops_do_not(self):
         self.deep.start(); first = self.deep.sid
@@ -220,11 +252,15 @@ class BoundDeepStackTests(unittest.TestCase):
         runner.store, runner.session, runner.sid, runner.policy = self.store, session, session['id'], {}
         request = dict(request_id='test-request', site_id='victoria', arm='b', generation=1, records=records,
             cutoff=self.now[0], deadline=self.now[0] + 15, reading_context=context)
+        request['records']=deepcopy(records)
+        request['records'][0]['valid_until']+=30  # display hold is not the original evidence lease
         result = dict(status='ready', judgment=dict(activity='reading', probabilities={'reading': 1}), provenance={})
         output = runner._output(request, result, self.now[0] + 9)
         self.assertEqual(output['valid_until'], value['valid_until'])
         self.assertEqual(output['status'], 'stale')
         self.assertFalse(output['fresh_on_arrival'])
+        self.assertEqual(output['policy_result']['reason'],'stale_judgment')
+        self.assertEqual(output['reading_evidence_validity']['reason'],'original_evidence_expired_before_answer')
 
     def test_existing_always_on_qwen_source_binds_without_a_recording_qwen_ledger(self):
         from la_qwen_context import LaQwenReceipts
@@ -272,6 +308,7 @@ class BoundDeepStackTests(unittest.TestCase):
             withheld_id, = reasoner.offer([record], generation=1, cutoff=self.now[0], shared_context={}, arms=('b',))
         withheld = json.loads(self.store.db.execute('SELECT payload FROM lab_reasoning_requests WHERE id=?', (withheld_id,)).fetchone()[0])
         self.assertIsNone(withheld['reading_context'])
+        self.assertEqual(withheld['reading_evidence_validity']['reason'],'qwen_context_withheld')
         self.assertNotIn('shared_context', withheld)
         invalid = dict(receipt, request_id='i' * 64, observed_at=start + 3.5,
             generated_at=start + 3.6, available_at=start + 3.7, first_received_at=start + 3.7,

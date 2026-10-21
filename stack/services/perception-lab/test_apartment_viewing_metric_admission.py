@@ -130,10 +130,10 @@ class MetricAdmissionTests(unittest.TestCase):
 
     def dropped_lease(self):
         self.build()
-        self.consume(0, .59)
         self.consume(.5, .59)
         self.outputs(2)
         self.capture_index = 1
+        self.consume(1,1.59)  # acquire NPZ before its genuine B anchor
         # Hold only the new post-offer hook so its exact production terminal
         # rows can exercise refusal cases. No runner/admission result is faked.
         with patch.object(self.source.metric, 'after_offer', return_value=False):
@@ -203,12 +203,12 @@ class MetricAdmissionTests(unittest.TestCase):
 
     def test_cadence_drop_releases_unexecuted_lease_and_next_real_pump_cycle_projects(self):
         runtime = self.build()
-        self.consume(0, .59)
         fallback = self.consume(.5, .59)
         self.outputs(2)
         self.assertTrue(fallback['media_ids'])
         self.assertEqual(self.source.metric.reason, 'receiver_clock_anchor_changed')
         self.capture_index = 1
+        self.consume(1,1.59)
         dropped = self.consume(1.5, 1.59)
         with self.f.store.lock:
             rows = self.f.store.db.execute(
@@ -221,9 +221,9 @@ class MetricAdmissionTests(unittest.TestCase):
         self.assertTrue(self.source.metric.lease is None,
                           'both arms provably never execute, but metric lease still blocks the pump until expiry')
         before = self.source.accepted
-        self.consume(2, 2.09)
-        self.assertEqual(self.source.accepted, before, 'metric wait must not consume its next slot with JPEG')
         self.capture_index = 2
+        self.consume(2, 2.59)
+        self.assertEqual(self.source.accepted, before, 'metric wait must not consume its next slot with JPEG')
         admitted = self.consume(2.5, 2.59)
         outputs = self.outputs(4)
         matching = [e for e in outputs if e['payload']['media_ids'] == admitted['media_ids']]

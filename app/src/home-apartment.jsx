@@ -10863,11 +10863,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       {/* edit mode */}
       {selectedSiteId === "victoria" && sourceMeta.kind === "equipment_unavailable"
         && spatialScale === "apartment" && phase === "ready" && (
-        <aside role="status" data-victoria-equipment-unavailable="1" style={{ position: "absolute", top: 110,
-          right: 14, zIndex: 12, maxWidth: 330, padding: 12, background: "rgba(10,17,23,.95)", color: "var(--hg-fg)" }}>
-          Equipment measurements are unavailable. The room is still available for viewing.
-          <div style={{ fontSize: 11, marginTop: 6 }}>{model.source_detail?.error}</div>
-          <button type="button" onClick={() => setEquipmentReloadEpoch((n) => n + 1)} style={{ minHeight: 40, marginTop: 8 }}>Retry equipment</button>
+        <aside role="status" className="apt-equipment-unavailable" data-victoria-equipment-unavailable="1"
+          aria-description={model.source_detail?.error} title={model.source_detail?.error}>
+          <div><strong>Equipment unavailable</strong><span>Room viewing still works.</span></div>
+          <button type="button" onClick={() => setEquipmentReloadEpoch((n) => n + 1)}>Retry equipment</button>
         </aside>
       )}
       {editing && spatialScale === "apartment" && phase === "ready"

@@ -57,3 +57,36 @@ test('phone keeps compact radial controls, selected fixture context and usable r
     fs.writeFileSync(path.join(run,'receipt.json'),JSON.stringify({passed:true,authored:true,physical_commands:0,row,before,orbited,zoomed,final:await pose()},null,2));
   }finally{await browser?.close();await server.close();}
 });
+
+
+test('unavailable equipment leaves the short-phone room toolbar and Retry usable, then recovers without writes',{timeout:145000},async()=>{
+  const run=path.resolve('.tmp/apartment-phone-equipment-browser/run-'+Date.now());fs.mkdirSync(run,{recursive:true});
+  const rooms=installSetupRooms(run),server=await startSetupServer(rooms);let browser;
+  try{
+    browser=await chromium.launch(browserOptions());
+    const {page,context}=await openSetupContext(browser,server.origin,server.log,{site:'victoria',viewport:{width:390,height:460},mobile:true});
+    let unavailable=true,failedRequests=0;
+    await context.route('**/api/apartment/v1/**',route=>{
+      if(unavailable&&route.request().method()==='GET'){
+        failedRequests++;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'authored_registration_unavailable'})});
+      }
+      return route.fallback();
+    });
+    await homeShell(page,server.origin).boot('1','victoria');
+    const notice=page.locator('[data-victoria-equipment-unavailable]');await notice.waitFor();
+    const retry=notice.getByRole('button',{name:'Retry equipment',exact:true});
+    const toolbar=page.getByRole('toolbar',{name:'Room view',exact:true});
+    const bounds=await notice.boundingBox(),tools=await toolbar.boundingBox(),target=await retry.boundingBox();
+    assert.ok(bounds.y+bounds.height<=tools.y-4,'equipment notice must not obscure room navigation: '+JSON.stringify({bounds,tools}));
+    assert.ok(target.height>=44&&target.width>=44,'Retry retains a coarse-pointer target');
+    assert.ok(target.x>=0&&target.x+target.width<=390&&target.y+target.height<=460,'Retry stays inside the phone viewport');
+    assert.equal(await retry.evaluate(node=>{const b=node.getBoundingClientRect();return node.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2));}),true,'Retry is not covered by the sheet');
+    assert.ok(failedRequests>0);
+    if(process.env.HOME_UI_PRIVATE_STILLS==='1')await page.screenshot({path:path.join(run,'phone-unavailable.png')});
+    unavailable=false;await retry.click();
+    await notice.waitFor({state:'detached'});
+    await page.waitForFunction(()=>window.__APT_ENGINE?.overlay?.virtualFixturesReadback().fixture_count===4);
+    assert.deepEqual(server.log.forbidden,[]);assert.deepEqual(server.log.errors,[]);
+    assert.equal(server.log.requests.some(request=>!['GET','HEAD'].includes(request.method)),false,'retry performs no command or persisted edit');
+  }finally{await browser?.close();await server.close();}
+});

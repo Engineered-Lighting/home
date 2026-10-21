@@ -172,3 +172,25 @@ test('intersections without a point are ignored before presentation filtering', 
     }), null);
   } finally { dispose(root); }
 });
+
+
+test('a surface pick uses a newly attached mesh transform before its first rendered frame', () => {
+  const root = new THREE.Group();
+  root.position.set(3, 1, -2);root.rotation.x=-Math.PI/2;
+  const fresh = new THREE.Group();fresh.position.set(.4,.2,.3);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4,4),new THREE.MeshBasicMaterial({side:THREE.DoubleSide}));
+  mesh.position.z=1.2;fresh.add(mesh);root.add(fresh);
+  try{
+    const expected=[.4,.2,1.5];
+    // localToWorld updates the apartment root, as the UI's projection does,
+    // but no render has propagated that transform to the new mesh yet.
+    const target=root.localToWorld(new THREE.Vector3(...expected));
+    const normal=new THREE.Vector3(0,0,1).applyQuaternion(root.quaternion);
+    const camera=cameraAt(target.clone().addScaledVector(normal,6),target);
+    const picking=createPicking(camera,host),before=geometrySnapshot(mesh);
+    const hit=picking.surfaceHit(root,[fresh],...center);
+    assert.ok(hit,'the just-loaded mesh is pickable before a render');
+    closeVector(hit.point,expected);closeVector(hit.normal,[0,0,1]);
+    assert.deepEqual(geometrySnapshot(mesh),before,'picking does not change mesh geometry or material');
+  }finally{dispose(root);}
+});

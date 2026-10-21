@@ -1070,3 +1070,14 @@ button.hg-no-press:active {
   .apt-home-shell .apt-ui-mobile-navigation { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--hg-border-soft); }
   .apt-home-shell .apt-ui-mobile-navigation button { min-width: 44px; min-height: 44px; }
 }
+
+/* Equipment failures must leave room navigation and Retry usable above the phone sheet. */
+.apt-equipment-unavailable { position: absolute; top: 12px; right: 14px; z-index: 12; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 28px); padding: 12px; border: 1px solid var(--apt-border, #333); border-radius: 12px; background: var(--apt-glass, rgba(10,17,23,.95)); color: var(--hg-fg); font-size: 12px; line-height: 1.4; }
+.apt-equipment-unavailable > div { min-width: 0; }
+.apt-equipment-unavailable strong, .apt-equipment-unavailable span { display: block; }
+.apt-equipment-unavailable span { color: var(--hg-fg-3); }
+.apt-equipment-unavailable button { flex-shrink: 0; min-height: 44px; padding: 0 10px; border: 1px solid var(--apt-border, #333); border-radius: 8px; background: var(--apt-control, #181818); color: inherit; font: inherit; cursor: pointer; }
+@container apartment-home (width < 680px) {
+  .apt-equipment-unavailable { top: 8px; left: 8px; right: 8px; max-width: none; gap: 8px; padding: 8px; }
+  .apt-equipment-unavailable > div { flex: 1; }
+}

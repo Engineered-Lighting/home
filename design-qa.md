@@ -2,8 +2,8 @@
 
 final result: blocked
 
-This result applies to complete ZIP fidelity. The fixture/glow/Light correction
-batch is implemented locally; the remaining audit findings are still open in
+This result applies to complete ZIP fidelity. The fixture/glow/Light and
+Aim/preset correction batches are implemented locally; remaining findings are open in
 Engineered-Lighting/home#397. This replaces the earlier blanket passed claim.
 
 ## Reference and source
@@ -101,13 +101,91 @@ changes are QA/release notes and the two test corrections above. Runtime source
 hashes remain identical across the runs. These are local working-tree receipts,
 not an exact-PR-head CI/integration acceptance or authorization to merge.
 
+## Aim and preset follow-up
+
+Runtime: `ecc1932f` and `338275d7`; command-ladder test correction: `6af04674`.
+The source ZIP and main baseline above remain unchanged. The earlier 97-item
+run describes the fixture/glow batch, not the combined follow-up.
+
+Aim now follows the prototype's compact hierarchy: one header with icon
+Undo/Redo, current/proposed rows with warm/cyan markers and right-aligned
+distance/tilt, and an inline Tap to aim hint. A valid proposal exposes Set aim
+and Discard. Named aims is a separate section. Existing manual Pan/Tilt remain
+available in a collapsed Fine-tune aim section. Command keeps its existing
+`Modeled · nothing sent` disclosure and transport restrictions.
+
+The four radial presets and two direction shortcuts use the prototype's
+grouped 26-pixel pills, 15-pixel radius, four-pixel gaps and selected ice border.
+Coarse pointers retain 44-pixel hit areas. Preset behavior is unchanged;
+uncommissioned directional shortcuts remain disabled.
+
+Mounted phone verification found an actual bug: expanding the sheet to full
+retired the drawing lease and also removed the inspector's aim descriptor,
+hiding pending/current rows and Set/Discard. The inspector now uses the
+existing fenced resident model while drawing is paused. Tap to aim reveals
+the room at half height and retains an exact scene/fixture scope through the
+reveal. Hidden documents, changed scenes and changed selections still cancel
+the request. No drawing, producer or command authority is added.
+
+Private comparisons are in `.tmp/aim-preset-design-qa-20261021/`. Final captures
+use `338275d7` runtime bytes; the later test-only commit does not change them.
+The extracted reference's 40 files match the ZIP inventory. Source/app pairs
+were composed without resizing and the exact saved pairs reopened:
+
+| Comparison | Viewport / state | Evidence |
+| --- | --- | --- |
+| Compact Aim, both themes | 1366 x 768 / no proposal | `aim-desktop-dark-focus.png`, `aim-desktop-light-focus.png` |
+| Full phone Aim, both themes | 390 x 844 / coarse pointer | `aim-phone-full-dark-pair.png`, `aim-phone-full-light-pair.png` |
+| Full phone pending proposal | 390 x 844 / coarse pointer / dark | `aim-phone-proposal-dark-pair.png` |
+| Radial presets, both themes | 390 x 844 / coarse pointer / 25% and 50% | `radial-phone-dark-pair.png`, `radial-phone-light-pair.png` |
+| Radial presets, desktop/tablet | 1366 x 768 / Off; 820 x 1180 / 100% | `radial-desktop-dark-pair.png`, `radial-tablet-dark-pair.png` |
+
+Typography: Geist/Geist Mono, row labels and compact measurement hierarchy
+match the reference. Spacing: Aim removes the nested Named aims inset and
+presets stay grouped; phone actions fit with 44-pixel hit areas. Tokens:
+warm current marker, cyan proposal marker, ice primary action and selected
+preset borders were checked in dark and light. Imagery: existing renderer
+and authored fixture data stay intact. Copy: real target names and missing
+commissioning/named-aim capabilities remain truthful instead of copying the
+prototype's invented data. The additional optical-pivot/travel disclosure and
+Fine-tune section remain deliberate functional differences.
+
+The existing coarse-pointer radial ring still stacks at 240 pixels to retain
+44-pixel zone targets, while the ZIP stays compact at 118 pixels. This is a
+remaining phone fidelity gap; this pass does not claim that entire card is
+identical. Phone header/tab and camera differences remain under their tickets.
+
+Focused keyboard, drag and phone regressions pass, including Fine-tune
+disclosure, channel-independent edits, Undo/Redo, and full-sheet Set/Undo/
+Discard/Tap recovery. The unchanged 145-second browser, 180-second file and
+600-second worker limits are retained. CI now splits the complete touched
+plan into twelve disjoint shards because an eight-shard worker exhausted
+its job budget after its tests had passed; matrix, artifacts and receipt
+aggregation all use twelve. Shard-contract tests pass 15/15.
+
+Combined verification status: the final 125-item recheck passes on `6af04674`.
+All twelve receipts are green and their disjoint union equals the unsharded
+plan. Two local workers ran concurrently; the longest shard took 162 seconds.
+Runtime hashes and the final mapped plan are sealed in the private acceptance
+receipt. Subsequent changes only update this QA report; exact-PR-head hosted
+CI/integration acceptance remains separate and pending.
+The first combined run completed 123/125 items successfully; one obsolete
+Aim-pane source assertion is corrected, and one native WebGL lit-reference
+sample was unstable (RGB delta 18, mean 2.55). Three diagnostic reruns passed
+without changing the renderer or its strict image thresholds. That intermittent
+native-test condition remains recorded and is not claimed fixed. The failed
+run remains under `final-mapped/`; the full recheck is separate under
+`final-mapped-recheck/`. An earlier 97-item run was aborted when the phone bug
+was found and does not count as a completed combined verification.
+
 ## Remaining acceptance work
 
 - #398: finish the complete every-state/orbit/theme fixture visual matrix on
   registered scans; this local authored comparison does not qualify installed
   Echo Park or Victoria assets.
-- #400: compact Aim hierarchy, radial preset pill styling and remaining exact
-  row spacing. This batch fixes the Light label/track/output portions.
+- #400: finish exact row spacing and the coarse-pointer radial-ring layout
+  against the ZIP; compact Aim hierarchy and radial preset styling are now
+  implemented locally, alongside the prior Light label/track/output fixes.
 - #399: restrained beams and redundant modeled annotations.
 - #401, #403, #404: header/Setup/toolbar, phone label/tab collisions and camera
   dock fidelity remain outside this correction batch.

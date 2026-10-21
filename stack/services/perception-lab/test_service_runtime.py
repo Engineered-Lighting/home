@@ -11,6 +11,38 @@ class CompositionTests(unittest.TestCase):
     receipt=fixtures.PairedRuntimeTests.receipt
     settle=fixtures.PairedRuntimeTests.settle
 
+    def test_la_only_activation_and_live_inspection_identify_disabled_arm(self):
+        runtime, _ = self.runtime(lambda *_: {'state': 'ready', 'profiles': self.profiles})
+        runtime.execution_arms = ('b',)
+        runtime.start_session(self.session)
+        runner = runtime.runners[self.session['id']]
+        self.runners.append(runner)
+        activation = next(e['payload'] for e in self.store.list_events(self.session['id']) if e['kind'] == 'experiment.activated')
+        self.assertEqual(activation['execution_arms'], ['b'])
+        self.assertEqual(set(activation['profiles']), {'b'})
+        self.assertFalse(activation['comparison'])
+        from controller import Controller
+        live = Controller(self.store, runtime).live(self.session['id'])
+        self.assertEqual(live['execution_arms'], ['b'])
+        self.assertEqual(live['arms']['A']['reason'], 'not_in_execution_scope')
+        self.assertEqual(live['arms']['A']['reasoning_status']['state'], 'off')
+        runtime.close()
+
+    def test_la_only_facts_cadence_cannot_schedule_disabled_arm(self):
+        from types import SimpleNamespace
+        runtime, _ = self.runtime(lambda *_: {'state': 'ready', 'profiles': self.profiles})
+        sid = self.session['id']
+        runtime.runners[sid] = SimpleNamespace(execution_arms=('b',))
+        runtime._schedule(sid)
+        observed = []
+        runtime.reasoners[sid] = SimpleNamespace(observe_facts=lambda arm, **_: observed.append(arm))
+        runtime._occupancy = lambda *_: (False, False, True)
+        facts = {arm: {'key': arm, 'people': 'one', 'camera': 'current'} for arm in ('a', 'b')}
+        keys = {arm: {'visual': frozenset({1}), 'config': (1,)} for arm in ('a', 'b')}
+        due, _ = runtime._facts_arms(sid, self.session, keys, facts, generation=1, now=100.)
+        self.assertEqual(due, ('b',))
+        self.assertEqual(observed, ['b'])
+
     def test_shutdown_waits_for_local_worker_without_releasing_unknown_execution(self):
         started=threading.Event()
         release=threading.Event()

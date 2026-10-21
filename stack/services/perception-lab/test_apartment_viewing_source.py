@@ -22,7 +22,7 @@ POLICY=dict(schema='home-apartment-viewing-policy-1',version=1,enabled=True,
 
 class ApartmentViewingTests(unittest.TestCase):
     setUp=fixture.ExistingApiAssessmentFactoryTests.setUp
-    def build(self,*,metric_factory=None):
+    def build(self,*,metric_factory=None,execution_arms=('a', 'b')):
         self.profiles=deepcopy(self.profiles)
         for profile in self.profiles.values():profile.update(profile_id='yolo26s-rtmpose-cpu-v1',model_version='detector-pose-v1')
         self.store.settings=replace(self.store.settings,max_session_seconds=300)
@@ -37,7 +37,7 @@ class ApartmentViewingTests(unittest.TestCase):
         with patch('recorder.StreamCopySupervisor',side_effect=AssertionError('viewing must not start or construct an encoded recorder')):
             runtime=build_runtime(self.store,SimpleNamespace(camera_id='den'),config,experiment_id='apartment-viewing',
                 profiles_override=self.profiles,transport_factory=lambda *_:lambda *_:None,lease=SimpleNamespace(ready=lambda:True),
-                apartment_metric_source=metric_factory)
+                apartment_metric_source=metric_factory,execution_arms=execution_arms)
         self.addCleanup(runtime.close);self.seen=[]
         def execute(request):
             pixels,meta=RegisteredImage(self.store)(request['frame']);self.seen.append((request,meta,pixels.shape))
@@ -56,6 +56,37 @@ class ApartmentViewingTests(unittest.TestCase):
     def consume(self,runtime,index=1):
         header=capture.header(self.jpeg,sequence=index)
         return runtime.preview_pumps[self.session['id']].consume(self.jpeg,header)
+
+    def test_continuous_la_only_uses_actual_viewing_source_without_a_dispatch(self):
+        runtime = self.build(execution_arms=('b',))
+        self.consume(runtime)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not self.seen:
+            time.sleep(.005)
+        self.assertEqual([request['arm'] for request, _, _ in self.seen], ['b'])
+        self.assertEqual(len(runtime.preview_pumps), 1)
+        self.assertEqual(runtime.runners[self.session['id']].execution_arms, ('b',))
+
+    def test_managed_la_only_factory_checks_actual_b_profile_without_inventing_a_receipt(self):
+        from managed_detector_app import create_managed_runtime
+        self.build()
+        config = deepcopy(self.config)
+        config.pop('existing_api_assessment'); config['schema_version'] = 1
+        config.update(apartment_viewing=deepcopy(POLICY), pose_profiles=deepcopy(self.profiles))
+        clients = {arm: SimpleNamespace(close=lambda: None) for arm in ('a', 'b')}
+        managed = create_managed_runtime(self.store, SimpleNamespace(camera_id='den'), config, clients,
+                                         continuous_la_only=True)
+        self.addCleanup(managed.close)
+        receipt = {'profile': {**self.profiles['b'], 'engine_epoch': 'prepared-b'}, 'expires_at': self.now + 300}
+        with patch('managed_detector_app.build_runtime') as build:
+            managed.factory({'b': receipt}, experiment_id='apartment-viewing')
+            self.assertEqual(build.call_args.kwargs['execution_arms'], ('b',))
+            self.assertEqual(build.call_args.kwargs['profiles_override']['b']['engine_epoch'], 'prepared-b')
+            with self.assertRaisesRegex(ValueError, 'differs from registered profile'):
+                managed.factory({'b': {**receipt, 'profile': {**receipt['profile'], 'artifact_sha256': 'f'*64}}},
+                                experiment_id='apartment-viewing')
+            with self.assertRaisesRegex(ValueError, 'Unexpected worker execution arms'):
+                managed.factory({'b': receipt}, experiment_id='placement-best')
     def test_actual_composition_continues_past_eight_without_archiving_or_starting_another_pump(self):
         runtime=self.build()
         for i in range(1,13):

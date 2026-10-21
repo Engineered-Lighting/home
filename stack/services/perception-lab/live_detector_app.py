@@ -495,7 +495,9 @@ def check_caption_provisioning(recipe,config,reasoning_factory):
         raise ValueError(f"Recipe {recipe['id']} grants captions without household caption egress")
 
 
-def build_runtime(store,source,config,*,transport_factory=None,lease=None,experiment_id='placement-same',profiles_override=None,reasoning_factory=None,la_live=None,apartment_metric_source=None):
+def build_runtime(store,source,config,*,transport_factory=None,lease=None,experiment_id='placement-same',profiles_override=None,reasoning_factory=None,la_live=None,apartment_metric_source=None,execution_arms=('a', 'b')):
+    from runtime import validate_execution_arms
+    execution_arms = validate_execution_arms(execution_arms)
     from recorder import StreamCopySupervisor
     from service_runtime import ServiceRuntime
     from profile_resolver import RegisteredPairs,recipe_digest
@@ -516,6 +518,8 @@ def build_runtime(store,source,config,*,transport_factory=None,lease=None,experi
         bindings={experiment_id:{'recipe_sha256':recipe_sha,'profiles':profiles}},readiness=readiness)
     executors={}
     for arm,binding in config['arms'].items():
+        if arm not in execution_arms:
+            continue
         binding={**binding,'profile':profiles[arm]}
         def credential(path=binding['token_file']):
             file=Path(path)
@@ -687,7 +691,7 @@ def build_runtime(store,source,config,*,transport_factory=None,lease=None,experi
         from apartment_viewing_source import ViewingRecorder
         recorder=ViewingRecorder(store,source.camera_id)
     else:recorder=StreamCopySupervisor(store,source)
-    runtime=ServiceRuntime(store,{source.camera_id:recorder},resolver,execute,reasoning_factory=reasoning_factory,**extra,
+    runtime=ServiceRuntime(store,{source.camera_id:recorder},resolver,execute,reasoning_factory=reasoning_factory,execution_arms=execution_arms,**extra,
         reasoning_min_offer_interval_s=config.get('reasoning_min_offer_interval_s'),
         reasoning_cadence=config.get('reasoning_cadence'),
         preview_sources={source.camera_id:anchor_source},

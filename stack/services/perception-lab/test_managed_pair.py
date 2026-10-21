@@ -51,6 +51,34 @@ class Inner:
 
 
 class ManagedTests(unittest.TestCase):
+    def test_continuous_la_only_starts_and_releases_only_the_consumed_worker(self):
+        self.runtime.continuous_la_only = True
+        self.runtime.catalog.append({'id': 'apartment-viewing', 'status': 'unverified'})
+        selected = []
+        self.runtime.factory = lambda receipts, experiment_id: selected.append((set(receipts), experiment_id)) or Inner()
+        session = self.controller.start({**self.body, 'experiment_id': 'apartment-viewing', 'request_id': 'activity-loop-fixture'})
+        self.settle('recording', session['id'])
+        self.assertEqual(selected, [({'b'}, 'apartment-viewing')])
+        self.assertEqual([c.starts for c in self.clients.values()], [0, 1])
+        self.controller.stop(session['id']); self.settle('stopped', session['id'])
+        self.assertEqual([c.stops for c in self.clients.values()], [0, 1])
+        events = self.store.list_events(session['id'])
+        ready = next(e['payload'] for e in events if e['kind'] == 'workers.ready')
+        self.assertEqual(ready['execution_arms'], ['b'])
+        self.assertFalse(ready['comparison'])
+        self.assertEqual(set(ready['receipts']), {'b'})
+
+    def test_manual_apartment_comparison_still_prepares_both_workers(self):
+        self.runtime.continuous_la_only = True
+        self.runtime.catalog.append({'id': 'apartment-viewing', 'status': 'unverified'})
+        selected = []
+        self.runtime.factory = lambda receipts, experiment_id: selected.append(set(receipts)) or Inner()
+        session = self.controller.start({**self.body, 'experiment_id': 'apartment-viewing'})
+        self.settle('recording', session['id'])
+        self.assertEqual(selected, [{'a', 'b'}])
+        self.assertEqual([c.starts for c in self.clients.values()], [1, 1])
+        self.controller.stop(session['id']); self.settle('stopped', session['id'])
+
     def test_pose_recipe_selects_both_workers_and_matching_factory(self):
         self.runtime.catalog.append({'id':'placement-best','status':'unverified'})
         selected=[]

@@ -8,9 +8,11 @@ from live_detector_app import private_json, validate_config, build_runtime
 from managed_pair import POSE_EXPERIMENTS
 
 
-def create_managed_refresh_app():
+def create_managed_refresh_app(*, continuous_la_only=False):
     from refresh_app import create_refresh_app
-    return create_refresh_app(capture_factory=create_managed_detector_app)
+    if not continuous_la_only:
+        return create_refresh_app(capture_factory=create_managed_detector_app)
+    return create_refresh_app(capture_factory=lambda **kwargs: create_managed_detector_app(continuous_la_only=True, **kwargs))
 
 
 class ReceiptLease:
@@ -85,7 +87,7 @@ def check_caption_startup(recipes, enabled, config, reasoning_factory):
     return {'source': source, 'granted_recipes': granted}
 
 
-def create_managed_runtime(store, source, config, clients, *, reasoning_factory=None, spatial_readiness=None, transport_factory=None, la_live=None):
+def create_managed_runtime(store, source, config, clients, *, reasoning_factory=None, spatial_readiness=None, transport_factory=None, la_live=None, continuous_la_only=False):
     import json
     from managed_readiness import ManagedReadiness, ReadinessPair
     from qwen_transport import saved_analysis
@@ -111,8 +113,12 @@ def create_managed_runtime(store, source, config, clients, *, reasoning_factory=
         if experiment_id=='apartment-viewing' and metric_status['present'] and not metric_status['provisioned']:
             raise ValueError(metric_status['reason'])
         value = deepcopy(config)
-        prepared={}
-        for arm in ('a', 'b'):
+        if set(receipts) not in ({'a', 'b'}, {'b'}) or (set(receipts) == {'b'} and not (continuous_la_only and experiment_id == 'apartment-viewing')):
+            raise ValueError('Unexpected worker execution arms')
+        # Both recipe profiles remain configured for catalog compatibility.
+        # Only receipt-backed arms execute or appear as activated model identities.
+        prepared={arm: deepcopy(value['pose_profiles'][arm] if experiment_id in POSE_EXPERIMENTS else value['arms'][arm]['profile']) for arm in ('a', 'b')}
+        for arm in receipts:
             supplied = receipts[arm]['profile']
             expected = value['pose_profiles'][arm] if experiment_id in POSE_EXPERIMENTS else value['arms'][arm]['profile']
             # Only engine identity changes. A receipt cannot silently change
@@ -123,12 +129,13 @@ def create_managed_runtime(store, source, config, clients, *, reasoning_factory=
             prepared[arm] = supplied
         value = validate_config(value)
         return build_runtime(store, source, value, lease=ReceiptLease(receipts),experiment_id=experiment_id,profiles_override=prepared,reasoning_factory=reasoning_factory,
-                             la_live=la_live,apartment_metric_source=apartment_metric if experiment_id=='apartment-viewing' else None)
+                             la_live=la_live,apartment_metric_source=apartment_metric if experiment_id=='apartment-viewing' else None,
+                             execution_arms=tuple(sorted(receipts)))
 
     # Capabilities add a cached launch-free host probe; admission stays the static catalog.
     pair = ReadinessPair(store, clients, factory, catalog, reasoning_available=reasoning_factory is not None,reasoning_readiness=getattr(reasoning_factory,'readiness',None),
                          setup_readiness=ManagedReadiness(clients, enabled), analysis_jobs=analysis,
-                         caption_readiness=caption, spatial_readiness=spatial_readiness)
+                         caption_readiness=caption, spatial_readiness=spatial_readiness, continuous_la_only=continuous_la_only)
     if config.get('apartment_viewing') is not None:
         from apartment_viewing_source import capability
         pair.apartment_viewing_capability=capability(config['apartment_viewing'])
@@ -146,7 +153,7 @@ def create_managed_runtime(store, source, config, clients, *, reasoning_factory=
     return pair
 
 
-def create_managed_detector_app(*, refresh_backend=None, refresh_gateway_subject=None):
+def create_managed_detector_app(*, refresh_backend=None, refresh_gateway_subject=None, continuous_la_only=False):
     from app import create_app
     from capture_app import load_provisioning
     from live_video import LiveVideo
@@ -231,7 +238,7 @@ def create_managed_detector_app(*, refresh_backend=None, refresh_gateway_subject
     # den site map (fail closed at startup, like the spatial file).
     check_room_facts_provisioning(settings, source, config)
     app = create_app(settings, runtime_factory=lambda store: create_managed_runtime(store, source, config, clients, reasoning_factory=reasoning,
-                                                                                    spatial_readiness=spatial, la_live=la_live),
+                                                                                    spatial_readiness=spatial, la_live=la_live, continuous_la_only=continuous_la_only),
                       refresh_backend=refresh_backend, refresh_gateway_subject=refresh_gateway_subject,
                       live_videos={source.camera_id: LiveVideo(source, settings.site_id)},
                       live_planes={source.camera_id: LivePlanes(

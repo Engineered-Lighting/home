@@ -19,12 +19,15 @@ class ManagedPair:
     deferred_start = True
 
     def __init__(self, store, clients, factory, catalog, *, clock=time.time, prepare_seconds=40, reasoning_available=False, reasoning_readiness=None,
-                 analysis_jobs=None, caption_readiness=None, spatial_readiness=None):
+                 analysis_jobs=None, caption_readiness=None, spatial_readiness=None, continuous_la_only=False):
         if set(clients) != {'a', 'b'}:
             raise ValueError('Exactly two provisioned lifecycle clients required')
         self.store, self.clients, self.factory = store, clients, factory
         self.catalog, self.clock = deepcopy(catalog), clock
         self.prepare_seconds = prepare_seconds
+        if type(continuous_la_only) is not bool:
+            raise ValueError('continuous_la_only must be boolean')
+        self.continuous_la_only = continuous_la_only
         self.lock = threading.RLock()
         self.current = None
         self.reasoning_available=reasoning_available
@@ -175,10 +178,16 @@ class ManagedPair:
             item = {'session': session, 'request_id': str(uuid.uuid4()), 'cancel': threading.Event(),
                     'receipts': {}, 'inner': None, 'phase': 'starting', 'reason': None,
                     'attempted': set(), 'thread': None, 'inner_stopped': False}
+            # Only the commissioned automatic apartment loop uses LA alone.
+            # Ordinary Lab comparisons retain both workers and both receipts.
+            item['execution_arms'] = ('b',) if (self.continuous_la_only
+                and session['experiment_id'] == 'apartment-viewing'
+                and session.get('request_id', '').startswith('activity-loop-')) else ('a', 'b')
             # Write the identity before transmitting; never invent a new ID after
             # a lost start response. Supervisor reservations survive our restart.
             self.store.append_event(session['id'], 'workers.preparing',
-                                    {'request_id': item['request_id']})
+                                    {'request_id': item['request_id'], 'execution_arms': list(item['execution_arms']),
+                                     'comparison': len(item['execution_arms']) == 2})
             self.current = item
             item['thread'] = threading.Thread(target=self._prepare, args=(item,), daemon=True)
             item['thread'].start()
@@ -187,6 +196,8 @@ class ManagedPair:
     def _prepare(self, item):
         try:
             for arm, client in self.clients.items():
+                if arm not in item['execution_arms']:
+                    continue
                 if item['cancel'].is_set():
                     raise RuntimeError('cancelled')
                 item['attempted'].add(arm)
@@ -200,6 +211,8 @@ class ManagedPair:
             deadline = time.monotonic() + self.prepare_seconds
             while not item['cancel'].is_set():
                 for arm, client in self.clients.items():
+                    if arm not in item['execution_arms']:
+                        continue
                     item['receipts'][arm] = client.status(item['request_id'])
                 states = [r['state'] for r in item['receipts'].values()]
                 if all(s == 'ready' for s in states):
@@ -224,7 +237,9 @@ class ManagedPair:
                 if result.get('state') != 'recording' or result.get('inference') != 'ready':
                     raise RuntimeError('paired_start_failed')
                 self.store.append_event(item['session']['id'], 'workers.ready',
-                                        {'request_id': item['request_id'], 'receipts': item['receipts']})
+                                        {'request_id': item['request_id'], 'receipts': item['receipts'],
+                                         'execution_arms': list(item['execution_arms']),
+                                         'comparison': len(item['execution_arms']) == 2})
                 self.store.transition(item['session']['id'], 'recording')
                 item['phase'] = 'recording'
         except Exception as exc:

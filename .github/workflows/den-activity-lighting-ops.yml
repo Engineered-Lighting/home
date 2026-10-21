@@ -79,7 +79,7 @@ jobs:
         working-directory: stack/services/perception-lab
         run: |
           set -euo pipefail
-          PYTHONPATH="${GITHUB_WORKSPACE}/tools/la-detector-trial" "${RUNNER_TEMP}/den-ops/bin/python" -B -m unittest test_managed_readiness test_continuous_app test_activity_media_cleanup test_activity_loop.LoopTests test_activity_loop_runtime -q
+          PYTHONPATH="${GITHUB_WORKSPACE}/tools/la-detector-trial" "${RUNNER_TEMP}/den-ops/bin/python" -B -m unittest test_managed_readiness test_continuous_app test_activity_media_cleanup test_activity_loop.LoopTests test_activity_loop_runtime test_managed_pair.ManagedTests test_paired_runtime test_service_runtime test_live_reasoning test_activity_reading test_jev_cadence -q
 
   inference-health-tests:
     runs-on: ubuntu-24.04

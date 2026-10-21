@@ -8,6 +8,7 @@ unit, restart a service, or edit the journal even through a config mistake.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import ssl
 import stat
@@ -123,11 +124,44 @@ class Host:
         """(returncode, stdout) for an allow-listed read-only command."""
         check_readonly(argv)
         try:
-            done = subprocess.run(list(argv), capture_output=True, text=True, timeout=self.command_timeout_s,
-                                  check=False, env={**os.environ, "SYSTEMD_PAGER": "", "LC_ALL": "C"})
-        except (OSError, subprocess.TimeoutExpired) as error:
+            proc = subprocess.Popen(list(argv), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    env={**os.environ, "SYSTEMD_PAGER": "", "LC_ALL": "C"})
+            timed_out = threading.Event()
+            def expire():
+                timed_out.set()
+                proc.kill()
+            timer = threading.Timer(self.command_timeout_s, expire)
+            timer.start()
+            try:
+                raw = proc.stdout.read(1048577)
+                if len(raw) > 1048576:
+                    proc.kill()
+                    proc.wait()
+                    return 125, "command output exceeded 1 MiB"
+                proc.wait()
+                if timed_out.is_set():
+                    return 124, "command timed out"
+                return proc.returncode, raw.decode("utf-8", "replace")
+            finally:
+                timer.cancel()
+                proc.stdout.close()
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+        except OSError as error:
             return 127, str(error)
-        return done.returncode, done.stdout
+
+    def file_sha256(self, path):
+        if os.path.getsize(path) > 64 * 1048576:
+            raise ValueError("individual provenance artifact exceeds 64 MiB")
+        value = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                value.update(chunk)
+        return value.hexdigest()
+
+    def monotonic(self):
+        return time.monotonic()
 
     def first_line(self, argv, timeout_s=5.0):
         """First stdout line of a streaming read-only command (tegrastats)."""

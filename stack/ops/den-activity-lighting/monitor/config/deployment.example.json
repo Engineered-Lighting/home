@@ -1,0 +1,98 @@
+{
+  "schema": "den-ops-deployment-1",
+  "deployment_id": "replace-with-reviewed-deployment-id",
+  "hosts": {
+    "la-host": {
+      "components": {
+        "brain": "<actual-artifact-model-or-release-id>",
+        "gateway": "<actual-artifact-model-or-release-id>",
+        "ops": "<actual-artifact-model-or-release-id>"
+      },
+      "monitor_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "soak_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "artifacts": [
+        {
+          "component": "brain",
+          "path": "/replace/private/deployed/brain/manifest-or-source-file",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "component": "gateway",
+          "path": "/replace/private/deployed/gateway/manifest-or-source-file",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "component": "ops",
+          "path": "/replace/private/deployed/ops/manifest-or-source-file",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "units": [
+        {
+          "name": "lighting-brain.service",
+          "scope": "system",
+          "working_directory": "/replace/private/deployed/service",
+          "exec_start": "<exact systemctl show ExecStart value>"
+        },
+        {
+          "name": "home-web-gateway.service",
+          "scope": "system",
+          "working_directory": "/replace/private/deployed/service",
+          "exec_start": "<exact systemctl show ExecStart value>"
+        }
+      ]
+    },
+    "victoria-jetson": {
+      "components": {
+        "bridge": "<actual-artifact-model-or-release-id>",
+        "lab": "<actual-artifact-model-or-release-id>",
+        "detector": "<actual-artifact-model-or-release-id>",
+        "ops": "<actual-artifact-model-or-release-id>"
+      },
+      "monitor_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "soak_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "artifacts": [
+        {
+          "component": "bridge",
+          "path": "/replace/private/deployed/bridge/manifest-or-source-file",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "component": "lab",
+          "path": "/replace/private/deployed/lab/manifest-or-source-file",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "component": "detector",
+          "path": "/replace/private/deployed/detector/manifest-or-source-file",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "component": "ops",
+          "path": "/replace/private/deployed/ops/manifest-or-source-file",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "units": [
+        {
+          "name": "victoria-ha-bridge.service",
+          "scope": "user",
+          "working_directory": "/replace/private/deployed/service",
+          "exec_start": "<exact systemctl show ExecStart value>"
+        },
+        {
+          "name": "perception-lab-managed.service",
+          "scope": "user",
+          "working_directory": "/replace/private/deployed/service",
+          "exec_start": "<exact systemctl show ExecStart value>"
+        },
+        {
+          "name": "lab-jetson-detector-trial.service",
+          "scope": "user",
+          "working_directory": "/replace/private/deployed/service",
+          "exec_start": "<exact systemctl show ExecStart value>"
+        }
+      ]
+    }
+  }
+}

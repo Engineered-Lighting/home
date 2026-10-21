@@ -12,6 +12,6 @@ STATE_SCHEMA = "den-ops-monitor-state-1"
 BASELINE_SCHEMA = "den-ops-fault-baseline-1"
 UNITS_BASELINE_SCHEMA = "den-ops-failed-units-baseline-1"
 SOAK_CONFIG_SCHEMA = "den-ops-soak-1"
-SOAK_RECEIPT_SCHEMA = "den-ops-soak-receipt-1"
+SOAK_RECEIPT_SCHEMA = "den-ops-soak-receipt-4"
 
 STEPS = ("normal", "cadence_reduced", "deep_stack_paused", "loop_stopped")

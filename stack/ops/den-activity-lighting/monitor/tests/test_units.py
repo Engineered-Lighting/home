@@ -74,6 +74,7 @@ def test_jetson_units_have_back_off_limits_and_private_environment(rendered):
     assert bridge["Service"]["Restart"] == "always" and bridge["Service"]["RestartSec"] == "5"
     assert bridge["Unit"]["StartLimitBurst"] == "10" and bridge["Unit"]["StartLimitIntervalSec"] == "600"
     assert bridge["Service"]["MemoryMax"] == "128M" and bridge["Service"]["CPUQuota"] == "25%"
+    assert "User" not in bridge["Service"] and bridge["Install"]["WantedBy"] == "default.target"
     assert bridge["Service"]["EnvironmentFile"] and "${BRIDGE_CONFIG}" in bridge["Service"]["ExecStart"]
     loop = unit(rendered["perception-lab-managed.service.d/50-activity-loop.conf"])
     assert loop["Service"]["Restart"] == "on-failure" and loop["Unit"]["StartLimitBurst"] == "5"

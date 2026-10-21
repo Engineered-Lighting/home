@@ -44,6 +44,8 @@ def evaluate_rule(signals, rule):
     if value is None:
         reason["detail"] = "%s unreadable" % label
         reason["notice"] = bool(rule.get("required", True))
+        if reason["notice"]:
+            reason.update(level=3, hold=3, immediate=True, evidence_error=True)
         return reason
     level = hold = 0
     for index, limit in enumerate(levels, start=1):

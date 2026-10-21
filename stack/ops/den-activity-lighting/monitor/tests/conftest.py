@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -50,6 +51,13 @@ class FakeHost:
 
     def now(self):
         return self.clock
+
+    def monotonic(self):
+        return self.clock
+
+    def file_sha256(self, path):
+        value = self.read_text(path)
+        return hashlib.sha256(value.encode()).hexdigest()
 
     def advance(self, seconds):
         self.clock += seconds

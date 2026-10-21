@@ -14,6 +14,7 @@ Signal keys (all floats):
 from __future__ import annotations
 
 import fnmatch
+import math
 import glob
 import json
 import os
@@ -76,6 +77,20 @@ def read_hwmon(root="/sys/class/hwmon"):
             if -40 < value < 200:
                 _put_max(out, "temp.hwmon.%s.%s" % (name, label), value)
     return out
+
+
+def hwmon_input_available(root, row):
+    """Check each commissioned input independently of aggregate maxima."""
+    chip, sensor = row['path'].split('/')
+    stem = sensor[:-len('_input')]
+    if (_read(os.path.join(root,chip,'name'))!=row['chip']
+            or (_read(os.path.join(root,chip,stem+'_label')) or stem)!=row['label']):
+        return False
+    try:
+        value=int(_read(os.path.join(root,chip,sensor)))/1000.
+    except (TypeError,ValueError):
+        return False
+    return -40<value<200
 
 
 def parse_meminfo(text):
@@ -164,10 +179,12 @@ def read_disks(paths):
 SYSTEMCTL_FAILED_ARGS = ("list-units", "--failed", "--plain", "--no-legend", "--no-pager")
 
 
-def parse_failed_units(text):
+def parse_failed_units(text, *, strict=False):
     units = []
     for line in str(text or "").splitlines():
         parts = line.replace("●", " ").split()
+        if strict and parts and (len(parts) < 4 or not re.fullmatch(r"[A-Za-z0-9_.:@\\-]+\.[A-Za-z]+", parts[0]) or "failed" not in parts[1:4]):
+            raise ValueError("malformed failed-unit output")
         if parts and "." in parts[0]:
             units.append(parts[0])
     return sorted(set(units))
@@ -198,7 +215,7 @@ def classify_fault(message):
     return None
 
 
-def load_fault_baseline(path):
+def load_fault_baseline(path, expected_host=None):
     """The documented historical baseline: known, reviewed records to ignore.
 
     ``{"schema": "den-ops-fault-baseline-1", "host": ..., "source": ...,
@@ -207,8 +224,10 @@ def load_fault_baseline(path):
     """
     with open(path, encoding="utf-8") as handle:
         doc = json.load(handle)
-    if doc.get("schema") != "den-ops-fault-baseline-1" or not isinstance(doc.get("ignore"), list):
+    if not isinstance(doc, dict) or doc.get("schema") != "den-ops-fault-baseline-1" or not isinstance(doc.get("ignore"), list):
         raise ValueError("fault baseline must be den-ops-fault-baseline-1 with an ignore list")
+    if expected_host is not None and doc.get("host") != expected_host:
+        raise ValueError("fault baseline host mismatch")
     rules = []
     for entry in doc["ignore"]:
         if not isinstance(entry, dict) or not entry.get("pattern") or not entry.get("why"):
@@ -227,7 +246,7 @@ def journal_message(entry):
     return str(message)
 
 
-def parse_journal_json(text):
+def parse_journal_json(text, *, strict=False):
     """``journalctl -o json`` lines -> list of entries (bad lines skipped)."""
     entries = []
     for line in str(text or "").splitlines():
@@ -237,7 +256,11 @@ def parse_journal_json(text):
         try:
             entry = json.loads(line)
         except ValueError:
+            if strict:
+                raise ValueError("malformed kernel journal JSON")
             continue
+        if strict and (not isinstance(entry, dict) or not isinstance(entry.get("__CURSOR"), str) or not entry["__CURSOR"] or "MESSAGE" not in entry or not str(entry.get("__REALTIME_TIMESTAMP", "")).isdigit()):
+            raise ValueError("incomplete kernel journal record")
         if isinstance(entry, dict):
             entries.append(entry)
     return entries
@@ -269,6 +292,6 @@ def new_faults(entries, baseline_rules, level_overrides=None):
 def pick(signals, pattern, op):
     """The worst value among keys matching ``pattern`` (max for >=, min for <=)."""
     values = [v for k, v in signals.items() if fnmatch.fnmatchcase(k, pattern)]
-    if not values:
+    if not values or any(not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) for v in values):
         return None
     return max(values) if op == ">=" else min(values)

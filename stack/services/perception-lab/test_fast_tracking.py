@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 import hashlib
 import io
+from contextlib import redirect_stdout
 import threading
 from types import SimpleNamespace
 import unittest
@@ -13,6 +14,62 @@ from PIL import Image
 from fast_tracking_camera import FastCamera,encoded,sha
 from fast_tracking_runtime import TrackingPump,TrackingHTTP
 from reasoning import digest
+from fast_tracking_depth import DepthProjector
+
+
+class JointObservationTests(unittest.TestCase):
+    def setUp(self):
+        matrix=np.eye(3).tolist();intrinsics=[[500,0,320],[0,500,180],[0,0,1]]
+        metadata={'frames':{name:dict(width=640,height=height,intrinsics=intrinsics,
+            source_distortion_coefficients=[0]*8,transformation_valid=True)
+            for name,height in [('rgb',360),('depth',400)]}}
+        depth=np.full((400,640),2000,dtype=np.uint16)
+        depth[170:191,310:331]=0  # missing stereo support at a confidently detected nose
+        self.value=dict(depth=depth,metadata=metadata,identity={'calibration_content_id':'c'*64},
+            calibration={'eeprom':{'cameraData':[[0,{}]],'stereoRectificationData':{
+                'leftCameraSocket':0,'rectifiedRotationLeft':matrix}}})
+        joints=[dict(joint_id=i,pixel=None,score=.1,status='uncertain',reason='low_response') for i in range(17)]
+        for i,pixel in [(0,[320,180]),(5,[300,240]),(6,[340,240])]:
+            joints[i].update(pixel=pixel,score=1.7,status='supported',reason=None)
+        joints[9].update(pixel=[700,380],score=1.7,reason='outside_frame')
+        self.pose=dict(instance_id='frame-local-person',layout='coco17',joints=joints)
+
+    def test_exact_joint_reasons_distinguish_image_loss_from_depth_loss(self):
+        result=DepthProjector().project(self.value,[self.pose])[0]
+        self.assertEqual({j['id'] for j in result['joints']},{5,6})
+        evidence=result['joint_observations']
+        self.assertEqual([j['id'] for j in evidence],list(range(17)))
+        self.assertEqual(evidence[0]['image_status'],'supported')
+        self.assertEqual(evidence[0]['response'],1.7)
+        self.assertEqual(evidence[0]['response_semantics'],'SimCC_response_not_probability')
+        self.assertEqual(evidence[0]['depth_status'],'unknown')
+        self.assertEqual(evidence[0]['depth_reason'],'no_depth_support')
+        self.assertIsNone(evidence[0]['camera_xyz_m'])
+        self.assertEqual(evidence[5]['depth_status'],'measured')
+        self.assertEqual(evidence[5]['camera_xyz_m'],result['joints'][0]['camera_xyz_m'])
+        self.assertEqual(evidence[9]['image_reason'],'outside_frame')
+        self.assertEqual(evidence[9]['depth_status'],'not_attempted')
+        self.assertEqual(evidence[11]['image_reason'],'low_response')
+        self.assertIsNone(evidence[11]['camera_xyz_m'])
+
+    def test_no_supported_image_joints_retains_omissions_without_inventing_body(self):
+        for joint in self.pose['joints']:
+            joint.update(status='uncertain',reason='low_response',pixel=None)
+        result=DepthProjector().project(self.value,[self.pose])[0]
+        self.assertEqual(result['joints'],[])
+        self.assertEqual(len(result['joint_observations']),17)
+        self.assertTrue(all(j['depth_status']=='not_attempted' and j['camera_xyz_m'] is None
+                            for j in result['joint_observations']))
+
+    def test_observations_are_owned_by_the_exact_instance_and_do_not_alias_input(self):
+        other=deepcopy(self.pose);other['instance_id']='another-frame-local-person'
+        other['joints'][0].update(pixel=None,score=.1,status='uncertain',reason='low_response')
+        result=DepthProjector().project(self.value,[other,self.pose])
+        self.assertEqual([p['instance_id'] for p in result],[other['instance_id'],self.pose['instance_id']])
+        self.assertEqual(result[0]['joint_observations'][0]['image_status'],'uncertain')
+        self.assertEqual(result[1]['joint_observations'][0]['image_status'],'supported')
+        result[1]['joint_observations'][0]['pixel'][0]=0
+        self.assertEqual(self.pose['joints'][0]['pixel'],[320,180])
 
 
 class CameraTests(unittest.TestCase):
@@ -113,6 +170,58 @@ class PumpTests(unittest.TestCase):
             self.assertTrue(self.pump.tick())
         self.assertEqual([x[0] for x in self.calls],['/tracking/frame'])
         self.assertEqual(self.pump.snapshot()['people'][0]['joints'][0]['position_m'],[1,2,3])
+
+    def test_optional_joint_diagnostics_are_bound_to_the_original_frame_without_body_authority(self):
+        self.frame['schema']='home-fast-camera-2'
+        fixture=JointObservationTests();fixture.setUp()
+        instances=DepthProjector().project(fixture.value,[fixture.pose])
+        self.pump.local_projector=SimpleNamespace(project=lambda v,p:instances)
+        with patch('fast_tracking_runtime.decode_paired_depth_frame',return_value=fixture.value), \
+                patch.dict('os.environ',{'DEN_FAST_TRACKING_BODY_DIAGNOSTICS':'1'}):
+            self.assertTrue(self.pump.tick())
+        packet=self.pump.snapshot();evidence=packet['pose_observations']
+        self.assertEqual(evidence['schema'],'home-body-observations-1')
+        self.assertEqual(evidence['frame_key'],packet['frame_key'])
+        self.assertEqual(evidence['association'],'frame_scoped_detection')
+        self.assertEqual(evidence['point_semantics'],'visible_depth_surface_not_anatomical_joint_center')
+        self.assertEqual(evidence['people'][0]['instance_id'],packet['people'][0]['instance_id'])
+        self.assertEqual(len(evidence['people'][0]['joints']),17)
+        self.assertEqual(evidence['people'][0]['joints'][0]['depth_reason'],'no_depth_support')
+        self.assertNotIn('body_pose',packet);self.assertNotIn('track_ref',evidence['people'][0])
+        self.assertEqual({j['id'] for j in packet['people'][0]['joints']},{5,6})
+        self.assertEqual(packet['expires_monotonic_s'],packet['source_la_monotonic_interval_s'][0]+.75)
+        packet['pose_observations']['people'][0]['joints'][0]['pixel'][0]=0
+        self.assertEqual(instances[0]['joint_observations'][0]['pixel'],[320,180])
+
+    def test_joint_diagnostics_are_opt_in_and_do_not_enter_the_journal_trace(self):
+        self.frame['schema']='home-fast-camera-2'
+        fixture=JointObservationTests();fixture.setUp()
+        instances=DepthProjector().project(fixture.value,[fixture.pose])
+        self.pump.local_projector=SimpleNamespace(project=lambda v,p:instances)
+        with patch('fast_tracking_runtime.decode_paired_depth_frame',return_value=fixture.value), \
+                patch.dict('os.environ',{'DEN_FAST_TRACKING_BODY_DIAGNOSTICS':'0'}), \
+                patch('fast_tracking_runtime.tracking_trace') as trace:
+            self.assertTrue(self.pump.tick())
+        self.assertNotIn('pose_observations',self.pump.snapshot())
+        # Coordinates are never added to the structured trace's extra fields.
+        for call in trace.call_args_list:
+            self.assertNotIn('pixel',str(call.kwargs))
+            self.assertNotIn('camera_xyz_m',str(call.kwargs))
+
+    def test_enabled_diagnostics_do_not_log_image_or_room_coordinates(self):
+        self.frame['schema']='home-fast-camera-2'
+        fixture=JointObservationTests();fixture.setUp()
+        instances=DepthProjector().project(fixture.value,[fixture.pose])
+        self.pump.local_projector=SimpleNamespace(project=lambda v,p:instances)
+        captured=io.StringIO()
+        with patch('fast_tracking_runtime.decode_paired_depth_frame',return_value=fixture.value), \
+                patch.dict('os.environ',{'DEN_FAST_TRACKING_BODY_DIAGNOSTICS':'1','DEN_FAST_TRACKING_TRACE':'1'}), \
+                redirect_stdout(captured):
+            self.assertTrue(self.pump.tick())
+        self.assertIn('pose_observations',self.pump.snapshot())
+        self.assertIn('worker_published',captured.getvalue())
+        for private_field in ('pixel','camera_xyz_m','position_m','joint_observations','pose_observations'):
+            self.assertNotIn(private_field,captured.getvalue())
 
     def test_corrupt_paired_depth_cannot_invoke_a_model(self):
         self.frame['schema']='home-fast-camera-2';executions=[]

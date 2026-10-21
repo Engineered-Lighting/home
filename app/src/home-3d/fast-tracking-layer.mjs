@@ -181,12 +181,27 @@ export function attachFastTracking(engine,{isCurrent=()=>true,onStatus=()=>{},fe
       const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
       while(current()){
         const {value,done}=await reader.read();if(done)break;
-        buffer+=decoder.decode(value,{stream:true});if(buffer.length>65536)throw Error('tracking_stream_bound');
-        let split;while((split=buffer.indexOf('\n\n'))>=0){const event=buffer.slice(0,split);buffer=buffer.slice(split+2);
-          if(!event.startsWith('data: '))throw Error('tracking_event_invalid');draw(JSON.parse(event.slice(6)));}
+        buffer+=decoder.decode(value,{stream:true});
+        // Network chunks may coalesce many individually bounded events. Bound
+        // each complete event and the unfinished tail, not the transport batch.
+        let split;while((split=buffer.indexOf('\n\n'))>=0){
+          if(split>65536)throw Error('tracking_stream_bound');
+          const event=buffer.slice(0,split);buffer=buffer.slice(split+2);
+          if(!event.startsWith('data: '))throw Error('tracking_event_invalid');
+          let packet;try{packet=JSON.parse(event.slice(6));}catch{throw Error('tracking_event_invalid_json');}
+          draw(packet);
+        }
+        // Permit the first byte of a delimiter split across network chunks.
+        if(buffer.length>65536&&!(buffer.length===65537&&buffer.endsWith('\n')))throw Error('tracking_stream_bound');
       }
       trace('stream_disconnected');clear('stream_disconnected');publish({active:false,status:'disconnected'});
-    }catch(error){if(!disposed){trace('stream_failed');clear('stream_failed');publish({active:false,status:'unavailable'});}}
+    }catch(error){if(!disposed){
+      // Never copy parser/network messages containing payload data into traces.
+      const known=['tracking_clock_unavailable','tracking_clock_invalid','tracking_clock_retired',
+        'tracking_stream_unavailable','tracking_stream_bound','tracking_event_invalid','tracking_event_invalid_json'];
+      const reason=known.includes(error?.message)?error.message:error?.name==='AbortError'?'tracking_stream_aborted':'tracking_stream_error';
+      trace('stream_failed',null,{reason});clear('stream_failed');publish({active:false,status:'unavailable'});
+    }}
     finally { streamRunning=false;if(current())retryTimer=setTimeout(()=>{if(current())stream();},1000); }
   }
   const clockTimer=setInterval(()=>refreshClock(),5000);

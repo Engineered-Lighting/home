@@ -134,3 +134,76 @@ test('GPU timing preserves positive intervals and rejects impossible or malforme
     assert.deepEqual(trackingGpuLatency(source,sample,completed),{valid:false,reason});
   }
 });
+
+test('a coalesced network chunk preserves separately bounded tracking events',async()=>{
+  const priorWindow=globalThis.window;let layer,streamController;
+  globalThis.window={HomeContentPacks:{get:()=>({manifest:{assets:{'collision.glb':{sha256:scene.collisionDigest}}}})}};
+  const engine={sceneIdentity:scene,siteId:'victoria',contentRevision:'pack',apartmentRoot:new THREE.Group(),renderer:{}};
+  const stream=new ReadableStream({start(c){streamController=c;}});
+  const fetchImpl=async url=>url.endsWith('/clock')?
+    new Response(JSON.stringify({attempt_id:'c'.repeat(32),monotonic_s:performance.now()/1000})):
+    new Response(stream,{headers:{'content-type':'text/event-stream'}});
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  try{
+    layer=attachFastTracking(engine,{fetchImpl,documentObject:{hidden:false}});await flush();
+    const now=performance.now()/1000,events=[];
+    for(let n=1;n<=200;n++){
+      const p=packet();p.sequence=n;p.frame_key=n.toString(16).padStart(64,'0');p.identity.sequence=n;
+      p.source_la_monotonic_interval_s=[now-.02,now-.01];p.expires_monotonic_s=now+.73;
+      const event='data: '+JSON.stringify(p)+'\n\n';assert.ok(event.length<65536);events.push(event);
+    }
+    const chunk=new TextEncoder().encode(events.join(''));assert.ok(chunk.length>65536);
+    streamController.enqueue(chunk);await flush();
+    assert.equal(layer.readback().diagnostics.counts.browser_received,200,
+      'a transport chunk may contain many valid events and must not discard all of them');
+    assert.equal(layer.readback().diagnostics.counts.stream_failed||0,0);
+    assert.equal(layer.readback().sequence,200);
+  }finally{layer?.dispose();streamController?.close();globalThis.window=priorWindow;}
+});
+
+test('a maximum-sized event survives a delimiter split between network chunks',async()=>{
+  const priorWindow=globalThis.window;let layer,streamController;
+  globalThis.window={HomeContentPacks:{get:()=>({manifest:{assets:{'collision.glb':{sha256:scene.collisionDigest}}}})}};
+  const engine={sceneIdentity:scene,siteId:'victoria',contentRevision:'pack',apartmentRoot:new THREE.Group(),renderer:{}};
+  const stream=new ReadableStream({start(c){streamController=c;}});
+  const fetchImpl=async url=>url.endsWith('/clock')?
+    new Response(JSON.stringify({attempt_id:'c'.repeat(32),monotonic_s:performance.now()/1000})):
+    new Response(stream,{headers:{'content-type':'text/event-stream'}});
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  try{
+    layer=attachFastTracking(engine,{fetchImpl,documentObject:{hidden:false}});await flush();
+    const p=packet(),now=performance.now()/1000;
+    p.source_la_monotonic_interval_s=[now-.02,now-.01];p.expires_monotonic_s=now+.73;p.diagnostic_fixture='';
+    p.diagnostic_fixture='x'.repeat(65536-('data: '+JSON.stringify(p)).length);
+    const event='data: '+JSON.stringify(p);assert.equal(event.length,65536);
+    streamController.enqueue(new TextEncoder().encode(event+'\n'));await flush();
+    assert.equal(layer.readback().diagnostics.counts.stream_failed||0,0);
+    assert.equal(layer.readback().diagnostics.counts.browser_received||0,0);
+    streamController.enqueue(new TextEncoder().encode('\n'));await flush();
+    assert.equal(layer.readback().diagnostics.counts.browser_received,1);
+    assert.equal(layer.readback().sequence,1);
+  }finally{layer?.dispose();streamController?.close();globalThis.window=priorWindow;}
+});
+
+for(const [name,input,reason] of [
+  ['one oversized complete tracking event','data: '+JSON.stringify({...packet(),diagnostic_fixture:'x'.repeat(65536)})+'\n\n','tracking_stream_bound'],
+  ['one oversized unfinished tracking event','data: '+JSON.stringify({...packet(),diagnostic_fixture:'x'.repeat(65536)}),'tracking_stream_bound'],
+  ['malformed JSON with private-looking contents','data: {"diagnostic_fixture":"private-sentinel" broken}\n\n','tracking_event_invalid_json']
+])test(name+' remains refused with a bounded diagnostic reason',async()=>{
+  const priorWindow=globalThis.window;let layer,streamController;
+  globalThis.window={HomeContentPacks:{get:()=>({manifest:{assets:{'collision.glb':{sha256:scene.collisionDigest}}}})}};
+  const engine={sceneIdentity:scene,siteId:'victoria',contentRevision:'pack',apartmentRoot:new THREE.Group(),renderer:{}};
+  const stream=new ReadableStream({start(c){streamController=c;}});
+  const fetchImpl=async url=>url.endsWith('/clock')?
+    new Response(JSON.stringify({attempt_id:'c'.repeat(32),monotonic_s:performance.now()/1000})):
+    new Response(stream,{headers:{'content-type':'text/event-stream'}});
+  const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  try{
+    layer=attachFastTracking(engine,{fetchImpl,documentObject:{hidden:false}});await flush();
+    streamController.enqueue(new TextEncoder().encode(input));await flush();
+    assert.equal(layer.readback().diagnostics.counts.browser_received||0,0);
+    assert.equal(layer.readback().diagnostics.events.find(e=>e.stage==='stream_failed')?.reason,reason);
+    assert.doesNotMatch(JSON.stringify(layer.readback().diagnostics),/private-sentinel|diagnostic_fixture/);
+    assert.equal(engine.apartmentRoot.children[0].children.length,0);
+  }finally{layer?.dispose();streamController?.close();globalThis.window=priorWindow;}
+});

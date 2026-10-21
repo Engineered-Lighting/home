@@ -113,7 +113,7 @@
     const identityKey=[identity?.siteId,identity?.contentRevision,identity?.frameDigest,identity?.registrationVersion].join('|');
     useEffect(()=>{
       let retired=false,layer=null;
-      if(active&&engine?.siteId==='victoria')loadLayer().then(module=>{
+      if(global.__HOME_FAST_TRACKING_ENABLED===true&&active&&engine?.siteId==='victoria')loadLayer().then(module=>{
         if(retired||!module.attachFastTracking)return;
         layer=module.attachFastTracking(engine,{isCurrent:()=>!retired&&activeRef.current&&engineRef.current===engine,
           onStatus:value=>{if(!retired){

@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import http.client
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -18,6 +19,13 @@ import uuid
 
 from reasoning import canonical,digest
 from fast_tracking_depth import decode_paired_depth_frame,DepthProjector
+
+
+def tracking_trace(stage,packet,*,stream_id=None,at_s=None,**extra):
+    if os.environ.get('DEN_FAST_TRACKING_TRACE')!='1':return
+    print('[den-fast-tracking-trace-v1] '+canonical(dict(stage=stage,at_s=time.monotonic() if at_s is None else at_s,
+        clock_domain='la_monotonic',stream_id=stream_id,attempt_id=packet.get('attempt_id'),sequence=packet.get('sequence'),
+        frame_key=packet.get('frame_key'),**extra)),flush=True)
 
 
 def private_json(path,maximum=131072):
@@ -155,7 +163,7 @@ class TrackingPump:
         if not self.fresh():raise ValueError('tracking_admission_ended')
         started=self.clock()
         proof=self.receiver.execute({**reference,'body':body},source_site='victoria')
-        inference_ms=(self.clock()-started)*1000
+        model_completed=self.clock();inference_ms=(model_completed-started)*1000
         if proof.get('terminal') is not True or proof.get('state')!='completed':return False
         if proof['result'].get('frame_id')!=key:raise ValueError('tracking_model_frame_mismatch')
         poses=proof['result'].get('pose_instances',[])
@@ -184,6 +192,9 @@ class TrackingPump:
             dropped=self.drops,lighting_authority=False,physical_permission=False,identity_authority=False,
             alignment_sha256=digest(self.alignment),mount_check='mount_check_skipped_development')
         with self.lock:self.latest=packet;self.reason=None
+        tracking_trace('worker_model_completed',packet,at_s=model_completed)
+        tracking_trace('worker_published',packet,at_s=now,people=len(people),joints=sum(len(p['joints']) for p in people),
+            expires_monotonic_s=packet['expires_monotonic_s'],source_la_monotonic_interval_s=observed)
         return True
     def capture_loop(self):
         while not self.stop_event.is_set() and self.fresh():
@@ -215,7 +226,7 @@ class TrackingPump:
 
 
 class TrackingHTTP:
-    def __init__(self,worker,pump):self.worker,self.pump=worker,pump;self.clients=0
+    def __init__(self,worker,pump):self.worker,self.pump=worker,pump;self.clients=0;self.readers=0
     async def __call__(self,scope,receive,send):
         if scope.get('type')=='lifespan':
             while True:
@@ -233,15 +244,24 @@ class TrackingHTTP:
                hmac.compare_digest(hashlib.sha256(values[0][7:]).hexdigest(),self.pump.config['read_token_sha256']))
         status=200 if valid and scope.get('scheme')=='https' and scope.get('method')=='GET' and not scope.get('query_string') else 403
         if path not in {'/v1/tracking/stream','/v1/tracking/clock'}:status=404
-        if self.clients>=2:status=429
+        # Long-lived viewers cannot consume the clock refresh admission slots.
+        if path.endswith('/stream') and self.clients>=2:status=429
+        if path.endswith('/clock') and self.readers>=2:status=429
         if status!=200:
             await send({'type':'http.response.start','status':status,'headers':[(b'content-type',b'application/json')]})
             await send({'type':'http.response.body','body':b'{"error":"tracking_unavailable"}'});return
         if path.endswith('/clock'):
-            data=canonical({'attempt_id':self.pump.attempt,'monotonic_s':time.monotonic()}).encode()
-            await send({'type':'http.response.start','status':200,'headers':[(b'content-type',b'application/json'),(b'cache-control',b'no-store')]})
-            await send({'type':'http.response.body','body':data});return
+            self.readers+=1
+            try:
+                data=canonical({'attempt_id':self.pump.attempt,'monotonic_s':time.monotonic()}).encode()
+                await send({'type':'http.response.start','status':200,'headers':[(b'content-type',b'application/json'),(b'cache-control',b'no-store')]})
+                await send({'type':'http.response.body','body':data})
+            finally:self.readers-=1
+            return
         self.clients+=1
+        import re
+        ids=[v.decode('ascii',errors='ignore') for k,v in headers if k.lower()==b'x-home-tracking-stream']
+        stream_id=ids[0] if len(ids)==1 and re.fullmatch(r'[a-f0-9]{32}',ids[0]) else None
         try:
             await send({'type':'http.response.start','status':200,'headers':[(b'content-type',b'text/event-stream'),(b'cache-control',b'no-store')]})
             previous=None
@@ -251,6 +271,7 @@ class TrackingHTTP:
                 if key!=previous:
                     data=b'data: '+canonical(packet).encode()+b'\n\n'
                     await asyncio.wait_for(send({'type':'http.response.body','body':data,'more_body':True}),1)
+                    tracking_trace('worker_stream_sent',packet,stream_id=stream_id)
                     previous=key
                 try:
                     message=await asyncio.wait_for(receive(),.02)

@@ -1222,7 +1222,7 @@ function sendIndex(req, res, filePath) {
     const haProxyRuntime = haTokenProxy.enabled
       ? `window.__HOME_WEB_HA_TOKEN_PROXY=true;window.__HOME_WEB_HA_TOKEN=${jsString(HA_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}</script>`;
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};window.__HOME_FAST_TRACKING_ENABLED=${!!trackingCa&&!!process.env.HOME_WEB_DEN_TRACKING_READ_TOKEN_FILE};${stackProxyRuntime}${haProxyRuntime}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {

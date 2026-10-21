@@ -30,3 +30,27 @@ test('stream delivers immediately, checks auth again, and drops a slow consumer'
   const body=new EventEmitter();Object.assign(body,{statusCode:200,headers:{'content-type':'text/event-stream'},destroy(){this.destroyed=true;}});
   slow.upstream().callback(body);body.emit('data',Buffer.from('data: {}\n\n'));assert.equal(body.destroyed,true);
 });
+
+test('two admitted streams leave a separate bounded clock slot',()=>{
+  const f=fixture();f.handler(f.req,f.res);
+  const req2=new EventEmitter();Object.assign(req2,{url:f.req.url,method:'GET',headers:f.req.headers});
+  const res2=new EventEmitter();res2.writeHead=()=>{};res2.end=()=>{res2.writableEnded=true;};
+  f.handler(req2,res2);
+  const clockReq=new EventEmitter();Object.assign(clockReq,{url:'/api/perception-tracking/v1/clock',method:'GET',headers:f.req.headers});
+  const clockRes=new EventEmitter();clockRes.writeHead=status=>{clockRes.status=status;};clockRes.end=()=>{clockRes.writableEnded=true;};
+  f.handler(clockReq,clockRes);assert.equal(f.calls(),3,'viewers must not starve their clock refresh');
+  f.res.emit('close');res2.emit('close');clockRes.emit('close');
+});
+
+test('diagnostics correlate split SSE writes using only frame references',()=>{
+  const events=[],f=fixture({onTrace:event=>events.push(event)});f.handler(f.req,f.res);
+  const response=new EventEmitter();Object.assign(response,{statusCode:200,headers:{'content-type':'text/event-stream'},destroy(){}});
+  f.upstream().callback(response);
+  const packet={attempt_id:'c'.repeat(32),sequence:7,frame_key:'d'.repeat(64),people:[{joints:[{position_m:[1,2,3]}]}],secret:'MUST_NOT_LOG'};
+  const bytes=Buffer.from('data: '+JSON.stringify(packet)+'\n\n');response.emit('data',bytes.subarray(0,13));response.emit('data',bytes.subarray(13));
+  assert.deepEqual(events.map(e=>e.stage),['gateway_received','gateway_written']);
+  assert.equal(events[0].sequence,7);assert.equal(events[0].stream_id,f.upstream().config.headers['X-Home-Tracking-Stream']);
+  assert.equal(f.res.headers['X-Home-Tracking-Stream'],events[0].stream_id);
+  assert.doesNotMatch(JSON.stringify(events),/position_m|MUST_NOT_LOG|Authorization/);
+  f.res.emit('close');
+});

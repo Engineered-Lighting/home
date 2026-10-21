@@ -1,4 +1,5 @@
 import base64
+import asyncio
 from copy import deepcopy
 import hashlib
 import io
@@ -154,6 +155,22 @@ class JPEGTests(unittest.TestCase):
             payload=fixture.store.db.execute('SELECT payload FROM remote_inputs').fetchone()[0]
             self.assertNotIn('data_base64',payload)
         finally:fixture.tearDown()
+
+
+class TrackingHTTPTests(unittest.IsolatedAsyncioTestCase):
+    async def test_two_viewers_do_not_starve_clock_and_short_reads_remain_bounded(self):
+        token='a'*40
+        pump=SimpleNamespace(config={'read_token_sha256':hashlib.sha256(token.encode()).hexdigest()},attempt='b'*32)
+        app=TrackingHTTP(None,pump);app.clients=2
+        scope={'type':'http','scheme':'https','method':'GET','path':'/v1/tracking/clock',
+            'headers':[(b'authorization',('Bearer '+token).encode())],'query_string':b''}
+        out=[]
+        async def send(message):out.append(message)
+        await app(scope,None,send)
+        self.assertEqual(out[0]['status'],200);self.assertEqual(app.readers,0)
+        app.readers=2;out.clear();await app(scope,None,send);self.assertEqual(out[0]['status'],429)
+        app.readers=0;out.clear();scope['path']='/v1/tracking/stream'
+        await app(scope,None,send);self.assertEqual(out[0]['status'],429)
 
 
 if __name__=='__main__':unittest.main()

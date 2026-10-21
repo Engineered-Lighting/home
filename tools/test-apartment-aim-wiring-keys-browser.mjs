@@ -62,6 +62,29 @@ test('aim wiring: arrow-key nudges and Tap to aim through the mounted Home shell
       assert.deepEqual(await descriptor(id), original);
       await fixtureInspector().locator('[data-apt-aim-tab-action="discard"]').click();
       await until('tap discard', () => document.querySelector('[data-apt-aim-bar]')?.hidden === true);
+      const fineTune = fixtureInspector().locator('[data-apt-aim-fine-tune]');
+      assert.equal(await fineTune.evaluate(node => node.open), false, 'numeric fine tuning starts collapsed');
+      assert.equal(await fixtureInspector().getByRole('slider', {name:'Pan',exact:true}).count(), 0, 'the primary Aim flow stays compact');
+      await fineTune.locator('summary').press('Enter');
+      const pan = fixtureInspector().getByRole('slider', {name:'Pan',exact:true});
+      await pan.focus(); await page.keyboard.press('ArrowRight');
+      await until('fine tune pan', ({id,pan})=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.pan_deg===pan+1,
+        {id,pan:original.state.pan_deg});
+      const fineTuned = await descriptor(id);
+      assert.deepEqual({...fineTuned.state,pan_deg:original.state.pan_deg}, original.state, 'fine tuning preserves every other channel and tilt');
+      await fixtureInspector().getByRole('button',{name:'Undo aim',exact:true}).press('Enter');
+      await until('fine tune undo', ({id,pan})=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.pan_deg===pan,
+        {id,pan:original.state.pan_deg});
+      assert.deepEqual(await descriptor(id),original,'compact Undo restores the exact aim');
+      await fixtureInspector().getByRole('button',{name:'Redo aim',exact:true}).press('Enter');
+      await until('fine tune redo', ({id,pan})=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.pan_deg===pan,
+        {id,pan:fineTuned.state.pan_deg});
+      assert.deepEqual(await descriptor(id),fineTuned,'compact Redo restores the exact fine tune');
+      await fixtureInspector().getByRole('button',{name:'Undo aim',exact:true}).press('Enter');
+      await until('restore fine tune', ({id,pan})=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.pan_deg===pan,
+        {id,pan:original.state.pan_deg});
+      await fineTune.locator('summary').press('Enter');
+      assert.equal(await fineTune.evaluate(node=>node.open),false,'keyboard users can close fine tuning again');
       return { point, hit };
     });
 }));

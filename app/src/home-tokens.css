@@ -613,6 +613,21 @@ button.hg-no-press:active {
 .apt-home-shell .apt-ui-button.is-primary { border-color: var(--hg-ice-bright); background: var(--hg-ice-bright); color: var(--hg-bg-0); }
 .apt-home-shell .apt-ui-button.is-proposed { border-color: var(--apt-proposed); color: var(--apt-proposed); }
 .apt-home-shell .apt-ui-button[aria-pressed="true"] { border-color: var(--hg-border-strong); background: var(--hg-bg-3); color: var(--hg-fg-0); }
+.apt-home-shell .apt-ui-button.is-ghost { border-color: transparent; }
+.apt-home-shell .apt-ui-button.apt-ui-chip { border-radius: 15px; color: var(--hg-fg-1); }
+.apt-home-shell .apt-ui-chip[aria-pressed="true"] { border-color: var(--hg-ice); color: var(--hg-fg-0); background: var(--apt-fill-2); }
+.apt-home-shell .apt-ui-quick { display: flex; flex: 0 0 auto; gap: 4px; }
+.apt-home-shell .apt-ui-preset-row { flex-wrap: wrap; gap: 8px; }
+.apt-home-shell .apt-ui-aim-rows { display: grid; gap: 10px; min-width: 0; }
+.apt-home-shell .apt-ui-aim-row { display: flex; align-items: center; gap: 10px; min-height: 30px; min-width: 0; font-size: 13.5px; }
+.apt-home-shell .apt-ui-aim-mark { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.apt-home-shell [data-apt-aim-row="current"] .apt-ui-aim-mark { background: var(--apt-warm); box-shadow: 0 0 8px color-mix(in srgb,var(--apt-warm) 60%,transparent); }
+.apt-home-shell [data-apt-aim-row="proposed"] .apt-ui-aim-mark { border: 2px solid var(--apt-proposed); }
+.apt-home-shell .apt-ui-aim-name { flex: 1 1 auto; min-width: 0; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apt-home-shell [data-apt-aim-row="proposed"] .apt-ui-aim-name { color: var(--apt-proposed); }
+.apt-home-shell .apt-ui-aim-measure { font-family: 'Geist Mono', monospace; font-size: 11.5px; color: var(--hg-fg-3); white-space: nowrap; }
+.apt-home-shell [data-apt-aim-row][data-state="invalid"] .apt-ui-aim-mark { border: 2px dashed var(--apt-blocked); }
+.apt-home-shell [data-apt-aim-row][data-state="invalid"] .apt-ui-aim-name { color: var(--hg-fg-2); white-space: normal; font-weight: 500; }
 .apt-home-shell .apt-ui-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: auto; gap: 2px; padding: 3px; border: 1px solid var(--apt-border-soft); border-radius: 10px; background: var(--apt-fill); }
 .apt-home-shell .apt-ui-seg.is-full { display: grid; width: 100%; grid-auto-columns: minmax(0,1fr); }
 .apt-home-shell .apt-ui-seg > button { display: flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--hg-fg-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; cursor: pointer; }

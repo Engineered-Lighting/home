@@ -23,6 +23,27 @@ def test_thermal_zone_exclusion(tmp_path):
     assert "temp.zone.tj_thermal" not in out and out["temp.zone_max"] == 47.5
 
 
+def test_excluded_channel_is_never_read(tmp_path, monkeypatch):
+    write_tree(str(tmp_path), {'thermal_zone0': {'type': 'cv0-thermal', 'temp': '0'},
+                               'thermal_zone1': {'type': 'cpu-thermal', 'temp': '48000'}})
+    original = sig._read
+    def read(path):
+        assert not str(path).endswith('thermal_zone0/temp'), 'unsupported driver called'
+        return original(path)
+    monkeypatch.setattr(sig, '_read', read)
+    assert sig.read_thermal_zones(str(tmp_path), ['cv0-thermal'])['temp.zone_max'] == 48
+
+
+@pytest.mark.parametrize('failure', [TypeError("can't concat NoneType to bytes"), UnicodeError('bad sysfs')])
+def test_unreadable_sysfs_channel_becomes_missing_evidence(monkeypatch, failure):
+    class Channel:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self): raise failure
+    monkeypatch.setattr('builtins.open', lambda *a, **k: Channel())
+    assert sig._read('/sys/class/thermal/thermal_zone0/temp') is None
+
+
 def test_hwmon_k10temp_and_two_nvme_drives(tmp_path):
     write_tree(str(tmp_path), fixture_json("sysfs.json")["la_hwmon"])
     out = sig.read_hwmon(str(tmp_path))

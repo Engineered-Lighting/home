@@ -32,7 +32,10 @@ def _read(path):
     try:
         with open(path, encoding="utf-8") as handle:
             return handle.read().strip()
-    except OSError:
+    except (OSError, TypeError, UnicodeError):
+        # Some unsupported Jetson sysfs channels return no bytes, causing the
+        # text decoder to raise TypeError. Treat an unreadable required input
+        # as missing evidence; never let it bypass the monitor's Stop latch.
         return None
 
 
@@ -46,13 +49,15 @@ def read_thermal_zones(root="/sys/class/thermal", exclude_types=()):
     out = {}
     excluded = {_key(t) for t in exclude_types}
     for zone in sorted(glob.glob(os.path.join(root, "thermal_zone*"))):
+        kind = _key(_read(os.path.join(zone, "type")) or os.path.basename(zone))
+        if kind in excluded:
+            continue
         raw = _read(os.path.join(zone, "temp"))
         try:
             value = int(raw) / 1000.0
         except (TypeError, ValueError):
             continue
-        kind = _key(_read(os.path.join(zone, "type")) or os.path.basename(zone))
-        if kind in excluded or value <= -40 or value >= 200:
+        if value <= -40 or value >= 200:
             continue
         _put_max(out, "temp.zone." + kind, value)
     if out:

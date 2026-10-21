@@ -29,7 +29,12 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
     // percentage, then "Photo isn't available here" with Retry and Back to
     // Cloud, still Echo Park.
     await modeButton('Photo').click();
-    await notice().getByRole('heading', { name: /^Loading Photo · \d+%$/ }).waitFor().catch(async error => {
+    const loadingSnapshot=await page.waitForFunction(()=>{
+      const node=document.querySelector('.apt-ui-toolbar-notice[data-apt-mode-notice="loading"]');
+      const title=node?.querySelector('h3')?.textContent||'';
+      const value=Number(node?.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow'));
+      return /^Loading Photo · \d+%$/.test(title)&&value>0&&value<100?{title,value}:false;
+    },null,{timeout:15000}).catch(async error => {
       // The touched-harness runner keeps only the last lines, which hold the stack.
       const diagnostics = JSON.stringify({ notice: await notice().allInnerTexts().catch(() => null),
         requests: requests.filter(row => /\/apartment\./.test(row.path)).map(row => row.path),
@@ -37,8 +42,9 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
       error.message += ' ' + diagnostics; error.stack = 'Photo loading diagnostics: ' + diagnostics + String.fromCharCode(10) + error.stack;
       throw error;
     });
-    const loading = await notice().evaluate(node => ({ title: node.querySelector('h3').textContent,
-      value: Number(node.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')) }));
+    // Snapshot title and value in one browser task; a concurrent candidate
+    // load can reset the live notice between two separate Playwright reads.
+    const loading=await loadingSnapshot.jsonValue();await loadingSnapshot.dispose();
     assert.ok(loading.value > 0 && loading.value < 100, 'a real partial percentage is shown: ' + loading.title);
     await still('photo-loading');
     assert.equal(await engineMode(), 'points', 'the current view stays as it is while Photo loads');

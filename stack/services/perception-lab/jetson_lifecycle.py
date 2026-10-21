@@ -61,7 +61,10 @@ class JetsonLauncher:
         if socket.gethostname() != 'victoria-den-jetson':
             raise ValueError('Jetson host required')
         for line in command(['systemctl', '--failed', '--no-legend', '--plain']).splitlines():
-            if line.split()[0] not in {'apport-autoreport.service', 'jetson_metrics.service'}:
+            # Same exact metadata-only non-dependency commissioned by Den ops.
+            # Kernel faults, unknown failed units and all headroom gates below
+            # still block every worker launch.
+            if line.split()[0] not in {'apport-autoreport.service', 'jetson_metrics.service', 'fwupd-refresh.service'}:
                 raise ValueError('Unknown failed unit')
         faults = subprocess.run(['journalctl', '-k', '-b', '--since', '20 minutes ago', '--no-pager',
                                  '--grep', 'MCE|hardware error|lockup|thermal.*critical|Out of memory|oom-kill|panic|I/O error|segfault'],

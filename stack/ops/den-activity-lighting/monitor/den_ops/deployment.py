@@ -14,6 +14,25 @@ EXPECTED_UNITS = {
 COMPONENTS = {"la-host": {"brain", "gateway", "ops"}, "victoria-jetson": {"bridge", "lab", "detector", "ops"}}
 
 
+def execution_identity(value):
+    """Exclude systemd's observed PID/timestamps, retaining its exact command.
+
+    A recording roll changes execution metadata even when the executable and
+    arguments are unchanged. Unknown serialized command formats fail closed.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    if not value.startswith('{'):
+        return value
+    if re.search(r'\}\s*;?\s*\{', value):
+        return None
+    match = re.fullmatch(
+        r'\{\s*(path=.+? ; argv\[\]=.+? ; ignore_errors=(?:yes|no))'
+        r' ; start_time=[^;]* ; stop_time=[^;]* ; pid=\d+ ; code=[^;]* ; status=[^;]*?\s*\}',
+        value, flags=re.DOTALL)
+    return match.group(1) if match else None
+
+
 def digest(doc):
     return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 

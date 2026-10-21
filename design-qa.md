@@ -163,12 +163,31 @@ plan into twelve disjoint shards because an eight-shard worker exhausted
 its job budget after its tests had passed; matrix, artifacts and receipt
 aggregation all use twelve. Shard-contract tests pass 15/15.
 
-Combined verification status: the final 125-item recheck passes on `6af04674`.
+Combined verification status: the final 126-item qualification passes on
+`491a26a9af32e663caf79b0dcdab5024ca45385e`.
 All twelve receipts are green and their disjoint union equals the unsharded
-plan. Two local workers ran concurrently; the longest shard took 162 seconds.
+plan. Two local workers ran concurrently; the longest shard took 158 seconds.
 Runtime hashes and the final mapped plan are sealed in the private acceptance
 receipt. Subsequent changes only update this QA report; exact-PR-head hosted
 CI/integration acceptance remains separate and pending.
+
+Hosted attempt `39527551675` on `4295351e` failed: the workflow contract still
+expected eight shards, and a Photo comparison sampled a missing surface pick.
+The workflow contract now requires twelve and is part of the local mapped
+plan (6/6 focused assertions pass). Photo explicitly awaits collision-proxy
+readiness before comparing all 35 samples, requires a real pick per backend,
+and compares collision/cutaway state alongside the existing matrices/pixels.
+A controlled delayed-collision experiment did not reproduce the exact hosted
+failure; its precise cause is not claimed proven. Hosted requalification is
+required. Assertions and numerical thresholds remain unchanged.
+
+The first follow-up run exposed an M2 test race: its title predicate passed,
+then a later DOM read observed a different loading state. It now captures title
+and progress atomically in the same awaited predicate, retaining the original
+15-second wait and nonzero partial-progress assertions. That interrupted mapped
+attempt is preserved with `ABORTED.md` under `ci-followup-mapped/` and does not
+count as a complete run. The separate `final-qualification/` contains the full
+126-item green run; the earlier 125-item recheck remains historical evidence.
 The first combined run completed 123/125 items successfully; one obsolete
 Aim-pane source assertion is corrected, and one native WebGL lit-reference
 sample was unstable (RGB delta 18, mean 2.55). Three diagnostic reruns passed

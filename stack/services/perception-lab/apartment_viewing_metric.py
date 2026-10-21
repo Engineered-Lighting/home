@@ -183,7 +183,7 @@ def prepare_metric_frame(*, originals, anchor_headers, receiver_proof, binding, 
         clock_mapping_status='verified', clock_mapping_id='apartment-bundle-clock-1:'+digest({
             'originals':pins['originals'],'headers':pins['anchor_headers'],'receiver_proof':pins['receiver_proof'],
             'capture_epoch':pins['capture_epoch'],'timing_generation':pins['timing_generation'],'timing':timing}),
-        geometric_validity='unvalidated')
+        geometric_validity='unvalidated',reading_timing_qualified=not bool(warnings))
     descriptor = dict(schema=SCHEMA, version=1, binding_digest=digest(binding),
         originals=deepcopy(pins['originals']), anchor_headers=deepcopy(pins['anchor_headers']),
         receiver_proof_sha256=pins['receiver_proof'], capture_epoch=meta['session'],

@@ -113,14 +113,11 @@ class DeepStackTests(unittest.TestCase):
                 'joints': [{'id': 0, 'position_m': [1., 2., 1.5]}, {'id': 5, 'position_m': [.8, 2., 1.2]},
                            {'id': 6, 'position_m': [1.2, 2., 1.2]}]}}
         seen = self.deep.observe()
-        self.assertEqual(seen['activity'], {'event_id': answer['id'], 'label': 'reading', 'confidence': .7,
-            'model': 'jev-1.13.0', 'facts_key': 'k' * 64, 'observed_at': started + 1.5})
+        self.assertNotIn('activity', seen, 'legacy answers have no frozen origin expiry or sole-reader binding')
         self.assertEqual(seen['person_count'], 1, 'arm-B boxes after the duplicate merge')
         self.assertEqual(seen['usage'], {'calls': 2, 'input_tokens': 900, 'output_tokens': 40}, 'both arms are billed')
         self.assertEqual(seen['health'], {'jev': (True, None), 'deep_stack': (True, None), 'camera': (True, None)})
-        person = seen['pose']['people'][0]
-        self.assertEqual((seen['pose']['key'], person['head_m'], person['approximate']), (output['id'], [1., 2., 1.5], True))
-        self.assertIsNotNone(person['head_pitch_deg'])
+        self.assertEqual(seen['pose']['people'], [], 'unbound legacy placement explicitly retires spotlight authority')
         self.store.append_event(sid, 'reasoning.delivery', {'arm': 'b', 'state': 'indeterminate'})
         self.now[0] += 11
         seen = self.deep.observe()
@@ -287,7 +284,9 @@ class EgressReleaseTests(unittest.TestCase):
         self.now[0] += 1; loop.tick()
         changes = [h for i, h in enumerate(jev_health()) if i == 0 or h != jev_health()[i - 1]]
         self.assertEqual(changes, [(False, 'jev_starting'), (False, 'jev_egress_blocked_indeterminate'),
-                                   (False, 'jev_resuming'), (True, None)])
+                                   (False, 'jev_resuming'), (False, 'jev_stale')])
+        # A completed legacy answer has no frozen source expiry/binding and
+        # cannot refresh the activity loop's qualified-answer health clock.
         # Paused (room empty): a blocked request of the loop's is still released on time.
         loop.occupancy = lambda: 'off'
         self.now[0] += 121; loop.tick()

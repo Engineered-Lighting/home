@@ -6,7 +6,7 @@ outside the runtime and source locks; source Stop retires retained references
 synchronously. Original clocks and both arms' common input remain unchanged.
 """
 from copy import deepcopy
-import hashlib,json,re
+import hashlib,json,re,time
 
 MAX_CAPTURE_BYTES=6*1024**2
 MIN_CAPTURE_INTERVAL_S=1.
@@ -25,6 +25,16 @@ def failure_reason(error,phase):
     if isinstance(error,ValueError) and re.fullmatch(r'(metric|bundled|receiver_clock|execution_clock|fixed_camera|qualified_receiver_clock|approximate)_[a-z0-9_]{1,90}',code):
         return code
     return 'metric_'+phase+'_'+type(error).__name__
+
+def after_anchor(raw,receipt):
+    # Use the incumbent bounded decoder, never packaging/arrival time, to
+    # choose the closest actual lower anchor for this original RGB plane.
+    from bundle_rgb_input import decode_bundle
+    from decimal import Decimal
+    depth,nv12,meta=decode_bundle(raw);rgb=meta['frames']['rgb']
+    return (meta['session']==receipt['session'] and rgb['sequence']>receipt['sequence']
+        and Decimal(str(rgb['device_timestamp_seconds']))*10**9
+            >receipt['frame_device_ns']+receipt['timestamp_quantization_ns']+1000)
 
 class MetricInputFactory:
     def __init__(self,client,*,clock=None,projection_factory=None,desk_preview=None,timing_policy='strict'):
@@ -183,7 +193,8 @@ class MetricInputSession:
             if self.closed or lease is None:return
         session,runner=self._current()
         with self.owner.store.lock:
-            row=self.owner.store.db.execute("SELECT id,payload FROM events WHERE session_id=? AND kind='perception.output' AND json_extract(payload,'$.arm')='b' AND json_extract(payload,'$.generation')=? ORDER BY id DESC LIMIT 1",(session['id'],runner.generation)).fetchone()
+            row=self.owner.store.db.execute("SELECT id,payload FROM events WHERE session_id=? AND kind='perception.output' AND json_extract(payload,'$.arm')='b' AND json_extract(payload,'$.generation')=? AND json_extract(payload,'$.media_ids')=? AND json_extract(payload,'$.frame_id')=? ORDER BY id DESC LIMIT 1",
+                (session['id'],runner.generation,json.dumps([record['id']],separators=(',',':')),lease.image_metadata['frame_id'])).fetchone()
         if row:
             payload=json.loads(row[1])
             if payload.get('media_ids')==[record['id']]:
@@ -303,10 +314,28 @@ class MetricInputSession:
             if not locked:raise ValueError('commissioned camera capture busy')
             self._current();phase='receiver_clock';started=self.factory.clock.begin(receipt)
             phase='npz_read'
-            raw,_=self.factory.client._read('/frame.npz');proof=self.factory.clock.finish(started)
-            available=self.owner.store.clock();self._current()
+            raw,_=self.factory.client._read('/frame.npz');self._current()
+            newer=after_anchor(raw,receipt)
+            if not newer:
+                # The bundle endpoint may still expose a plane from before
+                # the latest commissioned JPEG. Wait one bounded frame turn,
+                # then read once more; retain only one NPZ and never resend a
+                # model request. If it still lags, keep the older real anchor.
+                time.sleep(.05);self._current();del raw
+                raw,_=self.factory.client._read('/frame.npz');self._current()
+                newer=after_anchor(raw,receipt)
+            if newer:prior=(jpeg,header.encode())
             phase='calibration_read'
             calibration,_=self.factory.client._read('/calibration');self._current()
+            # Read the upper JPEG after NPZ under the SAME commissioned clock
+            # turn. The next pump turn publishes another host-clock receipt;
+            # a pending proof must never span that replacement. This is one
+            # bounded read through the existing client, not another pump.
+            phase='upper_anchor';jpeg,header=self.factory.client._read('/frame.jpg')
+            upper=_receipt(jpeg,header)
+            if upper['session']!=receipt['session'] or upper['timing_generation']!=receipt['timing_generation']:
+                raise ValueError('metric_camera_epoch_changed')
+            proof=self.factory.clock.finish(started);available=self.owner.store.clock();self._current()
             self.factory.capture_lock.release();locked=False
             originals={'npz':raw,'calibration':calibration,'anchor_a':prior[0],'anchor_b':jpeg}
             headers={'a':prior[1].decode(),'b':header}

@@ -10,12 +10,13 @@ import json
 import logging
 import threading
 import time
+import uuid
 from collections import Counter, deque
 from typing import Callable
 
 from . import OVERRIDE_SCHEMA, STATE_SCHEMA
 from .geometry import Geometry
-from .inputs import EventError, Inputs, validate_batch
+from .inputs import EventError, Inputs, validate_batch, reader_key
 from .rules import RULE_ORDER, Evaluation, FixtureOutput, Override, evaluate, held_output, short_name
 from .settings import Settings
 
@@ -24,7 +25,7 @@ log = logging.getLogger("lighting_brain")
 OVERRIDE_REASONS = ("change", "aim", "undo", "redo")
 # Fields that change every second without anything meaningful changing; they
 # don't count as a "change" for the stream (the 5 s push still carries them).
-VOLATILE = ("generated_at",)
+VOLATILE = ("generated_at", "state_revision", "reading_evidence")
 
 
 def _r(value: float | None, digits: int = 3) -> float | None:
@@ -124,6 +125,10 @@ class Brain:
         self.decisions: deque = deque(maxlen=settings.decision_log_size)
         self.evaluation: Evaluation | None = None
         self.version = 0
+        self.instance_id = uuid.uuid4().hex
+        self.decision_sequence = 0
+        self.decision_id = None
+        self._desired_signature = None
         self.started_at = clock()
         self.counts: Counter = Counter()
         self._signature: str | None = None
@@ -211,6 +216,11 @@ class Brain:
             self.decisions.appendleft(decision)
             log.info("%s: %s (%s)", decision["rule"], decision["why"], decision["change"])
         self.evaluation = new
+        desired = json.dumps([new.mode, [_fixture_json(fo) for fo in new.fixtures]], sort_keys=True)
+        if desired != self._desired_signature:
+            self._desired_signature = desired
+            self.decision_sequence += 1
+            self.decision_id = f'{self.instance_id}:{self.decision_sequence}'
         signature = json.dumps(_strip_volatile(self._state_locked(now)), sort_keys=True)
         # At most max_push_hz visible changes per second: a change inside the
         # interval waits for a later ingest or tick (tick_s <= the interval).
@@ -251,6 +261,8 @@ class Brain:
     def health(self) -> dict:
         with self._cond:
             return {"ok": True, "home": self.geometry.home, "room": self.geometry.room,
+                    "events_schemas": ["activity-lighting-events-1", "activity-lighting-events-2"],
+                    "reading_requires_bound_evidence": True,
                     "settings_version": self.settings.settings_version,
                     "synthetic_geometry": self.geometry.synthetic,
                     "uptime_s": round(self.clock() - self.started_at, 1), "events": dict(self.counts)}
@@ -265,6 +277,17 @@ class Brain:
             "home": self.geometry.home,
             "room": self.geometry.room,
             "generated_at": now,
+            "state_revision": self.version,
+            "decision_id": self.decision_id,
+            "reading_evidence": {
+                "bound": bool(inputs.activity and inputs.pose and inputs.activity.fresh(now) and inputs.pose.fresh(now)
+                              and reader_key(inputs.activity.data) is not None
+                              and reader_key(inputs.activity.data) == reader_key(inputs.pose.data)),
+                "activity": inputs.activity.data.get('binding') if inputs.activity else None,
+                "pose": inputs.pose.data.get('binding') if inputs.pose else None,
+                "activity_valid_until": inputs.activity.expires_at if inputs.activity else None,
+                "pose_valid_until": inputs.pose.expires_at if inputs.pose else None,
+            },
             "brain": "online",
             "mode": ev.mode,
             "why": ev.why,
@@ -283,6 +306,7 @@ class Brain:
                 "activity_age_s": _r(f.activity_age, 1),
                 "pose_age_s": _r(f.pose_age, 1),
                 "position_age_s": _r(f.position_age, 1),
+                "at_sofa": f.at_sofa,
                 "health": dict(f.health),
             },
             "settings_version": self.settings.settings_version,

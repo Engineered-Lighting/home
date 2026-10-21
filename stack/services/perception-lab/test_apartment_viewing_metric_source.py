@@ -21,12 +21,15 @@ class MetricSourceTests(unittest.TestCase):
             def _read(_,path):
                 owner.reads.append(path)
                 if block is not None and path=='/frame.npz':block[0].set();block[1].wait(2)
+                if path=='/frame.jpg':return owner.originals['anchor_b'],owner.headers['b']
                 return owner.originals['npz' if path=='/frame.npz' else 'calibration'],''
         class Clock:
             def begin(_,receipt):
                 owner.assertTrue(_CAPTURE_LOCK.locked(),'same commissioned capture turn must be held')
                 return 'authored-qualified-clock-start'
-            def finish(_,value):return deepcopy(owner.proof)
+            def finish(_,value):
+                owner.assertTrue(_CAPTURE_LOCK.locked(),'clock proof must finish before another commissioned capture publishes a new clock')
+                return deepcopy(owner.proof)
         self.reads=[]
         return MetricInputFactory(Client(),clock=Clock())
     def approximate_configuration(self):
@@ -44,6 +47,89 @@ class MetricSourceTests(unittest.TestCase):
         first=pump.consume(self.originals['anchor_a'],self.headers['a'])
         second=pump.consume(self.originals['anchor_b'],self.headers['b'])
         return first,second
+    def test_upper_anchor_is_fetched_after_npz_within_the_same_clock_turn(self):
+        runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.anchors(runtime)
+        self.assertEqual(self.reads,['/frame.npz','/frame.npz','/calibration','/frame.jpg'])
+        self.assertIsNotNone(source.metric.lease)
+        self.assertEqual(dict(source.metric.lease._originals)['anchor_b'],self.originals['anchor_b'])
+    def test_fresh_npz_uses_the_closest_actual_lower_anchor_without_extending_it(self):
+        runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
+        older=viewing.capture.header(self.originals['anchor_a'],sequence=4,observed_ns=int((viewing.capture.NOW-.5)*1e9))
+        pump.consume(self.originals['anchor_a'],older)
+        pump.consume(self.originals['anchor_a'],self.headers['a'])
+        lease=source.metric.lease;self.assertIsNotNone(lease,source.metric.reason)
+        self.assertEqual(dict(lease._originals)['anchor_a'],self.originals['anchor_a'])
+        headers=json.loads(lease._headers_json)
+        self.assertEqual(headers['a'],self.headers['a'],'a fresh original must not inherit the older pump bracket')
+        from assessment_existing_api import _receipt
+        from bundle_rgb_input import anchor_metadata
+        original=anchor_metadata(_receipt(self.originals['anchor_a'],self.headers['a']),site_id='victoria',camera_id='den',available_at=self.now,started_at=self.session['started_at'])
+        self.assertLessEqual(lease.image_metadata['valid_until'],original['valid_until'])
+        self.assertTrue(lease.image_metadata['reading_timing_qualified'])
+        self.assertEqual(self.reads,['/frame.npz','/calibration','/frame.jpg'])
+    def test_single_retry_replaces_a_lagging_bundle_with_the_fresh_original(self):
+        import io
+        import numpy as np
+        configured=self.factory();read=configured.client._read
+        with np.load(io.BytesIO(self.originals['npz']),allow_pickle=False) as bundle:
+            arrays={name:bundle[name].copy() for name in bundle.files}
+        meta=json.loads(arrays['metadata_json'].tobytes())
+        meta['frames']['rgb'].update(sequence=7,device_timestamp_seconds=999.9)
+        arrays['metadata_json']=np.frombuffer(json.dumps(meta).encode(),dtype=np.uint8)
+        buffer=io.BytesIO();np.savez_compressed(buffer,**arrays);lagging=buffer.getvalue()
+        reads=0
+        def delayed(path):
+            nonlocal reads
+            data,header=read(path)
+            if path=='/frame.npz':
+                reads+=1
+                if reads==1:return lagging,header
+            return data,header
+        configured.client._read=delayed
+        runtime=self.build(metric_factory=configured);source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.now=1800000000.59;pump=runtime.preview_pumps[self.session['id']]
+        older=viewing.capture.header(self.originals['anchor_a'],sequence=4,observed_ns=int((viewing.capture.NOW-.5)*1e9))
+        pump.consume(self.originals['anchor_a'],older)
+        pump.consume(self.originals['anchor_a'],self.headers['a'])
+        lease=source.metric.lease;self.assertIsNotNone(lease,source.metric.reason)
+        self.assertEqual(reads,2,'one bounded retry, no polling loop')
+        self.assertEqual(dict(lease._originals)['npz'],self.originals['npz'])
+        self.assertEqual(json.loads(lease._headers_json)['a'],self.headers['a'])
+        self.assertTrue(lease.image_metadata['reading_timing_qualified'])
+    def test_upper_anchor_from_another_clock_receipt_cannot_be_rebound(self):
+        configured=self.factory();read=configured.client._read
+        def changed(path):
+            data,header=read(path)
+            if path=='/frame.jpg':
+                receipt=json.loads(base64.urlsafe_b64decode(header));receipt['host_clock_validation_id']='changed-clock-receipt'
+                header=base64.urlsafe_b64encode(json.dumps(receipt).encode()).decode()
+            return data,header
+        configured.client._read=changed
+        runtime=self.build(metric_factory=configured);source=runtime.apartment_viewing_sessions[self.session['id']]
+        self.anchors(runtime)
+        self.assertIsNone(source.metric.lease);self.assertEqual(source.metric.prepared,0)
+        self.assertEqual(source.metric.reason,'bundled_receiver_proof_invalid')
+    def test_exact_metric_result_is_projected_even_after_a_newer_jpeg_result(self):
+        runtime=self.build(metric_factory=self.factory());source=runtime.apartment_viewing_sessions[self.session['id']]
+        original=runtime.executor
+        def pose(request):
+            value=original(request);value['result']=deepcopy(self.event['payload']['result'])
+            value['result']['frame_id']=request['frame']['frame_id'];return value
+        runtime.executor=runtime.runners[self.session['id']].executor=pose
+        self.anchors(runtime);deadline=time.monotonic()+2
+        while time.monotonic()<deadline:
+            events=[e for e in self.store.list_events(self.session['id'],0,100)
+                if e['kind']=='perception.output' and e['payload']['arm']=='b']
+            if events:break
+            time.sleep(.005)
+        self.assertEqual(len(events),1)
+        newer=deepcopy(events[0]['payload']);newer.update(media_ids=['newer-jpeg'],frame_id='newer-frame')
+        self.store.append_event(self.session['id'],'perception.output',newer)
+        source.metric.finalize()
+        self.assertEqual(source.metric.projected,1)
+        self.assertIsNone(source.metric.lease)
     def test_metric_clock_refusal_keeps_successive_exact_jpeg_outputs_available(self):
         configured=self.factory()
         configured.clock.begin=lambda _:(_ for _ in ()).throw(ValueError('receiver_clock_anchor_changed'))
@@ -120,7 +206,7 @@ class MetricSourceTests(unittest.TestCase):
         runtime.executor=runtime.runners[self.session['id']].executor=pose
         first,second=self.anchors(runtime)
         self.assertEqual(first['state'],'awaiting_metric_frame')
-        self.assertTrue(second['media_ids']);self.assertEqual(self.reads,['/frame.npz','/calibration'])
+        self.assertTrue(second['media_ids']);self.assertEqual(self.reads,['/frame.npz','/frame.npz','/calibration','/frame.jpg'])
         deadline=time.monotonic()+2
         while time.monotonic()<deadline:
             completed=[e for e in self.store.list_events(self.session['id'],0,100) if e['kind']=='perception.output']

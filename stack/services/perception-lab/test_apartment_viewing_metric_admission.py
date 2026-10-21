@@ -82,6 +82,7 @@ class MetricAdmissionTests(unittest.TestCase):
         class Client:
             def _read(_, path):
                 owner.assertTrue(_CAPTURE_LOCK.locked())
+                if path=='/frame.jpg':return f.originals['anchor_b'],owner.original_header(owner.capture_index+.5)
                 item = owner.campaign[owner.capture_index]
                 return item['npz' if path == '/frame.npz' else 'calibration'], ''
         class Clock:

@@ -58,6 +58,7 @@ no logging, so only WARNING reaches its journal): start, refusal, stop, pause,
 resume and kill-switch transitions only.
 """
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 import re
@@ -150,14 +151,28 @@ class PerceiverPump(qwen_live.QwenLivePump):
     ring, and one log line per pause, resume, switch change and first
     record_failed of a UTC day."""
 
-    def __init__(self, *, site_id, camera_id, fact_log, clock=time.time, poke=None, **kwargs):
+    def __init__(self, *, site_id, camera_id, fact_log, clock=time.time, poke=None, disabled_reason=None, **kwargs):
         session = {"id": day_session(site_id, camera_id, clock()), "site_id": site_id, "camera_id": camera_id}
         super().__init__(None, session, ledger=fact_log, clock=clock, **kwargs)
         self.fact_log = fact_log
         self.thread.name = "la-live-perceiver"
         self.logged_halt, self.logged_disabled = None, None
         self.poke, self.wanted = poke, False
+        self.disabled_reason = disabled_reason or (lambda: 'household')
         self.record_failures, self.record_failed_day = 0, None
+        self.completed_count, self.completed_profile = 0, None
+
+    def _receipt(self, request, draft):
+        result = super()._receipt(request, draft)
+        profile = request['profile']
+        if (result.get('state') in ('available', 'expired_on_receipt') and draft.get('engine_epoch') == profile['engine_epoch']
+                and draft.get('artifact_sha256') == profile['artifact_sha256']):
+            # A recorded completed execution, including expired/invalid answers.
+            # Rejected/unknown outcomes are not executed model workload.
+            with self.lock:
+                self.completed_count += 1
+                self.completed_profile = dict(profile)
+        return result
 
     def tick(self):
         if self.outstanding is None:
@@ -214,10 +229,14 @@ class PerceiverPump(qwen_live.QwenLivePump):
             else:
                 _log.warning("la-live-perceiver resumed: LA ended the indeterminate request (%s)", self.last_reason)
             self.logged_halt = self.halted
-        disabled = isinstance(result, dict) and result.get("reason") == "disabled"
+        disabled = (self.disabled_reason() if isinstance(result, dict) and result.get("reason") == "disabled" else False)
         if isinstance(result, dict) and result.get("reason") != "stopped" and disabled != self.logged_disabled:
-            if disabled:
+            if disabled == 'monitor_backoff':
+                _log.warning("la-live-perceiver: resource monitor back-off; no new capture or inference")
+            elif disabled:
                 _log.warning("la-live-perceiver: household kill switch %s is off; nothing is captured or sent", ENTRY)
+            elif self.logged_disabled == 'monitor_backoff':
+                _log.warning("la-live-perceiver: resource monitor gate released; household switch still applies")
             elif self.logged_disabled:
                 _log.warning("la-live-perceiver: household kill switch %s is on", ENTRY)
             self.logged_disabled = disabled
@@ -245,7 +264,11 @@ class LaLivePerceiver:
         self.monotonic = monotonic
         self.lock = threading.Lock()
         self.state = "idle"
+        self.producer_epoch = str(uuid.uuid4())
         self.grant = (None, False)
+        self.monitor_blocked = False
+        self.cadence_factor = 1
+        self.base_interval = settings["pump"]["interval_seconds"]
         self.reader, self.fact_log = reader, fact_log
         self.ring = ring or frame_ring.FrameRing(clock=clock)
         self.pump = None
@@ -257,6 +280,7 @@ class LaLivePerceiver:
         self.pump = PerceiverPump(transport=transport, profile=profile, frames=self.ring, fact_log=fact_log,
                                   config=settings["pump"], clock=clock, monotonic=monotonic, local_time=local_time,
                                   enabled=self.enabled, active=self.running, occupied=reader,
+                                  disabled_reason=self.disabled_reason,
                                   indeterminate_seconds=settings["indeterminate_reprobe_seconds"],
                                   site_id=site_id, camera_id=camera_id, poke=self.capture.poke)
         self.context_readback = StructuredCameraContext(site_id=site_id, camera_id=camera_id, clock=clock)
@@ -314,6 +338,8 @@ class LaLivePerceiver:
         """The household kill switch, read at most once a second."""
         now = self.monotonic()
         with self.lock:
+            if self.monitor_blocked:
+                return False
             checked, value = self.grant
             if checked is not None and 0 <= now - checked < GRANT_CACHE_SECONDS:
                 return value
@@ -323,7 +349,33 @@ class LaLivePerceiver:
             value = False
         with self.lock:
             self.grant = (now, value)
-        return value
+            return value and not self.monitor_blocked
+
+    def set_monitor_backoff(self, blocked):
+        """Quiesce new capture/inference without closing outstanding receipts."""
+        if type(blocked) is not bool:
+            raise ValueError('explicit monitor back-off required')
+        with self.lock:
+            self.monitor_blocked = blocked
+
+    def disabled_reason(self):
+        with self.lock:
+            return 'monitor_backoff' if self.monitor_blocked else 'household'
+
+    def set_cadence(self, factor):
+        if type(factor) is not int or factor not in (1, 2):
+            raise ValueError('normal or reduced Qwen cadence required')
+        # Pump code can consult enabled() while holding its own lock: keep that
+        # same lock order, and retain the configured base across repeated calls.
+        with self.pump.lock:
+            self.pump.config = {**self.pump.config, 'interval_seconds': self.base_interval * factor}
+            with self.lock:
+                self.cadence_factor = factor
+
+    def monitor_status(self):
+        with self.lock:
+            return dict(blocked=self.monitor_blocked, factor=self.cadence_factor,
+                        interval_seconds=self.base_interval * self.cadence_factor)
 
     def offer_preview(self, data, header):
         """A recording's accepted preview capture, offered to the ring while
@@ -340,16 +392,29 @@ class LaLivePerceiver:
         with self.lock:
             state = self.state
         return {"state": state, "pump": self.pump.snapshot(), "capture": self.capture.snapshot(),
+                "monitor": self.monitor_status(),
                 "ring": self.ring.snapshot(), "fact_log": self.fact_log.snapshot(),
                 "occupancy": self.reader.snapshot() if callable(getattr(self.reader, "snapshot", None)) else None}
+
+    def workload_status(self):
+        """Passive operational evidence; no frames, facts or renewed authority."""
+        # Match the pump -> perceiver lock order used by monitor controls.
+        with self.pump.lock:
+            completed = self.pump.completed_count
+            model = None if self.pump.completed_profile is None else dict(self.pump.completed_profile)
+            with self.lock:
+                state, blocked = self.state, self.monitor_blocked
+        return dict(schema='den-qwen-workload-1', producer_epoch=self.producer_epoch,
+                    state=state, blocked=blocked, completed=completed, model=model)
 
     def structured_context(self):
         """Read the original daily-scoped facts; never capture or call LA."""
         with self.lock:
-            state = self.state
+            state, blocked = self.state, self.monitor_blocked
         pump = self.pump.snapshot()
         return self.context_readback.snapshot(dict(state=state, pump_status=pump['status'],
-            last_reason=pump['last_reason'], outstanding=pump['outstanding'], halted=pump['halted'] is not None))
+            last_reason='monitor_backoff' if blocked else pump['last_reason'],
+            outstanding=pump['outstanding'], halted=pump['halted'] is not None))
 
 
 def camera_derived_entities(config, read):
@@ -408,6 +473,10 @@ def build(config, *, site_id, camera_id, policy_file, ha_bindings=None, transpor
 def attach(runtime, perceiver):
     """Start the perceiver with the controller's runtime, and stop it first
     whenever that runtime closes (shutdown or a failed composition)."""
+    attached = getattr(runtime, 'la_live_perceiver', None)
+    if attached is not None and attached is not perceiver:
+        raise ValueError('runtime already owns a different LA live perceiver')
+    runtime.la_live_perceiver = perceiver
     close = runtime.close
 
     def closing(*args, **kwargs):

@@ -47,13 +47,6 @@ class DevelopmentTimingTests(unittest.TestCase):
                 patch.object(bootstrap,'_read_private',side_effect=lambda p:by_path[p]):
             configured=bootstrap.load_factory(config,client=base.client)
         configured.clock=base.clock
-        if late=='capture':
-            read=configured.client._read
-            def slow(path):
-                value=read(path)
-                if path=='/calibration':f.now+=3  # the proof expires before prepare checks it
-                return value
-            configured.client._read=slow
         self.token='authored-development-'+'d'*40
         f.store.settings=replace(f.store.settings,token_grants=({'subject':'viewer','site_id':'victoria',
             'token_sha256':sha(self.token.encode()),'capabilities':['read']},))
@@ -70,6 +63,9 @@ class DevelopmentTimingTests(unittest.TestCase):
         runtime.executor=runtime.runners[f.session['id']].executor=execute
         prepare=apartment_viewing_metric.prepare_metric_frame
         def delayed(**kwargs):
+            if late=='capture':
+                f.now+=3  # original proof expires during preparation, after actual receipt
+                kwargs['now_s']=f.now
             lease=prepare(**kwargs)
             if late=='registration':f.now=lease.descriptor['retirement_deadline']+.05
             return lease
@@ -170,7 +166,7 @@ class DevelopmentTimingTests(unittest.TestCase):
         packet=self.live(runtime)['arms']['B']['virtual_target_preview']
         self.assertTrue(packet['available'],packet)
         self.assertIn('proof_expired',{item['check'] for item in packet['timing']['warnings']})
-        self.assertEqual(self.f.reads.count('/frame.npz'),1)
+        self.assertEqual(self.f.reads.count('/frame.npz'),2)
         runtime.stop_session(self.f.session)
 
     def test_anchor_stage_clock_refusal_is_a_warning_only_under_development(self):
@@ -178,6 +174,9 @@ class DevelopmentTimingTests(unittest.TestCase):
         packet=self.live(runtime)['arms']['B']['virtual_target_preview']
         self.assertTrue(packet['available'],packet)
         self.assertIn('clock_uncertainty',{item['check'] for item in packet['timing']['warnings']})
+        record=source.entries[packet['frame']['media_id']]['record']
+        self.assertFalse(record['metadata']['reading_timing_qualified'])
+        self.assertEqual(self.outputs('b')[-1]['payload']['reading_binding']['status'],'unavailable')
         runtime.stop_session(self.f.session);runtime.close()
         self.setUp()
         with self.assertRaisesRegex(ValueError,'bundled_anchor_clock_refused'):

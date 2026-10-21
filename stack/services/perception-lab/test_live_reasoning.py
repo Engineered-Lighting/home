@@ -66,6 +66,17 @@ class LiveReasoningTests(unittest.TestCase):
             self.assertEqual(value["judgment"]["probability"], 1)
         self.assertTrue(all(x["payload"]["status"] == "stale" for x in self.store.outputs_at(self.session["id"],21000)))
 
+    def test_activity_loop_validity_diagnostics_stay_local_to_actual_provider_boundary(self):
+        runner=self.setup_reasoner()
+        runner.session['request_id']='activity-loop-real-provider-regression'
+        ids=runner.offer(self.records(),generation=1,cutoff=100,arms=('b',))
+        self.settle(lambda:self.states() in [['completed'],['failed'],['indeterminate']])
+        self.assertEqual(self.states(),['completed'],'local diagnostics must not become unsupported provider arguments')
+        self.assertEqual(len(self.calls),1)
+        row=self.store.db.execute('SELECT payload FROM lab_reasoning_requests WHERE id=?',(ids[0],)).fetchone()
+        request=json.loads(row[0]);self.assertEqual(request['reading_evidence_validity']['reason'],'reader_binding_unavailable')
+        self.assertNotIn('reading_evidence_validity',json.dumps(self.calls[0]))
+
     def test_per_arm_history_reaches_provider_and_persisted_request(self):
         runner=self.setup_reasoner()
         records=self.records(99)+self.records(85)

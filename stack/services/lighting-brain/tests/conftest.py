@@ -75,8 +75,17 @@ DEFAULT_TTL = {"occupancy": 90, "zone": 90, "activity": 12, "person_pose": 10, "
 
 
 def event(kind, t, ttl=None, **fields):
-    return {"type": kind, "home": HOME, "room": ROOM, "source": "test", "observed_at": t, "sent_at": t,
-            "ttl_s": DEFAULT_TTL[kind] if ttl is None else ttl, **fields}
+    result = {"type": kind, "home": HOME, "room": ROOM, "source": "test", "observed_at": t, "sent_at": t,
+              "ttl_s": DEFAULT_TTL[kind] if ttl is None else ttl, **fields}
+    if kind in ('activity', 'person_pose'):
+        until = t + result['ttl_s']
+        binding = dict(schema='den-sole-reader-source-1', status='available', reason=None,
+            session_id='synthetic-session', generation=1, capture_epoch='synthetic-camera', engine_epoch='synthetic-engine',
+            reader_epoch='synthetic-reader', interval_start=NOON - 10000, instance_id='synthetic-person',
+            source_frame_id=f'frame-{t}', source_request_id=f'request-{t}', source_event_id=int(t * 10),
+            observed_at=t, available_at=t, valid_until=until) if fields.get('person_count') == 1 else None
+        result.update(evidence_version=2, valid_until=until, binding=binding)
+    return result
 
 
 def occupancy(t, present=True, people=1, **kw):
@@ -116,7 +125,8 @@ def cost(t, calls, usd=None, **kw):
 
 
 def batch(*events):
-    return {"schema": "activity-lighting-events-1", "events": list(events)}
+    return {"schema": "activity-lighting-events-2" if any(e.get('evidence_version') == 2 for e in events)
+            else "activity-lighting-events-1", "events": list(events)}
 
 
 def healthy(t):

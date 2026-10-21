@@ -165,7 +165,171 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(household_granted(unreadable)())
 
 
+class ActivityMonitorControlTests(PerceiverFixture, unittest.TestCase):
+    def loop(self):
+        from activity_loop import ActivityLoop
+        from activity_loop_runtime import ManagedDeepStack
+        perceiver = self.build()
+        self.running()
+        runtime = SimpleNamespace(close=lambda **_: {'drained': True})
+        perceiver_module.attach(runtime, perceiver)
+        store = SimpleNamespace(settings=SimpleNamespace(max_session_seconds=300), clock=self.clock)
+        controller = SimpleNamespace(store=store, runtime=runtime)
+        deep = ManagedDeepStack(controller, clock=self.clock, release=SimpleNamespace(snapshot=lambda: {}))
+        return ActivityLoop(deep=deep, occupancy=lambda: 'off', clock=self.clock,
+                            publisher=SimpleNamespace(snapshot=lambda: {}))
+
+    def test_monitor_stop_while_vacant_blocks_the_actual_always_on_qwen(self):
+        loop = self.loop()
+        loop.stop('monitor_backoff')
+        self.assertFalse(self.perceiver.enabled(), 'the actual Qwen pump must be blocked even without a recording')
+        self.assertEqual(loop.snapshot()['monitor_control_version'], 2)
+        self.assertTrue(loop.deep.snapshot()['qwen_control']['blocked'])
+        self.fill()
+        with self.assertLogs(LOG, level='WARNING') as logged:
+            self.perceiver.pump.tick()
+        self.assertEqual(self.transport.envelopes, [])
+        self.assertFalse(self.perceiver._capture_wanted())
+        self.assertIn('resource monitor back-off', logged.output[0])
+        self.assertEqual(self.perceiver.structured_context()['provider']['last_reason'], 'monitor_backoff')
+        self.assertTrue(self.log.writable(), 'back-off must retain the original receipt log')
+
+    def test_reduced_cadence_reaches_actual_qwen_before_a_recording_exists(self):
+        loop = self.loop()
+        original = self.perceiver.pump.config['interval_seconds']
+        loop.set_cadence('reduced')
+        self.assertEqual(self.perceiver.pump.config['interval_seconds'], original * 2)
+        loop.set_cadence('reduced')
+        self.assertEqual(self.perceiver.pump.config['interval_seconds'], original * 2, 'repeated back-off cannot compound')
+        self.assertEqual(loop.cadence_status()['qwen'], dict(blocked=False, factor=2, interval_seconds=original * 2))
+        loop.set_cadence('normal')
+        self.assertEqual(self.perceiver.pump.config['interval_seconds'], original)
+
+    def test_monitor_stop_cannot_replace_an_existing_operator_stop(self):
+        from activity_loop import ResumeRefused
+        loop = self.loop()
+        loop.stop('operator_stop')
+        loop.stop('monitor_backoff')
+        with self.assertRaises(ResumeRefused):
+            loop.resume('monitor_backoff')
+        self.assertEqual(loop.snapshot()['stopped_reason'], 'operator_stop')
+        self.assertFalse(self.perceiver.enabled())
+        loop.resume()
+        self.assertTrue(self.perceiver.enabled())
+
+    def test_monitor_release_preserves_household_off_and_original_receipts(self):
+        loop = self.loop()
+        loop.stop('monitor_backoff')
+        self.grant['on'] = False
+        self.advance(2, frames=False)
+        loop.resume('monitor_backoff')
+        self.assertFalse(self.perceiver.enabled(), 'resource recovery cannot enable the household switch')
+        self.assertTrue(self.log.writable())
+
+    def test_pending_request_is_retained_without_reexecution_during_backoff(self):
+        loop = self.loop()
+        pending = {'request': 'same-original'}
+        self.perceiver.pump.outstanding = pending
+        loop.stop('monitor_backoff')
+        with self.assertLogs(LOG, level='WARNING'):
+            self.perceiver.pump.tick()
+        self.assertIs(self.perceiver.pump.outstanding, pending)
+        self.assertEqual(self.transport.envelopes, [])
+
+    def test_attached_incumbent_cannot_be_replaced_or_invalid_cadence_applied(self):
+        loop = self.loop()
+        with self.assertRaises(ValueError):
+            perceiver_module.attach(loop.deep.runtime, SimpleNamespace())
+        for factor in (0, 3, True, 2.):
+            with self.assertRaises(ValueError):
+                self.perceiver.set_cadence(factor)
+
+    def test_monitor_stop_during_a_household_file_read_cannot_reopen_admission(self):
+        self.loop()
+        def grant():
+            self.perceiver.set_monitor_backoff(True)
+            return True
+        self.perceiver.granted = grant
+        self.assertFalse(self.perceiver.enabled())
+
+    def test_reduced_cadence_changes_the_real_pump_scheduler(self):
+        loop = self.loop()
+        original = self.perceiver.pump.config['interval_seconds']
+        loop.set_cadence('reduced')
+        waits = []
+        def wait(stop, wake, delay, woken):
+            waits.append(delay)
+            return len(waits) == 2
+        with patch.object(perceiver_module.occupancy_gate, 'wait', side_effect=wait), \
+                patch.object(self.perceiver.pump, 'tick') as tick:
+            self.perceiver.pump._run()
+        self.assertEqual(waits, [original * 2, original * 2])
+        tick.assert_called_once_with()
+
+
 class PerceiverTests(PerceiverFixture, unittest.TestCase):
+    def test_workload_status_counts_actual_completed_receipts_without_starting_work(self):
+        from activity_loop_runtime import ManagedDeepStack
+        self.build(completed())
+        self.running()
+        runtime = SimpleNamespace(close=lambda **_: {'drained': True})
+        perceiver_module.attach(runtime, self.perceiver)
+        controller = SimpleNamespace(runtime=runtime, store=SimpleNamespace(
+            settings=SimpleNamespace(max_session_seconds=300), clock=self.clock))
+        deep = ManagedDeepStack(controller, clock=self.clock, release=SimpleNamespace(snapshot=lambda: {}))
+        before = deep.snapshot()['qwen_workload']
+        self.assertEqual(before['completed'], 0)
+        self.assertIsNone(before['model'])
+        self.assertEqual(self.transport.envelopes, [])
+        self.fill()
+        self.perceiver.pump.tick()
+        after = deep.snapshot()['qwen_workload']
+        self.assertEqual(after['producer_epoch'], before['producer_epoch'])
+        self.assertEqual(after['completed'], 1)
+        self.assertEqual(after['model'], dict(PROFILE, engine_epoch='la-epoch'))
+        self.assertEqual(set(after), {'schema', 'producer_epoch', 'state', 'blocked', 'completed', 'model'})
+        self.assertEqual(len(self.transport.envelopes), 1)
+
+    def test_workload_does_not_count_rejected_or_unproven_model_results(self):
+        def wrong_model(envelope):
+            result = completed()(envelope)
+            result['artifact_sha256'] = 'b' * 64
+            return result
+        self.build(wrong_model)
+        self.running()
+        self.fill()
+        self.perceiver.pump.tick()
+        self.assertEqual(self.perceiver.workload_status()['completed'], 0)
+        self.assertIsNone(self.perceiver.workload_status()['model'])
+
+    def test_workload_counts_completed_invalid_answers_without_granting_reading_authority(self):
+        self.build(completed(text='not JSON'))
+        self.running()
+        self.fill()
+        self.perceiver.pump.tick()
+        self.assertEqual(self.perceiver.workload_status()['completed'], 1)
+        self.assertEqual(self.perceiver.structured_context()['freshness'], 'invalid')
+
+    def test_workload_does_not_count_la_rejections_as_executed_inference(self):
+        self.build(terminal('rejected', 'thermal_shed'))
+        self.running()
+        self.fill()
+        self.perceiver.pump.tick()
+        self.assertEqual(self.perceiver.workload_status()['completed'], 0)
+
+    def test_workload_can_count_late_execution_without_extending_its_evidence(self):
+        def late(envelope):
+            self.clock.now += scene.MAX_AGE_SECONDS + 1
+            return completed()(envelope)
+        self.build(late)
+        self.running()
+        self.fill()
+        self.perceiver.pump.tick()
+        self.assertEqual(self.perceiver.workload_status()['completed'], 1)
+        context = self.perceiver.structured_context()
+        self.assertEqual(context['freshness'], 'stale')
+        self.assertLess(context['latest']['receipt']['valid_until'], self.clock.now)
+
     def test_occupied_sends_the_ring_frames_and_writes_one_fact_line(self):
         self.build(completed())
         self.running()

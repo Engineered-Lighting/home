@@ -17,7 +17,7 @@ from typing import Callable
 
 from .aim import Reader, SpotPlan, add, norm, place_reader, plan_spot, scale, sub
 from .geometry import Geometry
-from .inputs import COST_WINDOW_S, Inputs
+from .inputs import COST_WINDOW_S, Inputs, reader_key
 from .settings import Settings
 
 MODES = ("off", "ambient", "night_ambient", "reading", "degraded_ambient")
@@ -264,6 +264,12 @@ def derive_facts(inputs: Inputs, geometry: Geometry, settings: Settings, now: fl
         else:
             reading_ok, reading_why = False, "Not reading"
 
+    # Legacy events still inform ambient/presence, but cannot qualify a spot.
+    if not (act and pose and reader_key(act.data) is not None
+            and reader_key(act.data) == reader_key(pose.data)
+            and act.data.get('person_count') == pose.data.get('person_count') == 1):
+        reading_ok, reading_why = False, "Pose stale" if pose is None else "Reading evidence unbound or expired"
+
     reader, reader_why = None, None
     if pose is None:
         reader_why = "Pose stale"
@@ -415,7 +421,7 @@ def _spot_precondition(facts: Facts, ctx: Context) -> str | None:
     # v1.1: a fresh position near the sofa seat, or JEV's zone_hint=sofa.
     if not (facts.at_sofa or facts.activity_zone_hint == "sofa"):
         return "No one at sofa"
-    if facts.people is None:
+    if facts.people != 1:
         return "People count unknown"
     if facts.activity_zone_hint == "desk":
         return "Activity at desk"

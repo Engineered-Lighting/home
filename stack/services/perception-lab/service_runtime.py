@@ -1303,6 +1303,12 @@ class ServiceRuntime:
                 if frame is None:return {'state':'awaiting_metric_frame','reason':source.metric.reason,'viewing_only':True,'physical_permission':False}
                 result=self.offer(session_id,frame)
                 source.metric.after_offer(frame)
+            # This branch owns capture slots too: share the accepted original
+            # with the always-on Qwen ring after releasing the runtime lock.
+            tap=self.preview_taps.get(source.camera_id)
+            if tap is not None:
+                try:tap(jpeg,metadata_header)
+                except Exception:pass
             return {'media_ids':frame['media_ids'],'inference':result,'viewing_only':True,'physical_permission':False}
         with self.lock:
             source=self.apartment_viewing_sessions.get(session_id);runner=self.runners.get(session_id)
@@ -1613,6 +1619,10 @@ class ServiceRuntime:
 
     def _new_reasoner(self, sid):
         reasoner=self.reasoning_factory(self.store, sid)
+        source = getattr(self, 'la_qwen', None)
+        bind = getattr(reasoner, 'bind_reading_qwen', None)
+        if source is not None and callable(bind):
+            bind(source)
         if hasattr(reasoner,"hold_max_s"):
             reasoner.hold_max_s=self.reasoning_cadence["hold_max_s"]
         return reasoner

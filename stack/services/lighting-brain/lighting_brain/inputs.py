@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from . import EVENTS_SCHEMA
+from . import EVENTS_SCHEMA, BOUND_EVENTS_SCHEMA
 from .geometry import ZONE_NAMES, Geometry
 from .settings import Settings
 
@@ -21,6 +21,39 @@ MAX_EVENTS_PER_BATCH = 200
 MAX_PEOPLE_PER_POSE = 16
 MAX_TTL_S = 3600.0
 COST_WINDOW_S = 3600.0
+READER_KEYS = ('session_id', 'generation', 'capture_epoch', 'engine_epoch', 'reader_epoch')
+BOUND_FIELDS = {'evidence_version', 'binding', 'valid_until'}
+
+
+def reader_key(event):
+    binding = event.get('binding') if isinstance(event, dict) and event.get('evidence_version') == 2 else None
+    return tuple(binding.get(k) for k in READER_KEYS) if isinstance(binding, dict) else None
+
+
+def _check_bound(event):
+    if event.get('evidence_version') != 2 or not _number(event.get('valid_until')):
+        return 'v2 activity/pose needs evidence_version:2 and original valid_until'
+    if (event['valid_until'] <= event['observed_at']
+            or event['observed_at'] + event['ttl_s'] > event['valid_until'] + 1e-6
+            or event['ttl_s'] > (12 if event['type'] == 'activity' else 10)):
+        return 'bound evidence cannot extend original validity'
+    b = event.get('binding')
+    if b is None:
+        return None  # explicit retirement, no geometry or subject assertion
+    keys = {'schema', 'status', 'reason', *READER_KEYS, 'interval_start', 'instance_id',
+            'source_frame_id', 'source_request_id', 'source_event_id', 'observed_at', 'available_at', 'valid_until'}
+    if (not isinstance(b, dict) or set(b) != keys or b.get('schema') != 'den-sole-reader-source-1'
+            or b.get('status') != 'available' or b.get('reason') is not None
+            or any(not _str(b.get(k), 256) for k in ('session_id', 'capture_epoch', 'engine_epoch', 'reader_epoch',
+                                                   'instance_id', 'source_frame_id', 'source_request_id'))
+            or type(b.get('generation')) is not int or b['generation'] < 1
+            or type(b.get('source_event_id')) is not int or b['source_event_id'] < 1
+            or not all(_number(b.get(k)) for k in ('interval_start', 'observed_at', 'available_at', 'valid_until'))
+            or not b['interval_start'] <= b['observed_at'] <= b['available_at'] < b['valid_until']
+            or event['observed_at'] != b['observed_at'] or event['valid_until'] > b['valid_until']
+            or event.get('person_count') != 1):
+        return 'bound sole-reader source invalid'
+    return None
 
 
 class EventError(Exception):
@@ -128,8 +161,8 @@ def _check_type_fields(event: dict) -> str | None:
 def validate_batch(body, home: str, geometry: Geometry) -> list[dict]:
     """Whole-batch validation: one bad event refuses the batch (nothing is
     applied), so a producer never half-updates the brain."""
-    if not isinstance(body, dict) or body.get("schema") != EVENTS_SCHEMA:
-        raise EventError(422, "schema_invalid", f"body.schema must be {EVENTS_SCHEMA}")
+    if not isinstance(body, dict) or body.get("schema") not in (EVENTS_SCHEMA, BOUND_EVENTS_SCHEMA):
+        raise EventError(422, "schema_invalid", f"body.schema must be {EVENTS_SCHEMA} or {BOUND_EVENTS_SCHEMA}")
     events = body.get("events")
     if not isinstance(events, list) or not events:
         raise EventError(422, "events_invalid", "body.events must be a non-empty list")
@@ -152,6 +185,10 @@ def validate_batch(body, home: str, geometry: Geometry) -> list[dict]:
         if not _number(ttl) or ttl <= 0 or ttl > MAX_TTL_S:
             raise EventError(422, "event_invalid", f"ttl_s must be within (0, {MAX_TTL_S:g}]", index)
         problem = _check_type_fields(event)
+        if body['schema'] == EVENTS_SCHEMA and BOUND_FIELDS.intersection(event):
+            problem = 'bound fields require activity-lighting-events-2 (no silent legacy downgrade)'
+        elif body['schema'] == BOUND_EVENTS_SCHEMA and event['type'] in ('activity', 'person_pose'):
+            problem = problem or _check_bound(event)
         if problem:
             raise EventError(422, "event_invalid", f"{event['type']}: {problem}", index)
     return events
@@ -165,10 +202,10 @@ class Obs:
 
     @property
     def expires_at(self) -> float:
-        return self.observed_at + self.ttl_s
+        return min(self.observed_at + self.ttl_s, self.data.get('valid_until', math.inf))
 
     def fresh(self, now: float) -> bool:
-        return now <= self.expires_at
+        return now < self.expires_at if self.data.get('evidence_version') == 2 else now <= self.expires_at
 
     def age(self, now: float) -> float:
         return max(0.0, now - self.observed_at)
@@ -201,6 +238,8 @@ class Inputs:
     health: dict[str, Obs] = field(default_factory=dict)
     cost: list[tuple[float, int, float | None]] = field(default_factory=list)
     latest: dict[str, float] = field(default_factory=dict)
+    bound_reader: tuple | None = None
+    reading_reset_at: float = -math.inf
     # Newest activity/pose answer that saw at least one person (AL-3 evidence,
     # independent of the Frigate bridge).
     last_person_evidence_at: float | None = None
@@ -209,7 +248,8 @@ class Inputs:
         """Apply one validated event. Returns why it was ignored, or None."""
         observed = float(event["observed_at"])
         ttl = float(event["ttl_s"])
-        if now > observed + ttl:
+        expiry = min(observed + ttl, event.get('valid_until', math.inf))
+        if now > expiry or event.get('evidence_version') == 2 and now == expiry:
             return "expired"
         if observed > now + settings.max_future_skew_s:
             return "future"
@@ -233,6 +273,9 @@ class Inputs:
         if kind == "occupancy":
             self.occupancy_last_present_at = _last_present(self.occupancy, obs, self.occupancy_last_present_at)
             self.occupancy = obs
+            if not event["present"] or event.get("people_count") != 1:
+                self.reading, self.bound_reader = None, None
+                self.reading_reset_at = observed
         elif kind == "zone":
             zone = event["zone"]
             self.zone_last_present_at[zone] = _last_present(
@@ -242,16 +285,35 @@ class Inputs:
             self._track_reading(obs, settings)
             self.activity = obs
         elif kind == "person_pose":
+            key = reader_key(event)
+            if key is None or event.get('person_count') != 1 or not event.get('people'):
+                self.reading, self.bound_reader = None, None
+            elif self.bound_reader != key:
+                if self.activity is None or reader_key(self.activity.data) != key:
+                    self.reading = None
+                self.bound_reader = key
             self.pose = obs
         elif kind == "person_position":
             self.position = obs
         elif kind == "health":
             self.health[event["component"]] = obs
+            if event['component'] in ('deep_stack', 'camera') and event['ok'] is False:
+                self.reading = None
         return None
 
     def _track_reading(self, obs: Obs, settings: Settings) -> None:
         data = obs.data
         confidence = data.get("confidence")
+        key = reader_key(data)
+        occupancy_blocks = (self.occupancy is not None and self.occupancy.fresh(obs.observed_at)
+                            and (not self.occupancy.data['present']
+                                 or self.occupancy.data.get('people_count') not in (None, 1)))
+        if (occupancy_blocks or obs.observed_at < self.reading_reset_at
+                or key is None or data.get('person_count') != 1
+                or self.bound_reader is not None and key != self.bound_reader
+                or data['label'] == 'insufficient_evidence'):
+            self.reading = None
+            return
         is_reading = data["label"] == "reading" and (confidence is None or confidence >= settings.reading_min_confidence)
         run = self.reading
         if is_reading:

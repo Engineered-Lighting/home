@@ -227,6 +227,41 @@ class PairedRuntimeTests(unittest.TestCase):
         strict.offer(self.frame("strict-frame",valid_until=99.5))
         self.assertEqual(calls,[])
 
+    def test_sampling_display_hold_never_extends_reading_source_expiry(self):
+        # The viewing arm's slower cadence may hold its presentation, but the
+        # source supporting a reading decision keeps its original lease.
+        def execute(request):
+            return self.receipt(request, result={
+                'objects': [{'label': 'person', 'instance_id': 'one', 'confidence': .9}],
+                'boxes': [{'label': 'person', 'instance_id': 'one', 'confidence': .9,
+                           'x': 100., 'y': 60., 'w': 100., 'h': 230.}]})
+        runner = PairedRunner(self.store, self.session['id'], self.profiles, execute,
+            clock=self.store.clock, experiment_generation=1, sampling_hz={'a': 1, 'b': 1})
+        self.runners.append(runner)
+        for index, (original_until,qualified) in enumerate(((100.2,True),(99.75,True),(100.2,False))):
+            with self.subTest(original_until=original_until):
+                frame_id = 'source-lease-' + str(index)
+                self.media = self.store.add_media(self.session['id'],
+                    b'synthetic-frame-' + str(index).encode(), 'image/jpeg',
+                    {'reading_timing_qualified': qualified})
+                runner.offer(self.frame(frame_id, capture_epoch='capture-' + str(index),
+                                        valid_until=original_until,
+                                        reading_timing_qualified=True))  # untrusted field cannot override original
+                self.settle(lambda: all(v is None for v in runner.snapshot()['active'].values()))
+                outputs = [e['payload'] for e in self.store.list_events(self.session['id'])
+                    if e['kind'] == 'perception.output' and e['payload']['frame_id'] == frame_id]
+                self.assertEqual(len(outputs), 2)
+                for output in outputs:
+                    self.assertTrue(output['current'], 'the presentation hold remains compatible')
+                    self.assertAlmostEqual(output['valid_until'], original_until + .5)
+                    binding = output['reading_binding']
+                    if original_until > self.store.clock() and qualified:
+                        self.assertEqual(binding['status'], 'available')
+                        self.assertEqual(binding['valid_until'], original_until)
+                    else:
+                        self.assertEqual(binding['status'], 'unavailable')
+                        self.assertEqual(binding['reason'], 'sole_person_source_not_current')
+
     def test_executor_cannot_mutate_persisted_request_or_source(self):
         calls=[]
         def execute(request):

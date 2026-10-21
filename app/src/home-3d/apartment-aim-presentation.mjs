@@ -215,6 +215,8 @@ export function aimKeyIntent({ key, dragging = false, proposal = null } = {}) {
  * a trailing "fixture" goes, and a long name ends in an ellipsis. */
 export function shortFixtureLabel(label) {
     const text = typeof label === 'string' ? label.trim() : '';
+    const numbered = /\b(socket|fixture)\s*#?\s*(\d+)\b/i.exec(text);
+    if (numbered) return `${numbered[1].toLowerCase() === 'socket' ? 'S' : 'F'}${numbered[2]}`;
     const trimmed = text.replace(/\s+fixture$/i, '') || text;
     return trimmed.length > LABEL_SHORT_MAX ? trimmed.slice(0, LABEL_SHORT_MAX - 1).trimEnd() + '…' : trimmed;
 }
@@ -271,7 +273,7 @@ export function placeFixtureLabels(entries, { selectedId = null, hoverId = null,
 
 // The bar sits below the proposed spot, kept inside the visible canvas (left
 // of the column, above the sheet) so it stays usable with Chat open.
-export function placeAimBar(screen, bounds) {
+export function placeAimBar(screen, bounds, { width: measuredWidth, height: measuredHeight, avoid = [] } = {}) {
     if (!screen || !bounds) return null;
     const width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
     if (!(width > 0 && height > 0)) return null;
@@ -279,7 +281,22 @@ export function placeAimBar(screen, bounds) {
         : clamp(screen.x, bounds.left + BAR_HALF_WIDTH_PX, bounds.right - BAR_HALF_WIDTH_PX);
     const y = height < BAR_TOP_PX + BAR_BOTTOM_PX ? bounds.top
         : clamp(screen.y + BAR_DROP_PX, bounds.top + BAR_TOP_PX, bounds.bottom - BAR_BOTTOM_PX);
-    return { x, y };
+    const base = { x, y };
+    if (!avoid.length) return base;
+    const barWidth = measuredWidth > 0 ? measuredWidth : BAR_HALF_WIDTH_PX * 2;
+    const barHeight = measuredHeight > 0 ? measuredHeight : 44, gap = 8;
+    const fit = at => ({
+        x: width < barWidth ? (bounds.left + bounds.right) / 2 : clamp(at.x, bounds.left + barWidth / 2, bounds.right - barWidth / 2),
+        y: height < BAR_TOP_PX + BAR_BOTTOM_PX ? bounds.top
+            : clamp(at.y, bounds.top + BAR_TOP_PX, Math.min(bounds.bottom - barHeight, bounds.bottom - BAR_BOTTOM_PX)),
+    });
+    const candidates = [base];
+    for (const obstacle of avoid) candidates.push(
+        { x, y: obstacle.bottom + gap }, { x, y: obstacle.top - barHeight - gap },
+        { x: obstacle.left - barWidth / 2 - gap, y }, { x: obstacle.right + barWidth / 2 + gap, y });
+    return candidates.map(fit).find(at => avoid.every(obstacle => at.x + barWidth / 2 <= obstacle.left - gap
+        || at.x - barWidth / 2 >= obstacle.right + gap || at.y + barHeight <= obstacle.top - gap
+        || at.y >= obstacle.bottom + gap)) || fit(base);
 }
 
 // The chip trails the cursor and flips to stay inside the visible canvas.
@@ -450,7 +467,23 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
         const blockerAt = drag?.model?.blocker_point_m && project(drag.model.blocker_point_m);
         const proposalAt = !drag && proposal ? project(proposal.target.point_m) : null;
         // A spot under the column or sheet keeps its bar, clamped into view.
-        const barAt = proposalAt ? placeAimBar(proposalAt, box) : null;
+        // A Spot proposal can survive a switch back to Zones. Its confirmation
+        // must not intercept the radial pickup, or the next drag cannot start.
+        // Keep the proposal and Set/Discard; move their bar around active hits.
+        const reserved = [];
+        const hub = host.querySelector?.('[data-apt-directional-composer="1"] [data-apt-radial-start="hub"]');
+        if (hub && !hub.closest('[hidden]')) {
+            const rect = hub.getBoundingClientRect(), origin = host.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0 && origin.width > 0 && origin.height > 0) {
+                const sx = host.clientWidth / origin.width, sy = host.clientHeight / origin.height;
+                reserved.push({ left: (rect.left - origin.left) * sx, right: (rect.right - origin.left) * sx,
+                    top: (rect.top - origin.top) * sy, bottom: (rect.bottom - origin.top) * sy });
+            }
+        }
+        if (within(reticleAt, box)) reserved.push({ left: reticleAt.x - RETICLE_RADIUS_PX, right: reticleAt.x + RETICLE_RADIUS_PX,
+            top: reticleAt.y - RETICLE_RADIUS_PX, bottom: reticleAt.y + RETICLE_RADIUS_PX });
+        const barAt = proposalAt ? placeAimBar(proposalAt, box,
+            { width: elements.bar?.offsetWidth, height: elements.bar?.offsetHeight, avoid: reserved }) : null;
         for (const item of placed) {
             const label = elements.labels.get(item.id), ring = elements.rings.get(item.id);
             write(label, !item.visible, item.x, item.y);

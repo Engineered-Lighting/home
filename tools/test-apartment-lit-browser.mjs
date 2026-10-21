@@ -164,6 +164,8 @@ test('Lit relights the mesh with assumed output, keeps the orbs legible, disclos
     // Lighting is a room toggle beside the view switch, not a fourth view.
     const litButton = page.getByRole('button', { name: 'Lighting', exact: true });
     await litButton.waitFor();
+    assert.equal((await litButton.innerText()).trim(), 'Lit', 'the compact design label retains the existing lighting action');
+    assert.equal(await page.getByRole('group', { name: 'Scene display', exact: true }).getByRole('button', { name: 'Lighting', exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: 'Lit view', exact: true }).count(), 0, 'no Lit view tab');
     assert.equal(await litButton.isDisabled(), false, 'Lighting is offered in a home with modeled fixtures');
     assert.equal(await litButton.getAttribute('aria-pressed'), 'false', 'Lighting is off by default');

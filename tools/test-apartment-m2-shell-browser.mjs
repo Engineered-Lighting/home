@@ -166,10 +166,11 @@ test('M2 shell: Photo missing, mode recovery, camera views and every former scre
     await tab('Controls');
     reached['previous-home'] = 'Menu item; exercised by test-apartment-home-shell-browser.mjs';
     await tab('Chat');
-    const bench = page.locator('.apt-ui-chat-header').getByRole('button', { name: 'Bench', exact: true });
+    await page.locator('.apt-ui-chat-header').getByRole('button', { name: 'Open app actions', exact: true }).click();
+    const bench = page.locator('.apt-ui-chat-header').getByRole('menuitem', { name: 'Bench', exact: true });
     await bench.waitFor({ timeout: 20000 }); await bench.click();
     assert.deepEqual(await page.evaluate(() => window.__benchOpened), ['http://127.0.0.1:8765/']);
-    reached.bench = 'chat header';
+    reached.bench = 'Chat actions menu';
     await tab('Controls');
     checks.push({ stage: 'former_screens_reachable', reached });
 

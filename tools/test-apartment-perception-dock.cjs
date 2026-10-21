@@ -423,7 +423,7 @@ test('viewing the activity loop retires old observers on rolls and pause, recove
   m.appSource.watchActivityLoop=options=>{notify=options.onChange;return()=>{closed++;};};
   await m.render({});
   try{
-    await click(m.container,'View perception');await click(m.container,'View activity loop');
+    await click(m.container,'View perception');await click(m.container,'Show details');await click(m.container,'View activity loop');
     const update=async value=>{await act(async()=>notify(value));await flush();};
     const first=denSession({id:'loop-one',generation:0});
     await update({status:'running',session:first,producerEpoch:'epoch-one',rolls:0});

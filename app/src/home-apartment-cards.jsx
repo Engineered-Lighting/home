@@ -332,6 +332,7 @@ function aptDirectionalTone(kelvin) {
 
 function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, power }) {
   const planRef = useRef(null);
+  const zonePickerId = React.useId();
   const zones = [...radials].sort((a, b) => a.number - b.number);
   const available = zones.length === 6 && zones.every((item, index) => item.number === index + 1 && Number.isFinite(item.azimuth_deg));
   React.useLayoutEffect(() => {
@@ -360,8 +361,9 @@ function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, p
           fill={view ? "var(--apt-warm)" : item.on && item.brightness > 0 ? aptDirectionalTone(item.color_temp_kelvin) : "var(--apt-fill-2)"}
           fillOpacity={view ? 0 : item.on && item.brightness > 0 ? .25 + item.brightness / 1.3 : 1}
           stroke={zone === item.number ? "var(--hg-ice)" : "var(--hg-bg-1)"} strokeWidth="2"
+          data-equivalent-target={zonePickerId}
           onClick={() => activate(item.number)} onKeyDown={event => keyActivate(event, item.number)} style={{ cursor: "pointer" }} />)}
-      <g role="button" tabIndex={0} className="hg-focusable" aria-label="All radial zones" aria-pressed={zone == null}
+      <g role="button" tabIndex={0} className="hg-focusable" aria-label="All radial zones" aria-pressed={zone == null} data-equivalent-target={zonePickerId}
         onClick={() => onZone?.(null)} onKeyDown={event => {
           if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (!event.repeat) onZone?.(null); }
         }} style={{ cursor: "pointer" }}>
@@ -374,6 +376,10 @@ function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, p
     </svg> : <p className="apt-ui-meta">Facing unavailable</p>}
     <div style={{ display: "grid", gap: 4, minWidth: 0, justifyItems: "start" }}>
       <div style={{ fontSize: 13, fontWeight: 540 }}>{zone == null ? "All zones" : `Zone ${zone}`}</div>
+      <select id={zonePickerId} className="apt-radial-zone-picker apt-ui-input" aria-label="Radial zone"
+        disabled={!available} value={zone ?? ''} onChange={event => onZone?.(event.target.value ? Number(event.target.value) : null)}>
+        <option value="">All zones</option>{zones.map(item => <option key={item.number} value={item.number}>Zone {item.number}</option>)}
+      </select>
       {power}
       <p className="apt-ui-meta" title="Directions are modeled; facing is unavailable until radial heading commissioning."
         style={{ margin: 0, lineHeight: 1.5 }}>Facing unverified. Drag outward to brighten, inward to dim.</p>
@@ -386,7 +392,7 @@ function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, p
 const aptDirectionalEmptySnapshot = Object.freeze({ descriptor: null, mode: "spot", active: false, readout: null });
 const aptDirectionalEmptySubscribe = () => () => {};
 
-function AptDirectionalComposer({ view, onMode, spotBadge = null, spotName = null }) {
+function AptDirectionalComposer({ view, onMode, spotBadge = null, spotName = null, shortLabel = null }) {
   const rootRef = useRef(null), pillRef = useRef(null), readoutRef = useRef(null);
   const snapshot = React.useSyncExternalStore(view?.subscribe || aptDirectionalEmptySubscribe,
     view?.getSnapshot || (() => aptDirectionalEmptySnapshot), view?.getSnapshot || (() => aptDirectionalEmptySnapshot));
@@ -414,7 +420,7 @@ function AptDirectionalComposer({ view, onMode, spotBadge = null, spotName = nul
       .apt-directional-toolpill button::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
       .apt-directional-toolpill button:hover{color:#fff}
       .apt-directional-toolpill button[aria-pressed="true"]{background:rgba(255,255,255,.15);color:#fff}
-      @media(pointer:coarse){.apt-directional-toolpill button{height:36px}}
+      @media(pointer:coarse){.apt-directional-toolpill button{height:36px;min-width:44px}}
     `}</style>
     <svg className="apt-directional-hits" aria-hidden="true" width="100%" height="100%"
       style={{ display: "block", overflow: "hidden", pointerEvents: "none" }}>
@@ -425,7 +431,9 @@ function AptDirectionalComposer({ view, onMode, spotBadge = null, spotName = nul
     <div ref={pillRef} hidden className="apt-directional-toolpill" role="group" aria-label="Room lighting tool" data-aim-ignore="true" data-apt-label-avoid=""
       onPointerDownCapture={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
       style={{ fontFamily: CARD_FONT_SANS }}>
-      <span className="nm">{descriptor.label || descriptor.fixture_id}</span>
+      <span className="nm" title={descriptor.label || descriptor.fixture_id}>
+        {shortLabel?.(descriptor.label || descriptor.fixture_id) || descriptor.label || descriptor.fixture_id}
+      </span>
       {pillButton("zones", "Zones", "Z")}{pillButton("spot", "Spot", "A")}
     </div>
     <div ref={readoutRef} hidden role="status" aria-live="off" data-aim-ignore="true"

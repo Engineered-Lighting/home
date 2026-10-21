@@ -53,7 +53,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/lit-(?:frame|display)\.mjs|tools\/test-lit-frame-lifecycle\.mjs)$/, ["test-lit-frame-lifecycle.mjs"]],
   [/^tools\/(?:bench-lit-receivers-browser|lib\/lit-webgpu-timestamp-benchmark|test-lit-webgpu-timestamp-benchmark)\.mjs$/, ["test-lit-webgpu-timestamp-benchmark.mjs"]],
   [/^tools\/(?:fixtures\/apartment-lit-layer-fixtures|test-lit-layer-fixture-memoization)\.mjs$/, ["test-lit-layer-fixture-memoization.mjs"]],
-  [/^app\/src\/(?:home-apartment\.jsx|home-3d\/markers\.js)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
+  [/^app\/src\/(?:home-apartment\.jsx|home-3d\/markers\.js)$/, ["test-apartment-webgpu-cloud-browser.mjs", "test-apartment-webgpu-cloud-browser-part2.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
   [/^(?:app\/src\/(?:home-app\.jsx|home-metrics(?:-lab)?\.jsx)|tools\/test-home-full-ui-metrics-browser\.mjs)$/, ["test-home-full-ui-metrics-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-people)\.jsx|tools\/test-home-full-ui-people-browser\.mjs)$/, ["test-home-full-ui-people-browser.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-intelligence)\.jsx|tools\/test-home-full-ui-intelligence-browser\.mjs)$/, ["test-home-full-ui-intelligence-browser.mjs"]],
@@ -145,11 +145,15 @@ const MAP = [
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
-  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser(?:-part[23])?|fixtures\/apartment-setup-(?:fixtures|rail-proof))\.mjs)$/, ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"]],
+  [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser(?:-part[234])?|fixtures\/apartment-setup-(?:fixtures|rail-proof))\.mjs)$/, ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs", "test-apartment-setup-rail-browser-part4.mjs"]],
+  [/^(?:app\/src\/home-app\.jsx|tools\/test-home-dark-only-browser\.mjs)$/, ["test-home-dark-only-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-cards)?\.jsx|home-3d\/(?:equipment-(?:virtual-fixtures|spotlight-visual)\.mjs|markers\.js))|tools\/test-apartment-(?:light-display|phone-controls)-browser\.mjs)$/, ["test-apartment-light-display-browser.mjs", "test-apartment-phone-controls-browser.mjs"]],
+  [/^(?:app\/src\/home-app\.jsx|tools\/test-home-full-ui-chat-browser\.mjs|tools\/fixtures\/home-full-ui-harness\.mjs)$/, ["test-home-full-ui-chat-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment-(?:setup|edit)\.jsx|home-apartment-data\.js|home-equipment-registration\.js)|web-gateway\/equipment-registration\.mjs|tools\/(?:test-apartment-setup-saves-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-saves-browser.mjs"]],
   [/^(?:app\/src\/(?:home-apartment(?:-setup|-edit)?\.jsx|home-app\.jsx|home-equipment-registration\.js|home-overlay\.js|home-tokens\.css)|tools\/(?:test-apartment-setup-read-only-browser|fixtures\/apartment-setup-fixtures)\.mjs)$/, ["test-apartment-setup-read-only-browser.mjs"]],
   [/^app\/src\/(?:home-apartment-(?:echo\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   [/^app\/src\/home-apartment-(?:echo\.jsx|quick\.js)$/, ["test-apartment-room-inspector-browser.mjs"]],
+  [/^(?:app\/src\/home-apartment(?:-echo|-aim)?\.jsx|tools\/test-apartment-echo-aim-tabs-browser\.mjs)$/, ["test-apartment-echo-aim-tabs-browser.mjs"]],
   [/^tools\/test-apartment-(?:quick\.cjs|echo-inspector-browser\.mjs)$/, ["test-apartment-quick.cjs", "test-apartment-echo-inspector-browser.mjs"]],
   // APT-F06/S02: the shared data states, the status rows that read them, and Quick, which delegates to them.
   [/^(?:app\/src\/(?:home-apartment-(?:states\.js|status\.jsx|quick\.js|ui\.jsx)|home-tokens\.css)|tools\/(?:test-apartment-states\.cjs|test-apartment-status-rows-browser\.mjs|fixtures\/den-contracts\/.+))$/,
@@ -176,7 +180,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
-  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser(?:-part2)?\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
+  [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|cloud|mesh|photo)-browser(?:-part2)?\.mjs)$/, ["test-apartment-webgpu-cloud-browser.mjs", "test-apartment-webgpu-cloud-browser-part2.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
   // The WebGPU splat pipeline (Photo on ?renderer=webgpu) and the Spark cutaway it mirrors.
   [/^(?:app\/src\/home-3d\/(?:modes\.js|pointcloud\.js|webgpu-renderer\.mjs|webgpu-material-ports\.mjs)|tools\/test-apartment-photo-crossfade-browser\.mjs)$/, ["test-apartment-photo-crossfade-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:gaussian-splat-[\w-]+\.mjs|splat-cutaway(?:-tsl)?\.m?js|splat-exterior-cleanup\.mjs|modes\.js|adaptive-performance\.mjs)|tools\/test-apartment-gaussian-splat\.mjs)$/, ["test-apartment-gaussian-splat.mjs"]],
@@ -216,6 +220,7 @@ const MAP = [
   // APT-P01..P06 camera dock: its own suite plus Den's two suites that mount the dock JSX.
   [/^(?:app\/src\/(?:home-apartment-den-perception\.jsx|home-apartment-perception-(?:dock-model|view|player)\.js|home-den-reason-vocabulary\.js|home-lighting-brain-panel\.jsx|home-perception-lab\.jsx|home-apartment\.jsx|home-app\.jsx|home-feature-loader\.js)|docs\/contracts\/den\/(?:reason-vocabulary\.json|fixtures\/[^/]+\.json)|tools\/test-(?:apartment-perception-dock|home-apartment-perception-ui|apartment-desk-preview-ui)\.cjs)$/,
     ["test-apartment-perception-dock.cjs", "test-home-apartment-perception-ui.cjs", "test-apartment-desk-preview-ui.cjs"]],
+  [/^(?:app\/src\/(?:home-app\.jsx|home-events\.jsx|home-tokens\.css)|tools\/test-apartment-chat-cards-browser\.mjs)$/, ["test-apartment-chat-cards-browser.mjs"]],
   // A new or changed top-level source must stay reachable from the loaders.
   [/^app\/src\/[^/]+\.(?:jsx|js)$/, ["run-bootstrap-tests", "run-lab-tests"]],
   [/^tools\/run-touched-harnesses\.mjs$/, ["run-apartment-shell-tests.js", "run-apartment-data-tests.js", "test-apartment-travel-guard.cjs", "test-home-app-source-contracts.cjs"]],
@@ -299,6 +304,8 @@ const SHARD_WEIGHT_S = {
   "test-apartment-aim-wiring-room-browser.mjs": 110,
   "test-apartment-aim-wiring-drag-browser.mjs": 105,
   "test-apartment-webgpu-renderer-browser.mjs": 100,
+  "test-apartment-webgpu-cloud-browser.mjs": 100,
+  "test-apartment-webgpu-cloud-browser-part2.mjs": 110,
   "test-apartment-webgpu-mesh-browser.mjs": 100,
   "test-apartment-webgpu-mesh-browser-part2.mjs": 110,
   "test-apartment-shell-audit-browser.mjs": 70,
@@ -328,8 +335,14 @@ const SHARD_WEIGHT_S = {
   "test-apartment-room-selection-browser.mjs": 134,
   "test-apartment-overlay-bridge-browser.mjs": 103,
   "test-apartment-setup-rail-browser.mjs": 70,
-  "test-apartment-setup-rail-browser-part2.mjs": 130,
+  "test-apartment-setup-rail-browser-part2.mjs": 85,
   "test-apartment-setup-rail-browser-part3.mjs": 45,
+  "test-apartment-setup-rail-browser-part4.mjs": 85,
+  "test-home-dark-only-browser.mjs": 65,
+  "test-apartment-light-display-browser.mjs": 60,
+  "test-apartment-phone-controls-browser.mjs": 65,
+  "test-apartment-echo-aim-tabs-browser.mjs": 65,
+  "test-home-full-ui-chat-browser.mjs": 75,
   "test-apartment-aim-wiring-room-browser.mjs": 113,
   "test-apartment-aim-wiring-drag-browser.mjs": 109,
 };
@@ -347,8 +360,8 @@ function shardWeight(name) {
 // Parts of one split suite run on different workers whenever there are at
 // least as many workers as parts, so no worker carries the whole suite.
 const SHARD_APART = [["test-apartment-directional-browser.mjs", "test-apartment-directional-browser-part2.mjs"],
-  ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"],
-  ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
+  ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs", "test-apartment-setup-rail-browser-part4.mjs"],
+  ["test-apartment-webgpu-cloud-browser.mjs", "test-apartment-webgpu-cloud-browser-part2.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"],
   ["test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"],
   ["test-apartment-lit-splats-browser.mjs", "test-apartment-lit-splats-browser-part2.mjs", "test-apartment-lit-splats-native-browser.mjs", "test-apartment-lit-splats-native-browser-part2.mjs", "test-apartment-lit-splats-native-browser-part3.mjs", "test-apartment-lit-splats-native-browser-part4.mjs"],
   ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]];

@@ -732,7 +732,7 @@ function useViewportProfile() {
 
 /* ── Header ──────────────────────────────────────────────────────────── */
 function HomeHeader({
-  theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
+  theme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
   onOpenVideoLabeler, onOpenApartment, onOpenPerceptionLab, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
@@ -907,7 +907,11 @@ function HomeHeader({
               boxShadow: "0 16px 46px rgba(0,0,0,0.50)",
             }}
           >
-            {serviceProfile && onOpenRemoteProfile && !mobile && (
+            {unified && onOpenRemoteProfile && <button type="button" role="menuitem" style={actionMenuItem}
+              onClick={() => runMenuAction(onOpenRemoteProfile)}>Connection</button>}
+            {unified && onOpenBench && <button type="button" role="menuitem" style={actionMenuItem}
+              onClick={() => runMenuAction(onOpenBench)}>Bench</button>}
+            {!unified && serviceProfile && onOpenRemoteProfile && !mobile && (
               <button
                 type="button"
                 role="menuitem"
@@ -924,7 +928,6 @@ function HomeHeader({
             {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>{mobile ? "lights + travel mode" : "lights"}</button>}
             {onOpenIntelligence && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
             {onOpenVideoLabeler && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenVideoLabeler)}>video labeler</button>}
-            {onToggleTheme && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
             {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenSimulationControls)}>simulation</button>}
           </div>
         </>
@@ -964,19 +967,19 @@ function HomeHeader({
     </span>
   );
   if (unified) return <header className="apt-ui-chat-header">
+    <div className="apt-ui-chat-heading">
     {chatSourceLine && <span className="apt-ui-chat-model" title={chatSourceLine}>{chatSourceLine}</span>}
     <span className="apt-ui-chat-source" title={sim?.active ? "Authored simulation; no hardware output" : warnText || `Home Assistant ${statusText}`}>
       {sim?.active ? "Simulation" : "Home Assistant"} <span className="apt-ui-badge" data-state={sim?.active ? "modeled" : statusText}>{sim?.active ? "authored" : statusText}</span>
     </span>
-    {showWarn && <span className="apt-ui-chat-warning" role="status">{warnText}</span>}
+    </div>
+    <window.HomeChatHeaderActions compact onExplain={onExplainLastAnswer} onCopy={onCopyTranscript}
+      onNewConversation={onNewConversation} copyDisabledReason={conversationCopyDisabledReason} />
     {muteState?.muted && <button type="button" className="apt-ui-button is-small" onClick={onUnmuteClick}>Muted · clear</button>}
     <span className="apt-ui-chat-header-actions">
-      {onOpenRemoteProfile && <button type="button" className="apt-ui-button is-small" onClick={onOpenRemoteProfile}>Connection</button>}
-      {onOpenBench && <button type="button" className="apt-ui-button is-small" onClick={onOpenBench}>Bench</button>}
       {actionMenu}
     </span>
-    <window.HomeChatHeaderActions onExplain={onExplainLastAnswer} onCopy={onCopyTranscript}
-      onNewConversation={onNewConversation} copyDisabledReason={conversationCopyDisabledReason} />
+    {showWarn && <span className="apt-ui-chat-warning" role="status">{warnText}</span>}
     {conversationCopyState && <span className="apt-ui-chat-copy-status" role="status">{conversationCopyState}</span>}
   </header>;
   return (
@@ -1296,7 +1299,6 @@ function SpatialModeRail({
   onPerceptionLab,
   onLights,
   onOps,
-  onToggleTheme,
 }) {
   const items = [
     { id: "home", label: "home", title: "Spatial home", onClick: onHome, tone: "var(--hg-ice)" },
@@ -1377,27 +1379,6 @@ function SpatialModeRail({
         );
       })}
       <div style={{ flex: 1 }} />
-      <button
-        type="button"
-        aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-        className="hg-focusable"
-        title={theme === "dark" ? "Light mode" : "Dark mode"}
-        onClick={onToggleTheme}
-        style={{
-          width: "100%",
-          height: 34,
-          border: "1px solid transparent",
-          borderRadius: 6,
-          background: itemBg,
-          color: "var(--hg-fg-2)",
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          cursor: "pointer",
-        }}
-      >
-        {theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
-      </button>
     </nav>
   );
 }
@@ -4426,6 +4407,7 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, m
 function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false, theme = "dark", unified = false }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   // HomeApp bumps `focusToken` to pull focus here (e.g. when the chat feed
   // becomes the live surface after boot). The `if (focusToken)` guard makes
   // the mount run (initial focusToken === 0) a no-op — InputRow is always
@@ -4436,7 +4418,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   const firstTok = value.split(/\s+/)[0];
   const slashCommands = availableSlashCommands({ mobile });
   const matches = isSlash ? slashCommands.filter((c) => c.cmd.startsWith(firstTok)) : [];
-  const showMenu = isSlash && matches.length > 0 && !value.includes(" ");
+  const showMenu = isSlash && matches.length > 0 && !value.includes(" ") && !slashDismissed;
   const spatialMode = !!(typeof window !== "undefined" && window.__HOME_SPATIAL_MODE);
   const lightTheme = theme === "light";
   const menuSurface = lightTheme
@@ -4457,6 +4439,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   };
   const handleKey = (e) => {
     if (showMenu) {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setSlashDismissed(true); return; }
       if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => (s + 1) % matches.length); return; }
       if (e.key === "ArrowUp")   { e.preventDefault(); setSel((s) => (s - 1 + matches.length) % matches.length); return; }
       if (e.key === "Tab")       { e.preventDefault(); complete(matches[sel].cmd); return; }
@@ -4568,7 +4551,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             aria-autocomplete="list"
             placeholder={isSlash ? "" : unified ? "Ask your home, or type /" : "type or /command"}
             value={value}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => { setSlashDismissed(false); onChange(e.target.value); }}
             onKeyDown={handleKey}
             style={{
               fontFamily: isSlash ? "'Geist Mono', monospace" : "'Geist', system-ui, sans-serif",
@@ -5325,18 +5308,22 @@ function apartmentChatAboutReply(text, about, current) {
     : { kind: "assistant", text: result.text, chatContext: result.outcome };
 }
 
-function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, simulationActive = false, recordingBanner = null, videoLabelerAvailable = true }) {
+function ApartmentHomeBar({ state, onFeature, onPreviousHome, simulationActive = false, recordingBanner = null, videoLabelerAvailable = true }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const firstItemRef = useRef(null);
-  // Setup lives in the Home menu, and is never a dead item: when the home
-  // can't open it, a press says why and the menu stays open.
+  // Direct Setup and its retained menu entry share the same controller action.
+  // An unavailable press opens the existing explanation instead of a dead end.
   const [setupWhy, setSetupWhy] = useState(false);
   const setupBlocked = state?.canSetup === false && !state?.setupActive;
   useEffect(() => { if (!setupBlocked || !menuOpen) setSetupWhy(false); }, [setupBlocked, menuOpen, state?.siteId]);
   window.HomeOverlay.useOverlayLayer({ key: "apartment-home-menu", active: menuOpen,
     rootRef: menuRef, trap: false, initialFocus: firstItemRef, onEscape: () => setMenuOpen(false) });
   const run = action => { setMenuOpen(false); action?.(); };
+  const toggleSetup = () => {
+    if (setupBlocked) { setSetupWhy(true); setMenuOpen(true); return; }
+    run(state.openSetup);
+  };
   // APT-S02: every home that holds unsaved work keeps its mark, viewed or not.
   const parkedUnsaved = window.HomeApartmentData?.dirtySites?.() || [];
   const status = apartmentStatusRows(state);
@@ -5366,6 +5353,13 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
     </details>
     <div className="apt-home-top-actions">
     {recordingBanner}
+    {state?.openSetup && <button type="button" className="apt-home-setup-toggle" aria-label="Setup"
+      aria-pressed={!!state.setupActive} aria-disabled={setupBlocked ? "true" : undefined}
+      aria-describedby={setupWhy && menuOpen ? "apt-home-setup-why" : undefined}
+      title={setupBlocked ? state.setupUnavailableReason || "Setup isn't available for this home here."
+        : "Placement, aims, devices and Home Assistant links"} onClick={toggleSetup}>
+      <IconSetup /><span className="apt-home-setup-label">Setup</span>
+    </button>}
     {simulationActive && <button type="button" className="apt-home-simulation"
       aria-label="Simulation active — open controls" title="Simulation: authored data, not live observations"
       onClick={() => run(() => onFeature?.("simulation"))}>
@@ -5389,7 +5383,7 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
             <button type="button" role="menuitemcheckbox" className="apt-home-setup" ref={firstItemRef}
               aria-checked={state.setupActive ? "true" : "false"} aria-disabled={setupBlocked ? "true" : undefined}
               aria-describedby={setupWhy ? "apt-home-setup-why" : undefined}
-              onClick={() => { if (setupBlocked) { setSetupWhy(true); return; } run(state.openSetup); }}>
+              onClick={toggleSetup}>
               Setup<span className="apt-home-menu-check" aria-hidden="true">{state.setupActive ? "On" : ""}</span>
             </button>
             {setupWhy && <p id="apt-home-setup-why" role="status" className="apt-home-menu-note" data-apt-setup-unavailable="1">
@@ -5402,7 +5396,6 @@ function ApartmentHomeBar({ state, onFeature, onPreviousHome, onTheme, theme, si
             ...(simulationActive ? [["simulation", "Simulation"]] : [])].map(([key, label], index) =>
             <button type="button" role="menuitem" key={key} ref={index === 0 && !state?.openSetup ? firstItemRef : undefined}
               onClick={() => run(() => onFeature(key))}>{label}</button>)}
-          <button type="button" role="menuitem" onClick={() => run(onTheme)}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
           <button type="button" role="menuitem" onClick={() => run(onPreviousHome)}>Previous Home</button>
         </div></>}
     </div></div>
@@ -5476,7 +5469,7 @@ function ApartmentSheetGrip({ detent, onDetent }) {
   </button>;
 }
 
-function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
+function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, autoplay = true }) {
   const viewport = useViewportProfile();
   const mobile = viewport.mobile;
   const videoLabelerAvailable = !mobile;
@@ -5520,8 +5513,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     catch { return null; }
   }, []);
 
-  const [theme, setTheme] = useState(themeOverride || initialPrefs.theme || "dark");
-  useEffect(() => { if (themeOverride) setTheme(themeOverride); }, [themeOverride]);
+  // This release is dark-only. The existing preference save below normalizes
+  // older Light choices without adding or changing the preference schema.
+  const theme = "dark";
   const [events, setEvents] = useState(initialEventsFromStorage);
   const [input, setInput] = useState("");
   const [voiceInternal, setVoiceInternal] = useState({ state: "inactive" });
@@ -6392,7 +6386,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   useEffect(() => {
     if (rootRef.current) rootRef.current.dataset.theme = theme;
     document.documentElement.dataset.theme = theme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "light" ? "#EFE9DC" : "#050606");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#050606");
   }, [theme]);
 
   /* Auto-scroll to bottom on new events — but only while the reader is
@@ -7522,6 +7516,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     const turnToolCalls = [];
     let streamingBubbleId = null;
     let pipelineRunId = null;
+    let pipelineErrorReported = false;
     const finalizeStreamingBubble = () => {
       const id = streamingBubbleId;
       if (!id) return false;
@@ -7745,6 +7740,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       }
       if (haEvent.type === "error") {
         const msg = haEvent.data?.message || "pipeline error";
+        pipelineErrorReported = true;
         addEvent({ kind: "system", text: msg, tone: "error" });
       }
     };
@@ -7773,7 +7769,9 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       const { elapsedMs } = await run.done;
       setMetrics((prev) => ({ ...prev, e2e: Math.round(elapsedMs) }));
     } catch (e) {
-      addEvent({ kind: "system", text: e?.message || "pipeline failed", tone: "error" });
+      // HA emits the failure before rejecting the same run. Retain the
+      // rejection backstop for transports that reject without an error event.
+      if (!pipelineErrorReported) addEvent({ kind: "system", text: e?.message || "pipeline failed", tone: "error" });
     } finally {
       // Defensive: if streaming never started (thinking stub never replaced
       // by a streaming bubble), the existing filter removes the stub. If it
@@ -11927,7 +11925,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       paddingBottom: 0,
     }}>
       {unifiedHome && <>
-        <ApartmentHomeBar state={shellState} theme={theme} simulationActive={!!sim.active} videoLabelerAvailable={videoLabelerAvailable} onTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+        <ApartmentHomeBar state={shellState} simulationActive={!!sim.active} videoLabelerAvailable={videoLabelerAvailable}
           recordingBanner={window.HomePerceptionLabRecordingBanner && <window.HomePerceptionLabRecordingBanner inline labOpen={perceptionLabOpen} onOpen={openPerceptionLabFeature} />}
           onPreviousHome={() => chooseHomeLayout("classic")} onFeature={key => {
             if (key === "metrics") { setShellMetricsOpen(true); return; }
@@ -12002,7 +12000,6 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen((open) => !open);
             }}
-            onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
           />}
           { !unifiedHome && spatialOpsDockOpen && (
             <div
@@ -12037,7 +12034,8 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
               {[["controls", "Controls"], ["camera", "Camera · JEV"], ["chat", "Chat"]].map(([key, label]) =>
                 <button type="button" role="tab" key={key} id={`apt-home-tab-${key}`}
                   aria-selected={shellTab === key} aria-controls={`apt-home-panel-${key}`}
-                  aria-label={key === "chat" && shellChatUnread ? "Chat, unread replies" : undefined}
+                  aria-label={key === "controls" ? "Controls" : key === "chat" && shellChatUnread ? "Chat, unread replies" : undefined}
+                  aria-description={key === "controls" && shellState?.selectionLabel ? shellState.selectionLabel : undefined}
                   tabIndex={shellTab === key ? 0 : -1}
                   onKeyDown={event => {
                     if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
@@ -12047,7 +12045,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
                     const next = event.key === "Home" ? keys[0] : event.key === "End" ? keys[keys.length - 1]
                       : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length];
                     showShellTab(next); document.getElementById(`apt-home-tab-${next}`)?.focus();
-                  }} onClick={() => showShellTab(key)}>{label}{key === "chat" && shellChatUnread
+                  }} onClick={() => showShellTab(key)}>{key === "controls" ? <>
+                    <span className="apt-home-controls-long">Controls</span>
+                    <span className="apt-home-controls-short" title={shellState?.selectionLabel || undefined}>{shellState?.selectionShortLabel || "Controls"}</span>
+                  </> : label}{key === "chat" && shellChatUnread
                     && <span className="apt-home-unread" data-apartment-chat-unread="1" aria-hidden="true" />}</button>)}
             </div>
           </nav>
@@ -12379,7 +12380,6 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         conversationCopyState={conversationCopyState}
         conversationCopyDisabledReason={conversationCopyDisabledReason}
         theme={theme}
-        onToggleTheme={isSpatialWide ? null : () => setTheme((t) => t === "dark" ? "light" : "dark")}
         voice={voice}
         connection={connection}
         sidecarOnline={sidecarOnline}

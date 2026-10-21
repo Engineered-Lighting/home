@@ -2289,9 +2289,9 @@ function aptLitRefusalWords(reason) {
 }
 
 function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sourceDetail, sourceStatus, stats, disabled, pointsOnlyReason, modeLockedReason, view,
-  onMode, onOrbit, onFit, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
+  onMode, onOrbit, onFit, onZoom, onRehearse, nativePacks, packVersion, packBusy, onPackChange, hasVirtualFixtures, virtualVisible, onVirtualVisible,
   homeId, homeName, hasPerception, fixtureCount, fixtureSelected, about, modeProgress = null, viewLockedReason = null, onDismissNotice,
-  lit = null, onLit = null, lighting = false, litRefused = null }) {
+  lit = null, onLit = null, lighting = false, litRefused = null, layerSeams = {}, setupMode = false }) {
   const Guide = window.HomeApartmentRoomGuide;
   const [popover, setPopover] = useState(null);
   const [guideDialog, setGuideDialog] = useState(null);
@@ -2316,21 +2316,23 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
   const retryPhotoDisabled = !!(disabled || pointsOnlyReason || modeLockedReason);
   const backToCloudDisabled = !!(disabled || modeLockedReason);
   const loadingPercent = modeLoading && modeProgress?.mode === modeLoading && Number.isFinite(modeProgress.percent) ? modeProgress.percent : null;
-  return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view" data-apt-label-avoid="">
+  return <div className="apt-ui-room-toolbar" role="toolbar" aria-label="Room view" data-apt-label-avoid=""
+    data-apt-edit-ui={setupMode ? "scene-navigation" : undefined}>
     <button type="button" className="apt-ui-toolbar-source hide-small" title={sourceLabel} onClick={() => setPopover(popover === "source" ? null : "source")}><AptUnifiedIcon name="info" /><span>{sourceLabel}</span></button>
     <span className="apt-ui-toolbar-separator hide-small" />
-    <div className="apt-ui-seg" role="group" aria-label="Scene mode">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
+    <div className="apt-ui-seg" role="group" aria-label="Scene display">{[["points", "Cloud"], ["splat", "Photo"], ["mesh", "Mesh"]].map(([key, label]) =>
       <button type="button" key={key} aria-label={`${label} view`} aria-pressed={mode === key}
-        title={key !== "points" && pointsOnlyReason ? pointsOnlyReason : undefined}
-        disabled={disabled || modeLoading === key || (key !== "points" && !!pointsOnlyReason)}
+        title={modeLockedReason || (key !== "points" && pointsOnlyReason ? pointsOnlyReason : undefined)}
+        disabled={disabled || !!modeLockedReason || modeLoading === key || (key !== "points" && !!pointsOnlyReason)}
         onClick={() => onMode(key)}>{label}</button>)}
-    </div>
     {/* Lighting is a property of the room, not a view: it relights whichever
-      * view is shown (Cloud, Photo or Mesh) and stays on across them. */}
-    <button type="button" className="apt-ui-button is-small" aria-label="Lighting" aria-pressed={!!lighting}
-      title={!onLit ? "Lighting needs modeled fixtures in this home" : modeLockedReason || "Simulated light from the virtual fixtures · not photometric"}
+      * view is shown (Cloud, Photo or Mesh) and stays on across them. Lit keeps
+      * the handoff's compact fourth segment without becoming a fourth mode. */}
+    <button type="button" aria-label="Lighting" aria-pressed={!!lighting}
+      title={!onLit ? "Lighting needs modeled fixtures in this home" : modeLockedReason || "Simulated lighting across Cloud, Photo and Mesh · not photometric"}
       disabled={disabled || !onLit || !!modeLockedReason} onClick={() => onLit?.(!lighting)}>
-      <AptUnifiedIcon name="bulb" /><span className="apt-ui-toolbar-word apt-ui-lighting-word">Lighting</span></button>
+      Lit</button>
+    </div>
     <span className="apt-ui-toolbar-separator apt-ui-orbit" />
     <button type="button" className="apt-ui-button is-icon is-small apt-ui-orbit" aria-label="Orbit left" disabled={disabled || !!viewLockedReason}
       title={viewLockedReason || undefined} onClick={() => onOrbit(-1)}><AptUnifiedIcon name="chevL" /></button>
@@ -2347,7 +2349,17 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
       {popover === "layers" && <div ref={popoverRef} role="dialog" aria-label="Room layers">
         <h3 className="apt-ui-heading">Room layers</h3>
         <Guide.LayersPanel homeId={homeId} hasPerception={hasPerception} fixtureCount={fixtureCount}
-          seams={hasVirtualFixtures ? { fixtures: { value: virtualVisible, set: onVirtualVisible } } : {}} />
+          seams={{ ...layerSeams, ...(hasVirtualFixtures ? { fixtures: { value: virtualVisible, set: onVirtualVisible } } : {}) }} />
+        <section className="apt-ui-mobile-navigation" aria-label="Room navigation">
+          <h3 className="apt-ui-heading">Room navigation</h3>
+          <div className="apt-ui-actions">
+            <button type="button" className="apt-ui-button" disabled={disabled || !!viewLockedReason} onClick={() => onOrbit(-1)}>Orbit left</button>
+            <button type="button" className="apt-ui-button" disabled={disabled || !!viewLockedReason} onClick={() => onOrbit(1)}>Orbit right</button>
+            <button type="button" className="apt-ui-button" disabled={disabled || !!viewLockedReason} onClick={onFit}>Fit room</button>
+            <button type="button" className="apt-ui-button" disabled={disabled || !onZoom} onClick={() => onZoom(1)}>Zoom in</button>
+            <button type="button" className="apt-ui-button" disabled={disabled || !onZoom} onClick={() => onZoom(-1)}>Zoom out</button>
+          </div>
+        </section>
         <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close layers</button>
       </div>}
     </div>
@@ -2491,7 +2503,7 @@ function aptUnifiedRadialPowerPatch(radials, on) {
 const aptEmptySubscribe = () => () => {};
 const aptEmptySnapshot = () => null;
 /* Presentation only. The host supplies registered descriptors and its existing guarded callbacks. */
-function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
+function AptUnifiedVirtualInspector({ homeName, roomName, fixtures, fixture, selected, visible, onVisible, onSelect, onBack,
   onPatch, onPatchAll, onUndo, onRedo, canUndo, canRedo, notice, sourceLabel, onSetup, canSetup, setupReadOnly = false, deskControls,
   tab: controlledTab, onTabChange, roomGroups, onRoomPower, roomPowerDisabledReason, namedAims, onShowComposer, directionalView, commandBinding,
   aimControls, aimNamedAims }) {
@@ -2559,14 +2571,14 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   };
   return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Fixture lighting inspector">
     <header className="apt-ui-header"><div className="apt-ui-header-row">
-      <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
+      <button type="button" className="apt-ui-button is-icon is-small" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
       <div className="apt-ui-grow"><h2 className="apt-ui-title">{fixture.label || fixture.fixture_id}</h2>
-        <div className="apt-ui-sub">{homeName} · {[
+        <div className="apt-ui-sub">{roomName || homeName} · {[
           state.spotlight?.on && `Spot ${Math.round((state.spotlight.brightness ?? 1) * 100)}%`,
           state.downward?.on && `Down ${Math.round((state.downward.brightness ?? 1) * 100)}%`,
           radials.some(item => item.on) && `Radial ${Math.round(radials.reduce((sum, item) => sum + (item.on ? item.brightness ?? 1 : 0), 0) / 6 * 100)}%`,
         ].filter(Boolean).join(" · ") || "Off"}</div></div>
-      <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
+      <button type="button" className="apt-ui-button is-icon is-small is-ghost" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
       <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled fixture</span><span className="apt-ui-badge">Not commissioned</span></div>
       <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">{[["light", "Light"], ["aim", "Aim"], ["setup", "Setup"]].map(([key, label]) =>
         <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-virtual-${key}`} onClick={() => setTab(key)}>{label}</button>)}
@@ -2915,6 +2927,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const [serviceEpoch, setServiceEpoch] = useState(0);
   const [equipmentReloadEpoch, setEquipmentReloadEpoch] = useState(0);
   const [virtualSpotlightsVisible, setVirtualSpotlightsVisible] = useState(true);
+  const [roomBeams, setRoomBeams] = useState('selected');
+  const [roomPools, setRoomPools] = useState(true);
+  const [roomLightDetails, setRoomLightDetails] = useState(false);
   const [virtualFixturePreview, setVirtualFixturePreview] = useState(null);
   const [virtualFixtureId, setVirtualFixtureId] = useState("");
   const [virtualFixtureChannel, setVirtualFixtureChannel] = useState("spotlight");
@@ -5331,6 +5346,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   }, [open, phase, selectedSiteId, selectedContentRevision, virtualFixtureDocument,
     virtualFixtureBindingKey, virtualSpotlightsVisible, editing, calibCam, liveOn, spatialScale]);
 
+  useEffect(() => {
+    engineRef.current?.overlay?.setVirtualFixtureDisplay?.({ beams: roomBeams, pools: roomPools, beamGain: .12 });
+  }, [selectionEngine, virtualFixtureDocument, roomBeams, roomPools]);
+
   // Always on while the Victoria view shows the registered fixtures. Brain
   // offline preserves ambient and disables automatic spots. Physical output
   // is never involved. Timing diagnostics are explicit and stay off normally.
@@ -5631,10 +5650,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // directional composer. Equipment state and receivers are unchanged.
   const lightPoolsInputRef = useRef(null), lightPoolsDrawRef = useRef(null);
   lightPoolsInputRef.current = { selectedId: virtualFixtureControlsOpen ? virtualFixtureId : null,
-    floor: virtualFixtureDocument?.references?.floor || null, beams: "selected", pools: true };
+    floor: virtualFixtureDocument?.references?.floor || null, beams: roomBeams === 'off' ? 'none' : roomBeams,
+    pools: roomPools, details: roomLightDetails };
   useEffect(() => {
     const engine = selectionEngine, host = hostRef.current;
-    if (!engine || !host || !virtualFixtureDocument || !apartmentSceneControlsEnabled || !virtualFixtureControlsOpen) return undefined;
+    if (!engine || !host || !virtualFixtureDocument || !apartmentSceneControlsEnabled || !virtualSpotlightsVisible) return undefined;
     let closed = false, poolLease = null;
     const admitted = () => !closed && document.visibilityState !== "hidden" && engineRef.current === engine
       && engine.siteId === "victoria" && host.isConnected;
@@ -5697,9 +5717,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     document.addEventListener("visibilitychange", onVisibility);
     void start();
     return () => { closed = true; unsubscribe(); document.removeEventListener("visibilitychange", onVisibility); retire(poolLease); };
-  }, [selectionEngine, virtualFixtureBindingKey, apartmentSceneControlsEnabled, virtualFixtureControlsOpen]);
+  }, [selectionEngine, virtualFixtureBindingKey, apartmentSceneControlsEnabled, virtualFixtureControlsOpen, virtualSpotlightsVisible]);
   useEffect(() => { lightPoolsDrawRef.current?.(); },
-    [virtualFixturePreview, virtualFixtureId, virtualFixtureControlsOpen, virtualSpotlightsVisible]);
+    [virtualFixturePreview, virtualFixtureId, virtualFixtureControlsOpen, virtualSpotlightsVisible, roomBeams, roomPools, roomLightDetails]);
 
   const directionalDisplay = directionalView && !directionalView.readback().disposed && hostRef.current && window.AptDirectionalComposer
     && window.HomeApartmentDirectional?.identityKey(getDirectionalSnapshot(virtualFixtureId, { drawing: false })?.descriptor)
@@ -9217,14 +9237,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       ...aptShellLightFacts(model, virtualFixtureItems.length, virtualFixtureDocument?.scope?.room_id, connection),
       hasPerception: perceptionDockAvailable,
       dockState: perceptionDockAvailable ? unifiedDock : "hidden",
-      selectionLabel: unifiedSelectionLabel, setupActive: editing,
+      selectionLabel: unifiedSelectionLabel,
+      selectionShortLabel: unifiedSelectionLabel ? aimPresentation?.shortLabel?.(unifiedSelectionLabel) || unifiedSelectionLabel : null,
+      setupActive: editing,
       haConnection: connection, haLastReportedAt: selectedSiteId === "echo" ? window.HomeApartmentStates?.latestReport(statesRef.current, window.HomeApartmentQuick?.echoLightEntityIds(model.devices)) ?? null : null,
       canSetup: apartmentSetupAvailable, setupUnavailableReason: apartmentSetupUnavailableReason,
       openSetup: openUnifiedSetup, aimBridge: echoNamedAims.chatBridge || null,
       selectHome: id => travelToSite(id, { presentation: "interior" }), chatRoom: chatRoomSnapshot });
   }, [unifiedShell, onShellState, selectedSiteId, selectedContentRevision, phase, sourceMeta.label,
     saveStatus.state, saveStatus.detail, apartmentDeviceControlsEnabled, connection, travelToSite, model.devices, model.zones, virtualFixtureItems.length, virtualFixtureDocument,
-    unifiedSelectionLabel, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
+    unifiedSelectionLabel, aimPresentation, editing, apartmentSceneControlsEnabled, apartmentPlacementControlsEnabled, openUnifiedSetup,
     apartmentSetupAvailable, apartmentSetupUnavailableReason,
     unifiedDock, perceptionDockAvailable, chatRoomSnapshot, echoNamedAims.chatBridge]);
   useEffect(() => {
@@ -9668,6 +9690,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
 
       {directionalDisplay && ReactDOM.createPortal(
         <window.AptDirectionalComposer view={directionalDisplay} onMode={changeFixtureInteractionMode}
+          shortLabel={aimPresentation?.shortLabel}
           spotBadge={window.AptSpotPendingDot && <window.AptSpotPendingDot store={aimProposals} siteId="victoria"
             descriptor={aimSelectedDescriptor} tool={fixtureInteractionMode} />}
           spotName={window.AptSpotPendingDot && aimSelectedProposal && fixtureInteractionMode !== "spot" ? "Spot (aim pending)" : null} />,
@@ -10167,10 +10190,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         </div>
       )}
 
-      {unifiedShell && !editing && !hideViewHud && spatialScale === "apartment" && (
+      {unifiedShell && !hideViewHud && spatialScale === "apartment" && (
         <AptUnifiedRoomToolbar mode={mode} modeLoading={modeLoading} modeError={modeError}
           sourceLabel={sourceMeta.label} disabled={!apartmentSceneControlsEnabled} pointsOnlyReason={interiorPointsOnlyReason}
-          modeLockedReason={(liveCam || engineRef.current?.rig?.inCameraPose?.()) && !calibCam
+          setupMode={editing}
+          modeLockedReason={editing ? "Finish Setup to change scene view" : (liveCam || engineRef.current?.rig?.inCameraPose?.()) && !calibCam
             ? "Camera view is locked to mesh. Return to room to change modes." : null}
           sourceDetail={`${sourceMeta.label}${revisionLabel}`} stats={stats} sourceStatus={<>
             <p className="apt-ui-meta">Save · {saveStatus.state}{saveStatus.detail ? ` · ${saveStatus.detail}` : ""}</p>
@@ -10178,6 +10202,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             {simActive && <p className="apt-ui-meta">Simulation</p>}</>}
           view={((azIdx % 8) + 8) % 8} onMode={next => { if (apartmentSceneControlsEnabled) { setLiveOn(false); pickMode(next); } }}
           onOrbit={direction => { if (apartmentSceneControlsEnabled) engineRef.current?.rig.stepAzimuth(direction); }}
+          onZoom={direction => { if (apartmentSceneControlsEnabled) (direction > 0 ? zoomInButtonRef.current : zoomOutButtonRef.current)?.click(); }}
           onFit={() => { if (apartmentSceneControlsEnabled) engineRef.current?.refit?.({ dur: 300 }); }}
           onRehearse={!liveShadow && onOpenDynamicReplay && !calibCam && !aimMode && !travelling
             && spatialScale === "apartment" && spatialTransition === "idle" ? onOpenDynamicReplay : null}
@@ -10185,6 +10210,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           packVersion={contentPacks.find(pack => pack.active && pack.manifest.siteId === selectedSiteId)?.manifest.revision || ""}
           packBusy={contentPackBusy} onPackChange={version => { void changeContentPack(version); }}
           hasVirtualFixtures={!!virtualFixtureDocument} virtualVisible={virtualSpotlightsVisible} onVirtualVisible={setVirtualSpotlightsVisible}
+          layerSeams={virtualFixtureDocument ? {
+            beams: { value: roomBeams, set: setRoomBeams }, pools: { value: roomPools, set: setRoomPools },
+            'light-details': { value: roomLightDetails, set: setRoomLightDetails },
+          } : {}}
           homeId={selectedSiteId} homeName={selectedSiteEntry?.shortName} fixtureCount={virtualFixtureItems.length}
           fixtureSelected={virtualFixtureControlsOpen && virtualSpotlightsVisible}
           hasPerception={perceptionDockAvailable}
@@ -10570,6 +10599,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
           saveStatus={saveStatus}
           saving={saving}
           aimRows={echoNamedAims.aimTab}
+          unified={unifiedShell}
+          onLight={id => { setAimMode(false); setAimDestination(null); setCardId(id || aimFixtureId); }}
+          onSetup={() => { setAimMode(false); setAimDestination(null); openUnifiedSetup(); }}
           onStateReadback={(latest) => {
             Object.assign(statesRef.current, latest || {});
             setServicePulse((n) => n + 1);
@@ -10633,6 +10665,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       {unifiedShell && virtualFixtureDocument && phase === "ready" && spatialScale === "apartment" && !editing && !calibCam && !liveOn && (
         <AptHomePanelSlot enabled={true} target={shellControlsHost}>
           <AptUnifiedVirtualInspector homeName={selectedSiteName} fixtures={virtualFixtureItems} fixture={selectedVirtualFixture}
+            roomName={virtualFixtureDocument.scope?.room_id?.replace(/(^|[-_\s]+)(\w)/g, (_, space, letter) => `${space ? " " : ""}${letter.toUpperCase()}`)}
             selected={virtualFixtureControlsOpen} visible={virtualSpotlightsVisible} onVisible={setVirtualSpotlightsVisible}
             tab={virtualInspectorTab} onTabChange={changeVirtualInspectorTab} onSelect={selectVirtualFixture}
             onBack={clearVirtualFixtureSelection} commandBinding={virtualFixtureDocument.binding}
@@ -10830,11 +10863,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       {/* edit mode */}
       {selectedSiteId === "victoria" && sourceMeta.kind === "equipment_unavailable"
         && spatialScale === "apartment" && phase === "ready" && (
-        <aside role="status" data-victoria-equipment-unavailable="1" style={{ position: "absolute", top: 110,
-          right: 14, zIndex: 12, maxWidth: 330, padding: 12, background: "rgba(10,17,23,.95)", color: "var(--hg-fg)" }}>
-          Equipment measurements are unavailable. The room is still available for viewing.
-          <div style={{ fontSize: 11, marginTop: 6 }}>{model.source_detail?.error}</div>
-          <button type="button" onClick={() => setEquipmentReloadEpoch((n) => n + 1)} style={{ minHeight: 40, marginTop: 8 }}>Retry equipment</button>
+        <aside role="status" className="apt-equipment-unavailable" data-victoria-equipment-unavailable="1"
+          aria-description={model.source_detail?.error} title={model.source_detail?.error}>
+          <div><strong>Equipment unavailable</strong><span>Room viewing still works.</span></div>
+          <button type="button" onClick={() => setEquipmentReloadEpoch((n) => n + 1)}>Retry equipment</button>
         </aside>
       )}
       {editing && spatialScale === "apartment" && phase === "ready"

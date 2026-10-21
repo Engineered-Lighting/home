@@ -69,7 +69,10 @@
     if (!el) return false;
     if (el.isContentEditable) return true;
     var tag = el.tagName;
-    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    // Checkboxes, radios and buttons do not own a text edit or native
+    // picker. Yielding here stranded Layers after its first checkbox focused.
+    if (tag === "INPUT") return !/^(checkbox|radio|button|submit|reset|image)$/i.test(el.type || "text");
+    return tag === "TEXTAREA" || tag === "SELECT";
   }
 
   function _rootOf(layer) {

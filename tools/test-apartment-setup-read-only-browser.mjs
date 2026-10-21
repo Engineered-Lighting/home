@@ -1,5 +1,5 @@
-// Setup is never a dead control. It lives in the Home menu (the top bar
-// holds only Menu). On a home whose equipment registration is read-only,
+// Direct Setup and the retained Home menu entry share one editor. On a home
+// whose equipment registration is read-only,
 // Setup opens the rail read-only and says why; where Setup cannot open at
 // all, pressing it says why instead of doing nothing. Echo is unchanged.
 // Also: Escape closes the Home menu opened with a mouse click and returns
@@ -44,9 +44,11 @@ test('Setup opens read-only on a read-only home, explains itself where it cannot
     await check('read-only Victoria: Setup opens the rail read-only, with the reason, and nothing can be changed', async () => {
       await page.waitForFunction(() => window.__havApartmentDebug?.modelSnapshot()?.source_detail?.read_only === true);
       assert.equal(await shell.setupState(), 'off');
-      assert.equal(await page.locator('.apt-home-topbar > .apt-home-top-actions > button').count(), 0, 'the top bar holds only Menu');
-      assert.equal(await (await shell.openMenu()).getAttribute('aria-disabled'), null, 'Setup is a working item here');
-      await shell.pressSetup(); await shell.inspector().waitFor(); await shell.waitSetupState('on');
+      const direct = page.getByRole('button', { name: 'Setup', exact: true });
+      assert.equal(await direct.getAttribute('aria-pressed'), 'false');
+      assert.equal(await direct.getAttribute('aria-disabled'), null, 'read-only Setup remains a working review control');
+      await direct.click(); await shell.inspector().waitFor(); await shell.waitSetupState('on');
+      assert.equal(await direct.getAttribute('aria-pressed'), 'true');
       const note = await shell.inspector().locator('[data-setup-read-only]').innerText();
       assert.match(note, /Victoria's room layout is read-only here, so placement can't be changed/);
       assert.match(note, /desk and sofa targets are marked from a light's Setup tab/);
@@ -59,6 +61,7 @@ test('Setup opens read-only on a read-only home, explains itself where it cannot
       }
       assert.equal(await (await shell.openMenu()).getAttribute('aria-checked'), 'true');
       await shell.pressSetup(); await shell.rail().waitFor({ state: 'detached' }); await shell.waitSetupState('off');
+      assert.equal(await direct.getAttribute('aria-pressed'), 'false', 'the retained menu entry closes the same Setup state');
       return { opened: true, read_only_note: note };
     });
     await check('read-only Victoria: the light Setup tab offers Review fixture placement, next to the registered desk target', async () => {
@@ -107,7 +110,7 @@ test('Setup opens read-only on a read-only home, explains itself where it cannot
     await ro.context.close();
 
     // 2. Victoria's registration is unavailable: Setup can't open, and says why.
-    const off = await openSetupContext(browser, server.origin, server.log, { site: 'victoria' });
+    const off = await openSetupContext(browser, server.origin, server.log, { site: 'victoria', mobile: true, viewport: { width: 390, height: 460 } });
     await off.context.route(REGISTRATION, route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"ok":false,"error":"equipment_unconfigured"}' }));
     const offShell = homeShell(off.page, server.origin);
     await offShell.boot('1', 'victoria');
@@ -125,6 +128,27 @@ test('Setup opens read-only on a read-only home, explains itself where it cannot
       const reason = await why.innerText();
       await off.page.keyboard.press('Escape'); await offShell.homeMenu().waitFor({ state: 'detached' });
       return { reason };
+    });
+    await check('short coarse phone: direct unavailable Setup explains itself, menu scrolls, and Escape restores its opener', async () => {
+      const direct = off.page.getByRole('button', { name: 'Setup', exact: true });
+      assert.equal(await direct.getAttribute('aria-disabled'), 'true');
+      const box = await direct.boundingBox();
+      assert.ok(box.width >= 44 && box.height >= 44 && box.x >= 0 && box.x + box.width <= 390, 'direct Setup retains an unclipped touch target');
+      await direct.click({ force: true });
+      const why = off.page.locator('[data-apt-setup-unavailable]');await why.waitFor();
+      assert.equal(await direct.getAttribute('aria-describedby'), 'apt-home-setup-why');
+      assert.match(await why.innerText(), /Victoria's equipment registration isn't available here/);
+      const menuBox = await offShell.homeMenu().boundingBox();
+      assert.ok(menuBox.y >= 0 && menuBox.y + menuBox.height <= 460, 'the menu stays inside the short viewport');
+      await off.page.waitForFunction(() => document.activeElement?.matches('.apt-home-menu [role="menuitemcheckbox"]'));
+      await off.page.keyboard.press('End');
+      await off.page.waitForFunction(() => document.activeElement?.textContent === 'Previous Home');
+      const last = await offShell.homeMenu().getByRole('menuitem', { name: 'Previous Home', exact: true }).boundingBox();
+      assert.ok(last.y >= menuBox.y && last.y + last.height <= menuBox.y + menuBox.height + 1, 'keyboard focus scrolls the final action into view');
+      await off.page.keyboard.press('Escape');await offShell.homeMenu().waitFor({ state: 'detached' });
+      assert.equal(await direct.evaluate(element => document.activeElement === element), true, 'Escape returns to direct Setup');
+      assert.equal(await offShell.rail().count(), 0, 'an unavailable press grants no editor access');
+      return { viewport: [390, 460], touch_target: [box.width, box.height], menu_scroll_and_focus: true };
     });
     await check('Echo is unchanged: Setup opens the editable rail', async () => {
       await offShell.selectHome('echo');

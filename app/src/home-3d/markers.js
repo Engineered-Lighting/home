@@ -1196,6 +1196,8 @@ export function createOverlay(apartmentRoot) {
             syncFixtureMountDecorations(); return result;
         },
         setVirtualFixtureState: virtualFixtures.setFixtureState,
+        setVirtualFixtureDisplay: virtualFixtures.setDisplay,
+        virtualFixtureDisplayReadback: virtualFixtures.displayReadback,
         setVirtualFixturesVisible(visible) {
             const result = virtualFixtures.setVisible(visible);
             syncFixtureMountDecorations(); return result;

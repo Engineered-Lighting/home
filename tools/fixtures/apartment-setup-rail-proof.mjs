@@ -17,7 +17,7 @@ const TOOLS = [['sockets', 'Devices and sockets'], ['names', 'Names'], ['targets
   ['position', 'Fixture position'], ['links', 'Home Assistant'], ['cameras', 'Cameras and sensors']];
 
 export async function runSetupRailProof({ phase = 'rail' } = {}) {
-  if (!['rail','dock','phone'].includes(phase)) throw Error('unknown Setup rail proof phase');
+  if (!['rail','dock','dock-collapsed','phone'].includes(phase)) throw Error('unknown Setup rail proof phase');
   const run = path.join(ROOT, '.tmp/apartment-setup-rail-browser', 'run-' + Date.now() + '-' + phase); fs.mkdirSync(run, { recursive: true });
   const rooms = installSetupRooms(run), packHashes = rooms.packHashes(), registration = hash(fs.readFileSync(rooms.registrationFile));
   const receipt = { schema: 'home-apartment-setup-rail-browser-1', authored_room: true, household_data: false, screenshots: false,
@@ -58,9 +58,11 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
     await shell.waitSetupState('off');
     await check('Setup opens one rail and its inspector in the right column; tabs, chat and dock are hidden', async () => {
       assert.equal(await shell.setupState(), 'off');
-      assert.equal(await page.locator('.apt-home-topbar > .apt-home-top-actions > button').count(), 0, 'the top bar holds only Menu');
+      const setupToggle = page.getByRole('button', { name: 'Setup', exact: true });
+      assert.equal(await setupToggle.getAttribute('aria-pressed'), 'false', 'the direct Setup toggle reads the shared off state');
       assert.equal(await (await shell.openMenu()).getAttribute('aria-checked'), 'false');
       await shell.openSetup(); await shell.waitSetupState('on');
+      assert.equal(await setupToggle.getAttribute('aria-pressed'), 'true', 'the direct toggle reflects Setup opened through Menu');
       assert.equal(await shell.homeMenu().count(), 0, 'choosing Setup closes the menu');
       assert.equal(await (await shell.openMenu()).getAttribute('aria-checked'), 'true', 'Setup reads as on in the menu');
       await page.keyboard.press('Escape'); await shell.homeMenu().waitFor({ state: 'detached' });
@@ -72,6 +74,9 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
       assert.equal(await page.locator('.apt-home-controls [data-apt-setup-inspector]').count(), 1, 'the inspector is in the unified right column');
       for (const selector of ['.apt-home-tabs', '.apt-home-camera', '.apt-home-chat']) assert.equal(await visible(selector), false, selector + ' hidden in Setup');
       assert.equal(await page.locator('.apt-home-controls > :not([data-apt-setup-inspector])').evaluateAll(nodes => nodes.filter(node => node.getClientRects().length).length), 0);
+      assert.equal(await page.getByRole('toolbar', { name: 'Room view', exact: true }).isVisible(), true);
+      assert.equal(await page.getByRole('group', { name: 'Apartment edit orbit controls', exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: 'Cloud view', exact: true }).isDisabled(), true);
       assert.equal(await saveButton().isDisabled(), true); assert.equal(await draft(), originalDraft);
       return { tools: labels.map(([id]) => id), column: 'unified-controls', hidden: ['tabs', 'camera', 'chat'] };
     });
@@ -200,14 +205,19 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
     });
 
     }
-    if (phase === 'dock') {
+    if (phase === 'dock' || phase === 'dock-collapsed') {
     await check('the camera dock is hidden in Setup and returns exactly as it was in each presentation', async () => {
       const dockState = () => page.evaluate(() => ({ dock: document.querySelector('.apt-home-shell').dataset.dock,
         expanded: document.querySelector('.apt-ui-dock-header button[aria-pressed]')?.getAttribute('aria-pressed'),
         open: document.querySelector('.apt-ui-dock-header button[aria-expanded]')?.getAttribute('aria-expanded') }));
       const states = [];
-      for (const [action, expected] of [[null, 'default'], ['Expand camera dock', 'expanded'], ['Restore camera dock size', 'default'],
-        ['Collapse camera dock', 'collapsed'], ['Show camera dock', 'default']]) {
+      // Keep every original transition, but avoid five editor round trips in
+      // one hosted-browser deadline. Each phase also proves the default state.
+      const transitions = phase === 'dock'
+        ? [[null, 'default'], ['Expand camera dock', 'expanded'], ['Restore camera dock size', 'default']]
+        : [[null, 'default'], ['Collapse camera dock', 'collapsed'], ['Show camera dock', 'default']];
+      for (const [action, expected] of transitions) {
+        receipt.dock_transition = { action, expected }; save();
         if (action) await page.getByRole('button', { name: action, exact: true }).click();
         await page.waitForFunction(expected => document.querySelector('.apt-home-shell').dataset.dock === expected, expected);
         const before = await dockState(); assert.equal(await visible('.apt-home-camera'), true);
@@ -218,18 +228,16 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
         assert.deepEqual(await dockState(), before); assert.equal(await visible('.apt-home-camera'), true);
         states.push(before.dock);
       }
-      assert.deepEqual([...new Set(states)].sort(), ['collapsed', 'default', 'expanded']);
+      assert.deepEqual([...new Set(states)].sort(), phase === 'dock' ? ['default', 'expanded'] : ['collapsed', 'default']);
       return { states };
     });
 
     }
     if (phase === 'phone') {
-    // The Victoria room at phone size with a coarse pointer and light theme.
+    // The Victoria room at phone size with a coarse pointer in Dark appearance.
     const phone = page, phoneShell = shell;
-    await check('phone and light theme: a narrow rail over the room, the inspector in the sheet, 44 px targets, readable text', async () => {
-      await page.getByRole('button', { name: 'Home menu', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'Light theme', exact: true }).click();
-      await page.waitForFunction(() => document.querySelector('.apt-home-shell').dataset.theme === 'light');
+    await check('phone and Dark appearance: a narrow rail over the room, the inspector in the sheet, 44 px targets, readable text', async () => {
+      assert.equal(await page.locator('.apt-home-shell').getAttribute('data-theme'), 'dark');
       await page.setViewportSize({ width: 390, height: 844 });
       await (await page.context().newCDPSession(page)).send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
       assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
@@ -243,17 +251,20 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
         const title = document.querySelector('[data-apt-setup-inspector] .apt-ui-title');
         let background = 'rgb(0, 0, 0)';
         for (let node = title; node; node = node.parentElement) { const color = getComputedStyle(node).backgroundColor; if (!/rgba\(.*, 0\)$|transparent/.test(color)) { background = color; break; } }
-        return { railWidth: rail.width, railShare: rail.height / stage.height, minTarget: Math.min(...buttons),
+        const toolbar = document.querySelector('.apt-ui-room-toolbar').getBoundingClientRect();
+        return { railWidth: rail.width, railHeight: rail.height, railTop: rail.top, railBottom: rail.bottom,
+          stageTop: stage.top, toolbarTop: toolbar.top, minTarget: Math.min(...buttons),
           inSheet: !!document.querySelector('.apt-home-panel [data-apt-setup-inspector]'), overflowX: document.documentElement.scrollWidth - innerWidth,
           titleContrast: contrast(getComputedStyle(title).color, background),
           // The rail sits on the room's dark glass in both themes.
           railContrast: Math.min(...[...document.querySelectorAll('.apt-setup-rail button')].map(node => contrast(getComputedStyle(node).color, 'rgb(8, 9, 11)'))) };
       });
-      assert.ok(layout.railWidth <= 181 && layout.railShare <= .465, JSON.stringify(layout));
+      assert.ok(layout.railWidth <= 181 && layout.railHeight <= 388 && layout.railTop >= layout.stageTop
+        && layout.railBottom <= layout.toolbarTop - 8, 'rail stays inside the room and clears the toolbar: ' + JSON.stringify(layout));
       assert.ok(layout.minTarget >= 44, 'coarse targets are at least 44 px: ' + layout.minTarget);
       assert.equal(layout.inSheet, true); assert.ok(layout.overflowX <= 0, 'no horizontal page scroll');
       assert.ok(layout.titleContrast >= 4.5, 'header text contrast ' + layout.titleContrast);
-      assert.ok(layout.railContrast >= 4.5, 'rail text stays readable on the dark room glass in light theme: ' + layout.railContrast);
+      assert.ok(layout.railContrast >= 4.5, 'rail text stays readable on the dark room glass: ' + layout.railContrast);
       await phoneShell.tool('position'); await phone.waitForFunction(() => document.querySelector('[data-apt-setup-inspector] .apt-ui-title')?.textContent === 'Fixture position');
       return layout;
     });

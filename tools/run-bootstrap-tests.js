@@ -450,7 +450,7 @@ assert("mobile header exposes people and apartment as direct actions",
 assert("mobile header does not render the desktop actions menu",
   appSource.includes("{!mobile && actionMenu}") &&
     appSource.includes("serviceProfile && onOpenRemoteProfile && !mobile") &&
-    appSource.includes("{onToggleTheme && !mobile"));
+    appSource.includes('const theme = "dark";') && !appSource.includes("onToggleTheme"));
 assert("video labeler is hidden on mobile",
   appSource.includes("const videoLabelerAvailable = !mobile") &&
     appSource.includes("onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}") &&

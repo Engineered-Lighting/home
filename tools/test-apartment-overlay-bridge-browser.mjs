@@ -171,6 +171,9 @@ test('real renderer overlay bridge stays canonical across modes, lifetime races 
         await page.getByRole('button',{name:'Layers',exact:true}).click();
         await page.getByRole('checkbox',{name:'Show virtual spotlights layer',exact:true}).setChecked(visible);
         await page.waitForFunction(value=>window.__APT_ENGINE.overlay.virtualFixturesReadback().visible===value,visible);
+        // The ZIP defaults to selected-only beams. This coexistence/performance
+        // proof explicitly needs real volumes even with no selected fixture.
+        if(visible)await page.getByRole('button',{name:'All beams',exact:true}).click();
         await page.getByRole('button',{name:'Close layers',exact:true}).click();
       }
       await assertFixtureState();

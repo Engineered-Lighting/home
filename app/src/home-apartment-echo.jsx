@@ -86,15 +86,16 @@
     </section>;
     return <aside className="apt-ui-inspector" data-apt-echo-light-inspector="1" aria-label="Echo light inspector">
       <header className="apt-ui-header"><div className="apt-ui-header-row">
-        <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptEchoIcon name="back" /></button>
+        <button type="button" className="apt-ui-button is-icon is-small" aria-label="All lights" onClick={onBack}><AptEchoIcon name="back" /></button>
         <div className="apt-ui-grow"><h2 className="apt-ui-title">{name}</h2>
           <div className="apt-ui-sub">{roomName || homeName} · {summary}</div></div>
-        <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptEchoIcon name="close" /></button></div>
+        <button type="button" className="apt-ui-button is-icon is-small is-ghost" aria-label="Close light" onClick={onBack}><AptEchoIcon name="close" /></button></div>
         <div className="apt-ui-actions">{haBadge(block.status)}
           {engineered && (Badge ? <Badge state="simulated">Engineered · simulated preview</Badge>
             : <span className="apt-ui-badge" data-state="simulated">Engineered · simulated preview</span>)}</div>
         <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">{[["light", "Light"], ["aim", "Aim"], ["setup", "Setup"]].map(([key, label]) =>
-          <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-echo-${key}`} onClick={() => setTab(key)}>{label}</button>)}
+          <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-echo-${key}`}
+            onClick={() => { if (key === "aim" && engineered && !aimDisabledReason && onAim) onAim(); else setTab(key); }}>{label}</button>)}
         </div>
       </header>
       {tab === "light" && light}

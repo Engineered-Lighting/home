@@ -31,7 +31,7 @@ export function kelvinColor(kelvin) {
  * Beams: only the selected light by default (or all, or none). A selected
  * light whose spot is off shows a grey dashed ring at its last aim. Pools add
  * the Down channel below the socket; Spot and Radial pools already exist. */
-export function lightPoolsPlan({ fixtures = [], selectedId = null, beams = 'selected', pools = true,
+export function lightPoolsPlan({ fixtures = [], selectedId = null, beams = 'selected', pools = true, details = false,
     floor = null, spotFwhmDeg = 20, downBeamDeg = 60 } = {}) {
     const rule = BEAM_RULES.includes(beams) ? beams : 'selected';
     const axes = [], rings = [], downPools = [], labels = [];
@@ -48,13 +48,13 @@ export function lightPoolsPlan({ fixtures = [], selectedId = null, beams = 'sele
         } else if (selected && rule !== 'none' && aimed && !lit(state.spotlight)) {
             rings.push({ fixture_id: id, center: beam.endpoint_m.slice(), normal: beam.origin_m.map((value, i) => value - beam.endpoint_m[i]), radius });
         }
-        if (selected && aimed && lit(state.spotlight)) labels.push({ fixture_id: id, channel: 'spot', point_m: beam.endpoint_m.slice(), text: 'Spot · modeled' });
+        if (details && selected && aimed && lit(state.spotlight)) labels.push({ fixture_id: id, channel: 'spot', point_m: beam.endpoint_m.slice(), text: 'Spot · modeled' });
         const anchor = fixture.anchor_m, ground = finite3(anchor) ? floorHeightAt(floor, anchor[0], anchor[1]) : null;
         if (pools && lit(state.downward) && ground != null && anchor[2] - ground > .05) {
             const center = [anchor[0], anchor[1], ground + .008];
             downPools.push({ fixture_id: id, channel: 'down', center, radius: Math.min(1.6, (anchor[2] - ground) * Math.tan(downBeamDeg * DEG / 2)),
                 kelvin: state.downward.color_temp_kelvin, brightness: state.downward.brightness });
-            if (selected) labels.push({ fixture_id: id, channel: 'down', point_m: center, text: 'Down · modeled' });
+            if (details && selected) labels.push({ fixture_id: id, channel: 'down', point_m: center, text: 'Down · modeled' });
         }
     }
     return Object.freeze({ beams: rule, pools: !!pools, axes, rings, downPools, labels, truth_role: 'virtual_preview', physical_commands: false });

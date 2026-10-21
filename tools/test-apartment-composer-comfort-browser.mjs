@@ -385,7 +385,7 @@ test('composer comfort: 34 px hub, 0.12 m lit-lobe margin, Off readout, native s
         hoverNone: matchMedia('(hover: none)').matches,
         pill: [...document.querySelectorAll('[data-apt-directional-composer="1"] .apt-directional-toolpill button')].map(node => getComputedStyle(node).height) }));
       assert.equal(media.coarse, true); assert.equal(media.anyCoarse, true);
-      assert.deepEqual(media.pill, ['36px', '36px'], 'the coarse-pointer pill buttons are 36 px tall');
+      assert.deepEqual(media.pill, ['36px', '36px'], 'the coarse-pointer pill retains its compact visible height; its pseudo-element supplies the 44 px hit area');
       assert.equal((await tablet.hub()).r, HUB_PX);
       return media;
     });

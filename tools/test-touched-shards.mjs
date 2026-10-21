@@ -233,7 +233,7 @@ test('all five WebGPU lighting proof parts are planned together and use separate
 });
 
 test('renderer parity always selects Cloud, Mesh and Photo on separate workers', () => {
-  const formats = ['test-apartment-webgpu-renderer-browser.mjs', 'test-apartment-webgpu-mesh-browser.mjs',
+  const formats = ['test-apartment-webgpu-cloud-browser.mjs', 'test-apartment-webgpu-cloud-browser-part2.mjs', 'test-apartment-webgpu-mesh-browser.mjs',
     'test-apartment-webgpu-mesh-browser-part2.mjs',
     'test-apartment-webgpu-photo-browser.mjs', 'test-apartment-webgpu-photo-browser-part2.mjs'];
   for (const file of ['app/src/home-apartment.jsx', 'app/src/home-3d/markers.js', 'app/src/home-3d/engine.js',
@@ -250,20 +250,21 @@ test('renderer parity always selects Cloud, Mesh and Photo on separate workers',
 });
 
 test('all Setup rail phases are selected together and distributed across workers', () => {
-  const parts = ['test-apartment-setup-rail-browser.mjs', 'test-apartment-setup-rail-browser-part2.mjs', 'test-apartment-setup-rail-browser-part3.mjs'];
-  for (const file of ['app/src/home-apartment.jsx', 'tools/fixtures/apartment-setup-rail-proof.mjs', 'tools/test-apartment-setup-rail-browser-part3.mjs']) {
+  const parts = ['test-apartment-setup-rail-browser.mjs', 'test-apartment-setup-rail-browser-part2.mjs', 'test-apartment-setup-rail-browser-part3.mjs', 'test-apartment-setup-rail-browser-part4.mjs'];
+  for (const file of ['app/src/home-apartment.jsx', 'tools/fixtures/apartment-setup-rail-proof.mjs', 'tools/test-apartment-setup-rail-browser-part3.mjs', 'tools/test-apartment-setup-rail-browser-part4.mjs']) {
     const argv = ['--files', file], full = planOf(argv);
     assert.ok(parts.every(name => full.includes(name)), 'all nine Setup checks guard ' + file);
     for (const count of [3, 8, 12]) {
       const shards = Array.from({length:count}, (_,index) => planOf([...argv, '--shard', `${index+1}/${count}`]));
       const owners = parts.map(name => shards.flatMap((plan,index) => plan.includes(name) ? [index] : []));
       assert.ok(owners.every(list => list.length === 1));
-      assert.equal(new Set(owners.flat()).size, parts.length);
+      assert.equal(new Set(owners.flat()).size, Math.min(count, parts.length));
+      for (let index=0;index<count;index++) assert.ok(owners.filter(list=>list.includes(index)).length<=Math.ceil(parts.length/count));
     }
   }
 });
 
-for (const [format, mode] of [['photo', 'splat'], ['mesh', 'mesh']]) test(`the two ${format} parity parts retain frames and contracts without dropping either phase`, () => {
+for (const [format, mode] of [['photo', 'splat'], ['mesh', 'mesh'], ['cloud', 'points']]) test(`the two ${format} parity parts retain frames and contracts without dropping either phase`, () => {
   const files = [`test-apartment-webgpu-${format}-browser.mjs`, `test-apartment-webgpu-${format}-browser-part2.mjs`];
   const phases = files.map(file => {
     const source = fs.readFileSync(path.join(root, 'tools', file), 'utf8');

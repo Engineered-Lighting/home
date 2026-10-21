@@ -266,11 +266,12 @@ const ED_EQUIPMENT_NOTE = { color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSi
 function EdEquipmentList({ document, selectedId, onSelect, onAddSocket, atCapacity, referenceId, onReference, onConfirm, disabled, heading, saveStatus, kinds = null }) {
   const references = document.references;
   const renderRecord = (record) => <button key={record.id} type="button"
-    data-equipment-id={record.id} onClick={() => onSelect(record.id)} className="hg-focusable"
+    data-equipment-id={record.id} onClick={() => onSelect(record.id)} className="hg-focusable apt-setup-equipment-row"
+    aria-pressed={selectedId === record.id}
     style={{ ...ED_EQUIPMENT_FIELD, textAlign: "left", cursor: "pointer", marginBottom: 5,
       borderColor: selectedId === record.id ? "var(--hg-ice)" : "var(--hg-border-soft)" }}>
-    <span style={{ color: record.kind === "mount" ? SURVEY_ORANGE : "var(--hg-ice)" }}>{record.kind === "mount" ? "◇" : record.kind === "camera" ? "◉" : "○"}</span> {record.label}
-    <span style={{ display: "block", marginTop: 3, fontSize: 8, color: "var(--hg-fg-4)" }}>{record.kind === "fixture" ? `${record.installation_status} fixture · ` : ""}{record.position_status === "missing" ? "position unresolved" : record.position_status}</span>
+    <span className="apt-setup-equipment-name" title={record.label}><span style={{ color: record.kind === "mount" ? SURVEY_ORANGE : "var(--hg-ice)" }}>{record.kind === "mount" ? "◇" : record.kind === "camera" ? "◉" : "○"}</span> {record.label}</span>
+    <span className="apt-setup-equipment-state" style={{ display: "block", marginTop: 3, fontSize: 8, color: "var(--hg-fg-4)" }}>{record.kind === "fixture" ? `${record.installation_status} fixture · ` : ""}{record.position_status === "missing" ? "position unresolved" : record.position_status}</span>
   </button>;
   // The Setup rail shows one record kind per tool (fixtures under Fixture
   // position, the camera under Cameras): the same rows, fields and saves.
@@ -1679,7 +1680,7 @@ function HomeApartmentEdit({
           provide deterministic 45° orbit steps when precise wall selection
           matters. Keep this visually quiet so it reads as an instrument, not
           another primary toolbar. */}
-      <div role="group" aria-label="Apartment edit orbit controls" data-apt-edit-ui="orbit-controls" style={{
+      {!rail && <div role="group" aria-label="Apartment edit orbit controls" data-apt-edit-ui="orbit-controls" style={{
         position: "absolute", left: "50%", transform: "translateX(-50%)",
         bottom: mobile && !rail ? "calc(45dvh + 12px)" : 16,
         maxWidth: mobile ? "calc(100vw - 12px)" : "none",
@@ -1695,7 +1696,7 @@ function HomeApartmentEdit({
           textOverflow: "ellipsis" }}>{isEquipmentRegistration ? "drag canvas to orbit · select equipment to measure" : "drag canvas to orbit · click surface to place"}</span>
         <EdButton label="→" ariaLabel="Orbit room right" title="Orbit room 45° right"
           onClick={() => engine?.rig.stepAzimuth(1)} />
-      </div>
+      </div>}
 
       {/* left rail + right inspector — side panels on desktop, stacked inside
           one fixed bottom sheet on phones, or the Setup rail's column */}

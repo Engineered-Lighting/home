@@ -246,9 +246,9 @@ test('labels never cover each other, the pill, the toolbar or the canvas edge, a
   assert.ok(shown > dropped * 4, `labels are placed far more often than dropped (${shown} shown, ${dropped} dropped)`);
 });
 
-test('short names trim the registered name and never invent one', { timeout: DEADLINE_MS.unit }, () => {
-  assert.equal(A.shortFixtureLabel('Authored socket 3 fixture'), 'Authored socket 3');
-  assert.equal(A.shortFixtureLabel('Proposed fixture 1'), 'Proposed fixture 1');
+test('short names derive numbered tags from the existing label and otherwise trim it', { timeout: DEADLINE_MS.unit }, () => {
+  assert.equal(A.shortFixtureLabel('Authored socket 3 fixture'), 'S3');
+  assert.equal(A.shortFixtureLabel('Proposed fixture 1'), 'F1');
   assert.equal(A.shortFixtureLabel('Fixture'), 'Fixture');
   assert.equal(A.shortFixtureLabel('A rather long registered fixture name'), 'A rather long reg…');
   assert.equal(A.shortFixtureLabel(null), '');
@@ -278,6 +278,18 @@ test('the Zones|Spot pill never covers the 44 px reticle', { timeout: DEADLINE_M
     assert.ok(at.y <= pill.y, 'the pill only ever moves up');
   }
   assert.deepEqual(A.pillClearOfReticle({ x: 10, y: 10, width, height }, null), { x: 10, y: 10 });
+});
+
+test('a retained aim bar leaves the radial pickup and current reticle usable', { timeout: DEADLINE_MS.unit }, () => {
+  const bounds = { left: 0, top: 0, right: 1026, bottom: 650 };
+  const hub = { left: 294, top: 162, right: 362, bottom: 231 };
+  const reticle = { left: 307, top: 166, right: 351, bottom: 210 };
+  const width = 284, height = 44;
+  const at = A.placeAimBar({ x: 328, y: 158 }, bounds, { width, height, avoid: [hub, reticle] });
+  const box = { left: at.x - width / 2, right: at.x + width / 2, top: at.y, bottom: at.y + height };
+  for (const obstacle of [hub, reticle]) assert.ok(box.right <= obstacle.left || box.left >= obstacle.right
+    || box.bottom <= obstacle.top || box.top >= obstacle.bottom, 'confirmation bar must not intercept a pickup point');
+  assert.ok(box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom);
 });
 
 function fakeHost() {

@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as THREE from '../app/src/vendor/three-0.180.0/three.module.js';
 import { createDirectAimGestureController } from '../app/src/home-3d/direct-aim-gesture.mjs';
+import { shortFixtureLabel } from '../app/src/home-3d/apartment-aim-presentation.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -647,6 +648,7 @@ test('readmitting the same equipment binding preserves its inspector and tool ch
 
 function renderComposer(f) {
   f.context.window.AptDirectionalComposer = function AuthoredComposerElement() {};
+  f.context.aimPresentation = { shortLabel: shortFixtureLabel };
   f.context.React = { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }) };
   f.context.ReactDOM = { createPortal: (element, host) => ({ element, host }) };
   f.context.directionalDisplay = actual.initializer('directionalDisplay', f.context);

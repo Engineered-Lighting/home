@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runFullUiShell } from './fixtures/home-full-ui-harness.mjs';
 test('mounted Chat streams, cancels and recovers from pipeline errors without duplicate messages', {timeout:145000}, async()=>{
-await runFullUiShell('home-full-ui-chat-browser', async ({page,origin,openShell,waitSite,tab,checks}) => {
+await runFullUiShell('home-full-ui-chat-browser', async ({page,origin,openShell,waitSite,tab,checks,receipt}) => {
+  const still=async name=>{if(process.env.HOME_UI_PRIVATE_STILLS==='1')await page.screenshot({path:receipt.run+'/chat-'+name+'.png'});};
   let authorized=true; const runs=[],cancels=[],unexpected=[];
   await page.context().route('**/auth/status', route => route.fulfill({json:{authenticated:authorized,authorityTag:authorized?'a'.repeat(64):null}}));
   await page.context().routeWebSocket('**/*', socket => {
@@ -37,23 +38,28 @@ await runFullUiShell('home-full-ui-chat-browser', async ({page,origin,openShell,
   run.event('intent-progress',{chat_log_delta:{content:'Authored answer '}});
   await page.getByText('Authored answer',{exact:false}).first().waitFor();
   await page.getByRole('button',{name:'Stop generation',exact:true}).waitFor();
+  await still('desktop-streaming');
   run.event('intent-progress',{chat_log_delta:{content:'streamed.'}});finish(run,'Authored answer streamed.');
   await page.getByRole('button',{name:'Stop generation',exact:true}).waitFor({state:'hidden'});
   assert.equal(await page.getByText('Authored answer streamed.',{exact:true}).count(),1,'final answer replaces streaming without duplication');
+  await still('desktop-final');
   checks.push({stage:'mounted_chat_informational_stream_and_final_deduplication'});
   const cancelled=await send('Explain this cancellation example.');
   await page.getByRole('button',{name:'Stop generation',exact:true}).click();
   cancelled.event('intent-progress',{chat_log_delta:{content:'Forbidden late answer'}});finish(cancelled,'Forbidden late answer');
   await page.waitForTimeout(250);assert.equal(await page.getByText('Forbidden late answer',{exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Stop generation',exact:true}).count(),0);
+  await still('desktop-cancelled');
   checks.push({stage:'cancel_before_first_token_ignores_late_result',cancel_messages:cancels.length});
   await page.setViewportSize({width:390,height:844});
   const failed=await send('Explain this failure example.');failed.event('error',{message:'Authored pipeline unavailable'});
   await page.getByText('Authored pipeline unavailable',{exact:false}).first().waitFor();
   await page.getByRole('button',{name:'Stop generation',exact:true}).waitFor({state:'hidden'});
   assert.equal(await page.getByText('Authored pipeline unavailable',{exact:false}).count(),1,'one failed typed turn produces one error message');
+  await still('phone-error');
   const recovered=await send('Explain this recovery example.');finish(recovered,'Authored recovery answer.');
   await page.getByText('Authored recovery answer.',{exact:true}).waitFor();
+  await still('phone-recovered');
   checks.push({stage:'phone_chat_pipeline_error_then_successful_new_turn'});
   const rejected=await send('Explain this rejected request example.');rejected.reject('Authored request refused');
   await page.getByText('Authored request refused',{exact:false}).first().waitFor();

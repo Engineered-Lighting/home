@@ -251,17 +251,20 @@ export async function runSetupRailProof({ phase = 'rail' } = {}) {
         const title = document.querySelector('[data-apt-setup-inspector] .apt-ui-title');
         let background = 'rgb(0, 0, 0)';
         for (let node = title; node; node = node.parentElement) { const color = getComputedStyle(node).backgroundColor; if (!/rgba\(.*, 0\)$|transparent/.test(color)) { background = color; break; } }
-        return { railWidth: rail.width, railShare: rail.height / stage.height, minTarget: Math.min(...buttons),
+        const toolbar = document.querySelector('.apt-ui-room-toolbar').getBoundingClientRect();
+        return { railWidth: rail.width, railHeight: rail.height, railTop: rail.top, railBottom: rail.bottom,
+          stageTop: stage.top, toolbarTop: toolbar.top, minTarget: Math.min(...buttons),
           inSheet: !!document.querySelector('.apt-home-panel [data-apt-setup-inspector]'), overflowX: document.documentElement.scrollWidth - innerWidth,
           titleContrast: contrast(getComputedStyle(title).color, background),
           // The rail sits on the room's dark glass in both themes.
           railContrast: Math.min(...[...document.querySelectorAll('.apt-setup-rail button')].map(node => contrast(getComputedStyle(node).color, 'rgb(8, 9, 11)'))) };
       });
-      assert.ok(layout.railWidth <= 181 && layout.railShare <= .465, JSON.stringify(layout));
+      assert.ok(layout.railWidth <= 181 && layout.railHeight <= 388 && layout.railTop >= layout.stageTop
+        && layout.railBottom <= layout.toolbarTop - 8, 'rail stays inside the room and clears the toolbar: ' + JSON.stringify(layout));
       assert.ok(layout.minTarget >= 44, 'coarse targets are at least 44 px: ' + layout.minTarget);
       assert.equal(layout.inSheet, true); assert.ok(layout.overflowX <= 0, 'no horizontal page scroll');
       assert.ok(layout.titleContrast >= 4.5, 'header text contrast ' + layout.titleContrast);
-      assert.ok(layout.railContrast >= 4.5, 'rail text stays readable on the dark room glass in light theme: ' + layout.railContrast);
+      assert.ok(layout.railContrast >= 4.5, 'rail text stays readable on the dark room glass: ' + layout.railContrast);
       await phoneShell.tool('position'); await phone.waitForFunction(() => document.querySelector('[data-apt-setup-inspector] .apt-ui-title')?.textContent === 'Fixture position');
       return layout;
     });

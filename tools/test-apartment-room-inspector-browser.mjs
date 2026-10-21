@@ -336,7 +336,14 @@ test('real authored room inspector preserves named aims and modeled channel bind
       assert.equal(cone, true, 'the selected light keeps its faint modeled cone');
       assert.deepEqual(drawn.objects.filter(name => name.startsWith('light-pools-down:')),
         fixtures.map(fixture => 'light-pools-down:' + fixture.fixture_id).sort(), 'every lit Down channel pools below its socket');
-      assert.ok(drawn.labels.includes('Down · modeled') && drawn.labels.includes('Spot · modeled'), JSON.stringify(drawn.labels));
+      assert.ok(!drawn.labels.includes('Down · modeled') && !drawn.labels.includes('Spot · modeled'), 'ordinary room omits redundant channel labels');
+      await page.getByRole('button', { name: 'Layers', exact: true }).click();
+      await page.getByRole('checkbox', { name: 'Light details', exact: true }).check();
+      await page.getByRole('button', { name: 'Close layers', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Room layers', exact: true }).waitFor({ state: 'detached' });
+      await page.waitForFunction(() => [...document.querySelectorAll('.apt-ui-overlay-label')].some(node => !node.hidden && node.textContent === 'Down · modeled'));
+      const detailed = await pools();
+      assert.ok(detailed.labels.includes('Down · modeled') && detailed.labels.includes('Spot · modeled'), JSON.stringify(detailed.labels));
       assert.deepEqual((await descriptors()).map(({ generation, ...descriptor }) => descriptor),
         originalDescriptors.map(({ generation, ...descriptor }) => descriptor), 'drawing pools changes no modeled state');
       return { selected: fixtures[1].fixture_id, beams: 1, down_pools: fixtures.length, labels: drawn.labels };

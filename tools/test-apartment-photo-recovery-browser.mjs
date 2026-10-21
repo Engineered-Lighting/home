@@ -102,6 +102,7 @@ test('Photo recovery uses the existing mode owner and preserves scope, locks and
                 workspaceAuthorityRef=useRef({key:'authored-authority'});
               const selectedSiteId=proof.selected,selectedContentRevision='authored-'+proof.selected+'-r1',apartmentAuthorityKey='authored-authority',selectedSiteInterior=snapshot.selectedSiteInterior,
                 liveCam=snapshot.liveCam,calibCam=snapshot.calibCam,apartmentSceneControlsEnabled=!snapshot.disabled&&selectedSiteInterior;
+              const editing=snapshot.editing===true;
               const refitMobileOverview=value=>proof.refits.push(value),setLiveOn=value=>{proof.liveOn=value};
               ${binding('showToast')}
               ${binding('dismissToast')}

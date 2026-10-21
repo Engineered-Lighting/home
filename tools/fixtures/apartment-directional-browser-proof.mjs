@@ -14,6 +14,7 @@ import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding
 import { installPack, authoredDocument } from './apartment-home-shell-fixtures.mjs';
 import { createDirectionalNativeMouse, assertDirectionalNativeMouseLedger } from './apartment-directional-native-mouse.mjs';
 import { waitForDirectionalReadiness } from './apartment-directional-readiness.mjs';
+import { shortFixtureLabel } from '../../app/src/home-3d/apartment-aim-presentation.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'), SRC = path.join(ROOT, 'app/src');
@@ -768,7 +769,7 @@ export async function runDirectionalBrowserProof({ part }) {
         return { selected_tab: selectedTab.getAttribute('aria-selected'), circles: circles.map(circle => ({ x: circle.getAttribute('cx'), y: circle.getAttribute('cy'), r: +circle.getAttribute('r'), fill: circle.getAttribute('fill') })),
           pill: rect(node.querySelector('[role="group"][aria-label="Room lighting tool"]')), hub: rect(circles.at(-1)),
           composer: { ...rect(node), width_css: node.clientWidth, height_css: node.clientHeight },
-          pill_label: pill.querySelector('.nm')?.textContent, button_heights: [...pill.querySelectorAll('button')].map(button => rect(button)?.height),
+          pill_label: pill.querySelector('.nm')?.textContent, pill_title: pill.querySelector('.nm')?.title, button_heights: [...pill.querySelectorAll('button')].map(button => rect(button)?.height),
           visible_svg_paths: [...node.querySelectorAll('svg path')].filter(path => path.getAttribute('fill') !== 'transparent').length,
           drawing, text: node.innerText, inventory: window.__APT_ENGINE.overlay.virtualFixturesReadback() };
       }, { scope: COMPOSER, tab: button(INSPECTOR, 'Aim', 'tab') });
@@ -787,7 +788,7 @@ export async function runDirectionalBrowserProof({ part }) {
         'native pill center follows the handoff whole-pixel projected placement');
       assert.ok(pill.y + pill.height < hub.y, 'compact pill clears the existing registered fixture center');
       assert.deepEqual(mounted.button_heights, [24, 24]); assert.ok(pill.height <= 34);
-      assert.equal(mounted.pill_label, fixture.label); assert.equal(mounted.visible_svg_paths, 0);
+      assert.equal(mounted.pill_label, shortFixtureLabel(fixture.label)); assert.equal(mounted.pill_title, fixture.label); assert.equal(mounted.visible_svg_paths, 0);
       assert.equal(mounted.drawing.visible, false, 'Spot mode leaves the borrowed ambient drawing hidden');
       assert.equal(mounted.inventory.fixture_count, 4);
       assert.equal(await page.evaluate(scope => !!window.__directionalDOM.scope(scope)?.querySelector('[data-apt-aim-pending]'), COMPOSER), false,

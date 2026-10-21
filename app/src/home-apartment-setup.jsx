@@ -308,7 +308,7 @@
 .apt-setup-icon { flex: 0 0 auto; color: #a1a1a1; }
 .apt-setup-rail button[aria-pressed="true"] .apt-setup-icon { color: #ededed; }
 @media (pointer: coarse) { .apt-setup-rail button { min-height: 44px; } .apt-setup-inspector :is(button, select, input:not([type="checkbox"]):not([type="range"])) { min-height: 44px; } }
-@container apartment-home (width < 900px) { .apt-setup-rail { bottom: auto; max-height: 46%; width: 180px; } }
+@container apartment-home (width < 900px) { .apt-setup-rail { bottom: 84px; max-height: 388px; width: 180px; } }
 .apt-setup-header { outline: none; }
 .apt-setup-header .apt-setup-toolbar:empty { display: none; }
 .apt-setup-caps { display: inline-block; }
@@ -341,6 +341,12 @@
 .apt-setup-body [data-apt-edit-ui] :is(input, select):not(.apt-ui-input) { font-family: 'Geist Mono', ui-monospace, monospace !important; min-height: 32px; border-radius: 7px; }
 .apt-setup-body [data-apt-edit-ui] [data-setup-heading] { font-size: 12.5px !important; font-weight: 560; color: var(--hg-fg-2) !important; margin: 16px 0 6px !important; }
 .apt-setup-body [data-apt-edit-ui] button { border-radius: 7px; }
+.apt-setup-body .apt-setup-equipment-row { display: flex; align-items: center; gap: 10px; min-height: 36px; margin: 0 0 2px!important;
+  padding: 7px 8px!important; border-color: transparent!important; background: transparent!important; }
+.apt-setup-body .apt-setup-equipment-row:hover { background: var(--apt-fill)!important; }
+.apt-setup-body .apt-setup-equipment-row[aria-pressed="true"] { border-color: var(--apt-border)!important; background: var(--apt-fill)!important; }
+.apt-setup-body .apt-setup-equipment-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apt-setup-body .apt-setup-equipment-state { flex: 0 1 auto; min-width: 0; margin: 0!important; text-align: right; color: var(--apt-muted)!important; }
 .apt-setup-source { margin: 0; }
 .apt-setup-source > summary { color: var(--apt-muted); font-size: 12px; }
 @media (pointer: coarse) { .apt-setup-body [data-apt-edit-ui] :is(button, input:not([type="checkbox"]):not([type="radio"]), select) { min-height: 44px!important; } }

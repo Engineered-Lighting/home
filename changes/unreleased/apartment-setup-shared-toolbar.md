@@ -4,4 +4,4 @@ target: desktop
 type: changed
 ---
 
-Setup uses the normal room navigation toolbar and keeps source revisions under Source details. Scene switches remain guarded during editing, and save conflicts and read-only reasons stay visible.
+Setup uses the normal room navigation toolbar, compact equipment list rows and source revisions under Source details. The phone tool rail uses the available space above the toolbar. Scene switches remain guarded during editing, and save conflicts and read-only reasons stay visible.

@@ -119,6 +119,7 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
     for (const key of ['siteId','contentRevision','registrationVersion','frameDigest']) assert.equal(scene[key],fixture.scene[key], 'frozen producer fixture matches authored mounted scene ' + key);
     const dock = page.getByRole('complementary',{name:'Den camera dock',exact:true});
     await dock.getByRole('button',{name:'View perception',exact:true}).click();
+    await dock.getByRole('button',{name:'Show details',exact:true}).click();
     await dock.getByRole('button',{name:'View activity loop',exact:true}).click();
     await page.locator('[data-apartment-approximate-badge="1"]').waitFor();
     const bodyState = await page.evaluate(()=>{

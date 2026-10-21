@@ -150,7 +150,7 @@ test('actual unified header delegates guarded actions and truthfully copies curr
               proof.copy=copyConversationTranscript;proof.cancel=cancelAction;proof.confirm=confirmAction;proof.undo=undoClear;
               proof.state={events,conversationId,conversationCopyState,conversationCopyDisabledReason};
               return h('section',{className:'apt-home-shell','data-theme':${JSON.stringify(scenario.theme)},style:{height:'100%',width:'100%',background:'var(--apt-surface)'}},
-                h(HomeHeader,{theme:${JSON.stringify(scenario.theme)},mobile:${scenario.width < 900},unified:true,voice,connection:'online',
+                h(HomeHeader,{theme:${JSON.stringify(scenario.theme)},mobile:${scenario.width < 900},unified:true,voice,connection:'online',chatSourceLine:'Authored model · Victoria modeled room',
                   onOpenRemoteProfile:()=>{},onOpenBench:()=>{},
                   onExplainLastAnswer:${headerProp('onExplainLastAnswer')},onCopyTranscript:${headerProp('onCopyTranscript')},onNewConversation:${headerProp('onNewConversation')},
                   conversationCopyState:${headerProp('conversationCopyState')},conversationCopyDisabledReason:${headerProp('conversationCopyDisabledReason')}}));

@@ -342,6 +342,12 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       at(backend + ':victoria');
       await page.waitForFunction(() => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready' && window.__APT_ENGINE?.siteId === 'victoria', null, { timeout: 60000 });
       await page.waitForFunction(() => window.__APT_ENGINE?.overlay?.virtualFixturesReadback?.().fixture_count > 0);
+      // Default selected-only beams are hidden without a selection. Exercise
+      // every shader port on both backends before retaining the build proof.
+      await page.getByRole('button', { name: 'Layers', exact: true }).click();
+      await page.getByRole('button', { name: 'All beams', exact: true }).click();
+      await page.getByRole('button', { name: 'Close layers', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Room layers', exact: true }).waitFor({ state: 'detached' });
       const result = await page.evaluate(proofInPage, {modes: proofModes, phase: proofPhase});
       at(backend + ':complete');
       return { ...result, pageErrors, warnings };

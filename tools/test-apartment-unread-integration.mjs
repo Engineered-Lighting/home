@@ -118,6 +118,7 @@ test('actual unread hook and shell tabs preserve Chat owners and accessible resp
         const [input,setInput]=useState('');
         const showShellTab=tab=>setShellTab(tab);
         const appColumnStyle={};
+        const shellState={selectionLabel:null,selectionShortLabel:null};
         ${text(hookBinding)}
         useEffect(()=>{authoredState.mounts++;return()=>{authoredState.cleanups++}},[]);
         window.__updateUnreadProof=patch=>ReactDOM.flushSync(()=>setSnapshot(previous=>({...previous,...patch})));

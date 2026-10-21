@@ -266,11 +266,12 @@ const ED_EQUIPMENT_NOTE = { color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSi
 function EdEquipmentList({ document, selectedId, onSelect, onAddSocket, atCapacity, referenceId, onReference, onConfirm, disabled, heading, saveStatus, kinds = null }) {
   const references = document.references;
   const renderRecord = (record) => <button key={record.id} type="button"
-    data-equipment-id={record.id} onClick={() => onSelect(record.id)} className="hg-focusable"
+    data-equipment-id={record.id} onClick={() => onSelect(record.id)} className="hg-focusable apt-setup-equipment-row"
+    aria-pressed={selectedId === record.id}
     style={{ ...ED_EQUIPMENT_FIELD, textAlign: "left", cursor: "pointer", marginBottom: 5,
       borderColor: selectedId === record.id ? "var(--hg-ice)" : "var(--hg-border-soft)" }}>
-    <span style={{ color: record.kind === "mount" ? SURVEY_ORANGE : "var(--hg-ice)" }}>{record.kind === "mount" ? "◇" : record.kind === "camera" ? "◉" : "○"}</span> {record.label}
-    <span style={{ display: "block", marginTop: 3, fontSize: 8, color: "var(--hg-fg-4)" }}>{record.kind === "fixture" ? `${record.installation_status} fixture · ` : ""}{record.position_status === "missing" ? "position unresolved" : record.position_status}</span>
+    <span className="apt-setup-equipment-name" title={record.label}><span style={{ color: record.kind === "mount" ? SURVEY_ORANGE : "var(--hg-ice)" }}>{record.kind === "mount" ? "◇" : record.kind === "camera" ? "◉" : "○"}</span> {record.label}</span>
+    <span className="apt-setup-equipment-state" style={{ display: "block", marginTop: 3, fontSize: 8, color: "var(--hg-fg-4)" }}>{record.kind === "fixture" ? `${record.installation_status} fixture · ` : ""}{record.position_status === "missing" ? "position unresolved" : record.position_status}</span>
   </button>;
   // The Setup rail shows one record kind per tool (fixtures under Fixture
   // position, the camera under Cameras): the same rows, fields and saves.

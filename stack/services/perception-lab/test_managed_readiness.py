@@ -133,6 +133,27 @@ class JetsonProbeTests(unittest.TestCase):
     def launcher(self):
         return JetsonLauncher('0123456789abcdef')
 
+    def test_metadata_refresh_failure_does_not_block_den_worker(self):
+        launcher = self.launcher()
+        def command(args, timeout=15):
+            if args[:2] == ['systemctl', '--failed']:
+                return 'fwupd-refresh.service loaded failed failed metadata downloader'
+            if args[:2] == ['systemctl', 'is-active']:
+                return 'active'
+            raise AssertionError('unexpected command')
+        with patch.object(jetson_lifecycle.socket, 'gethostname', return_value='victoria-den-jetson'), \
+                patch.object(jetson_lifecycle, 'command', side_effect=command), \
+                patch.object(jetson_lifecycle.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stdout='')), \
+                patch.object(JetsonLauncher, 'headroom', return_value=measured()), \
+                patch.object(JetsonLauncher, 'unit', return_value=IDLE_UNIT):
+            launcher.health()
+            with patch.object(jetson_lifecycle, 'command', return_value='unknown.service loaded failed failed unknown'):
+                with self.assertRaisesRegex(ValueError, 'Unknown failed unit'):
+                    launcher.health()
+            with patch.object(jetson_lifecycle.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='Out of memory')):
+                with self.assertRaisesRegex(ValueError, 'New kernel fault'):
+                    launcher.health()
+
     def test_thresholds_are_unchanged_and_boundaries_exact(self):
         self.assertEqual((JetsonLauncher.MIN_STORAGE_BYTES, JetsonLauncher.MIN_MEMORY_BYTES, JetsonLauncher.MAX_CELSIUS),
                          (20 * GIB, 3 * GIB, 80))

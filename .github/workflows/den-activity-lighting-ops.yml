@@ -15,6 +15,8 @@ on:
       - "stack/services/perception-lab/test_activity*.py"
       - "stack/services/perception-lab/continuous_app.py"
       - "stack/services/perception-lab/test_continuous_app.py"
+      - "stack/services/perception-lab/jetson_lifecycle.py"
+      - "stack/services/perception-lab/test_managed_readiness.py"
       - "tools/shared-home/**"
   push:
     branches: [main]
@@ -25,6 +27,8 @@ on:
       - "stack/services/perception-lab/test_activity*.py"
       - "stack/services/perception-lab/continuous_app.py"
       - "stack/services/perception-lab/test_continuous_app.py"
+      - "stack/services/perception-lab/jetson_lifecycle.py"
+      - "stack/services/perception-lab/test_managed_readiness.py"
       - "tools/shared-home/**"
   workflow_dispatch:
 
@@ -75,7 +79,7 @@ jobs:
         working-directory: stack/services/perception-lab
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/den-ops/bin/python" -B -m unittest test_continuous_app test_activity_media_cleanup test_activity_loop.LoopTests test_activity_loop_runtime -q
+          PYTHONPATH="${GITHUB_WORKSPACE}/tools/la-detector-trial" "${RUNNER_TEMP}/den-ops/bin/python" -B -m unittest test_managed_readiness test_continuous_app test_activity_media_cleanup test_activity_loop.LoopTests test_activity_loop_runtime -q
 
   inference-health-tests:
     runs-on: ubuntu-24.04

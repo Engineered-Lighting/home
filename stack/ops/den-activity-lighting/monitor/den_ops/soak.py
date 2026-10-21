@@ -228,7 +228,9 @@ def run(cfg, monitor_cfg, host, out_dir, *, sleep=time.sleep, duration_s=None, l
                 spec = manifest["hosts"][cfg["host"]]
                 for unit in spec["units"]:
                     seen = sample["units"].get(unit["name"], {})
-                    if not seen.get("readable") or seen.get("working_directory") != unit["working_directory"] or seen.get("exec_start") != unit["exec_start"]:
+                    observed_exec = deployment.execution_identity(seen.get("exec_start"))
+                    expected_exec = deployment.execution_identity(unit["exec_start"])
+                    if not seen.get("readable") or seen.get("working_directory") != unit["working_directory"] or not observed_exec or not expected_exec or observed_exec != expected_exec:
                         sample["evidence"]["ok"] = False
                         sample["evidence"]["errors"].append({"source": unit["name"], "detail": "unit execution/counter identity missing or changed"})
                 samples.append(sample)

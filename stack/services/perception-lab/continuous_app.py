@@ -7,7 +7,7 @@ configuration before the application's lifespan can start its background work.
 
 def create_app():
     from managed_detector_app import create_managed_refresh_app
-    app = create_managed_refresh_app()
+    app = create_managed_refresh_app(continuous_la_only=True)
     loop = getattr(app.state, 'activity_loop', None)
     if loop is None:
         raise RuntimeError('continuous_activity_loop_required')

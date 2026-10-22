@@ -100,6 +100,8 @@ function startFakeHa() {
   });
   server.on("upgrade", (req, socket) => {
     seen.sockets.add(socket);
+    // An upgraded fixture owns TCP teardown just as a WebSocket server does.
+    socket.on("end", () => socket.end());
     seen.upgrades.push({ extensions: req.headers["sec-websocket-extensions"] || "", authorization: req.headers.authorization || "" });
     const accept = crypto.createHash("sha1")
       .update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
@@ -230,6 +232,29 @@ async function main() {
     assert("REST through /proxy/ha succeeds", states.status === 200, states.status);
     assert("REST reaches HA with the gateway's token", ha.seen.rest[0]?.authorization === `Bearer ${HA_TOKEN}`, ha.seen.rest[0]);
 
+    for (const authenticated of [false, true]) {
+      const ws = await openSocket(first.port, cookie);
+      await waitFor(() => ws.received.some((text) => text.includes("auth_required")));
+      if (authenticated) {
+        ws.socket.write(clientFrame(JSON.stringify({ type: "auth", access_token: MARKER })));
+        await waitFor(() => ws.received.some((text) => text.includes("auth_ok")));
+      }
+      ws.socket.resetAndDestroy();
+      await sleep(150);
+      assert(`client TCP reset ${authenticated ? "after" : "before"} auth keeps the gateway alive`, first.child.exitCode == null,
+        { exitCode: first.child.exitCode });
+      if (first.child.exitCode != null) throw new Error("gateway died on an upgraded client TCP reset");
+      const healthy = await request(first.port, "/healthz");
+      assert("gateway still serves requests after a reset", healthy.status === 200);
+      assert("client reset retires its HA peer", await waitFor(() => [...ha.seen.sockets].every((socket) => socket.destroyed)));
+    }
+
+    const resetByHa = await openSocket(first.port, cookie);
+    await waitFor(() => resetByHa.received.some((text) => text.includes("auth_required")));
+    [...ha.seen.sockets].at(-1).resetAndDestroy();
+    assert("upstream reset closes the browser peer", await waitFor(() => resetByHa.closed));
+    assert("upstream reset keeps the gateway healthy", (await request(first.port, "/healthz")).status === 200);
+
     for (const [name, frame, chunked] of [
       ["7-bit auth frame", clientFrame(JSON.stringify({ type: "auth", access_token: MARKER })), false],
       ["16-bit auth frame", clientFrame(JSON.stringify({ type: "auth", access_token: MARKER, note: "x".repeat(300) })), false],
@@ -295,6 +320,11 @@ async function main() {
     children.push(none.child);
     const plainIndex = await request(none.port, "/", { headers: { Cookie: cookie } });
     assert("without a token file the page is told there is no proxy", plainIndex.body.includes("window.__HOME_WEB_HA_TOKEN_PROXY=false;") && !plainIndex.body.includes(MARKER));
+    const noRewrite = await openSocket(none.port, cookie);
+    await waitFor(() => noRewrite.received.some((text) => text.includes("auth_required")));
+    noRewrite.socket.resetAndDestroy();
+    assert("unrewritten websocket reset retires the upstream peer", await waitFor(() => [...ha.seen.sockets].every((socket) => socket.destroyed)));
+    assert("unrewritten websocket reset keeps Home healthy", (await request(none.port, "/healthz")).status === 200);
   } finally {
     for (const child of children) if (child.exitCode == null) child.kill();
     fs.rmSync(probe, { force: true });

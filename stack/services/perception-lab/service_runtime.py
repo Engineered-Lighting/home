@@ -256,7 +256,9 @@ class BundleSynchronizedAssociation:
 
 
 class ServiceRuntime:
-    def __init__(self, store, recorders, resolve_profiles, executor, *, analysis_jobs=None, preparation_jobs=None, reasoning_factory=None, preview_sources=None, preview_clients=None, bundle_sources=None, bundle_clients=None, ha_sources=None, ha_clients=None, recording_only=False, spatial_sources=None, caption_sources=None, spatial_associators=None, spatial_unavailable=None, reasoning_min_offer_interval_s=None, qwen_live=None, vjepa_live=None, reasoning_cadence=None, room_facts=None, occupancy_readers=None, preview_taps=None, paired_preview_sources=None, paired_preview_policy=None, paired_depth_clocks=None, bundled_rgb_sources=None, apartment_viewing_sources=None, la_qwen=None):
+    def __init__(self, store, recorders, resolve_profiles, executor, *, analysis_jobs=None, preparation_jobs=None, reasoning_factory=None, preview_sources=None, preview_clients=None, bundle_sources=None, bundle_clients=None, ha_sources=None, ha_clients=None, recording_only=False, spatial_sources=None, caption_sources=None, spatial_associators=None, spatial_unavailable=None, reasoning_min_offer_interval_s=None, qwen_live=None, vjepa_live=None, reasoning_cadence=None, room_facts=None, occupancy_readers=None, preview_taps=None, paired_preview_sources=None, paired_preview_policy=None, paired_depth_clocks=None, bundled_rgb_sources=None, apartment_viewing_sources=None, la_qwen=None, execution_arms=('a', 'b')):
+        from runtime import validate_execution_arms
+        self.execution_arms = validate_execution_arms(execution_arms)
         self.store = store
         self.reasoning_min_offer_interval_s = offer_interval(reasoning_min_offer_interval_s)
         self.reasoning_cadence = cadence_settings(reasoning_cadence)
@@ -562,7 +564,7 @@ class ServiceRuntime:
         if viewing is not None and viewing.metric is not None and pump is not None and pump.wake_event is not None:
             signals.append(pump.wake_event)
         runner=PairedRunner(self.store,sid,profiles,self.executor,clock=self.store.clock,experiment_generation=generation,sampling_hz=sampling_hz,
-            evidence_ready=_Signals(*signals))
+            evidence_ready=_Signals(*signals),execution_arms=self.execution_arms)
         runner.reasoning_windows=windows
         runner.ha_evidence=ha_evidence
         runner.caption_evidence=caption_evidence
@@ -582,8 +584,9 @@ class ServiceRuntime:
                     "site_id":session["site_id"],"camera_id":session["camera_id"],
                     "generation":generation,"experiment_id":experiment,"effective_at":self.store.clock(),"reasoning_windows":windows,"sampling_hz":sampling_hz,"spatial_policy":spatial_policy,"ha_evidence":ha_evidence,"caption_evidence":caption_evidence,
                     "source_policy":source_policy,"lever":lever,"baseline_sha256":baseline_sha256,
+                    "execution_arms":list(runner.execution_arms),"comparison":len(runner.execution_arms)==2,
                     "profiles":{arm:{k:profiles[arm][k] for k in
-                        ("profile_id","model_version","artifact_sha256","engine_epoch")} for arm in ("a","b")}})
+                        ("profile_id","model_version","artifact_sha256","engine_epoch")} for arm in runner.execution_arms}})
         except Exception:
             runner.close()
             raise
@@ -1046,7 +1049,7 @@ class ServiceRuntime:
             grants=source_policy(getattr(runner,"source_policy",None),ha=runner.ha_evidence,caption=getattr(runner,"caption_evidence",None))
         except (ValueError,AttributeError):
             return set()
-        return {arm for arm in ("a","b") if grants["temporal_encoder"][arm]=="granted"}
+        return {arm for arm in getattr(runner, 'execution_arms', ('a', 'b')) if grants["temporal_encoder"][arm]=="granted"}
 
     def _start_live_pump(self, session, factory, pumps, errors, unavailable, ready=None):
         sid=session["id"]
@@ -1196,7 +1199,7 @@ class ServiceRuntime:
         if not pumped and self.la_qwen is None:
             return {},None  # no perceiver runs for this recording
         grants=source_policy(getattr(runner,"source_policy",None),ha=runner.ha_evidence,caption=getattr(runner,"caption_evidence",None))
-        arms={arm for arm in ("a","b") if grants["qwen_scene"][arm]=="granted"}
+        arms={arm for arm in getattr(runner, 'execution_arms', ('a', 'b')) if grants["qwen_scene"][arm]=="granted"}
         if not arms:
             return {},None
         check=getattr(self.reasoning_factory,"qwen_granted",None)
@@ -1510,7 +1513,7 @@ class ServiceRuntime:
         # One shared context per tick from the same (unfiltered) rows for both
         # arms: equal digests unless a family is this experiment's lever.
         context=self._shared_context(session,runner,shared_rows,cutoff,captions,qwen=qwen_status,vjepa=vjepa_status)
-        arms,keys,facts,reasons=("a","b"),None,None,None
+        arms,keys,facts,reasons=getattr(runner, 'execution_arms', ('a', 'b')),None,None,None
         if only_new:
             keys=self._evidence_keys(session,records,captions,generation=generation,cutoff=cutoff,windows=windows,
                                      ha=ha_policy(ha),caption=caption_policy(caption))
@@ -1672,6 +1675,9 @@ class ServiceRuntime:
         due,reasons,wake=[],{},None
         for arm in ("a","b"):
             info=facts.get(arm) if isinstance(facts.get(arm),dict) else {}
+            runner = self.runners.get(sid)
+            if runner is not None and arm not in getattr(runner, 'execution_arms', ('a', 'b')):
+                continue
             key=info.get("key") if isinstance(info.get("key"),str) else None
             observe=getattr(reasoner,"observe_facts",None)
             if callable(observe):
@@ -1872,6 +1878,11 @@ class ServiceRuntime:
         snapshot=runner.snapshot()
         arms={}
         for arm in ("a","b"):
+            if arm not in runner.execution_arms:
+                arms[arm.upper()]={"id":arm.upper(),"status":"disabled","reason":"not_in_execution_scope",
+                    "active_request":None,"pending_request":None,
+                    "reasoning_status":{"state":"off","current":False}}
+                continue
             value=self._latest_live_payload(session["id"],"perception.output",arm,runner.generation) or {}
             rendered=value.get("arm_snapshot",{"id":arm.upper(),"status":"unavailable"})
             if isinstance(rendered,dict):
@@ -1910,6 +1921,7 @@ class ServiceRuntime:
             if enabled and arms[arm.upper()].get("reasoning_fresh") is False:
                 arms[arm.upper()]["reasoning_status"]["state"]="stale — historical judgment only"
         return {"state":"stopped" if snapshot["closed"] else "ready","arms":arms,"experiment_generation":runner.generation,
+                "execution_arms":list(runner.execution_arms),"comparison":len(runner.execution_arms)==2,
                 **({'apartment_viewing':self.apartment_viewing_sessions[session['id']].status()}
                    if session['id'] in self.apartment_viewing_sessions else {}),
                 "server_time":now,"acquisition":acquisition,

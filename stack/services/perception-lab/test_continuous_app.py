@@ -14,7 +14,10 @@ class ContinuousEntryTests(unittest.TestCase):
         app = types.SimpleNamespace(state=types.SimpleNamespace())
         if not missing_loop:
             app.state.activity_loop = loop
-        factory = types.SimpleNamespace(create_managed_refresh_app=lambda: app)
+        def managed(*, continuous_la_only=False):
+            self.assertTrue(continuous_la_only)
+            return app
+        factory = types.SimpleNamespace(create_managed_refresh_app=managed)
         return calls, app, patch.dict(sys.modules, {'managed_detector_app': factory})
 
     def test_ready_cleanup_starts_under_operator_stop(self):

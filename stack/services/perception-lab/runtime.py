@@ -71,6 +71,13 @@ class LookupNotPerformed(ValueError):
     """The identity lookup itself provably never ran (its ingress was busy)."""
 
 
+def validate_execution_arms(value):
+    """Configured comparison profiles remain separate from executed workers."""
+    if value not in (('a', 'b'), ('b',)):
+        raise ValueError('execution arms must be the comparison pair or LA only')
+    return value
+
+
 class PairedRunner:
     """One active and one replaceable pending frame per arm, durable dispatch IDs.
 
@@ -79,7 +86,8 @@ class PairedRunner:
     No synthetic observation is generated when an executor or receipt fails.
     """
 
-    def __init__(self, store, session_id, profiles, executor, *, clock=time.time, experiment_generation=None, sampling_hz=None, evidence_ready=None):
+    def __init__(self, store, session_id, profiles, executor, *, clock=time.time, experiment_generation=None, sampling_hz=None, evidence_ready=None, execution_arms=('a', 'b')):
+        self.execution_arms = validate_execution_arms(execution_arms)
         self.evidence_ready=evidence_ready
         self.sampling_hz=None if sampling_hz is None else dict(sampling_hz)
         if self.sampling_hz is not None and (set(self.sampling_hz)!={"a","b"} or any(not _finite(v) or not 0<v<=30 for v in self.sampling_hz.values())):
@@ -136,6 +144,8 @@ class PairedRunner:
                 ON paired_requests(session_id,arm)
                 WHERE state IN ('dispatching','running','indeterminate')""")
         for row in rows:
+            if row[0] not in self.execution_arms:
+                raise ValueError('prior execution outside requested worker scope')
             self.active[row[0]] = row[1]
 
     def _event(self, kind, payload):
@@ -170,7 +180,7 @@ class PairedRunner:
         with self.lock, self.store.capacity_batch(6*(65536+1024)):
             if self.closed:
                 raise RuntimeError("runner closed")
-            for arm in ("a", "b"):
+            for arm in self.execution_arms:
                 request = {"frame": frame, "arm": arm, "generation": self.generation,
                            "profile": self.profiles[arm], "session_id": self.session_id}
                 if self.sampling_hz is not None:
@@ -422,7 +432,7 @@ class PairedRunner:
 
     def snapshot(self):
         with self.lock:
-            return {"generation":self.generation,"active":dict(self.active),
+            return {"generation":self.generation,"active":dict(self.active),"execution_arms":list(self.execution_arms),
                     "pending":{arm:req["request_id"] if req else None for arm,req in self.pending.items()},
                     "closed":self.closed}
 

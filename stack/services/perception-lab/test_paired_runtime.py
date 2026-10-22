@@ -63,6 +63,26 @@ class PairedRuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError): runner.offer(self.frame(observed_at=98))
         with self.assertRaises(ValueError): runner.offer(self.frame("wrong",site_id="echo"))
 
+    def test_la_only_never_dispatches_or_fabricates_an_a_observation(self):
+        calls = []
+        def execute(request):
+            calls.append(request)
+            return self.receipt(request)
+        runner = PairedRunner(self.store, self.session['id'], self.profiles, execute,
+                             clock=lambda: 100., execution_arms=('b',))
+        self.runners.append(runner)
+        runner.offer(self.frame())
+        self.settle(lambda: len(calls) == 1 and not any(runner.snapshot()['active'].values()))
+        self.assertEqual([r['arm'] for r in calls], ['b'])
+        self.assertEqual(runner.snapshot()['execution_arms'], ['b'])
+        self.assertEqual({r[0] for r in self.store.db.execute('SELECT arm FROM paired_requests')}, {'b'})
+        self.assertEqual(calls[0]['frame']['valid_until'], self.frame()['valid_until'])
+
+    def test_unknown_or_empty_execution_scope_is_refused(self):
+        for arms in ((), ('a',), ('a', 'b', 'c'), ('b', 'b')):
+            with self.subTest(arms=arms), self.assertRaises(ValueError):
+                PairedRunner(self.store, self.session['id'], self.profiles, lambda _: None, execution_arms=arms)
+
     def test_runner_prepared_before_recording_uses_committed_start_for_replay(self):
         # Controller prepares the runner while the session is still starting.
         self.store.transition(self.session['id'],'stopped')

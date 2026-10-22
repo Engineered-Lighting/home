@@ -79,7 +79,8 @@ def load_soak_config(path):
         raise ValueError("admission soak uses 60 s sampling for at least 11400 s")
     if cfg['host'] == 'victoria-jetson' and not _qwen_profile((cfg.get('loop') or {}).get('qwen_profile')):
         raise ValueError('occupied soak requires the commissioned actual Qwen profile')
-    if {(u.get("name"), u.get("scope")) for u in cfg.get("units", [])} != deployment.EXPECTED_UNITS[cfg["host"]]:
+    required_units, _ = deployment.required_inventory(cfg.get('execution_profile'))
+    if {(u.get("name"), u.get("scope")) for u in cfg.get("units", [])} != required_units[cfg["host"]]:
         raise ValueError("required deployed units/scopes missing")
     names = [u.get("name") for u in cfg.get("units", [])]
     if not names or len(names) != len(set(names)):

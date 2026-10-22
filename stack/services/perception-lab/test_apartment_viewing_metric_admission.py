@@ -187,6 +187,14 @@ class MetricAdmissionTests(unittest.TestCase):
         matching = [e for e in outputs if e['payload']['media_ids']==admitted['media_ids']]
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]['payload']['arm'], 'b')
+        timing = self.source.metric.status()['capture_timing']
+        self.assertEqual(timing['frame_id'], matching[0]['payload']['frame_id'])
+        self.assertEqual(timing['schema'], 'den-metric-capture-timing-1')
+        self.assertEqual(set(timing['stages_ms']), {'capture_lock', 'receiver_clock', 'npz_read',
+                         'calibration_read', 'upper_anchor', 'clock_finish', 'verify_originals',
+                         'prepare', 'register'})
+        self.assertTrue(all(v>=0 for v in timing['stages_ms'].values()))
+        self.assertAlmostEqual(sum(timing['stages_ms'].values()), timing['total_ms'], places=5)
         self.consume(2.6, 2.7)
         self.assertEqual(self.source.metric.projected, 1)
 

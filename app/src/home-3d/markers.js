@@ -258,7 +258,20 @@ export function createOverlay(apartmentRoot) {
             cone.name = 'legacy-camera-frustum';
             group.add(cone);
         }
-        return { group, core, ghost, glow, pick, device, state: null, glyph, tag };
+        return { group, core, ghost, glow, stem, pick, device, state: null, glyph, tag };
+    }
+
+    // The modeled orb replaces the socket's survey decoration in ordinary
+    // viewing. Preserve its pick and measured position; Setup restores the
+    // orange marker when it hides the modeled fixtures.
+    function syncFixtureMountDecorations() {
+        const shown = virtualFixtures.readback();
+        const covered = new Set(shown.visible ? shown.fixtures.map(item => item.mount_id) : []);
+        for (const marker of markersById.values()) {
+            if (marker.device.equipment_record?.kind !== 'mount') continue;
+            const visible = !covered.has(marker.device.id);
+            marker.core.visible = marker.ghost.visible = marker.glow.visible = marker.stem.visible = visible;
+        }
     }
 
     /* The in-room HTML labels (room overlay) name these equipment ids, so
@@ -300,6 +313,7 @@ export function createOverlay(apartmentRoot) {
             markersById.set(d.id, m);
             devicesGroup.add(m.group);
         }
+        syncFixtureMountDecorations();
     }
 
     /* Immutable named survey planes. Reference traces and measurement lines
@@ -1177,9 +1191,15 @@ export function createOverlay(apartmentRoot) {
         overlayRoot, dispose, devicesGroup, camerasGroup, personGroup, zonesGroup, targetsGroup,
         equipmentReferenceGroup, setEquipmentRegistration,
         virtualFixturesGroup: virtualFixtures.root,
-        setVirtualFixtures: virtualFixtures.setDocument,
+        setVirtualFixtures(document) {
+            const result = virtualFixtures.setDocument(document);
+            syncFixtureMountDecorations(); return result;
+        },
         setVirtualFixtureState: virtualFixtures.setFixtureState,
-        setVirtualFixturesVisible: virtualFixtures.setVisible,
+        setVirtualFixturesVisible(visible) {
+            const result = virtualFixtures.setVisible(visible);
+            syncFixtureMountDecorations(); return result;
+        },
         virtualFixturesReadback: virtualFixtures.readback,
         virtualFixturePickObjects: virtualFixtures.pickObjects,
         virtualFixtureInteractionDescriptor: virtualFixtures.interactionDescriptor,

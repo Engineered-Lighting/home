@@ -195,12 +195,17 @@ async function proofInPage({modes, phase}) {
   if (phase === 'frames') { result.webgpu = e.webgpuReadback(); return result; }
   // Picking and projection: CPU paths, identical on both backends.
   await e.modes.setMode('mesh', { duration: 0 });
+  // Mesh display and its collision proxy are separate lazy assets. A fixed
+  // settling delay does not establish proxy readiness on a slow CI worker.
+  const proxy=await e.modes.preload(['collision']);
+  if(proxy.ok!==true||!e.modes.getCollision())throw Error('renderer_contract_collision_unavailable');
   e.rig.snapHome(0); await settle();
   const rect = e.renderer.domElement.getBoundingClientRect();
   result.contractScene = { rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},
     cameraPosition:e.camera.position.toArray(),cameraQuaternion:e.camera.quaternion.toArray(),
     cameraWorld:e.camera.matrixWorld.toArray(),cameraProjection:e.camera.projectionMatrix.toArray(),
-    apartmentWorld:e.apartmentRoot.matrixWorld.toArray(),tweening:e.rig.isTweening() };
+    apartmentWorld:e.apartmentRoot.matrixWorld.toArray(),tweening:e.rig.isTweening(),
+    collisionLoaded:!!e.modes.getCollision(),cutaway:e.modes.debugInfo().dollhouseCutaway };
   // Off-centre grid: the home pose is symmetric, so a centred column runs
   // exactly along the room's corner seam, where the face a ray meets is a
   // rounding tie (the WebGPU projection rounds differently at ~1e-13).
@@ -363,7 +368,21 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       if (proofPhase !== 'frames') {
       console.log('Authored renderer contract context: ' + JSON.stringify({backend,reference:reference.contractScene,
         candidate:candidate.contractScene,referenceFit:reference.fit,candidateFit:candidate.fit}));
-      assertNumericallyEqual(candidate.contractScene, reference.contractScene, 'camera and viewport');
+      const expectedScene = structuredClone(reference.contractScene);
+      if (backend === 'webgpu') {
+        // Native WebGPU clips depth to [0,1], WebGL to [-1,1]. The vendored
+        // Matrix4.makePerspective changes only the projection's Z row:
+        // z_gpu = (z_gl + w_gl) / 2. Keep every matrix element checked, with
+        // the existing tolerance, instead of treating correct depth as drift.
+        const projection = reference.contractScene.cameraProjection;
+        for (let column = 0; column < 4; column++)
+          expectedScene.cameraProjection[column * 4 + 2] = (projection[column * 4 + 2] + projection[column * 4 + 3]) / 2;
+      }
+      assertNumericallyEqual(candidate.contractScene, expectedScene, 'camera and viewport');
+      for(const [name,result] of [['reference',reference],['candidate',candidate]]){
+        assert.equal(result.picks.length,35,name+' keeps every original pick sample');
+        assert.ok(result.picks.some(Boolean),name+' must pick the authored room, not pass with all misses');
+      }
       contracts = {
         picks: assertNumericallyEqual(candidate.picks, reference.picks, 'surface picks'),
         projections: assertNumericallyEqual(candidate.projections, reference.projections, 'overlay projection'),

@@ -979,6 +979,7 @@ export async function runShellBrowserProof({ part }) {
       // intentionally selects Zones, whose isolated channel edits were tested above.
       await page.getByRole('tablist', { name: 'Light sections', exact: true }).getByRole('tab', { name: 'Aim', exact: true }).click();
       assert.equal(await spotTool.getAttribute('aria-pressed'), 'true');
+      await page.locator('[data-apt-aim-fine-tune] > summary').click();
       await page.getByRole('slider', { name: 'Pan', exact: true }).focus();
       await timedPhase('canonical_drag_spot', () => dragAndUndo('spot_pan_slider', 'Pan'));
       assert.deepEqual(receipt.native_drag_mouse.map(scope => scope.proof.samples), [16, 16]);

@@ -2252,11 +2252,11 @@ function AptHomePanelSlot({ enabled, target, children, className }) {
   return target ? ReactDOM.createPortal(className ? <div className={className}>{children}</div> : children, target) : null;
 }
 
-function AptUnifiedRange({ label, ariaLabel, value, min = 0, max = 100, step = 1, suffix = "%", onChange }) {
-  return <label className="apt-ui-slider">
+function AptUnifiedRange({ label, ariaLabel, value, min = 0, max = 100, step = 1, suffix = "%", hint, onChange }) {
+  return <label className="apt-ui-slider" title={hint}>
     <span className="apt-ui-row"><span className="grow">{label}</span><span className="apt-ui-value">{Math.round(value || 0)}{suffix}</span></span>
     <input className={`apt-ui-range${String(suffix).trim() === "K" ? " is-temperature" : ""}`} type="range" aria-label={ariaLabel || label} min={min} max={max} step={step}
-      value={value ?? min} onChange={event => onChange(Number(event.target.value))} />
+      value={value ?? min} aria-description={hint} onChange={event => onChange(Number(event.target.value))} />
   </label>;
 }
 
@@ -2264,6 +2264,8 @@ function AptUnifiedRange({ label, ariaLabel, value, min = 0, max = 100, step = 1
 function AptUnifiedIcon({ name }) {
   const paths = {
     back: "M10 3L5 8l5 5", close: "M4 4l8 8M12 4l-8 8", chevL: "M10 3L5 8l5 5", chevR: "M6 3l5 5-5 5",
+    aim: "M8 1v3M8 12v3M1 8h3M12 8h3M12 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0z",
+    undo: "M5 4L2 7l3 3M2 7h7a4 4 0 0 1 0 8H7", redo: "M11 4l3 3-3 3M14 7H7a4 4 0 0 0 0 8h2",
     chevD: "M3 6l5 5 5-5", chevU: "M3 10l5-5 5 5",
     layers: "M8 2l6 3-6 3-6-3 6-3zM2 8l6 3 6-3M2 11l6 3 6-3", help: "M6 6a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.2V10M8 12.5v.5",
     fit: "M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4", info: "M8 7v5M8 4.5V5M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14z",
@@ -2448,7 +2450,7 @@ function aptAimMeasure(descriptor, point) {
   if (!Array.isArray(origin) || !Array.isArray(point)) return null;
   const ray = point.map((value, axis) => value - origin[axis]), length = Math.hypot(...ray);
   if (!(length > 0)) return null;
-  return `${length.toFixed(2)} m · ${Math.round(Math.acos(Math.max(-1, Math.min(1, -ray[2] / length))) * 180 / Math.PI)}° tilt`;
+  return `${length.toFixed(2)} m · ${Math.round(Math.acos(Math.max(-1, Math.min(1, -ray[2] / length))) * 180 / Math.PI)}°`;
 }
 const APT_AIM_REASON = { blocked: "Blocked", out_of_reach: "Out of reach", no_surface: "No surface here", not_aimable: "Can’t aim here" };
 
@@ -2459,26 +2461,23 @@ function AptAimProposalRows({ descriptor, limits, proposal, tapAim, onSet, onDis
   const now = descriptor.target?.point, target = proposal?.target;
   const disclosures = [!Array.isArray(descriptor.optical_origin_m) && "Modeled from the socket display point · optical pivot not registered",
     limits?.physical_travel !== "commissioned" && "travel limits not commissioned"].filter(Boolean);
-  const swatch = color => <span aria-hidden="true" style={{ flex: "none", width: 9, height: 9, marginTop: 4, borderRadius: "50%",
-    border: `2px solid ${color}` }} />;
-  return <div data-apt-aim-rows="">
-    <div className="apt-ui-row" data-apt-aim-row="current" style={{ alignItems: "flex-start", gap: 8 }}>{swatch("#ffddb0")}
-      <span className="apt-ui-grow"><span className="apt-ui-channel-name">Now</span>
-        <span className="apt-ui-meta" style={{ display: "block" }}>{now
-          ? `${descriptor.target.surface_id || "Room surface"} · ${aptAimMeasure(descriptor, now) || ""}` : "Not aimed at a room surface yet"}</span></span></div>
-    {target ? <div className="apt-ui-row" data-apt-aim-row="proposed" data-state={target.valid ? "valid" : "invalid"}
-      style={{ alignItems: "flex-start", gap: 8 }}>{swatch(target.valid ? "#45dfff" : "#ff625f")}
-      <span className="apt-ui-grow"><span className="apt-ui-channel-name">Proposed</span>
-        <span className="apt-ui-meta" style={{ display: "block" }}>{target.valid
-          ? `${target.surface || "This spot"} · ${aptAimMeasure(descriptor, target.point_m) || ""}`
-          : `${APT_AIM_REASON[target.reason] || APT_AIM_REASON.not_aimable} · only Discard is available`}</span></span></div>
-      : <p className="apt-ui-copy" data-apt-aim-empty="">{tapAim ? "Tap a surface in the room." : "Drag the reticle onto a surface."}</p>}
-    <div className="apt-ui-actions" role="group" aria-label="Aim proposal">
-      {target?.valid && <button type="button" className="apt-ui-button" data-apt-aim-tab-action="set" onClick={onSet}
-        style={{ background: "#45dfff", borderColor: "#45dfff", color: "#04161b" }}>Set aim</button>}
-      {target && <button type="button" className="apt-ui-button" data-apt-aim-tab-action="discard" onClick={onDiscard}>Discard</button>}
-      <button type="button" className="apt-ui-button" aria-pressed={!!tapAim} onClick={onTapAim}>{tapAim ? "Tap a surface…" : "Tap to aim"}</button>
-    </div>
+  return <div className="apt-ui-aim-rows" data-apt-aim-rows="">
+    <div className="apt-ui-aim-row" data-apt-aim-row="current" role="group" aria-label="Current aim">
+      <span className="apt-ui-aim-mark" aria-hidden="true" />
+      <span className="apt-ui-aim-name">{now ? descriptor.target.surface_id || "Room surface" : "No aim yet"}</span>
+      {now && <span className="apt-ui-aim-measure">{aptAimMeasure(descriptor, now)}</span>}</div>
+    {target && <div className="apt-ui-aim-row" data-apt-aim-row="proposed" data-state={target.valid ? "valid" : "invalid"}
+      role="group" aria-label="Proposed aim"><span className="apt-ui-aim-mark" aria-hidden="true" />
+      <span className="apt-ui-aim-name">{target.valid ? target.surface || "This spot"
+        : `${APT_AIM_REASON[target.reason] || APT_AIM_REASON.not_aimable} · only Discard is available`}</span>
+      {target.valid && <span className="apt-ui-aim-measure">{aptAimMeasure(descriptor, target.point_m)}</span>}</div>}
+    {target ? <div className="apt-ui-actions" role="group" aria-label="Aim proposal">
+      {target.valid && <button type="button" className="apt-ui-button is-small is-primary" data-apt-aim-tab-action="set" onClick={onSet}>Set aim</button>}
+      <button type="button" className="apt-ui-button is-small is-ghost" data-apt-aim-tab-action="discard" onClick={onDiscard}>Discard</button>
+    </div> : <div className="apt-ui-row" role="group" aria-label="Aim proposal">
+      <p className="apt-ui-meta grow" data-apt-aim-empty="">{tapAim ? "Tap a surface in the room." : "Drag the reticle onto a surface."}</p>
+      <button type="button" className="apt-ui-button is-small" aria-pressed={!!tapAim} onClick={onTapAim}><AptUnifiedIcon name="aim" />{tapAim ? "Tap a surface…" : "Tap to aim"}</button>
+    </div>}
     {disclosures.length > 0 && <p className="apt-ui-meta" data-apt-aim-tab-disclosure="">{disclosures.join(" · ")}</p>}
   </div>;
 }
@@ -2538,7 +2537,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
   const state = fixture.state || {}, radials = radialSnapshot?.descriptor.fixture_id === fixture.fixture_id
     ? radialSnapshot.descriptor.state.radials : state.radials || [];
   const selectedRadials = zone == null ? radials : radials.filter(item => item.number === zone);
-  const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.brightness ?? 1), 0) / selectedRadials.length : 0;
+  const radialLevel = selectedRadials.length ? selectedRadials.reduce((sum, item) => sum + (item.on ? item.brightness ?? 1 : 0), 0) / selectedRadials.length : 0;
   const patchRadials = patch => onPatch({ radials: selectedRadials.map(item => ({ number: item.number, ...patch })) });
   // Profile ranges are assumed until the Den confirms them; a moved slider powers its channel on.
   const range = (key, fallback) => Array.isArray(fixture.color_temp_ranges?.[key]) ? fixture.color_temp_ranges[key] : fallback;
@@ -2552,19 +2551,23 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
           onChange={event => onPatch({ [key]: { on: event.target.checked } })} /><span>{current.on ? "On" : "Off"}</span></label></div>
       <AptUnifiedRange label="Brightness" ariaLabel={brightnessLabel} value={(current.brightness ?? 1) * 100}
         onChange={value => onPatch({ [key]: { brightness: value / 100, ...powered(value) } })} />
-      <AptUnifiedRange label="Color temp · assumed range" ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
+      <AptUnifiedRange label="Color temp" hint="Color-temperature range is assumed, not measured." ariaLabel={temperatureLabel} value={current.color_temp_kelvin ?? 3000}
         min={low} max={high} step={100} suffix=" K" onChange={value => onPatch({ [key]: { color_temp_kelvin: value, ...powered(1) } })} />
       {key === "spotlight" && <div className="apt-ui-row"><span className="apt-ui-meta grow">Where it points is set in Aim.</span>
-        <button type="button" className="apt-ui-button is-small" onClick={() => setTab("aim")}>Aim</button></div>}
+        <button type="button" className="apt-ui-button is-small" onClick={() => setTab("aim")}><AptUnifiedIcon name="aim" />Aim</button></div>}
     </section>;
   };
   return <aside className="apt-ui-inspector" data-victoria-virtual-fixtures="1" aria-label="Fixture lighting inspector">
     <header className="apt-ui-header"><div className="apt-ui-header-row">
       <button type="button" className="apt-ui-button is-icon" aria-label="All lights" onClick={onBack}><AptUnifiedIcon name="back" /></button>
       <div className="apt-ui-grow"><h2 className="apt-ui-title">{fixture.label || fixture.fixture_id}</h2>
-        <div className="apt-ui-sub">{homeName} · {isLit(fixture) ? "Light on" : "Light off"}</div></div>
+        <div className="apt-ui-sub">{homeName} · {[
+          state.spotlight?.on && `Spot ${Math.round((state.spotlight.brightness ?? 1) * 100)}%`,
+          state.downward?.on && `Down ${Math.round((state.downward.brightness ?? 1) * 100)}%`,
+          radials.some(item => item.on) && `Radial ${Math.round(radials.reduce((sum, item) => sum + (item.on ? item.brightness ?? 1 : 0), 0) / 6 * 100)}%`,
+        ].filter(Boolean).join(" · ") || "Off"}</div></div>
       <button type="button" className="apt-ui-button is-icon" aria-label="Close light" onClick={onBack}><AptUnifiedIcon name="close" /></button></div>
-      <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled</span><span className="apt-ui-badge">Virtual channels</span></div>
+      <div className="apt-ui-actions"><span className="apt-ui-badge" data-state="modeled">Modeled fixture</span><span className="apt-ui-badge">Not commissioned</span></div>
       <div className="apt-ui-seg is-full" role="tablist" aria-label="Light sections">{[["light", "Light"], ["aim", "Aim"], ["setup", "Setup"]].map(([key, label]) =>
         <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`apt-ui-virtual-${key}`} onClick={() => setTab(key)}>{label}</button>)}
       </div>
@@ -2574,7 +2577,7 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         <button type="button" key={String(on)} className="apt-ui-button is-small" onClick={() => onPatch({
           spotlight: { on }, downward: { on }, radials: aptUnifiedRadialPowerPatch(radials, on) })}>All {on ? "on" : "off"}</button>)}</div>
       {channel("spotlight", "Spot", "Hidden robotic spotlight", "Brightness", "Color temperature", 2700)}
-      {channel("downward", "Down", "Soft pool below the socket", "Down brightness", "Down color temperature", 2200)}
+      {channel("downward", "Down", "Downward LED · soft pool below the socket", "Down brightness", "Down color temperature", 2200)}
       <section className="apt-ui-channel" aria-label="Radial channel"><div className="apt-ui-channel-head">
         <div className="apt-ui-grow"><div className="apt-ui-channel-name">Radial</div><div className="apt-ui-channel-desc">Six outward zones behind the diffuser film</div></div>
         <label className="apt-ui-switch"><input type="checkbox" aria-label="Radial power" checked={radials.some(item => item.on)}
@@ -2583,31 +2586,33 @@ function AptUnifiedVirtualInspector({ homeName, fixtures, fixture, selected, vis
         {window.AptDirectionalRing && <window.AptDirectionalRing radials={radials} zone={zone} onZone={setZone} onShow={onShowComposer} view={directionalView}
           power={zone != null && <label className="apt-ui-switch"><input type="checkbox" aria-label={`Radial zone ${zone} power`}
             checked={!!selectedRadials[0]?.on} onChange={event => patchRadials({ on: event.target.checked })} /><span>{selectedRadials[0]?.on ? "On" : "Off"}</span></label>} />}
-        <div className="apt-ui-actions"><span className="apt-ui-meta grow">All six zones</span>{[0, 25, 50, 100].map(value => <button type="button" className="apt-ui-button is-small" key={value}
+        <div className="apt-ui-row apt-ui-preset-row"><span className="apt-ui-meta grow">All six zones</span><div className="apt-ui-quick">{[0, 25, 50, 100].map(value => <button type="button" className="apt-ui-button is-small apt-ui-chip" key={value}
           aria-pressed={value === 0 ? radials.every(item => !item.on || item.brightness === 0)
             : radials.every(item => item.on && item.brightness === value / 100)}
-          onClick={() => { setZone(null); onPatch({ radials: radials.map(item => ({ number: item.number, on: value > 0, brightness: value / 100 })) }); }}>{value ? `${value}%` : "Off"}</button>)}</div>
-        <div className="apt-ui-actions"><span className="apt-ui-meta grow">Light only</span>{["Toward walls", "Into the room"].map(label =>
-          <button key={label} type="button" className="apt-ui-button is-small" disabled title="Available after radial heading commissioning">{label}</button>)}</div>
+          onClick={() => { setZone(null); onPatch({ radials: radials.map(item => ({ number: item.number, on: value > 0, brightness: value / 100 })) }); }}>{value ? `${value}%` : "Off"}</button>)}</div></div>
+        <div className="apt-ui-row apt-ui-preset-row"><span className="apt-ui-meta grow">Light only</span><div className="apt-ui-quick">{["Toward walls", "Into the room"].map(label =>
+          <button key={label} type="button" className="apt-ui-button is-small apt-ui-chip" disabled title="Available after radial heading commissioning">{label}</button>)}</div></div>
         <AptUnifiedRange label="Brightness" ariaLabel="Radial brightness" value={radialLevel * 100} onChange={value => patchRadials({ on: value > 0, brightness: value / 100 })} />
-        <AptUnifiedRange label="Color temp · assumed range" ariaLabel="Radial color temperature" min={range("radials", [2200, 5000])[0]}
+        <AptUnifiedRange label="Color temp" hint="Color-temperature range is assumed, not measured." ariaLabel="Radial color temperature" min={range("radials", [2200, 5000])[0]}
           max={range("radials", [2200, 5000])[1]} step={100} suffix=" K"
           value={selectedRadials[0]?.color_temp_kelvin ?? 3000} onChange={value => patchRadials({ color_temp_kelvin: value })} />
       </section>
-      <p className="apt-ui-meta">Virtual preview · no hardware command sent.</p>
+      <p className="apt-ui-meta">Virtual preview · no hardware command sent. Channel ranges are assumed.</p>
     </section>}
-    {tab === "aim" && <section className="apt-ui-section" id="apt-ui-virtual-aim" role="tabpanel" aria-label="Fixture aim">
-      <h3 className="apt-ui-heading">Spotlight aim</h3>
+    {tab === "aim" && <div className="apt-ui-aim-pane" id="apt-ui-virtual-aim" role="tabpanel" aria-label="Fixture aim">
+      <section className="apt-ui-section"><div className="apt-ui-row"><h3 className="apt-ui-heading grow">Aim</h3><span className="apt-ui-meta">Modeled</span>
+        <button type="button" className="apt-ui-button is-small is-icon is-ghost" aria-label="Undo aim" title="Undo aim (Ctrl+Z / ⌘Z)" disabled={!canUndo} onClick={onUndo}><AptUnifiedIcon name="undo" /></button>
+        <button type="button" className="apt-ui-button is-small is-icon is-ghost" aria-label="Redo aim" title="Redo aim (Ctrl+Shift+Z / ⇧⌘Z)" disabled={!canRedo} onClick={onRedo}><AptUnifiedIcon name="redo" /></button></div>
       {aimControls || <p className="apt-ui-copy">Drag the aim handle onto a visible room surface. Its socket stays fixed.</p>}
+      {notice && <p role="status" className="apt-ui-copy">{notice}</p>}</section>
       {aimNamedAims}
+      <section className="apt-ui-section"><details className="apt-ui-details" data-apt-aim-fine-tune=""><summary>Fine-tune aim</summary>
       {['pan', 'tilt'].map(axis => <AptUnifiedRange key={axis} label={axis === 'pan' ? 'Pan' : 'Tilt'} ariaLabel={axis === 'pan' ? 'Pan' : 'Tilt'} suffix="°"
         min={fixture.limits?.[`${axis}_min_deg`] ?? (axis === 'pan' ? -175 : -5)} max={fixture.limits?.[`${axis}_max_deg`] ?? (axis === 'pan' ? 175 : 88)}
         value={state[`${axis}_deg`] || 0} onChange={value => onPatch({ [`${axis}_deg`]: value })} />)}
-      <div className="apt-ui-actions"><button type="button" className="apt-ui-button" disabled={!canUndo} onClick={onUndo}>Undo aim</button>
-        <button type="button" className="apt-ui-button" disabled={!canRedo} onClick={onRedo}>Redo aim</button></div>
-      {notice && <p role="status" className="apt-ui-copy">{notice}</p>}<p className="apt-ui-meta">Modeled aim · virtual preview only.</p>
+      <p className="apt-ui-meta">Modeled aim · virtual preview only.</p></details>
       {window.AptCommandLadder && <window.AptCommandLadder site="victoria" fixture={fixture} binding={commandBinding} />}
-    </section>}
+      </section></div>}
     {tab === "setup" && <section className="apt-ui-section" id="apt-ui-virtual-setup" role="tabpanel" aria-label="Fixture setup">
       <h3 className="apt-ui-heading">Fixture</h3><select className="apt-ui-input" aria-label="Virtual fixture" value={fixture.fixture_id} onChange={event => onSelect(event.target.value)}>
         {fixtures.map(item => <option key={item.fixture_id} value={item.fixture_id}>{item.label || item.fixture_id}</option>)}
@@ -2955,6 +2960,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const aimActionsRef = useRef(null);
   const [hoverFixtureId, setHoverFixtureId] = useState(null);
   const [tapAim, setTapAim] = useState(null);
+  const tapAimScopeRef = useRef(null);
   const [deskTargetSelection, setDeskTargetSelection] = useState(null);
   const deskTargetCaptureRef = useRef(null);
   const virtualFixtureStatesRef = useRef({ key: null, states: new Map(), targets: new Map() });
@@ -6228,9 +6234,11 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     overlay.setRoomLabelledEquipment(aimOverlayMountKey ? aimOverlayMountKey.split("|") : []);
     return () => { try { overlay.setRoomLabelledEquipment([]); } catch (_) { /* engine disposed */ } };
   }, [aimPresentation, aimOverlayMountKey]);
-  const aimSelectedDescriptor = useMemo(() => aimPresentation && virtualFixtureControlsOpen && virtualFixtureId
-    ? engineRef.current?.overlay.virtualFixtureInteractionDescriptor?.(virtualFixtureId) || null : null,
-  [aimPresentation, virtualFixtureControlsOpen, virtualFixtureId, virtualFixturePreview]);
+  // The inspector reads the fenced resident model even when a full phone
+  // sheet pauses the drawing lease. Set/Discard keep their existing fence.
+  const aimSelectedDescriptor = useMemo(() => aimOverlayWanted && virtualFixtureControlsOpen && virtualFixtureId
+    ? getVirtualFixtureSelectionContext()?.engine.overlay.virtualFixtureInteractionDescriptor?.(virtualFixtureId) || null : null,
+  [aimOverlayWanted, aimPresentation, getVirtualFixtureSelectionContext, virtualFixtureControlsOpen, virtualFixtureId, virtualFixturePreview]);
   const aimSelectedScope = aimSelectedDescriptor && aimProposals ? aimProposals.scopeFromDescriptor("victoria", aimSelectedDescriptor) : null;
   const aimSelectedProposal = aimSelectedScope ? aimProposals.current(aimSelectedScope) : null;
   // One stable overlay element: the host re-renders often, and each overlay
@@ -6296,9 +6304,13 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // Tap to aim (APT-A08): one tap on a surface proposes, as a drop would.
   // While it is on, the tap belongs to it, so it neither orbits nor deselects.
   useEffect(() => {
-    if (tapAim && (tapAim !== virtualFixtureId || !virtualFixtureControlsOpen || fixtureInteractionMode !== "spot" || !aimPresentation))
+    // A room reveal may briefly have no drawing lease. Keep the request only
+    // in its exact scene/fixture scope; hidden documents still cancel it.
+    if (tapAim && (tapAim !== virtualFixtureId || !virtualFixtureControlsOpen || fixtureInteractionMode !== "spot"
+      || !aimOverlayWanted || document.visibilityState === "hidden" || !aimSelectedScope
+      || JSON.stringify(aimSelectedScope) !== tapAimScopeRef.current))
       setTapAim(null);
-  }, [tapAim, virtualFixtureId, virtualFixtureControlsOpen, fixtureInteractionMode, aimPresentation]);
+  }, [tapAim, virtualFixtureId, virtualFixtureControlsOpen, fixtureInteractionMode, aimPresentation, aimOverlayWanted, aimSelectedDescriptor]);
   useEffect(() => {
     const presentation = aimPresentation, canvas = selectionEngine?.renderer?.domElement;
     if (!tapAim || !presentation || !canvas) return undefined;
@@ -10629,11 +10641,16 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
             roomGroups={roomLightGroups} onRoomPower={setRoomLightsPower} roomPowerDisabledReason={roomPowerDisabledReason} namedAims={namedAims}
             onPatch={patchVirtualFixtureFromInspector} onPatchAll={setVirtualQuickPower} onUndo={() => restoreVirtualAimHistory("undo")} onRedo={() => restoreVirtualAimHistory("redo")}
             canUndo={aimHistoryLength("undo") > 0} canRedo={aimHistoryLength("redo") > 0}
-            aimControls={aimPresentation && aimSelectedDescriptor ? <AptAimProposalRows descriptor={aimSelectedDescriptor}
+            aimControls={aimSelectedDescriptor ? <AptAimProposalRows descriptor={aimSelectedDescriptor}
               limits={selectedVirtualFixture?.limits} proposal={aimSelectedProposal} tapAim={!!tapAim}
               onSet={() => setAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
               onDiscard={() => discardAimProposal({ fixture_id: virtualFixtureId, proposal: aimSelectedProposal })}
-              onTapAim={() => setTapAim(value => value ? null : virtualFixtureId)} /> : null}
+              onTapAim={() => {
+                if (tapAim) { setTapAim(null); return; }
+                tapAimScopeRef.current = JSON.stringify(aimSelectedScope);
+                if (unifiedShell) (onShowShellAim || onShowShellControls)?.();
+                setTapAim(virtualFixtureId);
+              }} /> : null}
             aimNamedAims={window.AptDenNamedAims && <window.AptDenNamedAims registrationRevision={virtualFixtureDocument?.binding?.registration_version ?? null} />}
             notice={virtualAimNotice} sourceLabel={sourceMeta.label} onSetup={openUnifiedSetup}
             canSetup={apartmentPlacementControlsEnabled || apartmentSetupReadOnly} setupReadOnly={apartmentSetupReadOnly}

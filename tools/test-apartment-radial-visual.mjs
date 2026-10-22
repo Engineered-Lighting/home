@@ -86,7 +86,12 @@ function assertNonRadialUnchanged(rows) {
       assert.deepEqual(Buffer.from(current.array.buffer, current.array.byteOffset, current.array.byteLength), saved.bytes,
         row.node.name + ' keeps exact receiver/geometry bytes');
     }
-    assert.deepEqual(visualSnapshot(row.node), row.snapshot, row.node.name + ' keeps transforms, channel/aim metadata and uniforms');
+    const current = visualSnapshot(row.node);
+    // The core now participates in the cosmetic channel mix. Its color may
+    // change on radial-only input; geometry, transforms and all other state
+    // remain protected, and the mixed color has a separate numerical oracle.
+    if (row.node.name === 'fixture-orb-core') current.materials[0].color = row.snapshot.materials[0].color;
+    assert.deepEqual(current, row.snapshot, row.node.name + ' keeps transforms, channel/aim metadata and uniforms');
   }
 }
 const withoutRadials = descriptor => {
@@ -502,6 +507,32 @@ test('an all-off socket shows only its dim core and stays selectable', t => {
   assert.equal(f.api.setSelected(null), null); assert.equal(f.api.setSelected(f.id).fixture_id, f.id, 'an off socket is still selectable');
 });
 
+test('the lit orb core follows the prototype channel-weighted white, including radial-only CCT changes', t => {
+  const f = fixture(t), core = orbParts(f.root).core;
+  f.api.setFixtureState(f.id, allOff); f.api.setVisible(false); f.api.setVisible(true);
+  const geometry = core.geometry, position = core.getWorldPosition(new THREE.Vector3());
+  const expected = () => {
+    const sum = new THREE.Color(0, 0, 0); let weight = 0;
+    const parts = orbParts(f.root), state = f.api.interactionDescriptor(f.id).state;
+    for (const [level, color] of [
+      [state.spotlight.on ? state.spotlight.brightness : 0, f.root.getObjectByName('robotic-spotlight-emitter').material.color],
+      [state.downward.on ? state.downward.brightness : 0, f.root.getObjectByName('downward-emitter').material.color],
+      ...state.radials.map((zone, i) => [zone.on ? zone.brightness / 6 : 0, parts.sectors[i].material.color]),
+    ]) { weight += level; sum.r += color.r * level; sum.g += color.g * level; sum.b += color.b * level; }
+    return [.6 + .4 * sum.r / weight, .6 + .4 * sum.g / weight, .6 + .4 * sum.b / weight];
+  };
+  for (const patch of [
+    { spotlight: { on: true, brightness: .55, color_temp_kelvin: 2700 } },
+    { downward: { on: true, brightness: .18, color_temp_kelvin: 4000 } },
+    { radials: [{ number: 2, on: true, brightness: .8, color_temp_kelvin: 4500 }] },
+    { radials: [{ number: 2, color_temp_kelvin: 2500 }] },
+  ]) {
+    assert.equal(f.api.setFixtureState(f.id, patch).ok, true); f.api.setVisible(false); f.api.setVisible(true);
+    core.material.color.toArray().forEach((v, i) => assert.ok(Math.abs(v - expected()[i]) < 1e-12));
+    assert.equal(core.geometry, geometry); assert.deepEqual(core.getWorldPosition(new THREE.Vector3()), position);
+  }
+});
+
 test('every channel and mixed CCT tint the halo through the producer display white', t => {
   const { f, reference } = temperatureFixture(t), parts = orbParts(f.root);
   assert.equal(f.api.setFixtureState(f.id, allOff).ok, true); f.api.setVisible(false); f.api.setVisible(true);
@@ -549,15 +580,33 @@ test('the halo grows with how much light the socket gives; every layer keeps its
 
 test('the halo falloff hooks the vendored basic shader exactly once and shares one program', t => {
   const f = fixture(t), layers = haloLayers(f.root);
-  const shader = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader };
+  const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader };
   for (const [source, hook] of [[shader.vertexShader, '#include <project_vertex>'], [shader.fragmentShader, '#include <opaque_fragment>'],
     [shader.vertexShader, '#include <common>'], [shader.fragmentShader, '#include <common>']]) assert.equal(source.split(hook).length - 1, 1, hook);
   layers[0].material.onBeforeCompile(shader);
   assert.match(shader.vertexShader, /#include <project_vertex>\nvOrbHaloNormal = normalize\( normalMatrix \* normal \);\nvOrbHaloView = - mvPosition\.xyz;/);
-  assert.match(shader.fragmentShader, /diffuseColor\.a \*= pow\( clamp\( dot\( normalize\( vOrbHaloNormal \), normalize\( vOrbHaloView \) \), 0\.0, 1\.0 \), 2\.50 \);\n#include <opaque_fragment>/);
+  assert.match(shader.fragmentShader, /orbRadius < 0\.16 \? mix\( 1\.0, 0\.6, orbRadius \/ 0\.16 \)/);
+  assert.match(shader.fragmentShader, /orbRadius < 0\.45 \? mix\( 0\.6, 0\.14, \( orbRadius - 0\.16 \) \/ 0\.29 \)/);
+  assert.match(shader.fragmentShader, /mix\( 0\.14, 0\.0, \( orbRadius - 0\.45 \) \/ 0\.55 \)/);
+  assert.match(shader.fragmentShader, /diffuseColor\.a \*= orbFalloff \* uOrbHaloGain;\n#include <opaque_fragment>/);
+  assert.equal(shader.uniforms.uOrbHaloGain, layers[0].material.userData.orbHaloGain, 'shader uses the live per-layer gain');
   for (const text of [shader.vertexShader, shader.fragmentShader]) assert.equal(text.split('varying vec3 vOrbHaloNormal;').length - 1, 1);
   assert.equal(new Set(layers.map(layer => layer.material.onBeforeCompile)).size, 1);
   assert.equal(new Set(layers.map(layer => layer.material.customProgramCacheKey())).size, 1);
+});
+
+test('the additive halo matches the ZIP alpha and Spot/Down/mean-radial color weights', t => {
+  const f = fixture(t), parts = orbParts(f.root), layers = haloLayers(f.root);
+  const alpha = layer => layer.visible ? layer.material.opacity * layer.material.userData.orbHaloGain.value : 0;
+  for (const [spot, down, radial] of [[.55, .18, 0], [0, 0, .75], [.4, .8, .25], [1, 1, 1], [0, 0, 0]]) {
+    f.api.setFixtureState(f.id, { spotlight:{on:spot>0,brightness:spot,color_temp_kelvin:4500}, downward:{on:down>0,brightness:down,color_temp_kelvin:2700},
+      radials:[1,2,3,4,5,6].map(number=>({number,on:radial>0,brightness:radial,color_temp_kelvin:3200})) });
+    f.api.setVisible(false); f.api.setVisible(true);
+    const total = spot + down + radial, expectedAlpha = total ? .4 + .5 * Math.min(1, total / 1.4) : 0;
+    assert.ok(Math.abs(layers.reduce((sum,layer)=>sum+alpha(layer),0)-expectedAlpha)<1e-12, 'one prototype halo opacity');
+    for (const [group,weight] of [[[parts.spot],spot],[[parts.down],down],[parts.sectors,radial]])
+      assert.ok(Math.abs(group.reduce((sum,layer)=>sum+alpha(layer),0)-(total ? expectedAlpha*weight/total : 0))<1e-12, 'equal channel-family weight');
+  }
 });
 
 test('disposal releases every orb geometry and material', () => {

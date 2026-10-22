@@ -338,7 +338,7 @@ function AptDirectionalRing({ radials = [], zone = null, onZone, onShow, view, p
     if (view && planRef.current) return view.attachPlan(planRef.current);
   }, [view, available]);
   const selected = zone == null ? zones : zones.filter(item => item.number === zone);
-  const level = selected.length ? selected.reduce((sum, item) => sum + item.brightness, 0) / selected.length : 0;
+  const level = selected.length ? selected.reduce((sum, item) => sum + (item.on ? item.brightness : 0), 0) / selected.length : 0;
   const sector = azimuth => {
     const start = (-azimuth - 28) * Math.PI / 180, end = (-azimuth + 28) * Math.PI / 180;
     const point = (radius, angle) => `${59 + radius * Math.cos(angle)} ${59 + radius * Math.sin(angle)}`;

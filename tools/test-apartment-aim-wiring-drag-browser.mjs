@@ -44,7 +44,8 @@ test('aim wiring: drag aim, Set, Undo and the Escape order through the mounted H
       assert.deepEqual(aimed.display_anchor_m, original.display_anchor_m, 'the socket stays fixed');
       assert.equal(aimed.physical_commands, false);
       assert.match(await page.locator('body').innerText(), /no hardware command sent/);
-      assert.equal(await fixtureInspector().locator('.apt-ui-badge[data-state="modeled"]').textContent(), 'Modeled');
+      assert.equal(await fixtureInspector().locator('.apt-ui-badge[data-state="modeled"]').textContent(), 'Modeled fixture');
+      assert.equal(await fixtureInspector().getByText('Not commissioned', {exact:true}).count(), 1, 'the design badge keeps commissioning status explicit');
       assert.equal((await overlayState()).bar, null, 'Set retires the proposal');
       await blur(); await page.keyboard.press('Control+z');
       await until('undo', ({ id, pan }) => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.pan_deg === pan, { id, pan: original.state.pan_deg });

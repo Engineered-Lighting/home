@@ -265,9 +265,12 @@ test('the module has no transport or Home Assistant write path', () => {
 
 test('one mount in each Aim tab; currentness guard and registration lists intact', () => {
   const apartment = read('app/src/home-apartment.jsx'), aim = read('app/src/home-apartment-aim.jsx');
-  const victoriaAim = apartment.slice(apartment.indexOf('{tab === "aim" && <section className="apt-ui-section" id="apt-ui-virtual-aim"'));
+  const aimStart = apartment.indexOf('{tab === "aim" && <div className="apt-ui-aim-pane" id="apt-ui-virtual-aim"');
+  const setupStart = apartment.indexOf('{tab === "setup"', aimStart);
+  assert.ok(aimStart >= 0 && setupStart > aimStart, 'the Aim pane precedes Setup');
+  const victoriaAim = apartment.slice(aimStart, setupStart);
   assert.equal(apartment.split('<window.AptCommandLadder').length, 2, 'one Victoria mount');
-  assert.ok(victoriaAim.slice(0, victoriaAim.indexOf('</section>}')).includes('<window.AptCommandLadder site="victoria" fixture={fixture} binding={commandBinding} />'));
+  assert.ok(victoriaAim.includes('<window.AptCommandLadder site="victoria" fixture={fixture} binding={commandBinding} />'));
   assert.ok(apartment.includes('commandBinding={virtualFixtureDocument.binding}'));
   assert.equal(aim.split('<window.AptCommandLadder').length, 2, 'one Echo mount');
   assert.ok(aim.includes('<window.AptCommandLadder site="echo" sim={sim}'));

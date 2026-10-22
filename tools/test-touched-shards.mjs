@@ -24,6 +24,17 @@ function planOf(argv) {
   return [...result.stdout.matchAll(/^ {2}PLAN (\S+)$/gm)].map(match => match[1]);
 }
 
+test('the twelve CI workers publish the exact receipt set required by aggregation and retain ten-minute limits', () => {
+  const workflow = fs.readFileSync(path.join(root,'.github/workflows/llm-response-qa.yml'),'utf8');
+  const workers = /shard: \[([^\]]+)\]/.exec(workflow)[1].split(',').map(Number);
+  assert.deepEqual(workers,Array.from({length:12},(_,i)=>i+1));
+  assert.match(workflow,/touched_contracts:[\s\S]*?timeout-minutes: 10/);
+  for(const expected of ['--shard "${{ matrix.shard }}/12"','shard-${{ matrix.shard }}-of-12.json',
+    'name: touched-harness-shard-${{ matrix.shard }}-of-12','pattern: touched-harness-shard-*-of-12','--shards 12'])
+    assert.ok(workflow.includes(expected),expected);
+  assert.doesNotMatch(workflow,/matrix\.shard \}\}\/8|-of-8|--shards 8/);
+});
+
 test('shared mounted UI and labeler fixtures select every affected browser consumer',()=>{
   const fullUi=['test-home-full-ui-lights-browser.mjs','test-home-full-ui-people-browser.mjs','test-home-full-ui-intelligence-browser.mjs',
     'test-home-full-ui-metrics-browser.mjs','test-home-full-ui-lab-browser.mjs','test-apartment-connected-view-browser.mjs',
@@ -212,7 +223,7 @@ test('all five WebGPU lighting proof parts are planned together and use separate
     'tools/test-apartment-lit-webgpu-browser-part3.mjs', 'tools/test-apartment-lit-webgpu-browser-part5.mjs']) {
     const argv = ['--files', file], full = planOf(argv);
     assert.ok(parts.every(name => full.includes(name)), 'the complete lighting proof guards ' + file);
-    for (const count of [5, 6, 8]) {
+    for (const count of [5, 6, 8, 12]) {
       const shards = Array.from({ length: count }, (_, index) => planOf([...argv, '--shard', `${index + 1}/${count}`]));
       const owners = parts.map(name => shards.flatMap((plan, index) => plan.includes(name) ? [index] : []));
       assert.ok(owners.every(list => list.length === 1), 'each proof part has exactly one worker');
@@ -229,10 +240,12 @@ test('renderer parity always selects Cloud, Mesh and Photo on separate workers',
     ...formats.map(name => 'tools/' + name)]) {
     const full = planOf(['--files', file]);
     assert.ok(formats.every(name => full.includes(name)), 'all scan formats guard ' + file);
-    const shards = Array.from({ length: 8 }, (_, index) => planOf(['--files', file, '--shard', `${index + 1}/8`]));
-    const owners = formats.map(name => shards.flatMap((plan, index) => plan.includes(name) ? [index] : []));
-    assert.ok(owners.every(list => list.length === 1), 'each format runs once');
-    assert.equal(new Set(owners.flat()).size, formats.length, 'renderer formats use separate workers for ' + file);
+    for (const count of [8,12]) {
+      const shards = Array.from({ length: count }, (_, index) => planOf(['--files', file, '--shard', `${index + 1}/${count}`]));
+      const owners = formats.map(name => shards.flatMap((plan, index) => plan.includes(name) ? [index] : []));
+      assert.ok(owners.every(list => list.length === 1), 'each format runs once');
+      assert.equal(new Set(owners.flat()).size, formats.length, 'renderer formats use separate workers for ' + file);
+    }
   }
 });
 
@@ -241,7 +254,7 @@ test('all Setup rail phases are selected together and distributed across workers
   for (const file of ['app/src/home-apartment.jsx', 'tools/fixtures/apartment-setup-rail-proof.mjs', 'tools/test-apartment-setup-rail-browser-part3.mjs']) {
     const argv = ['--files', file], full = planOf(argv);
     assert.ok(parts.every(name => full.includes(name)), 'all nine Setup checks guard ' + file);
-    for (const count of [3, 8]) {
+    for (const count of [3, 8, 12]) {
       const shards = Array.from({length:count}, (_,index) => planOf([...argv, '--shard', `${index+1}/${count}`]));
       const owners = parts.map(name => shards.flatMap((plan,index) => plan.includes(name) ? [index] : []));
       assert.ok(owners.every(list => list.length === 1));

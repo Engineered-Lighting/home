@@ -1,177 +1,217 @@
-# Home design fidelity verification
+﻿# Home design fidelity verification
 
-final result: passed
+final result: blocked
 
-The supplied visual reference is `docs/design/apartment-unified/prototype/` from
-HomeRedesign.zip (SHA256 `9fcff2f8b0a73d0b0ea00ce9a984550ebec08ea9c94fe83335e63cace80375d8`).
-The reference's room and data are authored examples. Verification preserves the
-accepted production renderer and uses disposable four-fixture registration data.
-It does not qualify camera, perception, physical output or commissioning.
+This result applies to complete ZIP fidelity. The fixture/glow/Light and
+Aim/preset correction batches are implemented locally; remaining findings are open in
+Engineered-Lighting/home#397. This replaces the earlier blanket passed claim.
 
-## Comparison history
+## Reference and source
 
-- Initial implementation used legacy inspector panels and a separate toolbar.
-  Replaced the presentation with the supplied layout, component hierarchy and tokens.
-- Phone inspector comparison at 390 x 844 exposed retained room-list scroll,
-  overlapping range values and incorrectly bound switch styles. These findings
-  remain blocked until the frozen correction is captured and compared again.
-- A functional phone check found the boot artwork pushed the composer 3px beyond
-  the viewport. The unified boot area can now shrink and scroll. The unchanged
-  bounds assertion passes after that correction.
-- Phone toolbar overflow was corrected by hiding its angle count at the phone
-  breakpoint, as the reference does. Orbit arrows remain available.
-- Closed camera chrome now uses a truthful closed-view card, with the existing
-  perception component and its callbacks retained.
-- A tablet reference captured during its resize transition and one combined
-  image captured before the offscreen image painted were rejected. They were
-  recaptured and reopened: the tablet inspector measures exactly y590/h590;
-  both source/implementation images are visibly present in the final pairs.
+- Reference: HomeUIticketBreakdown.zip, SHA-256
+  `4f7fdb568481517e0e34e58459fcdd48f6111aac6b57c8c145c55d57091466c3`.
+- Visual authority: final SPEC plus unchanged prototype `scene.js` and
+  `app.css`. Earlier cylinder prose is superseded by the final orb design.
+- Implementation base: main `d6701024ce6ebc45a94b4d5ac7562574de0efd2d`.
+- Runtime correction commit: `492019d0`. The prior unmerged Chat correction is
+  outside this branch.
+- Both previews use authored local services and room data. No household
+  connection, registration, pack bytes or physical command is involved.
 
-## Final comparison inputs
+## Corrected in this batch
 
-Source visual truth: `docs/design/apartment-unified/prototype/`, rendered unchanged
-in the same browser as the implementation. Source and implementation were both
-opened, captured and then combined in comparison HTML before judging fidelity.
-The final screenshot comparisons are in
-`docs/design/apartment-unified/evidence-20261018/`.
+The normal fixture view no longer draws the orange socket survey core, ghost,
+glow and stem through the modeled orb. Hiding modeled fixtures restores those
+survey decorations; source positions and all pick objects remain unchanged.
 
-| State | Desktop 1366 x 768 | Tablet 820 x 1180 | Phone 390 x 844 |
-| --- | --- | --- | --- |
-| Home overview | [Pair](docs/design/apartment-unified/evidence-20261018/desktop-overview-comparison.jpg) | [Pair](docs/design/apartment-unified/evidence-20261018/tablet-overview-comparison.jpg) | [Pair](docs/design/apartment-unified/evidence-20261018/phone-overview-comparison.jpg) |
-| Socket 4, Light tab | [Pair](docs/design/apartment-unified/evidence-20261018/desktop-selected-comparison.jpg) | [Pair](docs/design/apartment-unified/evidence-20261018/tablet-selected-comparison.jpg) | [Pair](docs/design/apartment-unified/evidence-20261018/phone-selected-comparison.jpg) |
+The orb center uses the prototype's active-channel weighted white. Its halo
+uses the prototype's four radial-gradient stops, alpha and radius; six radial
+zones contribute their mean, equal in weight to Spot or Down. WebGL and the
+WebGPU node path have matching implementations. Existing channel fade, source,
+beam, receiver and geometry contracts are retained.
 
-Every source screenshot and corresponding implementation screenshot has the
-listed native pixel dimensions and CSS viewport, devicePixelRatio 1, dark theme,
-and half-sheet detent where applicable. No density resampling was applied to
-the source images. Comparison HTML displays them at native size; full-page
-screenshots include both images and explanatory labels. The desktop combined
-image can be downscaled by the viewer, so its
-[native-scale inspector crop](docs/design/apartment-unified/evidence-20261018/desktop-inspector-focus.jpg)
-was also compared. Tablet and phone controls are legible in their full pairs.
+Light rows now use the short Color temp label, with assumed-range disclosure
+in help and footer copy. Channel summaries, commissioning badges, the Aim icon
+and light-theme temperature palette follow the prototype. Actual range limits
+remain authoritative, so thumb positions can differ from the prototype's
+illustrative 1800-6500 K range.
 
-Empty Chat was captured at all three viewports. Committed
-[desktop](docs/design/apartment-unified/evidence-20261018/desktop-chat-comparison.jpg)
-and [phone](docs/design/apartment-unified/evidence-20261018/phone-chat-comparison.jpg)
-pairs compare its shell, typography, scroll area and composer. The implementation
-uses the existing explicitly labeled authored simulation. Its clear-conversation
-acknowledgement, connection/command-home controls and lack of prototype-only
-suggestion chips are expected content differences. This is not authenticated
-household chat or model-quality acceptance. The existing offline first-run
-connection surface remains available and was inspected separately.
+Radial Off reads zero in the ring and brightness control while preserving each
+stored level/CCT for switch-on. The Off preset and power switch retain their
+existing different state semantics.
 
-## Findings and post-fix checks
+## Visual evidence reviewed locally
 
-No actionable P0/P1/P2 visual findings remain in the reviewed states.
+Private evidence: `.tmp/fixture-design-qa-20261021/`. No screenshots are
+published. Each pair puts the actual source and implementation in one input;
+source PNGs and pairs were reopened for inspection.
 
-- Fonts and typography: both use the supplied Geist/Geist Mono families in the
-  same browser at density 1, with loaded fonts verified before capture. Titles
-  use 17px/560, compact headings 13px/560 and chat prose 13.5px/1.55. Range values
-  no longer overlap labels; the short Color temp label matches the reference.
-- Spacing and layout: the 52px bar, 340px desktop column, 590px tablet half
-  sheet and 422px phone half sheet match. Tablet has equal inspector/camera
-  panes; phone has one pane and its segmented tabs. The final native-scale
-  inspector comparison confirms card padding, tabs, sliders and switches.
-- Colors and tokens: surface, hairline borders, active tabs, warm switch state,
-  temperature tracks and disabled controls follow the supplied tokens. Feed
-  background and thin dark scrollbars now match the reference treatment.
-- Assets and icons: the room remains the current production renderer, with
-  canonical geometry and frame bindings unchanged. It intentionally differs
-  from the prototype's authored room/orbs. UI SVG paths reuse the supplied
-  prototype icons; no generated or placeholder scene replaces the real renderer.
-- Copy and state: actual equipment names/levels and current capabilities are
-  authoritative. The camera card says view closed until the existing component
-  is opened; it does not invent no-session, live-camera or pose state. The
-  command-home selector remains explicit. Missing joints, exact analyzed-frame
-  association, expiry and Approximate room placement semantics are unchanged.
+| Comparison | CSS/pixel viewport | Evidence |
+| --- | --- | --- |
+| Desktop Light, dark and light | 1366 x 768, DPR 1 | `desktop-dark-pair.png`, `desktop-light-pair.png` |
+| Phone Light, dark and light, half sheet | 390 x 844, DPR 1 | `phone-dark-pair.png`, `phone-light-pair.png` |
+| Phone Radial Off, full sheet | 390 x 844, DPR 1 | `phone-radial-off-pair.png` |
+| Tablet Cloud and Mesh, half sheet | 820 x 1180, DPR 1 | `tablet-dark-pair.png`, `tablet-mesh-pair.png` |
+| Focused typography, track, value and Aim row | native crop, no resampling | `light-controls-focus.png` |
 
-The initial phone scroll defect, range overlap and switch binding defects are
-resolved in the post-fix phone and inspector pairs above. The former toolbar
-overflow is resolved with the same phone count-hiding rule as the reference.
-The closed camera card is now one continuous panel with its existing CTA.
+Tablet source and implementation sheet bounds were both y=590/h=590 after
+transitions settled. A loading Photo capture was rejected. The final
+`tablet-photo-pair.png` is a comparison limitation: the ZIP has no packaged
+Victoria Photo scan and refuses it, whereas the implementation loads its
+explicitly authored splats. It is not a same-asset Photo fidelity pass.
 
-Behavioral review also found and fixed two regressions before acceptance:
+Fonts/typography: compact single-line labels and existing Geist hierarchy
+reviewed at native scale. Spacing/layout: rows fit and values align at all
+three widths; smaller residual spacing and preset styling remain below.
+Colors/tokens: native pixel inspection confirmed the existing dark warm-to-cool
+track already worked; the initial downscaled audit impression was incorrect.
+The light gradient now uses the reference palette. Image quality: fixture
+cosmetics change while the existing scan renderer stays intact. Copy/content:
+real capabilities, missing commissioning and preview-only status stay explicit;
+authored names, aims, rooms and data are not copied into the application.
 
-- Moving a focused selector into Setup caused captured blur to cancel a new aim
-  drag. Primary canvas pointer-down now transfers focus to the existing room
-  host before the unchanged native gesture starts. Strict canonical drag/Undo
-  passes after both a focused Setup selector and a focused Spot slider.
-- Switching turn component types reset consumed Undo and reattached private
-  review iframes. One stable presenter now uses the existing TurnHeader,
-  TurnBody and EventContent path in both layouts, changing only presentation
-  classes. Actual React tests preserve consumed Undo, the same review iframe
-  and streaming updates. A conditional-type mutation reproduces the original
-  failure, showing that the regression check detects it.
-- Independent exact-head review found that Radial Off followed by On could
-  leave six On flags at 0% with no modeled output. The new browser regression
-  reproduced that failure before the fix. A presentation-only patch now restores
-  50% only when all six levels are zero, including fixture and room All on.
-  Mixed/nonzero levels and selected-zone behavior remain unchanged. Ten authored
-  cases check actual descriptor levels and modeled diffuser/receiver visibility,
-  preserve zone identity and restore all four fixtures exactly. See the
-  [red/green evidence](docs/design/apartment-unified/evidence-20261018/radial-power-regression.json)
-  and [corrected control capture](docs/design/apartment-unified/evidence-20261018/radial-power-restored.jpg).
+## Functional and renderer verification
 
-## Verification and limits
+- 96 mapped harnesses plus JSX/ESM validation pass (97 plan items). Eight
+  disjoint receipts cover the entire mapped plan, with two concurrent workers,
+  180-second file limits and a 600-second worker limit. The initial drag test
+  expected the old Modeled badge; after updating that assertion and adding
+  commissioning coverage, its entire shard passed. The failed attempt remains
+  recorded; `mapped/attempt1-shard4.*` is not overwritten.
+- 37 radial/orb tests include unchanged protected-equivalence pins for readback,
+  descriptors, sources, picks, beams and receiver buffers. A numerical oracle
+  checks the new core color and combined halo alpha/channel weights.
+- The mounted one-label test also exercises decoration hide/restore and radial
+  Off -> 0% -> exact saved levels/CCT on switch-on, with zero command/session
+  traffic. Existing mixed-zone restoration and aiming coverage remains intact.
+- Native WebGPU and the node renderer's WebGL2 backend pass the complete Cloud
+  proof in installed Edge on the NVIDIA adapter: three frame poses, picks,
+  projections, fit, fixture/aim readbacks, Photo load and capture. Both report
+  no shader-port problems. Evidence: `native-webgpu-edge-fixed.log` and images
+  under `native-webgpu-edge/`. Frame-time samples are wall-clock measurements,
+  not a GPU blend-budget qualification.
+- Native verification exposed a test error: WebGPU's [0,1] clip-depth matrix
+  was compared byte-for-byte with WebGL's [-1,1] matrix. The test now checks
+  every element against the exact Z-row conversion, retaining its tolerance
+  and all interaction/image assertions. The bundled browser's earlier fallback
+  was not counted as native verification.
 
-- Public PR source: 18 touched harnesses plus JSX parsing pass. The authored
-  browser suite passes 28 checkpoints, including 10 radial/output cases, with screenshots disabled and no source
-  overlay. The slash control contract now parses required props instead of
-  rejecting an extra optional presentation prop; negative callback/default
-  mutations remain rejected.
-- Accepted-source composition: 5 tests and 28 browser checkpoints pass; all
-  134 source/helper pins remain unchanged. No physical commands, survey writes,
-  equipment saves or camera/model session starts occurred.
-- Checks include four actual fixture picks, six radial/down/spot independence,
-  modeled batch restore, canonical pointer-up geometry within the unchanged
-  3cm bound, drag/Undo, phone scroll reset, chat/controller/canvas identity,
-  draft continuity, keyboard navigation, Metrics/Escape focus restoration,
-  Previous Home and explicit URL rollback. Existing save/conflict/authority and
-  perception handlers/props are retained byte-for-byte, with relevant data,
-  Travel Mode and source contracts passing. No successful household private
-  save, physical commissioning or live perception qualification is claimed.
-- Browser console checks found no page errors or missing required code.
-  Expected unavailable backend/metadata routes in the disposable preview are
-  distinct from runtime acceptance. Historical shared-checkout failures are
-  recorded in the Phase 1 evidence; this report does not claim the shared dirty
-  checkout or the whole repository has a green baseline.
-- Final manual mode checks rendered Cloud, Photo and Mesh with all four authored
-  fixtures and restored Cloud. The local preview initially blocked the renderer's
-  embedded WASM/texture fetches; its tooling-only policy now permits data/blob
-  bytes while excluding external household endpoints. No renderer code changed.
-- The nine paired visual captures predate the narrow radial power correction;
-  it changes only the three bulk power patches, with no layout/style changes.
-  A new browser capture verifies Off then On visibly reads 50%. Five affected
-  contract harnesses plus JSX parsing pass after the correction. The updated
-  public and accepted-composition browser suites both pass, with zero output
-  commands. The independent Den patch still reconstructs the accepted UI exactly.
-- Hosted run 39112240176 passed all ten radial cases and both canonical drag/Undo
-  cases, then reached the 145s global deadline near its final classic-view check.
-  Repetitive restoration now uses eight native keys per fixture instead of 26,
-  with the same exact 75% and full-fixture assertions. Final URL reload, mount
-  and card phases retain timestamps. The deadline, coverage, renderer and 3cm
-  canonical tolerance are unchanged; the corrected local run passes all 28
-  checkpoints and ten radial cases. Hosted CI must pass on the revised head.
-- Repair released the UI lane. Den was notified; its selector changes are kept
-  outside this PR and reconstruct the accepted composition when applied
-  separately. Shared branch/index are unchanged. No host deployment occurred.
+Mapped receipts identify runtime commit `492019d0`; the only subsequent
+changes are QA/release notes and the two test corrections above. Runtime source
+hashes remain identical across the runs. These are local working-tree receipts,
+not an exact-PR-head CI/integration acceptance or authorization to merge.
 
-Original frame/depth associations and permissions remain authoritative. Scene
-examples, named-aim mapping, the in-room radial composer, new aim proposals,
-body geometry, lighting simulation and night tracking remain the explicitly
-deferred work; their scripted prototype output was not ported as real behavior.
+## Aim and preset follow-up
 
-## Follow-up polish
+Runtime: `ecc1932f` and `338275d7`; command-ladder test correction: `6af04674`.
+The source ZIP and main baseline above remain unchanged. The earlier 97-item
+run describes the fixture/glow batch, not the combined follow-up.
 
-P3 only: Close retains a bordered button rather than the prototype ghost icon,
-and Aim lacks the small target glyph. Existing send/voice and guarded command-home
-controls retain their behavior. These differences do not obstruct the layout or
-the reviewed workflows.
+Aim now follows the prototype's compact hierarchy: one header with icon
+Undo/Redo, current/proposed rows with warm/cyan markers and right-aligned
+distance/tilt, and an inline Tap to aim hint. A valid proposal exposes Set aim
+and Discard. Named aims is a separate section. Existing manual Pan/Tilt remain
+available in a collapsed Fine-tune aim section. Command keeps its existing
+`Modeled · nothing sent` disclosure and transport restrictions.
 
-## Implementation checklist
+The four radial presets and two direction shortcuts use the prototype's
+grouped 26-pixel pills, 15-pixel radius, four-pixel gaps and selected ice border.
+Coarse pointers retain 44-pixel hit areas. Preset behavior is unchanged;
+uncommissioned directional shortcuts remain disabled.
 
-- [x] Match the supplied shell and inspector at desktop, tablet and phone sizes.
-- [x] Compare actual paired captures and readable control details.
-- [x] Preserve renderer, scene bindings, existing feature access and controllers.
-- [x] Fix visual and lifecycle regressions and rerun scoped checks.
-- [x] Include release fragment and immediate URL/menu rollback instructions.
-- [ ] Coordinate a fresh installed baseline before any separate rollout.
+Mounted phone verification found an actual bug: expanding the sheet to full
+retired the drawing lease and also removed the inspector's aim descriptor,
+hiding pending/current rows and Set/Discard. The inspector now uses the
+existing fenced resident model while drawing is paused. Tap to aim reveals
+the room at half height and retains an exact scene/fixture scope through the
+reveal. Hidden documents, changed scenes and changed selections still cancel
+the request. No drawing, producer or command authority is added.
+
+Private comparisons are in `.tmp/aim-preset-design-qa-20261021/`. Final captures
+use `338275d7` runtime bytes; the later test-only commit does not change them.
+The extracted reference's 40 files match the ZIP inventory. Source/app pairs
+were composed without resizing and the exact saved pairs reopened:
+
+| Comparison | Viewport / state | Evidence |
+| --- | --- | --- |
+| Compact Aim, both themes | 1366 x 768 / no proposal | `aim-desktop-dark-focus.png`, `aim-desktop-light-focus.png` |
+| Full phone Aim, both themes | 390 x 844 / coarse pointer | `aim-phone-full-dark-pair.png`, `aim-phone-full-light-pair.png` |
+| Full phone pending proposal | 390 x 844 / coarse pointer / dark | `aim-phone-proposal-dark-pair.png` |
+| Radial presets, both themes | 390 x 844 / coarse pointer / 25% and 50% | `radial-phone-dark-pair.png`, `radial-phone-light-pair.png` |
+| Radial presets, desktop/tablet | 1366 x 768 / Off; 820 x 1180 / 100% | `radial-desktop-dark-pair.png`, `radial-tablet-dark-pair.png` |
+
+Typography: Geist/Geist Mono, row labels and compact measurement hierarchy
+match the reference. Spacing: Aim removes the nested Named aims inset and
+presets stay grouped; phone actions fit with 44-pixel hit areas. Tokens:
+warm current marker, cyan proposal marker, ice primary action and selected
+preset borders were checked in dark and light. Imagery: existing renderer
+and authored fixture data stay intact. Copy: real target names and missing
+commissioning/named-aim capabilities remain truthful instead of copying the
+prototype's invented data. The additional optical-pivot/travel disclosure and
+Fine-tune section remain deliberate functional differences.
+
+The existing coarse-pointer radial ring still stacks at 240 pixels to retain
+44-pixel zone targets, while the ZIP stays compact at 118 pixels. This is a
+remaining phone fidelity gap; this pass does not claim that entire card is
+identical. Phone header/tab and camera differences remain under their tickets.
+
+Focused keyboard, drag and phone regressions pass, including Fine-tune
+disclosure, channel-independent edits, Undo/Redo, and full-sheet Set/Undo/
+Discard/Tap recovery. The unchanged 145-second browser, 180-second file and
+600-second worker limits are retained. CI now splits the complete touched
+plan into twelve disjoint shards because an eight-shard worker exhausted
+its job budget after its tests had passed; matrix, artifacts and receipt
+aggregation all use twelve. Shard-contract tests pass 15/15.
+
+Combined verification status: the final 126-item qualification passes on
+`491a26a9af32e663caf79b0dcdab5024ca45385e`.
+All twelve receipts are green and their disjoint union equals the unsharded
+plan. Two local workers ran concurrently; the longest shard took 158 seconds.
+Runtime hashes and the final mapped plan are sealed in the private acceptance
+receipt. Subsequent changes only update this QA report; exact-PR-head hosted
+CI/integration acceptance remains separate and pending.
+
+Hosted attempt `39527551675` on `4295351e` failed: the workflow contract still
+expected eight shards, and a Photo comparison sampled a missing surface pick.
+The workflow contract now requires twelve and is part of the local mapped
+plan (6/6 focused assertions pass). Photo explicitly awaits collision-proxy
+readiness before comparing all 35 samples, requires a real pick per backend,
+and compares collision/cutaway state alongside the existing matrices/pixels.
+A controlled delayed-collision experiment did not reproduce the exact hosted
+failure; its precise cause is not claimed proven. Hosted requalification is
+required. Assertions and numerical thresholds remain unchanged.
+
+The first follow-up run exposed an M2 test race: its title predicate passed,
+then a later DOM read observed a different loading state. It now captures title
+and progress atomically in the same awaited predicate, retaining the original
+15-second wait and nonzero partial-progress assertions. That interrupted mapped
+attempt is preserved with `ABORTED.md` under `ci-followup-mapped/` and does not
+count as a complete run. The separate `final-qualification/` contains the full
+126-item green run; the earlier 125-item recheck remains historical evidence.
+The first combined run completed 123/125 items successfully; one obsolete
+Aim-pane source assertion is corrected, and one native WebGL lit-reference
+sample was unstable (RGB delta 18, mean 2.55). Three diagnostic reruns passed
+without changing the renderer or its strict image thresholds. That intermittent
+native-test condition remains recorded and is not claimed fixed. The failed
+run remains under `final-mapped/`; the full recheck is separate under
+`final-mapped-recheck/`. An earlier 97-item run was aborted when the phone bug
+was found and does not count as a completed combined verification.
+
+## Remaining acceptance work
+
+- #398: finish the complete every-state/orbit/theme fixture visual matrix on
+  registered scans; this local authored comparison does not qualify installed
+  Echo Park or Victoria assets.
+- #400: finish exact row spacing and the coarse-pointer radial-ring layout
+  against the ZIP; compact Aim hierarchy and radial preset styling are now
+  implemented locally, alongside the prior Light label/track/output fixes.
+- #399: restrained beams and redundant modeled annotations.
+- #401, #403, #404: header/Setup/toolbar, phone label/tab collisions and camera
+  dock fidelity remain outside this correction batch.
+- #405-#409 retain their audit scope, including gated Setup tools, Chat density,
+  the theme decision, capability copy and complete acceptance evidence.
+
+The older October 18 comparison images remain historical evidence under
+`docs/design/apartment-unified/evidence-20261018/`; they do not prove current
+whole-app fidelity. Deployment stays on hold. No tracking-pipeline files or
+other chat are part of this change.

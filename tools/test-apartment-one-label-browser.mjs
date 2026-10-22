@@ -25,7 +25,7 @@ function launchOptions(platform = process.platform) {
   return { headless: true, args, ...(platform === 'linux' ? { channel: 'chromium' } : !installed && platform === 'win32' ? { channel: 'msedge' } : {}) };
 }
 
-test('each Den fixture shows one label: its HTML label, never also its canvas equipment tag', { timeout: DEADLINE_MS + 15000 }, async () => {
+test('Den fixture orbs replace survey decoration, keep one label and report radial Off honestly', { timeout: DEADLINE_MS + 15000 }, async () => {
   const run = path.join(ROOT, '.tmp/apartment-one-label-browser', 'run-' + Date.now());
   fs.mkdirSync(run, { recursive: true });
   const receipt = { schema: 'home-apartment-one-label-1', authored_room: true, real_household_data: false, physical_commands: 0, views: [], errors: [] };
@@ -56,7 +56,8 @@ test('each Den fixture shows one label: its HTML label, never also its canvas eq
       const tags = [...overlay.markersById.values()].map(marker => {
         const tag = marker.group.getObjectByName('equipment-tag');
         let shown = !!tag; for (let node = tag; node && shown; node = node.parent) shown = node.visible;
-        return { id: marker.device.id, kind: marker.device.equipment_record?.kind || null, tag: !!tag, shown };
+        return { id: marker.device.id, kind: marker.device.equipment_record?.kind || null, tag: !!tag, shown,
+          decoration: [marker.core, marker.ghost, marker.glow, marker.stem].map(node => node.visible), pick: marker.pick.uuid };
       });
       return { html, fixtures: fixtures.map(item => ({ fixture_id: item.fixture_id, mount_id: item.mount_id })), tags };
     });
@@ -70,11 +71,45 @@ test('each Den fixture shows one label: its HTML label, never also its canvas eq
         const marker = state.tags.find(row => row.id === fixture.mount_id);
         assert.ok(marker?.tag, label + ': the mount of ' + fixture.fixture_id + ' has an equipment tag to hide');
         assert.equal(marker.shown, false, label + ': no canvas tag doubles the HTML label of ' + fixture.fixture_id);
+        assert.ok(marker.decoration.every(value => value === false), label + ': no survey box/ghost/glow/stem is drawn through the orb');
       }
       const labelled = new Set(state.fixtures.map(item => item.mount_id));
       for (const row of state.tags.filter(item => item.tag && !labelled.has(item.id)))
         assert.equal(row.shown, true, label + ': equipment without an HTML label keeps its tag (' + row.id + ')');
     }
+    const mountRestore = await page.evaluate(() => {
+      const o = window.__APT_ENGINE.overlay, ids = o.virtualFixturesReadback().fixtures.map(f => f.mount_id);
+      const mounts = ids.map(id => o.markersById.get(id));
+      const before = mounts.map(m => m.pick);
+      o.setVirtualFixturesVisible(false);
+      const restored = mounts.every(m => [m.core,m.ghost,m.glow,m.stem].every(n => n.visible));
+      o.setVirtualFixturesVisible(true);
+      return {restored, hidden:mounts.every(m => [m.core,m.ghost,m.glow,m.stem].every(n => !n.visible)),
+        picksUnchanged:mounts.every((m,i) => m.pick === before[i])};
+    });
+    assert.deepEqual(mountRestore, {restored:true,hidden:true,picksUnchanged:true}, 'Setup/layer hiding restores survey decoration and retains every pick');
+    const fixtureId = receipt.views[0].fixtures.at(-1).fixture_id;
+    await page.locator(`[data-apt-fixture-label="${fixtureId}"]`).click();
+    const panel = page.getByRole('complementary', {name:'Fixture lighting inspector',exact:true});
+    const radial = panel.getByRole('region', {name:'Radial channel',exact:true});
+    const power = panel.getByRole('checkbox',{name:'Radial power',exact:true});
+    const descriptor = () => page.evaluate(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id), fixtureId);
+    const retained = (await descriptor()).state.radials;
+    assert.ok(retained.every(zone=>zone.on && zone.brightness>0), 'authored initial radial levels are powered');
+    await power.uncheck();
+    await waitForDirectionalReadiness(page,id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials.every(zone=>!zone.on),fixtureId);
+    assert.deepEqual((await descriptor()).state.radials,retained.map(zone=>({...zone,on:false})), 'Off retains every individual level and CCT');
+    assert.equal(await radial.getByRole('slider',{name:'Radial brightness',exact:true}).inputValue(),'0','brightness reports output zero');
+    assert.equal(await radial.locator('svg text').first().textContent(),'0%','the ring reports output zero');
+    assert.equal(await radial.getByRole('button',{name:'Off',exact:true}).getAttribute('aria-pressed'),'true');
+    await power.check();
+    await waitForDirectionalReadiness(page,id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.radials.every(zone=>zone.on),fixtureId);
+    assert.deepEqual((await descriptor()).state.radials,retained,'On restores the exact saved levels and CCT');
+    assert.equal(await radial.getByRole('slider',{name:'Radial brightness',exact:true}).inputValue(),'75');
+    assert.equal(await radial.locator('svg text').first().textContent(),'75%');
+    assert.equal(await panel.getByRole('slider',{name:'Color temperature',exact:true}).getAttribute('aria-description'),'Color-temperature range is assumed, not measured.');
+    assert.ok((await panel.locator('.apt-ui-sub').textContent()).includes('Radial 75%'),'header summarizes the actual channel output');
+    receipt.radialPower={fixture_id:fixtureId,off_output:0,restored:retained};
     // Pausing retires the owned HTML layer synchronously. The fallback canvas
     // labels must return in that same operation, before any React effect or
     // asynchronous Spark sorting can change the capture's visible state.

@@ -1725,7 +1725,6 @@ function rewriteHaAuthFrame(frame) {
 function pipeWithHaAuth(socket, upstream, head) {
   let pending = head?.length ? Buffer.from(head) : Buffer.alloc(0);
   const fail = () => { socket.destroy(); upstream.destroy(); };
-  socket.once("close", () => upstream.destroy());
   const onData = (chunk) => {
     pending = Buffer.concat([pending, chunk]);
     const frame = parseMaskedFrame(pending);
@@ -1765,7 +1764,9 @@ function proxyUpgrade(req, socket, head, route) {
     return;
   }
 
+  let connected = false;
   const upstream = net.connect(targetUrl.port || 80, targetUrl.hostname, () => {
+    connected = true;
     const headers = proxyHeaders(req.headers, route, suffix, req.method);
     let request = `${req.method} ${targetUrl.pathname}${targetUrl.search} HTTP/${req.httpVersion}\r\n`;
     for (const [key, value] of Object.entries(headers)) {
@@ -1785,9 +1786,11 @@ function proxyUpgrade(req, socket, head, route) {
     if (head?.length) upstream.write(head);
     socket.pipe(upstream);
   });
+  socket.once("close", () => upstream.destroy());
+  upstream.once("close", () => { if (!socket.destroyed) socket.end(); });
   upstream.on("error", () => {
-    socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-    socket.destroy();
+    if (connected || socket.destroyed) socket.destroy();
+    else socket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
   });
 }
 
@@ -1996,6 +1999,9 @@ server.maxRequestsPerSocket = 100;
 server.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS);
 
 server.on("upgrade", (req, socket, head) => {
+  // HTTP relinquishes upgraded sockets. A client reset must retire this
+  // connection, rather than emit an unhandled error and terminate Home.
+  socket.on("error", () => socket.destroy());
   const browserAgentUpgrade = classifyAgentOrigin(req.headers, agentOriginBoundary);
   const nativeAgentUpgrade = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
   if (browserAgentUpgrade.agentHost || nativeAgentUpgrade.agentHost) {

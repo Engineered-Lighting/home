@@ -142,7 +142,7 @@ class MetricInputSession:
             'lab_profile':deepcopy(runner.profiles['b']),
             'sampling_hz':runner.sampling_hz['b'] if runner.sampling_hz is not None else None}
     def after_offer(self,frame):
-        """Retire only an exact lease BOTH arms provably declined to execute.
+        """Retire an exact lease every configured arm declined to execute.
 
         The existing runner's source cadence stays authoritative. Keep its
         next slot free of unrelated JPEGs while the same pump waits for a new
@@ -159,17 +159,19 @@ class MetricInputSession:
         if (expected!={**{key:lease.image_metadata[key] for key in required
                 if key not in ('session_id','media_ids')},'session_id':session['id'],'media_ids':[record['id']]}
                 or runner.generation!=lease.binding['model_generation']):return False
+        from runtime import original_frame,validate_execution_arms
+        try:arms=validate_execution_arms(runner.execution_arms)
+        except ValueError:return False
         ids={arm:sha(encoded([session['id'],runner.generation,arm,
-            frame['capture_epoch'],frame['frame_id']])) for arm in ('a','b')}
+            frame['capture_epoch'],frame['frame_id']])) for arm in arms}
         # Runner -> Store -> owner is the incumbent reconciliation lock order.
         # No source lock spans the durable terminal-disposition lookup.
         with runner.lock:
             with self.owner.store.lock:
                 rows=self.owner.store.db.execute(
-                    'SELECT id,payload,state,result FROM paired_requests WHERE id IN (?,?)',
-                    (ids['a'],ids['b'])).fetchall()
-            if len(rows)!=2:return False
-            from runtime import original_frame
+                    'SELECT id,payload,state,result FROM paired_requests WHERE id IN ('+
+                    ','.join('?' for _ in ids)+')',tuple(ids.values())).fetchall()
+            if len(rows)!=len(ids):return False
             for row in rows:
                 request=json.loads(row['payload']);arm=request.get('arm')
                 if (arm not in ids or row['id']!=ids[arm] or request.get('request_id')!=ids[arm]

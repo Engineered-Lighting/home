@@ -200,8 +200,27 @@ class RunnerTest(unittest.TestCase):
         log = [ev("mode", {"gaming": False}, 0.0, 0, "incumbent"), decision(1.0, "incumbent", 100),
                decision(2.0, "decide", 150), decision(5.0, "decide", 101), ev("mode", {"gaming": True}, 6.0, 0, "incumbent"),
                decision(7.0, "decide", 30), ev("mode", {"gaming": False}, 8.0, 0, "incumbent"), decision(9.0, "decide", 100)]
-        self.assertEqual(run.diff(log), [{"entity_id": LIGHTS[0], "start": 1.0, "end": 5.0},
+        self.assertEqual(run.diff(log), [{"entity_id": LIGHTS[0], "start": 2.0, "end": 5.0},
                                          {"entity_id": LIGHTS[0], "start": 8.0, "end": 9.0}])
+
+    def test_diff_compares_one_instant_once(self):
+        def decision(t, seq, source, brightness):
+            return ev("decision", {"requested_scene": {LIGHTS[0]: {**SCENE, "brightness": brightness}}}, t, seq, source)
+        log = [ev("mode", {"gaming": False}, 0.0, 0, "incumbent"), decision(1.0, 1, "incumbent", 100),
+               decision(1.0, 2, "decide", 100), decision(4.0, 3, "incumbent", 50), decision(4.0, 4, "decide", 50)]
+        self.assertEqual(run.diff(log), [])
+
+    def test_diff_takes_the_bulb_as_the_incumbent_left_it(self):
+        held = {"on": True, "brightness": 80, "kelvin": 2202}
+        log = [ev("light_observed", {"entity_id": LIGHTS[0], **SCENE, "context": "unknown"}, 0.0, 0),
+               ev("mode", {"gaming": False}, 0.0, 1, "incumbent"),
+               ev("decision", {"requested_scene": {LIGHTS[0]: SCENE}}, 0.0, 2, "decide"),
+               ev("correction", {"correction_id": "c1", "entity_id": LIGHTS[0], "after": held, "source": "synthetic"},
+                  3.0, 3),
+               ev("decision", {"requested_scene": {LIGHTS[0]: held}}, 3.0, 4, "decide"),
+               ev("light_observed", {"entity_id": LIGHTS[0], **SCENE, "context": "own"}, 5.0, 5, "plant"),
+               ev("mode", {"gaming": False, "holds": []}, 9.0, 6, "incumbent")]
+        self.assertEqual(run.diff(log), [])
 
 
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")

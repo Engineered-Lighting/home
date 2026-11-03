@@ -32,18 +32,28 @@ def scene_line(requested, transitions):
 
 
 def diff(log, a="incumbent", b="decide"):
-    """Intervals where b's latest requested scene for a bulb does not match a's latest
-    commanded target, leaving out time while the latest mode.gaming was true."""
-    latest, gaming, open_, spans = {a: {}, b: {}}, False, {}, []
-    for event in log:
-        if event["kind"] == "mode":
-            gaming = event["data"]["gaming"]
-        elif event["kind"] == "decision" and event["source"] in latest:
-            latest[event["source"]].update(event["data"]["requested_scene"])
-        else:
+    """Intervals where b's latest requested scene for a bulb does not match the bulb under a, leaving out
+    time while the latest mode.gaming was true.
+
+    The bulb under a is a's latest command for it, or else its latest correction or observed state: a
+    leaves held bulbs, and bulbs already where it wants them, as they are. Plant echoes only restate a's
+    commands, so they are left out. A bulb is compared from b's first request for it, and events at one
+    instant are compared once, after all of them."""
+    under, wanted, gaming, open_, spans = {}, {}, False, {}, []
+    for n, event in enumerate(log):
+        kind, data = event["kind"], event["data"]
+        if kind == "mode":
+            gaming = data["gaming"]
+        elif kind == "decision" and event["source"] in (a, b):
+            (under if event["source"] == a else wanted).update(data["requested_scene"])
+        elif kind == "correction":
+            under[data["entity_id"]] = data["after"]
+        elif kind == "light_observed" and event["source"] != "plant":
+            under[data["entity_id"]] = {key: data[key] for key in ("on", "brightness", "kelvin")}
+        if n + 1 < len(log) and log[n + 1]["t"] == event["t"]:
             continue
-        for bulb in sorted(set(latest[a]) | set(latest[b])):
-            differs = not gaming and not events.scene_matches(latest[a].get(bulb), latest[b].get(bulb))
+        for bulb in sorted(wanted):
+            differs = not gaming and not events.scene_matches(under.get(bulb), wanted.get(bulb))
             if differs and bulb not in open_:
                 open_[bulb] = event["t"]
             elif not differs and bulb in open_:

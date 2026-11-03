@@ -35,8 +35,11 @@ python -B tools/den-core/check.py C:/tmp/den-core/evening-1/log.jsonl
 `run.py` writes `log.jsonl` and prints the inputs per kind, each policy's
 decisions (UTC time, seconds from the first input, trigger, one-line scene)
 and, when both `incumbent` and `decide` ran, the intervals where decide's
-latest requested scene for a bulb does not match den_lighting's latest
-commanded target (game time left out). With `--synthetic` it also writes
+latest requested scene for a bulb does not match the bulb as den_lighting left
+it: its latest command, or else the latest correction or observed state, since
+den_lighting leaves held bulbs, and bulbs already where it wants them, alone.
+Game time is left out, and events at one instant are compared once, after all
+of them. With `--synthetic` it also writes
 `truth.json` (reading-shadow-truth-1) and the generated
 `la-fact-log-1-YYYY-MM-DD.jsonl`, so `tools/reading-shadow/replay.py` can
 score the same fake evening.

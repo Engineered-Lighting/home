@@ -217,6 +217,16 @@ class AdapterTest(Temp):
         with self.assertRaisesRegex(ValueError, "repeats light.den_front_left"):
             sources.recorder_lights([path, self.write("again.jsonl", [light_row(T0 + 1, LIGHTS[0], "off")])])
 
+    def test_bulb_scene_draft_covers_the_four_bulbs(self):
+        text = (HERE / "victoria_den_bulb_scenes.yaml").read_text("ascii")
+        for bulb in LIGHTS:
+            with self.subTest(bulb):
+                self.assertEqual(text.count("'%s'" % bulb), 4)  # the state and den_lighting's three attributes
+                self.assertIn("states('%s')" % bulb, text)
+                for attribute in ("brightness", "color_temp_kelvin", "min_color_temp_kelvin"):
+                    self.assertIn("state_attr('%s', '%s')" % (bulb, attribute), text)
+        self.assertEqual(text.count("unique_id: den_core_scene_"), 4)
+
     def test_from_start_carries_each_bulb_to_the_start(self):
         rows = [(1.0, "light_observed", {"entity_id": LIGHTS[1], "n": 1}), (2.0, "light_observed", {"entity_id": LIGHTS[1], "n": 2}),
                 (3.0, "light_observed", {"entity_id": LIGHTS[0], "n": 3}), (5.0, "light_observed", {"entity_id": LIGHTS[0], "n": 4}),

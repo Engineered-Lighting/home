@@ -1,0 +1,41 @@
+# DRAFT for Victoria HA, not deployed by anything in this repo: the owner copies it by hand.
+# See tools/den-core/README.md, "Recording the bulb levels on Victoria HA".
+#
+# HA's recorder leaves a light's brightness and colour temperature out of its history, so a
+# den-core replay of a past evening knows only on/off. These four template sensors each copy one
+# den bulb's state and the three attributes den_lighting reads (scene_from_state and its warmest
+# limit) into a sensor, whose attributes the recorder keeps. A template sensor takes the context of
+# the bulb change it follows, so each copy can still be told apart as den_lighting's own, a
+# person's, or unknown.
+#
+# Read-only: they render templates and send nothing to any bulb.
+template:
+  - sensor:
+      - name: Den front left scene
+        unique_id: den_core_scene_den_front_left
+        state: "{{ states('light.den_front_left') }}"
+        attributes:
+          brightness: "{{ state_attr('light.den_front_left', 'brightness') }}"
+          color_temp_kelvin: "{{ state_attr('light.den_front_left', 'color_temp_kelvin') }}"
+          min_color_temp_kelvin: "{{ state_attr('light.den_front_left', 'min_color_temp_kelvin') }}"
+      - name: Den front right scene
+        unique_id: den_core_scene_front_right
+        state: "{{ states('light.front_right') }}"
+        attributes:
+          brightness: "{{ state_attr('light.front_right', 'brightness') }}"
+          color_temp_kelvin: "{{ state_attr('light.front_right', 'color_temp_kelvin') }}"
+          min_color_temp_kelvin: "{{ state_attr('light.front_right', 'min_color_temp_kelvin') }}"
+      - name: Den rear left scene
+        unique_id: den_core_scene_den_rear_left
+        state: "{{ states('light.den_rear_left') }}"
+        attributes:
+          brightness: "{{ state_attr('light.den_rear_left', 'brightness') }}"
+          color_temp_kelvin: "{{ state_attr('light.den_rear_left', 'color_temp_kelvin') }}"
+          min_color_temp_kelvin: "{{ state_attr('light.den_rear_left', 'min_color_temp_kelvin') }}"
+      - name: Den rear right scene
+        unique_id: den_core_scene_den_rear_right
+        state: "{{ states('light.den_rear_right') }}"
+        attributes:
+          brightness: "{{ state_attr('light.den_rear_right', 'brightness') }}"
+          color_temp_kelvin: "{{ state_attr('light.den_rear_right', 'color_temp_kelvin') }}"
+          min_color_temp_kelvin: "{{ state_attr('light.den_rear_right', 'min_color_temp_kelvin') }}"

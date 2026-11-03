@@ -83,6 +83,7 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 | `runner.py` | `run()`: the deterministic heap runner; `load_policies()` |
 | `incumbent.py` | den_lighting's `policy.py`, loaded by path and unchanged, as a policy |
 | `check.py` | the byte-identical replay check |
+| `victoria_den_bulb_scenes.yaml` | a draft HA package for Victoria that records each bulb's level (below); nothing deploys it |
 | `run.py` | the CLI and its summary/diff |
 | `need.py`, `decide.py` | written on their own branches against the interface below; the runner loads them by name |
 
@@ -288,9 +289,8 @@ How the export is used:
   `color_temp_kelvin`, the colour mode and `min_color_temp_kelvin` out of the
   recorder. So the replayed incumbent learns its last-level preferences with
   no level. Its ONs go out with no level, and a game uses den_lighting's
-  default warmest colour temperatures. Comparing levels would need a recorded
-  copy of each bulb's level (a template sensor, for example), which is an HA
-  change on Victoria.
+  default warmest colour temperatures. Recording the levels from now on
+  needs the sensors in "Recording the bulb levels on Victoria HA" below.
 - `context` follows den_lighting's own first test:
   - `own` when the state's context or its parent is the `context_id` of one of
     den_lighting's commands in the `--live-commands` export;
@@ -310,6 +310,85 @@ How the export is used:
   bulb a person changed and leaves it alone. The replay only observes the
   change, so it may set the bulb back where the live one did not. The
   `person` and `unknown` rows show where that can happen.
+
+### Recording the bulb levels on Victoria HA (draft, owner's change)
+
+HA's recorder drops a light's levels, but it keeps a sensor's attributes.
+`victoria_den_bulb_scenes.yaml` defines four template sensors. Each copies
+one bulb's state, plus the three attributes den_lighting reads
+(`brightness`, `color_temp_kelvin`, `min_color_temp_kelvin`), into:
+
+- `sensor.den_front_left_scene`
+- `sensor.den_front_right_scene`
+- `sensor.den_rear_left_scene`
+- `sensor.den_rear_right_scene`
+
+A template sensor takes the context of the bulb change it follows, so each
+copy keeps its own, person or unknown label. The sensors only render
+templates. They send nothing to a bulb and change nothing den_lighting does.
+Past evenings stay on/off only: the sensors record from the moment they
+exist.
+
+**den-core does not read them yet.** Once a few evenings are recorded,
+`recorder_lights` can take the levels from these rows. That is the next step.
+
+To install it, put the file into Victoria HA's packages folder. If Victoria's
+`configuration.yaml` has no `packages:` line yet, add this under its
+`homeassistant:` key and restart HA once:
+`packages: !include_dir_named packages`. Without packages, paste the file's
+`- sensor:` item under an existing `template:` key instead, or the whole file
+if there is no `template:` key. Keep the file
+name: HA uses it as the package name, which must be lowercase with
+underscores. From the worktree root, in PowerShell 5.1:
+
+```powershell
+Get-Content tools\den-core\victoria_den_bulb_scenes.yaml | ssh HA "mkdir -p /config/packages && cat > /config/packages/victoria_den_bulb_scenes.yaml"
+```
+
+```powershell
+ssh HA "ha core check"
+```
+
+Then load it: Developer tools, YAML, "Template entities" (or restart HA if
+you just added `packages:`). In Developer tools, States, each
+`sensor.den_*_scene` should show the bulb's state and its `brightness` and
+`color_temp_kelvin`. If HA named one with a `_2` suffix, another entity
+already has that name: rename one of them before relying on it.
+
+To see that the recorder keeps the levels, after a bulb has changed once:
+
+```powershell
+$sql = @'
+SELECT m.entity_id, s.state, a.shared_attrs
+FROM states s
+JOIN states_meta m ON m.metadata_id = s.metadata_id
+LEFT JOIN state_attributes a ON a.attributes_id = s.attributes_id
+WHERE m.entity_id LIKE 'sensor.den_%_scene'
+ORDER BY s.last_updated_ts DESC LIMIT 8;
+'@
+```
+
+```powershell
+$sql | ssh HA "sqlite3 -readonly /config/home-assistant_v2.db"
+```
+
+Each row's `shared_attrs` should hold `brightness` and `color_temp_kelvin`
+(both `null` while the bulb is off).
+
+What they cost:
+
+- A few small recorder rows per bulb change. They make no long-term
+  statistics, because they have no unit and no state class.
+- Text sensors show in the logbook. To hide them, add the four entity ids
+  under `logbook:` `exclude:` `entities:` in `configuration.yaml`.
+
+This was tested in a Home Assistant 2026.2.3 core with the real recorder:
+- the entity ids came out as listed;
+- the levels were integers, and `null` when off;
+- each copy carried its bulb change's context and was written about 1 ms
+  after the bulb's own row;
+- the bulb-state and command export queries, and the check above, read that
+  database correctly.
 
 ## Choices the interface left open
 

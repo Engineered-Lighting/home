@@ -1,0 +1,12 @@
+resume_automatic:
+  name: Resume automatic Den lighting
+  description: Clear manual holds for selected Den fixtures, or all four when omitted.
+  fields:
+    entity_id:
+      name: Fixtures
+      description: Omit to resume the whole Den.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light

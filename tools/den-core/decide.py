@@ -29,7 +29,7 @@ Occupancy
 
 How it plugs in
 - After the spine and need merge:
-    python -B tools/den-core/run.py --out ABSDIR --synthetic evening --touch --policies need,incumbent,decide
+    python -B tools/den-core/run.py --out ABSDIR --synthetic evening --touch --policies need incumbent decide
   Expected: decide differs from den_lighting only from shortly after each reading block
   starts until up to about 35 s after it ends, and never during a game.
 """

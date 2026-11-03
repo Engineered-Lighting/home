@@ -22,7 +22,7 @@ reading-shadow-v0 scores is the timing this module emits. A sample's capture
 time is its observed_at; the clock is the event's t (the line's available_at).
 
 How it plugs in: a den-core policy, make_policy(config) and handle(event).
-After the spine merges, run run.py --policies need,incumbent,decide.
+After the spine merges, run run.py --policies need incumbent decide.
 Standard library only; it reads no clock, randomness, file, environment or
 network, and imports no other den-core module.
 """

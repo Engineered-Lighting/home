@@ -10,7 +10,7 @@ Fake data tonight, copied real files later and a live writer eventually all
 enter only as den-event-1 lines, so nothing downstream changes when the source
 does.
 
-- Standard-library Python 3.12, run with `python -B`. Offline only: no
+- Standard-library Python 3.12, run with `python -B` (`python3 -B` on Linux). Offline only: no
   network, Home Assistant, MQTT, camera, Jetson or LA host, and no light
   commands of any kind. "Decisions" here are log lines.
 - Nothing is ever written inside a git checkout. `events.write` and `run.py
@@ -22,10 +22,11 @@ does.
 
 ## Run and check
 
-From the worktree root, with an absolute output folder outside every checkout:
+From the worktree root, with an absolute output folder outside every checkout
+(`C:/tmp/...` on Windows, `/tmp/...` on Linux):
 
 ```bash
-python -B tools/den-core/run.py --synthetic evening --touch --game --policies incumbent --out C:/tmp/den-core/evening-1
+python -B tools/den-core/run.py --synthetic evening --touch --game --policies need incumbent decide --out C:/tmp/den-core/evening-1
 ```
 
 ```bash

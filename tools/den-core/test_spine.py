@@ -4,12 +4,14 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 Incumbent tests skip only when den_lighting's policy.py is not found above this
 folder; the real poll-log test skips only when those local files are absent.
 """
+import io
 import json
 import math
 import shutil
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -33,6 +35,19 @@ POLLS = ("den-desk-observe-20261028T173532Z.jsonl", "den-desk-observe-20261028T1
 REAL_POLLS = next(([folder / ".tmp" / name for name in POLLS] for folder in HERE.parents
                    if all((folder / ".tmp" / name).is_file() for name in POLLS)), None)
 SCENE = {"on": True, "brightness": 100, "kelvin": 3000}
+OFF = {"on": False, "brightness": None, "kelvin": None}
+DEN = "binary_sensor.den_oak_person_occupancy"
+
+
+def edge(t, a, b, entity=DEN):
+    """One invented journal line in the occupancy reader's format (journalctl -o cat)."""
+    return "occupancy edge: entity=%s from=%s to=%s observed_at=%.3f" % (entity, a, b, t)
+
+
+def command(t, entity_id, target, context_id, revision=7):
+    """One invented recorder export row, as the README's sqlite3 query prints it."""
+    return json.dumps({"time_fired_ts": t, "event_data": {"entity_id": entity_id, "revision": revision,
+                                                          "target": target, "context_id": context_id}})
 
 
 def ev(kind, data, t=1.0, seq=0, source="synthetic"):
@@ -138,6 +153,36 @@ class AdapterTest(Temp):
             (30, "occupancy", None, "on"), (34, "light_observed", LIGHTS[0], False), (36, "occupancy", None, "off"),
             (38, "light_observed", LIGHTS[0], True)])
 
+    def test_occupancy_journal_keeps_the_den(self):
+        first = self.write("a.txt", ["some other warning", edge(T0 + 30, "on", "off"), edge(T0, "unknown", "on"),
+                                     edge(T0 + 10, "unknown", "on", "binary_sensor.elsewhere_person_occupancy")])
+        second = self.write("b.txt", [edge(T0 + 30, "on", "off"), edge(T0 + 40, "off", "unavailable"),
+                                      "occupancy edge: entity=%s from=off to=on" % DEN])
+        items = sources.occupancy_journal([first, second])
+        self.assertEqual(items, [(T0, "occupancy", {"value": "on", "via": "jetson_journal"}),
+                                 (T0 + 30, "occupancy", {"value": "off", "via": "jetson_journal"}),
+                                 (T0 + 40, "occupancy", {"value": "unknown", "via": "jetson_journal"})])
+
+    def test_occupancy_journal_reads_a_powershell_redirect(self):
+        lines = [edge(T0, "unknown", "on"), edge(T0 + 30, "on", "off")]
+        utf16 = self.tmp / "ps.txt"
+        utf16.write_bytes("\r\n".join(lines).encode("utf-16"))  # what PowerShell 5.1's > writes
+        self.assertEqual(sources.occupancy_journal([utf16]), sources.occupancy_journal([self.write("a.txt", lines)]))
+
+    def test_recorder_commands(self):
+        path = self.write("commands.jsonl", [command(T0 + 5, LIGHTS[1], OFF, "ctx-2"), "",
+                                             command(T0 + 1, LIGHTS[0], SCENE, "ctx-1", revision=6)])
+        self.assertEqual(sources.recorder_commands([path]), [
+            (T0 + 1, "live_command", {"entity_id": LIGHTS[0], "revision": 6, "target": SCENE, "context_id": "ctx-1"}),
+            (T0 + 5, "live_command", {"entity_id": LIGHTS[1], "revision": 7, "target": OFF, "context_id": "ctx-2"})])
+        for name, line in (("bad-entity", command(T0, "light.elsewhere", OFF, "c")),
+                           ("bad-target", command(T0, LIGHTS[0], {"on": "yes", "brightness": None, "kelvin": None}, "c")),
+                           ("bad-time", command(None, LIGHTS[0], OFF, "c")), ("not-json", "{")):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "line 2 is not a den_lighting_command"):
+                sources.recorder_commands([self.write(name + ".jsonl", [command(T0, LIGHTS[0], OFF, "ok"), line])])
+        with self.assertRaisesRegex(ValueError, "repeats context ctx-1"):
+            sources.recorder_commands([path, self.write("again.jsonl", [command(T0 + 9, LIGHTS[0], OFF, "ctx-1")])])
+
     @unittest.skipUnless(REAL_POLLS and HAVE_POLICY, "real den-desk-observe files or policy.py absent")
     def test_real_poll_logs_replay(self):
         for path in REAL_POLLS:
@@ -193,6 +238,41 @@ class RunnerTest(unittest.TestCase):
     def test_missing_policy_module_is_named(self):
         with self.assertRaisesRegex(ValueError, "no_such_policy.py is not in tools/den-core yet"):
             runner.load_policies(["no_such_policy"])
+
+    def test_reference_kind_is_logged_never_handed_to_a_policy(self):
+        live = {"entity_id": LIGHTS[2], "revision": 3, "target": SCENE, "context_id": "ctx-1"}
+        with_live = self.INPUTS + [(-5.0, "live_command", live, "recorder_commands"),
+                                   (7.0, "live_command", {**live, "context_id": "ctx-2"}, "recorder_commands")]
+        plain_toys, live_toys = self.toys(), self.toys()
+        _, plain = runner.run(self.INPUTS, plain_toys)
+        _, logged = runner.run(with_live, live_toys)
+        self.assertEqual([(e["t"], e["source"]) for e in logged if e["kind"] == "live_command"],
+                         [(-5.0, "recorder_commands"), (7.0, "recorder_commands")])
+
+        def rest(log):
+            return [(e["t"], e["kind"], e["source"], e["data"]) for e in log if e["kind"] != "live_command"]
+        self.assertEqual(rest(logged), rest(plain))  # same ticks, same outputs
+        self.assertEqual([toy.seen for toy in live_toys], [toy.seen for toy in plain_toys])
+        with self.assertRaisesRegex(ValueError, "no inputs"):
+            runner.run(with_live[-2:], self.toys())
+
+    def test_live_diff(self):
+        lit, dim = {"on": True, "brightness": 180, "kelvin": 2700}, {"on": True, "brightness": 100, "kelvin": 2700}
+
+        def ours(t, scenes):
+            return ev("decision", {"requested_scene": scenes}, t, 0, "incumbent")
+
+        def live(t, bulb, target):
+            return ev("live_command", {"entity_id": bulb, "revision": 1, "target": target, "context_id": "c%g" % t},
+                      t, 0, "recorder_commands")
+        log = [ours(1.0, {LIGHTS[0]: OFF}), live(1.5, LIGHTS[0], OFF),            # live lags by 0.5 s
+               live(3.0, LIGHTS[1], lit), ours(3.0, {LIGHTS[1]: lit}),            # one instant: no span
+               ours(6.0, {LIGHTS[0]: {"on": True, "brightness": None, "kelvin": None}}),
+               live(6.0, LIGHTS[0], lit),                                          # a replayed null level differs
+               live(8.0, LIGHTS[1], dim), ev("tick", {}, 9.0, 0, "runner")]
+        self.assertEqual(run.live_diff(log), [{"entity_id": LIGHTS[0], "start": 1.0, "end": 1.5},
+                                              {"entity_id": LIGHTS[0], "start": 6.0, "end": 9.0},
+                                              {"entity_id": LIGHTS[1], "start": 8.0, "end": 9.0}])
 
     def test_diff_leaves_out_gaming(self):
         def decision(t, source, brightness):
@@ -301,12 +381,75 @@ class CheckTest(Temp):
 
 
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class RealFilesRunTest(Temp):
+    """A facts + journal replay, compared with live commands, through run.py and check.py (invented files)."""
+
+    def setUp(self):
+        super().setUp()
+        self.facts = self.write("la-fact-log-1-2026-11-04.jsonl", FactLogTest.LINES)
+        self.journal = self.write("edges.txt", [edge(T0 - 5, "unknown", "on"), edge(T0 + 20, "on", "off"),
+                                                edge(T0 + 200, "off", "on")])
+
+    def main(self, *argv):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            run.main(list(argv))
+        return out.getvalue()
+
+    def decisions(self, name):
+        _, log = events.read(self.tmp / name / "log.jsonl")
+        return [(e["t"], e["data"]["requested_scene"]) for e in of(log, "decision")], log
+
+    def test_journal_live_commands_and_check(self):
+        self.main("--facts", str(self.facts), "--journal", str(self.journal), "--policies", "need", "incumbent", "decide",
+                  "--out", str(self.tmp / "plain"))
+        plain, log = self.decisions("plain")
+        self.assertEqual([(e["t"] - T0, e["data"]) for e in log if e["kind"] == "occupancy"],
+                         [(dt, {"value": v, "via": "jetson_journal"}) for dt, v in ((-5, "on"), (20, "off"), (200, "on"))])
+        self.assertTrue(all(e["source"] == "occupancy_journal" for e in log if e["kind"] == "occupancy"))
+        # Nothing seen but the plant's own echoes: vacancy OFF 120 s after off, then last-level ON with no level.
+        self.assertEqual([(t - T0, scenes) for t, scenes in plain],
+                         [(141, {e: OFF for e in LIGHTS}),
+                          (200, {e: {"on": True, "brightness": None, "kelvin": None} for e in LIGHTS})])
+
+        # The live integration sent the same commands 0.5 s later, plus one before the replayed span.
+        rows = [command(T0 - 3600, LIGHTS[0], OFF, "ctx-early")]
+        rows += [command(t + 0.5, e, scene, "ctx-%d-%s" % (t, e)) for t, scenes in plain for e, scene in scenes.items()]
+        commands = self.write("den-lighting-commands.jsonl", rows)
+        text = self.main("--facts", str(self.facts), "--journal", str(self.journal), "--live-commands", str(commands),
+                         "--policies", "need", "incumbent", "decide", "--out", str(self.tmp / "live"))
+        self.assertIn("recorder_commands: kept 8 of 9 live command(s) inside the replayed span", text)
+        self.assertIn("diff live den_lighting vs incumbent replay: 8 interval(s); commands live/replayed: "
+                      "front_left 2/2, front_right 2/2, rear_left 2/2, rear_right 2/2", text)
+        live, log = self.decisions("live")
+        self.assertEqual(live, plain)
+        self.assertEqual(sorted({round(s["end"] - s["start"], 3) for s in run.live_diff(log)}), [0.5])
+        header, _ = events.read(self.tmp / "live" / "log.jsonl")
+        self.assertEqual([s["name"] for s in header["sources"]],
+                         [self.facts.name, self.journal.name, commands.name])
+        self.assertEqual(header["sources"][2]["sha256"], events.sha256_file(commands))
+        self.assertEqual(check.check(self.tmp / "live" / "log.jsonl")["ok"], True)
+
+    def test_refusals(self):
+        commands = self.write("c.jsonl", [command(T0, LIGHTS[0], OFF, "c")])
+        for argv in (["--facts", str(self.facts), "--journal", str(self.journal), "--assume-occupied"],
+                     ["--facts", str(self.facts), "--live-commands", str(commands), "--policies", "need"],
+                     ["--live-commands", str(commands)]):
+            with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.main(*argv, "--out", str(self.tmp / "refused"))
+        self.assertFalse((self.tmp / "refused").exists())
+
+
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
 class PurityTest(Temp):
     def test_no_clock_no_network(self):
         sources.lab()
         forbidden = mock.Mock(side_effect=AssertionError("clock or network used"))
+        journal = self.write("edges.txt", [edge(T0, "unknown", "on")])
+        commands = self.write("commands.jsonl", [command(T0, LIGHTS[0], OFF, "c")])
         with mock.patch("socket.socket", forbidden), mock.patch("time.time", forbidden), \
                 mock.patch("time.monotonic", forbidden):
+            self.assertEqual(len(sources.occupancy_journal([journal]) + sources.recorder_commands([commands])), 2)
             synthetic.evening()
             events.write(self.tmp / "log.jsonl", *evening_log(touch=True, game=True))
             self.assertTrue(check.check(self.tmp / "log.jsonl")["ok"])

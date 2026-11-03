@@ -1,8 +1,8 @@
 """Run the den-core policies over copied files or a synthetic evening; write one log and summarise it.
 
 python -B tools/den-core/run.py --out ABSDIR [--synthetic evening [--seed N] [--touch] [--game] [--clean]]
-    [--facts PATH ...] [--poll FILE ...] [--mqtt FILE --mqtt-t0 EPOCH] [--assume-occupied]
-    [--policies incumbent] [--no-plant]
+    [--facts PATH ...] [--poll FILE ...] [--mqtt FILE --mqtt-t0 EPOCH] [--journal FILE ... | --assume-occupied]
+    [--live-commands FILE ...] [--policies incumbent] [--no-plant]
 """
 import argparse
 import json
@@ -31,6 +31,24 @@ def scene_line(requested, transitions):
     return " ".join(parts)
 
 
+def _intervals(log, step, compared):
+    """Spans per bulb while compared() says it differs. step(event) folds in each event; bulbs are
+    compared once per instant, after all of its events, and a span still open ends at the last event."""
+    open_, spans = {}, []
+    for n, event in enumerate(log):
+        step(event)
+        if n + 1 < len(log) and log[n + 1]["t"] == event["t"]:
+            continue
+        for bulb, differs in compared():
+            if differs and bulb not in open_:
+                open_[bulb] = event["t"]
+            elif not differs and bulb in open_:
+                spans.append({"entity_id": bulb, "start": open_.pop(bulb), "end": event["t"]})
+    end = log[-1]["t"] if log else 0.0
+    spans += [{"entity_id": bulb, "start": start, "end": end} for bulb, start in open_.items()]
+    return sorted(spans, key=lambda s: (s["start"], s["entity_id"]))
+
+
 def diff(log, a="incumbent", b="decide"):
     """Intervals where b's latest requested scene for a bulb does not match the bulb under a, leaving out
     time while the latest mode.gaming was true.
@@ -39,28 +57,46 @@ def diff(log, a="incumbent", b="decide"):
     leaves held bulbs, and bulbs already where it wants them, as they are. Plant echoes only restate a's
     commands, so they are left out. A bulb is compared from b's first request for it, and events at one
     instant are compared once, after all of them."""
-    under, wanted, gaming, open_, spans = {}, {}, False, {}, []
-    for n, event in enumerate(log):
+    under, wanted, mode = {}, {}, {"gaming": False}
+
+    def step(event):
         kind, data = event["kind"], event["data"]
         if kind == "mode":
-            gaming = data["gaming"]
+            mode["gaming"] = data["gaming"]
         elif kind == "decision" and event["source"] in (a, b):
             (under if event["source"] == a else wanted).update(data["requested_scene"])
         elif kind == "correction":
             under[data["entity_id"]] = data["after"]
         elif kind == "light_observed" and event["source"] != "plant":
             under[data["entity_id"]] = {key: data[key] for key in ("on", "brightness", "kelvin")}
-        if n + 1 < len(log) and log[n + 1]["t"] == event["t"]:
-            continue
-        for bulb in sorted(wanted):
-            differs = not gaming and not events.scene_matches(under.get(bulb), wanted.get(bulb))
-            if differs and bulb not in open_:
-                open_[bulb] = event["t"]
-            elif not differs and bulb in open_:
-                spans.append({"entity_id": bulb, "start": open_.pop(bulb), "end": event["t"]})
-    end = log[-1]["t"] if log else 0.0
-    spans += [{"entity_id": bulb, "start": start, "end": end} for bulb, start in open_.items()]
-    return sorted(spans, key=lambda s: (s["start"], s["entity_id"]))
+
+    return _intervals(log, step, lambda: [(bulb, not mode["gaming"] and
+                                           not events.scene_matches(under.get(bulb), wanted.get(bulb)))
+                                          for bulb in sorted(wanted)])
+
+
+def live_diff(log, replayed="incumbent"):
+    """Intervals where the replayed incumbent's latest command for a bulb does not match the latest
+    command the live den_lighting sent for it (live_command lines).
+
+    The live command is the target, so a replayed null level does not match a live level. A bulb is
+    compared from the first command for it on either side, with a side that has none yet differing.
+    Gaming is not left out: both sides are den_lighting. Events at one instant are compared once."""
+    live, ours = {}, {}
+
+    def step(event):
+        if event["kind"] == "live_command":
+            live[event["data"]["entity_id"]] = event["data"]["target"]
+        elif event["kind"] == "decision" and event["source"] == replayed:
+            ours.update(event["data"]["requested_scene"])
+
+    return _intervals(log, step, lambda: [(bulb, not events.scene_matches(live.get(bulb), ours.get(bulb)))
+                                          for bulb in sorted(set(live) | set(ours))])
+
+
+def _span_lines(spans, first):
+    return ["  %-11s %+8.1f s .. %+8.1f s" % (short(s["entity_id"]), s["start"] - first, s["end"] - first)
+            for s in spans]
 
 
 def summary(header, log):
@@ -79,8 +115,15 @@ def summary(header, log):
     if {"incumbent", "decide"} <= {p["id"] for p in header["policies"]}:
         spans = diff(log)
         lines.append("diff incumbent vs decide (gaming left out): %d interval(s)" % len(spans))
-        lines += ["  %-11s %+8.1f s .. %+8.1f s" % (short(s["entity_id"]), s["start"] - first, s["end"] - first)
-                  for s in spans]
+        lines += _span_lines(spans, first)
+    live = Counter(e["data"]["entity_id"] for e in log if e["kind"] == "live_command")
+    if live and "incumbent" in {p["id"] for p in header["policies"]}:
+        ours = Counter(b for e in log if e["kind"] == "decision" and e["source"] == "incumbent"
+                       for b in e["data"]["requested_scene"])
+        spans = live_diff(log)
+        lines.append("diff live den_lighting vs incumbent replay: %d interval(s); commands live/replayed: %s"
+                     % (len(spans), ", ".join("%s %d/%d" % (short(b), live[b], ours[b]) for b in events.LIGHTS)))
+        lines += _span_lines(spans, first)
     if header["synthetic"]:
         lines.append("synthetic: plumbing only, never a gate")
     return "\n".join(lines)
@@ -103,7 +146,11 @@ def main(argv=None):
     parser.add_argument("--poll", nargs="+", default=[])
     parser.add_argument("--mqtt")
     parser.add_argument("--mqtt-t0", type=float, default=0.0)
+    parser.add_argument("--journal", nargs="+", default=[],
+                        help="the Jetson occupancy reader's journal lines (occupancy edge: ...)")
     parser.add_argument("--assume-occupied", action="store_true")
+    parser.add_argument("--live-commands", nargs="+", default=[],
+                        help="den_lighting_command events exported from the HA recorder: a reference, not an input")
     parser.add_argument("--policies", nargs="+", default=["incumbent"])
     parser.add_argument("--no-plant", action="store_true")
     args = parser.parse_args(argv)
@@ -112,6 +159,10 @@ def main(argv=None):
         parser.error("--out must be an absolute folder outside every git checkout")
     if (out / "log.jsonl").exists():
         parser.error("%s already holds a log" % out)
+    if args.journal and args.assume_occupied:
+        parser.error("--journal gives real occupancy; it replaces --assume-occupied, so give one or the other")
+    if args.live_commands and "incumbent" not in args.policies:
+        parser.error("--live-commands is compared with the incumbent: add incumbent to --policies")
 
     inputs, described, truth, fact_lines = [], [], None, []
     if args.synthetic:
@@ -136,8 +187,21 @@ def main(argv=None):
         path = Path(args.mqtt)
         inputs += runner.tagged(sources.mqtt_timeline(path, args.mqtt_t0), "mqtt_timeline")
         described.append({"name": path.name, "sha256": events.sha256_file(path), "params": {"t0": args.mqtt_t0}})
+    if args.journal:
+        paths = list(map(Path, args.journal))
+        inputs += runner.tagged(sources.occupancy_journal(paths), "occupancy_journal")
+        described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in paths]
     if not inputs:
-        parser.error("no inputs: give --synthetic, --facts, --poll or --mqtt")
+        parser.error("no inputs: give --synthetic, --facts, --poll, --mqtt or --journal")
+    if args.live_commands:
+        # A reference only: keep the commands inside the span the inputs replay (runner.run's ticks).
+        paths = list(map(Path, args.live_commands))
+        items = sources.recorder_commands(paths)
+        start, stop = min(t for t, *_ in inputs), max(t for t, *_ in inputs) + runner.TAIL_S
+        kept = [item for item in items if start <= item[0] <= stop]
+        inputs += runner.tagged(kept, "recorder_commands")
+        described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in paths]
+        print("recorder_commands: kept %d of %d live command(s) inside the replayed span" % (len(kept), len(items)))
 
     header, log = runner.run(inputs, runner.load_policies(args.policies), plant=not args.no_plant,
                              synthetic=bool(args.synthetic), assume_occupied=args.assume_occupied,

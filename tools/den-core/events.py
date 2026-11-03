@@ -11,7 +11,8 @@ SCHEMA = "den-event-1"
 LOG_SCHEMA = "den-replay-log-1"
 ENVELOPE = frozenset({"schema", "t", "seq", "kind", "source", "data"})
 LIGHTS = ("light.den_front_left", "light.front_right", "light.den_rear_left", "light.den_rear_right")
-ADAPTER_SOURCES = frozenset({"fact_log", "poll_log", "mqtt_timeline", "synthetic"})
+ADAPTER_SOURCES = frozenset({"fact_log", "poll_log", "mqtt_timeline", "occupancy_journal", "recorder_commands",
+                             "synthetic"})
 # la-fact-log-1's 12 keys (la_fact_log.KEYS); sources.fact_log checks the full format.
 FACT_KEYS = ("available_at", "engine_epoch", "latency_s", "observation", "observed_at", "outcome", "prompt_version",
              "request_id", "schema", "sent_at", "session_id", "source_id")
@@ -22,8 +23,12 @@ REQUIRED = {
     "correction": ("correction_id", "entity_id", "after", "source"),
     "gaming_sample": ("status", "sampled_at"),
     "tick": (),
+    "live_command": ("entity_id", "revision", "target", "context_id"),
 }
 INPUT_KINDS = tuple(REQUIRED)
+# Logged with the inputs but never handed to a policy, and they never set a run's span or ticks
+# (runner.run): live_command is what the live den_lighting sent, a reference to compare with.
+REFERENCE_KINDS = frozenset({"live_command"})
 DERIVED_KINDS = ("person_state", "mode", "decision")
 KINDS = INPUT_KINDS + DERIVED_KINDS
 MEDIA_KEYS = frozenset({"image", "images", "jpeg", "jpg", "png", "b64", "base64", "pixels", "bytes"})

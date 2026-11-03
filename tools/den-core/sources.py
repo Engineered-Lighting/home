@@ -5,11 +5,18 @@ kind of events.py, its name in events.ADAPTER_SOURCES, and one flag in run.py.
 Nothing downstream changes.
 """
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from events import LIGHTS
+
 LAB = Path(__file__).resolve().parents[2] / "stack" / "services" / "perception-lab"
+LA_LATENCY = Path(__file__).resolve().parents[1] / "la-latency"
+# The den's Frigate person-occupancy entity: what the Jetson's occupancy reader polls and den_lighting reads.
+DEN_OCCUPANCY = "binary_sensor.den_oak_person_occupancy"
+COMMAND_KEYS = frozenset({"entity_id", "revision", "target", "context_id"})
 
 
 def lab():
@@ -19,6 +26,22 @@ def lab():
     import la_fact_log
     import qwen_scene
     return la_fact_log, qwen_scene
+
+
+def flaps():
+    """tools/la-latency/occupancy_flaps.py, whose EDGE and parse() read the reader's journal edge lines."""
+    if str(LA_LATENCY) not in sys.path:
+        sys.path.append(str(LA_LATENCY))
+    import occupancy_flaps
+    return occupancy_flaps
+
+
+def _text(path):
+    """A copied text file: UTF-16 when it starts with a byte-order mark (PowerShell 5.1's `>`), else UTF-8."""
+    raw = Path(path).read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    return raw.decode("utf-8-sig", errors="replace")
 
 
 def fact_time(available_at):
@@ -126,3 +149,51 @@ def mqtt_timeline(path, t0=0.0):
             items.append((float(t0 + step["at"]), "occupancy", {"value": new, "via": "mqtt"}))
             value = new
     return items
+
+
+def occupancy_journal(paths):
+    """The den's occupancy edges from the Jetson occupancy reader's journal lines, at their observed_at.
+
+    Lines are matched by occupancy_flaps.EDGE (other lines are ignored). Only DEN_OCCUPANCY is kept. to=on
+    and to=off map to on and off, anything else to unknown; from= is not used. An edge repeated across
+    copies counts once.
+    """
+    edges = set()
+    for path in paths:
+        edges.update(flaps().parse(_text(path).splitlines()))
+    return [(t, "occupancy", {"value": to if to in ("on", "off") else "unknown", "via": "jetson_journal"})
+            for t, _, to, entity in sorted(edges) if entity == DEN_OCCUPANCY]
+
+
+def _scene(value):
+    b, k = value.get("brightness"), value.get("kelvin")
+    return (set(value) == {"on", "brightness", "kelvin"} and type(value["on"]) is bool
+            and (b is None or type(b) is int and 0 <= b <= 255) and (k is None or type(k) is int and k > 0))
+
+
+def recorder_commands(paths):
+    """den_lighting_command events from an HA recorder export (README): one JSON object per line,
+    {time_fired_ts, event_data}, as live_command items at time_fired_ts, in time order.
+
+    They are a reference to compare with, never a policy input (events.REFERENCE_KINDS). A bad line
+    or a context_id seen twice raises ValueError; blank lines are skipped.
+    """
+    found, seen = [], set()
+    for path in paths:
+        for number, raw in enumerate(_text(path).splitlines(), 1):
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+                t, data = row["time_fired_ts"], row["event_data"]
+                if (type(t) not in (int, float) or not math.isfinite(t) or set(data) != COMMAND_KEYS
+                        or data["entity_id"] not in LIGHTS or type(data["revision"]) is not int
+                        or not isinstance(data["context_id"], str) or not _scene(data["target"])):
+                    raise ValueError
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise ValueError("%s line %d is not a den_lighting_command export row" % (path, number)) from None
+            if data["context_id"] in seen:
+                raise ValueError("%s line %d repeats context %s" % (path, number, data["context_id"]))
+            seen.add(data["context_id"])
+            found.append((float(t), "live_command", data))
+    return sorted(found, key=lambda item: item[0])

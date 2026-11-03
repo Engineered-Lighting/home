@@ -56,7 +56,9 @@ reader's journal edges: real occupancy for facts replays), `--assume-occupied`
 `run.py` refuses it together with `--journal`), `--live-commands FILE ...`
 (den_lighting_command events exported from the HA recorder: a reference to
 compare with, never a policy input; needs `incumbent` in `--policies`),
-`--no-plant`, `--policies need incumbent decide`.
+`--lights FILE ...` (the four bulbs' on/off states exported from the HA
+recorder; needs `--live-commands`, and turns the plant off), `--no-plant`,
+`--policies need incumbent decide`.
 
 `check.py LOG` re-imports each logged policy module, refuses `code changed:
 <module>` when its file's sha256 differs, rebuilds it from the logged config
@@ -76,7 +78,7 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 | File | What it is |
 | --- | --- |
 | `events.py` | den-event-1: constants, `dumps`, `validate`, `read`, `write`, `inside_checkout`, `scene_matches` |
-| `sources.py` | file adapters: `fact_log`, `poll_log`, `mqtt_timeline`, `occupancy_journal`, `recorder_commands` |
+| `sources.py` | file adapters: `fact_log`, `poll_log`, `mqtt_timeline`, `occupancy_journal`, `recorder_commands`, `recorder_lights` |
 | `synthetic.py` | `evening()`: a fake evening in the real la-fact-log-1 format, built with the perceiver's own builders |
 | `runner.py` | `run()`: the deterministic heap runner; `load_policies()` |
 | `incumbent.py` | den_lighting's `policy.py`, loaded by path and unchanged, as a policy |
@@ -118,14 +120,14 @@ workstation, outside every checkout, and these tools replay them.
 - **`den_lighting_command` events** from the HA recorder: `--live-commands
   FILE ...` works now (adapter `recorder_commands`). See "Exporting the live
   commands" below.
-- **HA recorder export of the four bulbs with Context, plus den_lighting's
-  status entity**: a future adapter that emits `light_observed` with `context`
-  own/person/unknown. Turning a person's change into a `correction` needs the
-  attribution rules, which are parked. **Until it exists, a facts + journal
-  replay sees no bulb state**: den_lighting never turns on a bulb it has never
-  seen, so the replayed incumbent sends only vacancy OFFs, and after one of
-  its own OFFs a last-level ON with no level. Expect every live ON to differ
-  from the replay until then.
+- **The four bulbs' states** from the HA recorder: `--lights FILE ...` works
+  now (adapter `recorder_lights`), **on/off only**. See "Exporting the bulb
+  states" below. HA's recorder keeps no light brightness or colour
+  temperature, so no export can give past levels. Each state comes with its
+  `context`: own, person or unknown. Turning a person's change into a
+  `correction` needs the attribution rules, which are still parked.
+  den_lighting's status entity is not used: its `holds` belong to that parked
+  work.
 - **Eventually a live writer** that emits den-event-1 lines itself. It needs
   the owner's approval, and it only replaces the adapter.
 
@@ -138,7 +140,7 @@ input, and a replay may turn the bulbs off where the live integration did not.
 A full replay of copied files, from the worktree root:
 
 ```bash
-python -B tools/den-core/run.py --facts C:/tmp/den-core/in/facts --journal C:/tmp/den-core/in/occupancy-edges.txt --live-commands C:/tmp/den-core/in/den-lighting-commands.jsonl --policies need incumbent decide --out C:/tmp/den-core/real-1
+python -B tools/den-core/run.py --facts C:/tmp/den-core/in/facts --journal C:/tmp/den-core/in/occupancy-edges.txt --live-commands C:/tmp/den-core/in/den-lighting-commands.jsonl --lights C:/tmp/den-core/in/den-bulbs.jsonl --policies need incumbent decide --out C:/tmp/den-core/real-1
 ```
 
 ```bash
@@ -228,22 +230,86 @@ How the export is used:
 - The live commands are a reference, not an input. No policy sees them, and
   `incumbent.py` and den_lighting's `policy.py` are untouched.
 - `run.py` keeps only the commands inside the span the other inputs replay
-  (from the first input to 150 s after the last) and says how many it kept.
-  So a whole 10-day export can serve any evening.
+  (from the first input to 150 s after the last; `--lights` does not count)
+  and says how many it kept. So a whole 10-day export can serve any evening.
 - The summary's second comparison prints each bulb's command count, live and
   replayed. It then lists the intervals where the incumbent's latest replayed
   command for a bulb does not match the latest live one, in the style of
   `diff()`.
-  - The live command is the target, so a replayed null level does not match a
-    live level.
+  - A null level on either side matches any level, because a replay of
+    recorded bulbs knows no levels and sends its ONs without one. On/off
+    still has to agree, and so do levels both sides know.
   - A bulb is compared from its first command on either side.
   - Game time is included.
 - `time_fired_ts` is when HA fired the event, after the light call returned,
   and the replay's timed decisions (vacancy OFF) fall on its 2 s tick grid.
   So agreeing commands still show as short intervals of a second or two. Read
   the long ones.
-- Both files are ASCII. If you redirect with `>` instead of `Set-Content`,
-  PowerShell 5.1 writes UTF-16, which the adapters also read.
+- All three exports are ASCII. If you redirect with `>` instead of
+  `Set-Content`, PowerShell 5.1 writes UTF-16, which the adapters also read.
+
+### Exporting the bulb states (Windows PowerShell 5.1)
+
+Same SSH app, same read-only `sqlite3` and same 10-day recorder window as the
+live commands. The current schema keeps entity ids in `states_meta`, and the
+Context ids as 16-byte values, which `hex()` prints. Export the commands too:
+`--lights` needs `--live-commands`.
+
+```powershell
+$sql = @'
+SELECT json_object('last_updated_ts', s.last_updated_ts, 'entity_id', m.entity_id, 'state', s.state,
+  'context_id', hex(s.context_id_bin), 'context_user_id', hex(s.context_user_id_bin),
+  'context_parent_id', hex(s.context_parent_id_bin))
+FROM states s
+JOIN states_meta m ON m.metadata_id = s.metadata_id
+WHERE m.entity_id IN ('light.den_front_left', 'light.front_right', 'light.den_rear_left', 'light.den_rear_right')
+ORDER BY s.last_updated_ts, s.state_id;
+'@
+```
+
+```powershell
+$sql | ssh HA "sqlite3 -readonly /config/home-assistant_v2.db" | Set-Content -Encoding ascii C:\tmp\den-core\in\den-bulbs.jsonl
+```
+
+Each line looks like this (the values here are invented). An absent id
+prints as `""`:
+
+```json
+{"last_updated_ts":1793765042.5,"entity_id":"light.den_front_left","state":"on","context_id":"01563E3AB5D3D6764C61EFB99302BD5B","context_user_id":"","context_parent_id":""}
+```
+
+How the export is used:
+
+- Each `on` or `off` row becomes `light_observed` at `t = last_updated_ts`,
+  with `brightness` and `kelvin` null. Other states (`unavailable`,
+  `unknown`) are skipped, as den_lighting skips them. A bad row, or one bulb
+  recorded twice at one time, stops the run with the line number.
+- **No levels.** HA's light component leaves `brightness`,
+  `color_temp_kelvin`, the colour mode and `min_color_temp_kelvin` out of the
+  recorder. So the replayed incumbent learns its last-level preferences with
+  no level. Its ONs go out with no level, and a game uses den_lighting's
+  default warmest colour temperatures. Comparing levels would need a recorded
+  copy of each bulb's level (a template sensor, for example), which is an HA
+  change on Victoria.
+- `context` follows den_lighting's own first test:
+  - `own` when the state's context or its parent is the `context_id` of one of
+    den_lighting's commands in the `--live-commands` export;
+  - `person` when the context carries a user, such as the HA app;
+  - otherwise `unknown`, which covers a wall switch or a Hue dimmer.
+  den_lighting also counts as its own a device report, with a new context,
+  that lands on its target within a few seconds. Here that report comes out
+  `unknown`. No policy reads `context`, so this changes no decision.
+- The states are cut to the span set by the other inputs, like the commands,
+  but only up to the last input. Each bulb's latest state before the span is
+  moved to its start, the way den_lighting reads every bulb when it starts.
+  `run.py` prints how many it kept and their contexts.
+- **`--lights` turns the plant off.** The recorded states are what the live
+  den_lighting really saw, including the effects of its own commands, so the
+  replay sees the same thing instead of its own echoes.
+- **A person's change is not a correction yet.** The live den_lighting holds a
+  bulb a person changed and leaves it alone. The replay only observes the
+  change, so it may set the bulb back where the live one did not. The
+  `person` and `unknown` rows show where that can happen.
 
 ## Choices the interface left open
 
@@ -263,6 +329,9 @@ How the export is used:
   inputs alone. The incumbent reconciles on every event it is handed, so
   handing it the reference would move its decisions. `check` replays such a
   log byte for byte like any other.
+- `recorder_lights` states go first among inputs at one instant, so a
+  replay's opening instant observes the bulbs before its occupancy, as
+  den_lighting's start does.
 - `poll_log` emits a row's light edges before its occupancy edge, like the
   synthetic preamble. The synthetic fact files are named by the UTC day of
   `available_at`, as `la_fact_log` names its own.
@@ -375,6 +444,6 @@ need -> incumbent -> decide.
 
 The two adapters built after the three briefs extend the text above without
 changing it:
-- More source adapter names: 'occupancy_journal' (emits occupancy, via 'jetson_journal') and 'recorder_commands'.
+- More source adapter names: 'occupancy_journal' (emits occupancy, via 'jetson_journal'), 'recorder_commands' and 'recorder_lights' (emits light_observed with brightness and kelvin null).
 - Reference kinds: logged with the inputs, but never handed to a policy, and they set neither the span nor the ticks.
   - live_command: {entity_id, revision: int, target: scene, context_id: str}, one den_lighting_command event as the live integration fired it, at its time_fired_ts.

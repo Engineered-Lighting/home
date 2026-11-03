@@ -17,6 +17,8 @@ LA_LATENCY = Path(__file__).resolve().parents[1] / "la-latency"
 # The den's Frigate person-occupancy entity: what the Jetson's occupancy reader polls and den_lighting reads.
 DEN_OCCUPANCY = "binary_sensor.den_oak_person_occupancy"
 COMMAND_KEYS = frozenset({"entity_id", "revision", "target", "context_id"})
+LIGHT_KEYS = frozenset({"last_updated_ts", "entity_id", "state", "context_id", "context_user_id", "context_parent_id"})
+CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 def lab():
@@ -196,4 +198,52 @@ def recorder_commands(paths):
                 raise ValueError("%s line %d repeats context %s" % (path, number, data["context_id"]))
             seen.add(data["context_id"])
             found.append((float(t), "live_command", data))
+    return sorted(found, key=lambda item: item[0])
+
+
+def ulid(hex_bytes):
+    """The ULID text of a recorder context_id_bin given as hex (HA stores Context ids as 16 bytes); '' -> None."""
+    if hex_bytes == "":
+        return None
+    raw = bytes.fromhex(hex_bytes)
+    if len(raw) != 16:
+        raise ValueError("a context id is 16 bytes")
+    n = int.from_bytes(raw, "big")
+    return "".join(CROCKFORD[(n >> (5 * i)) & 31] for i in reversed(range(26)))
+
+
+def recorder_lights(paths, own=()):
+    """The four bulbs' recorded states from an HA recorder export (README): one JSON object per line,
+    {last_updated_ts, entity_id, state, context_id, context_user_id, context_parent_id} with the context
+    ids as hex, as light_observed items at last_updated_ts, in time order.
+
+    HA's recorder keeps no light brightness or colour temperature, so both are null. A state other than
+    on or off is skipped, as den_lighting skips it. context is 'own' when the state's context or its
+    parent is one of den_lighting's command contexts (own: the context_id values of recorder_commands),
+    'person' when a user made it, else 'unknown'. A bad line, or a bulb recorded twice at one time,
+    raises ValueError; blank lines are skipped.
+    """
+    own, found, seen = {c.upper() for c in own}, [], set()
+    for path in paths:
+        for number, raw in enumerate(_text(path).splitlines(), 1):
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+                t = row["last_updated_ts"]
+                if (set(row) != LIGHT_KEYS or type(t) not in (int, float) or not math.isfinite(t)
+                        or row["entity_id"] not in LIGHTS or not isinstance(row["state"], str)):
+                    raise ValueError
+                context, user, parent = (ulid(row[key]) for key in ("context_id", "context_user_id",
+                                                                      "context_parent_id"))
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise ValueError("%s line %d is not a den bulb state export row" % (path, number)) from None
+            if (row["entity_id"], t) in seen:
+                raise ValueError("%s line %d repeats %s at %r" % (path, number, row["entity_id"], t))
+            seen.add((row["entity_id"], t))
+            if row["state"] not in ("on", "off"):
+                continue
+            label = "own" if {context, parent} & own else "person" if user else "unknown"
+            found.append((float(t), "light_observed", {"entity_id": row["entity_id"], "on": row["state"] == "on",
+                                                       "brightness": None, "kelvin": None, "context": label}))
     return sorted(found, key=lambda item: item[0])

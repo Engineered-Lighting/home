@@ -44,6 +44,17 @@ def edge(t, a, b, entity=DEN):
     return "occupancy edge: entity=%s from=%s to=%s observed_at=%.3f" % (entity, a, b, t)
 
 
+def context(n):
+    """(hex, ULID text) of an invented HA Context id, as the recorder stores it and as den_lighting reports it."""
+    return "%032X" % n, sources.ulid("%032X" % n)
+
+
+def light_row(t, entity_id, state, context_id="", user="", parent=""):
+    """One invented bulb state export row, as the README's sqlite3 query prints it."""
+    return json.dumps({"last_updated_ts": t, "entity_id": entity_id, "state": state, "context_id": context_id,
+                       "context_user_id": user, "context_parent_id": parent})
+
+
 def command(t, entity_id, target, context_id, revision=7):
     """One invented recorder export row, as the README's sqlite3 query prints it."""
     return json.dumps({"time_fired_ts": t, "event_data": {"entity_id": entity_id, "revision": revision,
@@ -183,6 +194,35 @@ class AdapterTest(Temp):
         with self.assertRaisesRegex(ValueError, "repeats context ctx-1"):
             sources.recorder_commands([path, self.write("again.jsonl", [command(T0 + 9, LIGHTS[0], OFF, "ctx-1")])])
 
+    def test_recorder_lights(self):
+        (own_hex, own_ulid), (other, _), (person, _) = context(1), context(2), context(3)
+        path = self.write("lights.jsonl", [
+            light_row(T0 + 9, LIGHTS[3], "on", other, parent=own_hex),     # a report whose parent is own
+            light_row(T0 + 1, LIGHTS[0], "off", own_hex), "",
+            light_row(T0 + 2, LIGHTS[1], "on", other, user=person),
+            light_row(T0 + 3, LIGHTS[2], "unavailable", other),            # skipped, as den_lighting skips it
+            light_row(T0 + 4, LIGHTS[2], "on", other)])
+        items = sources.recorder_lights([path], own=[own_ulid.lower()])
+        self.assertEqual([(t - T0, d["entity_id"], d["on"], d["context"]) for t, _, d in items],
+                         [(1, LIGHTS[0], False, "own"), (2, LIGHTS[1], True, "person"), (4, LIGHTS[2], True, "unknown"),
+                          (9, LIGHTS[3], True, "own")])
+        self.assertTrue(all(k == "light_observed" and d["brightness"] is None and d["kelvin"] is None
+                            for _, k, d in items))
+        self.assertEqual(sources.ulid("01563E3AB5D3D6764C61EFB99302BD5B"), "01ARZ3NDEKTSV4RRFFQ69G5FAV")  # ULID spec
+        for name, line in (("other-entity", light_row(T0, "light.elsewhere", "on")),
+                           ("bad-context", light_row(T0, LIGHTS[0], "on", "ABC")),
+                           ("extra-key", json.dumps({**json.loads(light_row(T0, LIGHTS[0], "on")), "x": 1}))):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "line 1 is not a den bulb state"):
+                sources.recorder_lights([self.write(name + ".jsonl", [line])])
+        with self.assertRaisesRegex(ValueError, "repeats light.den_front_left"):
+            sources.recorder_lights([path, self.write("again.jsonl", [light_row(T0 + 1, LIGHTS[0], "off")])])
+
+    def test_from_start_carries_each_bulb_to_the_start(self):
+        rows = [(1.0, "light_observed", {"entity_id": LIGHTS[1], "n": 1}), (2.0, "light_observed", {"entity_id": LIGHTS[1], "n": 2}),
+                (3.0, "light_observed", {"entity_id": LIGHTS[0], "n": 3}), (5.0, "light_observed", {"entity_id": LIGHTS[0], "n": 4}),
+                (9.0, "light_observed", {"entity_id": LIGHTS[2], "n": 5})]
+        self.assertEqual([(t, d["n"]) for t, _, d in run.from_start(rows, 4.0, 8.0)], [(4.0, 3), (4.0, 2), (5.0, 4)])
+
     @unittest.skipUnless(REAL_POLLS and HAVE_POLICY, "real den-desk-observe files or policy.py absent")
     def test_real_poll_logs_replay(self):
         for path in REAL_POLLS:
@@ -268,11 +308,15 @@ class RunnerTest(unittest.TestCase):
         log = [ours(1.0, {LIGHTS[0]: OFF}), live(1.5, LIGHTS[0], OFF),            # live lags by 0.5 s
                live(3.0, LIGHTS[1], lit), ours(3.0, {LIGHTS[1]: lit}),            # one instant: no span
                ours(6.0, {LIGHTS[0]: {"on": True, "brightness": None, "kelvin": None}}),
-               live(6.0, LIGHTS[0], lit),                                          # a replayed null level differs
-               live(8.0, LIGHTS[1], dim), ev("tick", {}, 9.0, 0, "runner")]
+               live(6.0, LIGHTS[0], lit),                                          # a null level matches any
+               live(8.0, LIGHTS[1], dim),                                          # known levels still differ
+               ours(8.5, {LIGHTS[0]: OFF}), ev("tick", {}, 9.0, 0, "runner")]      # on/off differs
         self.assertEqual(run.live_diff(log), [{"entity_id": LIGHTS[0], "start": 1.0, "end": 1.5},
-                                              {"entity_id": LIGHTS[0], "start": 6.0, "end": 9.0},
-                                              {"entity_id": LIGHTS[1], "start": 8.0, "end": 9.0}])
+                                              {"entity_id": LIGHTS[1], "start": 8.0, "end": 9.0},
+                                              {"entity_id": LIGHTS[0], "start": 8.5, "end": 9.0}])
+        cross = {"on": True, "brightness": 180, "kelvin": None}
+        self.assertTrue(run._agree(cross, {"on": True, "brightness": None, "kelvin": 2700}))
+        self.assertFalse(run._agree(cross, {"on": True, "brightness": 100, "kelvin": None}))
 
     def test_diff_leaves_out_gaming(self):
         def decision(t, source, brightness):
@@ -419,7 +463,8 @@ class RealFilesRunTest(Temp):
         text = self.main("--facts", str(self.facts), "--journal", str(self.journal), "--live-commands", str(commands),
                          "--policies", "need", "incumbent", "decide", "--out", str(self.tmp / "live"))
         self.assertIn("recorder_commands: kept 8 of 9 live command(s) inside the replayed span", text)
-        self.assertIn("diff live den_lighting vs incumbent replay: 8 interval(s); commands live/replayed: "
+        self.assertIn("diff live den_lighting vs incumbent replay (a null level matches any): 8 interval(s); "
+                      "commands live/replayed: "
                       "front_left 2/2, front_right 2/2, rear_left 2/2, rear_right 2/2", text)
         live, log = self.decisions("live")
         self.assertEqual(live, plain)
@@ -430,10 +475,50 @@ class RealFilesRunTest(Temp):
         self.assertEqual(header["sources"][2]["sha256"], events.sha256_file(commands))
         self.assertEqual(check.check(self.tmp / "live" / "log.jsonl")["ok"], True)
 
+    def test_recorded_bulbs(self):
+        """Bulbs on before the span, a person turning one off while the room is vacant, den_lighting's own OFFs."""
+        lit = {"on": True, "brightness": 180, "kelvin": 2700}
+        rows = [light_row(T0 - 3600, e, "on", context(10)[0]) for e in LIGHTS]
+        rows.append(light_row(T0 + 50, LIGHTS[1], "unavailable", context(11)[0]))
+        rows.append(light_row(T0 + 100, LIGHTS[2], "off", context(12)[0], user=context(13)[0]))
+        commands = [command(T0 - 3600, LIGHTS[0], lit, context(20)[1])]
+        for n, e in enumerate((LIGHTS[0], LIGHTS[1], LIGHTS[3])):
+            commands.append(command(T0 + 141.5, e, OFF, context(30 + n)[1]))
+            rows.append(light_row(T0 + 141.6, e, "off", context(30 + n)[0]))
+        rows.append(light_row(T0 + 141.7, LIGHTS[3], "off", context(39)[0], parent=context(32)[0]))
+        for n, e in enumerate(LIGHTS):
+            commands.append(command(T0 + 200.5, e, lit, context(40 + n)[1]))
+            rows.append(light_row(T0 + 200.6, e, "on", context(40 + n)[0]))  # after the last input: not replayed
+        lights, commands = self.write("lights.jsonl", rows), self.write("commands.jsonl", commands)
+        text = self.main("--facts", str(self.facts), "--journal", str(self.journal), "--live-commands", str(commands),
+                         "--lights", str(lights), "--policies", "need", "incumbent", "decide", "--out", str(self.tmp / "lit"))
+        self.assertIn("recorder_lights: kept 9 of 13 bulb state(s), 4 carried to the start; "
+                      "context own 4, person 1, unknown 4\nplant: off", text)
+        self.assertIn("diff live den_lighting vs incumbent replay (a null level matches any): 7 interval(s); "
+                      "commands live/replayed: front_left 2/2, front_right 2/2, rear_left 1/1, rear_right 2/2", text)
+        decisions, log = self.decisions("lit")
+        on = {"on": True, "brightness": None, "kelvin": None}
+        self.assertEqual([(t - T0, scenes) for t, scenes in decisions],
+                         [(141, {e: OFF for e in LIGHTS if e != LIGHTS[2]}), (200, {e: on for e in LIGHTS})])
+        self.assertEqual([(round(e["t"] - T0, 3), e["data"]["entity_id"], e["data"]["on"], e["data"]["context"])
+                          for e in log if e["kind"] == "light_observed"],
+                         [(-5, e, True, "unknown") for e in LIGHTS] + [(100, LIGHTS[2], False, "person")]
+                         + [(141.6, e, False, "own") for e in (LIGHTS[0], LIGHTS[1], LIGHTS[3])]
+                         + [(141.7, LIGHTS[3], False, "own")])
+        self.assertTrue(all(e["source"] == "recorder_lights" for e in log if e["kind"] == "light_observed"))
+        self.assertEqual(sorted({round(s["end"] - s["start"], 3) for s in run.live_diff(log)}), [0.5])
+        header, _ = events.read(self.tmp / "lit" / "log.jsonl")
+        self.assertFalse(header["plant"])
+        self.assertEqual([s["name"] for s in header["sources"]],
+                         [self.facts.name, self.journal.name, lights.name, commands.name])
+        self.assertEqual(check.check(self.tmp / "lit" / "log.jsonl")["ok"], True)
+
     def test_refusals(self):
         commands = self.write("c.jsonl", [command(T0, LIGHTS[0], OFF, "c")])
+        lights = self.write("l.jsonl", [light_row(T0, LIGHTS[0], "on")])
         for argv in (["--facts", str(self.facts), "--journal", str(self.journal), "--assume-occupied"],
                      ["--facts", str(self.facts), "--live-commands", str(commands), "--policies", "need"],
+                     ["--facts", str(self.facts), "--lights", str(lights)],
                      ["--live-commands", str(commands)]):
             with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 self.main(*argv, "--out", str(self.tmp / "refused"))
@@ -447,9 +532,11 @@ class PurityTest(Temp):
         forbidden = mock.Mock(side_effect=AssertionError("clock or network used"))
         journal = self.write("edges.txt", [edge(T0, "unknown", "on")])
         commands = self.write("commands.jsonl", [command(T0, LIGHTS[0], OFF, "c")])
+        lights = self.write("lights.jsonl", [light_row(T0, LIGHTS[0], "on", context(1)[0])])
         with mock.patch("socket.socket", forbidden), mock.patch("time.time", forbidden), \
                 mock.patch("time.monotonic", forbidden):
-            self.assertEqual(len(sources.occupancy_journal([journal]) + sources.recorder_commands([commands])), 2)
+            self.assertEqual(len(sources.occupancy_journal([journal]) + sources.recorder_commands([commands])
+                                 + sources.recorder_lights([lights])), 3)
             synthetic.evening()
             events.write(self.tmp / "log.jsonl", *evening_log(touch=True, game=True))
             self.assertTrue(check.check(self.tmp / "log.jsonl")["ok"])

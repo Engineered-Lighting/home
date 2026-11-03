@@ -2,7 +2,7 @@
 
 python -B tools/den-core/run.py --out ABSDIR [--synthetic evening [--seed N] [--touch] [--game] [--clean]]
     [--facts PATH ...] [--poll FILE ...] [--mqtt FILE --mqtt-t0 EPOCH] [--journal FILE ... | --assume-occupied]
-    [--live-commands FILE ...] [--policies incumbent] [--no-plant]
+    [--live-commands FILE ... [--lights FILE ...]] [--policies incumbent] [--no-plant]
 """
 import argparse
 import json
@@ -75,13 +75,21 @@ def diff(log, a="incumbent", b="decide"):
                                           for bulb in sorted(wanted)])
 
 
+def _agree(a, b):
+    """scene_matches, where a null level on either side matches any level: HA's recorder keeps no light
+    levels, so a replay of recorded bulbs sends ONs with no level."""
+    if a is None or b is None:
+        return a is None and b is None
+    return events.scene_matches({key: None if key != "on" and b[key] is None else a[key] for key in a}, b)
+
+
 def live_diff(log, replayed="incumbent"):
     """Intervals where the replayed incumbent's latest command for a bulb does not match the latest
     command the live den_lighting sent for it (live_command lines).
 
-    The live command is the target, so a replayed null level does not match a live level. A bulb is
-    compared from the first command for it on either side, with a side that has none yet differing.
-    Gaming is not left out: both sides are den_lighting. Events at one instant are compared once."""
+    A null level on either side matches any level. A bulb is compared from the first command for it on
+    either side, with a side that has none yet differing. Gaming is not left out: both sides are
+    den_lighting. Events at one instant are compared once."""
     live, ours = {}, {}
 
     def step(event):
@@ -90,8 +98,18 @@ def live_diff(log, replayed="incumbent"):
         elif event["kind"] == "decision" and event["source"] == replayed:
             ours.update(event["data"]["requested_scene"])
 
-    return _intervals(log, step, lambda: [(bulb, not events.scene_matches(live.get(bulb), ours.get(bulb)))
+    return _intervals(log, step, lambda: [(bulb, not _agree(live.get(bulb), ours.get(bulb)))
                                           for bulb in sorted(set(live) | set(ours))])
+
+
+def from_start(rows, start, last):
+    """Recorded bulb states for a replay from start to last: each bulb's latest state before start, moved
+    to start (den_lighting reads every bulb when it starts), then the states from start to last."""
+    before = {}
+    for t, kind, data in rows:
+        if t < start:
+            before[data["entity_id"]] = (start, kind, data)
+    return [before[e] for e in events.LIGHTS if e in before] + [row for row in rows if start <= row[0] <= last]
 
 
 def _span_lines(spans, first):
@@ -121,7 +139,8 @@ def summary(header, log):
         ours = Counter(b for e in log if e["kind"] == "decision" and e["source"] == "incumbent"
                        for b in e["data"]["requested_scene"])
         spans = live_diff(log)
-        lines.append("diff live den_lighting vs incumbent replay: %d interval(s); commands live/replayed: %s"
+        lines.append("diff live den_lighting vs incumbent replay (a null level matches any): %d interval(s); "
+                     "commands live/replayed: %s"
                      % (len(spans), ", ".join("%s %d/%d" % (short(b), live[b], ours[b]) for b in events.LIGHTS)))
         lines += _span_lines(spans, first)
     if header["synthetic"]:
@@ -151,6 +170,8 @@ def main(argv=None):
     parser.add_argument("--assume-occupied", action="store_true")
     parser.add_argument("--live-commands", nargs="+", default=[],
                         help="den_lighting_command events exported from the HA recorder: a reference, not an input")
+    parser.add_argument("--lights", nargs="+", default=[],
+                        help="the four bulbs' states exported from the HA recorder (needs --live-commands)")
     parser.add_argument("--policies", nargs="+", default=["incumbent"])
     parser.add_argument("--no-plant", action="store_true")
     args = parser.parse_args(argv)
@@ -163,6 +184,8 @@ def main(argv=None):
         parser.error("--journal gives real occupancy; it replaces --assume-occupied, so give one or the other")
     if args.live_commands and "incumbent" not in args.policies:
         parser.error("--live-commands is compared with the incumbent: add incumbent to --policies")
+    if args.lights and not args.live_commands:
+        parser.error("--lights needs --live-commands: den_lighting's own bulb changes are known by its commands")
 
     inputs, described, truth, fact_lines = [], [], None, []
     if args.synthetic:
@@ -194,16 +217,29 @@ def main(argv=None):
     if not inputs:
         parser.error("no inputs: give --synthetic, --facts, --poll, --mqtt or --journal")
     if args.live_commands:
-        # A reference only: keep the commands inside the span the inputs replay (runner.run's ticks).
+        # Cut to the span the other inputs replay: the bulbs up to the last input, the commands (a reference
+        # only) through runner.run's tail of ticks as well.
+        start, last = min(t for t, *_ in inputs), max(t for t, *_ in inputs)
         paths = list(map(Path, args.live_commands))
         items = sources.recorder_commands(paths)
-        start, stop = min(t for t, *_ in inputs), max(t for t, *_ in inputs) + runner.TAIL_S
-        kept = [item for item in items if start <= item[0] <= stop]
+        kept = [item for item in items if start <= item[0] <= last + runner.TAIL_S]
+        if args.lights:
+            light_paths = list(map(Path, args.lights))
+            rows = sources.recorder_lights(light_paths, own={data["context_id"] for _, _, data in items})
+            states = from_start(rows, start, last)
+            inputs = runner.tagged(states, "recorder_lights") + inputs  # bulbs first at one instant, as den_lighting starts
+            described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in light_paths]
+            labels = Counter(data["context"] for _, _, data in states)
+            carried = len(states) - sum(1 for t, *_ in rows if start <= t <= last)
+            print("recorder_lights: kept %d of %d bulb state(s), %d carried to the start; context %s"
+                  % (len(states), len(rows), carried,
+                     ", ".join("%s %d" % (label, labels[label]) for label in ("own", "person", "unknown"))))
+            print("plant: off, the recorded bulb states stand in for it")
         inputs += runner.tagged(kept, "recorder_commands")
         described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in paths]
         print("recorder_commands: kept %d of %d live command(s) inside the replayed span" % (len(kept), len(items)))
 
-    header, log = runner.run(inputs, runner.load_policies(args.policies), plant=not args.no_plant,
+    header, log = runner.run(inputs, runner.load_policies(args.policies), plant=not (args.no_plant or args.lights),
                              synthetic=bool(args.synthetic), assume_occupied=args.assume_occupied,
                              sources=described)
     out.mkdir(parents=True, exist_ok=True)

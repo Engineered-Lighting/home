@@ -12,7 +12,7 @@ LOG_SCHEMA = "den-replay-log-1"
 ENVELOPE = frozenset({"schema", "t", "seq", "kind", "source", "data"})
 LIGHTS = ("light.den_front_left", "light.front_right", "light.den_rear_left", "light.den_rear_right")
 ADAPTER_SOURCES = frozenset({"fact_log", "poll_log", "mqtt_timeline", "occupancy_journal", "recorder_commands",
-                             "synthetic"})
+                             "recorder_lights", "synthetic"})
 # la-fact-log-1's 12 keys (la_fact_log.KEYS); sources.fact_log checks the full format.
 FACT_KEYS = ("available_at", "engine_epoch", "latency_s", "observation", "observed_at", "outcome", "prompt_version",
              "request_id", "schema", "sent_at", "session_id", "source_id")

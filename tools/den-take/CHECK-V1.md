@@ -93,14 +93,16 @@ switch between white and black.
    t_host - c. A frame within `epsilon_s` of a pattern change is skipped.
 
 An attempt is **unreadable** if one of its frames repeats an earlier frame's
-`rgb_nv12` sha256 (a stale image), or it has no screen, fewer than
-`min_flashes` flashes, or no consistent offset. `take.py`'s peek looks for
+`rgb_nv12` sha256 (a stale image: `stale_frame`), it has no screen
+(`no_screen`), it has fewer than `min_flashes` flashes (`few_flashes`), it has
+no consistent offset (`no_consistent_offset`), or its consistent offsets do not
+form one window (wrapping at +-5 s) whose width (last minus first) is at most
+`max_window_s` (`wide_window`). `take.py`'s peek runs the same fit, looks for
 repeats among the attempt's own frames, retries only an unreadable attempt, at
-most twice more, and never speaks the offset. `check.py` refits and
-reports every attempt and judges the first readable attempt of each slate
-(start and end). Each judged slate passes if its consistent offsets form one
-window (wrapping at +-5 s) whose width (last minus first) is at most
-`max_window_s`. Its c is the window's midpoint.
+most twice more, and never speaks the offset. `check.py` refits and reports
+every attempt and judges the first readable attempt of each slate (start and
+end). A slate passes if it has a readable attempt. Its c is the judged
+attempt's window midpoint.
 
 **Elapsed bound:** |c_end - c_start| (wrapped into [-5, 5) s) +
 (width_start + width_end) / 2 <= `elapsed_bound_s`. It is gated. The first

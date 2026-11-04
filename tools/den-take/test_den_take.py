@@ -123,6 +123,27 @@ def slate_frames(times, c, shown=True):
             for i, t in enumerate(times)]
 
 
+def slate_bundles(folder, times, c, first=0):
+    """Saved bundles for take.peek: [(path, t_host)]."""
+    window = []
+    for i, t in enumerate(times, first):
+        path = Path(folder) / f"{i}.npz"
+        path.write_bytes(bundle(metadata("s", i, t, t - 9.0), nv12(screen_value(t - c), i)))
+        window.append((path, t))
+    return window
+
+
+def judge(attempts, m=M):
+    """judge_slates on [(slate, slate_frames(...))], one attempt each, received at t_host."""
+    record, frames, numbers = {"slates": []}, [], {}
+    for which, fit_frames in attempts:
+        numbers[which] = numbers.get(which, 0) + 1
+        record["slates"].append({"slate": which, "attempt": numbers[which],
+                                 "pc_start_s": fit_frames[0][0], "pc_end_s": fit_frames[-1][0]})
+        frames += [{"recv": t, "t_host": t, "y": y, "stale": False} for t, y in fit_frames]
+    return check.judge_slates(record, frames, m)[0]
+
+
 # ---- a synthetic take folder, written with take.py's own writer ----
 
 def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, freeze=None,
@@ -613,11 +634,75 @@ class SlateFitTests(unittest.TestCase):
             self.assertEqual(take.peek(window, M)["reason"], "stale_frame")
             self.assertTrue(take.peek(window[:40] + window[41:], M)["readable"])
 
+    def test_wide_window_is_unreadable_and_retried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wide = slate_bundles(tmp, frame_times(4000.0, 4020.0, seed=300), 0.5)
+            narrow = slate_bundles(tmp, frame_times(4025.0, 4045.0, seed=3), 0.5, first=len(wide))
+            self.assertEqual(take.peek(wide, M), {"readable": False, "reason": "wide_window",
+                                                  "flashes": 19, "frames": len(wide)})  # never c
+            windows, spoken = iter([wide, narrow]), []
+            record = {"cues": [], "slates": []}
+            script = take.Script(record, types.SimpleNamespace(done=threading.Event()),
+                                 types.SimpleNamespace(window=lambda start, end: next(windows)),
+                                 take.Settings(slate_s=0.01, hold_lead_s=0.01, say_gap_s=0.01), M,
+                                 spoken.append, take.peek)
+            self.assertTrue(script.slate("start"))
+        self.assertEqual([(a["attempt"], a["peek"]["reason"]) for a in record["slates"]],
+                         [(1, "wide_window"), (2, None)])
+        self.assertEqual(spoken, ["Hold the phone to the camera.", "Slate.", "Unreadable, again.", "Slate."])
+
+    def test_window_wider_than_max_is_unreadable(self):
+        dense = slate_frames([1000.0 + 0.2 * k for k in range(100)], 3.2137)
+        width = check.fit_slate(dense, M)["width_s"]
+        self.assertTrue(check.fit_slate(dense, dict(M, max_window_s=width))["readable"])
+        narrower = dict(M, max_window_s=round(width - 0.001, 6))
+        fit = check.fit_slate(dense, narrower)
+        self.assertEqual((fit["readable"], fit["reason"], fit["window_count"], fit["width_s"], fit["c_s"]),
+                         (False, "wide_window", 1, width, None))
+        self.assertFalse(judge([("start", dense), ("end", slate_frames([2000.0 + 0.2 * k for k in range(100)],
+                                                                       3.2137))], narrower)["start"]["pass"])
+
+    def test_two_windows_are_unreadable(self):
+        # Phone seconds 2 to 9 only: no marker, and a 1 s shift moves each flash just 0.02 s.
+        times = frame_times(4002.5, 4010.0, seed=3)
+        fit = check.fit_slate(slate_frames(times, 0.5), dict(M, min_flashes=5))
+        self.assertEqual([round(sum(w) / 2) for w in fit["windows"]], [0, 2], fit)  # around 0.5 s and 1.5 s
+        self.assertEqual((fit["readable"], fit["reason"], fit["window_count"], fit["width_s"], fit["c_s"]),
+                         (False, "wide_window", 2, None, None))
+
     def test_unreadable_with_fewer_than_12_flashes(self):
         times = frame_times(4000.0, 4010.0)  # 10 s holds 9 flashes
         fit = check.fit_slate(slate_frames(times, 1.0), M)
         self.assertEqual((fit["readable"], fit["reason"]), (False, "few_flashes"))
         self.assertLess(fit["flashes"], M["min_flashes"])
+
+
+class SlateRuleTests(unittest.TestCase):
+    """judge_slates: the first readable attempt of each slate is judged, and must be one narrow window."""
+
+    def attempts(self, *fits):
+        stub = iter(dict({"frames": 1, "reason": None, "flashes": 12, "screen_pixels": 400, "windows": [[0.98, 1.02]],
+                          "window_count": 1, "width_s": 0.04, "c_s": 1.0}, **fit) for fit in fits)
+        frames = slate_frames([5000.0, 5000.2], 1.0)
+        with mock.patch.object(check, "fit_slate", side_effect=lambda frames, m: next(stub)):
+            return judge([("start", frames)] * (len(fits) - 1) + [("end", frames)])
+
+    def test_first_readable_attempt_is_judged_never_a_later_one(self):
+        for first in ({"readable": True, "window_count": 2, "width_s": None, "c_s": None},
+                      {"readable": True, "width_s": M["max_window_s"] + 0.001}):
+            report = self.attempts(first, {"readable": True}, {"readable": True})
+            self.assertEqual((report["start"]["judged_attempt"], report["start"]["pass"]), (1, False), first)
+            self.assertEqual((report["end"]["judged_attempt"], report["end"]["pass"]), (1, True))
+        report = self.attempts({"readable": False, "reason": "wide_window"}, {"readable": True}, {"readable": True})
+        self.assertEqual((report["start"]["judged_attempt"], report["start"]["pass"]), (2, True))
+
+    def test_wide_first_attempt_gives_way_to_a_narrow_one(self):
+        report = judge([("start", slate_frames(frame_times(4000.0, 4020.0, seed=300), 0.5)),
+                        ("start", slate_frames(frame_times(4025.0, 4045.0, seed=3), 0.5)),
+                        ("end", slate_frames(frame_times(5000.0, 5020.0, seed=4), 0.5))])
+        start = report["start"]
+        self.assertEqual([a["reason"] for a in start["attempts"]], ["wide_window", None])
+        self.assertEqual((start["judged_attempt"], start["pass"], report["end"]["pass"]), (2, True, True))
 
 
 class FaultTests(unittest.TestCase):

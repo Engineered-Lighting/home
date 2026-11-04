@@ -245,10 +245,12 @@ def fit_slate(frames, m):
     if len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == steps - 1:
         runs[-1][1] = runs.pop(0)[1] + steps
     windows = [[round(-period / 2 + a * grid, 6), round(-period / 2 + b * grid, 6)] for a, b in runs]
-    result.update(readable=True, windows=windows[:5], window_count=len(windows))
+    result.update(windows=windows[:5], window_count=len(windows))
     if len(windows) == 1:
         result["width_s"] = round(windows[0][1] - windows[0][0], 6)
-        result["c_s"] = round(wrap((windows[0][0] + windows[0][1]) / 2, period), 6)
+    if len(windows) != 1 or round(result["width_s"], 9) > m["max_window_s"]:
+        return dict(result, reason="wide_window")  # not one narrow window: try again
+    result.update(readable=True, c_s=round(wrap((windows[0][0] + windows[0][1]) / 2, period), 6))
     return result
 
 
@@ -322,7 +324,7 @@ def judge_slates(take, frames, m):
                        first_t_host=window[0]["t_host"] if window else None)
             attempts.append(fit)
         chosen = next((a for a in attempts if a["readable"]), None)
-        ok = bool(chosen and chosen["window_count"] == 1
+        ok = bool(chosen and chosen["window_count"] == 1  # readable implies this; checked again
                   and round(chosen["width_s"], 9) <= m["max_window_s"])
         report[which] = {"attempts": attempts, "judged_attempt": chosen and chosen["attempt"], "pass": ok}
         judged[which] = chosen if ok else None

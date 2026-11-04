@@ -159,7 +159,9 @@ and commissioning takes stay on disk as footage outside R's output.
 ## What commissioning may change
 
 Only `epsilon_s`, `min_flashes`, `lit_above`, `dark_below` and
-`slate_length_s`. `max_window_s` may only get smaller. `elapsed_bound_s` and
-the B rules never change. A change is committed as `CHECK-V2.md` (and
-`check.py`'s `METHOD_FILE` then names it), and a new commissioning take must
-pass under it before the first retained take. After that, nothing changes.
+`slate_length_s`. `max_window_s` may only get smaller, except that it may rise
+by twice any rise in `epsilon_s` (every window is at least 2 x `epsilon_s`
+wide). `elapsed_bound_s` and the B rules never change. A change is committed
+as `CHECK-V2.md` (and `check.py`'s `METHOD_FILE` then names it), and a new
+commissioning take must pass under it before the first retained take. After
+that, nothing changes.

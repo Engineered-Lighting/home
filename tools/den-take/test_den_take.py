@@ -147,9 +147,14 @@ def judge(attempts, m=M):
 # ---- a synthetic take folder, written with take.py's own writer ----
 
 def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, freeze=None,
-              backwards_at=None, session_change_at=None, drop=None, repeat_at=None,
-              rejected_start=False, complete=True, method_sha=None, commissioning=True):
-    """Fault times are (anchor, seconds after it); anchors: begin, hold_end, slate_end."""
+              backwards_at=None, session_change_at=None, drop=None, repeat_at=None, host_bump=None,
+              device_drift_ppm=20, seq_repeat_at=None, rejected_start=False, complete=True,
+              method_sha=None, commissioning=True):
+    """Fault times are (anchor, seconds after it); anchors: begin, hold_end, slate_end.
+
+    host_bump=(anchor, seconds, height) ramps t_host up by height at 0.015 s per second,
+    holds it 10 s and ramps it back down. seq_repeat_at gives one frame its
+    predecessor's rgb_seq. device_drift_ppm sets t_device's straight-line drift."""
     folder = Path(root) / f"take-{uuid.uuid4().hex[:8]}"
     folder.mkdir()
     slate, cues, slates, shown, anchors = M["slate_length_s"], [], [], [], {}
@@ -189,10 +194,17 @@ def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, 
     def at(fault):
         return anchors[fault[0]] + fault[1]
 
+    def bump(p):  # 0, then a 0.015 s/s ramp to the height, 10 s held, and back down
+        if not host_bump:
+            return 0.0
+        x, height = p - at(host_bump), host_bump[2]
+        return max(0.0, min(height, 0.015 * x, 0.015 * (2 * height / 0.015 + 10 - x)))
+
     sessions = ["sess-" + uuid.uuid4().hex, "sess-" + uuid.uuid4().hex]
     writer = take.TakeWriter(folder)
     host_offset, device_offset, previous_rgb, frozen = 5000.0, 1200.0, None, None
-    backwards_done = repeated = False
+    backwards_done = repeated = seq_repeated = False
+    previous_seq = None
     for i, p in enumerate(frame_times(0.1, t + 0.6)):
         if drop and at(drop) <= p < at(drop) + drop[2]:
             continue
@@ -204,7 +216,7 @@ def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, 
             rgb = frozen
         if repeat_at and p >= at(repeat_at) and not repeated:
             rgb, repeated = previous_rgb, True
-        t_host, t_device = true_host, true_host - device_offset + p * 20e-6
+        t_host, t_device = true_host + bump(p), true_host - device_offset + p * device_drift_ppm * 1e-6
         if step_both and p >= at(step_both):
             t_host, t_device = t_host + step_both[2], t_device + step_both[2]
         if step_host and p >= at(step_host):
@@ -212,9 +224,12 @@ def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, 
         if backwards_at and p >= at(backwards_at) and not backwards_done:
             t_host, t_device, backwards_done = t_host - 0.5, t_device - 0.5, True
         session = sessions[1] if session_change_at and p >= at(session_change_at) else sessions[0]
-        data = bundle(metadata(session, 1000 + i, t_host, t_device), rgb)
+        seq = 1000 + i
+        if seq_repeat_at and p >= at(seq_repeat_at) and not seq_repeated:
+            seq, seq_repeated = previous_seq, True
+        data = bundle(metadata(session, seq, t_host, t_device), rgb)
         writer.add(data, check.read_bundle(data)[0], p + 0.06, 1.8e9 + p + 0.06)
-        previous_rgb = rgb
+        previous_rgb, previous_seq = rgb, seq
     writer.close()
     after = sessions[1] if session_change_at else sessions[0]
     take.write_json(folder / "take.json", {
@@ -236,9 +251,9 @@ class Console(io.StringIO):
         return True
 
 
-def run_check(folder, typed="none"):
+def run_check(folder, typed="none", m=None):
     return check.run_check(folder, ask=lambda: typed, show=lambda p: None, out=io.StringIO(),
-                           console=Console())
+                           console=Console(), m=m)
 
 
 # ---- a fake camera with the installed owner's /health and /frame.npz shapes ----
@@ -716,8 +731,8 @@ class FaultTests(unittest.TestCase):
     def tearDownClass(cls):
         __import__("shutil").rmtree(cls.tmp, ignore_errors=True)
 
-    def verdict(self, **faults):
-        code, report, _ = run_check(make_take(self.tmp, **faults))
+    def verdict(self, m=None, **faults):
+        code, report, _ = run_check(make_take(self.tmp, **faults), m=m)
         return report["verdict"], report["failures"], report
 
     def test_clean_take_passes(self):
@@ -730,6 +745,19 @@ class FaultTests(unittest.TestCase):
         self.assertEqual(self.verdict(step_both=("begin", 15, 0.05))[0], "PASS")
         verdict, failures, _ = self.verdict(step_both=("begin", 15, 0.20))
         self.assertEqual((verdict, failures), ("FAIL", ["A_elapsed_bound"]))
+        verdict, failures, report = self.verdict(step_both=("begin", 15, 0.15))  # fails on the widths
+        self.assertEqual((verdict, failures), ("FAIL", ["A_elapsed_bound"]))
+        self.assertGreater(report["rules"]["A_elapsed_bound"]["elapsed_bound_s"], M["elapsed_bound_s"])
+
+    def test_offset_near_five_seconds_wraps(self):
+        verdict, failures, report = self.verdict(c=4.98, step_both=("begin", 15, 0.05))
+        self.assertEqual((verdict, failures), ("PASS", []))
+        self.assertLess(report["rules"]["A_elapsed_bound"]["elapsed_bound_s"], 0.15)
+
+    def test_slates_too_far_apart(self):
+        verdict, failures, report = self.verdict(m=dict(M, max_slate_separation_s=10))
+        self.assertEqual((verdict, failures), ("FAIL", ["A_separation"]))
+        self.assertGreater(report["rules"]["A_separation"]["separation_s"], 10)
 
     def test_one_second_error_at_end_slate(self):
         verdict, failures, _ = self.verdict(step_both=("hold_end", -0.5, 1.0))
@@ -749,6 +777,24 @@ class FaultTests(unittest.TestCase):
         self.assertEqual(verdict, "FAIL")
         self.assertIn("A_end_slate", failures)
         self.assertEqual(report["rules"]["A_end_slate"]["attempts"][0]["reason"], "stale_frame")
+
+    def test_t_host_bump_off_the_two_clock_line(self):
+        verdict, failures, report = self.verdict(host_bump=("begin", 5, 0.04))
+        self.assertEqual((verdict, failures), ("FAIL", ["B4_two_clock"]))
+        rule = report["rules"]["B4_two_clock"]
+        self.assertLessEqual(rule["max_step_s"], M["max_two_clock_step_s"])  # only the line fails
+        self.assertLessEqual(abs(rule["slope_ppm"]), M["max_two_clock_slope_ppm"])
+
+    def test_device_clock_drifts_too_fast(self):
+        verdict, failures, report = self.verdict(device_drift_ppm=2000)
+        self.assertEqual((verdict, failures), ("FAIL", ["B4_two_clock"]))
+        rule = report["rules"]["B4_two_clock"]
+        self.assertLessEqual(rule["max_step_s"], M["max_two_clock_step_s"])  # only the slope fails
+        self.assertLessEqual(rule["max_residual_s"], M["max_two_clock_line_s"])
+
+    def test_repeated_rgb_sequence(self):
+        verdict, failures, _ = self.verdict(seq_repeat_at=("begin", 10))
+        self.assertEqual((verdict, failures), ("FAIL", ["B3_increasing"]))
 
     def test_time_goes_backwards(self):
         verdict, failures, _ = self.verdict(backwards_at=("begin", 10))
@@ -772,11 +818,38 @@ class FaultTests(unittest.TestCase):
     def test_changed_file_fails_hash_rule(self):
         folder = make_take(self.tmp)
         path = sorted((folder / "frames").iterdir())[40]
-        data = bytearray(path.read_bytes())
-        data[-30] ^= 1  # a byte in the zip directory, so the archive still reads
-        path.write_bytes(bytes(data))
+        with zipfile.ZipFile(io.BytesIO(path.read_bytes())) as src:
+            members = {i.filename: src.read(i.filename) for i in src.infolist()}
+        members["depth_mm.npy"] = npy("<u2", (400, 640), bytes([7]) * 512_000)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+            for name, data in members.items():
+                archive.writestr(name, data)
+        path.write_bytes(out.getvalue())  # still a valid bundle; only depth changed
         code, report, _ = run_check(folder)
-        self.assertIn("B5_hashes", report["failures"])
+        self.assertEqual((report["verdict"], report["failures"]), ("FAIL", ["B5_hashes"]))
+        self.assertEqual(report["rules"]["B5_hashes"]["bad_files"], [path.relative_to(folder).as_posix()])
+
+    def test_row_that_disagrees_with_its_bundle_fails_hash_rule(self):
+        folder = make_take(self.tmp)
+        csv_path = folder / "frames.csv"
+        lines = csv_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        columns = lines[0].rstrip("\n").split(",")
+        edited = []
+        for row, column in ((30, "rgb_seq"), (60, "t_host_s"), (90, "t_device_s")):
+            cells = lines[row].split(",")
+            at = columns.index(column)
+            digits = cells[at].index(".") + 1 if "." in cells[at] else len(cells[at]) - 1
+            cells[at] = cells[at][:digits] + str((int(cells[at][digits]) + 1) % 10) + cells[at][digits + 1:]
+            lines[row] = ",".join(cells)  # same width, a different value
+            edited.append(cells[columns.index("file")])
+        csv_path.write_text("".join(lines), encoding="utf-8", newline="\n")
+        record = json.loads((folder / "take.json").read_text(encoding="utf-8"))
+        record["sha256"]["frames.csv"] = check.file_sha256(csv_path)  # as if take.py wrote it
+        take.write_json(folder / "take.json", record)
+        code, report, _ = run_check(folder)
+        self.assertEqual((report["verdict"], report["failures"]), ("FAIL", ["B5_hashes"]))
+        self.assertEqual(report["rules"]["B5_hashes"]["bad_files"], edited)
 
     def test_edited_frames_csv_fails_hash_rule(self):
         folder = make_take(self.tmp, backwards_at=("begin", 10))

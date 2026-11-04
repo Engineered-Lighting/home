@@ -92,6 +92,8 @@ def in_onedrive(path):
 def free_bytes(path):
     path = Path(path)
     while not path.exists():
+        if path.parent == path:
+            raise Refused("the drive for --out does not exist")
         path = path.parent
     return shutil.disk_usage(path).free
 

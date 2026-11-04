@@ -547,6 +547,19 @@ class FolderRuleTests(Workspace):
             usage.free = 36 * GIB
             self.assertEqual(take.run_dir(self.tmp / "c1", self.token_file), self.tmp / "c1")
 
+    def test_refuses_a_drive_that_does_not_exist(self):
+        calls = []
+
+        def missing(path):
+            calls.append(path)
+            if len(calls) > 100:  # fail instead of climbing forever
+                raise AssertionError("free_bytes went past the drive root")
+            return False
+        with mock.patch.object(take.Path, "exists", missing):
+            with self.assertRaisesRegex(take.Refused, "drive for --out does not exist"):
+                REAL_FREE_BYTES(self.tmp / "new" / "c1")
+        self.assertEqual(calls[-1], Path(calls[-1].anchor))
+
 
 class SlateFitTests(unittest.TestCase):
     def test_recovers_offset_at_about_4_fps(self):

@@ -6,6 +6,7 @@ No camera, no ssh, no speech. The fake camera listens on 127.0.0.1 only and
 every HTTP connection is checked to be loopback.
 """
 import contextlib
+import dataclasses
 import hmac
 import http.client
 import io
@@ -327,6 +328,29 @@ class FakeCamera:
         self.server.server_close()
 
 
+class SlateCamera(FakeCamera):
+    """A fake camera whose frames show the phone slate while `showing` is set.
+
+    Camera time runs five times faster than real time: a new bundle every 0.05 s,
+    0.25 s of t_host apart, so a 4 s slate holds 20 s of pattern at 4 frames per second."""
+
+    def __init__(self, c, **kwargs):
+        super().__init__(period=0.05, **kwargs)
+        self.c, self.showing = c, False
+
+    def response(self, path):
+        if path != "/frame.npz" or self.mode != "ok":
+            return super().response(path)
+        index, showing = int((time.monotonic() - self.start) / self.period), self.showing
+        key = (self.session, index, showing)
+        if key not in self.cache:
+            t_host = 7000.0123456 + index * 0.25  # not round, as real times are not
+            screen = screen_value(t_host - self.c) if showing else None
+            self.cache[key] = bundle(metadata(self.session, 500 + index, t_host, t_host - 3000.0),
+                                     nv12(screen, index))
+        return 200, "application/octet-stream", self.cache[key]
+
+
 FAST = take.Settings(slate_s=1.0, hold_lead_s=0.2, say_gap_s=0.1, away_s=0.2, commission_activity_s=1.0,
                      health_retry_s=0.1)
 
@@ -534,6 +558,36 @@ class TakeScriptTests(Workspace):
             session = (record["health_after"]["body"] or {}).get("session")
             self.assertEqual(session, camera.session if kept == 200 else None)  # else B2 fails it
 
+    def test_ctrl_c_keeps_an_incomplete_take(self):
+        camera = self.camera()
+
+        def say(text):
+            if text == "Begin.":
+                raise KeyboardInterrupt
+        try:
+            code, record, _ = self.run_take(self.args(camera), say=say)
+        except KeyboardInterrupt:
+            self.fail("Ctrl+C escaped take.run")
+        self.assertEqual((code, record["complete"], record["stop_reason"]), (1, False, "interrupted"))
+        self.assertEqual(record["cues"][-1]["cue"], "begin")
+        self.assertEqual(record["health_after"]["body"]["session"], camera.session)
+
+    def test_no_new_frame_for_stall_s_stops_the_take(self):
+        camera = self.camera()
+        threading.Timer(1.5, camera.close).start()
+        settings = dataclasses.replace(FAST, stall_s=1.0, commission_activity_s=10.0)
+        code, record, _ = self.run_take(self.args(camera), settings=settings)
+        self.assertEqual((code, record["complete"], record["stop_reason"]), (1, False, "no_new_frame"))
+        self.assertEqual(record["cues"][-1]["cue"], "stopped")
+        self.assertGreater(record["counts"]["errors"], 0)
+        self.assertIsNone(record["health_after"]["status"])
+
+    def test_token_change_stops_the_take(self):
+        camera = self.camera()
+        threading.Timer(1.0, lambda: setattr(camera, "token", "x" * 30)).start()
+        code, record, _ = self.run_take(self.args(camera))
+        self.assertEqual((code, record["complete"], record["stop_reason"]), (1, False, "unauthorized"))
+
     def test_free_take_ends_on_enter(self):
         camera = self.camera()
         settings = take.Settings(slate_s=1.0, hold_lead_s=0.2, say_gap_s=0.1, away_s=0.2, free_max_s=60)
@@ -569,6 +623,30 @@ class TakeScriptTests(Workspace):
         code, report, _ = run_check(Path(self.args(camera).out))  # take.py output feeds check.py
         self.assertEqual((code, report["verdict"]), (1, "FAIL"))
         self.assertIn("B1_complete", report["failures"])
+
+
+class EndToEndTests(Workspace):
+    def test_take_py_output_passes_check_py(self):
+        camera, c, spoken = SlateCamera(c=2.3456), 2.3456, []
+        self.addCleanup(camera.close)
+
+        def say(text):
+            spoken.append(text)
+            if text.startswith("Hold the phone"):
+                camera.showing = True
+            elif text.startswith(("Slate OK", "End slate")):
+                camera.showing = False
+        settings = take.Settings(slate_s=M["slate_length_s"] / 5, poll_s=0.05, hold_lead_s=0.2, say_gap_s=0.1,
+                                 away_s=0.4, commission_activity_s=4.0, health_retry_s=0.1)
+        code, record, _ = self.run_take(self.args(camera), say=say, peek=take.peek, settings=settings)
+        self.assertEqual((code, record["complete"]), (0, True), record["slates"])
+        code, report, _ = run_check(Path(self.args(camera).out))
+        self.assertEqual((code, report["verdict"], report["failures"]), (0, "PASS", []))
+        self.assertGreater(report["usable"]["minutes"], 0)
+        self.assertTrue(report["usable"]["segments"])
+        for judged in report["reported_only"]["offset_c_mod_period_s"]:
+            self.assertLess(abs(check.wrap(judged - c, 10)), 0.05)
+        self.assertNotIn("2.3", " ".join(spoken))
 
 
 class FolderRuleTests(Workspace):

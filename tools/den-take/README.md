@@ -31,9 +31,23 @@ camera server already running there (oak-den, port 8090), with its token.
 - The token stays in `C:\den-takes\private\camera-token.txt`. No code path
   prints, logs or writes it.
 
-Run every command below in PowerShell 5.1, from your checkout of
-`claude/rung-r` (the folder that holds `tools\`). If `python` is not found, use
-`py -3.12` instead.
+## Step 1, once: a folder for this branch
+
+Your checkout at `C:\claude\home` is on another branch with changes of its own.
+Leave it as it is: these lines add a second folder, a git worktree, that holds
+`claude/rung-r`. In PowerShell 5.1:
+
+```powershell
+git -C C:\claude\home fetch origin claude/rung-r
+git -C C:\claude\home worktree add C:\claude\home\.claude\worktrees\rung-r claude/rung-r
+Set-Location C:\claude\home\.claude\worktrees\rung-r
+```
+
+Run every command below in PowerShell 5.1, from
+`C:\claude\home\.claude\worktrees\rung-r` (the folder that holds `tools\`). If
+`python` is not found, use `py -3.12` instead. If the agent says the branch
+has changed, run `git pull` in that folder. Once the branch merges, skip this
+step and run everything from a checkout of `main` instead.
 
 ## Step 2, once: the camera token
 

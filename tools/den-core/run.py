@@ -71,25 +71,39 @@ def diff(header, log):
     Scenes differ unless each matches the other, so a level decide asks for counts against den_lighting's
     last-level ON with no level. A bulb is compared from decide's first request for it, once per instant,
     and only at instants holding an event decide plans on (REPLANS): den_lighting also acts on a facts line,
-    which decide follows only at its next tick."""
-    den, wanted, state = incumbent.Shadow(header), {}, {"gaming": False, "replan": False, "t": 0.0, "differs": []}
+    which decide follows only at its next tick. While decide is silent by design (its occupancy unknown, or
+    off for less than its vacancy_s) each bulb keeps the result it had."""
+    den, wanted = incumbent.Shadow(header), {}
+    vacancy_s = next(p["config"]["vacancy_s"] for p in header["policies"] if p["id"] == "decide")
+    state = {"gaming": False, "replan": False, "t": 0.0, "differs": [], "occupancy": "unknown", "vacant_since": None}
 
     def step(event):
         den.feed(event)
-        kind, data = event["kind"], event["data"]
+        kind, data, t = event["kind"], event["data"], event["t"]
         if kind == "mode":
             state["gaming"] = data["gaming"]
         elif kind == "decision" and event["source"] == "decide":
             wanted.update(data["requested_scene"])
             state["replan"] = True
+        elif kind == "occupancy":  # as decide.handle keeps it
+            value = data["value"] if data["value"] in ("on", "off") else "unknown"
+            if value != "off":
+                state["vacant_since"] = None
+            elif state["occupancy"] != "off":
+                state["vacant_since"] = t
+            state["occupancy"] = value
         state["replan"] = state["replan"] or kind in REPLANS
-        state["t"] = event["t"]
+        state["t"] = t
+
+    def silent():
+        since = state["vacant_since"]
+        return state["occupancy"] == "unknown" or (state["occupancy"] == "off" and state["t"] - since < vacancy_s)
 
     def compared():
-        if state["replan"]:
-            state["replan"] = False
+        if state["replan"] and not silent():
             state["differs"] = [(bulb, not state["gaming"] and not _both(wanted[bulb], den.wants(bulb, state["t"])))
                                 for bulb in sorted(wanted)]
+        state["replan"] = False
         return state["differs"]
 
     return _intervals(log, step, compared)
@@ -108,18 +122,27 @@ def live_diff(header, log):
     command the live den_lighting sent for it (live_command lines).
 
     The replayed target is the one it last acted on (incumbent.Shadow.acted): a command, or a bulb it found
-    already there, as when --lights shows it the live bulb's recorded result before its own tick. A null
-    level on either side matches any level. A bulb is compared from the first command for it on either
-    side, with a side that has none yet differing. Gaming is not left out: both sides are den_lighting.
-    Events at one instant are compared once."""
-    den, live, sent = incumbent.Shadow(header), {}, set()
+    already there, as when --lights shows it the live bulb's recorded result before its own tick. When the
+    replay finds a bulb already at its target on a recorded (not plant) state, the live den_lighting saw the
+    same bulb, so the live side takes that target too: neither sends a command. A null level on either side
+    matches any level. A bulb is compared from the first command or found target for it on either side,
+    with a side that has none yet differing. Gaming is not left out: both sides are den_lighting. Events at
+    one instant are compared once."""
+    den, live, sent, recorded = incumbent.Shadow(header), {}, set(), {}
 
     def step(event):
-        den.feed(event)
-        if event["kind"] == "live_command":
-            live[event["data"]["entity_id"]] = event["data"]["target"]
-        elif event["kind"] == "decision" and event["source"] == "incumbent":
-            sent.update(event["data"]["requested_scene"])
+        kind, data = event["kind"], event["data"]
+        if kind == "light_observed" and event["source"] != "plant":
+            recorded[data["entity_id"]] = {key: data[key] for key in ("on", "brightness", "kelvin")}
+        before = dict(den.acted)
+        commanded = {bulb for out in den.feed(event) if out["kind"] == "decision" for bulb in out["data"]["requested_scene"]}
+        for bulb, target in den.acted.items():
+            if target != before.get(bulb) and bulb not in commanded and events.scene_matches(target, recorded.get(bulb)):
+                live[bulb] = target
+        if kind == "live_command":
+            live[data["entity_id"]] = data["target"]
+        elif kind == "decision" and event["source"] == "incumbent":
+            sent.update(data["requested_scene"])
 
     return _intervals(log, step, lambda: [(bulb, not _agree(live.get(bulb), den.acted.get(bulb)))
                                           for bulb in sorted(set(live) | sent)])
@@ -234,13 +257,17 @@ def main(argv=None):
         described.append({"name": path.name, "sha256": events.sha256_file(path), "params": {"t0": args.mqtt_t0}})
     if args.journal:
         paths = list(map(Path, args.journal))
-        items, unlogged = sources.occupancy_journal(paths)
+        items, gaps = sources.occupancy_journal(paths)
         inputs += runner.tagged(items, "occupancy_journal")
         described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in paths]
-        if unlogged:
-            print("occupancy_journal: %d off(s) the reader never logged; the replay stays occupied through each:"
-                  % len(unlogged))
-            print("\n".join("  %s .. %s" % (utc(on), utc(off)) for on, off in unlogged))
+        if items and items[0][2]["value"] == "on":
+            print("occupancy_journal: the first edge is an arrival, so the replay starts with occupancy unknown "
+                  "and den_lighting makes no arrival ON for it")
+        for sure, text in ((True, "off(s) the reader never logged"), (False, "dropout(s) after an on that may hide an off")):
+            spans = [(on, line) for on, line, certain in gaps if certain is sure]
+            if spans:
+                print("occupancy_journal: %d %s; the replay stays occupied through each:" % (len(spans), text))
+                print("\n".join("  %s .. %s" % (utc(on), utc(line)) for on, line in spans))
     if not inputs:
         parser.error("no inputs: give --synthetic, --facts, --poll, --mqtt or --journal")
     if args.live_commands:

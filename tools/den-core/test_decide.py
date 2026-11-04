@@ -63,8 +63,8 @@ def hold(bulb, b, k, since, lifetime="room_vacant_2_minutes"):
     return {"entity_id": bulb, "pinned": on(b, k), "since": float(since), "lifetime": lifetime}
 
 
-def mode(rev, holds=(), gaming=False, normal=NORMAL):
-    return {"policy": "den_lighting@1.0.4", "revision": rev, "gaming": gaming, "occupancy": "on",
+def mode(rev, holds=(), gaming=False, normal=NORMAL, occupancy="on"):
+    return {"policy": "den_lighting@1.0.4", "revision": rev, "gaming": gaming, "occupancy": occupancy,
             "holds": sorted(holds, key=lambda h: h["entity_id"]), "normal": normal}
 
 
@@ -118,7 +118,7 @@ def evening():
     events += [ps(T0 + 60, "engaged"), ps(T0 + 64, "engaged"), ps(T0 + 180, "ending"), ps(T0 + 200, "none"),
                ev(T0 + 240, "mode", mode(2, [hold(RL, 80, 2202, T0 + 240)])),
                ps(T0 + 300, "starting"), ps(T0 + 304, "engaged"), ps(T0 + 400, "none"),
-               occ(T0 + 420, "off"), ev(T0 + 560, "mode", mode(3))]
+               occ(T0 + 420, "off"), ev(T0 + 560, "mode", mode(3, occupancy="off"))]
     events += [tick(T0 + 2 * k) for k in range(1, 301)]
     return sorted(events, key=lambda e: (e["t"], e["kind"] == "tick"))
 

@@ -133,7 +133,11 @@ class Shadow:
         return out
 
     def wants(self, entity_id, t):
-        """Controller.desired() for the bulb at t, or while it has none (vacancy wait, unknown occupancy) the
-        target it last acted on; None when it has neither."""
-        scene = self.policy.controller.desired(entity_id, t)
+        """Controller.desired() for the bulb at t. While it has none (vacancy wait, unknown occupancy): a held
+        bulb's pinned scene outside a game, since den_lighting leaves it as the person set it, else the target
+        it last acted on; None when it has neither."""
+        c = self.policy.controller
+        scene = c.desired(entity_id, t)
+        if scene is None and not c.gaming and entity_id in c.holds:
+            scene = c.holds[entity_id].scene
         return asdict(scene) if scene is not None else self.acted.get(entity_id)

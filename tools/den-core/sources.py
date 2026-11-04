@@ -154,22 +154,24 @@ def mqtt_timeline(path, t0=0.0):
 
 
 def occupancy_journal(paths):
-    """(items, unlogged): the den's occupancy edges from the Jetson occupancy reader's journal lines, at their
-    observed_at, and the spans in which the reader missed an off.
+    """(items, gaps): the den's occupancy edges from the Jetson occupancy reader's journal lines, at their
+    observed_at, and the spans in which the reader may have missed an off.
 
     Lines are matched by occupancy_flaps.EDGE (other lines are ignored). Only DEN_OCCUPANCY is kept. to=on
     and to=off map to on and off, anything else to unknown. An edge repeated across copies counts once.
-    The reader logs an off only straight from on, so a dropout that ends off leaves no line, and the next
-    line is a 'from=off' after a 'to=on'. Each such pair is in unlogged as (t of the to=on, t of the from=off
-    line); the replay stays occupied through it.
+    The reader logs an off only straight from on, so a dropout that ends off leaves no line. The next line
+    after that to=on is then 'from=off' (an off was surely missed) or, when the person comes back out of a
+    second dropout, 'from=unknown' (one may have been, which a dropout that ended on also logs). Each is in
+    gaps as (t of the to=on, t of that line, sure); the replay stays occupied through it.
     """
     edges = set()
     for path in paths:
         edges.update(flaps().parse(_text(path).splitlines()))
     den = [(t, a, b) for t, a, b, entity in sorted(edges) if entity == DEN_OCCUPANCY]
-    unlogged = [(den[n - 1][0], t) for n, (t, a, _) in enumerate(den) if n and den[n - 1][2] == "on" and a == "off"]
+    gaps = [(den[n - 1][0], t, a == "off") for n, (t, a, _) in enumerate(den)
+            if n and den[n - 1][2] == "on" and a in ("off", "unknown")]
     return [(t, "occupancy", {"value": b if b in ("on", "off") else "unknown", "via": "jetson_journal"})
-            for t, _, b in den], unlogged
+            for t, _, b in den], gaps
 
 
 def _scene(value):

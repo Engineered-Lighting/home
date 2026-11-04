@@ -189,6 +189,10 @@ class Decide:
         elif kind == "mode":
             previous = (state["mode"] or NO_MODE).get("holds", [])
             state["mode"] = copy.deepcopy(data)
+            if data.get("occupancy", state["occupancy"]) != state["occupancy"]:
+                # The incumbent's mode for an occupancy change reaches decide before the occupancy event itself,
+                # which follows in the same chain and plans with this mode; planning now would use the old one.
+                return []
             trigger = "hold change" if data.get("holds", []) != previous else "mode change"
         elif kind == "tick":
             trigger = "time step"

@@ -201,7 +201,10 @@ def only_the_look(header, log):
     if not by_bulb:
         return na("decide made no decision in this log")
     looks, first = logged_config(header, "decide").get("looks", {}), log[0]["t"]
-    spans = run.diff(header, log)
+    try:
+        spans = run.diff(header, log)
+    except (OSError, ValueError) as error:  # check 1 reports a changed den_lighting as its FAIL
+        return na("den_lighting refused this log's incumbent config: %s" % error)
     for span in spans:
         bulb, start, end = span["entity_id"], span["start"], span["end"]
         mine = by_bulb.get(bulb, [])

@@ -182,14 +182,18 @@ New-Item -ItemType Directory -Force C:\tmp\den-core\in | Out-Null
 ssh JETSON "journalctl _SYSTEMD_USER_UNIT=perception-lab-managed.service -o cat | grep 'occupancy edge'" | Set-Content -Encoding ascii C:\tmp\den-core\in\occupancy-edges.txt
 ```
 
-To cut it to one evening, add `--since 'YYYY-MM-DD HH:MM' --until 'YYYY-MM-DD
-HH:MM'` (the Jetson's local time) after `-o cat`, and give `run.py` only that
-day's fact file. Start the cut while the den is surely empty, such as early
-afternoon or the day before: the reader logs only changes, so the edge that
-set the state in force at `--since` is otherwise cut off, and the replay
-starts with occupancy unknown. Without a cut the replay spans every edge the
-journal still holds, with a tick every 2 s (about 90 MB of log and 20 s per
-week of span). Copy it before journald's size limit rotates the evening out.
+Copying the whole journal is simplest. The replay spans every edge it holds,
+with a tick every 2 s, which comes to about 30 MB of log and 15 s per week of
+span. To cut it to one evening, add `--since 'YYYY-MM-DD HH:MM' --until
+'YYYY-MM-DD HH:MM'` (the Jetson's local time) after `-o cat`. The replay
+starts with occupancy unknown, and den_lighting does not treat unknown to on
+as an arrival: it makes no last-level ON. So the cut must keep a
+`from=on to=off` line at least 120 s before the evening's first `to=on`.
+Start `--since` while the den is still occupied before it last empties, or
+during the evening before. `run.py` warns when a journal's first edge is an
+arrival. Give it the fact files that cover the cut: they are named by UTC day,
+so a Victoria evening spans two of them. Copy the journal before journald's
+size limit rotates the evening out.
 
 How a line becomes an event:
 
@@ -203,12 +207,14 @@ How a line becomes an event:
 - An edge that appears twice, such as in overlapping copies, counts once.
 - The reader logs only edges into `on`, and an off only straight from `on`.
   A dropout (stale or unavailable) that ends on logs `from=unknown to=on`. One
-  that ends off logs nothing at all, so the next line is `from=off to=on` at
-  the next arrival, and the replay stays occupied through the dropout and the
-  vacancy after it. den_lighting itself turned the dropout into unknown and
-  still saw the MQTT zero. `run.py` prints each such span, from the last
-  `to=on` to that `from=off` line, as an off the reader never logged; read
-  the replay with care there.
+  that ends off logs nothing at all, and the replay stays occupied through the
+  dropout and the vacancy after it. den_lighting itself turned the dropout
+  into unknown and still saw the MQTT zero. The next line is then
+  `from=off to=on` at the next arrival, or `from=unknown to=on` when the person
+  comes back out of a second dropout, which looks just like a dropout that
+  ended on. `run.py` prints both kinds of span, from the last `to=on` to that
+  line: a `from=off` one as an off the reader never logged, a `from=unknown`
+  one as a dropout that may hide an off. Read the replay with care there.
 - The reader polls the HA entity at 2 Hz. den_lighting reads Frigate's MQTT
   count and ignores HA OFF, so the edges match its input only to within a
   poll or so.
@@ -267,7 +273,11 @@ How the export is used:
   command, in the style of `diff()`. That target is its latest command, or a
   bulb it found already there and so left alone, as when `--lights` shows it
   the live bulb's recorded result before its own tick. So with `--lights` the
-  replay may send fewer commands than the live side without disagreeing.
+  replay may send fewer commands than the live side without disagreeing. When
+  the replay finds a bulb already at its target on a recorded state, the live
+  den_lighting saw the same bulb, so the live side takes that target too. That
+  covers, for example, a bulb a person turned off before leaving: neither side
+  sends it the vacancy OFF.
   - A null level on either side matches any level, because a replay of
     recorded bulbs knows no levels and sends its ONs without one. On/off
     still has to agree, and so do levels both sides know.

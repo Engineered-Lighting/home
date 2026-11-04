@@ -301,6 +301,15 @@ class Cli(Temp):
         self.assertIn("replay: FAIL: line ", out.getvalue())
         self.assertIn("overall: FAIL: 1 of 5 checks failed", out.getvalue())
 
+    def test_a_log_from_another_den_lighting_still_reports_every_check(self):
+        header, log, _ = evening(touch=True)
+        next(p for p in header["policies"] if p["id"] == "incumbent")["config"]["den_lighting_policy_sha256"] = "0" * 64
+        lines, passed = validate.report(self.write(header, log))
+        self.assertFalse(passed)
+        self.assertEqual(statuses(lines)["replay"], "FAIL")
+        self.assertEqual(lines[2], "only the look: n/a: den_lighting refused this log's incumbent config: "
+                                   "den_lighting policy.py changed")
+
     def test_a_log_without_need_or_decide(self):
         header, log, _ = evening(policies=["incumbent"])
         lines, passed = validate.report(self.write(header, log))

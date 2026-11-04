@@ -169,20 +169,21 @@ class AdapterTest(Temp):
                                      edge(T0 + 10, "unknown", "on", "binary_sensor.elsewhere_person_occupancy")])
         second = self.write("b.txt", [edge(T0 + 30, "on", "off"), edge(T0 + 40, "off", "unavailable"),
                                       "occupancy edge: entity=%s from=off to=on" % DEN])
-        items, unlogged = sources.occupancy_journal([first, second])
+        items, gaps = sources.occupancy_journal([first, second])
         self.assertEqual(items, [(T0, "occupancy", {"value": "on", "via": "jetson_journal"}),
                                  (T0 + 30, "occupancy", {"value": "off", "via": "jetson_journal"}),
                                  (T0 + 40, "occupancy", {"value": "unknown", "via": "jetson_journal"})])
-        self.assertEqual(unlogged, [])
+        self.assertEqual(gaps, [])
 
     def test_occupancy_journal_reports_an_unlogged_off(self):
-        # A dropout that ends on logs from=unknown; one that ends off logs nothing until the next from=off.
+        # After a to=on, from=off proves an off the reader never logged; from=unknown (a dropout that ended
+        # on, or a return out of a second dropout) may hide one. After a logged off, nothing is missing.
         path = self.write("a.txt", [edge(T0, "unknown", "on"), edge(T0 + 600, "unknown", "on"),
                                     edge(T0 + 4000, "off", "on"), edge(T0 + 4100, "on", "off"),
                                     edge(T0 + 4200, "off", "on")])
-        items, unlogged = sources.occupancy_journal([path])
+        items, gaps = sources.occupancy_journal([path])
         self.assertEqual([d["value"] for _, _, d in items], ["on", "on", "on", "off", "on"])
-        self.assertEqual(unlogged, [(T0 + 600, T0 + 4000)])
+        self.assertEqual(gaps, [(T0, T0 + 600, False), (T0 + 600, T0 + 4000, True)])
 
     def test_occupancy_journal_reads_a_powershell_redirect(self):
         lines = [edge(T0, "unknown", "on"), edge(T0 + 30, "on", "off")]
@@ -326,7 +327,9 @@ def scripted(script):
         due = [scenes for t, scenes in script if t <= event["t"]]
         del script[:len(due)]
         return [{"kind": "decision", "data": {"requested_scene": scenes, "transitions": {}}} for scenes in due]
-    return Toy("decide", reply)
+    toy = Toy("decide", reply)
+    toy.config = {"vacancy_s": 120}  # decide's own, which run.diff reads
+    return toy
 
 
 def seen(t, bulb, scene, context="unknown"):
@@ -395,6 +398,38 @@ class DiffTest(unittest.TestCase):
         self.assertEqual(found, [])
         found, log = self.diff(inputs, [(0, {LIGHTS[0]: SCENE})])
         self.assertEqual(found, [(LIGHTS[0], 3.0, log[-1]["t"])])
+
+    def test_a_hold_during_a_vacancy(self):
+        held = {"on": True, "brightness": 80, "kelvin": 2202}
+        for at in (150.0, 240.0):  # inside the vacancy wait, and after the vacancy OFF
+            with self.subTest(correction_at=at):
+                inputs = [seen(0.0, e, SCENE) for e in LIGHTS] + [occupied(0.0, "on"), occupied(100.0, "off"), (
+                    at, "correction", {"correction_id": "c1", "entity_id": LIGHTS[2], "after": held, "source": "t"},
+                    "synthetic")]
+                header, log = runner.run(inputs, runner.load_policies(["incumbent", "decide"]))
+                self.assertTrue([d for d in of(log, "decision", "decide")
+                                 if LIGHTS[2] in {s["channel"] for s in d["data"]["skipped"]}])
+                self.assertEqual(spans(run.diff(header, log)), [])
+
+    def test_decide_waits_for_an_arrival_in_the_same_chain(self):
+        # The arrival lands just after decide's vacancy timer ran out and before its tick: den_lighting never
+        # turns the bulbs off, so decide must not ask for OFF on the mode that comes ahead of the arrival.
+        header, log = runner.run([occupied(0.0, "on"), occupied(600.7, "off"), occupied(721.5, "on")],
+                                 runner.load_policies(["incumbent", "decide"]))
+        self.assertEqual([d["t"] for d in of(log, "decision", "decide")], [])
+
+    def test_live_diff_when_both_find_a_bulb_already_there(self):
+        # A person turns front_left off and leaves. The live den_lighting holds it and sends it nothing at its
+        # vacancy OFF; the replay finds it already off and sends nothing either.
+        def live(t, target):
+            return (t, "live_command", {"entity_id": LIGHTS[0], "revision": 1, "target": target, "context_id": "c%g" % t},
+                    "recorder_commands")
+        inputs = [seen(0.0, LIGHTS[0], SCENE), occupied(0.0, "on"), occupied(10.0, "off"), live(130.3, OFF),
+                  seen(130.4, LIGHTS[0], OFF, "own"), occupied(300.0, "on"), live(300.3, SCENE),
+                  seen(300.4, LIGHTS[0], SCENE, "own"), seen(400.0, LIGHTS[0], OFF, "person"), occupied(500.0, "off")]
+        header, log = runner.run(inputs, [incumbent.make_policy()], plant=False)
+        self.assertEqual([s for s in spans(run.live_diff(header, log)) if s[0] == LIGHTS[0]],
+                         [(LIGHTS[0], 130.0, 130.3), (LIGHTS[0], 300.0, 300.3)])
 
     def test_live_diff_counts_a_bulb_found_already_there(self):
         lit = {"on": True, "brightness": 180, "kelvin": 2700}

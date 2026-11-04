@@ -14,6 +14,7 @@ import json
 import math
 import random
 import re
+import shutil
 import socket
 import struct
 import tempfile
@@ -54,6 +55,8 @@ def setUpModule():
 
 def tearDownModule():
     _guard.stop()
+    if _CLEAN:
+        shutil.rmtree(_CLEAN[0].parent, ignore_errors=True)
 
 
 # ---- synthetic bundles, built like np.savez_compressed with hand-written .npy headers ----
@@ -247,6 +250,18 @@ def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, 
     return folder
 
 
+_CLEAN = []  # the one clean take, built on first use
+
+
+def clean_take(root):
+    """A fresh copy of a clean make_take() take: built once per run, copied for each test."""
+    if not _CLEAN:
+        _CLEAN.append(make_take(tempfile.mkdtemp(prefix="den-take-clean-")))
+    folder = Path(root) / f"take-{uuid.uuid4().hex[:8]}"
+    shutil.copytree(_CLEAN[0], folder)
+    return folder
+
+
 class Console(io.StringIO):
     def isatty(self):
         return True
@@ -362,7 +377,7 @@ def readable_peek(window, m):
 class Workspace(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="den-take-test-")).resolve()
-        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
         self.token_file = self.tmp / "private" / "camera-token.txt"
         self.token_file.parent.mkdir()
         self.token_file.write_text(TOKEN + "\n", encoding="ascii", newline="\n")
@@ -807,10 +822,11 @@ class FaultTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        __import__("shutil").rmtree(cls.tmp, ignore_errors=True)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def verdict(self, m=None, **faults):
-        code, report, _ = run_check(make_take(self.tmp, **faults), m=m)
+        folder = make_take(self.tmp, **faults) if faults else clean_take(self.tmp)
+        code, report, _ = run_check(folder, m=m)
         return report["verdict"], report["failures"], report
 
     def test_clean_take_passes(self):
@@ -894,7 +910,7 @@ class FaultTests(unittest.TestCase):
         self.assertEqual(list(folder.glob("check-*.json")), [])
 
     def test_changed_file_fails_hash_rule(self):
-        folder = make_take(self.tmp)
+        folder = clean_take(self.tmp)
         path = sorted((folder / "frames").iterdir())[40]
         with zipfile.ZipFile(io.BytesIO(path.read_bytes())) as src:
             members = {i.filename: src.read(i.filename) for i in src.infolist()}
@@ -909,7 +925,7 @@ class FaultTests(unittest.TestCase):
         self.assertEqual(report["rules"]["B5_hashes"]["bad_files"], [path.relative_to(folder).as_posix()])
 
     def test_row_that_disagrees_with_its_bundle_fails_hash_rule(self):
-        folder = make_take(self.tmp)
+        folder = clean_take(self.tmp)
         csv_path = folder / "frames.csv"
         lines = csv_path.read_text(encoding="utf-8").splitlines(keepends=True)
         columns = lines[0].rstrip("\n").split(",")
@@ -948,7 +964,7 @@ class CutTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        __import__("shutil").rmtree(cls.tmp, ignore_errors=True)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def kinds(self, report, kind):
         return [c for c in report["cuts"] if c["kind"] == kind]
@@ -1009,7 +1025,7 @@ class CutTests(unittest.TestCase):
         self.assertAlmostEqual(usable["minutes"] * 60, usable["end_t_s"] - usable["start_t_s"], places=2)
 
     def test_rerun_writes_next_check_file(self):
-        folder = make_take(self.tmp)
+        folder = clean_take(self.tmp)
         first = run_check(folder)[2]
         before = first.read_bytes()
         second = run_check(folder, typed="00:50-00:52")[2]
@@ -1019,7 +1035,7 @@ class CutTests(unittest.TestCase):
     def test_span_prompt_refuses_without_console(self):
         with self.assertRaisesRegex(check.Refused, "interactive console"):
             check.ask_spans(stdin=io.StringIO("none\n"), stdout=io.StringIO())
-        folder, shown = make_take(self.tmp), []
+        folder, shown = clean_take(self.tmp), []
         with self.assertRaises(check.Refused):
             check.run_check(folder, ask=lambda: "none", show=shown.append, out=io.StringIO(),
                             console=io.StringIO("none\n"))
@@ -1064,7 +1080,7 @@ class MethodTests(unittest.TestCase):
 
     def test_check_file_records_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            report = run_check(make_take(tmp))[1]
+            report = run_check(clean_take(tmp))[1]
         self.assertEqual(report["schema"], "den-take-check-1")
         self.assertEqual(report["method"]["file"], "CHECK-V1.md")
         self.assertEqual(report["method"]["sha256"], check.file_sha256(HERE / "CHECK-V1.md"))
@@ -1111,7 +1127,7 @@ class PngTests(unittest.TestCase):
             self.assertEqual(struct.unpack(">IIBBBBB", chunks[0][1]), (160, 90, 8, 0, 0, 0, 0))
             raw = zlib.decompress(chunks[1][1])
             self.assertEqual(b"".join(raw[r * 161 + 1:(r + 1) * 161] for r in range(90)), pixels)
-            folder = make_take(tmp)
+            folder = clean_take(tmp)
             run_check(folder)
             thumbs = sorted((folder / "review").glob("*.png"))
             last_t = float((folder / "frames.csv").read_text(encoding="utf-8").splitlines()[-1].split(",")[3])

@@ -1,0 +1,47 @@
+{
+  "id": "cph-budget-v0",
+  "written": "2026-11-04, before any real Home Assistant recorder export was opened",
+  "what_it_is": "A planning value for rung 11 (hand the den's four bulbs from den_lighting to the coordinator): can a 30% drop in corrections per occupied hour show within the hours one den gives? It is not a promotion gate and decides nothing about the coordinator.",
+  "applies_to": "each mode stratum of a den-exposure-1 file on its own: no_game and game",
+  "inputs": {
+    "occupied_h": "hours den_lighting was in charge (its status shows automatic) with its own occupancy on, from its status sensor",
+    "people": "actions from the HA app (a user id) or a switch or dimmer (no ids), one per human action, inside occupied_h",
+    "every_hold": "every counted action that opened or replaced a hold, whoever made it (people, another automation, or a hold with no bulb row), inside occupied_h"
+  },
+  "constants": {
+    "min_occupied_h": 20,
+    "max_hours_per_arm": 300,
+    "improvement": 0.3,
+    "hours_constant": 148,
+    "phi": 1,
+    "interval": "Garwood exact Poisson, two-sided",
+    "interval_level": 0.95
+  },
+  "hours_per_arm": "hours_constant * phi / rate. A13: (1.96 + 0.84)^2 * (1 + 0.7) / 0.3^2 = 148 at phi = 1, for a two-sided test at alpha 0.05 with power 0.8 between a rate and 0.7 of it. A rate of 0 needs unbounded hours.",
+  "verdicts_in_order": [
+    {
+      "verdict": "insufficient",
+      "when": "occupied_h < min_occupied_h",
+      "plain": "under 20 occupied hours in this stratum: too little to plan from"
+    },
+    {
+      "verdict": "beyond_budget",
+      "when": "hours_per_arm at the upper end of every_hold's interval > max_hours_per_arm",
+      "plain": "even counting every hold, at the high end of its rate, a 30% improvement would need more than 300 occupied hours per arm"
+    },
+    {
+      "verdict": "within_budget",
+      "when": "hours_per_arm at the lower end of people's interval <= max_hours_per_arm",
+      "plain": "people's overrides alone, at the low end of their rate, are frequent enough to show a 30% improvement within 300 occupied hours per arm"
+    },
+    {
+      "verdict": "undetermined",
+      "when": "otherwise",
+      "plain": "the answer depends on which holds count or on chance: export more evenings, or settle who made the uncounted holds"
+    }
+  ],
+  "notes": [
+    "phi stays 1 here. A dispersion fitted from a few 24-hour blocks is reported beside the verdict but never changes it; phi above 1 only raises the hours, so beyond_budget at phi = 1 holds a fortiori and within_budget is the optimistic case.",
+    "beyond_budget and within_budget cannot both hold: people's lower end is at most every_hold's upper end."
+  ]
+}

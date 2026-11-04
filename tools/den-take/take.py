@@ -366,8 +366,14 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
     before = camera.health()
     session = (before.get("body") or {}).get("session")
     healthy = (before["body"] or {}).get("healthy") is True
+    if before["status"] is None:
+        raise Refused(f"cannot reach the camera at {camera.host}:{camera.port} ({before.get('error')}); "
+                      "try the ssh tunnel in README step 4; nothing recorded")
+    if before["status"] in (401, 403):
+        raise Refused("the camera refused the token; redo README step 2; nothing recorded")
     if before["status"] != 200 or not healthy or type(session) is not str:
-        raise Refused(f"camera /health is not healthy (status {before['status']}); nothing recorded")
+        raise Refused(f"camera /health is not healthy (status {before['status']}); "
+                      "do not restart it, tell the agent; nothing recorded")
     folder.mkdir(parents=True, exist_ok=True)
     writer = TakeWriter(folder)
     take = {"schema": SCHEMA, "take": folder.name, "script": args.script,

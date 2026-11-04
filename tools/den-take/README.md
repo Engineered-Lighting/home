@@ -74,8 +74,9 @@ keep the screen awake.
 python -B tools\den-take\take.py --script commission --out C:\den-takes\c1
 ```
 
-If the PC cannot reach port 8090, open a second PowerShell window, run the
-tunnel below, and add `--camera http://127.0.0.1:18090` to the take.py command.
+If take.py says "cannot reach the camera", use the tunnel below: open a second
+PowerShell window, run it there, and add `--camera http://127.0.0.1:18090` to
+the take.py command.
 Nothing changes on the host. Close the tunnel window afterwards.
 
 ```powershell

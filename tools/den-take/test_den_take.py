@@ -13,6 +13,7 @@ import json
 import math
 import random
 import re
+import socket
 import struct
 import tempfile
 import threading
@@ -365,8 +366,17 @@ class PollerTests(Workspace):
         self.assertEqual(take.Camera(camera.url, "").get("/frame.npz")[0], 401)
         wrong = self.tmp / "wrong.txt"
         wrong.write_text("w" * 30, encoding="ascii", newline="\n")
-        with self.assertRaisesRegex(take.Refused, "status 401"):
+        with self.assertRaisesRegex(take.Refused, "refused the token"):
             take.run(self.args(camera, token_file=wrong), say=lambda t: None, settings=FAST)
+        self.assertFalse((self.tmp / "takes" / "t1").exists())
+
+    def test_unreachable_camera_is_named(self):
+        with socket.socket() as probe:  # a loopback port that nothing listens on
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        args = self.args(types.SimpleNamespace(url=f"http://127.0.0.1:{port}"))
+        with self.assertRaisesRegex(take.Refused, f"cannot reach the camera at 127.0.0.1:{port}"):
+            take.run(args, say=lambda t: None, settings=FAST)
         self.assertFalse((self.tmp / "takes" / "t1").exists())
 
     def test_drops_and_counts_duplicate_polls(self):

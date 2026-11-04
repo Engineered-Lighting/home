@@ -5,11 +5,20 @@ kind of events.py, its name in events.ADAPTER_SOURCES, and one flag in run.py.
 Nothing downstream changes.
 """
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from events import LIGHTS
+
 LAB = Path(__file__).resolve().parents[2] / "stack" / "services" / "perception-lab"
+LA_LATENCY = Path(__file__).resolve().parents[1] / "la-latency"
+# The den's Frigate person-occupancy entity: what the Jetson's occupancy reader polls and den_lighting reads.
+DEN_OCCUPANCY = "binary_sensor.den_oak_person_occupancy"
+COMMAND_KEYS = frozenset({"entity_id", "revision", "target", "context_id"})
+LIGHT_KEYS = frozenset({"last_updated_ts", "entity_id", "state", "context_id", "context_user_id", "context_parent_id"})
+CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 def lab():
@@ -19,6 +28,22 @@ def lab():
     import la_fact_log
     import qwen_scene
     return la_fact_log, qwen_scene
+
+
+def flaps():
+    """tools/la-latency/occupancy_flaps.py, whose EDGE and parse() read the reader's journal edge lines."""
+    if str(LA_LATENCY) not in sys.path:
+        sys.path.append(str(LA_LATENCY))
+    import occupancy_flaps
+    return occupancy_flaps
+
+
+def _text(path):
+    """A copied text file: UTF-16 when it starts with a byte-order mark (PowerShell 5.1's `>`), else UTF-8."""
+    raw = Path(path).read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    return raw.decode("utf-8-sig", errors="replace")
 
 
 def fact_time(available_at):
@@ -126,3 +151,99 @@ def mqtt_timeline(path, t0=0.0):
             items.append((float(t0 + step["at"]), "occupancy", {"value": new, "via": "mqtt"}))
             value = new
     return items
+
+
+def occupancy_journal(paths):
+    """The den's occupancy edges from the Jetson occupancy reader's journal lines, at their observed_at.
+
+    Lines are matched by occupancy_flaps.EDGE (other lines are ignored). Only DEN_OCCUPANCY is kept. to=on
+    and to=off map to on and off, anything else to unknown; from= is not used. An edge repeated across
+    copies counts once.
+    """
+    edges = set()
+    for path in paths:
+        edges.update(flaps().parse(_text(path).splitlines()))
+    return [(t, "occupancy", {"value": to if to in ("on", "off") else "unknown", "via": "jetson_journal"})
+            for t, _, to, entity in sorted(edges) if entity == DEN_OCCUPANCY]
+
+
+def _scene(value):
+    b, k = value.get("brightness"), value.get("kelvin")
+    return (set(value) == {"on", "brightness", "kelvin"} and type(value["on"]) is bool
+            and (b is None or type(b) is int and 0 <= b <= 255) and (k is None or type(k) is int and k > 0))
+
+
+def recorder_commands(paths):
+    """den_lighting_command events from an HA recorder export (README): one JSON object per line,
+    {time_fired_ts, event_data}, as live_command items at time_fired_ts, in time order.
+
+    They are a reference to compare with, never a policy input (events.REFERENCE_KINDS). A bad line
+    or a context_id seen twice raises ValueError; blank lines are skipped.
+    """
+    found, seen = [], set()
+    for path in paths:
+        for number, raw in enumerate(_text(path).splitlines(), 1):
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+                t, data = row["time_fired_ts"], row["event_data"]
+                if (type(t) not in (int, float) or not math.isfinite(t) or set(data) != COMMAND_KEYS
+                        or data["entity_id"] not in LIGHTS or type(data["revision"]) is not int
+                        or not isinstance(data["context_id"], str) or not _scene(data["target"])):
+                    raise ValueError
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise ValueError("%s line %d is not a den_lighting_command export row" % (path, number)) from None
+            if data["context_id"] in seen:
+                raise ValueError("%s line %d repeats context %s" % (path, number, data["context_id"]))
+            seen.add(data["context_id"])
+            found.append((float(t), "live_command", data))
+    return sorted(found, key=lambda item: item[0])
+
+
+def ulid(hex_bytes):
+    """The ULID text of a recorder context_id_bin given as hex (HA stores Context ids as 16 bytes); '' -> None."""
+    if hex_bytes == "":
+        return None
+    raw = bytes.fromhex(hex_bytes)
+    if len(raw) != 16:
+        raise ValueError("a context id is 16 bytes")
+    n = int.from_bytes(raw, "big")
+    return "".join(CROCKFORD[(n >> (5 * i)) & 31] for i in reversed(range(26)))
+
+
+def recorder_lights(paths, own=()):
+    """The four bulbs' recorded states from an HA recorder export (README): one JSON object per line,
+    {last_updated_ts, entity_id, state, context_id, context_user_id, context_parent_id} with the context
+    ids as hex, as light_observed items at last_updated_ts, in time order.
+
+    HA's recorder keeps no light brightness or colour temperature, so both are null. A state other than
+    on or off is skipped, as den_lighting skips it. context is 'own' when the state's context or its
+    parent is one of den_lighting's command contexts (own: the context_id values of recorder_commands),
+    'person' when a user made it, else 'unknown'. A bad line, or a bulb recorded twice at one time,
+    raises ValueError; blank lines are skipped.
+    """
+    own, found, seen = {c.upper() for c in own}, [], set()
+    for path in paths:
+        for number, raw in enumerate(_text(path).splitlines(), 1):
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+                t = row["last_updated_ts"]
+                if (set(row) != LIGHT_KEYS or type(t) not in (int, float) or not math.isfinite(t)
+                        or row["entity_id"] not in LIGHTS or not isinstance(row["state"], str)):
+                    raise ValueError
+                context, user, parent = (ulid(row[key]) for key in ("context_id", "context_user_id",
+                                                                      "context_parent_id"))
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise ValueError("%s line %d is not a den bulb state export row" % (path, number)) from None
+            if (row["entity_id"], t) in seen:
+                raise ValueError("%s line %d repeats %s at %r" % (path, number, row["entity_id"], t))
+            seen.add((row["entity_id"], t))
+            if row["state"] not in ("on", "off"):
+                continue
+            label = "own" if {context, parent} & own else "person" if user else "unknown"
+            found.append((float(t), "light_observed", {"entity_id": row["entity_id"], "on": row["state"] == "on",
+                                                       "brightness": None, "kelvin": None, "context": label}))
+    return sorted(found, key=lambda item: item[0])

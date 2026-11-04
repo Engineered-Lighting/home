@@ -15,6 +15,7 @@ import events
 
 HERE = Path(__file__).resolve().parent
 ORDER = ("need", "incumbent", "decide")
+TAIL_S = 150.0  # seconds of ticks after the last input, so a vacancy OFF can still happen
 
 
 def tagged(items, source):
@@ -41,18 +42,23 @@ def describe(policy):
             "config_sha256": events.sha256_json(policy.config)}
 
 
-def run(inputs, policies, *, tick_s=2.0, tail_s=150.0, plant=True, shown="incumbent", synthetic=False,
+def run(inputs, policies, *, tick_s=2.0, tail_s=TAIL_S, plant=True, shown="incumbent", synthetic=False,
         assume_occupied=False, sources=()):
-    """(header, events) for one run; inputs are (t, kind, data, source)."""
+    """(header, events) for one run; inputs are (t, kind, data, source).
+
+    Reference kinds (events.REFERENCE_KINDS) are logged in time order like any input, but no policy is
+    handed one and they do not set the span or the ticks, so a run's decisions are the same with or
+    without them."""
     inputs = sorted(inputs, key=lambda item: item[0])
-    if not inputs:
+    read = [item for item in inputs if item[1] not in events.REFERENCE_KINDS]
+    if not read:
         raise ValueError("no inputs")
     policies = sorted(policies, key=lambda p: ORDER.index(p.id) if p.id in ORDER else len(ORDER))
     actuation = "synthetic" if synthetic else "replay"
     header = {"schema": events.LOG_SCHEMA, "sources": list(sources), "policies": [describe(p) for p in policies],
               "tick_s": tick_s, "tail_s": tail_s, "plant": plant, "shown": shown, "synthetic": synthetic,
               "assume_occupied": assume_occupied, "actuation": actuation}
-    first, last = inputs[0][0], inputs[-1][0]
+    first, last = read[0][0], read[-1][0]
     queue, counter, log = [], itertools.count(), []
 
     def push(t, rank, kind, data, source):  # rank: 0 input, 1 plant echo, 2 tick
@@ -94,5 +100,7 @@ def run(inputs, policies, *, tick_s=2.0, tail_s=150.0, plant=True, shown="incumb
 
     while queue:
         t, _, _, kind, data, source = heapq.heappop(queue)
-        deliver(emit(t, kind, data, source), 0)
+        event = emit(t, kind, data, source)
+        if kind not in events.REFERENCE_KINDS:
+            deliver(event, 0)
     return header, log

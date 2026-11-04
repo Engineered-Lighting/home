@@ -51,6 +51,7 @@ class Settings:
     away_s: float = 10.0
     commission_activity_s: float = 180.0
     free_max_s: float = 28 * 60.0
+    health_retry_s: float = 1.0  # gap between the final /health tries
 
 
 class Refused(Exception):
@@ -162,6 +163,17 @@ class Camera:
             return {"status": status, "body": parsed if type(parsed) is dict else None}
         except (OSError, http.client.HTTPException, ValueError) as exc:
             return {"status": None, "body": None, "error": type(exc).__name__}
+
+
+def final_health(camera, settings, tries=3):
+    """/health after the take: the first reply with a JSON body (a 503 counts), else the last."""
+    for attempt in range(tries):
+        if attempt:
+            time.sleep(settings.health_retry_s)
+        reply = camera.health()
+        if type(reply["body"]) is dict:
+            break
+    return reply
 
 
 class TakeWriter:
@@ -403,7 +415,7 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
         poller.halt.set()
         poller.join(timeout=15)
         writer.close()
-        take["health_after"] = camera.health()
+        take["health_after"] = final_health(camera, settings)
         take["ended_unix"] = time.time()
         take["counts"] = {"polls": poller.polls, "kept": len(writer.index),
                           "duplicates": poller.duplicates, "errors": poller.errors}

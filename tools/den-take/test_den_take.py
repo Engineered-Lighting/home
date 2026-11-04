@@ -225,6 +225,7 @@ def run_check(folder, typed="none"):
 class FakeCamera:
     def __init__(self, token=TOKEN, period=0.25):
         self.token, self.period, self.mode, self.truncate = token, period, "ok", 0
+        self.health_failures = 0  # /health answers 500 with no body this many times
         self.session, self.start, self.cache = str(uuid.uuid4()), time.monotonic(), {}
         self.requests, self.lock = [], threading.Lock()
         camera = self
@@ -262,6 +263,9 @@ class FakeCamera:
 
     def response(self, path):
         healthy = self.mode == "ok"
+        if path == "/health" and self.health_failures:
+            self.health_failures -= 1
+            return 500, "text/plain", b"Internal Server Error\n"
         if path == "/health":
             body = {"healthy": healthy, "session": self.session, "timing_generation": 1,
                     "bundle_age_seconds": 0.1, "encoder_age_seconds": 0.03,
@@ -287,7 +291,8 @@ class FakeCamera:
         self.server.server_close()
 
 
-FAST = take.Settings(slate_s=1.0, hold_lead_s=0.2, say_gap_s=0.1, away_s=0.2, commission_activity_s=1.0)
+FAST = take.Settings(slate_s=1.0, hold_lead_s=0.2, say_gap_s=0.1, away_s=0.2, commission_activity_s=1.0,
+                     health_retry_s=0.1)
 
 
 def readable_peek(window, m):
@@ -479,6 +484,19 @@ class TakeScriptTests(Workspace):
         self.assertEqual(rows[0].split(","), list(take.CSV_FIELDS))
         self.assertEqual(len(rows) - 1, record["counts"]["kept"])
         self.assertNotIn("\r", (Path(self.args(camera).out) / "frames.csv").read_text(encoding="utf-8"))
+
+    def test_final_health_is_tried_three_times(self):
+        for failures, statuses, kept in ((2, [500, 500, 200], 200), (5, [500, 500, 500], 500)):
+            camera = self.camera()
+
+            def say(text):
+                if text.startswith("Slate OK. Done"):
+                    camera.health_failures = failures
+            code, record, _ = self.run_take(self.args(camera, name=f"h{failures}"), say=say)
+            after = [r[2] for r in camera.requests if r[1] == "/health"][1:]
+            self.assertEqual((code, after, record["health_after"]["status"]), (0, statuses, kept))
+            session = (record["health_after"]["body"] or {}).get("session")
+            self.assertEqual(session, camera.session if kept == 200 else None)  # else B2 fails it
 
     def test_free_take_ends_on_enter(self):
         camera = self.camera()

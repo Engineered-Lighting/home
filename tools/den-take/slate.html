@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>den-take slate</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #888; }
+  p { position: fixed; bottom: 8px; width: 100%; margin: 0; text-align: center;
+      font: 13px sans-serif; }
+</style>
+</head>
+<body>
+<p id="hint">Tap for full screen. Turn brightness up.</p>
+<script>
+// The CHECK-V1 slate pattern, on this phone's own clock. No network is used.
+// These four numbers must equal CHECK-V1.md's block (a test checks them).
+const PERIOD_S = 10;     // slate_period_s
+const FLASH_S = 0.5;     // slate_flash_s
+const STEP_S = 0.02;     // slate_phase_step_s
+const MARKER_SECOND = 0; // slate_marker_second
+
+function lit(ms) {
+  const s = Math.floor(ms / 1000);
+  const k = ((s % PERIOD_S) + PERIOD_S) % PERIOD_S;
+  if (k === MARKER_SECOND) return false;
+  const f = ms / 1000 - s;
+  return f >= STEP_S * k && f < STEP_S * k + FLASH_S;
+}
+
+function draw() {
+  document.body.style.background = lit(Date.now()) ? "#fff" : "#000";
+  requestAnimationFrame(draw);
+}
+
+document.body.addEventListener("click", () => {
+  document.getElementById("hint").remove();
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(() => {});
+}, { once: true });
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

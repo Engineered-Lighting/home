@@ -12,8 +12,9 @@ check fails, 1 otherwise. Times are UTC, with seconds from the log's first event
 2 need parity: the log's facts, mapped by need.sample(), go through den_lighting's own
   policy.Controller.gaming_sample (policy.py loaded unchanged by path, as test_need.py's parity test loads it).
   den_lighting's on and off moments must equal need's focused_engagement moves into engaged and back to none.
-3 only the look: for every interval of run.diff(), each decide decision in force for that bulb (the latest at the
-  interval's start, and any during it) chose the look: candidate (the first lowest-cost candidate, decide's own
+3 only the look: for every interval of run.diff() (decide's request against what den_lighting, re-run beside the
+  log, wanted for the bulb, levels compared both ways), each decide decision in force for that bulb (the latest at
+  the interval's start, and any during it) chose the look: candidate (the first lowest-cost candidate, decide's own
   rule) and put that look's logged scene on the bulb. OK also says, as information, how many seconds of one
   interval at most fall while need's latest person state is not reading by decide.reading(). That is nonzero
   when decide's base has nothing to request (den_lighting never saw the bulbs, as in a facts-only replay):
@@ -200,7 +201,7 @@ def only_the_look(header, log):
     if not by_bulb:
         return na("decide made no decision in this log")
     looks, first = logged_config(header, "decide").get("looks", {}), log[0]["t"]
-    spans = run.diff(log)
+    spans = run.diff(header, log)
     for span in spans:
         bulb, start, end = span["entity_id"], span["start"], span["end"]
         mine = by_bulb.get(bulb, [])

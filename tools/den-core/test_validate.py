@@ -229,6 +229,47 @@ class RealDataShape(Temp):
         self.assertEqual(lines[2], "only the look: n/a: decide made no decision in this log")
         self.assertRegex(lines[4], r"^quiet: OK \(no decide decision in 0\.0 s of game or [1-9]\d*\.\d s of unknown")
 
+    def journal_log(self, recorded=False):
+        """Facts with the evening's occupancy as journal edges and no bulb states, as run.py --facts --journal
+        replays them. recorded adds the live bulbs' on/off states, each a moment before the replay's own move,
+        as --lights shows them, with the plant off."""
+        items, _, _ = synthetic.evening()
+        facts = [item for item in items if item[1] == "facts"]
+        edges = [(t, kind, {"value": d["value"], "via": "jetson_journal"}) for t, kind, d in items if kind == "occupancy"]
+        inputs = runner.tagged(facts, "fact_log") + runner.tagged(edges, "occupancy_journal")
+        if recorded:
+            def states(t, on):
+                return [(t, "light_observed", {"entity_id": e, "on": on, "brightness": None, "kelvin": None,
+                                               "context": "own"}) for e in events.LIGHTS]
+            recorded = states(T0 - 600, True) + states(T0 - 470.2, False) + states(T0 - 60.1, True)
+            inputs = runner.tagged(recorded + states(T0 + 1569.8, False), "recorder_lights") + inputs
+        return runner.run(inputs, runner.load_policies(POLICIES), plant=not recorded)
+
+    def test_journal_occupancy_shows_every_look(self):
+        header, log = self.journal_log()
+        # The early vacancy's echo leaves den_lighting no level, so its arrival is a last-level ON with none.
+        self.assertEqual([d["data"]["requested_scene"][RL] for d in of(log, "decision", "incumbent") if d["t"] == T0 - 60],
+                         [{"on": True, "brightness": None, "kelvin": None}])
+        lines, passed = validate.report(self.write(header, log))
+        self.assertTrue(passed, "\n".join(lines))
+        self.assertEqual(statuses(lines), {"replay": "OK", "need parity": "OK", "only the look": "OK",
+                                           "holds": "n/a", "quiet": "OK"})
+        self.assertEqual(lines[2], "only the look: OK (8 interval(s), each decide's labelled placeholder reading look; "
+                                   "all of them while need is reading)")
+        odd = {"on": True, "brightness": 120, "kelvin": 3000}
+        status, text = validate.only_the_look(header, insert(log, decide_copy(log, T0 + 100, **{RL: odd})))
+        self.assertEqual(status, "FAIL")
+        self.assertIn("light.den_rear_left differs from den_lighting from 2026-11-04T04:01:40.0Z", text)
+
+    def test_recorded_bulbs_ahead_of_the_replay(self):
+        header, log = self.journal_log(recorded=True)
+        self.assertFalse(header["plant"])
+        lines, passed = validate.report(self.write(header, log))
+        self.assertTrue(passed, "\n".join(lines))
+        self.assertEqual(statuses(lines), {"replay": "OK", "need parity": "OK", "only the look": "OK",
+                                           "holds": "n/a", "quiet": "OK"})
+        self.assertIn("all of them while need is reading", lines[2])
+
 
 @unittest.skipUnless(HAVE_POLICY, NO_POLICY)
 class Cli(Temp):

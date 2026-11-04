@@ -36,14 +36,19 @@ python -B tools/den-core/check.py C:/tmp/den-core/evening-1/log.jsonl
 `run.py` writes `log.jsonl` and prints the inputs per kind, each policy's
 decisions (UTC time, seconds from the first input, trigger, one-line scene)
 and, when both `incumbent` and `decide` ran, the intervals where decide's
-latest requested scene for a bulb does not match the bulb as den_lighting left
-it: its latest command, or else the latest correction or observed state, since
-den_lighting leaves held bulbs, and bulbs already where it wants them, alone.
-Game time is left out, and events at one instant are compared once, after all
-of them. When `--live-commands` gave the commands the live den_lighting sent,
-it also prints, per bulb, how many commands each side sent and the intervals
-where the incumbent's latest replayed command does not match the latest live
-one (see "How real data plugs in"). With `--synthetic` it also writes
+latest requested scene for a bulb differs from what den_lighting wanted for
+it. That comes from re-running den_lighting in memory beside the log
+(`incumbent.Shadow`): its own `desired()` scene, or, while it has none
+(vacancy wait, unknown occupancy), the target it last acted on, a command or
+a bulb it found already there. Recorded bulb states move neither side. The
+two scenes have to match each way, so a level decide asks for counts against
+den_lighting's last-level ON with no level. Game time is left out, and a
+bulb is compared once per instant, only at instants where decide plans
+(occupancy, bulb state, person state, mode, tick, or its own decision). When
+`--live-commands` gave the commands the live den_lighting sent, it also
+prints, per bulb, how many commands each side sent and the intervals where
+the target the replay last acted on does not match the latest live command
+(see "How real data plugs in"). With `--synthetic` it also writes
 `truth.json` (reading-shadow-truth-1) and the generated
 `la-fact-log-1-YYYY-MM-DD.jsonl`, so `tools/reading-shadow/replay.py` can
 score the same fake evening.
@@ -67,6 +72,20 @@ adapter inputs with the logged parameters and compares every line byte for
 byte, header included. It prints `OK` or the first mismatching line and exits
 0 or 1.
 
+```bash
+python -B tools/den-core/validate.py C:/tmp/den-core/evening-1/log.jsonl --truth C:/tmp/den-core/evening-1/truth.json
+```
+
+`validate.py LOG [--truth TRUTH_JSON]` says check by check whether a run
+behaved as designed against den_lighting: the replay above; need's reading
+on/off moments against den_lighting's own dwell; that every interval of the
+diff above is decide's labelled placeholder reading look; that decide pins
+and skips held bulbs; and that it stays silent in games and while occupancy
+is unknown. It prints OK, FAIL or n/a per check and exits 0 or 1. It is a
+consistency check of den-core's own code, not a lighting-quality gate.
+`--truth` adds, as information only, how long need took to follow each
+reading block's cues; `tools/reading-shadow` is the gate for those.
+
 Tests:
 
 ```bash
@@ -81,8 +100,9 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 | `sources.py` | file adapters: `fact_log`, `poll_log`, `mqtt_timeline`, `occupancy_journal`, `recorder_commands`, `recorder_lights` |
 | `synthetic.py` | `evening()`: a fake evening in the real la-fact-log-1 format, built with the perceiver's own builders |
 | `runner.py` | `run()`: the deterministic heap runner; `load_policies()` |
-| `incumbent.py` | den_lighting's `policy.py`, loaded by path and unchanged, as a policy |
+| `incumbent.py` | den_lighting's `policy.py`, loaded by path and unchanged, as a policy; `Shadow`, the same re-run beside a logged run for the comparisons |
 | `check.py` | the byte-identical replay check |
+| `validate.py` | the check-by-check consistency check against den_lighting |
 | `victoria_den_bulb_scenes.yaml` | a draft HA package for Victoria that records each bulb's level (below); nothing deploys it |
 | `run.py` | the CLI and its summary/diff |
 | `need.py`, `decide.py` | written on their own branches against the interface below; the runner loads them by name |
@@ -163,9 +183,13 @@ ssh JETSON "journalctl _SYSTEMD_USER_UNIT=perception-lab-managed.service -o cat 
 ```
 
 To cut it to one evening, add `--since 'YYYY-MM-DD HH:MM' --until 'YYYY-MM-DD
-HH:MM'` (the Jetson's local time) after `-o cat`. Otherwise the replay spans
-every edge the journal still holds, with a tick every 2 s. Copy it before
-journald's size limit rotates the evening out.
+HH:MM'` (the Jetson's local time) after `-o cat`, and give `run.py` only that
+day's fact file. Start the cut while the den is surely empty, such as early
+afternoon or the day before: the reader logs only changes, so the edge that
+set the state in force at `--since` is otherwise cut off, and the replay
+starts with occupancy unknown. Without a cut the replay spans every edge the
+journal still holds, with a tick every 2 s (about 90 MB of log and 20 s per
+week of span). Copy it before journald's size limit rotates the evening out.
 
 How a line becomes an event:
 
@@ -174,13 +198,17 @@ How a line becomes an event:
 - Only `entity=binary_sensor.den_oak_person_occupancy` (the den's Frigate
   person-occupancy entity, which den_lighting also reads) is kept.
 - `to=on` becomes occupancy `on`, `to=off` becomes `off`, and any other `to=`
-  becomes `unknown`. `from=` is not used. The event is
-  `{value, via: 'jetson_journal'}` at `t = observed_at`.
+  becomes `unknown`. The event is `{value, via: 'jetson_journal'}` at
+  `t = observed_at`.
 - An edge that appears twice, such as in overlapping copies, counts once.
-- The reader logs only edges into `on` and from `on` into `off`. A dropout
-  (stale or unavailable) logs nothing until the next `from=unknown to=on`, so
-  the replay keeps the last edge's value through it. den_lighting itself
-  turns a dropout into unknown.
+- The reader logs only edges into `on`, and an off only straight from `on`.
+  A dropout (stale or unavailable) that ends on logs `from=unknown to=on`. One
+  that ends off logs nothing at all, so the next line is `from=off to=on` at
+  the next arrival, and the replay stays occupied through the dropout and the
+  vacancy after it. den_lighting itself turned the dropout into unknown and
+  still saw the MQTT zero. `run.py` prints each such span, from the last
+  `to=on` to that `from=off` line, as an off the reader never logged; read
+  the replay with care there.
 - The reader polls the HA entity at 2 Hz. den_lighting reads Frigate's MQTT
   count and ignores HA OFF, so the edges match its input only to within a
   poll or so.
@@ -234,9 +262,12 @@ How the export is used:
   (from the first input to 150 s after the last; `--lights` does not count)
   and says how many it kept. So a whole 10-day export can serve any evening.
 - The summary's second comparison prints each bulb's command count, live and
-  replayed. It then lists the intervals where the incumbent's latest replayed
-  command for a bulb does not match the latest live one, in the style of
-  `diff()`.
+  replayed. It then lists the intervals where the target the replayed
+  den_lighting last acted on for a bulb does not match the latest live
+  command, in the style of `diff()`. That target is its latest command, or a
+  bulb it found already there and so left alone, as when `--lights` shows it
+  the live bulb's recorded result before its own tick. So with `--lights` the
+  replay may send fewer commands than the live side without disagreeing.
   - A null level on either side matches any level, because a replay of
     recorded bulbs knows no levels and sends its ONs without one. On/off
     still has to agree, and so do levels both sides know.

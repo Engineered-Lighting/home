@@ -169,10 +169,20 @@ class AdapterTest(Temp):
                                      edge(T0 + 10, "unknown", "on", "binary_sensor.elsewhere_person_occupancy")])
         second = self.write("b.txt", [edge(T0 + 30, "on", "off"), edge(T0 + 40, "off", "unavailable"),
                                       "occupancy edge: entity=%s from=off to=on" % DEN])
-        items = sources.occupancy_journal([first, second])
+        items, unlogged = sources.occupancy_journal([first, second])
         self.assertEqual(items, [(T0, "occupancy", {"value": "on", "via": "jetson_journal"}),
                                  (T0 + 30, "occupancy", {"value": "off", "via": "jetson_journal"}),
                                  (T0 + 40, "occupancy", {"value": "unknown", "via": "jetson_journal"})])
+        self.assertEqual(unlogged, [])
+
+    def test_occupancy_journal_reports_an_unlogged_off(self):
+        # A dropout that ends on logs from=unknown; one that ends off logs nothing until the next from=off.
+        path = self.write("a.txt", [edge(T0, "unknown", "on"), edge(T0 + 600, "unknown", "on"),
+                                    edge(T0 + 4000, "off", "on"), edge(T0 + 4100, "on", "off"),
+                                    edge(T0 + 4200, "off", "on")])
+        items, unlogged = sources.occupancy_journal([path])
+        self.assertEqual([d["value"] for _, _, d in items], ["on", "on", "on", "off", "on"])
+        self.assertEqual(unlogged, [(T0 + 600, T0 + 4000)])
 
     def test_occupancy_journal_reads_a_powershell_redirect(self):
         lines = [edge(T0, "unknown", "on"), edge(T0 + 30, "on", "off")]
@@ -306,55 +316,106 @@ class RunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no inputs"):
             runner.run(with_live[-2:], self.toys())
 
-    def test_live_diff(self):
-        lit, dim = {"on": True, "brightness": 180, "kelvin": 2700}, {"on": True, "brightness": 100, "kelvin": 2700}
 
-        def ours(t, scenes):
-            return ev("decision", {"requested_scene": scenes}, t, 0, "incumbent")
 
-        def live(t, bulb, target):
-            return ev("live_command", {"entity_id": bulb, "revision": 1, "target": target, "context_id": "c%g" % t},
-                      t, 0, "recorder_commands")
-        log = [ours(1.0, {LIGHTS[0]: OFF}), live(1.5, LIGHTS[0], OFF),            # live lags by 0.5 s
-               live(3.0, LIGHTS[1], lit), ours(3.0, {LIGHTS[1]: lit}),            # one instant: no span
-               ours(6.0, {LIGHTS[0]: {"on": True, "brightness": None, "kelvin": None}}),
-               live(6.0, LIGHTS[0], lit),                                          # a null level matches any
-               live(8.0, LIGHTS[1], dim),                                          # known levels still differ
-               ours(8.5, {LIGHTS[0]: OFF}), ev("tick", {}, 9.0, 0, "runner")]      # on/off differs
-        self.assertEqual(run.live_diff(log), [{"entity_id": LIGHTS[0], "start": 1.0, "end": 1.5},
-                                              {"entity_id": LIGHTS[1], "start": 8.0, "end": 9.0},
-                                              {"entity_id": LIGHTS[0], "start": 8.5, "end": 9.0}])
+def scripted(script):
+    """A stand-in decide: at its first event at or after each script time, it requests that time's scenes."""
+    script = sorted(script, key=lambda step: step[0])
+
+    def reply(event):
+        due = [scenes for t, scenes in script if t <= event["t"]]
+        del script[:len(due)]
+        return [{"kind": "decision", "data": {"requested_scene": scenes, "transitions": {}}} for scenes in due]
+    return Toy("decide", reply)
+
+
+def seen(t, bulb, scene, context="unknown"):
+    return (t, "light_observed", {"entity_id": bulb, **scene, "context": context}, "synthetic")
+
+
+def occupied(t, value):
+    return (t, "occupancy", {"value": value, "via": "t"}, "synthetic")
+
+
+def spans(found):
+    return [(s["entity_id"], s["start"], s["end"]) for s in found]
+
+
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class DiffTest(unittest.TestCase):
+    """run.diff and run.live_diff against den_lighting re-run beside the log (incumbent.Shadow)."""
+
+    def diff(self, inputs, script, **options):
+        header, log = runner.run(inputs, [incumbent.make_policy(), scripted(script)], **options)
+        return spans(run.diff(header, log)), log
+
+    def test_leaves_out_gaming(self):
+        def game(t, status):
+            return (t, "gaming_sample", {"status": status, "sampled_at": t}, "synthetic")
+        inputs = [seen(0.0, LIGHTS[0], SCENE), occupied(0.0, "on"), game(10.0, "playing"), game(20.0, "playing")]
+        inputs += [game(t, "idle") for t in (30.0, 40.0, 50.0, 60.0)]
+        script = [(0, {LIGHTS[0]: SCENE}), (2, {LIGHTS[0]: {**SCENE, "brightness": 150}}),
+                  (6, {LIGHTS[0]: {**SCENE, "brightness": 101}}),        # within den_lighting's own tolerance
+                  (24, {LIGHTS[0]: {**SCENE, "brightness": 30}}),        # during the game: left out
+                  (64, {LIGHTS[0]: SCENE})]
+        found, log = self.diff(inputs, script)
+        self.assertEqual([m["t"] for m in of(log, "mode") if m["data"]["gaming"]][:1], [20.0])
+        self.assertEqual(found, [(LIGHTS[0], 2.0, 6.0), (LIGHTS[0], 60.0, 64.0)])
+
+    def test_a_level_counts_against_a_last_level_on(self):
+        # Nothing observed: the vacancy OFF's echo seeds normal with no level, so the arrival is ON with no level.
+        level_less = {"on": True, "brightness": None, "kelvin": None}
+        look = {"on": True, "brightness": 255, "kelvin": 2700}
+        inputs = [occupied(0.0, "on"), occupied(1.0, "off"), occupied(300.0, "on")]
+        script = [(300, {LIGHTS[0]: level_less}), (310, {LIGHTS[0]: look}), (320, {LIGHTS[0]: level_less})]
+        found, log = self.diff(inputs, script)
+        self.assertEqual([d["data"]["requested_scene"][LIGHTS[0]] for d in of(log, "decision") if d["t"] == 300.0],
+                         [level_less])
+        self.assertTrue(events.scene_matches(level_less, look))  # one way, the look would hide
+        self.assertEqual(found, [(LIGHTS[0], 310.0, 320.0)])
+
+    def test_recorded_bulbs_and_den_lightings_own_instants_open_nothing(self):
+        # A live bulb recorded off before the replay's vacancy runs out, and den_lighting turning another off
+        # on an input decide does not plan on, both before decide's next tick.
+        inputs = [seen(0.0, LIGHTS[0], SCENE), seen(0.0, LIGHTS[1], SCENE), occupied(0.0, "on"), occupied(11.0, "off"),
+                  seen(130.5, LIGHTS[0], OFF, "own"), (131.5, "gaming_sample", {"status": "idle", "sampled_at": 131.5},
+                                                      "synthetic")]
+        script = [(0, {LIGHTS[0]: SCENE, LIGHTS[1]: SCENE}), (132, {LIGHTS[0]: OFF, LIGHTS[1]: OFF})]
+        found, log = self.diff(inputs, script, plant=False)
+        self.assertEqual([(d["t"], sorted(d["data"]["requested_scene"])) for d in of(log, "decision")],
+                         [(131.5, sorted(LIGHTS[1:]))])  # front_left was found already off
+        self.assertEqual(found, [])
+
+    def test_a_hold_is_what_den_lighting_wants(self):
+        held = {"on": True, "brightness": 80, "kelvin": 2202}
+        inputs = [seen(0.0, LIGHTS[0], SCENE), occupied(0.0, "on"),
+                  (3.0, "correction", {"correction_id": "c1", "entity_id": LIGHTS[0], "after": held, "source": "t"},
+                   "synthetic")]
+        found, _ = self.diff(inputs, [(0, {LIGHTS[0]: SCENE}), (3, {LIGHTS[0]: held})])
+        self.assertEqual(found, [])
+        found, log = self.diff(inputs, [(0, {LIGHTS[0]: SCENE})])
+        self.assertEqual(found, [(LIGHTS[0], 3.0, log[-1]["t"])])
+
+    def test_live_diff_counts_a_bulb_found_already_there(self):
+        lit = {"on": True, "brightness": 180, "kelvin": 2700}
+
+        def live(t, target):
+            return (t, "live_command", {"entity_id": LIGHTS[0], "revision": 1, "target": target, "context_id": "c%g" % t},
+                    "recorder_commands")
+        # The live OFF and its recorded state come before the replay's own vacancy tick, so the replay finds the
+        # bulb already off and sends nothing; then the replay's arrival ON has other levels than the live one.
+        inputs = [seen(0.0, LIGHTS[0], SCENE), occupied(0.0, "on"), occupied(10.0, "off"), live(129.0, OFF),
+                  seen(129.1, LIGHTS[0], OFF, "own"), occupied(200.0, "on"), live(200.5, lit)]
+        header, log = runner.run(inputs, [incumbent.make_policy()], plant=False)
+        self.assertEqual([d["t"] for d in of(log, "decision") if LIGHTS[0] in d["data"]["requested_scene"]], [200.0])
+        found = spans(run.live_diff(header, log))
+        # The other bulbs' vacancy OFFs (den_lighting asks even for unobserved bulbs) have no live command here.
+        self.assertEqual(sorted({(bulb, start) for bulb, start, _ in found if bulb != LIGHTS[0]}),
+                         [(bulb, 130.0) for bulb in sorted(LIGHTS[1:])])
+        self.assertEqual([s for s in found if s[0] == LIGHTS[0]], [(LIGHTS[0], 129.0, 130.0), (LIGHTS[0], 200.0, log[-1]["t"])])
         cross = {"on": True, "brightness": 180, "kelvin": None}
         self.assertTrue(run._agree(cross, {"on": True, "brightness": None, "kelvin": 2700}))
         self.assertFalse(run._agree(cross, {"on": True, "brightness": 100, "kelvin": None}))
-
-    def test_diff_leaves_out_gaming(self):
-        def decision(t, source, brightness):
-            return ev("decision", {"requested_scene": {LIGHTS[0]: {**SCENE, "brightness": brightness}}}, t, 0, source)
-        log = [ev("mode", {"gaming": False}, 0.0, 0, "incumbent"), decision(1.0, "incumbent", 100),
-               decision(2.0, "decide", 150), decision(5.0, "decide", 101), ev("mode", {"gaming": True}, 6.0, 0, "incumbent"),
-               decision(7.0, "decide", 30), ev("mode", {"gaming": False}, 8.0, 0, "incumbent"), decision(9.0, "decide", 100)]
-        self.assertEqual(run.diff(log), [{"entity_id": LIGHTS[0], "start": 2.0, "end": 5.0},
-                                         {"entity_id": LIGHTS[0], "start": 8.0, "end": 9.0}])
-
-    def test_diff_compares_one_instant_once(self):
-        def decision(t, seq, source, brightness):
-            return ev("decision", {"requested_scene": {LIGHTS[0]: {**SCENE, "brightness": brightness}}}, t, seq, source)
-        log = [ev("mode", {"gaming": False}, 0.0, 0, "incumbent"), decision(1.0, 1, "incumbent", 100),
-               decision(1.0, 2, "decide", 100), decision(4.0, 3, "incumbent", 50), decision(4.0, 4, "decide", 50)]
-        self.assertEqual(run.diff(log), [])
-
-    def test_diff_takes_the_bulb_as_the_incumbent_left_it(self):
-        held = {"on": True, "brightness": 80, "kelvin": 2202}
-        log = [ev("light_observed", {"entity_id": LIGHTS[0], **SCENE, "context": "unknown"}, 0.0, 0),
-               ev("mode", {"gaming": False}, 0.0, 1, "incumbent"),
-               ev("decision", {"requested_scene": {LIGHTS[0]: SCENE}}, 0.0, 2, "decide"),
-               ev("correction", {"correction_id": "c1", "entity_id": LIGHTS[0], "after": held, "source": "synthetic"},
-                  3.0, 3),
-               ev("decision", {"requested_scene": {LIGHTS[0]: held}}, 3.0, 4, "decide"),
-               ev("light_observed", {"entity_id": LIGHTS[0], **SCENE, "context": "own"}, 5.0, 5, "plant"),
-               ev("mode", {"gaming": False, "holds": []}, 9.0, 6, "incumbent")]
-        self.assertEqual(run.diff(log), [])
 
 
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
@@ -398,6 +459,16 @@ class IncumbentTest(Temp):
                              ("den_lighting@1.0.4", "hue-den-4", "synthetic"))
         self.assertEqual(header["policies"][0]["config"]["den_lighting_policy_sha256"],
                          events.sha256_file(incumbent.find_policy()))
+
+    def test_e_shadow_follows_the_logged_run(self):
+        items, _, _ = synthetic.evening(touch=True, game=True)
+        header, log = runner.run(runner.tagged(items, "synthetic"), runner.load_policies(["need", "incumbent", "decide"]),
+                                 synthetic=True)
+        shadow = incumbent.Shadow(header)
+        replayed = [(e["t"], out["data"]["requested_scene"]) for e in log for out in shadow.feed(e)
+                    if out["kind"] == "decision"]
+        self.assertEqual(replayed, [(d["t"], d["data"]["requested_scene"]) for d in of(log, "decision")])
+        self.assertEqual(shadow.acted, {e: OFF for e in LIGHTS})  # the evening ends with the vacancy OFF
 
 
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
@@ -478,8 +549,8 @@ class RealFilesRunTest(Temp):
                       "front_left 2/2, front_right 2/2, rear_left 2/2, rear_right 2/2", text)
         live, log = self.decisions("live")
         self.assertEqual(live, plain)
-        self.assertEqual(sorted({round(s["end"] - s["start"], 3) for s in run.live_diff(log)}), [0.5])
         header, _ = events.read(self.tmp / "live" / "log.jsonl")
+        self.assertEqual(sorted({round(s["end"] - s["start"], 3) for s in run.live_diff(header, log)}), [0.5])
         self.assertEqual([s["name"] for s in header["sources"]],
                          [self.facts.name, self.journal.name, commands.name])
         self.assertEqual(header["sources"][2]["sha256"], events.sha256_file(commands))
@@ -516,8 +587,8 @@ class RealFilesRunTest(Temp):
                          + [(141.6, e, False, "own") for e in (LIGHTS[0], LIGHTS[1], LIGHTS[3])]
                          + [(141.7, LIGHTS[3], False, "own")])
         self.assertTrue(all(e["source"] == "recorder_lights" for e in log if e["kind"] == "light_observed"))
-        self.assertEqual(sorted({round(s["end"] - s["start"], 3) for s in run.live_diff(log)}), [0.5])
         header, _ = events.read(self.tmp / "lit" / "log.jsonl")
+        self.assertEqual(sorted({round(s["end"] - s["start"], 3) for s in run.live_diff(header, log)}), [0.5])
         self.assertFalse(header["plant"])
         self.assertEqual([s["name"] for s in header["sources"]],
                          [self.facts.name, self.journal.name, lights.name, commands.name])
@@ -545,7 +616,7 @@ class PurityTest(Temp):
         lights = self.write("lights.jsonl", [light_row(T0, LIGHTS[0], "on", context(1)[0])])
         with mock.patch("socket.socket", forbidden), mock.patch("time.time", forbidden), \
                 mock.patch("time.monotonic", forbidden):
-            self.assertEqual(len(sources.occupancy_journal([journal]) + sources.recorder_commands([commands])
+            self.assertEqual(len(sources.occupancy_journal([journal])[0] + sources.recorder_commands([commands])
                                  + sources.recorder_lights([lights])), 3)
             synthetic.evening()
             events.write(self.tmp / "log.jsonl", *evening_log(touch=True, game=True))

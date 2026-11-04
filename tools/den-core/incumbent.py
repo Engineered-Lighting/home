@@ -107,3 +107,33 @@ def make_policy(config=None):
     if changed:
         raise ValueError("incumbent config differs from den_lighting's own: %s" % ", ".join(changed))
     return Incumbent(den, effective)
+
+
+class Shadow:
+    """den_lighting re-run in memory beside a logged run, so a comparison can ask what it wanted at a logged
+    instant. feed() every logged event in log order: it hands the incumbent what the runner handed it (all but
+    reference kinds and the outputs of the incumbent and the policies after it), so at the end of each instant
+    its state is the logged run's.
+
+    acted is, per bulb, the target den_lighting last acted on: Controller._emitted, which policy.py sets both
+    when it sends a command and when it finds the bulb already there, kept when policy.py clears it."""
+
+    def __init__(self, header):
+        ids = [p["id"] for p in header["policies"]]
+        self.policy = make_policy(next(p["config"] for p in header["policies"] if p["id"] == Incumbent.id))
+        self.later = set(ids[ids.index(Incumbent.id):])
+        self.acted = {}
+
+    def feed(self, event):
+        """The incumbent's outputs, or [] for an event it was never handed."""
+        if event["source"] in self.later or event["kind"] in events.REFERENCE_KINDS:
+            return []
+        out = self.policy.handle(event)
+        self.acted.update((e, asdict(scene)) for e, scene in self.policy.controller._emitted.items())
+        return out
+
+    def wants(self, entity_id, t):
+        """Controller.desired() for the bulb at t, or while it has none (vacancy wait, unknown occupancy) the
+        target it last acted on; None when it has neither."""
+        scene = self.policy.controller.desired(entity_id, t)
+        return asdict(scene) if scene is not None else self.acted.get(entity_id)

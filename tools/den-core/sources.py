@@ -154,17 +154,22 @@ def mqtt_timeline(path, t0=0.0):
 
 
 def occupancy_journal(paths):
-    """The den's occupancy edges from the Jetson occupancy reader's journal lines, at their observed_at.
+    """(items, unlogged): the den's occupancy edges from the Jetson occupancy reader's journal lines, at their
+    observed_at, and the spans in which the reader missed an off.
 
     Lines are matched by occupancy_flaps.EDGE (other lines are ignored). Only DEN_OCCUPANCY is kept. to=on
-    and to=off map to on and off, anything else to unknown; from= is not used. An edge repeated across
-    copies counts once.
+    and to=off map to on and off, anything else to unknown. An edge repeated across copies counts once.
+    The reader logs an off only straight from on, so a dropout that ends off leaves no line, and the next
+    line is a 'from=off' after a 'to=on'. Each such pair is in unlogged as (t of the to=on, t of the from=off
+    line); the replay stays occupied through it.
     """
     edges = set()
     for path in paths:
         edges.update(flaps().parse(_text(path).splitlines()))
-    return [(t, "occupancy", {"value": to if to in ("on", "off") else "unknown", "via": "jetson_journal"})
-            for t, _, to, entity in sorted(edges) if entity == DEN_OCCUPANCY]
+    den = [(t, a, b) for t, a, b, entity in sorted(edges) if entity == DEN_OCCUPANCY]
+    unlogged = [(den[n - 1][0], t) for n, (t, a, _) in enumerate(den) if n and den[n - 1][2] == "on" and a == "off"]
+    return [(t, "occupancy", {"value": b if b in ("on", "off") else "unknown", "via": "jetson_journal"})
+            for t, _, b in den], unlogged
 
 
 def _scene(value):

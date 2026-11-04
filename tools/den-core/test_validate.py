@@ -123,7 +123,7 @@ class Mutations(Temp):
         lines = path.read_text("ascii").split("\n")
         n = next(i for i, line in enumerate(lines) if '"why":"reading_look: chose' in line)
         lines[n] = lines[n].replace("reading_look: chose", "reading_look: chosE")
-        path.write_text("\n".join(lines), "ascii")
+        path.write_text("\n".join(lines), "ascii", newline="\n")
         status, text = validate.replay(path, log[0]["t"])
         self.assertEqual(status, "FAIL")
         self.assertRegex(text, r"^line %d differs: the logged decision from decide at 2026-11-04T" % (n + 1))

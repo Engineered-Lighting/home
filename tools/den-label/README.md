@@ -41,7 +41,10 @@ Set-Location C:\claude\home\.claude\worktrees\den-label
 ```
 
 Run every command below from that folder. If `python` is not found, use
-`py -3.12`. Once the branch merges, run from a checkout of `main` instead.
+`py -3.12`. If the agent says the branch has changed, run `git pull` in that
+folder: Steps 4 and 5 start with it, so an agent's protocol edit (Step 3)
+always reaches your PC before you label. Once the branch merges, run from a
+checkout of `main` instead.
 
 ## Step 2, at R's commissioning take: the 3 unscripted minutes
 
@@ -88,6 +91,7 @@ Practice once on the commissioning take (here `c1`). Nothing from it is ever
 frozen:
 
 ```powershell
+git pull
 python -B tools\den-label\label.py boxes c1 --practice
 python -B tools\den-label\label.py labels c1 --practice
 ```
@@ -115,6 +119,7 @@ with approval 3 after R merges. After each one, run R's check (its README
 steps 5 and 7), then:
 
 ```powershell
+git pull
 python -B tools\den-label\label.py sessions
 python -B tools\den-label\label.py boxes <take>
 python -B tools\den-label\label.py labels <take>
@@ -171,6 +176,21 @@ if there were none). label.py accepts the new check only if it covers every
 earlier check's cuts; until then the session is blocked. Once it is accepted,
 the next label.py command clips your drafts to the new cuts, prints each
 change, and clears the end-to-end mark, so look again and press E again.
+
+## If label.py refuses a draft "made under another protocol"
+
+A draft records the protocol it was made under. If the agent changed
+PROTOCOL-V1.md (Step 3) after you made one, label.py refuses that draft. Run
+`git pull` first, in case you have not. Then move that take's refused drafts
+aside and redo its passes:
+
+```powershell
+python -B tools\den-label\label.py aside <take>
+```
+
+`aside` moves only the drafts label.py refuses, into
+`C:\den-takes\n1\work\aside\<time>\`, and prints each move. It never deletes
+anything, and drafts under the current protocol stay where they are.
 
 ## Step 6: the re-mark, the freezes and a copy
 

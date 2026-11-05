@@ -9,6 +9,7 @@
     python -B tools\\den-label\\label.py status
     python -B tools\\den-label\\label.py freeze fixture        (then: freeze labels)
     python -B tools\\den-label\\label.py verify
+    python -B tools\\den-label\\label.py aside <take>          (drafts made under another protocol)
 
 The passes open page.html in the owner's browser, served on 127.0.0.1 only with
 a one-time token. Frames never leave the PC. Agents read only `status` output
@@ -369,6 +370,9 @@ def parser():
     freeze = sub.add_parser("freeze", parents=[common])
     freeze.add_argument("what", choices=("fixture", "labels"))
     sub.add_parser("verify", parents=[common])
+    aside = sub.add_parser("aside", parents=[common],
+                           help="move a take's drafts made under another protocol aside (never deleted)")
+    aside.add_argument("take")
     return top
 
 
@@ -425,6 +429,11 @@ def main(argv=None, out=None, ready=None, protocol=None):
             ok, lines = ws.verify(freezes.read_text(encoding="utf-8") if freezes.exists() else "")
             print("\n".join(lines), file=out)
             return 0 if ok else 1
+        if args.command == "aside":
+            for line in ws.aside(args.take):
+                print(line, file=out)
+            print(f"Nothing was deleted. Redo {args.take}'s passes with label.py as usual.", file=out)
+            return 0
     except n1.Refused as exc:
         print(f"Refused: {exc}", file=out if out is not sys.stdout else sys.stderr)
         return 2

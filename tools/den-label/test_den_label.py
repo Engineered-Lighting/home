@@ -1064,6 +1064,52 @@ class SaveRefusalTests(Base):
         self.assertEqual(len(self.w.load_draft(self.w.draft_path("labels", "s1"))["intervals"]), 1)
 
 
+class StaleProtocolTests(Base):
+    """Item 2: a git pull before the passes, and a way out for drafts made under an old protocol."""
+
+    def test_readme_pulls_before_steps_4_and_5(self):
+        text = (HERE / "README.md").read_text(encoding="utf-8")
+        for step in ("## Step 4", "## Step 5"):
+            section = text[text.index(step):]
+            block = section[section.index("```powershell\n") + len("```powershell\n"):]
+            self.assertEqual(block.splitlines()[0], "git pull", step)
+
+    def stale(self, ws, path):
+        draft = json.loads(Path(path).read_bytes())
+        draft["protocol_sha256"] = "1" * 64
+        n1.write_json(path, draft)
+        return Path(path).read_bytes()
+
+    def test_aside_moves_a_takes_refused_drafts_and_never_deletes_them(self):
+        staged_take(self.takes, "a1")
+        commissioning_take(self.takes, "c1")
+        ws = self.ws()
+        ws.scan()
+        self.surfaces_done(ws, "c1")
+        self.boxes_done(ws, "a1")
+        self.labels_done(ws, "a1")
+        old = {kind: self.stale(ws, ws.draft_path(kind, "a1")) for kind in ("boxes", "labels")}
+        with self.assertRaisesRegex(n1.Refused, r"another protocol.*label\.py aside a1"):
+            label.Pass(ws, "boxes", "a1", out=io.StringIO())
+        code, text = run_main(["aside", "a1", "--takes", str(self.takes)])
+        self.assertEqual(code, 0, text)
+        moved = sorted((ws.root / "work" / "aside").rglob("*.json"))
+        self.assertEqual([p.parent.name + "/" + p.name for p in moved], ["boxes/a1.json", "labels/a1.json"])
+        self.assertEqual({p.parent.name: p.read_bytes() for p in moved}, old)
+        self.assertFalse(ws.draft_path("boxes", "a1").exists() or ws.draft_path("labels", "a1").exists())
+        self.assertIn("moved aside", text)
+        self.assertTrue(ws.surfaces_path().exists())  # the current surface map stays where it is
+        self.assertEqual(label.Pass(ws, "boxes", "a1", out=io.StringIO()).draft["keyframes"], [])
+        code, text = run_main(["aside", "a1", "--takes", str(self.takes)])
+        self.assertEqual(code, 2)
+        self.assertIn("nothing to move aside", text)
+        self.stale(ws, ws.surfaces_path())  # a surface map drawn on c1 under the old protocol goes with c1
+        code, text = run_main(["aside", "c1", "--takes", str(self.takes)])
+        self.assertEqual(code, 0, text)
+        self.assertFalse(ws.surfaces_path().exists())
+        self.assertEqual(len(list((ws.root / "work" / "aside").rglob("surfaces.json"))), 1)
+
+
 def browser_fixture(folder):
     """For test-page-browser.mjs: two synthetic takes, then the passes the browser plays, in order.
 

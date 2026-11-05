@@ -805,9 +805,51 @@ class Workspace:
             return None
         draft = read_json(path)
         if draft.get("protocol_sha256") != self.protocol.sha256:
+            take_id = draft.get("take") or (draft.get("reference") or {}).get("take") or "<take>"
             raise Refused(f"{Path(path).name} was made under another protocol sha256 "
-                          f"({str(draft.get('protocol_sha256'))[:12]}); it is refused")
+                          f"({str(draft.get('protocol_sha256'))[:12]}); it is refused. If the agent changed "
+                          f"the protocol, run git pull first; then label.py aside {take_id} moves it aside "
+                          "(never deletes it) so you can redo it")
         return draft
+
+    def refused_draft(self, path):
+        """Would load_draft refuse this file? Made under another protocol, or unreadable."""
+        try:
+            self.load_draft(path)
+        except Refused:
+            return True
+        return False
+
+    def aside(self, take_id):
+        """Move a take's refused drafts to work/aside/<UTC time>/, keeping their paths. Never deletes."""
+        if not TAKE_ID.fullmatch(take_id or ""):
+            raise Refused(f"{take_id!r} is not a take folder name")
+        work = self.root / "work"
+        paths = [self.draft_path(kind, take_id, practice) for practice in (False, True) for kind in DRAFT_KINDS]
+        surfaces = self.surfaces_path()
+        if surfaces.exists() and self.refused_draft(surfaces):
+            try:
+                drawn_on = (read_json(surfaces).get("reference") or {}).get("take")
+            except Refused:
+                drawn_on = None
+            if drawn_on in (take_id, None):
+                paths.append(surfaces)
+        refused = [path for path in paths if path.exists() and self.refused_draft(path)]
+        if not refused:
+            raise Refused(f"nothing to move aside: {take_id} has no draft that label.py refuses; drafts made "
+                          "under the current protocol stay where they are")
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now()))
+        target, k = work / "aside" / stamp, 1
+        while target.exists():
+            k += 1
+            target = work / "aside" / f"{stamp}-{k}"
+        moves = []
+        for path in refused:
+            rel = path.relative_to(work).as_posix()
+            (target / rel).parent.mkdir(parents=True, exist_ok=True)
+            os.rename(path, target / rel)  # a move within work\, never a delete
+            moves.append(f"moved aside: work/{rel} -> work/aside/{target.name}/{rel}")
+        return moves
 
     def surfaces_path(self):
         return self.root / "work" / "surfaces.json"

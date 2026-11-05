@@ -232,6 +232,25 @@ def mount_signature(bundle, grid=(8, 8)):
     return {"grid": [rows, cols], "shape": [HEIGHT, WIDTH], "cells": cells}
 
 
+def view_points(signature, k, reach_m):
+    """The camera, and each depth cell's four corners at its median depth (at most reach_m), in the camera frame.
+
+    How far a rigid motion moves a point is a convex function of the point, so its
+    largest value over everything the camera saw between itself and those surfaces
+    is at one of these. reach_m keeps a window or a doorway from counting as room.
+    """
+    rows, cols = signature["grid"]
+    height, width = signature["shape"]
+    points = [[0.0, 0.0, 0.0]]
+    for r, row in enumerate(signature["cells"]):
+        for c, millimetres in enumerate(row):
+            if millimetres is not None:
+                z = min(millimetres / 1000, reach_m)
+                points += [back_project(k, u, v, z) for v in (r * height // rows, (r + 1) * height // rows)
+                           for u in (c * width // cols, (c + 1) * width // cols)]
+    return points
+
+
 def check_mount(signature, current, *, tolerance_mm, tolerance_fraction, changed_fraction, minimum_cells):
     """'changed', 'no_large_change' or 'unknown' (too few comparable cells), as in spatial_validation.
 

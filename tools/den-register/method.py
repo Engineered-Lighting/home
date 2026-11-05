@@ -17,7 +17,7 @@ METHOD_FILE = "REGISTER-V1.md"
 BLOCK = "register-v1"
 KEYS = ("min_fit_pairs", "min_checks", "gate_m", "min_spread_m", "depth_window_px",
         "min_depth_valid_fraction", "max_left_depth_skew_s", "mount_tolerance_mm",
-        "mount_tolerance_fraction", "mount_changed_fraction", "mount_min_cells")
+        "mount_tolerance_fraction", "mount_changed_fraction", "mount_min_cells", "mount_view_reach_m")
 PROPOSED = re.compile(r"\bproposed\s+(-?[0-9]+(?:\.[0-9]+)?)\b")
 
 

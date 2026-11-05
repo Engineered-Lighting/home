@@ -6,8 +6,9 @@ in `docs/architecture/live-v1/schemas.json` (`room_model`,
 `calibration_record`). A change to this file is a new method: commit it as
 REGISTER-V2 and register again. Before any registration had run, the 2026-11-05
 review's fixes changed REGISTER-V1 in place: "A moved camera" below no longer
-lets a depth comparison confirm a registration, and the camera entry now holds
-the geometry rung 2 needs.
+lets a depth comparison confirm a registration, and needs every mark and the
+whole view to agree before it confirms; the camera entry now holds the geometry
+rung 2 needs.
 
 ## What is measured
 
@@ -109,25 +110,37 @@ looks at a frame of a later take in two steps.
    the cells, because a floor's depth does not change when a level camera turns
    about the vertical. Depth noise limits how far the slots could tighten.
 2. **The marks, against the same gate.** Only this step can confirm. The owner
-   clicks the marks on that later frame with the `click` step. Each click and
+   clicks every mark on that later frame with the `click` step. Each click and
    the depth under it go through the registered transform to a room position,
    compared with the worksheet's tape position:
    - any mark more than `gate_m` away: `changed`;
-   - at least `min_fit_pairs` fit marks and `min_checks` check marks clicked,
-     all within `gate_m`: `confirmed`;
-   - fewer marks, or none: `not_confirmed`.
+   - any mark the registration used not clicked: `not_confirmed`, naming it. A
+     turn shows most at the far marks, so none may be left out;
+   - every one clicked, all within `gate_m`: the third step decides.
+3. **The whole view, against the same gate.** A mark within the gate says little
+   about a point elsewhere: marks near the optical axis hardly show a roll, and
+   a swing about the marks' centre hardly moves them. So the marks' camera-frame
+   positions on the two frames (the entry keeps the first as `mount.marks`) give
+   the rigid motion they show together, and `view_movement_m` is the farthest
+   that motion carries anything in view: the marks, the camera, and the corners
+   of each signature cell at its depth, capped at `mount_view_reach_m`. How far a
+   rigid motion moves a point is convex in the point, so nothing between the
+   camera and those surfaces moves further. At most `gate_m`: `confirmed`. Over
+   it: `not_confirmed`. So is a registration frame with under `mount_min_cells`
+   cells of depth, which cannot say what the view holds.
 
 `changed` appends a RoomModel revision whose entry carries `invalidated`, with
 what the owner must re-check; from then on that `transform_id` resolves as
 invalidated, and a fit from a take recorded before that check is refused.
-`not_confirmed` (including a person blocking the view, with no clicks)
-invalidates nothing and confirms nothing. A take not recorded after the
-registration's own take is refused (`mount_take_not_later`), so a registration
-never confirms itself.
+`not_confirmed` invalidates nothing and confirms nothing. A take not recorded
+after the registration's own take is refused (`mount_take_not_later`), so a
+registration never confirms itself.
 
-`confirmed` is a statement at the marks: a turn grows with range, so points
-farther from the camera than every mark can be further off than the gate. This
-is why the marks spread across the room, with some at its far end.
+A person in view can go either way. Cells that lose their depth give `unknown`,
+which confirms nothing. But a person has valid depth: one filling over half of
+the frame trips the alarm, and the unmoved camera's entry is invalidated for
+good, at the price of a new take and fit. So the check take is recorded with the
+room clear.
 
 ## The numbers
 
@@ -148,4 +161,5 @@ mount_tolerance_mm = open         # open, proposed 50 (spatial_validation.check_
 mount_tolerance_fraction = open   # open, proposed 0.03 of the cell's depth
 mount_changed_fraction = open     # open, proposed 0.5 of compared cells
 mount_min_cells = open            # open, proposed 16 comparable cells
+mount_view_reach_m = open         # open, proposed 6.0 (past the room's far corner: a window or a doorway)
 ```

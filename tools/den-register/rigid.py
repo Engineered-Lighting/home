@@ -109,6 +109,12 @@ def apply(rotation, translation, point):
     return [sum(rotation[i][j] * point[j] for j in range(3)) + translation[i] for i in range(3)]
 
 
+def largest_move(source, target, points):
+    """The rigid motion that best carries source onto target, and the farthest it moves any of points, in metres."""
+    rotation, translation = kabsch(source, target)
+    return max(math.dist(apply(rotation, translation, p), p) for p in points)
+
+
 def matrix4(rotation, translation):
     return [list(rotation[i]) + [translation[i]] for i in range(3)] + [[0.0, 0.0, 0.0, 1.0]]
 

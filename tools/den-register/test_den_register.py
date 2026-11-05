@@ -50,6 +50,14 @@ FLOOR = {"f1": [3.0, 2.2, 0.0], "f2": [1.4, 2.2, 0.0], "f3": [3.6, 2.6, 0.0], "f
          "k1": [2.4, 2.6, 0.0], "k2": [3.2, 3.0, 0.0]}
 LINE = {"l1": [1.6, 2.0, 0.3], "l2": [2.2, 2.6, 0.3], "l3": [2.8, 3.2, 0.3], "l4": [3.1, 3.5, 0.3],
         "c1": [3.0, 3.5, 1.2], "c2": [1.6, 2.6, 0.4]}
+# One cross at the far end, the rest near: README step 3's spread, with a turn showing most at the far cross.
+FAR_AND_NEAR = {"far": synthetic.in_view(0.7, 0.0, 5.2), "n1": synthetic.in_view(-0.7, 0.5, 2.2),
+                "n2": synthetic.in_view(0.7, 0.4, 2.0), "n3": synthetic.in_view(0.1, -0.5, 2.4),
+                "c1": synthetic.in_view(-0.4, -0.2, 1.9), "c2": synthetic.in_view(0.4, 0.1, 2.5)}
+# Spread enough to pass the fit, all near the optical axis, where a roll moves a pixel least.
+CLUSTER = {"a": synthetic.in_view(0.4, 0.3, 3.0), "b": synthetic.in_view(-0.4, 0.3, 3.2),
+           "c": synthetic.in_view(0.4, -0.3, 2.8), "d": synthetic.in_view(-0.4, -0.3, 3.0),
+           "e": synthetic.in_view(0.0, 0.35, 3.0), "f": synthetic.in_view(0.1, -0.35, 3.2)}
 
 
 class Scene:
@@ -147,6 +155,16 @@ class RigidTests(unittest.TestCase):
         four = three + [[1, 1, 3]]
         self.assertEqual(len(rigid.fit(four, four)["loo_m"]), 4)
 
+    def test_largest_move_finds_the_farthest_point_a_known_motion_carries(self):
+        turn = synthetic.rotation_xyz(0.0, math.radians(2.0), 0.0)
+        shift = [0.01, -0.02, 0.0]
+        source = [[-1.0, -0.5, 2.0], [1.0, -0.5, 3.0], [0.0, 1.0, 4.0], [0.5, 0.2, 2.5]]
+        target = [rigid.apply(turn, shift, q) for q in source]
+        near, far = [0.0, 0.0, 0.0], [1.0, 0.0, 6.0]
+        self.assertAlmostEqual(rigid.largest_move(source, target, [near]), math.dist(shift, near), places=9)
+        self.assertAlmostEqual(rigid.largest_move(source, target, [near, far]),
+                               math.dist(rigid.apply(turn, shift, far), far), places=9)
+
     def test_leave_one_out_shows_a_point_that_hides_its_own_error(self):
         source = [[0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 2], [0.5, 0.5, 3]]
         target = [list(p) for p in source]
@@ -164,7 +182,7 @@ class MethodTests(unittest.TestCase):
                                     "max_left_depth_skew_s": 0.067})
         self.assertEqual(set(m.open), {"min_spread_m", "depth_window_px", "min_depth_valid_fraction",
                                        "mount_tolerance_mm", "mount_tolerance_fraction",
-                                       "mount_changed_fraction", "mount_min_cells"})
+                                       "mount_changed_fraction", "mount_min_cells", "mount_view_reach_m"})
         self.assertIsNone(m.scored())
         with self.assertRaises(KeyError):
             m["min_spread_m"]
@@ -258,6 +276,19 @@ class SceneTests(Base):
         self.assertEqual(scene.check_mount(base, few, **settings)["status"], "unknown")
         few["cells"][7][7] = 3000.0
         self.assertEqual(scene.check_mount(base, few, **settings)["status"], "no_large_change")
+
+    def test_the_view_points_are_each_cell_s_corners_at_its_depth_capped_at_the_reach(self):
+        cells = [[None] * 8 for _ in range(8)]
+        cells[0][0], cells[7][7] = 2000.0, 9000.0
+        signature = {"grid": [8, 8], "shape": [400, 640], "cells": cells}
+        k = {"fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 200.0}
+        points = scene.view_points(signature, k, reach_m=6.0)
+        self.assertEqual(len(points), 9)
+        self.assertEqual(points[0], [0.0, 0.0, 0.0], "the camera itself bounds the volume")
+        self.assertIn(scene.back_project(k, 0, 0, 2.0), points)
+        self.assertIn(scene.back_project(k, 80, 50, 2.0), points)
+        self.assertIn(scene.back_project(k, 640, 400, 6.0), points, "a window's 9 m counts as the reach")
+        self.assertEqual(max(point[2] for point in points), 6.0)
 
     def test_intrinsics_missing(self):
         depth, left, _ = synthetic.render()
@@ -733,6 +764,7 @@ class MountTests(Base):
                 self.assertNotIn("UNCHANGED", text)
                 self.assertIn("MOUNT NOT CONFIRMED", text)
                 self.assertIn("register.py click", text)
+                self.assertNotIn("the camera moved", text, "no marks are clicked, so nothing says so yet")
                 self.assertEqual(report["result"], "not_confirmed")
                 self.assertEqual(len(s.room_models()), 1, "nothing was checked, so nothing is invalidated")
 
@@ -768,24 +800,117 @@ class MountTests(Base):
     def test_too_few_marks_confirm_nothing(self):
         s, fitted = self.furnished()
         later = self.later_in_the_room()
-        later.click_all(["c1", "c2"])  # the ladder's counts apply here too: three plus two
+        later.click_all(["c1", "c2"])
         code, report, text = self.check(s, later.take)
         self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
-        self.assertIn("at least 3 fit marks and 2 check marks", text)
+        self.assertEqual(report["not_clicked"], ["p1", "p2", "p3", "p4"])
+        self.assertIn("p1, p2, p3, p4", text)
         self.assertEqual(len(s.room_models()), 1)
 
-    def test_one_mark_past_the_gate_is_enough_and_the_gate_is_five_cm(self):
-        for offset, expected, code_wanted in ((0.049, "confirmed", 0), (0.051, "changed", 1)):
-            with self.subTest(offset=offset):
+    def knocked_registration(self, points, fit, checks, pose, **method_values):
+        """A registration of these marks in the furnished room, and a later take from this pose."""
+        s = Scene(self, points=points, fit=fit, checks=checks, ended=1_800_000_100.0,
+                  background=synthetic.room_depth(), m=closed_method(**method_values))
+        s.click_all()
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        later = Scene(self, points=points, fit=fit, checks=checks, name="later", ended=1_800_001_000.0, pose=pose,
+                      background=synthetic.room_depth(pose))
+        return s, later
+
+    def test_leaving_the_far_cross_unclicked_cannot_confirm_a_turn(self):
+        # The 2026-11-05 verifier's case: three fit and two check marks are clicked, all within 5 cm, and the
+        # far cross, which would show the turn, is left out.
+        fit, checks = ("far", "n1", "n2", "n3"), ("c1", "c2")
+        s, later = self.knocked_registration(FAR_AND_NEAR, fit, checks, synthetic.moved(yaw_deg=1.0))
+        later.click_all(["n1", "n2", "n3", "c1", "c2"])
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertNotIn("still holds", text)
+        self.assertEqual(report["not_clicked"], ["far"])
+        self.assertIn("far", text)
+        self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.05)
+        self.assertEqual(len(s.room_models()), 1)
+        later.click_all(["far"])
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "changed"), text)
+        self.assertIn("far is", text)
+
+    def test_a_cluster_of_marks_near_the_optical_axis_cannot_confirm_a_roll(self):
+        s, later = self.knocked_registration(CLUSTER, ("a", "b", "c", "d"), ("e", "f"), synthetic.moved(roll_deg=3.0))
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.05, "every mark is within the gate")
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertGreater(report["view_movement_m"], 0.05)
+        self.assertNotIn("still holds", text)
+        self.assertIn("in view", text)
+        self.assertIn("the camera moved: register again", text)
+        self.assertNotIn("register.py click", text, "clicking this frame again would say the same")
+
+    def test_a_swing_about_the_marks_centre_cannot_be_confirmed(self):
+        centre = [sum(p[i] for p in synthetic.POINTS.values()) / len(synthetic.POINTS) for i in range(3)]
+        s, later = self.knocked_registration(synthetic.POINTS, synthetic.FIT, synthetic.CHECKS,
+                                             synthetic.pivoted(centre, 1.5))
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.05, "every mark is within the gate")
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertGreater(report["view_movement_m"], 0.05)
+
+    def test_the_movement_in_view_is_held_to_the_same_five_cm(self):
+        for yaw, expected, code_wanted in ((0.4, "confirmed", 0), (0.65, "not_confirmed", 1)):
+            with self.subTest(yaw=yaw):
                 self.tearDown()
                 self.setUp()
-                s, fitted = self.furnished()
-                later = self.later_in_the_room()
+                pose = synthetic.moved(yaw_deg=yaw)
+                s, later = self.knocked_registration(synthetic.POINTS, synthetic.FIT, synthetic.CHECKS, pose)
                 later.click_all()
-                sheet = synthetic.worksheet(offsets={"c1": [0, 0, offset]})  # measured truth vs what the camera sees
-                (s.work / "worksheet.json").write_text(json.dumps(sheet), encoding="utf-8")
                 code, report, text = self.check(s, later.take)
+                self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.05)
                 self.assertEqual((code, report["result"]), (code_wanted, expected), text)
+                entry = s.room_models()[0]["cameras"][0]
+                truth = max(math.dist(synthetic.to_camera(*pose, synthetic.in_view(*q)), q) for q in scene.view_points(
+                    entry["mount"]["signature"], entry["intrinsics"]["rectified_left"], s.m["mount_view_reach_m"]))
+                self.assertAlmostEqual(report["view_movement_m"], truth, delta=0.006)
+
+    def test_the_reach_caps_what_a_far_window_counts_for(self):
+        pose = synthetic.moved(yaw_deg=0.4)
+        far = {}
+        for reach in (6.0, 1.0):
+            self.tearDown()
+            self.setUp()
+            s, later = self.knocked_registration(synthetic.POINTS, synthetic.FIT, synthetic.CHECKS, pose,
+                                                 mount_view_reach_m=reach)
+            later.click_all()
+            far[reach] = self.check(s, later.take)[1]["view_movement_m"]
+        self.assertLess(far[1.0], far[6.0])
+
+    def test_a_registration_frame_with_too_little_depth_cannot_say_what_the_view_holds(self):
+        s = Scene(self, ended=1_800_000_100.0, background_mm=0)
+        s.click_all()
+        self.assertEqual(s.fit()[0], 0, s.out)
+        later = Scene(self, name="later", ended=1_800_001_000.0, background_mm=0)
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertIn("too little depth", text)
+        self.assertIn("Register again", text)
+        self.assertNotIn("register.py click", text)
+
+    def test_one_mark_past_the_gate_is_enough_and_the_gate_is_five_cm(self):
+        for mark in ("c1", "p2"):  # a check mark or a fit mark
+            for offset, expected, code_wanted in ((0.049, "confirmed", 0), (0.051, "changed", 1)):
+                with self.subTest(mark=mark, offset=offset):
+                    self.tearDown()
+                    self.setUp()
+                    s, fitted = self.furnished()
+                    later = self.later_in_the_room()
+                    later.click_all()
+                    sheet = synthetic.worksheet(offsets={mark: [0, 0, offset]})  # tape vs what the camera sees
+                    (s.work / "worksheet.json").write_text(json.dumps(sheet), encoding="utf-8")
+                    code, report, text = self.check(s, later.take)
+                    self.assertEqual((code, report["result"]), (code_wanted, expected), text)
 
     def test_the_registration_take_cannot_confirm_itself(self):
         s, fitted = self.furnished()

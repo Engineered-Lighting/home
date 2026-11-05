@@ -43,12 +43,30 @@ def camera_pose():
     return rotation, [0.4, 0.3, 2.1]
 
 
-def moved(pose=None, yaw_deg=0.0, pitch_deg=0.0, shift=(0.0, 0.0, 0.0)):
-    """The pose after a small knock: a turn about the room's vertical, a pitch about the camera's x, a slide."""
+def moved(pose=None, yaw_deg=0.0, pitch_deg=0.0, shift=(0.0, 0.0, 0.0), roll_deg=0.0):
+    """The pose after a small knock: a turn about the room's vertical, a pitch about the camera's x, a roll about
+    its z, a slide."""
     rotation, translation = pose or camera_pose()
     mul = lambda a, b: [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
-    rotation = mul(mul(rotation_xyz(0, 0, math.radians(yaw_deg)), rotation), rotation_xyz(math.radians(pitch_deg), 0, 0))
+    own = rotation_xyz(math.radians(pitch_deg), 0, math.radians(roll_deg))
+    rotation = mul(mul(rotation_xyz(0, 0, math.radians(yaw_deg)), rotation), own)
     return rotation, [translation[i] + shift[i] for i in range(3)]
+
+
+def pivoted(centre, yaw_deg, pose=None):
+    """The pose after the whole camera swings about a vertical line through a room point: a turn and a slide that
+    leave that point where the image had it."""
+    rotation, translation = pose or camera_pose()
+    turn = rotation_xyz(0, 0, math.radians(yaw_deg))
+    mul = lambda a, b: [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+    offset = [translation[i] - centre[i] for i in range(3)]
+    return mul(turn, rotation), [sum(turn[i][j] * offset[j] for j in range(3)) + centre[i] for i in range(3)]
+
+
+def in_view(x, y, z, pose=None):
+    """The room point at these camera coordinates (metres) of a pose."""
+    rotation, translation = pose or camera_pose()
+    return [sum(rotation[i][j] * (x, y, z)[j] for j in range(3)) + translation[i] for i in range(3)]
 
 
 def to_camera(rotation, translation, room_point):

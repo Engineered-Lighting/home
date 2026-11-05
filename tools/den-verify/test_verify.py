@@ -522,6 +522,32 @@ class HeldPointsCount(unittest.TestCase):
             hr = score([dec], [ref, after], self.model, corrections=[correction])[2]["hit_rate"]
             self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), expected)
 
+    def stuck_at_any_hue_level(self, level, pin, held, step=0):
+        """Three free bulbs go 0.8 -> 0.4 and B0 sticks; B3 stays at a Hue level, pinned at `pin` if held."""
+        pts = self.names[:2]
+        model = syn.hue_model({n: {b: self.K for b in syn.HUE} for n in pts}, kelvins=(2700,))
+        t = syn.T0
+        before = {B0: 0.8, B1: 0.8, B2: 0.8, B3: level}
+        ref = syn.light_state(t, {n: self.K * sum(before.values()) for n in pts}, anchored=False, ident="ls-r")
+        applied = {b: {"level": 0.4, "steps": send(t + 0.5)} for b in (B0, B1, B2)}
+        applied[B3] = {"status": "held" if held else "sent", "level": level + step}
+        hold_set = {"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                             "pinned": {"level_pct": pin, "cct_k": 2700}}]} if held else None
+        dec = syn.hue_decision("d", t + 0.5, before, applied, "ls-r", hold_set=hold_set,
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(pts)})
+        after = syn.light_state(t + 5, {n: self.K * (0.8 + 0.4 + 0.4 + level) for n in pts}, anchored=False)
+        hr = score([dec], [ref, after], model)[2]["hit_rate"]
+        return hr["hits"], hr["misses"], hr["verdict"]
+
+    def test_a_steady_hold_at_any_hue_level_lifts_nothing_through_the_allowance(self):
+        # level_pct / 100 misses 39 of the 254 read-backs by a float's last bit; a whole-percent pin misses by up to 0.5%
+        for n in range(1, 255):
+            level = n / 254
+            free = self.stuck_at_any_hue_level(level, None, False)
+            self.assertEqual(free, (0, 2, "fail"), n)
+            self.assertEqual(self.stuck_at_any_hue_level(level, level * 100, True), free, n)
+            self.assertEqual(self.stuck_at_any_hue_level(level, round(level * 100), True), free, n)
+
     def test_the_other_named_rule_leaves_every_held_lit_point_out(self):
         t = syn.T0
         both = {"held_rule": "exclude_both"}
@@ -1015,6 +1041,69 @@ class DimsAndOffs(unittest.TestCase):
         decisions, _, _ = score([dec], [ref, syn.light_state(t + 5, {"desk-1": 310 * 1.16}, anchored=False)], model)
         self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
         self.assertNotIn("level_bound", point(decisions[0], "desk-1"))
+
+    def off_with_a_wiggle(self, wiggle, cct_after=2700, kelvins=(2700,), levels=(0.4, 0.8)):
+        """B0 goes off and sticks on; B1 to B3 stay put, their read-backs `wiggle` away. Read where B0 stuck."""
+        stuck, steady = levels
+        pts = self.names[:2]
+        model = syn.hue_model({n: {b: 300.0 for b in syn.HUE} for n in pts}, kelvins=kelvins)
+        lm = LightModel(model)
+        t = syn.T0
+        before = {B0: stuck, B1: steady, B2: steady, B3: steady}
+        lit = lm.predict({b: {"level": lv, "cct_k": 2700} for b, lv in before.items()})
+        ref = syn.light_state(t, {n: lit[n] for n in pts}, anchored=False, ident="ls-r")
+        applied = {B0: {"level": 0.0, "steps": send(t + 0.5)}}
+        applied.update({b: {"level": steady + wiggle, "steps": []} for b in (B1, B2, B3)})
+        dec = syn.hue_decision("d", t + 0.5, before, applied, "ls-r",
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(pts)})
+        for b in (B1, B2, B3):
+            dec["applied_scene"][b]["readback"]["cct_k"] = cct_after
+        after = syn.light_state(t + 5, {n: lit[n] for n in pts}, anchored=False)
+        hr = score([dec], [ref, after], model)[2]["hit_rate"]
+        return hr["hits"], hr["misses"], hr["verdict"]
+
+    def test_a_read_back_step_on_a_bulb_that_stayed_put_widens_nothing(self):
+        self.assertEqual(self.off_with_a_wiggle(0.0), (0, 2, "fail"))
+        for steps in (1, -1, 2, -2):
+            self.assertEqual(self.off_with_a_wiggle(steps / 254), (0, 2, "fail"), steps)
+
+    def test_a_colour_nudge_on_a_bulb_that_stayed_put_widens_nothing(self):
+        wide_basis = (2202, 6500)
+        self.assertEqual(self.off_with_a_wiggle(0.0, kelvins=wide_basis), (0, 2, "fail"))
+        for kelvin in (2650, 2750, 2800):
+            self.assertEqual(self.off_with_a_wiggle(0.0, cct_after=kelvin, kelvins=wide_basis), (0, 2, "fail"), kelvin)
+
+    def test_a_small_move_adds_its_own_size_and_a_real_one_the_whole_bulb(self):
+        # B1 falls 240 to nothing, which gives 36; B0 at 60 moves by `to`, level_bound says what it added
+        model = syn.hue_model({"pt": {B0: 300.0, B1: 300.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"pt": 300.0}, anchored=False, ident="ls-r")
+
+        def bound(to, overrides=None):
+            dec = syn.hue_decision("d", t + 0.5, {B0: 0.2, B1: 0.8},
+                                   {B0: {"level": to, "steps": send(t + 0.5)}, B1: {"level": 0.0, "steps": send(t + 0.5)}},
+                                   "ls-r", targets={"A": {"surface_id": "pt"}})
+            after = syn.light_state(t + 5, {"pt": 300.0 * to}, anchored=False)
+            return point(score([dec], [ref, after], model, overrides=overrides)[0][0], "pt")["level_bound"]
+
+        self.assertEqual(bound(0.2), 36.0)           # did not move: nothing
+        self.assertEqual(bound(0.2 + 1e-15), 36.0)   # a float's last bit: nothing
+        self.assertEqual(bound(0.19), 39.0)          # moved 3: adds 3
+        self.assertEqual(bound(0.171), 44.7)         # moved 8.7, just inside 15% of its 60: adds 8.7
+        self.assertEqual(bound(0.17), 45.0)          # moved 9, its 15%: adds 15% of 60, nothing jumps here
+        self.assertEqual(bound(0.1), 45.0)           # past that: the whole bulb, still 15% of 60
+        self.assertEqual(bound(0.19, {"change_allowance": 0.3}), 78.0)  # the owner's share of the same ramp
+
+    def test_a_step_off_a_steady_bulb_moves_a_stuck_bulbs_verdict_nowhere(self):
+        # the hit may move by the step, not by a whole bulb: no verdict flips in this grid
+        flipped = []
+        for stuck in (0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0):
+            for steady in (0.1, 0.2, 0.3, 0.5, 0.6, 0.8, 1.0):
+                flat = self.off_with_a_wiggle(0.0, levels=(stuck, steady))
+                for steps in (1, -1):
+                    if flat != self.off_with_a_wiggle(steps / 254, levels=(stuck, steady)):
+                        flipped.append((stuck, steady, steps))
+        self.assertEqual(flipped, [])
 
     def test_daylight_keeps_the_level_check_on_the_same_dim(self):
         model = syn.hue_model({"desk-1": {B0: 400.0}}, kelvins=(2700,))

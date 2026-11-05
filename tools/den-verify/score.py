@@ -35,6 +35,18 @@ def _r(x, n):
     return None if x is None else round(x, n)
 
 
+def changed_light(now, was, tolerance):
+    """What one bulb puts under the allowance at a point: its brighter level, once it has really moved.
+
+    A move inside the ladder's tolerance of that level counts in proportion, so a read-back step, a colour
+    nudge or a pin's rounding widens a bound by about its own size, never by a whole bulb.
+    """
+    if math.isclose(now, was, rel_tol=1e-9):
+        return 0.0
+    brighter, moved = max(now, was), abs(now - was)
+    return moved / tolerance if moved < tolerance * brighter else brighter
+
+
 def percentile(sorted_values, q):
     """Linear interpolation between closest ranks (q in 0..1)."""
     if not sorted_values:
@@ -296,8 +308,7 @@ class Run:
                 else:
                     free += max(now, was)
                     own += abs(now - was)
-                if now != was:
-                    brightest += max(now, was)
+                brightest += changed_light(now, was, m["tolerance"])
             row["held_share"] = held_light / max(predicted, held_light) if held_light > 0 and predicted is not None else 0.0
             row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
             if measured is None:

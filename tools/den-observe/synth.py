@@ -33,6 +33,7 @@ DEPTH_SIZE, RGB_SIZE = (640, 400), (640, 360)
 BASELINE_M = 0.075
 UNIX_OFFSET_S = 1.8e9 - 0.12  # the synthetic takes' true host-monotonic -> Unix offset
 ARRIVAL_S = 0.05              # bundles arrive this long after capture
+TAKE_ENDED_UNIX = 1_800_001_000.0  # take.json's ended_unix, unless a test says otherwise
 
 
 def camera_pose(position=(0.0, 0.0, 2.2), tilt_deg=20.0):
@@ -147,7 +148,7 @@ def bundle(meta, depth):
     return output.getvalue()
 
 
-def make_take(folder, frames, depth, *, intrinsics=None):
+def make_take(folder, frames, depth, *, intrinsics=None, ended_unix=TAKE_ENDED_UNIX):
     """Write an R take: frames is [(t_rgb, t_depth)] host-monotonic seconds; depth is
     one depth frame's bytes or a list with one per frame; RGB sequence numbers
     start at 1000. Returns the folder. It has no check file: see write_check."""
@@ -164,6 +165,7 @@ def make_take(folder, frames, depth, *, intrinsics=None):
         "schema": take.SCHEMA, "take": folder.name, "script": "free", "commissioning": False,
         "cues": [{"cue": "begin", "text": "Begin.", "pc_mono_s": 1.0, "pc_unix": 1.8e9}],
         "slates": [], "complete": True, "stop_reason": None, "counts": {"kept": len(writer.index)},
+        "ended_unix": ended_unix,
         "sha256": {"frames.csv": check.file_sha256(folder / "frames.csv")}})
     return folder
 
@@ -196,6 +198,15 @@ def camera_entry(*, camera_id="den-oak", version="2026-11-12", error_bound_m=0.0
             "pose": {"camera_frame": "rectified_left", "room_from_camera": matrix},
             "photometric": {"k_L": None, "unit": "(cd/m²)/nc", "normalisation_version": None,
                             "calibration_id": None, "status": "uncalibrated"}}
+
+
+def held_entry(*, registered=TAKE_ENDED_UNIX - 100.0, confirmed=TAKE_ENDED_UNIX + 100.0, **kwargs):
+    """A camera entry with rung 1's mount record: registered before the take and confirmed after it."""
+    entry = camera_entry(**kwargs)
+    entry["mount"] = {"take": "synthetic-registration", "take_ended_unix": registered}
+    if confirmed is not None:
+        entry["confirmed"] = {"take": "synthetic-check", "take_ended_unix": confirmed}
+    return entry
 
 
 def room_model(cameras=None):

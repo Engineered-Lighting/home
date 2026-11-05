@@ -39,6 +39,27 @@ Because a bad registration refuses the run, den-observe never writes the null
 `room_position` and `joints_room` the schema reserves for an invalidated
 transform.
 
+A camera entry says where the camera was, so it can only lift a take recorded
+while the camera was there. Rung 1's entry carries the two times that bound this:
+`mount.take_ended_unix`, the registration's own take, and, once its mount check
+has confirmed the registration on a later take, `confirmed.take_ended_unix`.
+Against the take's own `ended_unix` in `take.json`:
+
+- a take older than the registration's own is refused, scored or not: the camera
+  may have been elsewhere, as when a knock and a new fit came between. No older
+  entry is reached for: it would be stale, and it may be invalidated;
+- a **scored** run also needs the take to be no later than the confirmation. A
+  check confirms the camera had not moved by then, which is what vouches for the
+  takes before it. So the owner runs the check after the takes to be scored;
+- an unscored run of a take past the confirmation is allowed, and it says so:
+  `run.json`'s `mount.status` is `not_confirmed` and the log has a `mount:` line.
+
+A scored run refuses an entry with no mount record. An unscored one (the tests,
+or a hand-made entry) lifts it and reports `no_mount_record`. Once a later check
+invalidates an entry, it lifts nothing more, not even a take a confirmation had
+vouched for: replay scored takes before the next check, or record new ones after
+the next fit.
+
 ## Time
 
 `capture_ts`, `depth_ts` and `available_ts` are Unix seconds:

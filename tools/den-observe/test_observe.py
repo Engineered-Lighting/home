@@ -87,6 +87,7 @@ def depth(holes=(), noise_seed=None):
     return _DEPTH[key]
 
 
+HELD_ROOM = synth.room_model([synth.held_entry()])  # registered before the take, confirmed after it
 SCENE = synth.Scene()
 PIXELS = {name: SCENE.joint_rgb(name) for name in synth.JOINTS}
 NAMES = list(synth.JOINTS)
@@ -114,10 +115,11 @@ class Case:
     """A synthetic take, room model and detector rows, written to a fresh folder."""
 
     def __init__(self, name, pairs=None, depth_bytes=None, *, rows=None, latency_s=0.3, check="PASS",
-                 intrinsics=None, room=None):
+                 intrinsics=None, room=None, ended_unix=synth.TAKE_ENDED_UNIX):
         self.work = new_dir(name)
         pairs = pairs or frames()
-        self.take = synth.make_take(self.work / "take", pairs, depth_bytes or depth(), intrinsics=intrinsics)
+        self.take = synth.make_take(self.work / "take", pairs, depth_bytes or depth(), intrinsics=intrinsics,
+                                    ended_unix=ended_unix)
         if check:
             synth.write_check(self.take, verdict=check)
         self.room = self.work / "room.json"
@@ -415,17 +417,37 @@ class RegistrationTests(unittest.TestCase):
         moved = {"rgb": dict(synth.RGB_K, cx=synth.RGB_K["cx"] + 3.0), "depth": synth.LEFT_K}
         self.refused(Case("intrinsics-moved", intrinsics=moved), "stale registration")
 
+    def test_a_scored_run_needs_rung_1s_mount_record(self):
+        closed = closed_method(new_dir("closed-no-mount"))
+        case = Case("scored-no-mount")
+        self.refused(case, "no mount record", scored=True, method_path=closed)
+
+    def test_a_take_without_a_readable_end_time_is_refused_against_a_mount_record(self):
+        for name, value in (("none", None), ("text", "2027-01-15"), ("true", True)):
+            with self.subTest(name):
+                self.refused(Case(f"no-end-{name}", room=HELD_ROOM, ended_unix=value), "ended_unix")
+
+    def test_an_entry_with_no_mount_record_lifts_an_unscored_run_and_says_so(self):
+        lines = []
+        case = Case("no-mount")
+        replay.replay(case.take, case.room, case.out, detections_path=case.rows_path, log=lines.append)
+        run = json.loads((case.out / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(run["mount"]["status"], "no_mount_record")
+        self.assertTrue(any(line.startswith("mount: no mount record") for line in lines), lines)
+
     def test_a_room_in_another_frame_is_refused(self):
         self.refused(Case("frame", room=dict(synth.room_model(), frame="y_up")), "z_up_metric_floor0")
 
 
 class Rung1FileChecks:
-    """The file den-register writes, as it stands after each step. `lines` is its three revisions:
-    a first fit, a second fit from a later take, and check-mount's invalidated revision."""
+    """The file den-register writes, as it stands after each step. `lines` is its five revisions: a first fit
+    (take ended 1_800_000_100), a second fit (take ended 1_800_000_900), check-mount's confirmation (take ended
+    1_800_001_500), its invalidation, after a 5 degree turn, and a fit from a take after the turn (ended 1_800_003_000).
+    """
 
     lines = ()
 
-    def case(self, name, n, room_bytes=None):
+    def case(self, name, n, room_bytes=None, ended_unix=synth.TAKE_ENDED_UNIX):
         """A person in view of rung 1's registered camera, with rung 1's file as it stood after n lines."""
         first = json.loads(self.lines[0])["cameras"][0]
         scene = synth.Scene(room_from_left=g.from_matrix(first["pose"]["room_from_camera"], "pose"),
@@ -435,7 +457,7 @@ class Rung1FileChecks:
         _DEPTH.setdefault(key, scene.depth_mm())
         pixels = {name: scene.joint_rgb(name) for name in synth.JOINTS}
         rows = [fake_detector.row(t, rgb_seq=1000 + i, pixels=pixels, latency_s=0.3) for i, (t, _) in enumerate(pairs)]
-        case = Case(name, pairs, _DEPTH[key], rows=rows,
+        case = Case(name, pairs, _DEPTH[key], rows=rows, ended_unix=ended_unix,
                     intrinsics={"rgb": first["intrinsics"]["rgb"], "depth": first["intrinsics"]["rectified_left"]})
         case.room = case.work / "room-model.jsonl"
         case.room.write_bytes(room_bytes if room_bytes is not None else "".join(
@@ -467,12 +489,61 @@ class Rung1FileChecks:
         self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
 
     def test_a_scored_run_passes_the_gate_on_rung_1s_file(self):
-        case = self.case("rung1-scored", 2)
+        case = self.case("rung1-scored", 3)
         run, records = case.run(scored=True, method_path=closed_method(case.work / "closed"))
         self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
         self.assertEqual(run["method"]["open_slots"], {})
         self.assertEqual(run["method"]["values_used"]["camera_entry_form"], "den-observe-camera-1")
         self.assertTrue(run["gate"]["pass"], run["gate"])
+        self.assertEqual(run["mount"], {"status": "confirmed", "take_ended_unix": synth.TAKE_ENDED_UNIX,
+                                        "registered_take_ended_unix": 1_800_000_900.0,
+                                        "confirmed_take_ended_unix": 1_800_001_500.0})
+
+    def assert_refused(self, case, text, **kwargs):
+        with self.assertRaises(replay.Refused) as caught:
+            case.run(**kwargs)
+        self.assertIn(text, str(caught.exception))
+        self.assertFalse(case.out.exists())
+
+    def test_a_scored_run_is_refused_until_a_check_confirms_the_registration(self):
+        # The verifier's case: a knock, NOT CONFIRMED, and a scored replay that passed with a 30 cm room error.
+        case = self.case("rung1-unconfirmed", 2)
+        self.assert_refused(case, "check-mount", scored=True, method_path=closed_method(case.work / "closed"))
+
+    def test_a_scored_run_is_refused_for_a_take_after_the_confirmation(self):
+        case = self.case("rung1-after", 3, ended_unix=1_800_001_501.0)
+        self.assert_refused(case, "check-mount", scored=True, method_path=closed_method(case.work / "closed"))
+
+    def test_a_confirmation_vouches_for_its_own_take_and_the_registration_for_its_own(self):
+        for name, ended in (("own", 1_800_001_500.0), ("registration", 1_800_000_900.0)):
+            with self.subTest(name):
+                case = self.case(f"rung1-edge-{name}", 3, ended_unix=ended)
+                run, records = case.run(scored=True, method_path=closed_method(case.work / "closed"))
+                self.assertEqual(run["mount"]["status"], "confirmed")
+                self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
+
+    def test_an_unscored_run_after_the_confirmation_says_it_is_not_confirmed(self):
+        case = self.case("rung1-unscored", 3, ended_unix=1_800_001_501.0)
+        lines = []
+        replay.replay(case.take, case.room, case.out, detections_path=case.rows_path, log=lines.append)
+        run = json.loads((case.out / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(run["mount"]["status"], "not_confirmed")
+        self.assertTrue(any(line.startswith("mount: NOT CONFIRMED") for line in lines), lines)
+
+    def test_a_take_recorded_before_the_current_registration_is_refused(self):
+        # The verifier's case: a fit, a knock, a fit from a new take, then a take from before the knock.
+        for name, n, ended in (("after-a-refit", 5, synth.TAKE_ENDED_UNIX), ("just-before", 2, 1_800_000_899.0)):
+            with self.subTest(name):
+                case = self.case(f"rung1-old-{name}", n, ended_unix=ended)
+                self.assert_refused(case, "before the take")
+                self.assert_refused(case, "before the take", scored=True,
+                                    method_path=closed_method(case.work / "closed"))
+
+    def test_a_take_after_the_refit_is_lifted_through_the_refit(self):
+        case = self.case("rung1-refit", 5, ended_unix=1_800_003_500.0)
+        run, _ = case.run()
+        self.assertEqual(run["transform_id"], self.transform_id(self.lines[4]))
+        self.assertEqual(run["mount"]["status"], "not_confirmed")
 
     def test_the_first_fit_is_stale_after_the_second(self):
         case = self.case("rung1-stale", 2)
@@ -482,7 +553,7 @@ class Rung1FileChecks:
         self.assertFalse(case.out.exists())
 
     def test_a_revision_check_mount_invalidated_is_refused_and_nothing_written(self):
-        case = self.case("rung1-invalidated", 3)
+        case = self.case("rung1-invalidated", 4)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             code = replay.main(["--take", str(case.take), "--room-model", str(case.room), "--detections",
@@ -513,7 +584,9 @@ class Rung1FileTests(Rung1FileChecks, unittest.TestCase):
     lines = tuple(RUNG1_FILE.read_text(encoding="utf-8").splitlines())
 
     def test_an_empty_file_or_a_line_that_is_not_an_object_is_refused(self):
-        for name, data in (("empty", b""), ("array", b"[1, 2]\n"), ("number", b'{"room_id": "den"}\n7\n')):
+        good = self.lines[0].encode("utf-8") + b"\n"
+        for name, data in (("empty", b""), ("array", b"[1, 2]\n"), ("number", b'{"room_id": "den"}\n7\n'),
+                           ("number-in-the-middle", good + b"7\n" + good)):
             with self.subTest(name):
                 case = self.case(f"rung1-{name}", 1, room_bytes=data)
                 with self.assertRaises(replay.Refused):
@@ -541,6 +614,11 @@ class RealRung1RunTests(Rung1FileChecks, unittest.TestCase):
         self.assertEqual(set(real), set(copy))
         self.assertEqual(set(real["intrinsics"]), set(copy["intrinsics"]))
         self.assertEqual(set(real["pose"]), set(copy["pose"]))
+        self.assertEqual(set(real["mount"]), set(copy["mount"]))
+        real_held = json.loads(self.lines[2])["cameras"][0]
+        copy_held = json.loads(RUNG1_FILE.read_text(encoding="utf-8").splitlines()[2])["cameras"][0]
+        self.assertEqual(set(real_held["confirmed"]), set(copy_held["confirmed"]))
+        self.assertEqual(len(self.lines), len(RUNG1_FILE.read_text(encoding="utf-8").splitlines()))
 
 
 class FreshnessTests(unittest.TestCase):
@@ -579,14 +657,14 @@ class FreshnessTests(unittest.TestCase):
         self.assertFalse(case.out.exists())
 
     def test_a_scored_run_with_every_slot_closed(self):
-        case = Case("scored", frames(4))
+        case = Case("scored", frames(4), room=HELD_ROOM)
         closed = closed_method(case.work / "closed")
         run, records = case.run(scored=True, method_path=closed)
         self.assertTrue(run["scored"])
         self.assertEqual(run["method"]["open_slots"], {})
         self.assertTrue(run["gate"]["pass"], run["gate"])
         self.assertEqual(run["gate"]["freshness"]["baseline"]["expired"], 115)
-        late = Case("scored-late", frames(4), latency_s=1.2)
+        late = Case("scored-late", frames(4), latency_s=1.2, room=HELD_ROOM)
         with contextlib.redirect_stdout(io.StringIO()):
             code = replay.main(["--take", str(late.take), "--room-model", str(late.room), "--detections",
                                 str(late.rows_path), "--out", str(late.out), "--scored", "--method", str(closed)])
@@ -598,7 +676,7 @@ class FreshnessTests(unittest.TestCase):
         closed = closed_method(new_dir("closed-shared"))
         for case, kwargs, text in ((Case("scored-no-check", check=None), {}, "PASS"),
                                    (Case("scored-failed-check", check="FAIL"), {}, "PASS"),
-                                   (Case("scored-no-times", latency_s=None), {}, "available_ts"),
+                                   (Case("scored-no-times", latency_s=None, room=HELD_ROOM), {}, "available_ts"),
                                    (Case("scored-fake"), {"fake": True, "detections_path": None}, "--fake")):
             with self.subTest(case.work.name), self.assertRaises(replay.Refused) as caught:
                 case.run(scored=True, method_path=closed, **kwargs)
@@ -662,6 +740,7 @@ class ReplayTests(unittest.TestCase):
         run = json.loads((out / "run.json").read_text(encoding="utf-8"))
         self.assertEqual((run["scored"], run["gate"]["records_with_problems"]), (False, 0))
         self.assertEqual(len(run["method"]["open_slots"]), 16)
+        self.assertEqual(run["mount"]["status"], "confirmed")
 
     def test_the_fake_detector_replays_any_take(self):
         case = Case("fake")

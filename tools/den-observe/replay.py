@@ -37,6 +37,13 @@ R5_BASELINE = {"expired": 115, "results": 228, "fraction": round(115 / 228, 3),
                "capture_to_completion_s": 1.46, "source": "notes.json R5, the 2026-10-22 window"}
 
 
+MOUNT_LINE = {"confirmed": "mount: rung 1 confirmed this registration on this take or a later one",
+              "not_confirmed": "mount: NOT CONFIRMED on this take or a later one: the camera may have moved, so these "
+                               "room positions are unchecked and a scored run would refuse",
+              "no_mount_record": "mount: no mount record in this camera entry, so these room positions are unchecked "
+                                 "and a scored run would refuse"}
+
+
 class Refused(Exception):
     """The run cannot start or finish; nothing is written."""
 
@@ -125,6 +132,7 @@ def replay(take_folder, room_model_path, out, *, detections_path=None, fake=Fals
         room_model = roommodel.load(room_model_path)
         transform_id = transform_id or roommodel.current_transform_id(room_model, camera_id)
         camera = roommodel.Camera(room_model, transform_id, max_error_bound_m=method.get("max_error_bound_m"))
+        mount = camera.take_state(take.record.get("ended_unix"), scored=scored)
     except roommodel.RegistrationRefused as exc:
         raise Refused(str(exc)) from None
     if fake:
@@ -166,7 +174,7 @@ def replay(take_folder, room_model_path, out, *, detections_path=None, fake=Fals
         raise
     summary = gate(records, camera, settings, method, scored=scored)
     run = {"schema": RUN_SCHEMA, "scored": scored, "take": take.folder.name,
-           "take_check": take.check, "clock": clock, "transform_id": camera.transform_id,
+           "take_check": take.check, "clock": clock, "transform_id": camera.transform_id, "mount": mount,
            "detector": detector, "rows": len(rows), "method": method.record(), "gate": summary}
     os.replace(partial, target / "observations.jsonl")
     with open(target / "run.json", "x", encoding="utf-8", newline="\n") as sink:
@@ -180,6 +188,7 @@ def report(run, target, log):
     summary = run["gate"]
     log(f"wrote {summary['records']} observations from {run['rows']} rows to {target}")
     log(f"transform_id {run['transform_id']}; clock from the {run['clock']['source']}")
+    log(MOUNT_LINE[run["mount"]["status"]])
     for key in ("kind", "validity", "depth", "joints"):
         log(f"{key}: " + ", ".join(f"{k} {v}" for k, v in sorted(summary["counts"][key].items())))
     fresh = summary["freshness"]
@@ -207,7 +216,8 @@ def demo(out=None, log=print):
     folder = synth.make_take(work / "take", frames, depth)
     synth.write_check(folder)
     room = work / "room-model.jsonl"
-    room.write_text(json.dumps(synth.room_model(), ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    room.write_text(json.dumps(synth.room_model([synth.held_entry()]), ensure_ascii=False) + "\n", encoding="utf-8",
+                    newline="\n")
     pixels = {name: scene.joint_rgb(name) for name in synth.JOINTS}
     rows = [fake_detector.row(t, rgb_seq=1000 + i, pixels=pixels) for i, (t, _) in enumerate(frames)]
     detections.write_rows(work / "detections.jsonl", rows)

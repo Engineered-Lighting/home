@@ -72,7 +72,9 @@ and the copy in `testdata` stands in for it.
 Rung 1 (`tools\den-register`) writes `C:\den-register\room-model.jsonl`, one
 revision per line. den-observe reads its last line, which holds the camera's
 current registration. It refuses the run if rung 1's mount check has invalidated
-that registration: register again. The plumbing run with the fake detector is:
+that registration, or if the take is older than the take that registration came
+from: register again, or use a newer take. The plumbing run with the fake
+detector is:
 
 ```powershell
 python -B tools\den-observe\replay.py --take C:\den-takes\2026-11-10-1 --room-model C:\den-register\room-model.jsonl --fake --out C:\den-takes\2026-11-10-1\observe-1
@@ -99,3 +101,10 @@ and keep the note: `detector_max_age_s = 1.0     # set 2026-11-.., R5 baseline .
 When no `open` is left, add `--scored` to the command above with
 `--detections`. A scored run also needs the take's newest check to PASS with
 a read start slate (its clock) and `available_ts` on every detector row.
+
+It also needs rung 1's mount check to have confirmed the registration on this
+take or a later one, because only that says the camera had not moved. So after
+the takes you want to score, follow "Later: has the camera moved?" in
+`tools\den-register\README.md`, then run the scored replays. Without that the
+run is refused and says so. An unscored run is written with a `mount: NOT
+CONFIRMED` line.

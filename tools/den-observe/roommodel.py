@@ -23,6 +23,14 @@ class RegistrationRefused(Exception):
     """No usable registration: nothing is written."""
 
 
+def _time(value):
+    return float(value) if type(value) in (int, float) and math.isfinite(value) else None
+
+
+def _section(entry, name):
+    return entry.get(name) if type(entry.get(name)) is dict else {}
+
+
 def load(path):
     """The current RoomModel: the file's last revision. One document alone is a file of one revision.
 
@@ -120,9 +128,39 @@ class Camera:
         except (KeyError, TypeError, ValueError) as exc:
             raise RegistrationRefused(f"{transform_id} camera entry is not usable: {exc}") from None
         self.transform_id, self.error_bound_m, self.baseline_m = transform_id, float(bound), float(baseline)
+        self.registered_unix = _time(_section(entry, "mount").get("take_ended_unix"))
+        self.confirmed_unix = _time(_section(entry, "confirmed").get("take_ended_unix"))
         self.f_left, self.f_rgb = self.rig.left_k[0], self.rig.rgb_k[0]
         rgb_origin_left = g.apply(*self.rig.left_from_rgb, [0.0, 0.0, 0.0])
         self.rgb_origin_room = g.apply(*self.room_from_left, rgb_origin_left)
+
+    def take_state(self, ended_unix, *, scored):
+        """Where a take stands against rung 1's mount record, or refused (METHOD.md, "Registration").
+
+        A confirmation vouches for the takes back to the registration's own, so a
+        take older than the registration is refused, and a scored take must be
+        vouched for. A registered entry always has the record; a hand-made one may not.
+        """
+        registered, confirmed = self.registered_unix, self.confirmed_unix
+        if registered is None:
+            if scored:
+                raise RegistrationRefused(f"{self.transform_id} has no mount record from rung 1, so a scored run "
+                                          "cannot tell where the camera was during this take")
+            return {"status": "no_mount_record"}
+        ended = _time(ended_unix)
+        if ended is None:
+            raise RegistrationRefused("take.json has no numeric ended_unix, so this take cannot be placed against "
+                                      f"{self.transform_id}'s mount record")
+        if ended < registered:
+            raise RegistrationRefused(f"this take ended before the take {self.transform_id} was registered from, so "
+                                      "the camera may have been somewhere else. Lift a take recorded since")
+        held = confirmed is not None and ended <= confirmed
+        if scored and not held:
+            raise RegistrationRefused(f"rung 1 has not confirmed {self.transform_id} on this take or a later one, so "
+                                      "the camera may have moved. Record a later take, click every mark, and run "
+                                      "register.py check-mount")
+        return {"status": "confirmed" if held else "not_confirmed", "take_ended_unix": ended,
+                "registered_take_ended_unix": registered, "confirmed_take_ended_unix": confirmed}
 
     def check_frame(self, intrinsics):
         """A frame's own intrinsics, when it carries them, must match the entry's."""

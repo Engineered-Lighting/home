@@ -21,6 +21,13 @@ intervals, prompt-2's parser, the pacing rule, the prompt-2 trigger).
   each round gains a `tidying` block); mail and wiping are at the counter; and
   every task starts after at least 30 s with no task, with one 90 s quiet block
   per round whose tail lies past τ_off.
+- It was checked again against N1's later revision (`b1f1a9d2`): the book's
+  place is an in-view surface, never the desk top; every task's next cue
+  starts with its stop ("Stop. Put the book down." after each
+  `still_reader`); scripts carry `end_s` (1,500 s, or 1,610 s with
+  `tidying`); the first cue comes 3 s after "Begin". None of it adds time or
+  changes an N2 count. The recount did correct one count N2 had wrong before
+  it: scored quiet units (section 4.4).
 - Numbers come only from the architecture's N2 text and the owner's answers.
   Anything else is an empty named slot in `GATE-V1.md`, filled on the
   development split before the held-out set opens.
@@ -211,11 +218,12 @@ intervals, prompt-2's parser, the pacing rule, the prompt-2 trigger).
     `entered_from_ending`.
   - With no such record before the offset, the onset is **missed**.
   - A missed onset is d_on = +∞ in the median, and counted with its tag.
-- **Why `stayed_on` is a miss, not a share gate.** 15 of every 20 N1 onsets
-  follow a 30 s gap that lies wholly inside the previous task's τ_off, where
-  false_on scores nothing. Taking d_on = 0 for any onset already on would let
-  an estimator that stays engaged across the counter tasks score 0 on those 15
-  and pass. A cap on the `entered_on` share would need a new owner number and
+- **Why `stayed_on` is a miss, not a share gate.** 15 of every 20 onsets in
+  `hard-a` and 14 in `hard-b` follow a gap that lies wholly inside the
+  previous task's τ_off (30 s, or 50 s across `hard-a`'s lights-down block),
+  where false_on scores nothing. Taking d_on = 0 for any onset already on
+  would let an estimator that stays engaged across the counter tasks score 0
+  on those onsets and pass. A cap on the `entered_on` share would need a new owner number and
   would still pass zeros up to the cap. A miss needs no new number and scores
   the case as what it is: this task's start went unnoticed. The cost falls on
   an estimator that holds `engaged` through a hidden-hands gap (hold rows
@@ -257,9 +265,11 @@ intervals, prompt-2's parser, the pacing rule, the prompt-2 trigger).
   = +∞ in the median when its onset is timed, and in the miss count either
   way. Otherwise an estimator that never turns on would add nothing to
   early_off.
-- false_on is the quiet criterion at band level, per second. N1 gives about 5
-  scored quiet units per take (7 with the phone as `none`), about 20 to 28 per
-  held-out set: too few for a 30-unit gate.
+- false_on is the quiet criterion at band level, per second. N1 gives 5
+  scored quiet units per `hard-a` take and 6 per `hard-b` (its short first
+  block is one), 7 and 8 with the phone as `none`: 22 per held-out set of two
+  takes each, or 30 with the phone as `none`. That is too few, or no margin
+  at all, for a 30-unit gate.
 - ECE: a unit's top label is its engagement label or its band; its confidence
   is that field's mean confidence over the seconds holding the label; acc is 1
   when the label equals the gold. Abstained units leave the demand ECE.

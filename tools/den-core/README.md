@@ -109,6 +109,12 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 | `victoria_den_bulb_scenes.yaml` | a draft HA package for Victoria that records each bulb's level (below); nothing deploys it |
 | `run.py` | the CLI and its summary/diff |
 | `need.py`, `decide.py` | written on their own branches against the interface below; the runner loads them by name |
+| `coordinator.py` | rung 9's coordinator v0: decide's rules behind the light model, as policy `decide` (below) |
+| `light_adapter.py` | the one adapter to rung 8's light model; every prediction goes through it |
+| `fake_light.py` | rung 8's prediction rule from its plan, until Stage 1's `predict.py` is merged; plumbing only |
+| `rung9-gate-v0.json` | rung 9's fixed numbers and its open slots |
+| `score.py` | rung 9's gate on a replayed log; refuses a scored run while a slot is open |
+| `hold_fixtures.py` | cases V6-V8 and V62-V64 under each compensation option; not admitted as pass or fail |
 
 ## Adding a source adapter
 
@@ -505,6 +511,157 @@ This was tested in a Home Assistant 2026.2.3 core with the real recorder:
 - the bulb-state and command export queries, and the check above, read that
   database correctly.
 
+## Rung 9: coordinator v0, scored on replay
+
+`coordinator.py` is decide v0's rules with rung 8's light model behind them. It runs beside the frozen den_lighting
+and sends nothing. Nothing has run on real data: the light model is still a fake, built from rung 8's plan and marked
+`fake: true`, so every result today is plumbing and never evidence.
+
+From the worktree root, in PowerShell 5.1:
+
+```powershell
+python -B tools/den-core/run.py --synthetic evening --touch --policies need incumbent coordinator --out C:/tmp/den-core-r9/evening-1
+```
+
+```powershell
+python -B tools/den-core/check.py C:/tmp/den-core-r9/evening-1/log.jsonl
+```
+
+```powershell
+python -B tools/den-core/score.py C:/tmp/den-core-r9/evening-1/log.jsonl --preview
+```
+
+```powershell
+python -B tools/den-core/hold_fixtures.py
+```
+
+```powershell
+python -B tools/den-core/score.py --slots
+```
+
+`run.py` takes `--policies need incumbent coordinator` in place of `decide`, and with it `--light-model PATH`
+(rung 8's `light-model.json`; the default is the fake), `--surfaces FILE` (JSON `{surface_id: [point_id, ...]}`, since
+rung 8 v1's points are image blocks with no surface id; without it the whole view is one surface, `room`),
+`--compensation P0|P1|P2|P3` and `--compensation-form strict|mode`. `--actuation shadow` labels a run shadow in place of
+replay, with or without the coordinator. Nothing is sent either way, and a synthetic run is only ever synthetic.
+
+### What a scored run needs
+
+`score.py LOG [--marks FILE]` refuses, and exits 2, on any of these. `--preview` runs anyway on the proposals logged in
+the header, prints no verdict and is never a gate.
+
+- an open slot in `rung9-gate-v0.json`. `score.py --slots` lists them with their proposals. To close one, set its
+  `status` to `closed` and its `value`, then rerun the evening: a log run under another gate file refuses;
+- a synthetic log;
+- a fake light model. **Today that is every run.** When Stage 1's `predict.py` is merged, replace the body of
+  `light_adapter._predict` with `predict.predict(scene, model)` and set `BACKEND`. `fake_light.predict` follows Stage
+  1's published call and gave the same numbers as `origin/claude/rung-8-stage1`'s `predict.py` over 400 random scenes;
+- a log run under a compensation option other than the gate's. Those are the counterfactual scenes the register
+  suggests: preview them.
+
+### What it gates and what it reports
+
+Both arms go through one light model version: the candidate's applied scenes, and den_lighting re-run beside the log
+(`incumbent.Shadow`), with held bulbs pinned at read-back in both. Game time leaves the comparison.
+
+Gated, exit 1 on a failure and 3 on too little evidence:
+
+- **replay**: every line byte for byte (`check.py`), and **decision time**: the slowest call under 100 ms. On Hue bulbs
+  an aim is the null path; `test_coordinator.py` times the solve on the real grid's 576 blocks, from a cold cache, with
+  a simulated spot's 32 aims on one channel;
+- **records**: every Decision carries `requested_scene`, `applied_scene` and `recipients`, plus `predicted` and
+  `targets`. Only the candidate's do: den_lighting's lines stay as they were;
+- **exclusions**: `predicted.eyes` recomputes from `inputs.person_state` (the `state_id`s), `inputs.field_support`,
+  `inputs.body_envelope.version` and `inputs.t_exec`, and nothing else. A kept channel's `t_exec` is null with a status,
+  as the schema says. Envelope parameters are pending, so nothing grows with age yet;
+- **steps**: every step logged as sent passed its check;
+- **hard constraints**: the seed Look's glare limit holds on free channels, and each held light that alone breaks it is
+  in `hard_conflicts`. It stays as set (manual-vs-safety S0) and free channels may not raise their part of it. Rung 8
+  writes `glare: null`, so on its model `hard_conflicts` stays empty and `G`, `G_hi` and `limit` are null, with
+  `eyes_note` saying why. The numbers appear when a model has a glare table, as the tests' fake does;
+- **anticipation and stability**, the replay surrogates, each against its floor.
+
+Reported, never gated, each labelled `predicted, replay surrogate`: predicted service coverage and missed service per
+occupied hour at the owner's marks, `hold_limited` minutes at the marks under P1 to P3, and each arm's mean predicted
+light. Light is electric only: rung 8 does not model daylight. Floors are in lux, so a relative model leaves every mark
+`unknown` rather than guessing a scale, and photometry-commissioning is still open.
+
+**The surrogates, `need-raise-v0`.** The contracts name both rates and say den_lighting scores 0 and 1 by
+construction, but give no formula (the design sheets are not copied), so this is a proposal, and closing the
+`surrogate_definitions` slot accepts it.
+
+- *A need episode* is a person's move into `engaged` from `none` or `starting`, while occupied and out of a game.
+- *Anticipation rate*: the share of episodes where, within `anticipation_window_s` after that move and before any
+  correction, a decision triggered by `person_state change` raised the predicted light at the person's surface by at
+  least `anticipation_rise_min`. den_lighting makes no decision on a person's state, so it scores 0.
+- *Stability rate*: the share of an arm's `person_state change` scene changes that stood at least `stability_dwell_s`
+  before the next one. An arm with none scores 1, which is den_lighting.
+
+**Marks** (`--marks`) are JSON Lines, one gold need episode each, following `EvalRecord.R_eval`:
+
+```json
+{"episode_id":"e1","track_id":"A","band":"fine","start":1793766000.0,"end":1793766300.0,"R_eval":{"surface_id":"armchair-book","placement_sd":3,"source":"gold_mark"}}
+```
+
+A mark is served when at least 70% of the visible patch is at the band's floor (300 lx fine, 200 lx casual), with at
+least 50% of the patch visible, standing uncorrected for 120 s or for the whole of a shorter mark. A mark names its
+surface; a surface is the blocks `--surfaces` gives it, because rung 8 v1 has no room geometry for a mark's outline.
+
+### The solve
+
+A reading scene's target is the seed Look's reference scene, predicted with nothing held, at each reader's surface. The
+cost is the squared relative shortfall and excess there, plus a small pull toward the look's level and P2's penalty. The
+solve is coordinate descent over the free bulbs. Base and vacancy-off stay den_lighting's own scenes, as in decide v0.
+
+Look and Preference are fixed stand-ins, logged in the header: one seed Look, a level factor of 1, and `mired_shift` and
+`contrast_shift` at 0. `make_policy` refuses any other offsets.
+
+### Compensation: built as named options, not admitted
+
+`decisions.json` leaves `compensation` to the owner, so V6-V8 and V62-V64 are not admitted as pass or fail.
+`hold_fixtures.py` prints what the coordinator does in each under P0, P1, P2 and P3, strict and mode, and P3's two
+fallbacks. V8 also runs under local-completion allowed, and V63 follows den_lighting's moves as `complete-policy`, the
+gaming option its expected results describe. `test_hold_fixtures.py` checks that each option does what its register
+entry and ladder rung 11's V63 text say. That tests the code and admits nothing.
+
+- A hold's direction and footprint come from what the person's change did to predicted light. Free light is measured
+  against a reference that only moves with the change, so a bound never lets a bulb back.
+- Under P1 and P3 a free bulb stays where it is rather than move against the change; P3 binds only at the changer's own
+  task surface, and falls back when the changer is unknown. Real corrections carry no changer yet, so they all fall back.
+- Under P2 a solve makes up `1 / (1 + lambda_h)` of a gap, and a rule's own move goes that share of the way.
+- In the mode form, vacancy-off, the arrival after it and a game's moves sit outside the bound. A return to base because
+  reading ended stays inside.
+
+### Why decide.py is unchanged
+
+`check.py` refuses a log whose policy file hash has changed. Editing `decide.py` would make every existing log refuse
+with `code changed: decide`, so the coordinator imports it and adds to it instead, as policy id `decide`, so the
+runner's order, `run.py`'s diff and `validate.py` read it as they read decide. `make_policy` pins `decide.py`,
+`light_adapter.py` and `fake_light.py` by hash in its config, as the incumbent pins `policy.py`.
+
+`--policies need incumbent decide` is byte-identical to before rung 9: `test_coordinator.py` pins the sha256 of the
+four synthetic evenings' whole logs, header included.
+
+### Keys the contracts do not name
+
+Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear only in the coordinator's Decisions:
+
+- `candidates[]`: `scene_id` (v0's) and the candidate's `scene`.
+- `requested_scene` keeps the hue-den-4 dialect `{on, brightness, kelvin}`, with `aim` when a spot model has one.
+- `applied_scene[]`: `readback` also holds `{on, brightness, kelvin}` beside the schema's `level` and `cct_k`;
+  `readback_source`, and a `reason` when a step was dropped. A step adds `transition_s`, which rung 10's settle rule
+  reads, and its `checks` is `{revision_current, fresh_check, not_held}`.
+- `targets[track]` and `recipients[].targets[]`: `value` and `unit` beside `lx`, because a relative model has no lux.
+- `recipients[]`: `light_model`, and each target's `interval` (null until the model has an error score).
+- `predicted.eyes[]`: `support_status` and `excluded`. `predicted.daylight` says electric only.
+- `inputs`: `preference`, `compensation`, `coordinator`, `recipient_rule`, `light_state_status`.
+
+### Left for later
+
+The simulated-spot execution cases V9a-V9h, V9k, V9l and V65(b); rung 9's loop check (non-inferiority, every delta
+open); per-person need and eye positions (rungs 5 and 6: today a track's surface is its `working_region.surface_id`, and
+an eye is named by its `track_id`); and the kept_current outcome, whose deadline is pending.
+
 ## Choices the interface left open
 
 - `seq` counts from 0 in event order. `check` reports file lines counting from
@@ -645,3 +802,4 @@ changing it:
 - Reference kinds: logged with the inputs, but never handed to a policy, and they set neither the span nor the ticks.
   - live_command: {entity_id, revision: int, target: scene, context_id: str}, one den_lighting_command event as the live integration fired it, at its time_fired_ts.
   - live_status: {automatic: bool|null, gaming: bool|null}, whether den_lighting's status sensor showed it automatic and in a game (null without its status), on each change.
+- A third actuation, 'shadow', set by the runner like the other two; see "Rung 9" above for what the coordinator's decisions add.

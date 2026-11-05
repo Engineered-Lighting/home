@@ -1346,7 +1346,7 @@ class SecondCtrlCTests(SweepCase):
             response, files, frames = self.run_sweep()
         self.assertEqual(response["outcome"], "error")
         self.assertIn("fit crashed", response["detail"])
-        self.assertEqual(files, ["frames", "frames.jsonl", "response.json"], "the data is kept")
+        self.assertEqual(files, ["frames", "frames.jsonl", "response.json"], "--recheck can finish it")
         self.assertEqual(len(frames), 24)
         self.assertTrue(self.released())
 
@@ -1377,6 +1377,72 @@ class FramesDeletedTests(SweepCase):
         self.assertFalse(response["frames_deleted"])
         self.assertEqual(response["frames_left"], ["frames.jsonl"])
         self.assertIsNone(frames, "frames\\ itself went")
+
+
+class RecheckTests(SweepCase):
+    """--recheck recomputes a saved sweep's verdict from its folder."""
+
+    def swept(self, method, **patches):
+        stage = contextlib.ExitStack()
+        stage0, token = stage.enter_context(stage0_folder())
+        camera = sweep.Camera(self.fake.url, TOKEN)
+        _, folder = sweep.start_run(stage0, camera, token, method)
+        with contextlib.ExitStack() as during:
+            for target, value in patches.items():
+                during.enter_context(mock.patch.object(sweep.meter, target, value))
+            response = sweep.Sweep(camera, method, folder, say=quiet).run()
+        return stage, folder, response
+
+    def test_recheck_matches_the_saved_verdict_and_never_overwrites(self):
+        method = sweep_method()
+        stage, folder, response = self.swept(method)
+        with stage:
+            saved = (folder / "response.json").read_bytes()
+            record, path = sweep.recheck(folder, method)
+            second, path2 = sweep.recheck(folder, method)
+            self.assertEqual((path.name, path2.name), ("recheck-1.json", "recheck-2.json"))
+            self.assertEqual((folder / "response.json").read_bytes(), saved)
+            on_disk = json.loads(path.read_text())
+        self.assertEqual(response["outcome"], "pass")
+        self.assertEqual((record["outcome"], record["same_as_saved"], record["method_matches_sweep"]),
+                         ("pass", True, True))
+        self.assertEqual(on_disk["meter_norm"]["parameters_sha256"], response["meter_norm"]["parameters_sha256"])
+        self.assertEqual(record["frames"], 24)
+
+    def test_recheck_finishes_a_sweep_whose_fit_errored(self):
+        method = sweep_method()
+        stage, folder, response = self.swept(method, check=mock.Mock(side_effect=RuntimeError("bug")))
+        with stage:
+            record, _ = sweep.recheck(folder, method)
+        self.assertEqual(response["outcome"], "error")
+        self.assertEqual((record["outcome"], record["saved_outcome"], record["same_as_saved"]), ("pass", "error", False))
+
+    def test_recheck_refuses_a_changed_frame_a_void_or_open_numbers(self):
+        method = sweep_method()
+        stage, folder, _ = self.swept(method)
+        with stage:
+            frame = sorted((folder / "frames").iterdir())[3]
+            frame.write_bytes(b"\0" + frame.read_bytes()[1:])
+            with self.assertRaises(sweep.Refused):
+                sweep.recheck(folder, method)
+            with self.assertRaises(sweep.Refused):
+                sweep.recheck(folder, meter.Method(method.values, ("pixel_step",)))  # a number still open
+            self.assertFalse(list(folder.glob("recheck-*.json")))
+        self.fake.refuse_post_at, self.fake.last = 4, None
+        stage, folder, response = self.swept(method)
+        with stage:
+            self.assertEqual(response["outcome"], "void")
+            with self.assertRaises(sweep.Refused):
+                sweep.recheck(folder, method)
+
+    def test_main_recheck(self):
+        method = sweep_method()
+        stage, folder, _ = self.swept(method)
+        with stage, mock.patch.object(sweep.meter, "load_method", return_value=method):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(sweep.main(["--recheck", str(folder)]), 0)
+        self.assertIn("RECHECK PASS", out.getvalue())
 
 
 class MeterRangeTests(unittest.TestCase):

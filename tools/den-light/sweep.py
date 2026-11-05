@@ -5,6 +5,7 @@
     python -B tools\\den-light\\sweep.py --install-record C:\\den-light\\stage0-<date> --camera http://<host>:8090
     python -B tools\\den-light\\sweep.py --run C:\\den-light\\stage0-<date> --camera http://<host>:8090
     python -B tools\\den-light\\sweep.py --rollback-check C:\\den-light\\stage0-<date> --camera http://<host>:8090
+    python -B tools\\den-light\\sweep.py --recheck C:\\den-light\\stage0-<date>\\sweep-<n>
 
 --prepare reads the fixture-check lines the owner saved (before.txt) and writes
 the systemd drop-in that points oak-den.service at the meter build with every
@@ -12,8 +13,10 @@ flag kept. --install-record reads the after-check lines (after.txt), checks the
 camera, and writes install.json. --run holds the camera through POST /meter,
 steps exposure, releases, and writes the sweep's response.json.
 --rollback-check reads rollback.txt, then waits past the restart and needs a
-healthy camera without the meter keys. It talks only to the camera, never to
-Home Assistant, and writes no lights. The token is never printed or written.
+healthy camera without the meter keys. --recheck recomputes a saved sweep's
+verdict from its frames and writes recheck-<n>.json. It talks only to the
+camera, never to Home Assistant, and writes no lights. The token is never
+printed or written.
 """
 import argparse
 import http.client
@@ -51,7 +54,8 @@ SHA_LINE = re.compile(r"([0-9a-f]{64}) [ *](/\S+)")
 VOID_REASONS = ("repeat_mismatch", "still_scene_wait_over_limit", "camera_503", "camera_unreachable",
                 "new_camera_session", "run_over_limit", "interrupted_or_errored_before_repeat")
 SCHEMAS = {"prepare": "den-light-stage0-prepare-1", "install": "den-light-stage0-install-1",
-           "rollback": "den-light-stage0-rollback-2", "response": "den-light-stage0-response-1"}
+           "rollback": "den-light-stage0-rollback-2", "response": "den-light-stage0-response-1",
+           "recheck": "den-light-stage0-recheck-1"}
 METER_KEYS = ("sensitivity_iso", "color_temperature_kelvin", "lens_position", "meter")
 INSTALL_HEALTH_WAIT_S = 30.0  # --install-record and --rollback-check wait this long for a first healthy /health
 ROLLBACK_SETTLE_S = 30.0      # then the rollback check waits this long and needs the same camera session:
@@ -821,7 +825,7 @@ class Sweep:
             response.update(outcome="void", void_reason=void.reason, detail=void.detail)
             response.setdefault("release", self.release)
             response.update(self.delete_frames())
-        except Exception as exc:  # after the data is complete: keep the frames
+        except Exception as exc:  # after the data is complete: keep the frames for --recheck
             response.update(outcome="error", detail=f"{type(exc).__name__}: {exc}")
             response.setdefault("release", self.release)
         finally:
@@ -869,6 +873,75 @@ def start_run(stage0, camera, token_file, method):
     return stage0, new_sweep_folder(stage0)
 
 
+# ---- recheck: the verdict again, from a saved sweep folder ---------------------------------
+
+def load_kept(folder, method):
+    """The kept steps of a saved sweep from frames.jsonl and frames\\, each frame's sha256 checked."""
+    try:
+        lines = (folder / "frames.jsonl").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        raise Refused("no readable frames.jsonl in the sweep folder") from None
+    steps = {}
+    for raw in lines:
+        if not raw.strip():
+            continue
+        try:
+            line = json.loads(raw)
+            name = line["file"]
+            if not re.fullmatch(r"frames/\d{4}\.nv12", name):
+                raise ValueError(name)
+            nv12 = (folder / name).read_bytes()
+        except (ValueError, KeyError, TypeError, OSError):
+            raise Refused("frames.jsonl names a frame that is missing or unreadable") from None
+        if meter.sha256_bytes(nv12) != line.get("sha256"):
+            raise Refused(f"{name} does not hash what frames.jsonl recorded")
+        step = steps.setdefault(line["step"], {"hold": line["hold"], "frames": []})
+        if step["hold"] != line["hold"]:
+            raise Refused(f"step {line['step']} has two holds in frames.jsonl")
+        step["frames"].append({"n": line["n"], "report": line["report"], "nv12": nv12})
+    if sorted(steps) != list(range(1, method["step_count"] + 2)):
+        raise Refused(f"frames.jsonl does not hold steps 1 to {method['step_count'] + 1}")
+    return [steps[i] for i in sorted(steps)]
+
+
+def recheck(folder, method):
+    """Recompute a saved sweep's repeat check and verdict; writes recheck-<n>.json beside response.json."""
+    if method.open:
+        raise Refused("METHOD-V1 still has numbers the owner has not confirmed: " + ", ".join(method.open))
+    folder = Path(folder)
+    if not folder.is_absolute() or not SWEEP_NAME.fullmatch(folder.name) or not folder.is_dir():
+        raise Refused("give a sweep folder by its absolute path, for example C:\\den-light\\stage0-20261110\\sweep-1")
+    folder = folder.resolve()
+    if inside_checkout(folder) or in_onedrive(folder):
+        raise Refused("the folder is inside a git checkout or OneDrive")
+    try:
+        saved = json.loads((folder / "response.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise Refused("no readable response.json in the sweep folder") from None
+    if saved.get("outcome") not in ("pass", "fail", "error"):
+        raise Refused(f"the sweep's outcome is {saved.get('outcome')}: a void sweep has no frames to recheck")
+    steps = load_kept(folder, method)
+    agrees = meter.agree(*(meter.region_means(meter.decode(steps[i]["frames"][0]["nv12"], method["pixel_step"]),
+                                              meter.sample_regions(method["pixel_step"], method["grid_cols"],
+                                                                   method["grid_rows"]),
+                                              method["grid_cols"] * method["grid_rows"]) for i in (0, -1)),
+                         method["noise_tolerance_codes"])
+    record = {"schema": SCHEMAS["recheck"], "sweep": folder.name, "saved_outcome": saved.get("outcome"),
+              "method_sha256": method.file_sha256, "method_stage0_block_sha256": method.block_sha256,
+              "method_matches_sweep": method.block_sha256 == saved.get("method_stage0_block_sha256"),
+              "code_sha256": code_sha256(), "frames": sum(len(s["frames"]) for s in steps),
+              "void_reason": None, "written_pc_unix": time.time()}
+    if agrees:
+        record.update(verdict_fields(meter.check(steps, method), method))
+    else:
+        record.update(outcome="void", void_reason="repeat_mismatch")
+    record["same_as_saved"] = record["outcome"] == saved.get("outcome")
+    numbers = [int(m.group(1)) for m in (re.fullmatch(r"recheck-(\d+)\.json", c.name) for c in folder.iterdir()) if m]
+    path = folder / f"recheck-{max(numbers, default=0) + 1}.json"
+    write_json(path, record)
+    return record, path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     group = parser.add_mutually_exclusive_group(required=True)
@@ -876,6 +949,7 @@ def main(argv=None):
     group.add_argument("--install-record", metavar="STAGE0_FOLDER")
     group.add_argument("--run", metavar="STAGE0_FOLDER")
     group.add_argument("--rollback-check", metavar="STAGE0_FOLDER")
+    group.add_argument("--recheck", metavar="SWEEP_FOLDER")
     parser.add_argument("--date", help="yyyymmdd, for --prepare: names the meter directory")
     parser.add_argument("--camera", help="http://<host>:8090, or http://127.0.0.1:18090 through the tunnel")
     parser.add_argument("--token-file", default=DEFAULT_TOKEN_FILE)
@@ -886,6 +960,12 @@ def main(argv=None):
             print(f"Fixture check passed. Wrote {DROP_IN_NAME} for {record['meter_path']}.")
             print("Next: README step 3 (needs approval 1).")
             return 0
+        if args.recheck:
+            record, path = recheck(Path(args.recheck), meter.load_method())
+            print(f"RECHECK {record['outcome'].upper()}: " + (", ".join(record.get("check", {}).get("reasons", []))
+                                                              or record["void_reason"] or "every check passed"))
+            print(f"The saved outcome was {record['saved_outcome']}. Wrote {path}")
+            return 0 if record["outcome"] == "pass" else 1
         camera = Camera(args.camera, read_token(args.token_file))
         if args.rollback_check:
             rollback_check(Path(args.rollback_check), camera, args.token_file)
@@ -909,7 +989,8 @@ def main(argv=None):
                 "Could not delete " + " and ".join(response["frames_left"]) + f" in {folder}: delete them by hand.")
         print(f"VOID ({response['void_reason']}): {response['detail']}. {gone}")
     elif response["outcome"] == "error":
-        print(f"ERROR after the data was complete: {response['detail']}. The frames are kept: tell the agent.")
+        print(f"ERROR after the data was complete: {response['detail']}. The frames are kept: tell the agent, "
+              f"then run --recheck {folder}")
     else:
         print(f"{response['outcome'].upper()}: " + (", ".join(response["check"]["reasons"]) or "every check passed"))
     print(f"Wrote {folder / 'response.json'}")

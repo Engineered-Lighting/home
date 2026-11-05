@@ -15,7 +15,6 @@ slot is open. Exit codes: 0 written, 1 scored and the gate failed, 2 refused
 import argparse
 import json
 import os
-import shutil
 import sys
 import tempfile
 from pathlib import Path

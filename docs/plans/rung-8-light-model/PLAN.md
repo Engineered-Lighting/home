@@ -2,7 +2,9 @@
 
 Status: plan only. Nothing here is built or run yet. No host, camera or light
 has been touched to write it. Revised on 2026-11-04 after an independent
-review, and on 2026-11-05 after a second check.
+review, on 2026-11-05 after a second check, and again on 2026-11-05 after a
+final check (the install no longer writes over the camera script that
+perception-lab pins).
 
 The plan has two stages. **Stage 0** (about 3 build days, then about one
 minute of camera time) checks that the camera can meter light at all. **Stage
@@ -35,10 +37,11 @@ step. Neither stage depends on rungs R, N1 or N2.
 ## Run folders
 
 Each run writes only to its own folder on the PC: `C:\den-light\stage0-<id>\`
-for Stage 0 (`install.json`, then one `sweep-<n>\` folder per sweep) and
-`C:\den-light\<session-id>\` for each probe session. Like den-take, the tools
-refuse a folder inside a git checkout or OneDrive, a sweep or session folder
-that already holds a sweep or session, and a PC low on disk. Frames are never
+for Stage 0 (the install's pasted lines, the drop-in and `install.json`, then
+one `sweep-<n>\` folder per sweep) and `C:\den-light\<session-id>\` for each
+probe session. Like den-take, the tools refuse a folder inside a git checkout
+or OneDrive, a Stage 0, sweep or session folder that already holds a sweep or
+session, and a PC low on disk; each refusal has its own test. Frames are never
 copied to git, OneDrive or the cloud. The HA token lives in
 `C:\den-light\private\` and the camera token in den-take's private folder
 (below); no code path prints or writes either token.
@@ -53,13 +56,19 @@ before any of Stage 1 is built.
 **The installed camera.** The den's OAK-D Pro is served by `oak-den.service`
 on DepthAI 3.10.0. Its server as installed is copied at
 `tools/fixtures/installed-oak-capture-20261016.py`, sha256
-`d052fc217b2d412cb877cfb49608e7dcef4a52526932b8d036a51380accb6132`. As
+`d052fc217b2d412cb877cfb49608e7dcef4a52526932b8d036a51380accb6132`.
+perception-lab pins that file by path and sha256: `bundle_rgb_input.py`'s
+`CAMERA_SOURCE` (`victoria-camera-pilot/pilot-20260926/capture.py` under the
+Jetson account's home) and `CAMERA_SHA` (the fixture's hash). On any mismatch
+it refuses every bundled-RGB capture (`fixed_camera_clock_checks_changed`), so
+the install never writes to that file or its directory (Run, step 1). As
 the fixture is written (it sends no camera control, and its strict argument
 parser takes no focus flag), the RGB camera runs automatic exposure, white
 balance and (if fitted) autofocus with no control input, and each frame
 reports only `exposure_duration_seconds`. The fixture check (Run, step 1)
-confirms the live ExecStart and its flags before this is relied on: a drop-in
-could start another script that locks autofocus.
+confirms that the live ExecStart runs the pinned file, and with which flags,
+before this is relied on: a drop-in could start another script that locks
+autofocus.
 Its 640x360 NV12 output is tone-mapped and gamma-encoded by the ISP (no RAW),
 and shares one sensor, ISP and exposure with the 1920x1080 RTSP stream
 Frigate reads.
@@ -75,9 +84,10 @@ Windows PC with PowerShell 5.1 unless the table says otherwise.
 | File | Runs on | Does |
 |---|---|---|
 | `METHOD-V1.md`, Stage 0 part | repo | `meter-norm/v1` and the Stage 0 check in one fenced block the code reads, with the named statistics below. Committed before any sweep frame. Every output records its sha256, as rung R's CHECK-V1 does. |
-| `oak-capture-meter.py` | Jetson | The installed server plus the metering hold, and nothing else. |
+| `oak-capture-meter.py` | Jetson | The installed server plus the metering hold, and nothing else. Installed beside the pinned script, never over it. |
 | `meter.py` | PC | Pure: reads bundles (zipfile and a small .npy reader, as den-take does), decodes NV12, applies `meter-norm/v1`, fits the inverse response, runs the global check. |
-| `sweep.py` | PC | The Stage 0 runner: holds the camera through `POST /meter` with den-take's camera token, steps exposure, releases, writes `response.json`; `--install-record` writes `install.json`. Never calls HA; writes no lights. |
+| `sweep.py` | PC | The Stage 0 runner: holds the camera through `POST /meter` with den-take's camera token, steps exposure, releases, writes `response.json`. `--prepare` checks the fixture-check lines and writes the drop-in; `--install-record` checks the after-check lines and the camera, then writes `install.json`; `--rollback-check` checks a rollback. Never calls HA; writes no lights. |
+| `README.md`, Stage 0 part | repo | The owner's PowerShell 5.1 lines for approval 1, the rollback, and the privacy rules. |
 | `test_den_light.py` | anywhere | All tests, synthetic data only. |
 
 **What Stage 0's METHOD-V1 fixes.** Each statistic is named here, so METHOD-V1
@@ -93,28 +103,36 @@ only fills in its number:
 - **residual**: the per-channel RMS of fit minus observed, in code values, at
   most R;
 - **region test**: the response is also fitted separately on each region of a
-  4x4 grid, and every region curve lies within P% of the global curve from
-  code 16 to 235;
+  4x4 grid. A fit by alternating least squares is fixed only up to scale, so
+  each region curve is first scaled to the global curve by least squares on
+  their ratio, over the codes from 16 to 235 that the region supports (at
+  least a minimum count of the region's samples at that code). It then lies
+  within P% of the global curve at each of those codes. A region is not
+  pinned at code 128, which it may not reach. A region that supports no code
+  from 16 to 235 is reported as untested and does not fail;
 - **gain agreement**: each held frame's reported exposure is within one
   frame-time quantum (the step the camera reports exposure in, which METHOD-V1
   records) of the hold, and its ISO and white balance kelvin equal the hold
-  exactly.
+  exactly;
+- **sampling and timing**: the pixel step (every n-th pixel each way), the
+  frames kept per exposure, the settle limit (how long a step may wait for
+  its first agreeing frame), the still-scene span, the camera's exposure and
+  ISO limits, the fit's iteration count and the minimum samples per code.
 
-**`meter-norm/v1`** (the normalisation version A9 and E7 ask for): decode
-NV12 as BT.601 limited range, as the server does for its JPEG; apply the
-measured inverse response per channel; mask clipped pixels; divide by t·G
-(exposure in ms times ISO/100, from the frame's own metadata); combine R, G
-and B with fixed weights. For Stage 1's readings, a pixel is masked if any
-channel reaches the clipping limit in any capture the session fits or scores;
-the session mask is the union of those captures, fixed before reduction, and
-every reading, D included, is the mean over the same unmasked pixels in every
-step (The model; Stage 1's METHOD-V1 part fixes this rule and the block
-minimum). Stage 0's response fit works on single pixels, so it drops a pixel
-only from the frames where it clips. White balance is held at one fixed value
-in every capture and is part of the version. The black level cancels, because
-each contribution is a frame minus an all-off frame at the same exposure. A
-rule change means a new version and a refit. Rung 7 later reuses it for its
-camera scale.
+**`meter-norm/v1`** (the normalisation version A9 and E7 ask for) works on
+one pixel of one frame: decode NV12 as BT.601 limited range, as the server
+does for its JPEG; flag the pixel if any channel reaches its clipping limit (a
+flagged pixel has no value in that frame); otherwise apply the measured
+inverse response per channel, scaled so that f(128) = 1, divide by t·G
+(exposure in ms times ISO/100, from the frame's own metadata) and combine R, G
+and B with fixed weights. White balance is held at one fixed value in every
+capture and is part of the version. meter-norm/v1 does not say which pixels a
+reading averages: Stage 0's response fit drops a pixel only from the frames
+that flag it, and Stage 1's reduction rule (The model) sets the session mask.
+So the meter-norm version Stage 0 records is the one Stage 1 records. The
+black level cancels, because each Stage 1 contribution is a frame minus an
+all-off frame at the same exposure. A rule change means a new version and a
+refit. Rung 7 later reuses it for its camera scale.
 
 **The metering hold** in `oak-capture-meter.py`:
 
@@ -126,29 +144,41 @@ camera scale.
   exactly three modes: auto exposure on, white balance AUTO, and focus as the
   installed server leaves it. Under the fixture, which takes no focus flag,
   that is CONTINUOUS_VIDEO (not `AutoFocusMode.AUTO`, which focuses once and
-  stops). If the fixture check finds a live ExecStart that locks autofocus,
-  the rebuild restores that lock instead, so restoring never changes installed
-  behaviour. A crashed PC tool can never leave the camera held.
+  stops). Release and expiry send those three; a restart (of the process or
+  of its capture session) holds nothing and sends no control, so the new
+  pipeline starts in DepthAI's defaults, which are the same three. If the
+  fixture check finds a live ExecStart that locks autofocus, the rebuild
+  restores that lock instead, so restoring never changes installed behaviour.
+  A crashed PC tool can never leave the camera held.
 - Each RGB frame adds the gain, white balance and lens position it reports,
-  plus `meter: {held, generation}`. The schema stays 1, keys added only;
-  den-take's `parse_metadata()` ignores extra keys.
+  plus `meter: {held, generation}`, inside its `frames.rgb` entry only
+  (perception-lab's bundle readers require `frames` to hold exactly rgb,
+  depth, left and right). The schema stays 1, keys added only; den-take's
+  `parse_metadata()` ignores extra keys.
 - Nothing else changes. A test checks that the file equals the installed
-  fixture outside its marked meter blocks, and perception-lab's bundle tests,
-  which load the fixture, also run against it.
+  fixture outside its marked meter blocks. perception-lab's bundle tests keep
+  loading the unchanged fixture; they cannot load this file, because
+  `test_lab_bundled_rgb_stereo.py` raises unless the file it loads hashes
+  `CAMERA_SHA`.
 
 **The response fit and the global check.** `meter.py` fits a monotone inverse
-response per channel: alternating least squares on a piecewise-linear curve,
-made monotone with pool-adjacent-violators. The global check is the residual
-and the region test as METHOD-V1 names them: one curve must fit the whole
-image within R, and the same fit on each region of the 4x4 grid must stay
-within P% of it.
+response per channel: alternating least squares on a piecewise-linear curve
+with a knot at every code, made monotone with pool-adjacent-violators. The
+fit fixes the curve only up to scale: the global curve is scaled so that
+f(128) = 1, and each region curve is scaled to the global curve by least
+squares before the region test (above). The global check is the residual and
+the region test as METHOD-V1 names them: one curve must fit the whole image
+within R, and the same fit on each region of the 4x4 grid must stay within
+P% of it.
 
 **`sweep.py`** reads auto-exposure's pick (t, G) from a few auto frames, then
 holds and steps t·G from 1/16 to 2 times that pick in steps of about 1.41x
 (11 exposures). It changes time, not gain, unless time would pass the 30 fps
 frame time. It repeats the first exposure at the end; if the two disagree
 beyond the noise tolerance, the scene moved and the sweep is void (see Void
-sweeps). It releases on success, error and Ctrl+C. It writes to a new
+sweeps). It releases on success, error and Ctrl+C. Ctrl+C or an error before
+the repeat's frames are in voids the sweep; after that the data is complete,
+so Ctrl+C waits until `response.json` is written. It writes to a new
 `sweep-<n>\` folder in the Stage 0 folder (Run folders, above), and refuses to
 start unless that folder's `install.json` exists and its after hash equals
 `oak-capture-meter.py`'s committed sha256.
@@ -163,53 +193,87 @@ owner).
 
 - NV12 decode round-trips; the response fit recovers a known S-shaped curve
   within 1% and its residual matches a hand-worked RMS; a synthetic local tone
-  map fails the region test while one global curve passes it; a pixel is
-  dropped from the fit only in the frames where it clips; gain agreement
-  passes an exposure one frame-time quantum off and fails one two quanta off,
-  or any ISO or kelvin difference.
+  map fails the region test while one global curve passes it; a region curve
+  at another scale passes once scaled; a pixel is dropped from the fit only in
+  the frames where it clips; gain agreement passes an exposure one frame-time
+  quantum off and fails one two quanta off, or any ISO or kelvin difference.
 - `sweep.py` against a fake camera server: the exposure list, renewal,
   release on success, error and Ctrl+C, and no HA call. One test per void
   reason (repeat mismatch, still-scene wait over the limit, a 503, an
-  unreachable camera, a new camera session, a run over the run limit): each
-  writes outcome void with that reason and deletes the sweep's frames. It
+  unreachable camera, a new camera session, a run over the run limit, and
+  interrupted or errored before the repeat, once by Ctrl+C and once by a
+  refused `POST /meter`): each writes outcome void with that reason and
+  deletes the sweep's frames. Ctrl+C after the repeat does not void it. It
   refuses without `install.json` or with a wrong after hash.
+- Run folders, one test each: a folder inside a git checkout, one inside
+  OneDrive, a Stage 0 or sweep folder that already holds a sweep, and a PC
+  low on disk each refuse and write nothing.
+- The install lines: `--prepare` refuses a wrong hash or an ExecStart that
+  runs anything but the pinned file, and writes a drop-in that keeps every
+  flag; `--install-record` refuses changed flags, an extra drop-in, a changed
+  pinned hash, a wrong meter hash or a held camera; `--rollback-check`
+  refuses anything but the before state.
 - The camera server against a fake control queue: request checks, the token
-  rule, renewal, expiry and release. Release, expiry and restart set exactly
-  auto exposure on, white balance AUTO and focus CONTINUOUS_VIDEO (or the
-  installed lock, if the fixture check found one). The file matches the
+  rule, renewal, expiry and release. Release and expiry send exactly auto
+  exposure on, white balance AUTO and focus CONTINUOUS_VIDEO (or the installed
+  lock, if the fixture check found one); a restart starts unheld and sends
+  nothing. The new keys go inside `frames.rgb` only. The file matches the
   fixture outside its meter blocks.
 
 ### Run (approval 1)
 
-1. **Install the server** (approval 1). The fixture check is the first step
-   on both install paths.
-   - **Fixture check.** Read ExecStart from `systemctl cat oak-den.service`,
-     including any drop-in, and note its flags. `sha256sum` the script it
-     names and compare it with the fixture's (today `d052fc21…`). On a
-     mismatch, stop and change nothing. Then pull the installed copy into
+1. **Install the server** (approval 1). Nothing is overwritten: the meter
+   server goes in a new sibling release directory, and a systemd drop-in
+   points `oak-den.service` at it with its flags unchanged.
+   - **Fixture check.** Read `oak-den.service`'s FragmentPath, DropInPaths and
+     effective ExecStart with `systemctl show` (not `systemctl cat`, which
+     would also print any inline `Environment=` secret), and `sha256sum` the
+     pinned file. `sweep.py --prepare` checks that ExecStart runs exactly the
+     pinned file, `victoria-camera-pilot/pilot-20260926/capture.py`, by
+     absolute path, and that it hashes the fixture's `d052fc21…`. On a
+     mismatch, stop and change nothing. A new fixture is then its own piece
+     of work: pull the installed copy into
      `tools/fixtures/installed-oak-capture-<date>.py`, record its sha256 in
-     this plan, rebuild `oak-capture-meter.py` from it, rerun the
-     outside-the-meter-blocks equality test and perception-lab's bundle
-     tests, and ask for approval 1 again.
-   - **By hand:** back up the installed file, copy in `oak-capture-meter.py`,
-     run the after-check, then restart `oak-den.service` while the den is
-     empty and dark.
-   - **The pilot-release helper**, only if the fixture check shows the
-     installed script is a pilot release. `switch-pilot-release.sh` exists
-     only on the owner's PC, not in git, and hashes only the staged release.
-     It passes `--af lock`, `--imu`, `--npz-encoding` and `--check-config`,
-     which the fixture's strict argument parser rejects, so the build first
-     confirms them against a server rebuilt from that release.
-   - **After-check.** After the copy or switch, `sha256sum` the file ExecStart
-     now names and compare it with `oak-capture-meter.py`'s committed sha256;
-     on a mismatch, roll back. `sweep.py --install-record` writes the before
-     and after hashes, the ExecStart line and the path used to
-     `stage0-<id>\install.json`, from the lines the owner pastes.
+     this plan, rebuild `oak-capture-meter.py` from it and rerun the
+     outside-the-meter-blocks equality test. It also means a perception-lab
+     change, outside rung 8 and with its own approval: `CAMERA_SHA` (and
+     `CAMERA_SOURCE`, if the path moved) in `bundle_rgb_input.py`, the
+     fixture path that `test_bundle_rgb_input.py` and
+     `test_lab_bundled_rgb_stereo.py` hard-code, and the copy of the hash in
+     `test_bundle_rgb_clock_uncertainty.py`. Then ask for approval 1 again.
+   - **Install.** `--prepare` also writes the drop-in
+     `zz-den-light-meter.conf`: `ExecStart=` to clear the old line, then the
+     before ExecStart with only the script path changed to
+     `victoria-camera-pilot/pilot-<date>-meter/oak-capture-meter.py`, every
+     flag kept. The owner makes that directory (it must not exist yet),
+     copies `oak-capture-meter.py` and the drop-in into it, installs the
+     drop-in as `/etc/systemd/system/oak-den.service.d/zz-den-light-meter.conf`
+     (its name sorts last, so it wins over any other drop-in), runs
+     `daemon-reload`, then restarts `oak-den.service` while the den is empty
+     and dark. The pinned file and its directory are never written.
+   - **After-check.** `sweep.py --install-record` reads the same
+     `systemctl show` lines and both hashes after the restart. It checks that
+     ExecStart is the before line with only the script path changed, that the
+     drop-in is the only new one, that the meter file hashes
+     `oak-capture-meter.py`'s committed sha256, that the pinned file still
+     hashes `d052fc21…`, and that `/health` answers and a bundle shows
+     `held: false` with the new keys. Then it writes the before and after
+     hashes, both ExecStart lines, the paths and the drop-in to
+     `stage0-<id>\install.json`. On any mismatch it writes nothing, and the
+     owner rolls back.
+   - The pilot-release helper (`switch-pilot-release.sh`, on the owner's PC
+     only, not in git) is not used. It passes `--af lock`, `--imu`,
+     `--npz-encoding` and `--check-config`, which the fixture's parser
+     rejects, and while the drop-in exists it would override whatever release
+     the helper switches to; roll back before using it.
 
    Frigate's den feed drops briefly during the restart; nothing else should
-   change. Check `/health` and that bundles show `held: false`. Rollback: the
-   backup (or the helper's rollback) and one more restart, then the same
-   after-check, now expecting the before hash.
+   change. Rollback (on a no-go, or whenever the owner asks): remove the
+   drop-in, `daemon-reload`, restart once more, then `sweep.py
+   --rollback-check` expects the before ExecStart and drop-ins and the pinned
+   hash. The meter directory is then inert and may be deleted. After a pass
+   the meter server may stay for Stage 1, which needs it; unheld, it behaves
+   as the installed server.
 2. **Light the room** with den_lighting's arrival scene, at least one bulb on.
    The tool writes no lights. If no bulb is on, the owner turns one on in the
    HA app, and den_lighting keeps that as its normal scene until it is changed
@@ -229,8 +293,10 @@ balance and passes gain agreement. If it fails, the owner chooses RAW output
 of Stage 1 is built.
 
 **Void sweeps.** A void is a repeat mismatch, a still-scene wait over about
-20 s, a 503 or an unreachable camera, a new camera session, or a run longer
-than about 100 s (the METHOD-V1 limits). It is neither a pass nor a fail.
+20 s, a 503 or an unreachable camera, a new camera session, a run longer
+than about 100 s (the METHOD-V1 limits), or a sweep interrupted or errored
+before the repeat (Ctrl+C, a refused `POST /meter`, or any other error before
+the repeat's frames are in). It is neither a pass nor a fail.
 `response.json` records outcome void and the reason, and the void's frames are
 deleted. Up to 3 reruns the same evening fall under approval 1. A later rerun,
 or one after a code or METHOD change, needs approval 1 again; the server is
@@ -246,12 +312,12 @@ that session's 16 hold-outs.
 
 | File | Runs on | Does |
 |---|---|---|
-| `METHOD-V1.md`, the rest | repo | The held-exposure rule, the probe schedule, the block grid and its rules, the clipping-mask rule and the minimum unmasked share per block, every other tolerance (Stage 0's noise tolerance is reused), the noise floor and the gate. Committed before any probe. |
+| `METHOD-V1.md`, the rest | repo | The held-exposure rule, the probe schedule, the block grid and its rules, the reduction rule (the session mask, its union across captures and the minimum unmasked share per block; The model), every other tolerance (Stage 0's noise tolerance is reused), the noise floor and the gate. Committed before any probe. |
 | `guard.py` | PC | Pure rules, no I/O: start checks, own-or-foreign decisions, the abort decision, the restore plan and its order. |
 | `probe.py` | PC | Runs one session. Holds a small HA REST client and reuses `sweep.py`'s camera client. `--recover` finishes an interrupted session. |
 | `model.py` | PC | Reduces frames to `readings.json`, builds the schedule, fits, predicts, scores; writes `light-model.json` and `score.json`. |
 | `synthetic.py` | anywhere | The synthetic den, a fake camera and a fake HA. The fake HA runs den_lighting's `policy.py` unchanged, loaded by path as den-core's `incumbent.py` does, plus copies of `__init__.py`'s learning code (see Tests). |
-| `README.md` | repo | Owner steps and privacy rules. |
+| `README.md`, the rest | repo | Stage 1's owner steps. |
 
 den-light does not import den-core and adds nothing to it. A change fragment
 goes in `changes/unreleased/` with each stage's tools.
@@ -281,15 +347,18 @@ computers. Once `readings.json` exists, nothing needs them.
 - c is a bulb, u its brightness command (1 to 254; Zigbee caps at 254), k its
   colour temperature in kelvin.
 - A reading is a block's mean in `meter-norm/v1` units over the session
-  mask's unmasked pixels. A pixel is masked if any channel reaches the
-  clipping limit in any capture the session fits or scores; the mask is the
-  union over those captures, fixed before reduction, so every reading, D
-  included, averages the same pixels in every step. A block whose unmasked
-  share is below METHOD-V1's minimum (for example 50%), or that is missing
-  from any basis capture, is excluded from fitting and from every hold-out
-  pair, and counted in `score.json`. Each block's all-off noise sets its
-  noise floor; a block whose all-off brackets disagree beyond tolerance has
-  the steps between them flagged and unused.
+  mask's unmasked pixels.
+- **The reduction rule** is Stage 1's, not part of `meter-norm/v1`; Stage 1's
+  METHOD-V1 part fixes it and the minimum share before any probe. A pixel is
+  masked if `meter-norm/v1` flags it in any capture the session fits or
+  scores; the session mask is the union over those captures, fixed before
+  reduction, so every reading, D included, averages the same pixels in every
+  step. A block whose unmasked share is below the minimum (for example 50%),
+  or that is missing from any basis capture, is excluded from fitting and from
+  every hold-out pair, and counted in `score.json`.
+- Each block's all-off noise sets its noise floor; a block whose all-off
+  brackets disagree beyond tolerance has the steps between them flagged and
+  unused.
 
 **One held exposure.** Every fitted and scored capture uses one (t, G).
 METHOD-V1 fixes the rule that picks it: at session start, with all four bulbs
@@ -468,7 +537,11 @@ On abort, in order:
    `probes.jsonl` logged to now. In step 4 it gives a snapshot-off bulb
    turn_on only if that history shows a direct off-to-on change at least
    120 s after vacancy began, with no unknown, unavailable or gap. Otherwise
-   it uses on-then-off.
+   it uses on-then-off. History holds only state changes, so a **gap** is
+   either of: a signal has no state at the window start (HA's answer holds no
+   entry for it at or before the start), or HA restarted inside the window
+   (either signal reads `unavailable`, or `/api/logbook` for the window shows
+   a `homeassistant_start` event).
 4. Restore each other bulb still the tool's, as in the order's step 4. A
    bulb that only went unavailable is restored too if it reports on or off
    again while the room is empty; the tool waits about 5 min for it after the
@@ -576,8 +649,11 @@ python -B -m unittest discover -s tools/den-light -v
   With no walk-through in about 30 min: "bulbs left lit, occupancy unknown"
   recorded, the tool exits, and `--recover` redoes the check.
 - `--recover`'s branch: history with a direct off-to-on change 120 s or more
-  after vacancy began gives a snapshot-off bulb turn_on only; under 120 s,
-  through unknown or unavailable, or with a gap in the history, on-then-off.
+  after vacancy began gives a snapshot-off bulb turn_on only; under 120 s, or
+  through unknown, on-then-off. Each kind of gap also gives on-then-off, one
+  test each: a signal with no entry at or before the window start, an
+  `unavailable` state inside the window, and a `homeassistant_start` logbook
+  event inside the window with otherwise clean history.
 - A write HA applied with its response lost, once by timeout or Ctrl+C and
   once by a kill: the bulb counts as the tool's, `--recover` restores it, and
   `normal` equals the snapshot.
@@ -628,15 +704,18 @@ Each needs the owner's yes first. Nothing below has happened.
 One-time:
 
 1. **Install the metering camera server and run Stage 0's one-minute camera
-   check**: after the fixture check, one restart of `oak-den.service` in an
-   empty, dark den (Frigate's den feed drops briefly, and the den lights
-   follow that feed), then exposure, gain, white balance and focus held for
-   about 1 min while the owner is out of view; Frigate sees held settings
-   meanwhile. No pause. The tool writes no lights. If no bulb is on, the
+   check**: after the fixture check, the meter server copied into a new
+   sibling release directory and a systemd drop-in that points
+   `oak-den.service` at it with its flags unchanged (the pinned script is not
+   touched), one restart of `oak-den.service` in an empty, dark den (Frigate's
+   den feed drops briefly, and the den lights follow that feed), then
+   exposure, gain, white balance and focus held for about 1 min while the
+   owner is out of view; Frigate sees held settings meanwhile. No pause. The
+   tool writes no lights. If no bulb is on, the
    owner turns one on in the HA app, and den_lighting keeps that as its
    normal scene until it is changed again; set it back by hand afterwards if
-   wanted. Covers up to 3 void reruns the same evening. Rollback: the backup
-   (or the pilot helper's) and one more restart, then the after-check.
+   wanted. Covers up to 3 void reruns the same evening. Rollback: remove the
+   drop-in, `daemon-reload` and one more restart, then the rollback check.
 2. **A Home Assistant long-lived token on the PC** for `probe.py` (Stage 1),
    in `C:\den-light\private\`, never printed.
 
@@ -670,6 +749,9 @@ No decision blocks rung 8. Photometry-commissioning is not needed for it.
   pairs, and `score.json` reports each step's SNR.
 - **REST polling** at about 1 s can miss a sub-second flicker. The
   `last_updated` check and the camera guard cover it.
+- **Flicker at short exposures.** Stage 0's shortest steps (1/16 of auto's
+  pick) may catch bulb or mains flicker. The repeat check then voids the
+  sweep, or the residual shows it.
 - **Port 8090 has never been reached from the PC.** Stage 0 finds out;
   den-take's ssh tunnel is the fallback, and POST works through it.
 - **Disk.** The tools refuse on low disk (0.3-0.5 GB per session; a sweep
@@ -679,7 +761,7 @@ No decision blocks rung 8. Photometry-commissioning is not needed for it.
 
 | When | What | Owner time |
 |---|---|---|
-| Stage 0, once | Install the camera server by pasting commands: fixture check, copy, after-check, `install.json` | about 15 min |
+| Stage 0, once | Install the camera server by pasting commands: fixture check, meter directory and drop-in, after-check, `install.json` | about 15 min |
 | Stage 0, once | Light the room, start `sweep.py`, step out, read the result | about 5 min |
 | Stage 1, once | Create the HA token | about 3 min |
 | Each session | Copy the store file, start `probe.py`, leave; keep the den empty; read the result, run `model.py` | about 20 min: 3 before, a 2-minute vacancy wait, 12 during, 2 after |
@@ -690,11 +772,12 @@ No decision blocks rung 8. Photometry-commissioning is not needed for it.
 | 0 | `oak-capture-meter.py` and its tests | 1 |
 | 0 | `meter.py` (decode, response fit, global check) and tests | 1 |
 | 0 | `sweep.py` and its fake-server tests | 0.5 |
+| 0 | `README.md`, Stage 0 part, and change fragment | 0.25 |
 | 1 | `METHOD-V1.md`, the rest | 0.25 |
 | 1 | `model.py` (reduce, schedule, fit, predict, score) and tests | 1.25 |
 | 1 | `guard.py`, the den_lighting fake, and tests | 1.5 |
 | 1 | `probe.py`, `synthetic.py` and end-to-end tests | 1.5 |
-| 1 | `README.md` and change fragments | 0.5 |
+| 1 | `README.md`, the rest, and change fragment | 0.25 |
 
 Stage 0: about 3 build days, then about 20 minutes of owner time and one
 minute of camera. Stage 1, only after Stage 0 passes: about 5 build days, then

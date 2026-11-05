@@ -26,7 +26,8 @@ LOOK = on(255, 2700)
 OFF = {"on": False, "brightness": None, "kelvin": None}
 CANDIDATES = ["keep_current", "look:reading@0", "base", "off"]
 DECISION_KEYS = {"decision_id", "ts", "trigger", "policy", "actuator_domain", "inputs", "requested_scene",
-                 "transitions", "candidates", "skipped", "hard_conflicts", "status", "why"}
+                 "transitions", "candidates", "skipped", "hard_conflicts", "status", "why",
+                 "applied_scene", "recipients", "recipients_basis", "predicted"}  # rung 9's fields
 SOURCES = {"person_state": "need", "mode": "incumbent", "tick": "runner"}
 
 
@@ -334,7 +335,7 @@ class NothingIsSentTest(unittest.TestCase):
         tree = ast.parse(Path(decide.__file__).read_text(encoding="ascii"))
         names = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
         names |= {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-        self.assertEqual(names, {"copy", "hashlib", "json"})
+        self.assertEqual(names, {"copy", "hashlib", "json", "light_model"})
 
 
 class PurityTest(unittest.TestCase):
@@ -411,7 +412,7 @@ class PolicyAttributeTest(unittest.TestCase):
         for entry in config["decisions"].values():
             self.assertEqual(set(entry), {"value", "status", "effect"})
         self.assertTrue(config["looks"]["reading@0"]["status"].startswith("placeholder"))
-        self.assertEqual(len(config["not_used"]), 13)
+        self.assertEqual(len(config["not_used"]), 8)
 
     def test_override_deep_merges_and_changes_the_sha(self):
         p = decide.make_policy({"vacancy_s": 60, "looks": {"reading@0": {"scene": on(200, 3000)}}})

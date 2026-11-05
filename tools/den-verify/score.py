@@ -626,7 +626,7 @@ class Run:
                 decisions_out.append(rec)
                 continue
             try:
-                verify, rows, counted = self.verify(d, frame)
+                verify, _, counted = self.verify(d, frame)
             except KeyError as e:
                 why = str(e.args[0])
                 rec["verify"], rec["verify_status"] = None, why
@@ -699,14 +699,14 @@ class Run:
         all_hits = sum(h for h, _ in counted_by_day.values())
         all_counted = sum(k for _, k in counted_by_day.values())
         narrow = self.rate_and_verdict(all_hits - wide_hits, all_counted)
-        audible = self.rate_and_verdict(all_hits - below_noise["hits"], all_counted - below_noise["count"])
+        judged = self.rate_and_verdict(all_hits - below_noise["hits"], all_counted - below_noise["count"])
         misses = sum(causes.values())
         surfaces_total = sum(status_counts.values())
         unver = status_counts["unverifiable"] + status_counts["prior_only"]
         rate = self.hit_rate(counted_by_day)
         # hits the meter could not tell from a bulb that never moved lift nothing: the rest must pass too
         if rate["verdict"] != "fail":
-            rate["verdict"] = audible[1]
+            rate["verdict"] = judged[1]
         report = {
             "tool": "den-verify", "rung": 10, "scored": self.scored,
             "model": {"version": self.model.version, "basis_unit": self.model.basis_unit,
@@ -718,7 +718,7 @@ class Run:
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
             "below_meter_noise": {**below_noise, "misses": below_noise["count"] - below_noise["hits"],
-                                  "value_without": audible[0], "verdict_without": audible[1]},
+                                  "value_without": judged[0], "verdict_without": judged[1]},
             "hits_beyond_level_tolerance": {"count": wide_hits, "value_if_missed": narrow[0],
                                             "verdict_if_missed": narrow[1]},
             "fallback_patch_points_scored": fallback_scored,

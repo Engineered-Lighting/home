@@ -584,9 +584,10 @@ def score_root(root, room_model, token_file, method, den_method, location=None, 
     if not days:
         raise Refused("the photometry folder holds no day-<yyyymmdd> folder (README, --new-day)")
     room = read_room_model(room_model)
-    captures, normalisation, skipped = [], None, []
+    captures, normalisation, skipped, responses = [], None, [], []
     for day in days:
         record = load_day(day, method, den_method)
+        responses.append(record.get("stage0_response_sha256"))
         if normalisation is None:
             normalisation = record["normalisation"]
         elif record["normalisation"]["sha256"] != normalisation["sha256"]:
@@ -653,6 +654,7 @@ def score_root(root, room_model, token_file, method, den_method, location=None, 
               "skipped_folders": skipped,
               "room_model_in": room["version"], "room_model_out": room_record["version"],
               "days": [d.name for d in days], "normalisation": norm,
+              "stage0_response_sha256": sorted(set(responses)),
               "method_sha256": method.file_sha256, "method_block_sha256": method.block_sha256,
               "den_light_method_block_sha256": den_method.block_sha256, "code_sha256": code_sha256(),
               "sun_from_location": location is not None, "written_pc_unix": time.time()}

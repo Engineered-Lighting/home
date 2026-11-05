@@ -701,6 +701,11 @@ class EndToEndTests(Workspace):
     def test_take_py_output_passes_check_py(self):
         camera, c, spoken = SlateCamera(c=2.3456), 2.3456, []
         self.addCleanup(camera.close)
+        # On Linux perf_counter and monotonic are one clock. Shifting take.clock by 100000 s puts any
+        # cue or receipt not taken through take.clock outside the slate windows, so this test fails.
+        shifted = mock.patch.object(take, "clock", lambda: time.perf_counter() + 100000.0)
+        shifted.start()
+        self.addCleanup(shifted.stop)
 
         def say(text):
             spoken.append(text)

@@ -1,10 +1,14 @@
 # CHECK-V1: capture-clock check for den takes
 
-This is rung R's check method, version 1. It is committed alone, as the first
-commit on `claude/rung-r`, before any camera read. `check.py` reads every
+This is rung R's check method, version 1. It was first committed alone, as the
+first commit on `claude/rung-r`, before any camera read. Before any take
+existed it was revised twice in place, along with the code, by the commits
+"Call a split or wide slate window unreadable, so take.py retries it" and "Let
+max_window_s rise with epsilon_s at commissioning". `check.py` reads every
 number it uses from the one fenced block below. `take.py` reads the slate
 length from it, and `slate.html` repeats the four pattern numbers (a test keeps
-them equal). `take.json` and every `check-N.json` record this file's sha256.
+them equal). `take.json` and every `check-N.json` record the sha256 of this
+revised text, which no longer changes in place once the first take exists.
 `check.py` refuses a take recorded under a different CHECK file.
 
 ## Basis

@@ -651,6 +651,9 @@ class RealRung1RunTests(Rung1FileChecks, unittest.TestCase):
         real_held = json.loads(self.lines[2])["cameras"][0]
         copy_held = json.loads(RUNG1_FILE.read_text(encoding="utf-8").splitlines()[2])["cameras"][0]
         self.assertEqual(set(real_held["confirmed"]), set(copy_held["confirmed"]))
+        real_gone = json.loads(self.lines[3])["cameras"][0]
+        copy_gone = json.loads(RUNG1_FILE.read_text(encoding="utf-8").splitlines()[3])["cameras"][0]
+        self.assertEqual(set(real_gone["invalidated"]), set(copy_gone["invalidated"]))
         self.assertEqual(len(self.lines), len(RUNG1_FILE.read_text(encoding="utf-8").splitlines()))
 
 

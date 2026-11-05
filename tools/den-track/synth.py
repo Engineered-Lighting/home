@@ -22,6 +22,8 @@ CAMERA = (0.0, 0.0)
 CAMERA_HEIGHT_M = 2.1
 DOOR = (-2.4, 4.4)          # just outside the left wall
 ARMCHAIR = (0.2, 3.0, 1.0, 3.7)  # x0, y0, x1, y1
+# The made-up den in the shape of METHOD.md's `room` slot, for practice runs.
+ROOM_MODEL = {'exits': [list(DOOR)], 'floor': [ROOM['x'][0], ROOM['y'][0], ROOM['x'][1], ROOM['y'][1]]}
 BODY_HALF_WIDTH_M = 0.22
 CHEST_HEIGHT_M = 1.25
 
@@ -66,6 +68,21 @@ class Walker:
                 f = 0.0 if b <= a else max(0.0, min(1.0, (t - a) / (b - a)))
                 return (p[0] + f * (q[0] - p[0]), p[1] + f * (q[1] - p[1]))
         return self.legs[-1][3] if self.legs else None
+
+    def facing(self, t):
+        """Bearing (deg, clockwise from +y) the person faces: where they walk,
+        and while they pause, where they last walked (or will walk next)."""
+        moving = [(a, b, p, q) for a, b, p, q in self.legs if p != q]
+        if not moving:
+            return 0.0
+        leg = None
+        for m in moving:
+            if m[0] <= t:
+                leg = m
+        if leg is None:
+            leg = moving[0]
+        _, _, p, q = leg
+        return math.degrees(math.atan2(q[0] - p[0], q[1] - p[1])) % 360.0
 
     def inside(self, t):
         p = self.at(t)
@@ -141,12 +158,15 @@ def scenario(name, seed=0, noise='typical', fps=4.0):
             if hidden(p, others) or rng.random() < noise_cfg['miss']:
                 continue
             xy, sigma = ray_noise(p, noise_cfg, rng)
-            obs.append({'pid': pid, 'xy': xy, 'z': CHEST_HEIGHT_M + rng.gauss(0, 0.05), 'depth_sigma': sigma})
+            facing = next(w.facing(local) for w in walkers if w.pid == pid)
+            obs.append({'pid': pid, 'xy': xy, 'z': CHEST_HEIGHT_M + rng.gauss(0, 0.05), 'depth_sigma': sigma,
+                        'true_xy': p, 'facing': facing})
         if noise_cfg['false_per_frame'] and rng.random() < noise_cfg['false_per_frame']:
             fx, fy = rng.uniform(*ROOM['x']), rng.uniform(*ROOM['y'])
             r = math.hypot(fx, fy)
             obs.append({'pid': None, 'xy': (fx, fy), 'z': rng.uniform(0.4, 1.6),
-                        'depth_sigma': noise_cfg['depth_base'] + noise_cfg['depth_per_m2'] * r * r})
+                        'depth_sigma': noise_cfg['depth_base'] + noise_cfg['depth_per_m2'] * r * r,
+                        'true_xy': (fx, fy), 'facing': None})
         rng.shuffle(obs)
         for i, o in enumerate(obs):
             o['id'] = 'obs-%s-%d-%05d-%d' % (name, seed, k, i)
@@ -156,7 +176,7 @@ def scenario(name, seed=0, noise='typical', fps=4.0):
         e['start'] = round(t0 + e['start'], 4)
         e['end'] = round(t0 + e['end'], 4)
     return {'name': name, 'seed': seed, 'noise': noise if isinstance(noise, str) else 'custom',
-            'fps': fps, 'frames': frames, 'events': events}
+            'fps': fps, 'frames': frames, 'events': events, 'lateral': noise_cfg['lateral']}
 
 
 # --- scenes -----------------------------------------------------------------
@@ -244,7 +264,7 @@ def entry_exit(rng):
                      (DOOR[0], DOOR[1], 0)], rng.uniform(0.8, 1.2), t0=1.0, leaves=True)
     b.t_end = a.t_end + 2.0
     s, e = _meet_window(a, b, near=1.4)
-    return [a, b], [{'id': 'e1', 'kind': 'near_pass', 'start': s, 'end': e}]
+    return [a, b], [{'id': 'e1', 'kind': 'entry_exit', 'start': s, 'end': e}]
 
 
 def swap_at_door(rng):
@@ -253,7 +273,7 @@ def swap_at_door(rng):
     gap = rng.uniform(1.0, 3.0)
     b = Walker('B', [(DOOR[0], DOOR[1], 0), (-1.2, 4.0, 0), (0.6, 2.4, 1.0)], rng.uniform(0.9, 1.2),
                t0=a.t_end + gap)
-    return [a, b], [{'id': 'd1', 'kind': 'door', 'start': max(0.0, a.t_end - 2.5), 'end': b.t0 + 3.5}]
+    return [a, b], [{'id': 'd1', 'kind': 'entry_exit', 'start': max(0.0, a.t_end - 2.5), 'end': b.t0 + 3.5}]
 
 
 SCENES = {
@@ -266,3 +286,113 @@ SCENES = {
     'entry_exit': entry_exit,
     'swap_at_door': swap_at_door,
 }
+
+
+# --- as live-v1 records ---------------------------------------------------------
+# What rung 2 would write for these scenes: `observation` records with the
+# field names of schemas.json, and the den-track-truth/v1 lines the owner's
+# annotation would give. A made-up pinhole camera turns floor points into
+# image boxes, only so a person_box and a keypoints observation of the same
+# person overlap the way they would in the real image.
+
+SENSOR = 'synth-cam'
+TRANSFORM = 'synth-cam@synth-1'
+F_PX, CX_PX, CY_PX = 600.0, 960.0, 540.0
+SHOULDER_Z, HIP_Z = 1.40, 0.95
+SHOULDER_HALF_M, HIP_HALF_M = 0.19, 0.15
+COCO17 = 17
+
+
+def _ray_cov(xy, along, across, z_sd=0.05):
+    dx, dy = xy[0] - CAMERA[0], xy[1] - CAMERA[1]
+    r = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / r, dy / r
+    a2, c2 = along * along, across * across
+    return [[a2 * ux * ux + c2 * uy * uy, (a2 - c2) * ux * uy, 0.0],
+            [(a2 - c2) * ux * uy, a2 * uy * uy + c2 * ux * ux, 0.0],
+            [0.0, 0.0, z_sd * z_sd]]
+
+
+def _rounded(m, nd=6):
+    return [[round(v, nd) for v in row] for row in m]
+
+
+def _box(xy, rng, jitter):
+    y = max(xy[1] - CAMERA[1], 0.3)
+    u = lambda x: CX_PX + F_PX * (x - CAMERA[0]) / y
+    v = lambda h: CY_PX + F_PX * (CAMERA_HEIGHT_M - h) / y
+    box = [u(xy[0] - 0.25), v(1.75), u(xy[0] + 0.25), v(0.0)]
+    return [round(b + rng.gauss(0, jitter), 1) for b in box]
+
+
+def _joints(o, rng, lateral):
+    """coco17 joints_room: shoulders and hips from the measured torso point,
+    the rest unsupported (null, never zero-filled)."""
+    out = [{'j': j, 'xyz': None, 'cov': None, 'status': 'unsupported', 'lift': 'none'} for j in range(COCO17)]
+    if o['facing'] is None:
+        return out
+    b = math.radians(o['facing'])
+    fx, fy = math.sin(b), math.cos(b)
+    rx, ry = fy, -fx                      # the person's right, seen from above
+    r = math.hypot(o['xy'][0] - CAMERA[0], o['xy'][1] - CAMERA[1]) or 1.0
+    ux, uy = (o['xy'][0] - CAMERA[0]) / r, (o['xy'][1] - CAMERA[1]) / r
+    along = 0.6 * o['depth_sigma']
+    across = 0.7 * lateral
+    status = 'supported' if r < 4.6 else 'uncertain'
+    for left, right, z, half in ((5, 6, SHOULDER_Z, SHOULDER_HALF_M), (11, 12, HIP_Z, HIP_HALF_M)):
+        for j, side in ((left, -1), (right, 1)):
+            e_along, e_across = rng.gauss(0, along), rng.gauss(0, across)
+            x = o['xy'][0] + side * half * rx + e_along * ux - e_across * uy
+            y = o['xy'][1] + side * half * ry + e_along * uy + e_across * ux
+            out[j] = {'j': j, 'xyz': [round(x, 4), round(y, 4), round(z + rng.gauss(0, 0.03), 4)],
+                      'cov': _rounded(_ray_cov((x, y), along, across, 0.03)),
+                      'status': status, 'lift': 'stereo'}
+    return out
+
+
+def records(scene, box_share=0.7, keypoints_share=0.9):
+    """(observations, truth_lines) for one scene, as live-v1 records."""
+    import truth as truth_mod
+    rng = random.Random('records/%s/%s/%s' % (scene['name'], scene['seed'], scene['noise']))
+    lateral = scene.get('lateral', 0.04)
+    observations, labels_by_frame = [], []
+    for f in scene['frames']:
+        labels = []
+        for o in sorted(f['obs'], key=lambda o: o['id']):
+            want_kp = o['pid'] is not None and rng.random() < keypoints_share
+            want_box = o['pid'] is None or not want_kp or rng.random() < box_share
+            common = {'schema_version': 'observation/v1', 'capture_ts': f['t'], 'depth_ts': f['t'],
+                      'transform_id': TRANSFORM, 'validity': 'valid'}
+            if want_kp:
+                rec = dict(common, obs_id=o['id'] + '-k',
+                           source={'sensor_id': SENSOR, 'model': 'synth-pose', 'model_version': 'synth-1'},
+                           kind='keypoints', image_box=_box(o['true_xy'], rng, 3.0),
+                           keypoints=[[None, None, None] for _ in range(COCO17)], joint_set='coco17',
+                           joints_room=_joints(o, rng, lateral),
+                           room_position={'x': round(o['xy'][0], 4), 'y': round(o['xy'][1], 4),
+                                          'z': round(o['z'], 4),
+                                          'cov': _rounded(_ray_cov(o['xy'], o['depth_sigma'], lateral))},
+                           score=round(rng.uniform(0.6, 0.95), 3), visibility='visible')
+                observations.append(rec)
+                labels.append((rec['obs_id'], o['pid']))
+            if want_box:
+                along = 1.3 * o['depth_sigma']
+                bx = o['xy'][0] + rng.gauss(0, 0.3 * along) if want_kp else o['xy'][0]
+                by = o['xy'][1] + rng.gauss(0, 0.3 * along) if want_kp else o['xy'][1]
+                rec = dict(common, obs_id=o['id'] + '-b',
+                           source={'sensor_id': SENSOR, 'model': 'synth-det', 'model_version': 'synth-1'},
+                           kind='person_box', image_box=_box(o['true_xy'], rng, 6.0),
+                           room_position={'x': round(bx, 4), 'y': round(by, 4), 'z': round(o['z'], 4),
+                                          'cov': _rounded(_ray_cov((bx, by), along, 1.3 * lateral))},
+                           score=round(rng.uniform(0.4, 0.9), 3), visibility='visible')
+                observations.append(rec)
+                labels.append((rec['obs_id'], o['pid']))
+        labels_by_frame.append((f['t'], labels))
+    people = sorted({o['pid'] for f in scene['frames'] for o in f['obs'] if o['pid'] is not None})
+    lines = [truth_mod.take_line('%s-%d-%s' % (scene['name'], scene['seed'], scene['noise']), people,
+                                 labeller='synthetic', blind=True)]
+    for t, labels in labels_by_frame:
+        lines.append(truth_mod.frame_line(SENSOR, t, labels))
+    for e in scene['events']:
+        lines.append(truth_mod.window_line(e['id'], e['kind'], e['start'], e['end']))
+    return observations, lines

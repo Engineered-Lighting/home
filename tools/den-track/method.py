@@ -27,7 +27,7 @@ class MethodError(Exception):
 
 
 def read_block(path=METHOD_PATH):
-    with open(path, encoding='utf-8', newline=None) as f:   # universal newlines: CRLF == LF
+    with open(path, encoding='utf-8-sig', newline=None) as f:   # universal newlines: CRLF == LF
         lines = f.read().split('\n')
     starts = [i for i, line in enumerate(lines) if line.strip() == FENCE]
     if len(starts) != 1:
@@ -94,6 +94,17 @@ class Method:
     @property
     def scoring(self):
         return self.values['scoring']
+
+    @property
+    def room(self):
+        return self.values['room']
+
+    def override(self, dotted, value):
+        """Practice only, for tuning: this changes the values, not the block or its fingerprint."""
+        section, key = dotted.split('.', 1)
+        if section not in self.values or key not in self.values[section]:
+            raise MethodError('no such value in the method: %s' % dotted)
+        self.values[section][key] = value
 
     def require_closed(self):
         if self.open:

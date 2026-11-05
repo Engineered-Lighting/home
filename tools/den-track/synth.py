@@ -235,7 +235,7 @@ def to_records(scene, with_boxes=False):
     """
     observations, frames = [], []
     unsure = 0.2 if scene['noise'] == 'noisy' else 0.0
-    source = {'sensor_id': 'synth-cam', 'model': 'synthetic', 'model_version': 'synth-1'}
+    source = {'sensor_id': 'den-oak', 'model': 'synthetic', 'model_version': 'synth-1'}
     for frame in scene['frames']:
         rng = _scene_rng(scene, frame['index'])
         labels = {}
@@ -245,7 +245,7 @@ def to_records(scene, with_boxes=False):
             base = {'version': 'observation/v1', 'source': source, 'capture_ts': frame['t'], 'image_box': box,
                     'room_position': {'x': xy[0], 'y': xy[1], 'z': round(o['z'], 4),
                                       'cov': _floor_cov(xy, o['depth_sigma'], o['lateral'])},
-                    'transform_id': 'synth-cam@1', 'score': 0.86, 'visibility': 'visible', 'validity': 'valid',
+                    'transform_id': 'den-oak@synthetic', 'score': 0.86, 'visibility': 'visible', 'validity': 'valid',
                     'depth_ts': frame['t']}
             if o['pid'] is None:
                 recs = [dict(base, obs_id=o['id'] + '-b', kind='person_box')]

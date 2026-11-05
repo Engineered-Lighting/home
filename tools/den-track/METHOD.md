@@ -205,7 +205,9 @@ A scored run that names a take in any note must be that same look: the same take
 nothing changed. So a retune, of the numbers or the code, cannot be tried on takes that have
 been looked at, new labels cannot be tried, and a take cannot be dropped or added once results
 are known. Replaying a scored run is allowed, and gives the same report. Each report goes
-to a new folder, so an earlier one stays. A refused run shows no result and uses no take.
+to a new folder, so an earlier one stays, and a scored run on fresh takes lists the earlier
+scored runs the record holds and whether they passed (`earlier_scored_runs`), so a pass after
+a failure says so. A refused run shows no result and uses no take.
 
 Three things get past it. Deleting both notes by hand, which nothing can stop. A take looked
 at alone and then left out of the session: nothing ties it to the others, and the plan
@@ -265,7 +267,7 @@ frame, so that is a new take to this tool.
     "min_people_per_crossing": 2,
     "window_pad_s": {"open": true, "proposed": 2.0, "why": "Padding on each side of the owner's mark, so a window holds frames before and after and a swap shows in its own IDF1. The contracts name none. Proposed 2.0: about what walkers need to come together and part. Staged crossings must be further apart than twice this."},
     "face_visible_score_min": {"open": true, "proposed": 0.4, "why": "E2 asks how often a face is even visible. Without reading frames, the stand-in is nose and both eyes above this keypoint score. Proposed 0.4, rung 2's proposed keypoint_score_min."},
-    "trial_rule": {"open": true, "proposed": {"sides": "take", "min_scored": 2, "contact_reach_m": 2.0, "unseen_s": 0.6}, "why": "What a marked crossing must show to count as a trial; see 'Which crossings count'. sides, take or window: where a person's sightings before and after the mark may come from. take: anywhere in the take, so a far person hidden behind the near one past the padding counts once they are seen again, and a detector that stalls on someone counts only if it comes back. window: only inside the padded window, which is stricter and needs along-the-view crossings staged so both are seen again within window_pad_s (on synthetic close crossings it admits about half). min_scored: how many frames must see each person in the window and on each side; proposed 2 because 3 starts to refuse real crossings behind the armchair. contact_reach_m: how near the two must come inside the window. It is a check against a mistyped mark, not a definition of a crossing, so it is wider than arm's reach: depth error adds to what is read, and synthetic crossings marked at 1.6 read up to 1.7. unseen_s: how long someone must be unseen during an occlusion's mark; proposed from tracker.coasting_after_s."},
+    "trial_rule": {"open": true, "proposed": {"sides": "take", "min_scored": 2, "contact_reach_m": 2.0, "unseen_s": 0.6}, "why": "What a marked crossing must show to count as a trial; see 'Which crossings count'. sides, take or window: where a person's sightings before and after the mark may come from. take: anywhere in the take, so a far person hidden behind the near one past the padding counts once they are seen again, and a detector that stalls on someone counts only if it comes back. window: only inside the padded window, which is stricter and needs along-the-view crossings staged so both are seen again within window_pad_s (on synthetic close crossings it admits about half). min_scored: how many frames must see each person in the window and on each side; proposed 2 because 3 starts to refuse synthetic crossings behind the armchair, about 1 in 10. contact_reach_m: how near the two must come inside the window. It is a check against a mistyped mark, not a definition of a crossing, so it is wider than arm's reach: depth error adds to what is read, and synthetic crossings marked at 1.6 read up to 1.7. unseen_s: how long someone must be unseen during an occlusion's mark; proposed from tracker.coasting_after_s."},
     "unresolved_switch": {"open": true, "proposed": "flagged", "why": "A track changes person across cannot-tell labels, with the tracker confident for part of that span: the labels cannot say whether the change came while it was sure. flagged: it does not fail the gate, and its number is reported. A swap made while confident, then ambiguous before the labels resume, would pass; the review saw that only on constructed records, never on tracker output. silent: it fails the gate. A labeller who stays unsure about a second past the parting then fails a swap the tracker did report; the review saw 1 flip in 80 hard takes. flagged or silent."},
     "crossings_plan": {"open": true, "proposed": {"crossing": 12, "crossing_occluded": 5, "occlusion": 3, "near_pass": 3, "door": 2}, "why": "E2 says 20 to 30 staged crossings and occlusions, not how many of each. Fixed before recording, so the sample is set in advance: a scored run refuses when the crossings that count fall short of it for any kind, so the hard ones cannot quietly go missing. Proposed: the README's script, 25 crossings weighted toward what geometry finds hard (bound 11.3% at 0 failures). 30 would give 9.5%."}
   }
@@ -296,26 +298,30 @@ with `--set tracker.<name>=<value>` to try a value.
 - **Seeds 1000-1099** were looked at to diagnose silent swaps, which led to the reach
   rule and the door's radius, so they count as tuning too.
 - **Seeds 2000-2199** were run once, after the numbers stopped moving (1,600 runs at
-  each noise). They and the conditions below were run again when the reader stopped
-  merging overlapping boxes, with no value changed, and these are the results of that
-  run. The difference is small: a false box used to vanish into a real person's keypoints.
+  each noise). They and the conditions below were run again after three later changes, with
+  no value changed, and these are the results of that run: the reader stopped merging
+  overlapping boxes, a tentative track beside a person reads `ambiguous`, and a crossing
+  along the view ends with the near person stepping aside, so both are seen again. The
+  second took silent swaps at typical noise from 3 to 1. IDF1 is over the crossings that
+  count: all but 3 at noisy, and all but 56 of the 800 at 2 frames a second, where
+  `min_scored` is a lot to ask.
 
 | Noise | Silent swaps | Flagged switches | IDF1 by scene, lowest to highest | Lowest scene |
 |---|---|---|---|---|
-| clean | 0 | 177 | 0.954 to 1.000 | `near_pass` |
-| typical | 3 | 376 | 0.914 to 0.987 | `crossing_behind_armchair` |
-| noisy | 8 | 529 | 0.858 to 0.977 | `near_pass` |
+| clean | 0 | 181 | 0.954 to 1.000 | `near_pass` |
+| typical | 1 | 379 | 0.914 to 0.987 | `crossing_behind_armchair` |
+| noisy | 7 | 531 | 0.858 to 0.977 | `near_pass` |
 
 **Other conditions**, seeds 3000-3099 at typical noise, 800 runs each:
 
 | Condition | Silent swaps | Flagged switches | IDF1 | Lowest scene |
 |---|---|---|---|---|
-| 2 frames a second | 5 | 340 | 0.901 | `near_pass` 0.659 |
-| 4.75 frames a second (R6) | 1 | 149 | 0.971 | `touching_crossing` 0.938 |
-| 8 frames a second | 1 | 182 | 0.972 | `crossing_behind_armchair` 0.938 |
-| 15 frames a second | 1 | 215 | 0.969 | `crossing_behind_armchair` 0.942 |
-| Observations' covariance half too small | 2 | 193 | 0.937 | `near_pass` 0.879 |
-| Observations' covariance twice too big | 1 | 161 | 0.962 | `crossing_behind_armchair` 0.900 |
+| 2 frames a second | 2 | 343 | 0.908 | `near_pass` 0.658 |
+| 4.75 frames a second (R6) | 0 | 151 | 0.971 | `touching_crossing` 0.937 |
+| 8 frames a second | 0 | 183 | 0.972 | `crossing_behind_armchair` 0.938 |
+| 15 frames a second | 0 | 217 | 0.969 | `crossing_behind_armchair` 0.942 |
+| Observations' covariance half too small | 0 | 196 | 0.936 | `near_pass` 0.879 |
+| Observations' covariance twice too big | 1 | 162 | 0.962 | `crossing_behind_armchair` 0.900 |
 
 None of this is a score. It says the method works on the scenes it was written for.
 

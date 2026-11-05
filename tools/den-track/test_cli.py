@@ -1017,6 +1017,29 @@ class FreshTakesTest(Base):
         code, text = self.scored_exit(takes, 'score-1')
         self.assertEqual(code, 0, text)
 
+    def test_fresh_takes_after_a_failed_session_say_so_in_the_new_report(self):
+        self.failing_session()
+        self.retune_the_code()
+        fresh = [self.make_take(seed=seed, meth=self.meth) for seed in (200, 201)]
+        code, text = cli(*self.score_args(fresh, 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('1 earlier scored run', text)
+        self.assertIn('1 failed', text)
+        with open(self.path('score-2', 'score.json'), encoding='utf-8') as f:
+            earlier = json.load(f)['earlier_scored_runs']
+        self.assertEqual(len(earlier), 1)
+        self.assertEqual((earlier[0]['passed'], earlier[0]['takes']), (False, 3))
+        self.assertNotEqual(earlier[0]['code_fingerprint'], method.code_fingerprint())
+
+    def test_a_first_score_and_its_replay_name_no_earlier_run(self):
+        takes = self.takes()
+        self.score_once(takes)
+        code, text = cli(*self.score_args(takes, 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        self.assertNotIn('earlier scored run', text)
+        with open(self.path('score-2', 'score.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['earlier_scored_runs'], [])
+
     def test_this_users_record_defaults_to_local_app_data_and_says_so_in_the_refusal(self):
         env = {k: v for k, v in os.environ.items() if k != den_track.LEDGER_ENV}
         env['LOCALAPPDATA'] = self.path('appdata')
@@ -1089,8 +1112,9 @@ class FreshTakesTest(Base):
         notes = records.read_jsonl(os.path.splitext(takes[0][0])[0] + den_track.SCORE_RUNS_SUFFIX)
         self.assertEqual(notes, records.read_jsonl(den_track.ledger_path()))
         self.assertEqual(len(notes), 1)
-        self.assertEqual(set(notes[0]), {'scored', 'method_fingerprint', 'code_fingerprint', 'takes'})
+        self.assertEqual(set(notes[0]), {'scored', 'passed', 'method_fingerprint', 'code_fingerprint', 'takes'})
         self.assertIs(notes[0]['scored'], True)
+        self.assertIs(notes[0]['passed'], True)
         self.assertEqual(len(notes[0]['takes']), 2)
         for row in notes[0]['takes']:
             self.assertEqual(set(row), {'take_id', 'observations_sha256', 'tracks_sha256', 'truth_sha256'})

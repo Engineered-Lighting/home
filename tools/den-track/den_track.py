@@ -214,9 +214,21 @@ def used_problems(current, takes, earlier):
             % ('; '.join(found), ledger_path())]
 
 
-def note_score(method, takes, scored):
+def earlier_scored(current, takes):
+    """Other scored runs this record holds, from any takes: a run after a failed one should say so."""
+    out = []
+    for run in earlier_runs(takes):
+        if run.get('scored') is True and not same_look(run, current):
+            row = {'passed': run.get('passed'), 'takes': len(run['takes']), 'method_fingerprint': run.get('method_fingerprint'),
+                   'code_fingerprint': run.get('code_fingerprint')}
+            if row not in out:
+                out.append(row)
+    return out
+
+
+def note_score(method, takes, scored, passed):
     """One line per different look at these takes, practice or scored, in each place that keeps the record."""
-    stamp = run_stamp(method, takes, scored)
+    stamp = dict(run_stamp(method, takes, scored), passed=passed if scored else None)
     for path in note_paths(takes):
         if stamp not in (records.read_jsonl(path) if os.path.exists(path) else []):
             os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
@@ -356,9 +368,11 @@ def cmd_score(args):
     body = score_mod.score_session(takes, scoring)
     if args.scored:
         check_scored(method, takes, body)
-    note_score(method, takes, args.scored)
+    earlier = earlier_scored(run_stamp(method, takes, args.scored), takes)
+    note_score(method, takes, args.scored, body['gate']['passed'])
     crossing_lines = body.pop('crossing_lines')
     report = dict(body, tool='den-track', command='score', scored=bool(args.scored), method=method_stamp(method),
+                  earlier_scored_runs=earlier,
                   labelling={'labellers': sorted({t['truth'].labeller for t in takes if t['truth'].labeller}),
                              'takes': len(takes), 'declared_blind': sum(1 for t in takes if t['truth'].blind is True)},
                   takes=[dict(take_stamp(t), name=t['name'], labeller=t['truth'].labeller, blind=t['truth'].blind)
@@ -370,6 +384,9 @@ def cmd_score(args):
           % (', '.join(report['labelling']['labellers']) or 'nobody named', report['labelling']['declared_blind'],
              report['labelling']['takes']))
     gate = report['gate']
+    if earlier:
+        print('this record holds %d earlier scored run(s), on other takes, under other numbers or code: %d failed'
+              % (len(earlier), sum(1 for run in earlier if run['passed'] is not True)))
     print('wrote %s' % os.path.join(args.out, SCORE_FILE))
     if not args.scored:
         print_open(method)

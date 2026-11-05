@@ -202,9 +202,12 @@ python -B tools\den-label\label.py remark
 python -B tools\den-label\label.py status
 ```
 
-When every session is audited and labelled end to end and the re-mark is done:
+When every session is audited and labelled end to end and the re-mark is done,
+pull first, so label.py sees every freeze line already in FREEZES.md and never
+reuses a version number:
 
 ```powershell
+git pull
 python -B tools\den-label\label.py freeze fixture
 python -B tools\den-label\label.py freeze labels
 python -B tools\den-label\label.py verify
@@ -214,7 +217,9 @@ Each freeze prints one `den-n1 ...` line. Paste both to the agent, who appends
 them to FREEZES.md and pushes. Only then may N2 run. A frozen folder is never
 edited: any change, or sessions added later, makes `fixture-v2` and
 `labels-v2`. After each freeze, copy `C:\den-takes\n1` to another household
-computer or a USB drive.
+computer or a USB drive. `verify` fails a line in FREEZES.md with no folder on
+this PC (copy it back from that copy) and a version logged twice with
+different hashes.
 
 Exit codes: 0 = done, 1 = `verify` found a problem, 2 = refused (nothing
 written).

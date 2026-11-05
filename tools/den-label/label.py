@@ -31,6 +31,7 @@ import n1
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_TAKES = r"C:\den-takes"
+FREEZES = HERE / "FREEZES.md"
 MAX_BODY = 4 * 1024 ** 2
 PAGE_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
             "connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -376,6 +377,10 @@ def parser():
     return top
 
 
+def freezes_text():
+    return FREEZES.read_text(encoding="utf-8") if FREEZES.exists() else ""
+
+
 def main(argv=None, out=None, ready=None, protocol=None):
     out = out or sys.stdout
     args = parser().parse_args(argv)
@@ -412,10 +417,10 @@ def main(argv=None, out=None, ready=None, protocol=None):
             return 0
         if args.command == "freeze":
             if args.what == "fixture":
-                line, changes = ws.freeze_fixture()
+                line, changes = ws.freeze_fixture(freezes_text())
                 record = None
             else:
-                line, record, changes = ws.freeze_labels()
+                line, record, changes = ws.freeze_labels(freezes_text())
             for change in changes:
                 print(change, file=out)
             print("Paste this line to the agent for FREEZES.md:", file=out)
@@ -425,8 +430,7 @@ def main(argv=None, out=None, ready=None, protocol=None):
                 print(json.dumps(record, sort_keys=True), file=out)
             return 0
         if args.command == "verify":
-            freezes = HERE / "FREEZES.md"
-            ok, lines = ws.verify(freezes.read_text(encoding="utf-8") if freezes.exists() else "")
+            ok, lines = ws.verify(freezes_text())
             print("\n".join(lines), file=out)
             return 0 if ok else 1
         if args.command == "aside":

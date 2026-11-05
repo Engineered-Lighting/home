@@ -727,8 +727,14 @@ def verify_folder(folder):
 
 
 def freeze_lines(text):
-    """{('fixture', 1): hash, ...} from FREEZES.md."""
-    return {(kind, int(version)): sha for kind, version, sha in FREEZE_LINE.findall(text)}
+    """[('fixture', 1, hash), ...] from FREEZES.md, every line in order (a version may be logged twice)."""
+    return [(kind, int(version), sha) for kind, version, sha in FREEZE_LINE.findall(text)]
+
+
+def next_version(n1root, kind, freezes_text=""):
+    """One more than any version on disk or logged in FREEZES.md, so a lost folder's number is never reused."""
+    logged = [version for k, version, _ in freeze_lines(freezes_text) if k == kind]
+    return 1 + max(versions(n1root, kind) + logged, default=0)
 
 
 def utc_date(unix):
@@ -1005,7 +1011,7 @@ class Workspace:
         frames = read_frames(state.folder)
         return state, frames, usable_frames(state, frames), draft
 
-    def freeze_fixture(self):
+    def freeze_fixture(self, freezes_text=""):
         changes = self.sync_all()
         entries = self.entries()
         if not entries:
@@ -1026,7 +1032,7 @@ class Workspace:
                              "segments": [[s["first_n"], s["last_n"], s["start_t_s"], s["end_t_s"]]
                                           for s in state.report["usable"]["segments"] if s["frames"]],
                              "frames": len(rows), "boxes": {"file": name, "sha256": sha256_bytes(files[name])}})
-        version = 1 + max(versions(self.root, "fixture"), default=0)
+        version = next_version(self.root, "fixture", freezes_text)
         frozen = now()
         manifest = {"schema": "den-n1-fixture-1", "version": version, "frozen_unix": frozen,
                     "protocol": {"file": self.protocol.file, "sha256": self.protocol.sha256},
@@ -1045,7 +1051,7 @@ class Workspace:
                 f"pad={pad['fraction']:g}/{pad['min_px']:g}px")
         return line, changes
 
-    def freeze_labels(self):
+    def freeze_labels(self, freezes_text=""):
         changes = self.sync_all()
         entries = self.entries()
         if not entries:
@@ -1103,7 +1109,7 @@ class Workspace:
             "intervals": remark["intervals"], "spans": remark["spans"],
             "agreement": agreement(first["intervals"], remark["intervals"])})
         files["split.json"] = self.split_path.read_bytes()
-        version = 1 + max(versions(self.root, "labels"), default=0)
+        version = next_version(self.root, "labels", freezes_text)
         frozen = now()
         per_split = {name: dict(c, days=len(c["days"])) for name, c in counts.items()}
         manifest = {"schema": "den-n1-labels-1", "version": version, "frozen_unix": frozen,
@@ -1129,18 +1135,35 @@ class Workspace:
         return line, record, changes
 
     def verify(self, freezes_text=""):
-        """Every frozen folder against its manifest, and each manifest hash against FREEZES.md."""
-        logged, lines, ok = freeze_lines(freezes_text), [], True
+        """Every frozen folder against its manifest, and every FREEZES.md line against a folder.
+
+        Fails a changed, missing or extra file, a manifest hash that differs from its logged line,
+        a logged version with no folder, and one version logged twice with different hashes."""
+        logged, lines, ok = {}, [], True
+        for kind, version, sha in freeze_lines(freezes_text):
+            logged.setdefault((kind, version), [])
+            if sha not in logged[kind, version]:
+                logged[kind, version].append(sha)
         for kind in ("fixture", "labels"):
-            for version in versions(self.root, kind):
-                digest, problems = verify_folder(self.root / f"{kind}-v{version}")
-                expected = logged.get((kind, version))
-                if expected and expected != digest:
-                    problems.append(f"manifest hash differs from FREEZES.md ({expected[:12]})")
-                note = "" if expected else " (not yet in FREEZES.md)"
+            on_disk = versions(self.root, kind)
+            for version in sorted(set(on_disk) | {v for k, v in logged if k == kind}):
+                hashes = logged.get((kind, version), [])
+                problems = []
+                if version in on_disk:
+                    digest, problems = verify_folder(self.root / f"{kind}-v{version}")
+                    head = f"{kind}-v{version} sha256={digest}: "
+                    if len(hashes) == 1 and hashes[0] != digest:
+                        problems.append(f"manifest hash differs from FREEZES.md ({hashes[0][:12]})")
+                else:
+                    head = f"{kind}-v{version}: "
+                    problems.append("logged in FREEZES.md but no folder for it on this PC; copy it back "
+                                    "from your backup copy")
+                if len(hashes) > 1:
+                    problems.append("logged twice in FREEZES.md with different hashes ("
+                                    + ", ".join(h[:12] for h in hashes) + ")")
+                note = "" if hashes else " (not yet in FREEZES.md)"
                 ok = ok and not problems
-                lines.append(f"{kind}-v{version} sha256={digest}: "
-                             + ("; ".join(problems) if problems else "OK") + note)
+                lines.append(head + ("; ".join(problems) if problems else "OK") + note)
         if not lines:
             lines.append("nothing frozen yet")
         return ok, lines

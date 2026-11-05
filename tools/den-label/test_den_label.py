@@ -1140,6 +1140,15 @@ class ClipKindTests(Base):
         n1.check_labels(draft["intervals"], draft["spans"], PROTOCOL, ws.state("s1").segments(), t_of)
 
 
+def two_frozen(test):
+    """FreezeTests.build on two sessions, then both freezes. Returns the workspace and the two lines."""
+    ws = FreezeTests.build(test, names=(("a1", "hard-a"), ("b1", "hard-b")))
+    with mock.patch.object(n1, "now", return_value=BASE_UNIX + 10 * DAY):
+        fixture_line, _ = ws.freeze_fixture()
+        labels_line, _, _ = ws.freeze_labels()
+    return ws, fixture_line, labels_line
+
+
 class FreezeRecheckTests(Base):
     """Item 3: freeze_labels runs every save-time protocol check again."""
 
@@ -1154,6 +1163,42 @@ class FreezeRecheckTests(Base):
             with self.assertRaisesRegex(n1.Refused, r"a1.*carried exactly"):
                 ws.freeze_labels()
         self.assertEqual(n1.versions(ws.root, "labels"), [])
+
+
+class FreezeLogTests(Base):
+    """Item 4: every FREEZES.md line needs its folder, one hash per version, and versions never repeat."""
+
+    def frozen(self):
+        return two_frozen(self)
+
+    def test_verify_fails_a_logged_version_with_no_folder(self):
+        ws, fixture_line, labels_line = self.frozen()
+        ghost = fixture_line.replace("fixture-v1 ", "fixture-v2 ").replace("sha256=", "sha256=" + "0" * 4, 1)
+        ghost = re.sub(r"sha256=([0-9a-f]{64})[0-9a-f]{4}", r"sha256=\1", ghost)
+        ok, lines = ws.verify(f"{fixture_line}\n{labels_line}\n{ghost}\n")
+        self.assertFalse(ok, lines)
+        self.assertTrue(any(l.startswith("fixture-v2") and "no folder" in l for l in lines), lines)
+
+    def test_verify_fails_one_version_logged_twice_with_different_hashes(self):
+        ws, fixture_line, labels_line = self.frozen()
+        other = re.sub(r"sha256=[0-9a-f]{64}", "sha256=" + "0" * 64, fixture_line, count=1)
+        ok, lines = ws.verify(f"{other}\n{fixture_line}\n{labels_line}\n")  # the right line logged last
+        self.assertFalse(ok, lines)
+        self.assertTrue(any("logged twice" in l for l in lines), lines)
+        ok, lines = ws.verify(f"{fixture_line}\n{fixture_line}\n{labels_line}\n")  # the same line twice is fine
+        self.assertTrue(ok, lines)
+
+    def test_a_freeze_never_reuses_a_logged_version(self):
+        ws, fixture_line, labels_line = self.frozen()
+        shutil.move(str(ws.root / "fixture-v1"), str(self.tmp / "lost-fixture-v1"))  # a lost folder
+        freezes = self.tmp / "FREEZES.md"
+        freezes.write_text(f"# log\n\n{fixture_line}\n{labels_line}\n", encoding="utf-8", newline="\n")
+        with mock.patch.object(label, "FREEZES", freezes, create=True), \
+                mock.patch.object(n1, "now", return_value=BASE_UNIX + 11 * DAY):
+            code, text = run_main(["freeze", "fixture", "--takes", str(self.takes)])
+        self.assertEqual(code, 0, text)
+        self.assertIn("den-n1 fixture-v2 ", text)
+        self.assertFalse((ws.root / "fixture-v1").exists())
 
 
 def browser_fixture(folder):

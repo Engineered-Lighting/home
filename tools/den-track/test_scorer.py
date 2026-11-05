@@ -7,9 +7,9 @@ import scorer_core
 from scorer_math import best_matching, upper_bound
 
 
-def links_from(rows, conf=1.0):
+def links_from(rows, confident=True):
     """rows: [(person, track), ...] one per frame, frame k at time k."""
-    return [(float(k), 'o%d' % k, p, t, conf if t is not None else None) for k, (p, t) in enumerate(rows)]
+    return [(float(k), 'o%d' % k, p, t, confident if t is not None else None) for k, (p, t) in enumerate(rows)]
 
 
 class BoundTest(unittest.TestCase):
@@ -73,31 +73,31 @@ class IdF1Test(unittest.TestCase):
 class SwitchTest(unittest.TestCase):
     def test_swap_is_silent_only_when_confident(self):
         rows = [('A', 1), ('B', 2)] * 3 + [('B', 1), ('A', 2)] * 3
-        loud = links_from(rows, conf=0.4)
-        quiet = links_from(rows, conf=0.99)
-        self.assertEqual([s['silent'] for s in scorer_core.switches(loud, 0.9)], [False, False])
-        self.assertEqual([s['silent'] for s in scorer_core.switches(quiet, 0.9)], [True, True])
-
-    def test_threshold_is_inclusive(self):
-        rows = [('A', 1)] * 2 + [('B', 1)]
-        self.assertTrue(scorer_core.switches(links_from(rows, conf=0.9), 0.9)[0]['silent'])
+        loud = links_from(rows, confident=False)
+        quiet = links_from(rows, confident=True)
+        self.assertEqual([s['silent'] for s in scorer_core.switches(loud)], [False, False])
+        self.assertEqual([s['silent'] for s in scorer_core.switches(quiet)], [True, True])
 
     def test_false_observation_is_not_a_switch(self):
         rows = [('A', 1), (None, 1), ('A', 1)]
-        self.assertEqual(scorer_core.switches(links_from(rows), 0.9), [])
+        self.assertEqual(scorer_core.switches(links_from(rows)), [])
 
     def test_fragment_is_not_a_switch(self):
         rows = [('A', 1)] * 3 + [('A', 2)] * 3
-        self.assertEqual(scorer_core.switches(links_from(rows), 0.9), [])
+        self.assertEqual(scorer_core.switches(links_from(rows)), [])
+
+    def test_switch_back_counts_twice(self):
+        rows = [('A', 1)] * 2 + [('B', 1)] * 2 + [('A', 1)] * 2
+        self.assertEqual(len(scorer_core.switches(links_from(rows))), 2)
 
 
 class WindowTest(unittest.TestCase):
     def test_per_window_and_pooled(self):
         rows = [('A', 1), ('B', 2)] * 5 + [('A', 1), ('B', 2)] * 5 + [('B', 1), ('A', 2)] * 5
-        links = links_from(rows, conf=0.99)
+        links = links_from(rows)
         windows = [{'id': 'c1', 'kind': 'crossing', 'start': 0, 'end': 9},
                    {'id': 'c2', 'kind': 'crossing', 'start': 15, 'end': 29}]
-        res = scorer_core.score_windows(links, windows, 0.9, 0.9)
+        res = scorer_core.pool([('t1', scorer_core.score_take(links, windows))], 0.9, 1)
         w1, w2 = res['windows']
         self.assertEqual((w1['silent_swaps'], w1['idf1']), (0, 1.0))
         self.assertEqual(w2['silent_swaps'], 2)
@@ -107,16 +107,43 @@ class WindowTest(unittest.TestCase):
 
     def test_switch_before_window_is_known_to_window(self):
         rows = [('A', 1)] * 5 + [('B', 1)] * 5
-        links = links_from(rows, conf=0.99)
-        res = scorer_core.score_windows(links, [{'id': 'w', 'start': 4.5, 'end': 9}], 0.9, 0.9)
+        res = scorer_core.score_take(links_from(rows), [{'id': 'w', 'start': 4.5, 'end': 9}])
         self.assertEqual(res['windows'][0]['silent_swaps'], 1)
 
-    def test_gate_passes(self):
+    def test_silent_swap_outside_windows_fails_the_gate(self):
+        rows = [('A', 1), ('B', 2)] * 10 + [('B', 1), ('A', 2)] * 10
+        windows = [{'id': 'c%d' % k, 'start': 2 * k, 'end': 2 * k + 1} for k in range(10)]
+        res = scorer_core.pool([('t', scorer_core.score_take(links_from(rows), windows))], 0.9, 10)
+        self.assertEqual(res['crossings_with_silent_swap'], 0)
+        self.assertEqual(res['silent_swaps_outside_windows'], 2)
+        self.assertFalse(res['gate']['passed'])
+
+    def test_reported_swap_is_not_silent_but_costs_idf1(self):
+        rows = [('A', 1), ('B', 2)] * 4 + [('B', 1), ('A', 2)] * 4
+        links = links_from(rows[:8], True) + [(8.0 + k, 'q%d' % k, p, t, False)
+                                               for k, (p, t) in enumerate(rows[8:])]
+        res = scorer_core.pool([('t', scorer_core.score_take(links, [{'id': 'c', 'start': 0, 'end': 20}]))],
+                               0.9, 1)
+        self.assertEqual((res['silent_swaps'], res['reported_switches']), (0, 2))
+        self.assertAlmostEqual(res['pooled']['idf1'], 0.5)
+        self.assertAlmostEqual(res['ambiguous_share'], 0.5)
+        self.assertFalse(res['gate']['passed'])
+
+    def test_takes_pool_and_gate_passes(self):
         links = links_from([('A', 1), ('B', 2)] * 10)
         windows = [{'id': 'c%d' % k, 'start': 2 * k, 'end': 2 * k + 1} for k in range(10)]
-        res = scorer_core.score_windows(links, windows, 0.9, 0.9)
+        takes = [('t%d' % i, scorer_core.score_take(links, windows)) for i in range(2)]
+        res = scorer_core.pool(takes, 0.9, 20)
+        self.assertEqual(res['crossings'], 20)
         self.assertTrue(res['gate']['passed'])
-        self.assertAlmostEqual(res['silent_swap_rate_upper_95'], 1 - 0.05 ** (1 / 10))
+        self.assertAlmostEqual(res['silent_swap_rate_upper_95'], 1 - 0.05 ** (1 / 20))
+
+    def test_too_few_windows_fail_the_gate(self):
+        links = links_from([('A', 1), ('B', 2)] * 10)
+        windows = [{'id': 'c%d' % k, 'start': 2 * k, 'end': 2 * k + 1} for k in range(10)]
+        res = scorer_core.pool([('t', scorer_core.score_take(links, windows))], 0.9, 20)
+        self.assertFalse(res['gate']['windows_met'])
+        self.assertFalse(res['gate']['passed'])
 
 
 if __name__ == '__main__':

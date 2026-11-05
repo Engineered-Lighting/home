@@ -1059,17 +1059,19 @@ class ProbeEndToEndTests(unittest.TestCase):
         rig.assert_normal_is_snapshot(self)
         self.assert_frames_are_clean(rig)
 
-    def settled(self, rig, frames, *, dwell=0, count=3, sent_at=0.0):
+    def settled(self, rig, frames, *, dwell=0, count=3, sent_at=0.0, held=True):
         """settled_frames() over made-up frames [(time, value)], with a clock that follows them."""
         rig.m1 = rig.m1.closed(step_dwell_s=dwell, frames_per_capture=count, settle_limit_s=5)
         s = rig.session()
+        s.hold, s.generation, s.hold_applied = {"exposure_us": 1000, "iso": 100}, 7, True
         now, pending = [sent_at], iter(frames)
 
         def next_frame():
             now[0], value = next(pending)
-            return {"held": False}, value, {}
+            return ({"held": held, "generation": 7, "exposure_us": 1000, "iso": 100,
+                     "kelvin": rig.m0["white_balance_kelvin"]}, value, {})
         s.clock, s.next_frame, s.means = (lambda: now[0]), next_frame, (lambda value: [[value, value, value]])
-        kept, landed = s.settled_frames(sent_at, held=False)
+        kept, landed = s.settled_frames(sent_at, held=held)
         return [k[1] for k in kept], landed
 
     def test_a_step_settles_on_agreeing_frames_after_the_dwell(self):
@@ -1086,6 +1088,11 @@ class ProbeEndToEndTests(unittest.TestCase):
         with self.assertRaises(probe.Abort) as caught:
             self.settled(rig, [(0.1, 10), (0.2, 10), (0.3, 50)])
         self.assertEqual(caught.exception.reason, "frames within a settled step disagree")
+
+    def test_auto_exposure_still_moving_only_restarts_the_run(self):
+        rig = Rig(self)  # all four come on at the session's start, and auto exposure follows: no camera guard yet
+        frames = [(0.1, 10), (0.2, 10), (0.3, 50), (0.4, 50), (0.5, 50)]
+        self.assertEqual(self.settled(rig, frames, held=False), ([50, 50, 50], 0.3))
 
     def test_a_step_that_never_settles_aborts(self):
         rig = Rig(self)
@@ -1366,6 +1373,28 @@ class ProbeEndToEndTests(unittest.TestCase):
                 rig.assert_normal_is_snapshot(self)
                 self.assertEqual(rig.holds(), {})
                 self.assert_frames_are_clean(rig)
+
+    def test_frames_before_a_hold_reaches_the_sensor_are_skipped(self):
+        rig = Rig(self)
+        rig.cam.control_latency = 3  # the server tags frames held as soon as the POST returns; the sensor follows later
+        outcome, lines, s = rig.run()
+        self.assertEqual(outcome, "complete", lines)
+        params, digest = synthetic.meter_norm_for(rig.m0)
+        lm, scored = model.run_session(rig.folder, {"parameters": params, "parameters_sha256": digest}, rig.m1)
+        self.assertEqual(scored["error"]["verdict"], "pass", scored["error"])
+        for line in rig.log():
+            if line["kind"] == "capture":  # every kept frame was at the hold it names
+                for frame in line["frames"]:
+                    self.assertEqual(frame["report"]["iso"], line["hold"]["iso"])
+                    self.assertAlmostEqual(frame["report"]["exposure_us"], line["hold"]["exposure_us"], delta=50)
+
+    def test_a_hold_that_never_reaches_the_sensor_aborts(self):
+        rig = Rig(self, m1=method1(settle_limit_s=0.3))
+        rig.cam.control_latency = 10 ** 6
+        outcome, lines, s = rig.run()
+        self.assertEqual(outcome, "aborted")
+        self.assertIn("the hold did not apply", json.loads((rig.folder / "session.json").read_text())["abort_reason"])
+        rig.assert_normal_is_snapshot(self)
 
     def test_the_camera_guard_aborts_on_a_frame_that_fails_gain_agreement(self):
         rig = Rig(self)

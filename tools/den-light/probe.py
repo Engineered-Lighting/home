@@ -236,6 +236,7 @@ class Session:
         self.probing = False
         self.hold = None             # the held settings, or None
         self.generation = None
+        self.hold_applied = False    # a frame has shown this generation's settings at the sensor
         self.last_post = None
         self.camera_session = None
         self.last_sequence = None
@@ -357,6 +358,7 @@ class Session:
         if status != 200 or type(reply.get("generation")) is not int:
             raise Abort(f"POST /meter was refused ({status})")
         self.hold = dict(settings)
+        self.hold_applied = self.hold_applied and reply["generation"] == self.generation  # a renewal keeps it
         self.generation, self.last_post = reply["generation"], self.clock()
         self.log.write("hold", exposure_us=settings["exposure_us"], iso=settings["iso"], generation=self.generation)
 
@@ -426,14 +428,19 @@ class Session:
                     continue
                 ok, why = meter.gain_agreement(report, dict(self.hold, white_balance_kelvin=self.m0["white_balance_kelvin"]),
                                                self.m0["exposure_quantum_us"])
-                if not ok:
+                if not ok and self.hold_applied:
                     raise Abort(f"a held frame failed gain agreement ({why})")
+                if not ok:  # the server tags frames held at once; the control reaches the sensor a few frames later
+                    if now - start > self.m1["settle_limit_s"]:
+                        raise Abort(f"the hold did not apply ({why})")
+                    continue
+                self.hold_applied = True
             means = self.means(nv12)
             seen.append((now, means))
             if now < counted_from:
                 continue
             if anchor is None or not meter.agree(anchor, means, tolerance):
-                if len(kept) >= 2:
+                if held and len(kept) >= 2:  # unheld, auto exposure may still be moving: no guard yet, only a new run
                     raise Abort("frames within a settled step disagree")
                 if now - start > self.m1["settle_limit_s"]:
                     raise Abort("the step did not settle")

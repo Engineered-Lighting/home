@@ -435,8 +435,18 @@ A step **settles** on `frames_per_capture` consecutive frames that agree under
 Stage 0's noise tolerance. A frame that disagrees with one earlier counted
 frame starts the run again. A frame that disagrees with two or more aborts
 ("frames within a settled step disagree"). No settled run within
-`settle_limit_s` of the send aborts too. A held frame must report the hold's
-generation and pass Stage 0's gain agreement, or the session aborts.
+`settle_limit_s` of the send aborts too.
+
+**Under a hold.** As in Stage 0, frames are skipped until one reports the
+hold's generation and passes gain agreement: the server tags frames as held as
+soon as `POST /meter` returns, and the control reaches the sensor a few frames
+later. No such frame within `settle_limit_s` aborts ("the hold did not apply").
+Once one has passed, a later frame that fails gain agreement under the same
+generation aborts. A renewal keeps its generation.
+
+The first capture of a session, before any hold, reads auto exposure with all
+four bulbs on. Auto exposure may still be moving, so there a frame that
+disagrees only starts the run again.
 
 **The brackets.** Each all-off capture's first frame must agree, under the same
 tolerance, with the previous all-off capture's first frame. Otherwise something

@@ -631,6 +631,8 @@ class FakeCamera:
         self.session, self.sequence, self.generation = "session-1", 0, 0
         self.auto = {"exposure_us": 20000, "iso": 400, "kelvin": 4000}
         self.held, self.hold = False, None
+        self.control_latency = 0     # frames before a hold reaches the sensor; the server tags them held at once
+        self.sensor, self.wanted, self.control_wait = self.auto, self.auto, 0
         self.shown, self.next_scene, self.wait = None, None, 0
         self.t0 = time.monotonic()
         self.lock = threading.Lock()
@@ -663,7 +665,14 @@ class FakeCamera:
             self.wait -= 1
         if (not self.wait and time.perf_counter() >= self.landing_at) or self.shown is None:
             self.shown = self.next_scene
-        settings = self.hold if self.held else self.auto
+        wanted = self.hold if self.held else self.auto
+        if wanted != self.wanted:
+            self.wanted, self.control_wait = wanted, self.control_latency
+        if self.control_wait:
+            self.control_wait -= 1
+        else:
+            self.sensor = self.wanted
+        settings = self.sensor
         x = settings["exposure_us"] / 1000 * settings["iso"] / 100
         blocks = self.den.block_rgb(self.shown, time.monotonic() - self.t0)
         if self.person:

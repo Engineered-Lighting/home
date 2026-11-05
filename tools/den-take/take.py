@@ -159,10 +159,17 @@ class Camera:
     def health(self):
         try:
             status, body = self.get("/health")
-            parsed = json.loads(body) if status in (200, 503) else None
-            return {"status": status, "body": parsed if type(parsed) is dict else None}
-        except (OSError, http.client.HTTPException, ValueError) as exc:
+        except OSError as exc:  # camera not reached; RemoteDisconnected is an OSError too, so lands here
             return {"status": None, "body": None, "error": type(exc).__name__}
+        except http.client.HTTPException as exc:  # reached, but the reply was not whole HTTP
+            return {"status": None, "body": None, "error": type(exc).__name__, "answered": True}
+        if status not in (200, 503):
+            return {"status": status, "body": None}
+        try:
+            parsed = json.loads(body)
+        except ValueError as exc:  # JSONDecodeError, or bytes that are not UTF-8
+            return {"status": status, "body": None, "error": type(exc).__name__}
+        return {"status": status, "body": parsed if type(parsed) is dict else None}
 
 
 def final_health(camera, settings, tries=3):
@@ -380,13 +387,18 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
     before = camera.health()
     session = (before.get("body") or {}).get("session")
     healthy = (before["body"] or {}).get("healthy") is True
-    if before["status"] is None:
-        raise Refused(f"cannot reach the camera at {camera.host}:{camera.port} ({before.get('error')}); "
+    error = before.get("error")
+    if before["status"] is None and not before.get("answered"):
+        raise Refused(f"cannot reach the camera at {camera.host}:{camera.port} ({error}); "
                       "try the ssh tunnel in README step 4; nothing recorded")
     if before["status"] in (401, 403):
         raise Refused("the camera refused the token; redo README step 2; nothing recorded")
+    if before["status"] is None or (before["status"] == 200 and error):
+        raise Refused(f"the camera at {camera.host}:{camera.port} answered but /health was unreadable "
+                      f"({error}); do not restart it, tell the agent; nothing recorded")
     if before["status"] != 200 or not healthy or type(session) is not str:
-        raise Refused(f"camera /health is not healthy (status {before['status']}); "
+        detail = f", {error}" if error else ""
+        raise Refused(f"camera /health is not healthy (status {before['status']}{detail}); "
                       "do not restart it, tell the agent; nothing recorded")
     folder.mkdir(parents=True, exist_ok=True)
     writer = TakeWriter(folder)

@@ -5,30 +5,39 @@ One JSON object per line, one line per RGB frame the detector ran on:
     {"schema": "den-detections-1",
      "frame": {"capture_ts": 5120.3341, "clock": "host_monotonic", "rgb_seq": 812,
                "width": 640, "height": 360},
-     "detector": {"boxes": "yolo26s", "keypoints": "rtmpose-m", "keypoint_layout": "coco17"},
+     "available_ts": 5120.6702,
+     "detector": {"boxes": "yolo26s", "boxes_version": null,
+                  "keypoints": "rtmpose-m", "keypoints_version": null, "keypoint_layout": "coco17"},
      "detections": [
        {"id": "812:0", "class": "person", "score": 0.91, "box_xyxy": [210.0, 40.5, 380.2, 352.0],
         "keypoints": [[296.1, 77.0, 0.88], null, ...]}]}
 
-- capture_ts is the frame's own capture time in seconds on the named clock.
-  For an R take it is the bundle's RGB host-monotonic time (frames.csv t_host_s).
+- capture_ts is the frame's own capture time in seconds on the named clock:
+  host_monotonic (an R take's bundle time, frames.csv t_host_s) or unix (the
+  live loop's observed_at). Rows of one file share one clock.
+- available_ts, optional, is when the detector's result for that frame was
+  complete, on the same clock. den-observe's freshness is available_ts minus
+  capture_ts; a scored run needs it on every row.
 - Boxes and keypoints are in source pixels of that frame (x right, y down).
 - keypoints, when present, has exactly 17 entries in COCO-17 order; an entry
   is [u, v, score] or null when the detector gave no finite pixel. A detection
   without a keypoint model has "keypoints": null.
 - Scores are the detector's own (box confidence; RTMPose SimCC response, which
   is not a probability). den-observe never reads them as probabilities.
+- The *_version entries are optional (null when unknown) and become the
+  Observation's source.model_version.
 
 from_perception_lab() maps one perception-lab result (Ultralytics boxes plus
-RTMPose pose_instances, joined by instance_id) to a row without running any
-model; the caller supplies the frame's capture time, which those results do
+RTMPose pose_instances, joined by instance_id, as staged_specialist composes
+them) to a row without running any model; the caller supplies the frame's
+capture time, and the completion time if it has one, which those results do
 not carry.
 """
 import json
 import math
 
 SCHEMA = "den-detections-1"
-CLOCKS = ("host_monotonic",)
+CLOCKS = ("host_monotonic", "unix")
 COCO17 = ("nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder", "right_shoulder",
           "left_elbow", "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip",
           "left_knee", "right_knee", "left_ankle", "right_ankle")
@@ -63,6 +72,12 @@ def validate(row):
         raise RowError("frame width and height are required")
     if not _text(detector.get("boxes")) or detector.get("keypoint_layout", "coco17") != "coco17":
         raise RowError("detector needs a box model name and the coco17 keypoint layout")
+    for key in ("boxes_version", "keypoints_version"):
+        if detector.get(key) is not None and not _text(detector[key]):
+            raise RowError(f"detector {key} must be a short string or null")
+    if "available_ts" in row and row["available_ts"] is not None and (
+            not _finite(row["available_ts"]) or row["available_ts"] < frame["capture_ts"]):
+        raise RowError("available_ts must be finite and not before capture_ts")
     if len(detections) > MAX_DETECTIONS:
         raise RowError("too many detections in one frame")
     ids = set()
@@ -102,6 +117,8 @@ def read_rows(path):
                 raise RowError(f"line {number}: {exc}") from None
     if any(b["frame"]["capture_ts"] <= a["frame"]["capture_ts"] for a, b in zip(rows, rows[1:])):
         raise RowError("capture_ts must increase from row to row")
+    if len({row["frame"]["clock"] for row in rows}) > 1:
+        raise RowError("every row of one file uses the same clock")
     return rows
 
 
@@ -111,8 +128,9 @@ def write_rows(path, rows):
             target.write(json.dumps(validate(row), separators=(",", ":")) + "\n")
 
 
-def from_perception_lab(result, *, capture_ts, rgb_seq=None, clock="host_monotonic",
-                        boxes_model="yolo26s", keypoints_model="rtmpose-m", width=None, height=None):
+def from_perception_lab(result, *, capture_ts, available_ts=None, rgb_seq=None, clock="host_monotonic",
+                        boxes_model="yolo26s", keypoints_model="rtmpose-m", boxes_version=None,
+                        keypoints_version=None, width=None, height=None):
     """One perception-lab result -> one den-detections-1 row. Runs no model.
 
     result: Ultralytics normalize_result output ("boxes": x, y, w, h, label,
@@ -153,7 +171,10 @@ def from_perception_lab(result, *, capture_ts, rgb_seq=None, clock="host_monoton
     frame = {"capture_ts": capture_ts, "clock": clock, "width": width, "height": height}
     if rgb_seq is not None:
         frame["rgb_seq"] = rgb_seq
-    detector = {"boxes": boxes_model, "keypoint_layout": "coco17"}
+    detector = {"boxes": boxes_model, "boxes_version": boxes_version, "keypoint_layout": "coco17"}
     if any(d["keypoints"] is not None for d in detections):
-        detector["keypoints"] = keypoints_model
-    return validate({"schema": SCHEMA, "frame": frame, "detector": detector, "detections": detections})
+        detector.update(keypoints=keypoints_model, keypoints_version=keypoints_version)
+    row = {"schema": SCHEMA, "frame": frame, "detector": detector, "detections": detections}
+    if available_ts is not None:
+        row["available_ts"] = available_ts
+    return validate(row)

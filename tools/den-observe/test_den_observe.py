@@ -114,7 +114,8 @@ class DetectionRowTests(unittest.TestCase):
         cases = {
             "schema": dict(good, schema="den-detections-0"),
             "no capture time": dict(good, frame={k: v for k, v in good["frame"].items() if k != "capture_ts"}),
-            "unknown clock": dict(good, frame=dict(good["frame"], clock="unix")),
+            "unknown clock": dict(good, frame=dict(good["frame"], clock="device")),
+            "result before capture": dict(good, available_ts=0.5),
             "box outside": dict(good, detections=[dict(good["detections"][0], box_xyxy=[0, 0, 700, 100])]),
             "16 keypoints": dict(good, detections=[dict(good["detections"][0],
                                                         keypoints=good["detections"][0]["keypoints"][:16])]),
@@ -146,10 +147,12 @@ class AdapterTests(unittest.TestCase):
         return out
 
     def test_maps_boxes_and_joined_poses_without_running_a_model(self):
-        row = detections.from_perception_lab(self.result(), capture_ts=5120.5, rgb_seq=77)
+        row = detections.from_perception_lab(self.result(), capture_ts=5120.5, available_ts=5121.9, rgb_seq=77)
         self.assertEqual(row["frame"], {"capture_ts": 5120.5, "clock": "host_monotonic", "width": 640,
                                         "height": 360, "rgb_seq": 77})
-        self.assertEqual(row["detector"], {"boxes": "yolo26s", "keypoint_layout": "coco17", "keypoints": "rtmpose-m"})
+        self.assertEqual(row["available_ts"], 5121.9)
+        self.assertEqual(row["detector"], {"boxes": "yolo26s", "boxes_version": None, "keypoint_layout": "coco17",
+                                           "keypoints": "rtmpose-m", "keypoints_version": None})
         person, cup = row["detections"]
         self.assertEqual((person["id"], person["class"], person["score"]), ("f9:0", "person", 0.91))
         self.assertEqual(person["box_xyxy"], [200.0, 40.0, 380.0, 352.0])

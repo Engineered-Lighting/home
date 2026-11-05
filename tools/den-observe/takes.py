@@ -5,6 +5,14 @@ parser, no numpy, no pickle) and adds the depth plane: depth_mm.npy, uint16,
 640x400, millimetres, aligned to the rectified-left camera, 0 = invalid.
 Every frame's RGB and depth times are the bundle's host-monotonic timestamps.
 Only take.json, frames.csv, the newest check-N.json and the bundles are read.
+
+Clock. Observations need Unix capture times; a take has host-monotonic ones.
+Take.clock() gives unix = t_host + offset_s. With a PASS check whose start
+slate was read, offset_s = -c + k * slate_period_s, where c is CHECK-V1's
+offset (camera minus phone, phone time = Date.now()) and the whole periods k
+come from frames.csv's arrival times (recv_pc_unix), which are within a few
+seconds. Without one, offset_s is the median arrival offset, which places
+capture late by the transport latency; such a run cannot be scored.
 """
 import array
 import csv
@@ -76,7 +84,11 @@ def read_frame(data):
     t_depth, sequence = plane.get("host_monotonic_timestamp_seconds"), plane.get("sequence")
     if not check._finite(t_depth) or type(sequence) is not int:
         raise BundleError("depth sequence or timestamp missing")
-    meta = dict(meta, depth_seq=sequence, t_depth=float(t_depth),
+    rgb_plane = (raw_meta.get("frames") or {}).get("rgb") or {}
+    intrinsics = None
+    if plane.get("transformation_valid") is True and rgb_plane.get("transformation_valid") is True:
+        intrinsics = {"rectified_left": plane.get("intrinsics"), "rgb": rgb_plane.get("intrinsics")}
+    meta = dict(meta, depth_seq=sequence, t_depth=float(t_depth), intrinsics=intrinsics,
                 sync=raw_meta.get("synchronization"), raw=raw_meta)
     return meta, Depth(DEPTH_SHAPE[1], DEPTH_SHAPE[0], depth_from_bytes(body), float(t_depth), sequence)
 
@@ -90,11 +102,19 @@ def newest_check(folder):
     if not numbered:
         return None
     path = max(numbered)[1]
+    out = {"file": path.name, "verdict": None, "c_s": None, "period_s": None}
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
+        report = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
-        return {"file": path.name, "verdict": None}
-    return {"file": path.name, "verdict": report.get("verdict") if type(report) is dict else None}
+        return out
+    if type(report) is not dict:
+        return out
+    offsets = (report.get("reported_only") or {}).get("offset_c_mod_period_s") or [None]
+    period = ((report.get("method") or {}).get("tolerances") or {}).get("slate_period_s")
+    out.update(verdict=report.get("verdict"),
+               c_s=offsets[0] if check._finite(offsets[0]) else None,
+               period_s=period if check._finite(period) and period > 0 else None)
+    return out
 
 
 class Take:
@@ -118,7 +138,8 @@ class Take:
             try:
                 if not re.fullmatch(r"frames/[0-9]{6}-[0-9]+\.npz", name):
                     raise ValueError(name)
-                self.rows.append({"file": name, "rgb_seq": int(row["rgb_seq"]), "t_host": float(row["t_host_s"])})
+                self.rows.append({"file": name, "rgb_seq": int(row["rgb_seq"]), "t_host": float(row["t_host_s"]),
+                                  "recv_unix": float(row["recv_pc_unix"])})
             except (KeyError, TypeError, ValueError):
                 raise TakeRefused(f"frames.csv row {name!r} is malformed") from None
         if any(b["t_host"] <= a["t_host"] for a, b in zip(self.rows, self.rows[1:])):
@@ -128,6 +149,19 @@ class Take:
 
     def __len__(self):
         return len(self.rows)
+
+    def clock(self):
+        """{offset_s, source, check}: unix = t_host + offset_s (see the module note)."""
+        if not self.rows:
+            raise TakeRefused("the take has no frames")
+        arrival = sorted(r["recv_unix"] - r["t_host"] for r in self.rows)
+        approx = arrival[len(arrival) // 2]
+        c = self.check or {}
+        if c.get("verdict") == "PASS" and c.get("c_s") is not None and c.get("period_s"):
+            period = c["period_s"]
+            k = round((approx + c["c_s"]) / period)
+            return {"offset_s": -c["c_s"] + k * period, "source": "slate", "check": c["file"]}
+        return {"offset_s": approx, "source": "arrival", "check": c.get("file")}
 
     def frame(self, index):
         row = self.rows[index]

@@ -581,8 +581,8 @@ def why_not_confirmed(entry, mount, marks, m):
         return (f"every mark of the registration counts, and these are not clicked on this take: "
                 f"{', '.join(not_clicked)}"), None, facts
     before = {mark["id"]: mark["camera_xyz_m"] for mark in mount["marks"]}
-    start, now = list(before.values()), [clicked[pid]["camera_xyz_m"] for pid in before]
-    movement = rigid.largest_move(start, now, start + scene.view_points(
+    start, after = list(before.values()), [clicked[pid]["camera_xyz_m"] for pid in before]
+    movement = rigid.largest_move(start, after, start + scene.view_points(
         mount["signature"], entry["intrinsics"]["rectified_left"], m["mount_view_reach_m"]))
     facts["view_movement_m"] = records.rounded(movement)
     motion = marks_motion(mount, marks)

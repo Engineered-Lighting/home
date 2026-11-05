@@ -15,8 +15,8 @@ is imported and unchanged, because check.py pins each policy's file hash: an edi
 log refuse with `code changed: decide`. This module's dependencies are pinned in its own config instead.
 
 Stand-ins, all logged in the header: one seed Look, a Preference with level factor 1 and mired_shift and contrast_shift
-at 0. A track's surface is its working_region.surface_id, else the whole view ('room'). An eye is named by its
-track_id, because need v0 has no attention and rung 8 writes `glare: null`.
+at 0. A track's surface is its working_region.surface_id, else 'room': the blocks the gate's surface_map names for it,
+else the whole view. An eye is named by its track_id, because need v0 has no attention and rung 8 writes `glare: null`.
 
 Standard library only. handle() reads no clock, randomness, file or network; make_policy reads the gate file and a
 light-model file, once.
@@ -49,6 +49,10 @@ def load_gate(path=GATE_FILE):
     for name, slot in gate["slots"].items():
         if slot["status"] not in ("open", "closed") or (slot["status"] == "closed" and slot["value"] is None):
             raise ValueError("gate slot %s: closed needs a value, else status open" % name)
+    chosen = gate["slots"]["surface_map"]["value"]
+    if chosen is not None and not (isinstance(chosen, dict) and all(
+            isinstance(blocks, list) and all(isinstance(p, str) for p in blocks) for blocks in chosen.values())):
+        raise ValueError("gate slot surface_map: its value must be {surface_id: [point_id, ...]}")
     return gate
 
 
@@ -122,7 +126,7 @@ def _level(scene):
 
 
 def surface_of(person, light):
-    """A person's task surface: their working region's, else the whole view."""
+    """A person's task surface: their working region's, else 'room'."""
     surface = ((person or {}).get("working_region") or {}).get("surface_id")
     return surface if surface in light.surfaces else light_adapter.ROOM
 
@@ -745,6 +749,9 @@ def make_policy(config=None):
         raise ValueError("unknown local-completion option: %s" % effective["local_completion"])
     if effective["gaming"] not in ("non-gaming-stratified", "complete-policy"):
         raise ValueError("unknown gaming option: %s" % effective["gaming"])
-    model, logged = light_adapter.describe(effective["light_model"])
+    spec, chosen = effective["light_model"], effective["gate"]["slots"].get("surface_map")
+    if chosen and not spec.get("surfaces"):  # the gate's map, unless the run names another, which score.py refuses
+        spec["surfaces"] = chosen
+    model, logged = light_adapter.describe(spec)
     effective["light_model"] = logged
     return Coordinator(effective, light_adapter.LightModel(model, surfaces=logged.get("surfaces")))

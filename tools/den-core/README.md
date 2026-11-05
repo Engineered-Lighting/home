@@ -540,8 +540,8 @@ python -B tools/den-core/score.py --slots
 ```
 
 `run.py` takes `--policies need incumbent coordinator` in place of `decide`, and with it `--light-model PATH`
-(rung 8's `light-model.json`; the default is the fake), `--surfaces FILE` (JSON `{surface_id: [point_id, ...]}`, since
-rung 8 v1's points are image blocks with no surface id; without it the whole view is one surface, `room`),
+(rung 8's `light-model.json`; the default is the fake), `--surfaces FILE` (JSON `{surface_id: [point_id, ...]}`, to
+preview a map; the default is the gate file's `surface_map` slot, and with neither the whole view is one surface, `room`),
 `--compensation P0|P1|P2|P3` and `--compensation-form strict|mode`. `--actuation shadow` labels a run shadow in place of
 replay, with or without the coordinator, and needs the real bulbs' reports (`--lights` or `--no-plant`). Until a live
 writer exists it labels a run of copied files from such a time. Nothing is sent either way, and a synthetic run is only
@@ -559,7 +559,13 @@ the header, prints no verdict and is never a gate.
   `light_adapter._predict` with `predict.predict(scene, model)` and set `BACKEND`. `fake_light.predict` follows Stage
   1's published call and gave the same numbers as `origin/claude/rung-8-stage1`'s `predict.py` over 400 random scenes;
 - a log run under a compensation option other than the gate's. Those are the counterfactual scenes the register
-  suggests: preview them.
+  suggests: preview them;
+- a surface map that can't stand behind a score. Rung 8 v1's blocks have no surface id, so which blocks form each surface
+  is the owner's mark on its grid (Stage 1 names them `rRRcCC`), in the `surface_map` slot. A closed map reaches the run
+  with no flag. It must name
+  `room`, because need v0 has no working region, so its one track is scored at `room`, and an unnamed `room` is the whole
+  view's mean. Every surface needs a block and every block must be in the model. A log run on another map (`--surfaces`)
+  refuses; preview it. The slot's proposal names no block, so closing it at the proposal still refuses.
 
 ### What it gates and what it reports
 
@@ -607,7 +613,7 @@ construction, but give no formula (the design sheets are not copied), so this is
 
 A mark is served when at least 70% of the visible patch is at the band's floor (300 lx fine, 200 lx casual), with at
 least 50% of the patch visible, standing uncorrected for 120 s or for the whole of a shorter mark. A mark names its
-surface; a surface is the blocks `--surfaces` gives it, because rung 8 v1 has no room geometry for a mark's outline.
+surface; a surface is the blocks `surface_map` gives it, because rung 8 v1 has no room geometry for a mark's outline.
 
 ### The solve
 
@@ -672,8 +678,8 @@ Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear 
 ### Left for later
 
 The simulated-spot execution cases V9a-V9h, V9k, V9l and V65(b); rung 9's loop check (non-inferiority, every delta
-open); per-person need and eye positions (rungs 5 and 6: today a track's surface is its `working_region.surface_id`, and
-an eye is named by its `track_id`); and the kept_current outcome, whose deadline is pending.
+open); per-person need and eye positions (rungs 5 and 6: today a track's surface is its `working_region.surface_id`, else
+`room`, and an eye is named by its `track_id`); and the kept_current outcome, whose deadline is pending.
 
 ## Choices the interface left open
 

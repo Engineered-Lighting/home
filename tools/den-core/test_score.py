@@ -33,9 +33,17 @@ HAVE_POLICY = incumbent.find_policy() is not None
 FIXED = {name: item["value"] for name, item in coordinator.load_gate()["fixed"].items()}
 
 
+def fake_map():
+    """The owner's map, as these tests' fake room would have it: the fake's surfaces, with 'room' at all of its blocks."""
+    blocks = fake_light.build()["surfaces"]
+    return {**blocks, "room": [p for name in sorted(blocks) for p in blocks[name]]}
+
+
 def closed_gate(tmp, **overrides):
-    """A copy of the gate file with every slot closed at its proposal, or an override."""
+    """A copy of the gate file with every slot closed at its proposal, or an override. The surface map's proposal names
+    no block, so it closes at fake_map() unless a test says otherwise."""
     gate = coordinator.load_gate()
+    overrides = {"surface_map": fake_map(), **overrides}
     for name, slot in gate["slots"].items():
         slot.update(status="closed", value=overrides.get(name, slot["proposed"]))
     path = Path(tmp) / "gate.json"
@@ -52,13 +60,15 @@ def real_model(tmp, **params):
     return path
 
 
-def replay_log(tmp, gate_path, model_path, name="log.jsonl", compensation=None, **options):
-    """A non-synthetic log: the synthetic evening's inputs, tagged as if they were copied files."""
+def replay_log(tmp, gate_path, model_path, name="log.jsonl", compensation=None, surfaces=None, **options):
+    """A non-synthetic log: the synthetic evening's inputs, tagged as if they were copied files. surfaces is run.py's --surfaces."""
     items, _, _ = synthetic.evening(unclear_rate=0.0, invalid_rate=0.0, fail_rate=0.0, **options)
     config = {"gate": coordinator.gate_config(coordinator.load_gate(gate_path)),
               "light_model": {"source": "file", "path": str(model_path)}}
     if compensation:
         config["compensation"] = compensation
+    if surfaces:
+        config["light_model"]["surfaces"] = surfaces
     tagged = runner.tagged([item for item in items if item[1] != "facts"], "poll_log") + runner.tagged(
         [item for item in items if item[1] == "facts"], "fact_log")
     header, log = runner.run(tagged, runner.load_policies(["need", "incumbent", "coordinator"], {"coordinator": config}),
@@ -171,6 +181,97 @@ class RefusalTest(Base):
         path.write_text(json.dumps(gate), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "stability_floor"):
             coordinator.load_gate(path)
+
+
+class SurfaceMapTest(Base):
+    """Which blocks form each surface is the owner's mark on rung 8's grid, whose blocks have no surface id. Need v0's only
+    track has no working region, so without a map that names 'room' everyone is scored at the whole view's mean."""
+    COUNTER = ["counter-1/%d" % n for n in range(4)]
+
+    def scored(self, gate, surfaces=None, name="log.jsonl", **options):
+        """The model is as rung 8 writes it, with no surfaces of its own, so a map can only come from the run."""
+        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+            path, _, log = replay_log(self.tmp, gate, real_model(self.tmp, surfaces=False), name=name, surfaces=surfaces, touch=True, **options)
+            lines, code = score.report(path, gate_path=gate)
+        return self.text(lines), code, path, log
+
+    def test_with_no_map_a_scored_run_refuses_until_the_slot_is_closed(self):
+        gate = coordinator.load_gate(closed_gate(self.tmp))
+        gate["slots"]["surface_map"].update(status="open", value=None)
+        path = self.tmp / "open.json"
+        path.write_text(json.dumps(gate), encoding="utf-8")
+        text, code, log_path, _ = self.scored(path)
+        self.assertEqual(code, 2, text)
+        self.assertIn("1 open slot(s) in the gate file: surface_map", text)
+        self.assertNotIn("verdict", text)
+        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):  # a preview still runs, at the whole view
+            lines, code = score.report(log_path, preview=True, gate_path=path)
+        self.assertEqual(code, 0, self.text(lines))
+        self.assertIn("surfaces: room 12, of 12 blocks", self.text(lines))
+        self.assertIn("verdict: none (preview)", self.text(lines))
+
+    def test_closing_it_at_the_proposal_still_refuses_because_it_names_no_block(self):
+        self.assertEqual(coordinator.load_gate()["slots"]["surface_map"]["proposed"], {})
+        text, code, _, _ = self.scored(closed_gate(self.tmp, surface_map={}))
+        self.assertEqual(code, 2, text)
+        self.assertIn("surface_map names no 'room'", text)
+        self.assertNotIn("verdict", text)
+
+    def test_a_map_without_room_refuses(self):
+        text, code, _, _ = self.scored(closed_gate(self.tmp, surface_map={"counter-1": self.COUNTER}))
+        self.assertEqual(code, 2, text)
+        self.assertIn("surface_map names no 'room'", text)
+
+    def test_a_block_the_model_lacks_or_an_empty_surface_refuses(self):
+        for n, (surfaces, word) in enumerate((({"room": ["r99c99"]}, "room"), ({"room": self.COUNTER, "desk": []}, "desk"),
+                                              ({"room": self.COUNTER + ["r99c99"]}, "room"))):
+            with self.subTest(surfaces=surfaces):
+                text, code, _, _ = self.scored(closed_gate(self.tmp, surface_map=surfaces), name="%d.jsonl" % n)
+                self.assertEqual(code, 2, text)
+                self.assertIn("surface_map: %s: no block, or a block the light model does not have" % word, text)
+
+    def test_a_closed_map_reaches_the_run_with_no_flag(self):
+        surfaces = {"room": self.COUNTER}
+        text, code, _, log = self.scored(closed_gate(self.tmp, surface_map=surfaces))
+        self.assertEqual(code, 0, text)
+        self.assertIn("surfaces: room 4, of 12 blocks", text)
+        self.assertIn("verdict: PASS", text)
+        decision = next(e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide" and e["data"]["targets"])
+        light = light_adapter.LightModel(fake_light.build(surfaces=False), surfaces=surfaces)
+        look = {b: fixtures.scene(200) for b in events.LIGHTS}
+        self.assertEqual(decision["targets"]["room"]["surface_id"], "room")
+        self.assertEqual(decision["targets"]["room"]["value"], round(light.predict(look)["room"], 3))
+        whole = light_adapter.LightModel(fake_light.build(surfaces=False)).predict(look)["room"]
+        self.assertNotEqual(decision["targets"]["room"]["value"], round(whole, 3))
+
+    def test_a_log_run_on_another_map_is_a_counterfactual_and_refuses(self):
+        gate = closed_gate(self.tmp, surface_map={"room": self.COUNTER})
+        text, code, _, _ = self.scored(gate, surfaces={"room": self.COUNTER[:2]})
+        self.assertEqual(code, 2, text)
+        self.assertIn("the log ran on another surface map", text)
+
+    def test_a_map_of_the_wrong_shape_stops_at_the_gate_file(self):
+        for value in (["room"], {"room": "counter-1/0"}, {"room": [["counter-1/0"]]}):
+            path = closed_gate(self.tmp, surface_map=value)
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "surface_map"):
+                coordinator.load_gate(path)
+
+    def test_a_scored_run_on_the_full_grid_reaches_a_verdict(self):
+        # The review's scenario: rung 8's 576 blocks under the gate's proposed P1 mode. On the cloud build run.py stopped at
+        # a 458 KB line, so there was nothing to score. The owner must see a verdict on the log.
+        blocks = self.COUNTER + ["other/%d" % n for n in range(140)]
+        gate = closed_gate(self.tmp, surface_map={"room": blocks})
+        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+            path, _, log = replay_log(self.tmp, gate, real_model(self.tmp, surfaces=False, filler=576 - 12), touch=True)
+            lines, code = score.report(path, gate_path=gate)
+        self.assertEqual(code, 0, self.text(lines))
+        self.assertIn("surfaces: room 144, of 576 blocks", self.text(lines))
+        self.assertIn("comparator: frozen", self.text(lines))
+        self.assertIn("compensation P1-mode", self.text(lines))
+        self.assertIn("verdict: PASS", self.text(lines))
+        held = [e for e in log if e["kind"] == "decision" and e["source"] == "decide" and e["data"]["inputs"]["hold_set"]["held"]]
+        self.assertTrue(held)
+        self.assertLess(max(len(events.dumps(e)) for e in held), events.MAX_LINE_BYTES)
 
 
 class ScoredRunTest(Base):
@@ -290,6 +391,19 @@ class SurrogateTest(Base):
         self.assertEqual(score.anticipation(self.timeline([small]), light, slots), (0.0, 0, 1, 0))
         unknown = {**rise, "before": {FL: {"on": True, "brightness": None, "kelvin": None}}}
         self.assertEqual(score.anticipation(self.timeline([unknown]), light, slots), (0.0, 0, 1, 1))
+
+    def test_a_person_with_no_working_region_is_scored_at_the_maps_room(self):
+        # Rear left alone rises: the whole view gains, the counter does not, since that bulb never reaches it.
+        person = fixtures.person_state(100.0, "room", "engaged", None)
+        del person["working_region"]
+        line = self.timeline([{"t": 105.0, "before": {RL: fixtures.scene(120)}, "after": {RL: fixtures.scene(200)}}])
+        line.episodes = [{"t": 100.0, "track": "room", "person": person}]
+        slots = {"anticipation_window_s": 10, "anticipation_rise_min": 0.05}
+        whole = light_adapter.LightModel(fake_light.build(surfaces=False))
+        self.assertEqual(score.anticipation(line, whole, slots), (1.0, 1, 1, 0))
+        counter = {"room": ["counter-1/%d" % n for n in range(4)]}
+        mapped = light_adapter.LightModel(fake_light.build(surfaces=False), surfaces=counter)
+        self.assertEqual(score.anticipation(line, mapped, slots), (0.0, 0, 1, 0))
 
     def test_the_incumbent_scores_0_and_1_by_construction(self):
         _, log = fixtures.run_case("V6", "P0")

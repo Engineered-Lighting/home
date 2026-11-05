@@ -165,6 +165,14 @@ class AdapterTest(unittest.TestCase):
         mapped = light_adapter.LightModel(fake_light.build(surfaces=False), surfaces={"desk": ["counter-1/0", "counter-1/1"]})
         self.assertEqual(sorted(mapped.surfaces), ["desk", light_adapter.ROOM])
 
+    def test_a_map_can_say_what_room_is(self):
+        blocks = ["counter-1/0", "counter-1/1"]
+        whole = light_adapter.LightModel(fake_light.build(surfaces=False))
+        mapped = light_adapter.LightModel(fake_light.build(surfaces=False), surfaces={"room": blocks})
+        self.assertEqual(mapped.surfaces, {"room": blocks})
+        self.assertEqual(len(whole.surfaces["room"]), 12)
+        self.assertGreater(mapped.predict({FL: scene(254)})["room"], whole.predict({FL: scene(254)})["room"])
+
     def test_only_the_adapter_calls_the_fake(self):
         for path in HERE.glob("*.py"):
             if path.name in ("light_adapter.py", "fake_light.py") or path.name.startswith("test_"):
@@ -477,6 +485,22 @@ class StandInTest(unittest.TestCase):
         self.assertEqual(p.config["gate"]["sha256"], events.sha256_json(gate))
         self.assertEqual(p.config["gate"]["open"], sorted(gate["slots"]))
         self.assertEqual(p.config["compensation"]["option"], gate["slots"]["compensation_option"]["proposed"])
+
+    def test_the_gates_surface_map_is_the_run_unless_the_run_names_another(self):
+        blocks = {"room": ["counter-1/0"], "desk": ["counter-1/1"]}
+        slots = {**SLOTS, "surface_map": blocks}
+        gate = {**GATE, "slots": slots}
+        p = coordinator.make_policy({"gate": gate})
+        self.assertEqual(p.config["light_model"]["surfaces"], blocks)
+        self.assertEqual(p.light.surfaces, blocks)
+        self.assertEqual(events.sha256_json(coordinator.make_policy(p.config).config), events.sha256_json(p.config))
+        other = {"room": ["counter-1/2"]}
+        q = coordinator.make_policy({"gate": gate, "light_model": {"source": "fake", "params": {}, "surfaces": other}})
+        self.assertEqual(q.config["light_model"]["surfaces"], other)
+        self.assertEqual(q.light.surfaces, other)
+        # The proposal names no block: the model's own surfaces stand, as they always have for a preview.
+        self.assertNotIn("surfaces", policy().config["light_model"])
+        self.assertIn("counter-1", policy().light.surfaces)
 
 
 class PurityTest(unittest.TestCase):

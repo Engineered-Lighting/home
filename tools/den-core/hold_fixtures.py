@@ -33,7 +33,7 @@ T0 = 1793764800.0
 FL, FR, RL, RR = events.LIGHTS
 NOT_ADMITTED = "not admitted as pass or fail until the owner decides compensation (docs/architecture/live-v1/decisions.json)"
 SLOTS = {"anticipation_floor": 0.8, "stability_floor": 0.9, "surrogate_definitions": "need-raise-v0",
-         "anticipation_window_s": 10, "anticipation_rise_min": 0.05, "stability_dwell_s": 120,
+         "anticipation_window_s": 10, "anticipation_rise_min": 0.05, "stability_dwell_s": 120, "surface_map": {},
          "look_brightness": 200, "look_kelvin": 2700, "look_fade_s": 2,
          "look_weights": {"shortfall": 1.0, "excess": 0.5, "change": 0.001}, "solve_steps": 9,
          "glare_limit": 1.0, "glare_sd_k": 2, "exposed_fraction": 0.1, "s_serve": 0.25, "met_tolerance": 0.05,

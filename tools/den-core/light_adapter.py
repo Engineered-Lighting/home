@@ -7,8 +7,8 @@ nothing else changes.
 
 den-core speaks Hue scenes {on, brightness 0-255, kelvin}; rung 8 speaks {channel_key: {level 0..1, cct_k}}, with
 level the command as a share of Hue's 254. A surface's value is the mean over its blocks: rung 8 v1's points are image
-blocks with no surface id, so a surface map comes from the model's own `surfaces` or from `surfaces=` here. The whole
-view is always one more surface, 'room', for a person with no working region.
+blocks with no surface id, so a surface map comes from the model's own `surfaces` or from `surfaces=` here. There is
+always a surface 'room', for a person with no working region: the blocks a map names for it, else the whole view.
 
 A bulb that is on with no brightness or no kelvin (HA's recorder keeps neither) has no prediction: its value is None,
 and so is every total it is part of. Nothing guesses a level.
@@ -61,7 +61,7 @@ class LightModel:
         self.fake = bool(model.get("fake")) or BACKEND.startswith("fake")
         self.points = [p["point_id"] for p in model["sample_points"]]
         self.keys = {c["entity_id"]: c["channel_key"] for c in model["channels"]}
-        self.surfaces = {**(surfaces or model.get("surfaces") or {}), ROOM: self.points}  # 'room': the whole view
+        self.surfaces = {ROOM: self.points, **(surfaces or model.get("surfaces") or {})}  # 'room' unmapped: the whole view
         self.error = model.get("error") or {}
         self.glare_table = model.get("glare")
         self.spots = model.get("spot_model") or {}

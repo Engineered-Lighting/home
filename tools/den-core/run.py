@@ -317,7 +317,8 @@ def main(argv=None):
     parser.add_argument("--actuation", choices=["replay", "shadow"],
                         help="the label on each decision; nothing is sent either way (default: replay, or synthetic)")
     parser.add_argument("--light-model", help="with the coordinator: 'fake' (the default), or rung 8's light-model.json")
-    parser.add_argument("--surfaces", help="with the coordinator: JSON {surface_id: [point_id, ...]} over the light model's blocks")
+    parser.add_argument("--surfaces", help="with the coordinator: JSON {surface_id: [point_id, ...]} over the light model's blocks, "
+                                           "to preview; the default is the gate file's surface_map slot")
     parser.add_argument("--compensation", choices=["P0", "P1", "P2", "P3"],
                         help="with the coordinator: a named option; the default is the gate file's slot")
     parser.add_argument("--compensation-form", choices=["strict", "mode"])

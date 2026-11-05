@@ -123,6 +123,10 @@ Status: plan only. Nothing here is built or run. Written 2026-11-05.
 | feasible means | the premise holds, given a detector at least as good as the stand-in | the premise holds on a crop and a box alone; a detector isn't needed for it |
 | not_feasible means | the closest stand-in to the planned stack failed: the strongest "no" this camera can give, after the diagnosis | only the cheapest variant failed. It can't say whether a detector would pass. The perception rungs still wait, and the diagnosis says whether option 1 is worth a fresh held-out set. |
 
+- **Option 1 probably doesn't fix check (b).** A fixed COCO-style detector has
+  no paper, mail or cloth class either: its "object class at the hand" would
+  read nothing, or at best `book`, for mail and nothing for a cloth. Only
+  prompt-2 (section 1(b)) adds that vocabulary, under either option.
 - **Recommendation: option 2.** It front-loads no decision, installs nothing,
   is the smallest build, and sends only crops to LA. Leaving the surface map out
   also keeps place, a shortcut cue, out of the estimator. Its cost: a

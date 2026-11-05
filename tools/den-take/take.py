@@ -425,9 +425,13 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
         raise
     finally:
         poller.halt.set()
+        print("Asking the camera's /health once more (up to about 25 s); please wait.", flush=True)
         poller.join(timeout=15)
         writer.close()
-        take["health_after"] = final_health(camera, settings)
+        try:
+            take["health_after"] = final_health(camera, settings)
+        except KeyboardInterrupt:  # a second Ctrl+C: skip the wait but still save the take below
+            take["health_after"] = {"status": None, "body": None, "error": "interrupted"}
         take["ended_unix"] = time.time()
         take["counts"] = {"polls": poller.polls, "kept": len(writer.index),
                           "duplicates": poller.duplicates, "errors": poller.errors}

@@ -135,7 +135,9 @@ Then, 10 s later, "Begin." / the activity part, at most 28 min; press Enter to
 end it / "Hold the phone to the camera." and the end slate, the same way /
 "Done." If three start-slate attempts are unreadable, the take stops. The cues
 are also printed in the window. Ctrl+C stops a take; it is then kept with
-`complete: false` and fails the check.
+`complete: false` and fails the check. After any take, take.py asks the
+camera's `/health` once more, up to about 25 s; wait for the "Saved" line. A
+second Ctrl+C there skips that wait, and the take is still saved.
 
 Exit codes: take.py 0 = complete, 1 = stopped, 2 = refused (nothing
 recorded). check.py 0 = PASS, 1 = FAIL, 2 = refused (no check file written).

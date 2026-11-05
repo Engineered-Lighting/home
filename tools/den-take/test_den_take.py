@@ -602,6 +602,35 @@ class TakeScriptTests(Workspace):
         self.assertEqual(record["cues"][-1]["cue"], "begin")
         self.assertEqual(record["health_after"]["body"]["session"], camera.session)
 
+    def test_second_ctrl_c_during_final_health_still_saves_the_take(self):
+        camera, real_health, calls = self.camera(), take.Camera.health, []
+
+        def say(text):
+            if text == "Begin.":
+                raise KeyboardInterrupt
+
+        def health(self):
+            calls.append(self)
+            if len(calls) > 1:  # /health before the take answers; the one after it is cut short
+                raise KeyboardInterrupt
+            return real_health(self)
+        try:
+            with mock.patch.object(take.Camera, "health", health):
+                code, record, output = self.run_take(self.args(camera), say=say)
+        except KeyboardInterrupt:
+            self.fail("the second Ctrl+C escaped take.run")
+        self.assertEqual((code, record["complete"], record["stop_reason"]), (1, False, "interrupted"))
+        self.assertEqual(record["health_after"], {"status": None, "body": None, "error": "interrupted"})
+        self.assertEqual(record["cues"][-1]["cue"], "begin")
+        rows = (Path(self.args(camera).out) / "frames.csv").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(record["counts"]["kept"], len(rows) - 1)
+        self.assertGreater(record["counts"]["kept"], 0)
+        self.assertIn("frames.csv", record["sha256"])
+        self.assertLess(output.index("Asking the camera's /health once more"), output.index("Saved "))
+        code, report, _ = run_check(Path(self.args(camera).out))  # a FAIL, not a refusal
+        self.assertEqual((code, report["verdict"]), (1, "FAIL"))
+        self.assertIn("B1_complete", report["failures"])
+
     def test_no_new_frame_for_stall_s_stops_the_take(self):
         camera = self.camera()
         threading.Timer(1.5, camera.close).start()

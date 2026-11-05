@@ -644,6 +644,10 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
             raise Refused("mount_changed", f"{tid} was invalidated already; register again")
         take, row, _, bundle = scene.load_frame(take_dir, frame_number(take_dir, frame, work))
         report["frame"] = row["n"]
+        if take["ended_unix"] > now():
+            raise Refused("mount_take_in_future", f"{Path(take_dir).name} ended later than this PC's clock says it is "
+                                                  "now, so it could vouch for takes not recorded yet. Check the PC's "
+                                                  "clock, then record a new take")
         if take["ended_unix"] <= mount["take_ended_unix"]:
             raise Refused("mount_take_not_later", f"{Path(take_dir).name} was not recorded after the take {tid} was "
                                                   "registered from, so it says nothing about a later move")

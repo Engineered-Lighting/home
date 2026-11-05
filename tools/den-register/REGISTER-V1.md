@@ -156,7 +156,10 @@ invalidated, and a fit from a take recorded before that check is refused.
 `take_ended_unix`, the frame, `worst_mark_m` and `view_movement_m`. Only a later
 take than the one already there moves it on. `not_confirmed` writes nothing and
 confirms nothing. A take not recorded after the registration's own take is
-refused (`mount_take_not_later`), so a registration never confirms itself.
+refused (`mount_take_not_later`), so a registration never confirms itself. So is
+a take that ended later than the check's own clock says it is now
+(`mount_take_in_future`): `take.py` and this tool run on one PC, and a clock
+running ahead would vouch for takes not recorded yet.
 
 A confirmation says the camera had not moved when that take was recorded, so it
 vouches for what came before it, back to the registration's own take. Rung 2's

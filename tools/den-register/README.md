@@ -190,6 +190,7 @@ works out how far that movement would carry anything else in view:
 | `MOUNT NOT CONFIRMED` | A cross is not clicked, or one cross does not move with the others, or one is more than 5 cm from your tape position, or the crosses show a movement that puts something else in view further off. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same: a cross on furniture that moved, measure it again; otherwise treat the camera as moved. Then steps 4, 5 and 7. |
 | `MOUNT CHANGED` | The depth moved a lot, or the crosses moved together by more than 5 cm. The registration is now invalidated, for good, and takes it had vouched for can no longer be replayed. | The line lists what to re-check. Then steps 4, 5 and 7. |
 | `mount_take_not_later` | That take is not newer than the registration's own. | Record a new take. |
+| `mount_take_in_future` | That take ended later than this PC's clock says it is now, so it could vouch for takes not recorded yet. | Check the PC's clock, then record a new take. |
 
 One cross off on its own, because you misclicked it or it moved, gives `MOUNT NOT
 CONFIRMED` and names it: only the crosses moving together invalidate. A person

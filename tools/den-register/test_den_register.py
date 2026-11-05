@@ -636,8 +636,8 @@ class FitTests(Base):
         code, report = s.fit()
         self.assertEqual(reasons(report), ["frame_depth_different_times"])
 
-    def test_a_take_whose_end_time_is_not_a_number_is_refused_by_name(self):
-        for value in ("2027-01-15", True, None, float("nan"), [1]):
+    def test_a_take_whose_end_time_is_not_a_time_is_refused_by_name(self):
+        for value in ("2027-01-15", True, None, float("nan"), [1], 1e30, -5.0, 0):
             with self.subTest(value=value):
                 self.tearDown()
                 self.setUp()
@@ -1360,6 +1360,35 @@ class MountTests(Base):
         self.assertEqual((code, report["result"], report["reason"]), (1, "refused", "take_unreadable"), text)
         self.assertNotIn("CONFIRMED", text)
         self.assertEqual(len(s.room_models()), 1)
+
+    def test_a_take_from_a_clock_running_ahead_cannot_vouch_for_anything(self):
+        # The 2026-11-05 verifier's case: a check take 30 days past this PC's clock would vouch for every take
+        # recorded up to then, with a knock possibly in between.
+        ahead = 1_800_002_000.0 + 30 * 86400
+        s, fitted = self.furnished()
+        later = self.later_in_the_room(name="ahead", ended=ahead)
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"], report["reason"]), (1, "refused", "mount_take_in_future"), text)
+        self.assertIn("clock", text)
+        self.assertNotIn("CONFIRMED", text)
+        self.assertEqual(len(s.room_models()), 1)
+        out = io.StringIO()
+        self.assertEqual(register.main(["resolve", str(s.work), fitted["transform_id"]], out=out), 0)
+        self.assertIn("not confirmed", out.getvalue())
+
+    def test_a_take_from_a_clock_running_ahead_cannot_invalidate_either(self):
+        s, fitted = self.registered()
+        code, report, text = self.check(s, self.later_take(s, "ahead", 2800, 1_800_002_000.5))
+        self.assertEqual((code, report["reason"]), (1, "mount_take_in_future"), text)
+        self.assertEqual(len(s.room_models()), 1)
+
+    def test_a_take_that_ended_as_the_check_runs_can_vouch(self):
+        s, fitted = self.furnished()
+        later = self.later_in_the_room(ended=1_800_002_000.0)
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (0, "confirmed"), text)
 
     def rewrite_entry(self, s, change):
         path = s.work / "room-model.jsonl"

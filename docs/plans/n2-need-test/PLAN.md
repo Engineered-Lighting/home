@@ -101,10 +101,16 @@ Status: plan only. Nothing here is built or run. Written 2026-11-05.
        (`canonical`, `digest`, `frame_descriptors`, `first_receipt`).
   3. Dropping mail and wiping isn't an option: A13 names them shortcut cases.
 - **What this plan does.** Development runs prompt-1 first and prints a case ×
-  reply-row table (counts only). If `sorting_mail` and `wiping` share their
-  most common row, prompt-2 is written then, on development only, and
-  development is asked and fitted again. GATE-V1 records `prompt`; the
-  EvalRecord says a prompt-2 was written with the staged cases in view.
+  reply-row table (counts only): one group per case and gold band, counting
+  the valid rows of the replies whose latest frame lies in the group's scored
+  seconds. Hold rows are counted apart; they say nothing about the vocabulary.
+  - **Trigger.** prompt-2 is written when any fine group's most common row is
+    also the most common row of any casual or none group (`sorting_mail`
+    against `wiping` is one such pair; `still_reader` against `idle_seated` is
+    another). A tie for most common counts each tied row.
+  - It is written then, on development only, and development is asked and
+    fitted again. GATE-V1 records `prompt`; the EvalRecord says a prompt-2 was
+    written with the staged cases in view.
 
 ## 2. Scope: the owner's one choice
 

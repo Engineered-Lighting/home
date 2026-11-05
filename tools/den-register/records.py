@@ -138,6 +138,12 @@ def parse_transform_id(value):
     return camera_id, version
 
 
+def invalidation(room_models, camera_id, version):
+    """This entry's `invalidated` record, from whichever line of the file holds it, or None. It is for good."""
+    return next((c["invalidated"] for _, c in entries(room_models, camera_id)
+                 if c.get("version") == version and c.get("invalidated")), None)
+
+
 def resolve(room_models, value):
     """{entry, invalidated, confirmed}: the one camera entry `<camera_id>@<version>` names.
 
@@ -153,9 +159,8 @@ def resolve(room_models, value):
             for c in found}
     if len(bare) != 1:
         raise Refused("transform_ambiguous", f"{value} names {len(bare)} different camera entries")
-    invalidated = next((c["invalidated"] for c in found if c.get("invalidated")), None)
     confirmed = next((c["confirmed"] for c in reversed(found) if c.get("confirmed")), None)
-    return {"entry": found[-1], "invalidated": invalidated, "confirmed": confirmed}
+    return {"entry": found[-1], "invalidated": invalidation(room_models, camera_id, version), "confirmed": confirmed}
 
 
 def room_from_camera(entry):

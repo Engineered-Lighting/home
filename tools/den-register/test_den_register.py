@@ -1439,6 +1439,17 @@ class MountTests(Base):
         self.assertEqual((code, report["result"], report["reason"]), (1, "refused", "mount_changed"), text)
         self.assertEqual(len(s.room_models()), 3)
 
+    def test_a_revision_that_only_changes_the_light_scale_does_not_stop_a_mount_check(self):
+        # Rung 7 writes a revision of the same camera entry with a measured photometric scale.
+        s, fitted = self.furnished()
+        revision = s.room_models()[0]
+        revision["cameras"][0]["photometric"] = dict(records.PHOTOMETRIC_UNCALIBRATED, k_L=0.1, status="measured")
+        records.append_jsonl(s.work / "room-model.jsonl", revision)
+        later = self.later_in_the_room()
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (0, "confirmed"), text)
+
     def test_a_take_from_a_clock_running_ahead_cannot_vouch_for_anything(self):
         # The 2026-11-05 verifier's case: a check take 30 days past this PC's clock would vouch for every take
         # recorded up to then, with a knock possibly in between.

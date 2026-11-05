@@ -139,8 +139,9 @@ when none did). A person's change (a Correction) is busy from `ts` −
 falls between a step's `sent_at` and its end, for any decision, or inside a
 person's change. A decision's verify frame is the first frame at or after its
 settle time that is not excluded and comes before the next decision's first
-step. If there is none, `verify` is null with `verify_status` giving the
-reason.
+step. If the next decision sends a step before this one has settled, it was
+superseded before it settled; if no frame qualifies, likewise `verify` is null
+with `verify_status` giving the reason.
 
 **Occupied seconds** are flagged: a frame inside an occupancy interval is
 marked occupied in the report and in its residual `flags`. Occupied frames are
@@ -181,10 +182,12 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
 - `spill[]` and `increments[]` entries add `uncertainty`, in the block's `unit`.
 - `explanation` is null when nothing missed, else a list of
   `{point_id, cause, basis}`.
-- `verify` is null with a sibling `verify_status` when no verify frame exists.
+- `verify` is null with a sibling `verify_status` when no verify frame exists;
+  a frame with no residual (mid-fade, or before any decision) keeps
+  `residual: []` with a sibling `residual_status`.
 - A LightState is named by an `id` key when its line has one, else
-  `ls-HHMMSS` in local time (the contracts cite `ls-190409` but give
-  LightState no id field).
+  `ls-HHMMSS` in local time, with hundredths for a frame off the whole second
+  (the contracts cite `ls-190409` but give LightState no id field).
 
 ## Inputs the contracts do not define
 

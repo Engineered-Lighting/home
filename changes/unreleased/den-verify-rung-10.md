@@ -17,7 +17,8 @@ that changed, and every level check carries the meter's noise, so a perfect dim 
 a hit and a bulb that stayed on is a miss. A fault inside those bounds cannot be
 seen: at the proposed allowance, one bulb of four stuck on a dim shallower than
 about 2.5:1 reads as a hit, the same line as going up, and the report gives what
-the hit rate would be without such hits. A change below the meter's noise counts
-neither way. Which points count never depends on what they read. It reads records
+the hit rate would be without such hits. A change below the meter's noise is judged
+to that noise, and the report gives the hit rate without such points. Which points
+count never depends on what they read. It reads records
 already on disk, opens no network connection, and refuses a scored run until the
 owner closes its open slots in `VERIFY-V1.md`.

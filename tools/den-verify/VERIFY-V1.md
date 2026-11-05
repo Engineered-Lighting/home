@@ -42,9 +42,8 @@ For each point at the verify frame:
   - `outside` otherwise;
   - `prior_only` when the estimate's `basis` is `prior`;
   - `unverifiable` when the surface is missing from the frame, its usable share
-    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's,
-    nothing is lit there and nothing changed, or a change there is below the
-    meter's noise (see "Measurement uncertainty"). Its `residual` is then null.
+    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's, or
+    nothing is lit there and nothing changed. Its `residual` is then null.
 
 A `fallback_patch` estimate is scored here, because a fallback patch is a
 verify aid. It never counts as delivered service: the gold share below treats
@@ -120,12 +119,14 @@ frame)²) under `reference_frame` and u(predicted) under `zero`, taken at the
 prediction, not the reading. A reading inside that noise is not a miss. Where the
 tolerance on the level is narrower than the noise (below about 130 lx at the
 proposed bounds) and a change there is too (below about 15 to 20 lx), the meter
-cannot tell a bulb that moved from one that did not, so the point is
-`unverifiable`, whatever it reads. The report and the console count these, and how
-many read beyond the noise (`below_meter_noise`), since such a reading fits neither
-and is not counted as a miss. A fault inside the noise cannot be seen: one bulb of
-four stuck on a 60 to 12 lx dim reads 12 lx high, and is a hit. Relative frames
-have no lux term, and none of this changes their result.
+cannot tell a bulb that moved from one that did not, but it can tell either from a
+bulb far off. Such a point still counts both ways, judged to the noise: a 40 to 25
+lx dim that reads 125 lx is a miss, and one that stayed at 40 lx is a hit the meter
+could not have told from a landing. The report and the console count these points,
+with their hits and misses and what the hit rate would be without them
+(`below_meter_noise`). A fault inside the noise cannot be seen: one bulb of four
+stuck on a 60 to 12 lx dim reads 12 lx high, and is a hit. Relative frames have no
+lux term, and none of this changes their result.
 
 **Held and superseded channels.** The ladder says a held or superseded channel
 is excluded from misses. Here that means the channel, not the point: a person or
@@ -266,8 +267,8 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   {decision_id, hold_set_revision}, flags[]}`, with `residual` = measured −
   predicted in `unit`, and `flags` from `held`, `occupied`, `outside`,
   `daylight`, `shadow`, `drift`, `unexplained`, `fallback_patch`,
-  `wide_tolerance` (`within` only by the wider bound), `below_noise` (the point
-  is `unverifiable` for that reason; its residual is still given here).
+  `wide_tolerance` (`within` only by the wider bound), `below_noise` (the change
+  there is below the meter's noise).
 - `spill[]` and `increments[]` entries add `uncertainty`, in the block's `unit`.
 - `points[]` entries add `level_bound`, in the block's `unit`, only where the
   point is judged to more than `tolerance` × predicted.

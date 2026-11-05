@@ -360,10 +360,8 @@ class Run:
         row["error"] = measured - predicted
         if predicted > 0:
             row["residual"] = row["error"] / predicted
-        if level_tolerance < noise and 0 < own <= noise:
-            row["status"], row["why"] = "unverifiable", "a change below the meter's noise"
-            row["below_noise"] = "beyond" if abs(row["error"]) > noise else "inside"
-            return
+        # the meter cannot tell this change from none, only from a bulb far off: it still counts, to the noise
+        row["below_noise"] = level_tolerance < noise and 0 < own <= noise
         ladder = predicted > 0 and within(measured, predicted, m["tolerance"])
         row["status"] = "within" if ladder or within(measured, predicted, 0, wide) else "outside"
         row["level_bound"] = max(level_tolerance, wide)
@@ -617,7 +615,7 @@ class Run:
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
         excluded_held = fallback_scored = eyes_total = 0
-        below_noise = {"count": 0, "read_beyond_noise": 0}
+        below_noise = {"count": 0, "hits": 0}
         wide_by_day = {}
         excluded_by_status = {"within": 0, "outside": 0}
         not_admitted, not_verified = [], []
@@ -649,9 +647,6 @@ class Run:
             for p in verify["points"]:
                 status_counts[p["status"]] += 1
                 per_point.setdefault(p["point_id"], {k: 0 for k in status_counts})[p["status"]] += 1
-                reading = rows.get(p["point_id"], {}).get("below_noise")
-                below_noise["count"] += reading is not None
-                below_noise["read_beyond_noise"] += reading == "beyond"
             eyes_total += len(verify["not_verified"])
             for s in verify["spill"]:
                 spill_counts[s["status"]] = spill_counts.get(s["status"], 0) + 1
@@ -669,6 +664,9 @@ class Run:
                     n += 1
                     hits += r["status"] == "within"
                     wide += r["wide_hit"]
+                    if r["below_noise"]:
+                        below_noise["count"] += 1
+                        below_noise["hits"] += r["status"] == "within"
                 for e in verify["explanation"] or []:
                     if e["cause"] in causes:
                         causes[e["cause"]] += 1
@@ -701,8 +699,10 @@ class Run:
             states_out.append(rec)
 
         wide_hits = sum(wide_by_day.values())
-        narrow = self.rate_and_verdict(sum(h for h, _ in counted_by_day.values()) - wide_hits,
-                                       sum(k for _, k in counted_by_day.values()))
+        all_hits = sum(h for h, _ in counted_by_day.values())
+        all_counted = sum(k for _, k in counted_by_day.values())
+        narrow = self.rate_and_verdict(all_hits - wide_hits, all_counted)
+        audible = self.rate_and_verdict(all_hits - below_noise["hits"], all_counted - below_noise["count"])
         misses = sum(causes.values())
         surfaces_total = sum(status_counts.values())
         unver = status_counts["unverifiable"] + status_counts["prior_only"]
@@ -716,7 +716,8 @@ class Run:
             "hit_rate": self.hit_rate(counted_by_day),
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
-            "below_meter_noise": below_noise,
+            "below_meter_noise": {**below_noise, "misses": below_noise["count"] - below_noise["hits"],
+                                  "value_without": audible[0], "verdict_without": audible[1]},
             "hits_beyond_level_tolerance": {"count": wide_hits, "value_if_missed": narrow[0],
                                             "verdict_if_missed": narrow[1]},
             "fallback_patch_points_scored": fallback_scored,

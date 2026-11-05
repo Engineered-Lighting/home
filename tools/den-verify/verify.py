@@ -91,10 +91,12 @@ def cmd_run(args):
          f"hit rate {hr['value']} ({hr['hits']} of {hr['hits'] + hr['misses']}), "
          f"gate {hr['gate']}: {hr['verdict']}{' (preview)' if args.preview else ''}")
     left, noise = report["excluded_held_or_superseded"], report["below_meter_noise"]
-    if left or noise["count"]:
-        far = f"; {noise['read_beyond_noise']} of them read beyond that noise" if noise["read_beyond_noise"] else ""
-        _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs, "
-             f"{noise['count']} point(s) whose change is below the meter's noise{far}")
+    if left:
+        _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs")
+    if noise["count"]:
+        _say(f"{noise['count']} counted point(s) have a change below the meter's noise "
+             f"({noise['hits']} hit(s), {noise['misses']} miss(es)); "
+             f"without them the hit rate would be {noise['value_without']}: {noise['verdict_without']}")
     wide = report["hits_beyond_level_tolerance"]
     if wide["count"]:
         _say(f"{wide['count']} hit(s) are beyond {values['tolerance']:.0%} of the level; if they had missed, "

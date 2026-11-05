@@ -127,10 +127,13 @@ def score_session(takes, scoring):
         raise ScoreError(problem)
     results, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0, 'unsure': 0}
     crossing_lines = []
+    second_boxes = 0
     for take in takes:
         links, skipped = take_links(take['observations'], take['tracks'], take['truth'])
         for k in left_out:
             left_out[k] += skipped[k]
+        named = [l for l in links if l[2] is not None]
+        second_boxes += len(named) - len({(l[0], l[2]) for l in named})
         windows = windows_of(take['truth'], scoring['window_pad_s'])
         result = scorer_core.score_take(links, windows, scoring['min_people_per_crossing'],
                                         unsure_links(take['observations'], take['tracks'], take['truth']),
@@ -152,6 +155,7 @@ def score_session(takes, scoring):
     faces = [r['face_visible_share'] for r in rows if r['face_visible_share'] is not None]
     summary['face_visible_share_mean'] = (sum(faces) / len(faces)) if faces else None
     summary['left_out'] = left_out
+    summary['second_boxes'] = second_boxes
     summary['windows'] = rows
     summary['plan'] = plan_counts(rows, scoring['crossings_plan'])
     summary['crossing_lines'] = crossing_lines

@@ -236,9 +236,13 @@ def plan_problems(plan, counts):
 
 
 def repeated_takes(takes):
-    """The same detection in two takes would count its crossing twice."""
-    owner, found = {}, []
+    """The same detection, or the same footage, in two takes would count its crossings twice."""
+    owner, frames, found = {}, {}, []
     for take in takes:
+        other = frames.setdefault(take_id(take['observations']), take['name'])
+        if other != take['name']:
+            found.append('%s and %s are the same frames, and a take counts once' % (other, take['name']))
+            continue
         for oid in (obs.get('obs_id') for obs in take['observations']):
             other = owner.setdefault(oid, take['name'])
             if other != take['name']:
@@ -331,6 +335,9 @@ def print_report(report):
     if report['unresolved_switches']:
         print('%d of the switches are unresolved: a track changed person across cannot-tell labels, with the tracker '
               'sure for part of that span' % report['unresolved_switches'])
+    if report['second_boxes']:
+        print('%d second boxes of one person in a frame: each that a track took costs IDF1 a false positive (METHOD.md)'
+              % report['second_boxes'])
     if report['left_out']['unsure']:
         print('left out of the score: %d observations labelled cannot tell' % report['left_out']['unsure'])
     print('IDF1 pooled over crossings %s; whole takes %s' % (fmt(pooled['idf1']), fmt(report['whole_take']['idf1'])))

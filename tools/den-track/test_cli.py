@@ -209,6 +209,31 @@ class PracticeRunTest(Base):
         self.assertEqual(len(crossings), 1)
         self.assertEqual(len(crossings[0]['track_ids']), 1)
 
+    def test_the_report_counts_second_boxes_of_one_person_so_a_low_idf1_can_be_explained(self):
+        def duplicate_three(obs_path, truth_path):
+            rows = records.read_jsonl(obs_path)
+            lines = records.read_jsonl(truth_path)
+            frames = {line['capture_ts']: line for line in lines if line['kind'] == 'frame'}
+            for row in [r for r in rows if r['kind'] == 'keypoints'][:3]:
+                dup = dict(row, obs_id=row['obs_id'] + '-dup', kind='person_box')
+                rows.append(dup)
+                frames[row['capture_ts']]['labels'][dup['obs_id']] = frames[row['capture_ts']]['labels'][row['obs_id']]
+            records.write_jsonl(obs_path, rows)
+            records.write_jsonl(truth_path, lines)
+
+        take = self.make_take(edit_observations=duplicate_three)
+        code, text = cli(*self.score_args([take]))
+        self.assertEqual(code, 0, text)
+        self.assertIn('3 second boxes', text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['second_boxes'], 3)
+
+    def test_a_take_with_no_second_box_says_nothing_of_them(self):
+        take = self.make_take()
+        code, text = cli(*self.score_args([take]))
+        self.assertEqual(code, 0, text)
+        self.assertNotIn('second box', text)
+
     def test_a_single_person_occlusion_is_not_a_crossing_for_rung_5(self):
         take = self.make_take('armchair_occlusion')
         cli(*self.score_args([take]))
@@ -576,6 +601,27 @@ class ScoredRunTest(Base):
             records.write_jsonl(copy, lines)
             again.append([obs, tracks, copy])
         self.assert_refused(self.score_args(takes + again, scored=True, meth=meth), 'a take counts once')
+
+    def test_the_same_footage_observed_twice_in_a_session_is_refused(self):
+        meth = self.small_method()
+        take = self.make_take(seed=0, meth=meth)
+        folder = self.path('takes', 'observed-again')
+        os.makedirs(folder)
+        rename = {row['obs_id']: row['obs_id'] + '-again' for row in records.read_jsonl(take[0])}
+        obs = os.path.join(folder, 'observations.jsonl')
+        records.write_jsonl(obs, [dict(row, obs_id=rename[row['obs_id']]) for row in records.read_jsonl(take[0])])
+        lines = records.read_jsonl(take[2])
+        lines[0].update(take='observed-again', observations_sha256=den_track.text_sha256(obs))
+        for line in lines:
+            if line['kind'] == 'frame':
+                line['labels'] = {rename[o]: p for o, p in line['labels'].items()}
+        truth_path = os.path.join(folder, 'truth.jsonl')
+        records.write_jsonl(truth_path, lines)
+        run_folder = os.path.join(folder, 'track-1')
+        code, text = cli('--method', meth, 'track', '--observations', obs, '--out', run_folder)
+        self.assertEqual(code, 0, text)
+        again = [obs, os.path.join(run_folder, 'tracks.jsonl'), truth_path]
+        self.assert_refused(self.score_args([take, again], scored=True, meth=meth), 'a take counts once')
 
     def test_refused_when_two_crossings_overlap_once_padded(self):
         meth = self.closed_method()

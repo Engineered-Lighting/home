@@ -70,22 +70,30 @@ def _enumerate(tracks, obs, link, miss, free, limit):
     return out
 
 
-def associate(link, miss, free, coasting=None, limit=20000):
-    """Returns (choice, marginal, risk).
+def associate(link, miss, free, limit=20000, temperature=1.0):
+    """Returns (choice, marginal, risk, alternatives).
 
     choice[t]   : the observation index track t takes, or None (missed);
     marginal[t] : the probability that choice[t] is right, given the model;
     risk[t]     : the probability that track t's person is not where the best
                   hypothesis puts it in a way that can move an identity: t
                   takes an observation the best gives another track, t's
-                  observation goes to another track, or (only when t is
-                  `coasting`, unseen since before this frame) t's observation
-                  is really a newcomer's. Two tracks that may have swapped
-                  both carry the risk, the unseen one too.
+                  observation goes to another track, or t's observation is
+                  really a newcomer's (or a lost person's: `free` carries
+                  that density). Two tracks that may have swapped both
+                  carry the risk, the unseen one too;
+    alternatives[t]: risk[t] split by who t may really be following:
+                  {u: p} for another track u, {'new': p} for a newcomer.
+                  The values add up to risk[t].
+
+    `temperature` > 1 flattens the hypothesis weights (each to the power
+    1 / temperature) before marginals and risks are taken, because the
+    motion model is more sure of itself than people are predictable. The
+    best hypothesis is the same at any temperature.
     """
     n_tracks, n_obs = len(link), len(free)
-    coasting = coasting or [False] * n_tracks
     choice, marginal, risk = [None] * n_tracks, [1.0] * n_tracks, [0.0] * n_tracks
+    alternatives = [{} for _ in range(n_tracks)]
     for tracks, obs in clusters(n_tracks, n_obs, link):
         if not tracks:
             continue
@@ -94,32 +102,50 @@ def associate(link, miss, free, coasting=None, limit=20000):
             best = _greedy(tracks, obs, link)
             for t in tracks:
                 choice[t], marginal[t], risk[t] = best.get(t), 0.0, 1.0
+                alternatives[t] = {'new': 1.0}
             continue
-        total = sum(w for w, _ in hyps)
         best_w, best = hyps[0]
         for w, h in hyps[1:]:
             if w > best_w:
                 best_w, best = w, h
+        if temperature != 1.0 and best_w > 0:
+            hyps = [((w / best_w) ** (1.0 / temperature), h) for w, h in hyps]
+        total = sum(w for w, _ in hyps)
         given = {o for o in best.values() if o is not None}
+        owner = {o: u for u, o in best.items() if o is not None}
         for t in tracks:
             choice[t] = best[t]
             if total <= 0:
                 marginal[t], risk[t] = 0.0, 1.0
+                alternatives[t] = {'new': 1.0}
                 continue
             agree = moved = 0.0
+            alt = {}
             for w, h in hyps:
                 mine = h[t]
                 if mine == best[t]:
                     agree += w
                 elif best[t] is None and mine not in given:
                     pass            # t may have been seen where the best saw a newcomer: no identity moves
-                elif mine is None and not coasting[t] and best[t] not in h.values():
-                    pass            # a newcomer exactly where a track in view is seen: treated as noise
                 else:
                     moved += w
+                    key = _alternative(t, mine, best, h, owner)
+                    alt[key] = alt.get(key, 0.0) + w
             marginal[t] = agree / total
             risk[t] = moved / total
-    return choice, marginal, risk
+            alternatives[t] = {k: v / total for k, v in sorted(alt.items(), key=lambda kv: str(kv[0]))}
+    return choice, marginal, risk, alternatives
+
+
+def _alternative(t, mine, best, h, owner):
+    """Who track t may really be following, in hypothesis h."""
+    if mine is not None and mine in owner and owner[mine] != t:
+        return owner[mine]                  # t takes the observation the best gives u
+    if best[t] is not None:
+        for u, o in h.items():
+            if u != t and o == best[t]:
+                return u                    # u takes the observation the best gives t
+    return 'new'
 
 
 def _greedy(tracks, obs, link):

@@ -206,7 +206,7 @@ class OneObservationOneDetectionTest(unittest.TestCase):
         rows, _, labelled, _ = self.crossing()
         lines, _ = records.run_tracker(rows, params())
         report = score.score_session([{'name': 't', 'observations': rows, 'tracks': lines, 'truth': labelled}],
-                                     method.Method().scoring)
+                                     method.Method().scoring, params()['max_coast_s'])
         window = report['windows'][0]
         self.assertEqual((window['switches'], window['silent_swaps']), (0, 0))
         self.assertEqual(report['pooled']['idf1'], 1.0)

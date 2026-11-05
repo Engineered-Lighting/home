@@ -120,11 +120,14 @@ def plan_counts(rows, plan):
                 'counted': sum(1 for r in rows if r['admitted'] and r['kind'] == k)} for k in sorted(kinds)}
 
 
-def score_session(takes, scoring):
-    """takes: [{'name', 'observations', 'tracks', 'truth'}]. Returns the full report body."""
+def score_session(takes, scoring, max_coast_s):
+    """takes: [{'name', 'observations', 'tracks', 'truth'}]. max_coast_s is the tracker's: past it a track has ended.
+    Returns the full report body."""
     problem = scorer_core.trial_problem(scoring.get('trial_rule'))
     if problem:
         raise ScoreError(problem)
+    if not records.is_number(max_coast_s) or max_coast_s <= 0:
+        raise ScoreError('tracker.max_coast_s must be a number above 0, not %r' % (max_coast_s,))
     results, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0, 'unsure': 0}
     crossing_lines = []
     second_boxes = 0
@@ -138,7 +141,7 @@ def score_session(takes, scoring):
         result = scorer_core.score_take(links, windows, scoring['min_people_per_crossing'],
                                         unsure_links(take['observations'], take['tracks'], take['truth']),
                                         scoring['unresolved_switch'] == 'silent', scoring['trial_rule'],
-                                        floor_positions(take['observations']))
+                                        floor_positions(take['observations']), max_coast_s)
         faces = face_share(take['observations'], take['truth'], windows, scoring['face_visible_score_min'])
         for row, crossing in zip(result['windows'], take['truth'].crossings):
             row['take'] = take['name']

@@ -136,6 +136,48 @@ class Base(unittest.TestCase):
         return [os.path.join(folder, 'observations.jsonl'), os.path.join(run_folder, 'tracks.jsonl'),
                 os.path.join(folder, 'truth.jsonl')]
 
+    def walked_take(self, seed, meth, lost=(), past=0.0, written=True):
+        """A and B walk past each other 0.5 m apart, then stand for 16 s. Each of `lost` goes unseen from the start of
+        the mark until `past` seconds after its end: rejected, or with no row at all unless `written`."""
+        folder = self.path('takes', 'walked-%d' % seed)
+        os.makedirs(folder)
+        t0 = 1793000000.0 + 1000.0 * seed
+        y = 2.2 + 0.02 * seed
+        a = synth.Walker('A', [(-2.0, y, 0.3), (2.0, y, 16.0)], 1.0)
+        b = synth.Walker('B', [(2.0, y + 0.5, 0.3), (-2.0, y + 0.5, 16.0)], 1.0)
+        start, end = synth._meet_window(a, b)
+        rows, lines = [], []
+        for k in range(int(max(a.t_end, b.t_end) * 4)):
+            local, labels = k / 4.0, {}
+            ts = round(t0 + local, 3)
+            for person, walker in (('A', a), ('B', b)):
+                x, y_now = walker.at(local)
+                oid = 'o-%d-%d-%s' % (seed, k, person)
+                row = {'version': 'observation/v1', 'obs_id': oid, 'kind': 'person_box', 'capture_ts': ts,
+                       'source': {'sensor_id': 'den-oak', 'model': 'm', 'model_version': None},
+                       'room_position': {'x': x, 'y': y_now, 'z': 1.0, 'cov': [[0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01]]},
+                       'image_box': [1, 1, 2, 2], 'transform_id': 'x', 'depth_ts': ts, 'score': 0.8,
+                       'visibility': 'visible', 'validity': 'valid'}
+                if person in lost and start <= local <= end + past:
+                    if not written:
+                        continue
+                    row['validity'] = 'rejected:no_room_position:depth_absent'
+                    row.pop('room_position')
+                rows.append(row)
+                labels[oid] = person
+            lines.append({'kind': 'frame', 'capture_ts': ts, 'labels': labels})
+        obs_path = os.path.join(folder, 'observations.jsonl')
+        records.write_jsonl(obs_path, rows)
+        head = {'version': 'den-track-truth/1', 'kind': 'header', 'take': 'walked-%d' % seed, 'people': ['A', 'B'],
+                'labeller': 'owner', 'blind': True, 'observations_sha256': den_track.text_sha256(obs_path)}
+        crossing = {'kind': 'crossing', 'crossing_id': 'c1', 'type': 'crossing', 'interval': [t0 + start, t0 + end]}
+        truth_path = os.path.join(folder, 'truth.jsonl')
+        records.write_jsonl(truth_path, [head] + [l for l in lines if l['labels']] + [crossing])
+        run_folder = os.path.join(folder, 'track-1')
+        code, text = cli('--method', meth, 'track', '--observations', obs_path, '--out', run_folder)
+        self.assertEqual(code, 0, text)
+        return [obs_path, os.path.join(run_folder, 'tracks.jsonl'), truth_path]
+
     def score_args(self, takes, out='score', scored=False, meth=None):
         args = ['--method', meth] if meth else []
         args.append('score')
@@ -442,6 +484,46 @@ class ScoredRunTest(Base):
         code, text = cli(*self.score_args(takes, scored=True, meth=meth))
         self.assertEqual(code, 0, text)
         self.assertNotIn('EXCLUDED', text)
+
+    def test_a_detector_stall_that_outlasts_a_tracks_coast_is_no_trial(self):
+        """The owner marks twenty real crossings, and the detector saw nobody until the tracks had ended: no track spans
+        a crossing, so no swap could happen, and passing would say the tracker held identities through them."""
+        for n, (lost, past, written) in enumerate((('AB', 8.0, True), ('AB', 12.0, True), ('AB', 8.0, False), ('B', 8.0, True))):
+            with self.subTest(lost=lost, past=past, written=written):
+                meth = self.closed_method('METHOD-stall-%d.md' % n)
+                takes = [self.walked_take(100 * n + seed, meth, lost, past, written) for seed in range(20)]
+                self.assert_refused(self.score_args(takes, 'stall-%d' % n, scored=True, meth=meth), 'at least 20')
+                out = takes and self.score_args(takes, 'peek-%d' % n, meth=meth)
+                code, text = cli(*out)
+                self.assertEqual(code, 0, text)
+                self.assertIn('max_coast_s', text, 'the practice report says why they do not count')
+
+    def test_the_same_stall_can_be_counted_only_by_a_method_whose_tracks_coast_through_it(self):
+        def coasting(block):
+            block['tracker']['max_coast_s'] = 30.0
+            block['scoring'].update(min_crossings=2, crossings_plan={'crossing': 2})
+        meth = self.closed_method('METHOD-long-coast.md', coasting)
+        takes = [self.walked_take(seed, meth, 'B', 8.0) for seed in range(2)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertNotIn('EXCLUDED', text)
+
+    def test_a_stall_within_a_tracks_coast_is_still_a_trial(self):
+        meth = self.small_method()
+        takes = [self.walked_take(seed, meth, 'B', 3.0) for seed in range(2)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertNotIn('EXCLUDED', text)
+
+    def test_a_max_coast_the_scorer_cannot_read_is_a_refusal(self):
+        def bad(block):
+            block['tracker']['max_coast_s'] = 'six'
+        meth = self.small_method()
+        takes = [self.walked_take(seed, meth) for seed in range(2)]
+        other = self.closed_method('METHOD-bad-coast.md', bad)
+        code, text = cli(*self.score_args(takes, meth=other))
+        self.assertEqual(code, 2, text)
+        self.assertIn('max_coast_s', text)
 
     def test_twenty_windows_each_holding_one_sighting_of_each_person_are_refused(self):
         meth = self.closed_method()

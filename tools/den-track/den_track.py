@@ -371,7 +371,7 @@ def cmd_score(args):
     if len(set(names)) != len(names):
         raise Refused('two takes share a name: %s' % names)
     scoring = method.scoring
-    body = score_mod.score_session(takes, scoring)
+    body = score_mod.score_session(takes, scoring, method.tracker['max_coast_s'])
     if args.scored:
         check_scored(method, takes, body)
     current = run_stamp(method, takes, args.scored)
@@ -448,7 +448,7 @@ def practice_rows(method, scenes, seeds, noise, fps):
             lines, counts = records.run_tracker(observations, method.tracker, floor=floor, exits=exits)
             tracks += counts['tracks']
             takes.append({'name': truth.take, 'observations': observations, 'tracks': lines, 'truth': truth})
-        report = score_mod.score_session(takes, method.scoring)
+        report = score_mod.score_session(takes, method.scoring, method.tracker['max_coast_s'])
         report['scene'] = scene
         report['tracks_per_run'] = tracks / len(seeds)
         rows.append(report)

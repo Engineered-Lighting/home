@@ -259,6 +259,7 @@ class WindowTest(unittest.TestCase):
 
 
 RULE = {'sides': 'take', 'min_scored': 2, 'contact_reach_m': 1.6, 'unseen_s': 0.6}
+COAST_S = 6.0
 
 
 def walkers(spans, gap=1.0):
@@ -276,10 +277,10 @@ def walkers(spans, gap=1.0):
     return sorted(links), positions
 
 
-def trial_row(spans, kind='crossing', mark=(10.0, 12.0), pad=2.0, rule=None, **kw):
+def trial_row(spans, kind='crossing', mark=(10.0, 12.0), pad=2.0, rule=None, coast=COAST_S, **kw):
     links, positions = walkers(spans, **kw)
     window = {'id': 'w', 'kind': kind, 'mark': list(mark), 'start': mark[0] - pad, 'end': mark[1] + pad}
-    return scorer_core.score_take(links, [window], 2, trial=rule or RULE, positions=positions)['windows'][0]
+    return scorer_core.score_take(links, [window], 2, trial=rule or RULE, positions=positions, max_unseen_s=coast)['windows'][0]
 
 
 class TrialRuleTest(unittest.TestCase):
@@ -310,6 +311,58 @@ class TrialRuleTest(unittest.TestCase):
         spans = {'A': [(0, 20)], 'B': [(0, 10), (15, 20)]}
         self.assertTrue(self.admitted(spans, rule=dict(RULE, sides='take'))[0])
         self.assertFalse(self.admitted(spans, rule=dict(RULE, sides='window'))[0])
+
+    def test_unseen_across_the_mark_for_longer_than_a_track_coasts_is_no_trial_under_either(self):
+        """The detector stalls: nobody is seen after the contact while the window lasts, and the tracks end before they are back."""
+        for name, spans in (('both', {'A': [(0, 10), (20, 40)], 'B': [(0, 10), (20, 40)]}),
+                            ('one', {'A': [(0, 40)], 'B': [(0, 10), (20, 40)]}),
+                            ('from before the mark', {'A': [(0, 40)], 'B': [(0, 9), (17, 40)]}),
+                            ('until after the mark', {'A': [(0, 40)], 'B': [(0, 11), (17.25, 40)]})):
+            for sides in ('take', 'window'):
+                with self.subTest(lost=name, sides=sides):
+                    ok, why = self.admitted(spans, rule=dict(RULE, sides=sides))
+                    self.assertFalse(ok)
+                    self.assertIn('followed through', why)
+
+    def test_the_refusal_says_it_was_the_coast_and_who_went_unseen(self):
+        row = trial_row({'A': [(0, 40)], 'B': [(0, 10), (20, 40)]})
+        self.assertEqual(row['followed'], ['A'])
+        self.assertEqual(row['longest_unseen_s'], {'A': 0.25, 'B': 10.0})
+        self.assertIn('max_coast_s', row['excluded_because'])
+        self.assertIn('B', row['excluded_because'])
+
+    def test_unseen_for_no_longer_than_a_track_coasts_is_a_trial(self):
+        self.assertTrue(self.admitted({'A': [(0, 40)], 'B': [(0, 10), (16, 40)]})[0], '6 s: the track is still there to be taken')
+        self.assertFalse(self.admitted({'A': [(0, 40)], 'B': [(0, 10), (16.25, 40)]})[0], '6.25 s: it ended')
+
+    def test_the_limit_is_the_coast_it_is_given(self):
+        spans = {'A': [(0, 40)], 'B': [(0, 10), (20, 40)]}
+        self.assertTrue(self.admitted(spans, coast=12.0)[0])
+        self.assertFalse(self.admitted(spans, coast=9.0)[0])
+
+    def test_a_long_gap_that_does_not_touch_the_mark_does_not_count(self):
+        self.assertTrue(self.admitted({'A': [(0, 40)], 'B': [(0, 1), (9, 40)]})[0], 'unseen long before the mark')
+        self.assertTrue(self.admitted({'A': [(0, 40)], 'B': [(0, 13), (30, 40)]})[0], 'unseen long after the mark')
+
+    def test_an_occlusion_longer_than_a_track_coasts_is_no_trial(self):
+        ok, why = self.admitted({'A': [(0, 10), (19, 30)], 'B': [(0, 30)]}, kind='occlusion', gap=5.6)
+        self.assertFalse(ok)
+        self.assertIn('max_coast_s', why)
+        self.assertTrue(self.admitted({'A': [(0, 10), (15, 30)], 'B': [(0, 30)]}, kind='occlusion', gap=5.6)[0])
+
+    def test_a_door_with_nobody_seen_for_longer_than_a_track_coasts_is_no_trial(self):
+        spans = {'A': [(0, 8.5)], 'B': [(15, 30)]}
+        ok, why = self.admitted(spans, kind='door', gap=5.6, mark=(10.0, 13.5))
+        self.assertFalse(ok, '6.5 s between the last of one and the first of the other, so no track was there to take')
+        self.assertIn('max_coast_s', why)
+        self.assertTrue(self.admitted({'A': [(0, 9)], 'B': [(15, 30)]}, kind='door', gap=5.6, mark=(10.0, 13.5))[0])
+
+    def test_a_contact_distance_that_cannot_be_read_is_no_trial(self):
+        links, _ = walkers({'A': [(0, 20)], 'B': [(0, 20)]})
+        window = {'id': 'w', 'kind': 'crossing', 'mark': [10.0, 12.0], 'start': 8.0, 'end': 14.0}
+        row = scorer_core.score_take(links, [window], 2, trial=RULE, positions={})['windows'][0]
+        self.assertFalse(row['admitted'])
+        self.assertIn('unknown', row['excluded_because'])
 
     def test_seen_only_outside_the_window_is_no_trial_under_either(self):
         spans = {'A': [(0, 7), (15, 20)], 'B': [(0, 7), (15, 20)]}

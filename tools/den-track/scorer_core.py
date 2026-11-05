@@ -143,20 +143,33 @@ def _closest(links, people, window, positions):
     return best
 
 
-def _out_of_sight(links, people, window, unseen_s):
-    """Was one of these people unseen for at least unseen_s at some time during the mark?"""
+def _longest_unseen(links, person, window):
+    """The longest this person went unseen at some time during the mark, or 0 if no two sightings reach across any of it."""
     t0, t1 = window['mark']
-    for person in people:
-        times = sorted({l[0] for l in links if l[2] == person})
-        if any(b - a >= unseen_s and a <= t1 and b >= t0 for a, b in zip(times, times[1:])):
-            return True
-    return False
+    times = sorted({l[0] for l in links if l[2] == person})
+    return max((b - a for a, b in zip(times, times[1:]) if a <= t1 and b >= t0), default=0.0)
 
 
-def _trial(links, window, min_people, rule, positions):
-    """Why a window cannot show that identities held (or None if it can), and what was seen in it."""
+def _door_gap(links, left, came, mark):
+    """In a door swap, the shortest time from the last sighting of someone leaving to the first of someone coming in."""
+    last = max(l[0] for l in links if l[2] in left and l[0] < mark[0])
+    first = min(l[0] for l in links if l[2] in came and l[0] > mark[1])
+    return first - last
+
+
+def _coast_note(limit):
+    return 'a track coasts for %g s (tracker.max_coast_s), so no track was left to swap' % limit
+
+
+def _trial(links, window, min_people, rule, positions, max_unseen_s=None):
+    """Why a window cannot show that identities held (or None if it can), and what was seen in it.
+
+    Past max_unseen_s without a sighting a person's track has ended, whatever the sightings around it show: they come
+    back on a new track, so nothing was tested, and that is the same whether the sides reach over the take or not.
+    """
     people = sorted({l[2] for l in links if l[2] is not None and _inside(l[0], window)})
-    seen = {'followed': [], 'closest_m': None, 'scored_sides': {}}
+    seen = {'followed': [], 'closest_m': None, 'scored_sides': {}, 'longest_unseen_s': {}}
+    limit = float('inf') if max_unseen_s is None else max_unseen_s
     if len(people) < min_people:
         return 'fewer than %d people scored' % min_people, seen
     if rule is None or not window.get('mark'):
@@ -171,17 +184,24 @@ def _trial(links, window, min_people, rule, positions):
         seen['scored_sides'] = in_window
         if not left or not came:
             return 'no door swap: nobody with %d sightings before the mark and none after it, and another the other way round' % least, seen
+        gap = _door_gap([l for l in links if _inside(l[0], window)], left, came, window['mark'])
+        if gap > limit:
+            return 'nobody was seen at the door for %.1f s, and %s' % (gap, _coast_note(limit)), seen
         return None, seen
     counts = in_window if rule['sides'] == 'window' else _sighting_counts(links, window, True)
     seen['scored_sides'] = counts
-    seen['followed'] = sorted(p for p, c in counts.items() if min(c.values()) >= least)
+    enough = sorted(p for p, c in counts.items() if min(c.values()) >= least)
+    seen['longest_unseen_s'] = {p: _longest_unseen(links, p, window) for p in enough}
+    seen['followed'] = [p for p in enough if seen['longest_unseen_s'][p] <= limit]
     if len(seen['followed']) < min_people:
+        lost = [p for p in enough if p not in seen['followed']]
         return ('fewer than %d people followed through the mark, with %d sightings each in the window and on each side of '
-                'the mark (%s)' % (min_people, least, '; '.join('%s %d in the window, %d before, %d after'
-                                                                 % (p, c['window'], c['before'], c['after'])
-                                                                 for p, c in sorted(counts.items())))), seen
+                'the mark (%s)%s' % (min_people, least, '; '.join('%s %d in the window, %d before, %d after'
+                                                                   % (p, c['window'], c['before'], c['after'])
+                                                                   for p, c in sorted(counts.items())),
+                                     '; %s unseen for longer across it: %s' % (' and '.join(lost), _coast_note(limit)) if lost else '')), seen
     if kind == 'occlusion':
-        if not _out_of_sight(links, seen['followed'], window, rule['unseen_s']):
+        if max(seen['longest_unseen_s'][p] for p in seen['followed']) < rule['unseen_s']:
             return 'nobody was out of sight for %g s during the mark' % rule['unseen_s'], seen
         return None, seen
     seen['closest_m'] = _closest(links, seen['followed'], window, positions or {})
@@ -191,7 +211,7 @@ def _trial(links, window, min_people, rule, positions):
     return None, seen
 
 
-def score_take(links, windows, min_people=2, unsure=(), unresolved_is_silent=False, trial=None, positions=None):
+def score_take(links, windows, min_people=2, unsure=(), unresolved_is_silent=False, trial=None, positions=None, max_unseen_s=None):
     """One take's crossings. windows: [{'id', 'kind', 'start', 'end'}], and 'mark',
     the owner's [t0, t1] inside the padded window, when there is one.
 
@@ -200,7 +220,8 @@ def score_take(links, windows, min_people=2, unsure=(), unresolved_is_silent=Fal
     own best mapping. A window is a trial (`admitted`) only if it holds a silent
     swap, or at least min_people people, and under `trial` (scoring.trial_rule) those
     people can be seen to go through what the kind of crossing claims, with
-    `positions` ({obs_id: (x, y)}) saying where they were. See METHOD.md.
+    `positions` ({obs_id: (x, y)}) saying where they were, and none unseen across
+    the mark for longer than max_unseen_s, the tracker's coast. See METHOD.md.
     """
     all_switches = switches(links, unsure, unresolved_is_silent)
     rows = []
@@ -211,7 +232,7 @@ def score_take(links, windows, min_people=2, unsure=(), unresolved_is_silent=Fal
         tracked = [l for l in inside if l[3] is not None]
         doubted = sum(1 for l in tracked if not l[4])
         silent = sum(1 for s in sw if s['silent'])
-        why, seen = _trial(links, w, min_people, trial, positions)
+        why, seen = _trial(links, w, min_people, trial, positions, max_unseen_s)
         why = None if silent else why
         rows.append({
             'id': w['id'], 'kind': w.get('kind'), 'start': w['start'], 'end': w['end'],
@@ -222,6 +243,7 @@ def score_take(links, windows, min_people=2, unsure=(), unresolved_is_silent=Fal
             'followed': seen['followed'],
             'closest_m': seen['closest_m'],
             'scored_sides': seen['scored_sides'],
+            'longest_unseen_s': seen['longest_unseen_s'],
             'idtp': counts['idtp'], 'idfp': counts['idfp'], 'idfn': counts['idfn'],
             'idf1': idf1(counts),
             'mapping': counts['mapping'],

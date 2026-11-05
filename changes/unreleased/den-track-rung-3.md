@@ -19,8 +19,9 @@ must show to count, how an unresolved switch counts, and the crossings plan) awa
 owner.
 
 A crossing counts only if it shows what its kind claims, such as both people followed
-through the owner's mark and near each other; the rest are listed as excluded, and a
-scored run refuses when too few remain or a kind falls short of the plan. A take that has
+through the owner's mark, unseen for no longer than a track coasts, and near each other; the
+rest are listed as excluded, and a scored run refuses when too few remain or a kind falls short
+of the plan. A take that has
 been scored is used: a retune of the numbers or the code, new labels, or dropping or adding
 a take once results are known needs fresh takes. The tool refuses the old ones, from a
 record of hashes kept beside each take and for the Windows user. Truth files say who

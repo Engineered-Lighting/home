@@ -161,9 +161,9 @@ takes with nothing changed. Then close `freeze.frozen_on`, which freezes the met
 
 **3. Record.** R takes with this script. Leave at least 6 s between crossings, so their
 padded windows do not overlap. Any number of crossings per take works; tracks restart
-with each take. A crossing counts only if both people are seen again after it, so don't
-end a take with someone out of sight: after a crossing along the view, the near person
-steps aside until the far one can be seen.
+with each take. A crossing counts only if both people are seen again within 6 s
+(`tracker.max_coast_s`), so don't end a take with someone out of sight: after a crossing along
+the view, the near person steps aside until the far one can be seen.
 
 | Crossings | `type` | What A and B do |
 |---|---|---|
@@ -210,9 +210,9 @@ python -B tools\den-track\den_track.py score --scored --out C:\den-takes\crossin
 the counts against the plan, who labelled, and the method's and code's fingerprints. A
 crossing that does not show what its kind claims (METHOD.md, "Which crossings count") is
 listed as excluded, with why, and does not count: for most kinds, both people seen on
-both sides of the mark and in the window, and near each other in it. A detector that
-stalled on someone for good, a mistyped time or a take cut short ends up there. A scored
-run refuses when too few are left. An agent may read `score.json`, `track-run.json` and
+both sides of the mark and in the window, unseen across it for no longer than a track coasts,
+and near each other in it. A detector that stalled on someone until their track ended, a
+mistyped time or a take cut short ends up there. A scored run refuses when too few are left. An agent may read `score.json`, `track-run.json` and
 `observations.score-runs.jsonl`, which hold counts, ids and hashes, but not `observations.jsonl`,
 `tracks.jsonl`, `truth.jsonl` or any frame. If geometry alone misses the gate, the ladder's
 next step is session appearance as its own rung, after the owner's decision on learning
@@ -237,7 +237,7 @@ the value.
 | `tracker.reconfirm_s` | 1.5 s | How long after doubt a track is confident again; while it is not, no narrow beam and no teaching |
 | `scoring.window_pad_s` | 2.0 s | How much of each crossing's before and after is scored |
 | `scoring.face_visible_score_min` | 0.4 | The keypoint score that counts as a visible face (a stand-in) |
-| `scoring.trial_rule` | `sides` `take`, `min_scored` 2, `contact_reach_m` 2.0, `unseen_s` 0.6 | What a marked crossing must show to count. `take` counts someone hidden past the padding once they are seen again, and `window` does not (METHOD.md) |
+| `scoring.trial_rule` | `sides` `take`, `min_scored` 2, `contact_reach_m` 2.0, `unseen_s` 0.6 | What a marked crossing must show to count. `take` counts someone hidden past the padding if they are seen again within `tracker.max_coast_s`, and `window` does not. Past the coast neither counts: the track has ended (METHOD.md) |
 | `scoring.unresolved_switch` | `flagged` | How a track's change of person counts when it crosses cannot-tell labels and the tracker was sure for part of them: `flagged` or `silent` |
 | `scoring.crossings_plan` | the script above: 12 `crossing`, 5 `crossing_occluded`, 3 `occlusion`, 3 `near_pass`, 2 `door` | How many of each kind must count. A scored run refuses when any kind falls short |
 

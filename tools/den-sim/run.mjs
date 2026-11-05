@@ -1,11 +1,13 @@
-// Den simulation harness: the real Home on loopback, fed scripted lighting-brain
-// documents. It binds 127.0.0.1 only; the page's CSP is connect-src 'self';
-// anything not served here is a logged 503; non-GET is refused except the feed;
-// WebSocket upgrades are destroyed. There is no path to a bulb, the camera, the
-// Jetson, LA, Home Assistant or any LAN host.
+// Den simulation harness: the real Home on loopback, following the real lighting
+// brain on a scripted reader. It binds 127.0.0.1 only; the page's CSP is connect-src
+// 'self'; anything not served here is a logged 503; non-GET is refused except the
+// feed; WebSocket upgrades are destroyed. There is no path to a bulb, the camera,
+// the Jetson, LA, Home Assistant or any LAN host.
 //
 //   node tools\den-sim\run.mjs                   your real scan pack
 //   node tools\den-sim\run.mjs --room authored   authored room and sockets, no household data
+//
+// Needs python on the PATH for the lighting brain (standard library only).
 //
 // Optional private inputs, read only from %LOCALAPPDATA%\den-sim\private:
 //   registration-revision-3.json       saved from Home; otherwise AUTHORED SOCKETS
@@ -22,6 +24,7 @@ import { createContentPackHandler } from '../../web-gateway/content-pack-route.m
 import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs';
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
+import { prepareBrain } from './brain.mjs';
 import { BRAIN_BASE, createFeed, hopList } from './feed.mjs';
 
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
@@ -80,11 +83,16 @@ function loadCouch() {
       const mark = readPrivateJson(file), point = mark.seat?.point_m;
       const valid = mark.schema === 'home-registered-sofa-target-1' && same(mark.binding, binding)
         && Array.isArray(point) && point.length === 3 && point.every(Number.isFinite);
-      if (valid) return { point, source: 'sofa_mark', label: 'YOUR SOFA MARK' };
+      if (valid) return { point, source: 'sofa_mark', label: 'YOUR SOFA MARK', mark };
       privateNotes.push('sofa mark refused: wrong schema, pack binding or seat');
     } catch (error) { privateNotes.push('sofa mark unreadable: ' + error.message); }
   }
   return { point: declaredPoint(), source: 'declared', label: 'DECLARED' };
+}
+function floorCentre() {
+  const directory = path.join(PACKS, 'victoria', binding.content_revision);
+  const polygon = JSON.parse(fs.readFileSync(path.join(directory, 'floor.json'), 'utf8')).walkable_polygon;
+  return [0, 1].map(axis => Math.round(polygon.reduce((sum, corner) => sum + corner[axis], 0) / polygon.length * 100) / 100);
 }
 // Where the script says the couch is, never read from the sofa mark. A private
 // point if one was declared, or else the middle of this pack's floor, so the
@@ -98,10 +106,7 @@ function declaredPoint() {
       privateNotes.push('couch-declared.json refused: point_m must be [x, y, z]');
     } catch (error) { privateNotes.push('couch-declared.json unreadable: ' + error.message); }
   }
-  const directory = path.join(PACKS, 'victoria', binding.content_revision);
-  const polygon = JSON.parse(fs.readFileSync(path.join(directory, 'floor.json'), 'utf8')).walkable_polygon;
-  const centre = [0, 1].map(axis => polygon.reduce((sum, corner) => sum + corner[axis], 0) / polygon.length);
-  return [...centre.map(v => Math.round(v * 100) / 100), SEAT_HEIGHT_M];
+  return [...floorCentre(), SEAT_HEIGHT_M];
 }
 const registration = loadRegistration(), couch = loadCouch();
 
@@ -110,10 +115,21 @@ function sourceIsPinned() {
   catch { return false; }
 }
 const pinned = sourceIsPinned();
+function startBrain() {
+  try {
+    // An authored room has no household data, so its geometry stays out of the private folder.
+    return prepareBrain({ registration, couch, floorCentre: floorCentre(), geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, notes: privateNotes });
+  } catch (error) {
+    console.error(`The lighting brain could not run, so there is nothing to show. It needs python on the PATH.\n${error.message}`);
+    return process.exit(1);
+  }
+}
+const brain = startBrain();
 const context = { room, registration: { source: registration.source, label: registration.label, revision: registration.doc.revision },
   couch: { source: couch.source, label: couch.label, point: couch.point }, base: refs.base.sha.slice(0, 8), source_is_pinned: pinned,
-  pack_revision: binding.content_revision, private_notes: privateNotes };
-const feed = createFeed({ seat: couch.point, couchLabel: couch.label });
+  pack_revision: binding.content_revision, private_notes: privateNotes,
+  brain: { invented_camera: brain.invented_camera, first_try_refused: brain.first_try_refused, seat_m: brain.seat_m } };
+const feed = createFeed({ timelines: brain.timelines, couchLabel: couch.label });
 
 /* ---------- static source, the same inventory as the Home browser suites ---------- */
 function staticSources(root) {
@@ -243,9 +259,13 @@ server.on('error', error => {
 });
 server.listen(PORT, HOST, () => {
   const scan = room === 'real' ? `real scan pack ${binding.content_revision}` : 'AUTHORED ROOM';
+  const asciiBrain = text => text.replace(/\s*·\s*/g, ', ');
+  const reading = brain.timelines.reading_on_couch.summary;
   console.log([`Den simulation: ${ORIGIN}/`, `Room: ${scan} | Sockets: ${registration.label.replace(' · ', ', ')} | Couch: ${couch.label}`,
+    ...(brain.first_try_refused ? [`Brain, first try: ${asciiBrain(brain.first_try_refused.refusal)}`] : []),
+    `Brain${brain.invented_camera ? ', second try with an INVENTED CAMERA' : ''}: ${reading.lit ? 'lights a spot on the hand point' : asciiBrain(reading.refusal)}`,
     ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
-    `Run output: ${run}`, 'Everything is scripted and nothing is sent. Press Ctrl+C to stop.'].join('\n'));
+    `Run output: ${run}`, 'The brain is real, its reader is scripted, and nothing is sent. Press Ctrl+C to stop.'].join('\n'));
   fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: new Date().toISOString(), origin: ORIGIN }, null, 2) + '\n');
   // The pack catalog must resolve before the page asks for it.
   if (!readPackIndex(PACKS).packs.some(item => item.active && item.manifest.siteId === 'victoria')) console.error('No active Victoria pack in ' + PACKS);

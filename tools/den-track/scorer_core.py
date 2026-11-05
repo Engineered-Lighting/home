@@ -71,7 +71,7 @@ def _inside(time, window):
 def _why_no_trial(inside, window, min_people):
     """Why a window cannot show that identities held, or None if it can."""
     named = [l for l in inside if l[2] is not None]
-    if len({l[2] for l in named}) < min_people:
+    if not named or len({l[2] for l in named}) < min_people:
         return 'fewer than %d people scored' % min_people
     mark = window.get('mark')
     if mark and min(l[0] for l in named) >= mark[0]:

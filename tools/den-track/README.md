@@ -44,7 +44,7 @@ git -C C:\claude\home worktree add C:\claude\home\.claude\worktrees\rung-3 claud
 Set-Location C:\claude\home\.claude\worktrees\rung-3
 ```
 
-The tests take about 5 seconds, and connect to nothing:
+The tests take about 10 seconds, and connect to nothing:
 
 ```powershell
 python -B -m unittest discover -s tools\den-track -v
@@ -114,14 +114,16 @@ How the command line behaves:
   The tracker's confidence is `association.status` and `association.hypotheses`.
   METHOD.md says what each field holds and which stay empty.
 - **Inputs.** `observation` lines with the schema's fields. Other keys are ignored,
-  so a `version` or rung 2's `freshness` makes no difference.
+  so a `version` or rung 2's `freshness` makes no difference. Each Observation is one
+  detection, as rung 2 writes them: overlapping boxes are never merged.
 - **`den-track-truth/1`.** See `truth.py`. A header says who labelled, whether blind, and
   which observations; one line per frame gives each observation's true person (one
   capital letter, null for "not a person", or `?` for "cannot tell"), and one line per
   crossing gives the owner's mark.
 - **`crossings.jsonl`.** `score` also writes the crossings as rung 5's gate reads them,
   `{crossing_id, track_ids, interval}`, for its "`association_safe` false through
-  every annotated crossing" check. A one-person occlusion or a door swap is not included.
+  every annotated crossing" check. A one-person occlusion, a door swap or an excluded
+  crossing is not included.
 
 ## The staged crossings session, later
 
@@ -185,8 +187,8 @@ Then once for the session, with one `--take` per take. The line is long; it is o
 python -B tools\den-track\den_track.py score --scored --out C:\den-takes\crossings-1\score-1 --take C:\den-takes\crossings-1\take-01\observe-1\observations.jsonl C:\den-takes\crossings-1\take-01\track-1\tracks.jsonl C:\den-takes\crossings-1\take-01\truth.jsonl --take C:\den-takes\crossings-1\take-02\observe-1\observations.jsonl C:\den-takes\crossings-1\take-02\track-1\tracks.jsonl C:\den-takes\crossings-1\take-02\truth.jsonl
 ```
 
-**7. Read it.** `score.json` has each crossing, the pooled numbers, the bound, the gate
-and the method's fingerprint. A crossing whose window does not hold scored observations
+**7. Read it.** `score.json` has each crossing, the pooled numbers, the bound, the gate,
+the counts against the plan, who labelled, and the method's and code's fingerprints. A crossing whose window does not hold scored observations
 of two people on both sides of the mark (the detector stalled, a time was mistyped, the
 take was cut short) is listed as excluded and does not count; a scored run refuses when
 too few are left. An agent may read `score.json`, `track-run.json` and
@@ -205,7 +207,7 @@ the value.
 
 | Slot | Proposed | What decides it |
 |---|---|---|
-| `freeze.frozen_on` | the date of the freeze | Closing it freezes the method |
+| `freeze.frozen_on` | the date of the freeze | Closing it freezes the method, and the code with it: any later change to either needs fresh takes |
 | `record.time_field` | `null`, no time on a line | Owner question 2 below |
 | `room.floor_m` | `[0, 0, 4.572, 3.759]` | Note R10's tape measures; check against rung 1's frame |
 | `room.exits_m` | `[]`, known to be wrong | The door's position in the room frame |

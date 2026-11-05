@@ -148,6 +148,16 @@ class PracticeRunTest(Base):
         self.assertEqual(set(lines[0]), {'crossing_id', 'track_ids', 'interval'})
         self.assertEqual(len(lines[0]['track_ids']), 2)
 
+    def test_a_crossing_with_nobody_scored_is_not_handed_to_rung_5(self):
+        take = self.make_take('close_crossing')
+        lines = records.read_jsonl(take[2])
+        lines.append({'kind': 'crossing', 'crossing_id': 'empty', 'type': 'crossing', 'interval': [5.0, 6.0]})
+        records.write_jsonl(take[2], lines)
+        cli(*self.score_args([take]))
+        crossings = records.read_jsonl(self.path('score', 'crossings.jsonl'))
+        self.assertEqual(len(crossings), 1, "rung 5's gate could never meet a crossing that names no track")
+        self.assertEqual(len(crossings[0]['track_ids']), 2)
+
     def test_a_single_person_occlusion_is_not_a_crossing_for_rung_5(self):
         take = self.make_take('armchair_occlusion')
         cli(*self.score_args([take]))

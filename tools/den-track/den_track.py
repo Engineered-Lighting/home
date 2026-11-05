@@ -298,7 +298,9 @@ def cmd_score(args):
     print('wrote %s' % os.path.join(args.out, SCORE_FILE))
     if not args.scored:
         print_open(method)
-        print('PRACTICE: this is not a score. The gate would %s.' % ('pass' if gate['passed'] else 'fail'))
+        print('PRACTICE: this is not a score. On these %d crossings the numbers would %s the gate; a scored run also '
+              'needs at least %d crossings and the plan.'
+              % (report['crossings'], 'pass' if gate['passed'] else 'fail', scoring['min_crossings']))
         return EXIT_OK
     print('SCORED under %s, code %s: the gate %s (0 silent swaps: %s; IDF1 >= %s: %s)'
           % (method.fingerprint, method.code_fingerprint, 'PASSED' if gate['passed'] else 'FAILED', gate['silent_swaps_zero'],

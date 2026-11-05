@@ -1110,6 +1110,52 @@ class StaleProtocolTests(Base):
         self.assertEqual(len(list((ws.root / "work" / "aside").rglob("surfaces.json"))), 1)
 
 
+class ClipKindTests(Base):
+    """Item 3: an end that a new cut leaves on a segment's first or last frame becomes carried."""
+
+    def test_an_end_on_a_new_segment_edge_becomes_carried_and_is_reported(self):
+        folder = staged_take(self.takes, "s1", typed="none")
+        ws = self.ws()
+        ws.scan()
+        self.boxes_done(ws, "s1")
+        frames = n1.read_frames(folder)
+        t_of = {f["n"]: f["t"] for f in frames}
+        before = max((f for f in frames if f["t"] < 69), key=lambda f: f["n"])["n"]
+        after = min((f for f in frames if f["t"] >= 71), key=lambda f: f["n"])["n"]
+        ends_at_cut = dict(self.interval(ws, "s1", 62, 65, "casual", "wiping"), offset_n=before)
+        starts_at_cut = dict(self.interval(ws, "s1", 71, 76, "fine", "still_reader"), onset_n=after)
+        self.labels_done(ws, "s1", intervals=[ends_at_cut, starts_at_cut], spans=[])
+        recheck(folder, "01:10")  # a new [69, 71) cut: before and after become segment edges
+        code, text = run_main(["status", "--takes", str(self.takes)])
+        self.assertEqual(code, 0, text)
+        draft = ws.load_draft(ws.draft_path("labels", "s1"))
+        by_case = {x["case"]: x for x in draft["intervals"]}
+        self.assertEqual((by_case["wiping"]["offset_n"], by_case["wiping"]["offset_kind"]), (before, "carried"))
+        self.assertEqual(by_case["wiping"]["onset_kind"], "touch")
+        self.assertEqual((by_case["still_reader"]["onset_n"], by_case["still_reader"]["onset_kind"]),
+                         (after, "carried"))
+        self.assertIn(f"interval wiping at frames {by_case['wiping']['onset_n']} to {before}: offset carried", text)
+        self.assertIn(f"interval still_reader at frames {after} to", text)
+        self.assertIn("onset carried", text)
+        n1.check_labels(draft["intervals"], draft["spans"], PROTOCOL, ws.state("s1").segments(), t_of)
+
+
+class FreezeRecheckTests(Base):
+    """Item 3: freeze_labels runs every save-time protocol check again."""
+
+    def test_freeze_labels_reruns_the_label_checks(self):
+        ws = FreezeTests.build(self, names=(("a1", "hard-a"), ("b1", "hard-b")))
+        path = ws.draft_path("labels", "a1")
+        draft = json.loads(path.read_bytes())
+        draft["intervals"][0]["onset_kind"] = "carried"  # not on a segment's first frame
+        n1.write_json(path, draft)
+        with mock.patch.object(n1, "now", return_value=BASE_UNIX + 10 * DAY):
+            ws.freeze_fixture()
+            with self.assertRaisesRegex(n1.Refused, r"a1.*carried exactly"):
+                ws.freeze_labels()
+        self.assertEqual(n1.versions(ws.root, "labels"), [])
+
+
 def browser_fixture(folder):
     """For test-page-browser.mjs: two synthetic takes, then the passes the browser plays, in order.
 

@@ -561,27 +561,34 @@ def split_pieces(a, b, segments):
 
 
 def clip_items(intervals, spans, segments, t_of):
-    """Clip intervals and spans to new usable segments; cut-side ends become carried."""
+    """Clip intervals and spans to new usable segments.
+
+    An interval end that lands on a segment's first or last frame becomes carried, as the protocol
+    requires, whether the cut split the interval or only moved a segment edge onto its end."""
+    firsts, lasts = {first for first, _ in segments}, {last for _, last in segments}
     changes, out_intervals, out_spans = [], [], []
     for item in intervals:
         a, b = item["onset_n"], item["offset_n"]
-        pieces = split_pieces(a, b, segments)
-        if pieces == [(a, b)]:
-            out_intervals.append(item)
-            continue
         kept = []
-        for first, last in pieces:
+        for first, last in split_pieces(a, b, segments):
             if first >= last:
                 continue
             piece = dict(item, onset_n=first, offset_n=last, onset_t_s=t_of[first], offset_t_s=t_of[last])
-            if first != a:
+            if first in firsts:
                 piece["onset_kind"] = "carried"
-            if last != b:
+            if last in lasts:
                 piece["offset_kind"] = "carried"
             kept.append(piece)
         out_intervals += kept
-        changes.append(f"interval {item['case']} at frames {a} to {b}: "
-                       + (", ".join(f"{p['onset_n']} to {p['offset_n']}" for p in kept) or "dropped"))
+        if kept == [item]:
+            continue
+        described = []
+        for piece in kept:
+            frames = [] if (piece["onset_n"], piece["offset_n"]) == (a, b) else \
+                [f"{piece['onset_n']} to {piece['offset_n']}"]
+            carried = [end for end in ("onset", "offset") if piece[f"{end}_kind"] != item[f"{end}_kind"]]
+            described.append(" ".join(frames + ([" and ".join(carried) + " carried"] if carried else [])))
+        changes.append(f"interval {item['case']} at frames {a} to {b}: " + (", ".join(described) or "dropped"))
     for item in spans:
         a, b = item["start_n"], item["end_n"]
         pieces = split_pieces(a, b, segments)
@@ -979,6 +986,13 @@ class Workspace:
         return {"schema": "den-n1-surface-map-1", "image": {"width": WIDTH, "height": HEIGHT},
                 "reference": draft["reference"], "surfaces": draft["surfaces"]}
 
+    def recheck(self, take_id, kind, draft, state, t_of):
+        """A freeze runs every save-time protocol check again on a draft, as it now stands."""
+        try:
+            return check_labels(draft["intervals"], draft["spans"], self.protocol, state.segments(), t_of)
+        except Refused as exc:
+            raise Refused(f"{take_id}'s {kind} draft fails a protocol check: {exc}") from None
+
     def ready_session(self, entry, kind):
         """A session's state, frames and draft, checked for a freeze."""
         take_id = entry["session"]
@@ -1050,6 +1064,7 @@ class Workspace:
             if not draft["actor"]["end_to_end"]:
                 raise Refused(f"{entry['session']} is not marked labelled end to end")
             t_of = {f["n"]: f["t"] for f in frames}
+            draft["intervals"], draft["spans"] = self.recheck(entry["session"], "labels", draft, state, t_of)
             checks[entry["session"]] = state.check_sha256
             record = {"schema": "den-n1-session-labels-1", "take": entry["session"], "check": state.check,
                       "check_sha256": state.check_sha256, "split": entry["split"],
@@ -1078,7 +1093,10 @@ class Workspace:
             raise Refused(f"the re-mark of {remark_id} is not done")
         if remark["check_sha256"] != state.check_sha256:
             raise Refused(f"the re-mark of {remark_id} is tied to a superseded check")
+        t_of = {f["n"]: f["t"] for f in read_frames(state.folder)}
+        remark["intervals"], remark["spans"] = self.recheck(remark_id, "remark", remark, state, t_of)
         first = self.load_draft(self.draft_path("labels", remark_id))
+        first["intervals"], first["spans"] = self.recheck(remark_id, "labels", first, state, t_of)
         files["remark.json"] = canonical({
             "schema": "den-n1-remark-1", "take": remark_id, "check": state.check,
             "check_sha256": state.check_sha256, "protocol_sha256": self.protocol.sha256, "actor": remark["actor"],

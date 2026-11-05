@@ -66,7 +66,8 @@ box before the session can be frozen.
    frame the person turns away or leaves working distance. An interval never
    crosses a cut or a segment edge. One running at a segment edge stops there,
    and label.py marks that end `carried`. An end is `carried` exactly when it
-   sits on a segment's first or last frame.
+   sits on a segment's first or last frame, including when a newer check's cut
+   moves a segment edge onto it.
 4. **Pauses and switches.** A pause of `pause_s` s or less with the same
    object does not end the interval. Switching to a different task starts a
    new one. label.py refuses two intervals of the same case in one segment

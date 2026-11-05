@@ -141,10 +141,10 @@ looks at a frame of a later take in three steps.
    a swing about the marks' centre hardly moves them. So `view_movement_m` is the
    farthest the marks' rigid motion carries anything in view: the marks, the
    camera, and the corners of each signature cell at its depth, capped at
-   `mount_view_reach_m`. A cell
-   with no depth counts at `mount_view_reach_m`: a dark far floor or a bare wall
-   has no depth and is still room. How far a rigid motion moves a point is convex
-   in the point, so nothing between the camera and those surfaces moves further.
+   `mount_view_reach_m`. A cell with no depth counts at `mount_view_reach_m`: a dark
+   far floor or a bare wall has no depth and is still room. How far a rigid motion
+   moves a point is convex in the point, so nothing between the camera and those
+   surfaces moves further.
    At most `gate_m`: `confirmed`, with one more condition. Over it:
    `not_confirmed`. So is a registration frame with under `mount_min_cells` cells
    of depth, which cannot say what the view holds, and so are marks whose second

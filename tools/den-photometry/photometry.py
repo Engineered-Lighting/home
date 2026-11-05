@@ -584,7 +584,7 @@ def score_root(root, room_model, token_file, method, den_method, location=None, 
     if not days:
         raise Refused("the photometry folder holds no day-<yyyymmdd> folder (README, --new-day)")
     room = read_room_model(room_model)
-    captures, normalisation = [], None
+    captures, normalisation, skipped = [], None, []
     for day in days:
         record = load_day(day, method, den_method)
         if normalisation is None:
@@ -593,12 +593,19 @@ def score_root(root, room_model, token_file, method, den_method, location=None, 
             raise Refused(f"{day.name} pinned other meter-norm/v1 parameters")
         rows = read_worksheet(day)
         kept = {}
-        for folder in day.iterdir():
+        for folder in sorted(day.iterdir()):
             match = CAPTURE_NAME.fullmatch(folder.name)
-            if match and folder.is_dir():
-                cap = read_json(folder / "capture.json", f"{day.name}\\{folder.name}\\capture.json")
-                if cap.get("outcome") == "kept":
-                    kept[int(match.group(1))] = cap
+            if not (match and folder.is_dir()):
+                continue
+            try:
+                cap = read_json(folder / "capture.json", "capture.json")
+            except Refused:
+                skipped.append({"folder": f"{day.name}\\{folder.name}", "reason": "no capture.json (interrupted)"})
+                continue
+            if cap.get("outcome") == "kept":
+                kept[int(match.group(1))] = cap
+            else:
+                skipped.append({"folder": f"{day.name}\\{folder.name}", "reason": f"outcome {cap.get('outcome')}"})
         for n in sorted(set(rows) - set(kept)):
             raise Refused(f"{day.name}\\{WORKSHEET} has a row for capture {n}, which is not a kept capture")
         for n in sorted(kept):
@@ -643,6 +650,7 @@ def score_root(root, room_model, token_file, method, den_method, location=None, 
     report = {"schema": SCHEMAS["report"], "score": n, "gate": result["gate"], "result": plain(result),
               "captures": plain(captures),
               "unused": [{"capture": c["id"], "reason": why} for c, why in selection["unused"]],
+              "skipped_folders": skipped,
               "room_model_in": room["version"], "room_model_out": room_record["version"],
               "days": [d.name for d in days], "normalisation": norm,
               "method_sha256": method.file_sha256, "method_block_sha256": method.block_sha256,

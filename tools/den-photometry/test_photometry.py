@@ -430,6 +430,19 @@ class ScoreTests(ScoreCase):
             self.assertEqual({s["surface_estimates"][0]["unit"] for s in states}, {"relative"})
             self.assertTrue(all(s["sun"] is None for s in states))
 
+    def test_void_and_interrupted_capture_folders_are_skipped_and_listed(self):
+        with workspace() as ws:
+            day1 = self.two_days(ws)
+            self.fake.scene_after_posts = (self.fake.posts + 2, scene(60.0))
+            folder, record, _ = ws.capture(self.fake, day1, "desk")
+            self.assertEqual(record["outcome"], "void")
+            (day1 / "capture-9" / "frames").mkdir(parents=True)  # a capture cut off before capture.json
+            _, report = ws.score()
+            self.assertEqual(report["gate"], "pass")
+            self.assertEqual(report["skipped_folders"],
+                             [{"folder": f"day-20261110\\{folder.name}", "reason": "outcome void"},
+                              {"folder": "day-20261110\\capture-9", "reason": "no capture.json (interrupted)"}])
+
     def test_a_second_score_supersedes_the_first(self):
         with workspace() as ws:
             self.two_days(ws)

@@ -33,6 +33,9 @@ INPUT_KINDS = tuple(REQUIRED)
 REFERENCE_KINDS = frozenset({"live_command", "live_status"})
 DERIVED_KINDS = ("person_state", "mode", "decision")
 KINDS = INPUT_KINDS + DERIVED_KINDS
+# What the runner stamps on a decision. A shadow run decides beside what the bulbs really did and sends nothing, as
+# a replay does; rung 9's ladder entry runs one after the replays. 'shown' is rung 11's and no den-core run sets it.
+ACTUATIONS = ("synthetic", "replay", "shadow")
 MEDIA_KEYS = frozenset({"image", "images", "jpeg", "jpg", "png", "b64", "base64", "pixels", "bytes"})
 MAX_LINE_BYTES = 16384
 

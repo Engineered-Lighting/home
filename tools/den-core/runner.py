@@ -43,18 +43,23 @@ def describe(policy):
 
 
 def run(inputs, policies, *, tick_s=2.0, tail_s=TAIL_S, plant=True, shown="incumbent", synthetic=False,
-        assume_occupied=False, sources=()):
+        assume_occupied=False, sources=(), actuation=None):
     """(header, events) for one run; inputs are (t, kind, data, source).
 
     Reference kinds (events.REFERENCE_KINDS) are logged in time order like any input, but no policy is
     handed one and they do not set the span or the ticks, so a run's decisions are the same with or
-    without them."""
+    without them.
+
+    actuation defaults to synthetic or replay, by the synthetic flag. 'shadow' changes only that label: nothing
+    is sent in any den-core run, and a synthetic run is only ever synthetic."""
     inputs = sorted(inputs, key=lambda item: item[0])
     read = [item for item in inputs if item[1] not in events.REFERENCE_KINDS]
     if not read:
         raise ValueError("no inputs")
     policies = sorted(policies, key=lambda p: ORDER.index(p.id) if p.id in ORDER else len(ORDER))
-    actuation = "synthetic" if synthetic else "replay"
+    actuation = actuation or ("synthetic" if synthetic else "replay")
+    if actuation not in events.ACTUATIONS or synthetic != (actuation == "synthetic"):
+        raise ValueError("actuation %r does not fit synthetic=%s" % (actuation, synthetic))
     header = {"schema": events.LOG_SCHEMA, "sources": list(sources), "policies": [describe(p) for p in policies],
               "tick_s": tick_s, "tail_s": tail_s, "plant": plant, "shown": shown, "synthetic": synthetic,
               "assume_occupied": assume_occupied, "actuation": actuation}

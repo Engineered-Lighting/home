@@ -527,6 +527,23 @@ class CheckTest(Temp):
         result = self.variant(lines)
         self.assertEqual((result["ok"], result["first_mismatch"]["line"]), (False, n + 1))
 
+    def test_a_shadow_run_replays_and_a_synthetic_one_cannot_be_called_shadow(self):
+        items = [(T0, "occupancy", {"value": "on", "via": "t"}, "occupancy_journal")]
+        header, log = runner.run(items, runner.load_policies(["incumbent"]), actuation="shadow", tail_s=4.0)
+        self.assertEqual(header["actuation"], "shadow")
+        path = self.tmp / "shadow.jsonl"
+        events.write(path, header, log)
+        self.assertTrue(check.check(path)["ok"])
+        for kwargs in ({"synthetic": True, "actuation": "shadow"}, {"actuation": "synthetic"}, {"actuation": "shown"}):
+            with self.assertRaises(ValueError):
+                runner.run(items, runner.load_policies(["incumbent"]), tail_s=4.0, **kwargs)
+        lines = (self.tmp / "log.jsonl").read_text("ascii").split("\n")[:-1]
+        tampered = json.loads(lines[0])
+        tampered["actuation"] = "shadow"  # this log's header says synthetic: true
+        result = self.variant([events.dumps(tampered)] + lines[1:])
+        self.assertFalse(result["ok"])
+        self.assertIn("does not replay", result["reason"])
+
     def test_changed_header_config_or_code(self):
         for key, value, reason in (("config", None, "refused its logged config"), ("code_sha256", "0" * 64, "code changed: incumbent")):
             header = json.loads(self.lines[0])

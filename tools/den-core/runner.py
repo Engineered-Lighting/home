@@ -50,8 +50,9 @@ def run(inputs, policies, *, tick_s=2.0, tail_s=TAIL_S, plant=True, shown="incum
     handed one and they do not set the span or the ticks, so a run's decisions are the same with or
     without them.
 
-    actuation defaults to synthetic or replay, by the synthetic flag. 'shadow' changes only that label: nothing
-    is sent in any den-core run, and a synthetic run is only ever synthetic."""
+    actuation defaults to synthetic or replay, by the synthetic flag. 'shadow' decides beside what the real bulbs
+    reported, so it needs the plant off: a run the plant echoes is not one. Nothing is sent in any den-core run,
+    and a synthetic run is only ever synthetic."""
     inputs = sorted(inputs, key=lambda item: item[0])
     read = [item for item in inputs if item[1] not in events.REFERENCE_KINDS]
     if not read:
@@ -60,6 +61,8 @@ def run(inputs, policies, *, tick_s=2.0, tail_s=TAIL_S, plant=True, shown="incum
     actuation = actuation or ("synthetic" if synthetic else "replay")
     if actuation not in events.ACTUATIONS or synthetic != (actuation == "synthetic"):
         raise ValueError("actuation %r does not fit synthetic=%s" % (actuation, synthetic))
+    if actuation == "shadow" and plant:
+        raise ValueError("actuation shadow needs the plant off: the real bulbs report")
     header = {"schema": events.LOG_SCHEMA, "sources": list(sources), "policies": [describe(p) for p in policies],
               "tick_s": tick_s, "tail_s": tail_s, "plant": plant, "shown": shown, "synthetic": synthetic,
               "assume_occupied": assume_occupied, "actuation": actuation}

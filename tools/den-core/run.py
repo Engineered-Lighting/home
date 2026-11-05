@@ -329,6 +329,8 @@ def main(argv=None):
         parser.error("%s already holds a log" % out)
     if args.actuation and args.synthetic:
         parser.error("a synthetic run is only ever actuation synthetic: leave out --actuation")
+    if args.actuation == "shadow" and not (args.no_plant or args.lights):
+        parser.error("--actuation shadow decides beside the real bulbs' reports: give --lights or --no-plant")
     if {"decide", "coordinator"} <= set(args.policies):
         parser.error("decide and coordinator are one policy in two versions: give one of them")
     if ((args.light_model or args.surfaces or args.compensation or args.compensation_form)

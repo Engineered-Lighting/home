@@ -558,7 +558,8 @@ def evening_log(tmp, name="log.jsonl", configs=None, source="synthetic", actuati
     items, _, _ = synthetic.evening(unclear_rate=0.0, invalid_rate=0.0, fail_rate=0.0, **options)
     synthetic_run = source == "synthetic"
     header, log = runner.run(runner.tagged(items, source), runner.load_policies(["need", "incumbent", "coordinator"], configs),
-                             synthetic=synthetic_run, actuation=actuation, sources=[{"name": "test", "params": options}])
+                             synthetic=synthetic_run, actuation=actuation, plant=actuation != "shadow",
+                             sources=[{"name": "test", "params": options}])
     path = Path(tmp) / name
     events.write(path, header, log)
     return path, header, log
@@ -688,6 +689,7 @@ class RunFlagsTest(unittest.TestCase):
 
     def test_refusals(self):
         for argv in (["--synthetic", "evening", "--actuation", "shadow"],
+                     ["--poll", str(self.tmp / "poll.txt"), "--actuation", "shadow"],  # the plant is on
                      ["--synthetic", "evening", "--policies", "incumbent", "decide", "coordinator"],
                      ["--synthetic", "evening", "--policies", "incumbent", "--light-model", "fake"],
                      ["--synthetic", "evening", "--policies", "incumbent", "--compensation", "P0"]):

@@ -543,7 +543,9 @@ python -B tools/den-core/score.py --slots
 (rung 8's `light-model.json`; the default is the fake), `--surfaces FILE` (JSON `{surface_id: [point_id, ...]}`, since
 rung 8 v1's points are image blocks with no surface id; without it the whole view is one surface, `room`),
 `--compensation P0|P1|P2|P3` and `--compensation-form strict|mode`. `--actuation shadow` labels a run shadow in place of
-replay, with or without the coordinator. Nothing is sent either way, and a synthetic run is only ever synthetic.
+replay, with or without the coordinator, and needs the real bulbs' reports (`--lights` or `--no-plant`). Until a live
+writer exists it labels a run of copied files from such a time. Nothing is sent either way, and a synthetic run is only
+ever synthetic.
 
 ### What a scored run needs
 

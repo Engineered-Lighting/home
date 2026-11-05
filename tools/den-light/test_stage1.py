@@ -17,6 +17,7 @@ import os
 import random
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -549,6 +550,50 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(guard.classify("light.den_rear_left", before["light.den_rear_left"],
                                         states(self.ha)["light.den_rear_left"], owner), "unavailable")
 
+    def written(self, e, level):
+        """(owner, the state the tool's write left) for one bulb, its reply naming the state."""
+        before = states(self.ha)
+        owner = guard.Owner({x: guard.scene_of_state(before[x]) for x in guard.LIGHTS})
+        owner.intend(e, guard.scene(True, level, 3000))
+        changed = self.ha.call("light", "turn_on", {"entity_id": e, "brightness": level, "color_temp_kelvin": 3000})
+        owner.responded(e, changed[0]["context"]["id"])
+        return owner, states(self.ha)[e]
+
+    def test_a_devices_own_report_of_the_target_is_the_tools(self):
+        e = "light.den_front_left"
+        owner, after = self.written(e, 100)
+        self.ha.set_light(e, on=True, brightness=101, kelvin=3000)  # one step off, with a context of its own
+        report = states(self.ha)[e]
+        self.assertNotIn(report["context"]["id"], owner.contexts)
+        self.assertEqual(guard.classify(e, after, report, owner), "own", "within tolerance, and the value moved")
+        self.assertIn(report["context"]["id"], owner.contexts)
+        self.assertEqual(guard.classify(e, after, report, owner), "own", "classifying twice changes nothing")
+        self.ha.set_light(e, on=True, brightness=140, kelvin=3000)
+        self.assertEqual(guard.classify(e, report, states(self.ha)[e], owner), "foreign", "beyond tolerance")
+
+    def test_the_first_report_of_a_write_whose_reply_named_no_state_is_the_tools(self):
+        e = "light.den_front_left"
+        before = states(self.ha)
+        owner = guard.Owner({x: guard.scene_of_state(before[x]) for x in guard.LIGHTS})
+        owner.intend(e, guard.scene(True, 100, 3000))
+        owner.responded(e, None)
+        self.ha.set_light(e, on=True, brightness=100, kelvin=3000)
+        report = states(self.ha)[e]
+        self.assertEqual(guard.classify(e, before[e], report, owner), "own")
+        self.ha.set_light(e, on=False)
+        self.assertEqual(guard.classify(e, report, states(self.ha)[e], owner), "foreign")
+
+    def test_a_bulb_back_from_unavailable_is_not_a_persons_change(self):
+        e = "light.den_front_left"
+        owner, after = self.written(e, 100)
+        self.ha.set_available(e, False)
+        gone = states(self.ha)[e]
+        self.assertEqual(guard.classify(e, after, gone, owner), "unavailable")
+        self.ha.set_available(e, True)
+        self.ha.set_light(e, on=True, brightness=254, kelvin=2700)  # a power-cycled bulb comes back at its default
+        back = states(self.ha)[e]
+        self.assertEqual(guard.classify(e, gone, back, owner), "unavailable")
+
     def test_restore_plan_order(self):
         plan = guard.restore_plan(SNAPSHOT, guard.LIGHTS)
         right = [a["do"] for a in plan if a.get("entity_id") == "light.front_right"]
@@ -864,6 +909,129 @@ class ProbeEndToEndTests(unittest.TestCase):
         self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "on")
         self.assert_frames_are_clean(rig)
 
+    def test_light_that_lands_after_ha_reports_it_is_not_read_as_the_step_before(self):
+        rig = Rig(self, m1=method1(step_dwell_s=0.2))
+        rig.cam.latency_s = 0.06  # HA shows the target at once; the camera sees it 60 ms later
+        outcome, lines, s = rig.run()
+        self.assertEqual(outcome, "complete", lines)
+        params, digest = synthetic.meter_norm_for(rig.m0)
+        lm, scored = model.run_session(rig.folder, {"parameters": params, "parameters_sha256": digest}, rig.m1)
+        self.assertEqual(scored["error"]["verdict"], "pass", scored["error"])
+        steps = [l for l in rig.log() if l["kind"] == "step"]
+        for step in steps:
+            self.assertLessEqual(step["settle_s"], step["capture_s"])
+        landed = [step["settle_s"] for before, step in zip(steps, steps[1:])
+                  if step["step_kind"] == "basis" and step["scene"] != before["scene"]]  # basis: a bright, visible change
+        self.assertGreaterEqual(min(landed), 0.06, "the camera cannot have seen the light before it landed")
+        self.assertLess(statistics.median(landed), 0.2, "the log measures the landing, not the dwell")
+        self.assertGreaterEqual(min(step["capture_s"] for step in steps), 0.2, "no frame is kept inside the dwell")
+
+    def test_reports_that_land_after_the_reply_do_not_abort(self):
+        rig = Rig(self)
+
+        def late(s, step):
+            if 6 <= step["index"] <= 25:  # HA seconds: the service reply names no state, the report follows
+                rig.ha.report_delay.update({e: 30 for e in guard.LIGHTS})
+        outcome, lines, s = rig.run(late)
+        self.assertEqual(outcome, "complete", lines)
+        self.assertEqual(json.loads((rig.folder / "session.json").read_text())["abort_reason"], None)
+        rig.assert_normal_is_snapshot(self)
+        self.assertEqual(rig.holds(), {})
+
+    def test_a_device_report_one_step_off_does_not_abort(self):
+        rig = Rig(self)
+        e = "light.den_front_left"
+
+        def nudge(s, step):
+            if step["kind"] == "confirm" and step["ratio"] == s.m1["confirm_ratios"][1]:
+                # the confirm steps keep this bulb's scene, so no write follows: it reports one level off, under a
+                # context of its own, and the next guard read has to judge that report
+                light = rig.ha.lights[e]
+                rig.ha.set_light(e, on=True, brightness=light["brightness"] - 1, kelvin=light["kelvin"])
+        outcome, lines, s = rig.run(nudge)
+        self.assertEqual(outcome, "complete", lines)
+        reports = [l for l in rig.log() if l["kind"] == "observed" and l["entity_id"] == e
+                   and (l["scene"] or {}).get("brightness") == 253]
+        self.assertEqual([l["owner"] for l in reports[:1]], ["own"])
+
+    def test_a_change_just_before_the_restore_is_not_overwritten(self):
+        rig = Rig(self)
+        e = "light.den_rear_left"
+        marks = {}
+        real = probe.Session.abort
+
+        def abort(self_, reason):
+            marks["t"] = rig.ha.now()
+            rig.ha.set_light(e, on=True, brightness=60, kelvin=2700)  # after the last guard read, before any restore write
+            return real(self_, reason)
+        with mock.patch.object(probe.Session, "abort", abort):
+            outcome, lines, s = rig.run(at_step(9, lambda s: setattr(rig.cam, "fail", 503)))
+        self.assertEqual(outcome, "aborted")
+        self.assertFalse([c for c in rig.rest_calls(marks["t"]) if c[3].get("entity_id") == e])
+        record = json.loads((rig.folder / "session.json").read_text())
+        self.assertEqual([u[0] for u in record["unrestored"]], [e])
+        rig.assert_normal_is_snapshot(self, [x for x in guard.LIGHTS if x != e])
+
+    def test_a_game_and_occupancy_in_one_read_leaves_den_lighting_paused(self):
+        rig = Rig(self)
+
+        def both(s):
+            rig.ha.start_game()
+            rig.ha.set_occupancy("on")
+        outcome, lines, s = rig.run(at_step(9, both))
+        self.assertEqual(outcome, "aborted")
+        self.assertIn("after the game", lines[0])
+        self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "off")
+
+    def nth_all_off(self, rig, n):
+        return [s["index"] for s in model.schedule(rig.m1, SNAPSHOT, RANGES, WARMEST)["steps"]
+                if s["kind"] == "all_off"][n]
+
+    def test_all_off_brackets_that_disagree_abort(self):
+        rig = Rig(self)
+        n = self.nth_all_off(rig, 1)
+        outcome, lines, s = rig.run(at_step(n, lambda s: setattr(rig.cam, "person", 0.05)))
+        self.assertEqual(outcome, "aborted")
+        record = json.loads((rig.folder / "session.json").read_text())
+        self.assertEqual(record["abort_reason"], "all-off brackets disagree")
+        self.assertLess(record["last_clean_step"], n, "the disagreeing capture is not a clean step")
+        rig.assert_normal_is_snapshot(self)
+        self.assert_frames_are_clean(rig)
+
+    def settled(self, rig, frames, *, dwell=0, count=3, sent_at=0.0):
+        """settled_frames() over made-up frames [(time, value)], with a clock that follows them."""
+        rig.m1 = rig.m1.closed(step_dwell_s=dwell, frames_per_capture=count, settle_limit_s=5)
+        s = rig.session()
+        now, pending = [sent_at], iter(frames)
+
+        def next_frame():
+            now[0], value = next(pending)
+            return {"held": False}, value, {}
+        s.clock, s.next_frame, s.means = (lambda: now[0]), next_frame, (lambda value: [[value, value, value]])
+        kept, landed = s.settled_frames(sent_at, held=False)
+        return [k[1] for k in kept], landed
+
+    def test_a_step_settles_on_agreeing_frames_after_the_dwell(self):
+        rig = Rig(self)
+        frames = [(0.2, 10), (0.4, 10), (0.6, 50), (1.2, 50), (1.4, 50), (1.6, 50)]
+        self.assertEqual(self.settled(rig, frames, dwell=1), ([50, 50, 50], 0.6), "landed at the dwell's third frame")
+
+    def test_a_frame_that_disagrees_with_one_restarts_the_run(self):
+        rig = Rig(self)
+        self.assertEqual(self.settled(rig, [(0.1, 10), (0.2, 50), (0.3, 50), (0.4, 50)]), ([50, 50, 50], 0.2))
+
+    def test_a_frame_that_disagrees_with_two_aborts(self):
+        rig = Rig(self)
+        with self.assertRaises(probe.Abort) as caught:
+            self.settled(rig, [(0.1, 10), (0.2, 10), (0.3, 50)])
+        self.assertEqual(caught.exception.reason, "frames within a settled step disagree")
+
+    def test_a_step_that_never_settles_aborts(self):
+        rig = Rig(self)
+        with self.assertRaises(probe.Abort) as caught:
+            self.settled(rig, [(float(t), t * 10) for t in range(1, 9)])
+        self.assertEqual(caught.exception.reason, "the step did not settle")
+
     def test_a_probe_write_ha_refuses_aborts_and_restores(self):
         rig = Rig(self)
         outcome, lines, s = rig.run(at_step(9, lambda s: setattr(rig.ha, "refuse_writes", 1)))
@@ -1035,15 +1203,28 @@ class ProbeEndToEndTests(unittest.TestCase):
         rig.assert_normal_is_snapshot(self)
         self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
 
-    def test_the_camera_guard_aborts_on_a_503_and_a_new_session(self):
-        for change in ({"fail": 503}, {"session": "session-2"}):
+    def test_the_camera_guard_aborts_on_a_503_a_lost_camera_a_new_session_and_no_new_frame(self):
+        for change, why in (({"fail": 503}, "503"), ({"fail": "drop"}, "unreachable"),
+                            ({"session": "session-2"}, "new camera session"), ({"frozen": True}, "without a frame")):
             with self.subTest(change=change):
-                rig = Rig(self)
+                rig = Rig(self, m1=method1(frame_timeout_s=0.4))
                 outcome, lines, s = rig.run(at_step(9, lambda s: [setattr(rig.cam, k, v) for k, v in change.items()]))
                 self.assertEqual(outcome, "aborted")
+                self.assertIn(why, json.loads((rig.folder / "session.json").read_text())["abort_reason"])
                 rig.assert_normal_is_snapshot(self)
                 self.assertEqual(rig.holds(), {})
                 self.assert_frames_are_clean(rig)
+
+    def test_the_camera_guard_aborts_on_a_frame_that_fails_gain_agreement(self):
+        rig = Rig(self)
+
+        def change_iso(s):
+            with rig.cam.lock:
+                rig.cam.hold = dict(rig.cam.hold, iso=rig.cam.hold["iso"] * 2)
+        outcome, lines, s = rig.run(at_step(9, change_iso))
+        self.assertEqual(outcome, "aborted")
+        self.assertIn("gain agreement", json.loads((rig.folder / "session.json").read_text())["abort_reason"])
+        rig.assert_normal_is_snapshot(self)
 
     def test_start_refusals_pause_nothing(self):
         cases = {

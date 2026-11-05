@@ -219,7 +219,7 @@ def fixture_records(by_id):
 class Session:
     """One probe session in one new session folder (or --recover on an old one)."""
 
-    def __init__(self, folder, ha, camera, method1, method0, *, clock=time.monotonic, wall=time.time,
+    def __init__(self, folder, ha, camera, method1, method0, *, clock=time.perf_counter, wall=time.time,
                  sleep=time.sleep, say=print):
         self.folder, self.ha, self.camera = Path(folder), ha, camera
         self.m1, self.m0 = method1, method0
@@ -240,6 +240,7 @@ class Session:
         self.camera_session = None
         self.last_sequence = None
         self.last_frame_at = None
+        self.last_all_off = None     # the last all-off capture's region means, for the bracket check
         self.frames_saved = 0
         self.last_clean = 0
         self.regions = meter.sample_regions(method0["pixel_step"], method0["grid_cols"], method0["grid_rows"])
@@ -292,7 +293,7 @@ class Session:
         reason = guard.abort_reason(before, by_id, self.owner, self.switch, self.sensor)
         self.last = by_id
         if reason:
-            game = "gaming_session" in reason
+            game = ((by_id.get(self.sensor) or {}).get("attributes") or {}).get("gaming_session") is True
             raise Abort(reason, game=game)
         return by_id
 
@@ -341,7 +342,7 @@ class Session:
             if self.clock() > deadline:
                 raise Abort("the bulbs did not reach the step's scene")
             self.sleep(min(0.2, self.m1["poll_s"]))
-        return {"sent_pc": sent_pc, "send_s": t_acked - t_send, "acked_at": t_acked}
+        return {"sent_pc": sent_pc, "send_s": t_acked - t_send, "t_send": t_send}
 
     # the camera -------------------------------------------------------------------------
     def post_hold(self, settings):
@@ -407,15 +408,20 @@ class Session:
     def means(self, nv12):
         return meter.region_means(meter.decode(nv12, self.m0["pixel_step"]), self.regions, len(set(self.regions)))
 
-    def settled_frames(self, held=True):
-        """frames_per_capture consecutive agreeing frames (Stage 0's noise tolerance), under the hold."""
-        tolerance, start = self.m0["noise_tolerance_codes"], self.clock()
-        kept, anchor = [], None
+    def settled_frames(self, sent_at=None, held=True):
+        """(frames, landed): frames_per_capture consecutive agreeing frames (Stage 0's noise tolerance) from
+        step_dwell_s after the send, under the hold, and when the camera first showed that light: the earliest
+        frame since the send, dwell frames included, with no frame between it and the run that disagrees."""
+        tolerance = self.m0["noise_tolerance_codes"]
+        start = self.clock() if sent_at is None else sent_at
+        counted_from = start + (0 if sent_at is None else self.m1["step_dwell_s"])
+        kept, anchor, anchor_at, seen = [], None, 0, []
         while len(kept) < self.m1["frames_per_capture"]:
             report, nv12, meta = self.next_frame()
+            now = self.clock()
             if held:
                 if not report["held"] or report["generation"] != self.generation:
-                    if self.clock() - start > self.m1["settle_limit_s"]:
+                    if now - start > self.m1["settle_limit_s"]:
                         raise Abort("the hold did not apply")
                     continue
                 ok, why = meter.gain_agreement(report, dict(self.hold, white_balance_kelvin=self.m0["white_balance_kelvin"]),
@@ -423,17 +429,32 @@ class Session:
                 if not ok:
                     raise Abort(f"a held frame failed gain agreement ({why})")
             means = self.means(nv12)
+            seen.append((now, means))
+            if now < counted_from:
+                continue
             if anchor is None or not meter.agree(anchor, means, tolerance):
                 if len(kept) >= 2:
                     raise Abort("frames within a settled step disagree")
-                if self.clock() - start > self.m1["settle_limit_s"]:
+                if now - start > self.m1["settle_limit_s"]:
                     raise Abort("the step did not settle")
-                anchor, kept = means, [(report, nv12, meta)]
+                anchor, anchor_at, kept = means, len(seen) - 1, [(report, nv12, meta)]
                 continue
             kept.append((report, nv12, meta))
-        return kept, self.clock()
+        landed = seen[anchor_at][0]
+        for at, means in reversed(seen[:anchor_at]):
+            if not meter.agree(anchor, means, tolerance):
+                break
+            landed = at
+        return kept, landed
 
-    def save(self, step, kept, timing, settled_at):
+    def check_bracket(self, nv12):
+        """Each all-off capture must agree with the one before: something else changed the room otherwise."""
+        means = self.means(nv12)
+        if self.last_all_off is not None and not meter.agree(self.last_all_off, means, self.m0["noise_tolerance_codes"]):
+            raise Abort("all-off brackets disagree")
+        self.last_all_off = means
+
+    def save(self, step, kept, timing, landed, captured):
         """Write a clean step's frames (after a guard read that passed) and its capture and step lines."""
         files = []
         for report, nv12, meta in kept:
@@ -449,7 +470,7 @@ class Session:
                        label=step.get("label"), ratio=step.get("ratio"), bulb=step.get("bulb"),
                        level=step.get("level"), kelvin=step.get("kelvin"),
                        sent_pc=timing["sent_pc"], send_s=round(timing["send_s"], 4),
-                       settle_s=round(settled_at - timing["acked_at"], 4), settled_pc=self.wall())
+                       settle_s=round(landed - timing["t_send"], 4), capture_s=round(captured - timing["t_send"], 4))
         self.last_clean = step["index"]
 
     # phases ------------------------------------------------------------------------------
@@ -542,14 +563,14 @@ class Session:
         cool = plan["temperatures"]["cool"]
         scene = model.all_on(self.m1["full_level"], cool)
         timing = self.apply(scene)
-        kept, _ = self.settled_frames(held=False)
+        kept, _ = self.settled_frames(timing["t_send"], held=False)
         t_pick = statistics.median(r["exposure_us"] for r, _, _ in kept)
         iso_pick = round(statistics.median(r["iso"] for r, _, _ in kept))
         limit = min(meter.clip_limits(self.m0))
         for k in range(int(self.m1["exposure_search_steps"]) + 1):
             settings = hold_for(t_pick * iso_pick / 2 ** (k / 2), iso_pick, self.m0)
             self.post_hold(settings)
-            kept, settled_at = self.settled_frames()
+            kept, _ = self.settled_frames()
             y = luma_percentile(kept[-1][1], self.m0["pixel_step"], self.m1["exposure_percentile"])
             self.log.write("exposure_try", exposure_us=settings["exposure_us"], iso=settings["iso"], y=y)
             if y < limit:
@@ -571,9 +592,12 @@ class Session:
             if settings != self.hold:
                 self.post_hold(settings)
             timing = self.apply(step["scene"])
-            kept, settled_at = self.settled_frames()
+            kept, landed = self.settled_frames(timing["t_send"])
+            captured = self.clock()
             self.guard_read()  # a step is clean only after a read that passed
-            self.save(step, kept, timing, settled_at)
+            if step["kind"] == "all_off":
+                self.check_bracket(kept[0][1])
+            self.save(step, kept, timing, landed, captured)
             self.record["last_clean_step"] = step["index"]
         self.probing = False
         self.release()
@@ -697,8 +721,10 @@ class Session:
 
     def finish(self, outcome, reason=None):
         """Restore, resume and the walk-through, for a clean end or an abort that may restore."""
-        if self.sensor and self.log:
-            self.sample(self.read())  # occupancy as it is now
+        by_id = self.read()  # the re-read before any restore write: a change since the last check is not overwritten
+        self.sample(by_id)
+        guard.abort_reason(self.last, by_id, self.owner, self.switch, self.sensor)
+        self.last = by_id
         arrival = self.arrival_seen()
         bulbs = [e for e in self.owner.tools() if e not in self.owner.unavailable]
         restored, failed = self.restore(bulbs, arrival=arrival) if bulbs else ([], [])

@@ -218,12 +218,18 @@ def classify(e, before, after, owner):
         return "unavailable"
     if before is not None and after.get("last_updated") == before.get("last_updated"):
         return None
-    if not owner.is_own(e, scene_of_state(after)):
+    if before is not None and before.get("state") not in ("on", "off"):
+        return "unavailable"  # coming back at whatever level: not a person's change
+    found = scene_of_state(after)
+    if not owner.is_own(e, found):
         return "foreign"
     context = (after.get("context") or {}).get("id")
-    if before is not None and context not in owner.contexts:
-        return "foreign"  # a moved last_updated with a foreign context, even if the value came back
-    return "own"
+    if before is None or context in owner.contexts:
+        return "own"
+    if found == scene_of_state(before):
+        return "foreign"  # a moved last_updated with a foreign context: the value left and came back
+    owner.contexts.add(context)  # a device's own report of the target, or the first report of a write
+    return "own"                 # whose reply named no state: within tolerance of the intent, and the value moved
 
 
 def watched_changed(before, after, switch_id, sensor_id):

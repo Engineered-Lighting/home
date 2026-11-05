@@ -617,6 +617,9 @@ class FakeCamera:
     def __init__(self, den, ha, *, token, step=10, latency=2, seed=7, code_noise=0.4, curve_k=1.0):
         self.den, self.ha, self.token, self.step, self.latency = den, ha, token, step, latency
         self.curve_k = curve_k
+        self.latency_s = 0.0         # a bulb's light lands this long after HA shows its target (ZHA reports at once)
+        self.landing_at = 0.0
+        self.frozen = False          # no new frames: the same sequence again and again
         self.rng = random.Random(seed)
         self.code_noise = code_noise
         self.points = meter.sample_points(step)
@@ -649,13 +652,14 @@ class FakeCamera:
                     for e, l in self.ha.lights.items()}
 
     def frame(self):
-        self.sequence += 1
+        self.sequence += 0 if self.frozen else 1
         scene = self.scene_now()
-        if scene != self.next_scene:  # a bulb takes `latency` frames to show a change
+        if scene != self.next_scene:  # a bulb takes `latency` frames and latency_s to show a change
             self.next_scene, self.wait = scene, self.latency
+            self.landing_at = time.perf_counter() + self.latency_s
         if self.wait:
             self.wait -= 1
-        if not self.wait or self.shown is None:
+        if (not self.wait and time.perf_counter() >= self.landing_at) or self.shown is None:
             self.shown = self.next_scene
         settings = self.hold if self.held else self.auto
         x = settings["exposure_us"] / 1000 * settings["iso"] / 100

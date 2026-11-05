@@ -183,6 +183,7 @@ class Owner:
 
     def __init__(self, initial):
         self.intents = {e: [{"target": initial[e], "responded": True}] for e in LIGHTS}
+        self.restoring = {e: [] for e in LIGHTS}  # restore writes --recover found in the log
         self.contexts = set()
         self.foreign = set()        # person-owned: never written again
         self.unavailable = set()
@@ -200,7 +201,7 @@ class Owner:
 
     def is_own(self, e, actual):
         history = self.intents[e]
-        if matches(history[-1]["target"], actual):
+        if matches(history[-1]["target"], actual) or any(matches(t, actual) for t in self.restoring[e]):
             return True
         return not history[-1]["responded"] and len(history) > 1 and matches(history[-2]["target"], actual)
 

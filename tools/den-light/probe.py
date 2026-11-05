@@ -52,6 +52,11 @@ class HAUnreachable(Exception):
     pass
 
 
+class HAAnswered(HAUnreachable):
+    """HA answered, but not 200 (a failed Zigbee delivery is a 500). Handled as unreachable, except
+    that a refused probe write aborts with HA still there to take the restore."""
+
+
 # ---- Home Assistant's REST API --------------------------------------------------------
 
 class HA:
@@ -77,15 +82,14 @@ class HA:
             raise HAUnreachable(type(exc).__name__) from None
         finally:
             connection.close()
+        if status != 200:
+            raise HAAnswered(f"answered {status} to {method} {path.split('?')[0]}")
         if len(data) > sweep.MAX_BODY:
             raise HAUnreachable("reply too large")
         try:
-            value = json.loads(data) if data else None
+            return json.loads(data) if data else None
         except ValueError:
             raise HAUnreachable("reply is not JSON") from None
-        if status != 200:
-            raise sweep.Refused(f"Home Assistant answered {status} to {method} {path.split('?')[0]}")
-        return value
 
     def states(self):
         return {s["entity_id"]: s for s in self.request("GET", "/api/states")}
@@ -308,6 +312,8 @@ class Session:
         self.log.write("intent", entity_id=e, service="light." + service, data=data, change="non-human")
         try:
             states = self.ha.call("light", service, data)
+        except HAAnswered as exc:
+            raise Abort(f"Home Assistant refused a probe write ({exc})") from None
         except HAUnreachable as exc:
             raise Abort(f"Home Assistant unreachable ({exc})", ha_lost=True) from None
         context = next(((s.get("context") or {}).get("id") for s in states if s.get("entity_id") == e), None)
@@ -737,7 +743,13 @@ class Session:
                 self.probe(plan)
             except Abort as abort:
                 return self.abort(abort)
-            unrestored = self.finish("complete")
+            except Exception as exc:  # a full disk, a bug: den_lighting must not stay paused for it
+                return self.abort(Abort(f"an error in the tool ({type(exc).__name__}: {exc})"))
+            try:
+                unrestored = self.finish("complete")
+            except Abort as stop:  # session.json still reads "probed": --recover knows the data is complete
+                return "stopped", [f"STOPPED while restoring: {stop.reason}. The data is complete, but den_lighting "
+                                   f"stays paused. Once Home Assistant answers, run probe.py --recover {self.folder}"]
             return "complete", self.result_lines(unrestored)
         finally:
             if self.log:
@@ -830,6 +842,9 @@ class Session:
             self.delete_frames_after(max(steps, default=0))
         try:
             unrestored = self.finish(outcome, reason)
+        except Abort as stop:
+            return "stopped", [f"STOPPED: {stop.reason}. den_lighting stays paused. Once Home Assistant answers, run "
+                               f"probe.py --recover {self.folder} again."]
         finally:
             self.log.close()
         return outcome, ["Recovered."] + self.result_lines(unrestored)
@@ -869,10 +884,13 @@ def rebuild_owner(lines, record):
     pending = {}
     for line in lines:
         kind, e = line.get("kind"), line.get("entity_id")
-        if kind == "intent" and not line.get("restore"):
+        if kind == "intent":
             data = line["data"]
             target = (guard.scene(True, data.get("brightness"), data.get("color_temp_kelvin"))
                       if line["service"] == "light.turn_on" else guard.scene(False))
+            if line.get("restore"):  # an earlier restore that stopped part-way: this bulb may read it now
+                owner.restoring[e].append(target)
+                continue
             owner.intend(e, target)
             pending[e] = True
         elif kind == "sent" and not line.get("restore") and pending.pop(e, False):

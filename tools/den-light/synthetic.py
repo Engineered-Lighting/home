@@ -107,7 +107,9 @@ def from_iso(text):
 # ---- the fake Home Assistant ------------------------------------------------------------
 
 class HAError(Exception):
-    pass
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
 
 
 class FakeHA:
@@ -129,6 +131,7 @@ class FakeHA:
         self.report_delay = {}     # entity -> HA seconds before its next report lands
         self.incumbent = "off"
         self.down = False          # True: HA unreachable (connections dropped)
+        self.refuse_writes = 0     # the next n light writes answer 500, as a failed Zigbee delivery does
         self.error = None
         self.on_light_change = None
         now = self.now()
@@ -385,6 +388,9 @@ class FakeHA:
             self.calls.append((now, domain, service, dict(data), context, "rest"))
             changed = []
             if domain == "light" and service in ("turn_on", "turn_off"):
+                if self.refuse_writes:
+                    self.refuse_writes -= 1
+                    raise HAError("Failed to send request: device did not respond", 500)
                 ids = data.get("entity_id")
                 ids = [ids] if isinstance(ids, str) else list(ids or [])
                 if not ids or not set(ids) <= set(self.lights):
@@ -490,7 +496,14 @@ class FakeHA:
                     data = json.loads(raw or b"{}")
                     return self.reply(200, fake.call(domain, service, data))
                 except HAError as exc:
-                    return self.reply(400, {"message": str(exc)})
+                    if exc.status != 500:
+                        return self.reply(exc.status, {"message": str(exc)})
+                    body = b"500 Internal Server Error\n\nServer got itself in trouble"  # HA's page: text, not JSON
+                    self.send_response(500)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return None
 
         return Handler
 

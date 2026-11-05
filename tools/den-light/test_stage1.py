@@ -803,18 +803,22 @@ class ProbeEndToEndTests(unittest.TestCase):
         self.assertEqual([u[0] for u in record["unrestored"]], [e])
         rig.assert_normal_is_snapshot(self, [x for x in guard.LIGHTS if x != e])
 
+    def walk_through_once(self, rig):
+        """Someone walks in and out, slowly enough for the tool's polling on a busy PC."""
+        def go():
+            time.sleep(0.1)
+            rig.ha.set_occupancy("on")
+            time.sleep(0.5)
+            rig.ha.set_occupancy("off")
+        threading.Thread(target=go, daemon=True).start()
+
     def test_occupancy_unknown_at_resume_asks_for_a_walk_through(self):
-        rig = Rig(self)
+        rig = Rig(self, m1=method1(walkthrough_limit_s=10))
 
         def walk(text):
             rig.said.append(text)
             if "walk through" in text:
-                def go():
-                    time.sleep(0.1)
-                    rig.ha.set_occupancy("on")
-                    time.sleep(0.1)
-                    rig.ha.set_occupancy("off")
-                threading.Thread(target=go, daemon=True).start()
+                self.walk_through_once(rig)
         s = rig.session()
         s.say = walk
         outcome, lines, s = rig.run(at_step(6, lambda s: rig.ha.set_occupancy("unknown")), session=s)
@@ -832,10 +836,10 @@ class ProbeEndToEndTests(unittest.TestCase):
         self.assertEqual(record["walk_through"]["outcome"], "bulbs left lit, occupancy unknown")
         self.assertIn("bulbs left lit, occupancy unknown", lines)
         self.assertTrue(any(rig.ha.lights[e]["on"] for e in guard.LIGHTS), "it never turns them off itself")
-        threading.Timer(0.1, rig.ha.set_occupancy, args=("on",)).start()
-        threading.Timer(0.25, rig.ha.set_occupancy, args=("off",)).start()
-        rig.m1 = rig.m1.closed(walkthrough_limit_s=3)
-        outcome, lines = rig.session().recover()
+        rig.m1 = rig.m1.closed(walkthrough_limit_s=10)
+        s = rig.session()
+        s.say = lambda text: self.walk_through_once(rig)
+        outcome, lines = s.recover()
         self.assertEqual(lines, ["bulbs off after the walk-through"])
         self.assertEqual(json.loads((rig.folder / "session.json").read_text())["walk_through"]["bulbs_off"], True)
 
@@ -859,6 +863,83 @@ class ProbeEndToEndTests(unittest.TestCase):
         self.assertEqual(rig.holds(), {})
         self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "on")
         self.assert_frames_are_clean(rig)
+
+    def test_a_probe_write_ha_refuses_aborts_and_restores(self):
+        rig = Rig(self)
+        outcome, lines, s = rig.run(at_step(9, lambda s: setattr(rig.ha, "refuse_writes", 1)))
+        self.assertEqual(outcome, "aborted", lines)
+        record = json.loads((rig.folder / "session.json").read_text())
+        self.assertIn("500", record["abort_reason"])
+        self.assertEqual(record["phase"], "done", "HA is there, so the restore runs now")
+        rig.assert_normal_is_snapshot(self)
+        self.assertEqual(rig.holds(), {})
+        self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "on")
+        self.assert_frames_are_clean(rig)
+
+    def test_an_unexpected_error_mid_probe_aborts_and_restores(self):
+        rig = Rig(self)
+
+        def boom(s):
+            raise OSError("no space left on device")
+        outcome, lines, s = rig.run(at_step(9, boom))
+        self.assertEqual(outcome, "aborted", lines)
+        self.assertIn("OSError", json.loads((rig.folder / "session.json").read_text())["abort_reason"])
+        rig.assert_normal_is_snapshot(self)
+        self.assertEqual(rig.holds(), {})
+        self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "on")
+
+    def restore_then_lose_ha(self, rig):
+        """HA goes away on the second restore write, with the first bulb already restored."""
+        real = probe.Session.restore_send
+        state = {"n": 0}
+
+        def dying(self_, e, target):
+            state["n"] += 1
+            if state["n"] == 2:
+                rig.ha.down = True
+            return real(self_, e, target)
+        return mock.patch.object(probe.Session, "restore_send", dying)
+
+    def test_ha_lost_during_the_clean_end_restore_asks_for_recover(self):
+        rig = Rig(self)
+        with self.restore_then_lose_ha(rig):
+            outcome, lines, s = rig.run()
+        self.assertEqual(outcome, "stopped")
+        self.assertIn("--recover", lines[0])
+        self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "off", "den_lighting stays paused")
+        rig.ha.down = False
+        outcome, lines = rig.session().recover()
+        self.assertEqual(outcome, "complete", lines)
+        record = json.loads((rig.folder / "session.json").read_text())
+        self.assertEqual(record["unrestored"], [], "the tool's own restore write is not a person's change")
+        rig.assert_normal_is_snapshot(self)
+        self.assertEqual(rig.holds(), {})
+        self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "on")
+
+    def test_ha_lost_during_an_aborts_restore_asks_for_recover(self):
+        rig = Rig(self)
+        with self.restore_then_lose_ha(rig):
+            outcome, lines, s = rig.run(at_step(9, lambda s: rig.ha.set_occupancy("unknown")))
+        self.assertEqual(outcome, "aborted")
+        self.assertIn("--recover", lines[0])
+        rig.ha.down = False
+        outcome, lines = rig.session().recover()
+        self.assertEqual(json.loads((rig.folder / "session.json").read_text())["unrestored"], [])
+        rig.assert_normal_is_snapshot(self)
+        self.assertEqual(rig.ha.states[synthetic.SWITCH]["state"], "on")
+
+    def test_recover_stopped_again_keeps_asking(self):
+        rig = Rig(self)
+        rig.run(at_step(10, lambda s: setattr(rig.ha, "down", True)))
+        rig.ha.down = False
+        with self.restore_then_lose_ha(rig):
+            outcome, lines = rig.session().recover()
+        self.assertEqual(outcome, "stopped")
+        self.assertIn("--recover", lines[0])
+        rig.ha.down = False
+        outcome, lines = rig.session().recover()
+        rig.assert_normal_is_snapshot(self)
+        self.assertEqual(rig.holds(), {})
 
     def test_a_game_mid_run_leaves_den_lighting_paused_and_asks_for_recover(self):
         rig = Rig(self)

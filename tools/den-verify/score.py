@@ -257,6 +257,7 @@ class Run:
         parts = model.contributions(state)
         before_state = d.before_state()
         before = model.predict(before_state)
+        parts_before = model.contributions(before_state)
         ref = d.ref
         out = {}
         unit_ok = frame.unit == model.basis_unit
@@ -281,15 +282,14 @@ class Run:
             else:
                 row["held_share"] = 0.0
             row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
+            brightest = sum(max(parts[c][sid], parts_before[c][sid] if c in parts_before else 0.0) for c in parts
+                            if parts[c][sid] != (parts_before[c][sid] if c in parts_before else 0.0))
             if measured is None:
                 row["status"] = "prior_only" if why == "prior_only" else "unverifiable"
             elif predicted is None:
                 row["status"], row["why"] = "unverifiable", rwhy
-            elif predicted <= 0:
-                row["status"], row["why"] = "unverifiable", "prediction not positive"
             else:
-                row["residual"] = (measured - predicted) / predicted
-                row["status"] = "within" if within(measured, predicted, m["tolerance"]) else "outside"
+                self.judge_level(row, measured, predicted, brightest)
             # increments: measured change against the model's own change
             if measured is not None and ref_val is not None:
                 mc = measured - ref_val
@@ -302,13 +302,6 @@ class Run:
                 row["increment"] = {"point_id": sid, "measured_change": None,
                                     "predicted_change": row["predicted_change"],
                                     "status": "unverifiable", "uncertainty": None}
-            # The read-frame prediction carries the model's error on the change. Where the fall is larger than
-            # the level left, the level's tolerance is narrower than that error: it proves neither a hit nor
-            # a miss, and only a miss on the increment counts.
-            if (row["status"] in ("within", "outside") and m["background"] != "zero"
-                    and -row["predicted_change"] > predicted and row["increment"]["status"] == "within"):
-                row["status"], row["why"], row["dim_unresolved"] = "unverifiable", "a deep dim whose change landed", True
-                del row["residual"]
             # A held-lit point is never a hit; it is a miss only beyond what the held light could account for.
             row["excluded_held"] = (row["held_lit"] and row["status"] in ("within", "outside")
                                     and (m["held_rule"] == "exclude_both"
@@ -316,11 +309,35 @@ class Run:
             out[sid] = row
         return out, revision
 
+    def judge_level(self, row, measured, predicted, brightest):
+        """within or outside, to the ladder's tolerance or what the prediction itself inherits if that is wider.
+
+        Nothing here but the status depends on the reading.
+        """
+        m = self.m
+        # the read frame's D hides the model's error at the state it read, and the changed bulbs carry theirs;
+        # with D taken as zero only an off, with no level to take a share of, needs the same allowance
+        inherited = 0.0
+        if m["background"] != "zero" or predicted <= 0:
+            inherited = float(Fraction(str(m["change_allowance"])) * Fraction(brightest))
+        if predicted <= 0 and inherited <= 0:
+            row["status"], row["why"] = "unverifiable", "prediction not positive"
+            return
+        level_tolerance = m["tolerance"] * max(predicted, 0.0)
+        row["error"] = measured - predicted
+        if predicted > 0:
+            row["residual"] = row["error"] / predicted
+        ladder = predicted > 0 and within(measured, predicted, m["tolerance"])
+        row["status"] = "within" if ladder or within(measured, predicted, 0, inherited) else "outside"
+        row["level_bound"] = max(level_tolerance, inherited)
+        row["widened"] = inherited > level_tolerance
+        row["wide_hit"] = row["status"] == "within" and not ladder
+
     def explain(self, d, frame, row):
         """One cause for an outside point: held, shadow, daylight, drift or unexplained."""
         if row["excluded_held"]:
             return {"cause": "held", "basis": f"held or superseded share {row['held_share']:.2f}"}
-        res = row["residual"]
+        res = row["error"]
         occ, people = self.occupied(frame.ts)
         xy = self.model.xy(row["point_id"])
         if occ and res < 0 and xy:
@@ -378,6 +395,8 @@ class Run:
             kind = kinds.get(p) or self.model.kind(p)
             points.append({"point_id": p, "kind": kind, "status": row["status"],
                            "camera_estimate": row["measured"], "residual": _r(row.get("residual"), 4)})
+            if row.get("widened"):
+                points[-1]["level_bound"] = _r(row["level_bound"], 3)
             inc = dict(row["increment"])
             for k in ("measured_change", "predicted_change", "uncertainty"):
                 inc[k] = _r(inc[k], 3)
@@ -458,6 +477,8 @@ class Run:
                 flags.append("occupied")
             if row["basis"] == "fallback_patch":
                 flags.append("fallback_patch")
+            if row.get("wide_hit"):
+                flags.append("wide_tolerance")
             if row["status"] == "outside":
                 flags.append("outside")
                 cause = self.explain(d, frame, row)["cause"]
@@ -550,7 +571,8 @@ class Run:
         status_counts = {"within": 0, "outside": 0, "unverifiable": 0, "prior_only": 0}
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
-        excluded_held = fallback_scored = eyes_total = dims_unverifiable = 0
+        excluded_held = fallback_scored = eyes_total = 0
+        wide_by_day = {}
         excluded_by_status = {"within": 0, "outside": 0}
         not_admitted, not_verified = [], []
         spill_counts, inc_counts = {}, {}
@@ -581,14 +603,13 @@ class Run:
             for p in verify["points"]:
                 status_counts[p["status"]] += 1
                 per_point.setdefault(p["point_id"], {k: 0 for k in status_counts})[p["status"]] += 1
-                dims_unverifiable += "dim_unresolved" in rows.get(p["point_id"], {})
             eyes_total += len(verify["not_verified"])
             for s in verify["spill"]:
                 spill_counts[s["status"]] = spill_counts.get(s["status"], 0) + 1
             for s in verify["increments"]:
                 inc_counts[s["status"]] = inc_counts.get(s["status"], 0) + 1
             if admitted:
-                hits = n = 0
+                hits = n = wide = 0
                 for r in counted:
                     if r["excluded_held"]:
                         excluded_held += 1
@@ -598,12 +619,14 @@ class Run:
                         fallback_scored += 1
                     n += 1
                     hits += r["status"] == "within"
+                    wide += r["wide_hit"]
                 for e in verify["explanation"] or []:
                     if e["cause"] in causes:
                         causes[e["cause"]] += 1
                 day = self.clock.day(frame.ts)
                 h0, n0 = counted_by_day.get(day, (0, 0))
                 counted_by_day[day] = (h0 + hits, n0 + n)
+                wide_by_day[day] = wide_by_day.get(day, 0) + wide
             rows_out.append({"decision_id": d.id, "light_state": frame.id, "ts": frame.ts,
                              "settled_at": d.settled, "occupied": occ, "admitted": admitted,
                              "within_tolerance": verify["within_tolerance"],
@@ -628,6 +651,10 @@ class Run:
                 frame_counts["residual_written"] += 1
             states_out.append(rec)
 
+        hit_rate = self.hit_rate(counted_by_day)
+        narrow = {day: (h - w, k) for day, (h, k), w in
+                  ((day, v, wide_by_day.get(day, 0)) for day, v in counted_by_day.items())}
+        strict = self.hit_rate(narrow)
         misses = sum(causes.values())
         surfaces_total = sum(status_counts.values())
         unver = status_counts["unverifiable"] + status_counts["prior_only"]
@@ -638,10 +665,11 @@ class Run:
             "decisions": {"total": len(self.decs), "verified": len(rows_out),
                           "not_verified": not_verified, "not_admitted": not_admitted},
             "frames": frame_counts,
-            "hit_rate": self.hit_rate(counted_by_day),
+            "hit_rate": hit_rate,
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
-            "dim_points_unverifiable": dims_unverifiable,
+            "hits_beyond_level_tolerance": {"count": sum(wide_by_day.values()), "value_if_missed": strict["value"],
+                                            "verdict_if_missed": strict["verdict"]},
             "fallback_patch_points_scored": fallback_scored,
             "misses_explained": {
                 **causes, "misses": misses,

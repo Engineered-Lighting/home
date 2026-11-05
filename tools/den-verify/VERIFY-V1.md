@@ -28,16 +28,17 @@ For each point at the verify frame:
   not list taken from `Decision.inputs.actuator_state`, and then every hold in
   force at the frame (`Correction.hold.pinned`, at the hold set's revision)
   pinned over them. Requested values are never used.
-- `residual` = (measured − predicted) / predicted.
+- `residual` = (measured − predicted) / predicted, null when the prediction is
+  not positive.
 - `status`:
-  - `within` when |residual| ≤ `tolerance` (inclusive, compared in exact
-    rationals so 345 against 300 is within);
+  - `within` when |measured − predicted| ≤ `tolerance` × predicted (inclusive,
+    compared in exact rationals so 345 against 300 is within), or ≤ the wider
+    bound the prediction itself inherits (see "The background");
   - `outside` otherwise;
   - `prior_only` when the estimate's `basis` is `prior`;
   - `unverifiable` when the surface is missing from the frame, its usable share
-    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's,
-    the prediction is not positive, or the point is a deep dim whose change
-    landed (see "The background"). Its `residual` is then null.
+    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's, or
+    nothing is lit there and nothing changed. Its `residual` is then null.
 
 A `fallback_patch` estimate is scored here, because a fallback patch is a
 verify aid. It never counts as delivered service: the gold share below treats
@@ -53,17 +54,31 @@ D(p) + Ê(p; state), and the background D comes from the slot `background`:
 - `zero`: D(p) = 0, for runs after dark.
 
 Under `reference_frame` the prediction works out as the read frame's measurement
-plus the model's change, so its error grows with the change, not with the level
-left after it. On a deep dim, where the predicted fall is larger than the
-predicted level (about 2:1 in a dark room), that error can exceed ±15% of what
-is left: with the model 5% off and every bulb landing as commanded, a 0.8 to 0.1
-dim reads −23% or +49%, depending on which way the model is off. The level check
-there proves neither a hit nor a miss. So under `reference_frame`, a deep dim
-whose increment (below) is `within` is `unverifiable`, and the report and the
-console count these (`dim_points_unverifiable`). If the increment misses, the
-bulb did not make the change, and the point is `outside`. Every other point, and
-every point under `zero`, keeps the plain level check. A run with nothing left to
-count is `insufficient`, never a pass.
+plus the model's change, so it inherits the model's error on every bulb that
+changed, at that bulb's brighter level, and that error does not shrink with the
+level left. With the model 5% off and every bulb landing as commanded, a 0.8 to
+0.1 dim reads −23% or +49%, and a crossfade of two bulbs with no net change reads
+−18% with each bulb 10% off. So under `reference_frame` a point is judged to the
+wider of `tolerance` × predicted and `change_allowance` × the brighter level of
+every bulb that changed, summed. A bulb that did not change adds nothing: its
+error is in both frames and cancels. For a bright-up the first is the wider, so
+the ladder's ±15% stands exactly; on a dim or an off the second is, and the
+record gives that point's `level_bound`.
+
+Every point is then a hit or a miss, whichever way the model is off. The rule
+looks at no reading, so it cannot keep hits and drop misses. What it costs:
+
+- A fault smaller than the allowance reads as a hit. At the proposed 0.15, one
+  bulb of four stuck on a dim shallower than about 2.5:1 is a hit on the level
+  (its increment still reads `outside`). One stuck on a deeper dim, on an off or
+  on any bright-up is a miss. A model more than 15% off at a bulb's brighter level
+  is a miss.
+- `change_allowance` = 0 is the ladder's literal level check, with the false misses
+  above. `zero` needs no allowance and is sharper after dark, because it reads the
+  model's own level: there only an off, with no level to take a share of, uses it.
+
+The report and the console give how many hits are beyond ±15% of the level and
+what the hit rate would be if they had missed (`hits_beyond_level_tolerance`).
 
 **Increments.** For each point, `measured_change` = Ê_after − Ê_before on the
 camera (verify frame minus the decision's read frame) and `predicted_change` =
@@ -210,8 +225,11 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   tool writes `{surface_id, predicted, residual, residual_pct, unit, against
   {decision_id, hold_set_revision}, flags[]}`, with `residual` = measured −
   predicted in `unit`, and `flags` from `held`, `occupied`, `outside`,
-  `daylight`, `shadow`, `drift`, `unexplained`, `fallback_patch`.
+  `daylight`, `shadow`, `drift`, `unexplained`, `fallback_patch`,
+  `wide_tolerance` (`within` only by the wider bound).
 - `spill[]` and `increments[]` entries add `uncertainty`, in the block's `unit`.
+- `points[]` entries add `level_bound`, in the block's `unit`, only where the
+  point is judged to more than `tolerance` × predicted.
 - `explanation` is null when nothing missed, else a list of
   `{point_id, cause, basis}`.
 - `verify` is null with a sibling `verify_status` when no verify frame exists;
@@ -256,6 +274,7 @@ bootstrap_rounds = 10000            # owner choice 6
 # Open: the contracts leave these to the owner
 settle_margin_s = open              # open, proposed 1; Hue landing after a fade (den_lighting's own readback window is 3)
 background = open                   # open, proposed "reference_frame"; or "zero"
+change_allowance = open             # open, proposed 0.15; the read-frame prediction's share of each changed bulb's brighter level (rung 8's gate: median 8%, p90 19%); 0 is the ladder's literal level check
 held_share_min = open               # open, proposed 0.15; held or superseded share of a point's light; below the tolerance they alone cannot push it out
 held_rule = open                    # open, proposed "far_misses_count"; or "exclude_both"; when a held-lit point is a miss
 uncertainty_rel = open              # open, proposed 0.03; per frame, a fraction of the estimate

@@ -496,7 +496,7 @@ class DaylightAndDrift(unittest.TestCase):
 
 
 class DimsAndOffs(unittest.TestCase):
-    """Under the read-frame background, the model's error at a brighter before state is not a miss."""
+    """Under the read-frame background the prediction inherits the model's error on what changed."""
 
     names = [f"p{i}" for i in range(6)]
     # the model is 5% off, high at p1, p3, p5 and low at p0, p2, p4: every bulb lands as commanded
@@ -525,28 +525,28 @@ class DimsAndOffs(unittest.TestCase):
     def ons(self):
         return [self.case(f"d-on{i}", syn.T0 + 100 * i, {B0: 0.3, B1: 0.5}, {B0: 0.8}) for i in range(3)]
 
-    def test_a_perfect_off_and_a_deep_dim_do_not_fail_a_passing_session(self):
+    def test_a_perfect_off_and_a_deep_dim_count_as_hits(self):
         t = syn.T0
         off = self.case("d-off", t + 400, {B0: 0.8, B1: 0.5}, {B0: 0.0, B1: 0.0})
         dim = self.case("d-dim", t + 500, {B0: 0.8, B1: 0.5}, {B0: 0.1, B1: 0.1})
         decisions, states, report = self.run_cases(self.ons() + [off, dim])
         hr = report["hit_rate"]
-        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (18, 0, 1.0, "pass"))
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (30, 0, 1.0, "pass"))
         self.assertEqual(report["misses_explained"]["misses"], 0)
         for did in ("d-off", "d-dim"):
             v = by_id(decisions, "decision_id", did)["verify"]
-            # the same whichever way the model is off, and no residual to be read as a miss
-            self.assertEqual({p["status"] for p in v["points"]}, {"unverifiable"}, did)
-            self.assertEqual({p["residual"] for p in v["points"]}, {None}, did)
-            self.assertIsNone(v["within_tolerance"], did)
+            # the same whichever way the model is off; 15% of the 240 and 50 that changed
+            self.assertEqual({p["status"] for p in v["points"]}, {"within"}, did)
+            self.assertEqual({p["level_bound"] for p in v["points"]}, {43.5}, did)
+            self.assertIs(v["within_tolerance"], True, did)
             self.assertIsNone(v["explanation"], did)
-            self.assertEqual({i["status"] for i in v["increments"] if i["measured_change"] is not None},
-                             {"within"}, did)
-        self.assertEqual(report["points"]["unverifiable"], 12)
-        self.assertEqual(report["dim_points_unverifiable"], 9)  # d-off's other three predict nothing at all
-        for s in states:
-            if s["ts"] in (t + 405, t + 505):  # the frames that verify d-off and d-dim
-                self.assertEqual(s["residual"], [])
+        self.assertEqual(report["points"]["unverifiable"], 0)
+        # what those hits rest on is said, and what the gate would read without them
+        self.assertEqual(report["hits_beyond_level_tolerance"],
+                         {"count": 12, "value_if_missed": 0.6, "verdict_if_missed": "fail"})
+        r = residual(states, t + 505, "p0")
+        self.assertIn("wide_tolerance", r["flags"])
+        self.assertNotIn("outside", r["flags"])
 
     def test_the_owner_is_told_on_the_console(self):
         t = syn.T0
@@ -556,9 +556,10 @@ class DimsAndOffs(unittest.TestCase):
             with Quiet() as q:
                 self.assertEqual(cli.main(argv), 0)
         out = q.buf.getvalue()
-        self.assertIn("gate 0.85: insufficient", out)
-        self.assertIn("left out of the hit rate: 0 point(s) lit by held or superseded bulbs, "
-                      "6 deep dim point(s) whose change landed", out)
+        self.assertIn("gate 0.85: pass", out)
+        self.assertIn("6 hit(s) are beyond 15% of the level; if they had missed, "
+                      "the hit rate would be 0.0: fail", out)
+        out.encode("ascii")
 
     def test_a_bulb_that_did_not_dim_is_still_a_miss_and_fails_the_gate(self):
         t = syn.T0
@@ -570,15 +571,16 @@ class DimsAndOffs(unittest.TestCase):
         hr = report["hit_rate"]
         self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (18, 6, 0.75, "fail"))
 
-    def test_a_bulb_that_stayed_on_after_an_off_is_still_a_miss(self):
+    def test_a_bulb_that_stayed_on_after_an_off_is_a_miss_whichever_way_the_model_is_off(self):
         t = syn.T0
         stuck = {B0: 0.8, B1: 0.5}
         off = self.case("d-off", t, stuck, {B0: 0.0, B1: 0.0}, landed=stuck)
         decisions, _, report = self.run_cases([off])
         d = by_id(decisions, "decision_id", "d-off")
-        for n in ("p0", "p2", "p4"):
-            self.assertEqual(point(d, n)["status"], "outside")
+        self.assertEqual([p["status"] for p in d["verify"]["points"]], ["outside"] * 6)
         self.assertEqual(report["hit_rate"]["verdict"], "fail")
+        self.assertEqual(len(d["verify"]["explanation"]), 6)
+        self.assertIsNone(point(d, "p1")["residual"])  # the model is high there, so the read frame predicts below zero
 
     def test_a_dim_that_landed_short_of_the_change_is_still_a_miss(self):
         t = syn.T0
@@ -587,40 +589,103 @@ class DimsAndOffs(unittest.TestCase):
         decisions, _, _ = self.run_cases([dim])
         self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"outside"})
 
-    def one_point(self, before, after, measured):
+    def one_point(self, before, after, measured, err_before=0.0):
         model = syn.hue_model({"desk-1": {B0: 400.0}}, kelvins=(2700,))
         t = syn.T0
-        ref = syn.light_state(t, {"desk-1": 400 * before}, anchored=False, ident="ls-ref")
+        ref = syn.light_state(t, {"desk-1": 400 * before * (1 + err_before)}, anchored=False, ident="ls-ref")
         dec = syn.hue_decision("d-1", t + 0.5, {B0: before}, {B0: {"level": after, "steps": send(t + 0.5)}}, "ls-ref",
                                targets={"A": {"surface_id": "desk-1"}})
         return [dec], [ref, syn.light_state(t + 5, {"desk-1": measured}, anchored=False)], model
 
-    def test_a_bright_up_keeps_the_level_check_though_its_increment_lands(self):
-        d, f, model = self.one_point(0.0, 0.8, 320 * 1.16)
-        decisions, _, _ = score(d, f, model)
-        self.assertEqual(decisions[0]["verify"]["increments"][0]["status"], "within")
-        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
-        self.assertEqual(point(decisions[0], "desk-1")["residual"], 0.16)
-
-    def test_a_deep_dim_that_landed_earns_no_hit_either(self):
-        # hits there with soft misses dropped would be the held bug again: the gate cannot be lifted
-        for measured in (40.0, 40 * 1.3):  # on target, and 30% high
-            d, f, model = self.one_point(0.8, 0.1, measured)
+    def test_the_models_error_at_the_brighter_state_is_not_a_miss(self):
+        for after, err in ((0.37, 0.10), (0.4, 0.10), (0.36, 0.12), (0.37, -0.10), (0.1, 0.14)):
+            d, f, model = self.one_point(0.8, after, 400 * after, err_before=err)
             decisions, _, report = score(d, f, model)
-            self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable", measured)
-            hr = report["hit_rate"]
-            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"), measured)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], "within", (after, err))
+            self.assertEqual(point(decisions[0], "desk-1")["level_bound"], 48.0, (after, err))
+            self.assertEqual(report["hit_rate"]["verdict"], "pass", (after, err))
 
-    def test_a_dim_of_two_to_one_keeps_the_level_check_though_its_increment_lands(self):
-        d, f, model = self.one_point(0.8, 0.4, 160 * 1.2)
-        decisions, _, report = score(d, f, model)
-        self.assertEqual(decisions[0]["verify"]["increments"][0]["status"], "within")
+    def test_such_dims_do_not_fail_a_session_whose_bulbs_all_landed(self):
+        model = syn.hue_model({n: {B0: 400.0} for n in self.names}, kelvins=(2700,))
+        targets = {f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}
+
+        def scene(did, t, before, after, err_before):
+            ref = syn.light_state(t, {n: 400 * before * (1 + err_before) for n in self.names}, anchored=False,
+                                  ident=f"ls-{did}")
+            dec = syn.hue_decision(did, t + 0.5, {B0: before}, {B0: {"level": after, "steps": send(t + 0.5)}},
+                                   f"ls-{did}", targets=targets)
+            return [dec], [ref, syn.light_state(t + 5, {n: 400 * after for n in self.names}, anchored=False)]
+
+        t = syn.T0
+        cases = [scene(f"d-on{i}", t + 100 * i, 0.3, 0.8, 0.0) for i in range(3)]
+        cases += [scene(f"d-dim{i}", t + 500 + 100 * i, 0.8, 0.37, 0.10) for i in range(2)]
+        decisions = [d for c in cases for d in c[0]]
+        frames = [f for c in cases for f in c[1]]
+        hr = score(decisions, frames, model)[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (30, 0, "pass"))
+
+    def crossfade(self, err):
+        """B0 1 to 0 and B1 0 to 1, both landed, the model off by err each way: no net change."""
+        model = syn.hue_model({"mid": {B0: 300.0, B1: 300.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"mid": 300 * (1 + err)}, anchored=False, ident="ls-x")
+        dec = syn.hue_decision("d-x", t + 0.5, {B0: 1.0, B1: 0.0},
+                               {B0: {"level": 0.0, "steps": send(t + 0.5)}, B1: {"level": 1.0, "steps": send(t + 0.5)}},
+                               "ls-x", targets={"A": {"surface_id": "mid"}})
+        after = syn.light_state(t + 5, {"mid": 300 * (1 - err)}, anchored=False)
+        return score([dec], [ref, after], model)
+
+    def test_a_crossfade_whose_bulbs_landed_is_not_a_miss(self):
+        for err in (0.08, 0.10, 0.12):
+            decisions, _, report = self.crossfade(err)
+            self.assertEqual(point(decisions[0], "mid")["status"], "within", err)
+            self.assertEqual(report["hit_rate"]["verdict"], "pass", err)
+
+    def test_a_model_beyond_the_allowance_is_still_a_miss(self):
+        d, f, model = self.one_point(0.8, 0.1, 40.0, err_before=0.2)
+        self.assertEqual(point(score(d, f, model)[0][0], "desk-1")["status"], "outside")
+        self.assertEqual(point(self.crossfade(0.2)[0][0], "mid")["status"], "outside")
+
+    def test_a_far_reading_at_a_deep_dim_does_not_cost_the_points_on_target(self):
+        t = syn.T0
+
+        def dim(did, tt, far):
+            ref = syn.light_state(tt, {n: 300 * 0.8 + 100 * 0.5 for n in self.names}, anchored=False, ident=f"ls-{did}")
+            dec = syn.hue_decision(did, tt + 0.5, {B0: 0.8, B1: 0.5},
+                                   {B0: {"level": 0.1, "steps": send(tt + 0.5)}, B1: {"level": 0.1, "steps": send(tt + 0.5)}},
+                                   f"ls-{did}", targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)})
+            values = {n: 40.0 for n in self.names}
+            values[self.names[0]] = far
+            return [dec], [ref, syn.light_state(tt + 5, values, anchored=False)]
+
+        hr = self.run_cases([dim("d-1", t, 145.0)])[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (5, 1, 0.8333, "fail"))
+        on = self.case("d-on", t, {B0: 0.3, B1: 0.5}, {B0: 0.8})
+        cases = [on, dim("d-1", t + 100, 145.0), dim("d-2", t + 200, 145.0)]
+        hr = self.run_cases(cases)[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (16, 2, 0.8889, "pass"))
+
+    def test_a_bright_up_keeps_the_ladders_tolerance_exactly(self):
+        for before in (0.0, 0.3, 0.5):
+            d, f, model = self.one_point(before, 0.8, 320 * 1.151)
+            decisions, _, report = score(d, f, model)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], "outside", before)
+            self.assertNotIn("level_bound", point(decisions[0], "desk-1"), before)
+            d, f, model = self.one_point(before, 0.8, 320 * 1.149)
+            decisions, _, report = score(d, f, model)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], "within", before)
+            self.assertEqual(report["hits_beyond_level_tolerance"]["count"], 0, before)
+
+    def test_an_unchanged_bulbs_light_widens_nothing(self):
+        # its error is in both frames and cancels, so 15% of the level stands
+        model = syn.hue_model({"desk-1": {B0: 100.0, B1: 300.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 400.0}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: 1.0, B1: 1.0}, {B0: {"level": 0.1, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        decisions, _, _ = score([dec], [ref, syn.light_state(t + 5, {"desk-1": 310 * 1.16}, anchored=False)], model)
         self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
-        self.assertEqual(report["hit_rate"]["verdict"], "fail")
-        d, f, model = self.one_point(0.8, 0.4, 160 * 1.1)
-        decisions, _, report = score(d, f, model)
-        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
-        self.assertEqual(report["hit_rate"]["verdict"], "pass")
+        self.assertNotIn("level_bound", point(decisions[0], "desk-1"))
 
     def test_daylight_keeps_the_level_check_on_the_same_dim(self):
         model = syn.hue_model({"desk-1": {B0: 400.0}}, kelvins=(2700,))
@@ -628,18 +693,105 @@ class DimsAndOffs(unittest.TestCase):
         ref = syn.light_state(t, {"desk-1": 400 * 0.8 + 500}, anchored=False, ident="ls-ref")
         dec = syn.hue_decision("d-1", t + 0.5, {B0: 0.8}, {B0: {"level": 0.1, "steps": send(t + 0.5)}}, "ls-ref",
                                targets={"A": {"surface_id": "desk-1"}})
-        after = syn.light_state(t + 5, {"desk-1": 40.0 + 500}, anchored=False)
-        decisions, _, _ = score([dec], [ref, after], model)
-        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
+        for reading, status in ((40.0 + 500, "within"), ((40.0 + 500) * 1.16, "outside")):
+            after = syn.light_state(t + 5, {"desk-1": reading}, anchored=False)
+            decisions, _, _ = score([dec], [ref, after], model)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], status)
+            self.assertNotIn("level_bound", point(decisions[0], "desk-1"))
 
     def test_the_zero_background_keeps_the_level_check(self):
         d, f, model = self.one_point(0.8, 0.1, 40 * 1.25)
         decisions, _, _ = score(d, f, model)
-        self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable")
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
         decisions, _, report = score(d, f, model, overrides={"background": "zero"})
         self.assertEqual(decisions[0]["verify"]["increments"][0]["status"], "within")
         self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
-        self.assertEqual(report["dim_points_unverifiable"], 0)
+        self.assertEqual(report["hits_beyond_level_tolerance"]["count"], 0)
+
+    def test_an_off_under_the_zero_background_is_judged_too(self):
+        zero = {"background": "zero"}
+        d, f, model = self.one_point(0.8, 0.0, 0.5)
+        self.assertEqual(point(score(d, f, model, overrides=zero)[0][0], "desk-1")["status"], "within")
+        d, f, model = self.one_point(0.8, 0.0, 320.0)
+        decisions, _, report = score(d, f, model, overrides=zero)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
+        self.assertEqual(report["hit_rate"]["verdict"], "fail")
+
+    def test_nothing_lit_and_nothing_changed_stays_unverifiable(self):
+        model = syn.hue_model({"desk-1": {B0: 400.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 0.0}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: 0.0}, {B0: {"level": 0.0, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        decisions, _, report = score([dec], [ref, syn.light_state(t + 5, {"desk-1": 5.0}, anchored=False)], model)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable")
+        self.assertEqual(report["hit_rate"]["verdict"], "insufficient")
+
+    def test_the_allowance_is_the_owners_and_zero_is_the_ladders_level_check(self):
+        m = method.load()
+        self.assertEqual(m.open["change_allowance"], 0.15)
+        d, f, model = self.one_point(0.8, 0.37, 400 * 0.37, err_before=0.10)
+        decisions, _, report = score(d, f, model, overrides={"change_allowance": 0})
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
+        self.assertEqual(report["hit_rate"]["verdict"], "fail")
+
+    def room(self, before, after, read, reads, anchored=False, overrides=None):
+        """Four equal bulbs, 50 each at full, all commanded from `before` to `after`."""
+        unit = "lx" if anchored else "relative"
+        model = syn.hue_model({n: {b: 50.0 for b in syn.HUE} for n in self.names}, unit=unit, kelvins=(2700,))
+        t = syn.T0
+        targets = {f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}
+
+        def scene(did, tt, b, a, r0, r1):
+            ref = syn.light_state(tt, {n: r0 for n in self.names}, anchored=anchored, ident=f"ls-{did}")
+            dec = syn.hue_decision(did, tt + 0.5, {x: b for x in syn.HUE},
+                                   {x: {"level": a, "steps": send(tt + 0.5)} for x in syn.HUE}, f"ls-{did}",
+                                   targets=targets)
+            return dec, [ref, syn.light_state(tt + 5, {n: r1 for n in self.names}, anchored=anchored)]
+
+        cases = [scene(f"d-on{i}", t + 100 * i, 0.2, 1.0, 40.0, 200.0) for i in range(3)]
+        cases.append(scene("d-dim", t + 400, before, after, read, reads))
+        decisions, _, report = score([c[0] for c in cases], [f for c in cases for f in c[1]], model, overrides=overrides)
+        return by_id(decisions, "decision_id", "d-dim"), report
+
+    def test_one_bulb_of_four_left_on_a_deep_dim_or_an_off_is_a_miss_in_either_unit(self):
+        for anchored in (False, True):
+            # 200 to 40 with one of the four stuck reads 80; an off from 202 with one left at full reads 50
+            for before, after, read, reads in ((1.0, 0.2, 200.0, 80.0), (1.0, 0.0, 202.0, 50.0), (1.0, 1 / 3, 200.0, 100.0)):
+                d, report = self.room(before, after, read, reads, anchored)
+                self.assertEqual({p["status"] for p in d["verify"]["points"]}, {"outside"}, (anchored, after))
+                hr = report["hit_rate"]
+                self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (18, 6, "fail"), (anchored, after))
+
+    def test_a_bulb_that_never_moved_in_low_light_is_a_miss_in_either_unit(self):
+        for anchored in (False, True):
+            unit = "lx" if anchored else "relative"
+            model = syn.hue_model({n: {B0: 30.0, B1: 300.0} for n in self.names}, unit=unit, kelvins=(2700,))
+            t = syn.T0
+            targets = {f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}
+
+            def scene(did, tt, b, cmd, r0, r1):
+                ref = syn.light_state(tt, {n: r0 for n in self.names}, anchored=anchored, ident=f"ls-{did}")
+                dec = syn.hue_decision(did, tt + 0.5, b, {x: {"level": lv, "steps": send(tt + 0.5)} for x, lv in cmd.items()},
+                                       f"ls-{did}", targets=targets)
+                return dec, [ref, syn.light_state(tt + 5, {n: r1 for n in self.names}, anchored=anchored)]
+
+            cases = [scene(f"d-on{i}", t + 100 * i, {B1: 0.3}, {B1: 0.8}, 90.0, 240.0) for i in range(3)]
+            cases.append(scene("d-stuck", t + 400, {B0: 1.0}, {B0: 0.2}, 30.0, 30.0))
+            decisions, _, report = score([c[0] for c in cases], [f for c in cases for f in c[1]], model)
+            self.assertEqual({p["status"] for p in by_id(decisions, "decision_id", "d-stuck")["verify"]["points"]},
+                             {"outside"}, anchored)
+            hr = report["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (18, 6, 0.75, "fail"), anchored)
+
+    def test_what_the_allowance_costs_is_what_the_note_says(self):
+        # one bulb of four stuck on a 2:1 dim reads 125 for 100: a hit at 15% of the 200 that changed,
+        # its increment still outside; a narrower allowance catches it
+        d, _ = self.room(1.0, 0.5, 200.0, 125.0)
+        self.assertEqual(point(d, "p0")["status"], "within")
+        self.assertEqual(d["verify"]["increments"][0]["status"], "outside")
+        d, _ = self.room(1.0, 0.5, 200.0, 125.0, overrides={"change_allowance": 0.10})
+        self.assertEqual(point(d, "p0")["status"], "outside")
 
 
 class HitRateBoundary(unittest.TestCase):
@@ -803,7 +955,8 @@ class MethodAndCommandLine(unittest.TestCase):
         m = method.load()
         self.assertIsNone(m.scored())
         self.assertEqual(sorted(m.open), sorted([
-            "settle_margin_s", "background", "held_share_min", "held_rule", "uncertainty_rel", "uncertainty_abs_lx",
+            "settle_margin_s", "background", "change_allowance", "held_share_min", "held_rule",
+            "uncertainty_rel", "uncertainty_abs_lx",
             "spill_band_top", "spill_allowance_lx", "daylight_change_min", "shadow_radius_m",
             "max_frame_gap_s", "delta_hit_rate", "record_extensions"]))
         self.assertEqual(m.values["tolerance"], 0.15)
@@ -852,7 +1005,7 @@ class MethodAndCommandLine(unittest.TestCase):
             self.assertEqual(out, ["report-preview.json"])
             preview = json.loads((Path(tmp) / "out" / "report-preview.json").read_text(encoding="utf-8"))
             self.assertFalse(preview["scored"])
-            self.assertEqual(len(preview["method"]["open"]), 13)
+            self.assertEqual(len(preview["method"]["open"]), 14)
 
     def test_one_open_slot_is_enough_to_refuse(self):
         text = method.closed_copy(method.lf_text(HERE / "VERIFY-V1.md"))
@@ -865,7 +1018,7 @@ class MethodAndCommandLine(unittest.TestCase):
             self.assertEqual(cli.main(["slots"]), 0)
         out = q.buf.getvalue()
         out.encode("ascii")
-        self.assertIn("13 open slot(s)", out)
+        self.assertIn("14 open slot(s)", out)
         self.assertIn("pending decision envelope-parameters", out)
 
     def test_outputs_are_never_overwritten(self):

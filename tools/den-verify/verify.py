@@ -90,10 +90,13 @@ def cmd_run(args):
     _say(f"decisions verified {report['decisions']['verified']} of {report['decisions']['total']}; "
          f"hit rate {hr['value']} ({hr['hits']} of {hr['hits'] + hr['misses']}), "
          f"gate {hr['gate']}: {hr['verdict']}{' (preview)' if args.preview else ''}")
-    left, dims = report["excluded_held_or_superseded"], report["dim_points_unverifiable"]
-    if left or dims:
-        _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs, "
-             f"{dims} deep dim point(s) whose change landed")
+    left = report["excluded_held_or_superseded"]
+    if left:
+        _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs")
+    wide = report["hits_beyond_level_tolerance"]
+    if wide["count"]:
+        _say(f"{wide['count']} hit(s) are beyond {values['tolerance']:.0%} of the level; if they had missed, "
+             f"the hit rate would be {wide['value_if_missed']}: {wide['verdict_if_missed']}")
     _say(f"wrote {', '.join(names)} in {out}")
     return 0
 

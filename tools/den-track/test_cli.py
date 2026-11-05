@@ -91,6 +91,9 @@ class Base(unittest.TestCase):
         patcher = mock.patch.object(socket.socket, 'connect', no_connections)
         patcher.start()
         self.addCleanup(patcher.stop)
+        ledger = mock.patch.dict(os.environ, {den_track.LEDGER_ENV: self.path('this-user', 'score-runs.jsonl')})
+        ledger.start()
+        self.addCleanup(ledger.stop)
 
     def path(self, *parts):
         return os.path.join(self.tmp.name, *parts)
@@ -562,6 +565,18 @@ class ScoredRunTest(Base):
         meth = self.closed_method('METHOD-null.md', change)
         self.assert_refused(self.score_args([self.make_take(meth=meth)], scored=True, meth=meth), 'crossings_plan')
 
+    def test_the_same_take_passed_twice_is_refused(self):
+        meth = self.closed_method()
+        takes = [self.make_take(seed=seed, meth=meth) for seed in range(10)]
+        again = []
+        for obs, tracks, truth_path in takes:
+            lines = records.read_jsonl(truth_path)
+            lines[0]['take'] += '-again'
+            copy = truth_path.replace('truth.jsonl', 'truth-copy.jsonl')
+            records.write_jsonl(copy, lines)
+            again.append([obs, tracks, copy])
+        self.assert_refused(self.score_args(takes + again, scored=True, meth=meth), 'a take counts once')
+
     def test_refused_when_two_crossings_overlap_once_padded(self):
         meth = self.closed_method()
         takes = self.twenty(meth)
@@ -794,6 +809,173 @@ class FreshTakesTest(Base):
         records.write_jsonl(takes[0][2], lines)
         self.assert_refused_as_used(self.score_args(takes, 'score-2', scored=True, meth=self.meth))
 
+    def scored_exit(self, takes, out):
+        code, text = cli(*self.score_args(takes, out, scored=True, meth=self.meth))
+        return code, text
+
+    def assert_first_report_kept(self, first):
+        with open(self.path('score-1', 'score.json'), 'rb') as f:
+            self.assertEqual(f.read(), first)
+
+    def copy_truth(self, takes, name):
+        """The takes' truth files, copied somewhere new. Their labels are the same, and only the file moved."""
+        out = []
+        for obs, tracks, truth_path in takes:
+            copy = os.path.join(os.path.dirname(truth_path), name, 'truth.jsonl')
+            os.makedirs(os.path.dirname(copy), exist_ok=True)
+            shutil.copyfile(truth_path, copy)
+            out.append([obs, tracks, copy])
+        return out
+
+    def forget_the_note_beside_each_take(self, takes):
+        for take in takes:
+            os.remove(os.path.splitext(take[0])[0] + den_track.SCORE_RUNS_SUFFIX)
+
+    def test_moving_the_truth_files_does_not_free_the_takes_after_a_retune(self):
+        takes = self.takes()
+        first = self.score_once(takes)
+        self.retune_the_code()
+        retracked = self.retrack(takes, 'track-2')
+        self.assert_refused_as_used(self.score_args(self.copy_truth(retracked, 'moved'), 'score-2', scored=True, meth=self.meth))
+        self.assert_first_report_kept(first)
+
+    def test_a_truth_file_copied_beside_itself_does_not_free_the_takes(self):
+        takes = self.takes()
+        self.score_once(takes)
+        self.retune_the_code()
+        beside = []
+        for obs, tracks, truth_path in self.retrack(takes, 'track-2'):
+            copy = truth_path.replace('truth.jsonl', 'truth2.jsonl')
+            shutil.copyfile(truth_path, copy)
+            beside.append([obs, tracks, copy])
+        self.assert_refused_as_used(self.score_args(beside, 'score-2', scored=True, meth=self.meth))
+
+    def test_the_observations_and_truth_copied_to_a_new_folder_do_not_free_the_takes(self):
+        takes = self.takes()
+        self.score_once(takes)
+        self.retune_the_code()
+        moved = []
+        for n, (obs, _, truth_path) in enumerate(takes):
+            folder = self.path('elsewhere', 'take-%d' % n)
+            os.makedirs(folder)
+            shutil.copyfile(obs, os.path.join(folder, 'observations.jsonl'))
+            shutil.copyfile(truth_path, os.path.join(folder, 'truth.jsonl'))
+            moved.append([os.path.join(folder, 'observations.jsonl'), os.path.join(folder, 'track-1', 'tracks.jsonl'),
+                          os.path.join(folder, 'truth.jsonl')])
+        self.assert_refused_as_used(self.score_args(self.retrack(moved, 'track-2'), 'score-2', scored=True, meth=self.meth))
+
+    def test_deleting_the_note_beside_each_take_does_not_free_them(self):
+        takes = self.takes()
+        self.score_once(takes)
+        self.retune_the_code()
+        self.forget_the_note_beside_each_take(takes)
+        self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
+
+    def test_deleting_this_users_record_does_not_free_them_while_the_notes_beside_the_takes_remain(self):
+        takes = self.takes()
+        self.score_once(takes)
+        self.retune_the_code()
+        os.remove(den_track.ledger_path())
+        self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
+
+    def test_re_saving_the_observations_does_not_make_a_fresh_take(self):
+        takes = self.takes()
+        self.score_once(takes)
+        for obs, _, truth_path in takes:
+            with open(obs, 'a', encoding='utf-8', newline='\n') as f:
+                f.write('\n')
+            lines = records.read_jsonl(truth_path)
+            lines[0]['observations_sha256'] = den_track.text_sha256(obs)
+            records.write_jsonl(truth_path, lines)
+        self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
+
+    def failing_session(self):
+        """Three takes, one with a silent swap: the gate fails."""
+        takes = self.takes(first=0) + self.takes(first=2)[:1]
+        lines = records.read_jsonl(takes[2][2])
+        frames = [l for l in lines if l['kind'] == 'frame']
+        for line in frames[-3:]:
+            line['labels'] = {o: {'A': 'B', 'B': 'A'}.get(p, p) for o, p in line['labels'].items()}
+        records.write_jsonl(takes[2][2], lines)
+        code, text = cli(*self.score_args(takes, 'score-1', scored=True, meth=self.meth))
+        self.assertEqual(code, 1, text)
+        self.assertIn('FAILED', text)
+        return takes
+
+    def test_dropping_the_take_that_failed_is_refused(self):
+        takes = self.failing_session()
+        self.assert_refused_as_used(self.score_args(takes[:2], 'score-2', scored=True, meth=self.meth))
+
+    def test_a_failed_session_replayed_whole_still_fails(self):
+        takes = self.failing_session()
+        code, text = cli(*self.score_args(takes, 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 1, text)
+
+    def test_adding_takes_to_a_scored_session_is_refused(self):
+        takes = self.takes()
+        self.score_once(takes)
+        self.assert_refused_as_used(self.score_args(takes + self.takes(first=2), 'score-2', scored=True, meth=self.meth))
+
+    def test_dropping_a_take_after_a_practice_look_is_refused(self):
+        takes = self.takes() + self.takes(first=2)
+        code, text = cli(*self.score_args(takes, 'peek', meth=self.meth))
+        self.assertEqual(code, 0, text)
+        self.assert_refused_as_used(self.score_args(takes[:3], 'score-2', scored=True, meth=self.meth))
+
+    def test_a_take_looked_at_alone_cannot_join_a_session_later(self):
+        takes = self.takes()
+        code, text = cli(*self.score_args(takes[:1], 'peek', meth=self.meth))
+        self.assertEqual(code, 0, text)
+        self.assert_refused_as_used(self.score_args(takes, 'score-2', scored=True, meth=self.meth))
+
+    def test_a_practice_look_at_the_same_session_with_nothing_changed_can_be_scored(self):
+        takes = self.takes()
+        code, text = cli(*self.score_args(takes, 'peek', meth=self.meth))
+        self.assertEqual(code, 0, text)
+        code, text = self.scored_exit(takes, 'score-1')
+        self.assertEqual(code, 0, text)
+        self.assertIn('SCORED', text)
+
+    def test_a_practice_look_after_a_score_does_not_block_its_replay(self):
+        takes = self.takes()
+        first = self.score_once(takes)
+        code, text = cli(*self.score_args(takes[:1], 'peek', meth=self.meth))
+        self.assertEqual(code, 0, text)
+        code, text = self.scored_exit(takes, 'score-2')
+        self.assertEqual(code, 0, text)
+        with open(self.path('score-2', 'score.json'), 'rb') as f:
+            self.assertEqual(f.read(), first)
+
+    def test_a_refused_run_shows_no_result_and_uses_no_take(self):
+        takes = self.takes()
+        args = self.score_args(takes[:1], 'refused', scored=True, meth=self.meth)
+        code, text = cli(*args)
+        self.assertEqual(code, 2, text)
+        self.assertFalse(os.path.exists(den_track.ledger_path()))
+        code, text = self.scored_exit(takes, 'score-1')
+        self.assertEqual(code, 0, text)
+
+    def test_this_users_record_defaults_to_local_app_data_and_says_so_in_the_refusal(self):
+        env = {k: v for k, v in os.environ.items() if k != den_track.LEDGER_ENV}
+        env['LOCALAPPDATA'] = self.path('appdata')
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(den_track.ledger_path(), self.path('appdata', 'den-track', 'score-runs.jsonl'))
+        takes = self.takes()
+        self.score_once(takes)
+        self.retune_the_code()
+        code, text = cli(*self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 2, text)
+        self.assertIn(den_track.ledger_path(), text)
+
+    def test_a_record_the_tool_cannot_read_is_a_refusal(self):
+        takes = self.takes()
+        os.makedirs(os.path.dirname(den_track.ledger_path()))
+        with open(den_track.ledger_path(), 'w', encoding='utf-8') as f:
+            f.write('{"neither": "takes"}\n')
+        code, text = self.scored_exit(takes, 'score-1')
+        self.assertEqual(code, 2, text)
+        self.assertIn(den_track.ledger_path(), text)
+
     def test_a_replay_with_nothing_changed_gives_the_same_report(self):
         takes = self.takes()
         first = self.score_once(takes)
@@ -842,11 +1024,16 @@ class FreshTakesTest(Base):
         with open(self.path('score-1', 'score.json'), encoding='utf-8') as f:
             report = json.load(f)
         self.assertEqual(report['method']['code_fingerprint'], method.code_fingerprint())
-        notes = records.read_jsonl(os.path.splitext(takes[0][2])[0] + den_track.SCORE_RUNS_SUFFIX)
+        notes = records.read_jsonl(os.path.splitext(takes[0][0])[0] + den_track.SCORE_RUNS_SUFFIX)
+        self.assertEqual(notes, records.read_jsonl(den_track.ledger_path()))
         self.assertEqual(len(notes), 1)
-        self.assertEqual(set(notes[0]), {'method_fingerprint', 'code_fingerprint', 'observations_sha256',
-                                         'tracks_sha256', 'truth_sha256'})
-        self.assertTrue(all(v.startswith('sha256:') for v in notes[0].values()))
+        self.assertEqual(set(notes[0]), {'scored', 'method_fingerprint', 'code_fingerprint', 'takes'})
+        self.assertIs(notes[0]['scored'], True)
+        self.assertEqual(len(notes[0]['takes']), 2)
+        for row in notes[0]['takes']:
+            self.assertEqual(set(row), {'take_id', 'observations_sha256', 'tracks_sha256', 'truth_sha256'})
+            self.assertTrue(all(v.startswith('sha256:') for v in row.values()))
+        self.assertEqual(sorted(t['take_id'] for t in report['takes']), [row['take_id'] for row in notes[0]['takes']])
 
 
 class OutputFolderTest(Base):

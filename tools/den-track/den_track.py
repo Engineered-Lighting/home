@@ -30,7 +30,8 @@ import truth as truth_mod       # noqa: E402
 EXIT_OK, EXIT_GATE, EXIT_REFUSED = 0, 1, 2
 TRACKS_FILE, TRACK_RUN_FILE = 'tracks.jsonl', 'track-run.json'
 SCORE_FILE, CROSSINGS_FILE = 'score.json', 'crossings.jsonl'
-SCORE_RUNS_SUFFIX = '.score-runs.jsonl'     # beside a take's truth file: truth.score-runs.jsonl
+SCORE_RUNS_SUFFIX = '.score-runs.jsonl'     # beside a take's observations: observations.score-runs.jsonl
+LEDGER_ENV = 'DEN_TRACK_LEDGER'
 
 
 class Refused(Exception):
@@ -131,34 +132,95 @@ def load_take(triple):
             'truth': truth, 'paths': triple}
 
 
-def score_stamp(method, take):
-    """What a score of this take looked at, as hashes only."""
+def ledger_path():
+    """This Windows user's record of what has been scored. It stays when a take's files are copied, moved or deleted."""
+    override = os.environ.get(LEDGER_ENV)
+    if override:
+        return override
+    base = os.environ.get('LOCALAPPDATA') or os.path.join(os.path.expanduser('~'), '.local', 'share')
+    return os.path.join(base, 'den-track', 'score-runs.jsonl')
+
+
+def take_id(observations):
+    """The take itself, by the detections in it, so a re-saved or copied file is the same take."""
+    ids = sorted(str(obs.get('obs_id')) for obs in observations)
+    return 'sha256:' + hashlib.sha256('\n'.join(ids).encode('utf-8')).hexdigest()
+
+
+def take_stamp(take):
     obs_path, tracks_path, truth_path = take['paths']
-    return {'method_fingerprint': method.fingerprint, 'code_fingerprint': method.code_fingerprint,
-            'observations_sha256': text_sha256(obs_path), 'tracks_sha256': text_sha256(tracks_path),
-            'truth_sha256': text_sha256(truth_path)}
+    return {'take_id': take_id(take['observations']), 'observations_sha256': text_sha256(obs_path),
+            'tracks_sha256': text_sha256(tracks_path), 'truth_sha256': text_sha256(truth_path)}
 
 
-def score_runs_path(take):
-    return os.path.splitext(take['paths'][2])[0] + SCORE_RUNS_SUFFIX
+def run_stamp(method, takes, scored):
+    """What a score looked at: its takes, together, as hashes only."""
+    return {'scored': bool(scored), 'method_fingerprint': method.fingerprint, 'code_fingerprint': method.code_fingerprint,
+            'takes': sorted((take_stamp(t) for t in takes), key=lambda row: row['take_id'])}
 
 
-def earlier_scores(take):
-    path = score_runs_path(take)
-    return records.read_jsonl(path) if os.path.exists(path) else []
+def note_paths(takes):
+    """Where a look at these takes is noted: this user's record, and beside each take's observations."""
+    return sorted({ledger_path()} | {os.path.splitext(t['paths'][0])[0] + SCORE_RUNS_SUFFIX for t in takes})
 
 
-def note_score(method, takes):
-    """Beside each truth file, one line per different score of that take, practice or scored.
+def earlier_runs(takes):
+    """Every look noted anywhere these takes keep their record."""
+    runs = []
+    for path in note_paths(takes):
+        for run in records.read_jsonl(path) if os.path.exists(path) else []:
+            if not isinstance(run.get('takes'), list) or not all(isinstance(row, dict) for row in run['takes']):
+                raise Refused('%s holds a line that says no takes. It is the record of what has been scored: '
+                              'mend it rather than delete it.' % path)
+            runs.append(run)
+    return runs
 
-    Any score shows results, so it uses the take. This is the record that lets a
-    scored run refuse a take looked at under other code, another method, or other
-    tracks, labels or observations.
+
+def same_look(a, b):
+    return all(a.get(key) == b.get(key) for key in ('method_fingerprint', 'code_fingerprint', 'takes'))
+
+
+def used_problems(current, takes, earlier):
+    """Why earlier looks bar this scored run. Any score shows results, so it uses its takes.
+
+    A scored run naming a take already looked at must be that same look: the same takes, with
+    nothing changed. So a retune cannot be tried on them, a take cannot be dropped or added
+    once results are known, and new labels cannot be tried. Replaying a scored run is allowed,
+    whatever else has looked at its takes since, because it gives the same report.
     """
-    for take in takes:
-        stamp = score_stamp(method, take)
-        if stamp not in earlier_scores(take):
-            with open(score_runs_path(take), 'a', encoding='utf-8', newline='\n') as f:
+    names = {take_id(t['observations']): t['name'] for t in takes}
+
+    def ids_of(run):
+        return {row.get('take_id') for row in run['takes']}
+
+    looks = [run for run in earlier if ids_of(run) & set(names)]
+    if any(run.get('scored') is True and same_look(run, current) for run in looks):
+        return []
+    found = []
+    for run in looks:
+        if same_look(run, current):
+            continue
+        shared = ', '.join(sorted(names[i] for i in ids_of(run) & set(names)))
+        if ids_of(run) != set(names):
+            text = '%s: already scored together with other takes: a session of %d, of which this run names %d, and this run has %d' % (
+                shared, len(ids_of(run)), len(ids_of(run) & set(names)), len(names))
+        else:
+            text = '%s: already scored under other code, another method, or other tracks, labels or observations' % shared
+        if text not in found:
+            found.append(text)
+    if not found:
+        return []
+    return ['%s. A take that has been scored is used, and a re-score needs fresh takes (the record: %s)'
+            % ('; '.join(found), ledger_path())]
+
+
+def note_score(method, takes, scored):
+    """One line per different look at these takes, practice or scored, in each place that keeps the record."""
+    stamp = run_stamp(method, takes, scored)
+    for path in note_paths(takes):
+        if stamp not in (records.read_jsonl(path) if os.path.exists(path) else []):
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+            with open(path, 'a', encoding='utf-8', newline='\n') as f:
                 f.write(json.dumps(stamp) + '\n')
 
 
@@ -171,6 +233,18 @@ def plan_problems(plan, counts):
                 % ', '.join(truth_mod.CROSSING_TYPES)]
     return ['the plan wants %d %s, and %d count' % (c['planned'], kind, c['counted'])
             for kind, c in counts.items() if c['counted'] < c['planned']]
+
+
+def repeated_takes(takes):
+    """The same detection in two takes would count its crossing twice."""
+    owner, found = {}, []
+    for take in takes:
+        for oid in (obs.get('obs_id') for obs in take['observations']):
+            other = owner.setdefault(oid, take['name'])
+            if other != take['name']:
+                found.append('%s and %s hold the same observation %s, and a take counts once' % (other, take['name'], oid))
+                break
+    return found
 
 
 def check_scored(method, takes, report):
@@ -207,11 +281,8 @@ def check_scored(method, takes, report):
             problems.append('%s: its observations are not the ones tracked' % take['name'])
         if run.get('tracks_sha256') != text_sha256(tracks_path):
             problems.append('%s: its tracks changed after they were written' % take['name'])
-        stamp = score_stamp(method, take)
-        if any(line != stamp for line in earlier_scores(take)):
-            problems.append('%s: already scored under other code, another method, or other tracks, labels or observations '
-                            '(%s). A take that has been scored is used, and a re-score needs fresh takes'
-                            % (take['name'], score_runs_path(take)))
+    problems += repeated_takes(takes)
+    problems += used_problems(run_stamp(method, takes, True), takes, earlier_runs(takes))
     need = method.scoring['min_crossings']
     if report['crossings'] < need:
         left = ['%s/%s' % (e['take'], e['id']) for e in report['crossings_excluded']]
@@ -278,14 +349,12 @@ def cmd_score(args):
     body = score_mod.score_session(takes, scoring)
     if args.scored:
         check_scored(method, takes, body)
-    note_score(method, takes)
+    note_score(method, takes, args.scored)
     crossing_lines = body.pop('crossing_lines')
     report = dict(body, tool='den-track', command='score', scored=bool(args.scored), method=method_stamp(method),
                   labelling={'labellers': sorted({t['truth'].labeller for t in takes if t['truth'].labeller}),
                              'takes': len(takes), 'declared_blind': sum(1 for t in takes if t['truth'].blind is True)},
-                  takes=[{'name': t['name'], 'labeller': t['truth'].labeller, 'blind': t['truth'].blind,
-                          'observations_sha256': text_sha256(t['paths'][0]),
-                          'tracks_sha256': text_sha256(t['paths'][1]), 'truth_sha256': text_sha256(t['paths'][2])}
+                  takes=[dict(take_stamp(t), name=t['name'], labeller=t['truth'].labeller, blind=t['truth'].blind)
                          for t in takes])
     write_json(os.path.join(args.out, SCORE_FILE), report)
     records.write_jsonl(os.path.join(args.out, CROSSINGS_FILE), crossing_lines)

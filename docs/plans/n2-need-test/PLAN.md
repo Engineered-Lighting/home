@@ -79,6 +79,15 @@ Status: plan only. Nothing here is built or run. Written 2026-11-05.
      (paper or mail, a cloth; handling papers, wiping or tidying), as N2's own
      module with its own `PROMPT_VERSION`. qwen_scene and the live loop stay
      prompt-1.
+     - The module brings its own reply parser and receipt builder, because
+       qwen_scene's can't take a prompt-2 reply: `build_observation` raises
+       "unsupported prompt version" for anything but prompt-1 (line 265), and
+       `parse_reply` rejects a new value as `value_out_of_vocabulary` (line
+       135).
+     - Its receipt keeps the `qwen-observation-1` shape with its own
+       `result_schema` and `prompt_version`, so the adapter, need v1 and
+       score.py read it unchanged. It reuses qwen_scene's version-free helpers
+       (`canonical`, `digest`, `frame_descriptors`, `first_receipt`).
   3. Dropping mail and wiping isn't an option: A13 names them shortcut cases.
 - **What this plan does.** Development runs prompt-1 first and prints a case ×
   reply-row table (counts only). If `sorting_mail` and `wiping` share their
@@ -376,11 +385,13 @@ gate, one re-send. N2's ask step reuses that pattern; this names its interface.
   GATE-V1 records. Then `qwen_scene.model_context` (placement, a local time
   label from the latest frame's `recv_pc_unix`, prior null), `request_body` or
   prompt-2's, the gate checks, the send, the timeout and one re-send.
-- **Replies.** `parse_reply`, `build_observation` and `first_receipt`: an
-  invalid reply stays an invalid receipt with its reason, never repaired. A
-  request that fails twice is logged `failed`, with no receipt. A gate refusal
-  waits and retries the same slot; the virtual schedule doesn't move. S is LA's
-  monotonic time from the first send to the reply used.
+- **Replies.** qwen_scene's `parse_reply` and `build_observation` under
+  prompt-1, prompt-2's own under prompt-2 (section 1(b)), and `first_receipt`
+  under either: an invalid reply stays an invalid receipt with its reason,
+  never repaired. A request that fails twice is logged `failed`, with no
+  receipt. A gate refusal waits and retries the same slot; the virtual
+  schedule doesn't move. S is LA's monotonic time from the first send to the
+  reply used.
 - **Out:** `asks.jsonl` per session, one line per slot (slot, segment, r,
   frames, crop, outcome, S, attempts, receipt: words and digests only). The
   crops leave the RAM disk when the run ends or stops. Agents never open
@@ -442,16 +453,18 @@ gate, one re-send. N2's ask step reuses that pattern; this names its interface.
 | 1 | `tools/den-n2/score.py`, `GATE-V1.md` (slots empty), `test_den_n2.py` on synthetic N1-format labels and need logs, `README.md`, `RESULTS.md`, release note | about 1,300 lines | 1.5 days |
 | 2 | need v1 preset and `test_need.py` additions; `sources.n2_asks`, the `run.py` flags and their test | about 550 lines | 1 day |
 | 3 | the ask step: PC `ask.py` (schedule, crop, copy, refusals), the LA step (look-test pattern), tests with a fake LA | about 750 lines | 1 day |
-| at development, if needed | prompt-2 and its tests | about 160 lines | 0.25 day |
+| at development, if needed | prompt-2: its request body, reply parser and receipt builder, and their tests | about 260 lines | 0.5 day |
 | option 1 only | detector pass, its facts, tests | about 500 lines | 1.5 days |
-| **Total, option 2** | | **about 2,800 lines** | **about 3.75 agent-days** |
+| **Total, option 2** | | **about 2,900 lines** | **about 4 agent-days** |
 
 Tests are all synthetic. score.py: every window, mark, carried piece, onset
 tag, bound, verdict rule and refusal, and development mode never opening
 held-out labels. need v1: v0 unchanged, each transition, the exit clock, rise
 and fall, `check.py` OK on a v1 log. Ask step: the schedule and its resets,
 exact NV12 crops, the freeze refusal, no image or reply text in any log, and
-re-sends, timeouts and gate waits against a fake LA and clock.
+re-sends, timeouts and gate waits against a fake LA and clock. prompt-2: its
+own values pass its parser, and its receipts go through the adapter and need
+v1 unchanged.
 
 ## 10. Approvals
 

@@ -1305,7 +1305,7 @@ class ReplayTest(unittest.TestCase):
         self.assertTrue(all(d["predicted"]["surfaces_not_logged"] > 0 for d in mine))
         lines, code = score.report(path, preview=True)
         self.assertEqual(code, 0, "\n".join(lines))
-        self.assertIn("surfaces not logged: %d decision(s) left out up to %d of the map's %d surfaces, those nobody is at"
+        self.assertIn("surfaces not logged: %d decision(s) left out up to %d of the map's %d surfaces, those no logged track is at"
                       % (len(mine), max(d["predicted"]["surfaces_not_logged"] for d in mine), 577), "\n".join(lines))
 
     def test_a_run_replays_byte_for_byte_under_each_actuation(self):

@@ -386,8 +386,8 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
                      "they still planned for them" % left_out)
     narrowed = [d["predicted"]["surfaces_not_logged"] for d in decisions if "surfaces_not_logged" in d["predicted"]]
     if narrowed:
-        lines.append("surfaces not logged: %d decision(s) left out up to %d of the map's %d surfaces, those nobody is at, to fit "
-                     "the line; rung 10 can verify only what a Decision lists" % (len(narrowed), max(narrowed), len(light.surfaces)))
+        lines.append("surfaces not logged: %d decision(s) left out up to %d of the map's %d surfaces, those no logged track is at, "
+                     "to fit the line; rung 10 can verify only what a Decision lists" % (len(narrowed), max(narrowed), len(light.surfaces)))
 
     timeline = Timeline(header, log)
     rate, hits, episodes, unknown = anticipation(timeline, light, slots)

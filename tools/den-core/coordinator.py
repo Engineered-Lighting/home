@@ -741,9 +741,9 @@ class Coordinator:
     def _fitted(self, record, result, tasks):
         """events.validate refuses a line over its limit and the run then stops with no log. A wide map or a long evening can
         get there: a track is never forgotten, since its id is never reused and a PersonState says nothing when it ends. So
-        when a Decision would not fit, surfaces nobody is at go first, and predicted.surfaces_not_logged counts them. If that
-        is not enough, the rows of the tracks longest unheard from go, then readers, and last a track a light is over the
-        glare limit at, which is what the gate most needs to read. inputs.tracks_not_logged counts those. They stay in the
+        when a Decision would not fit, surfaces no logged track is at go first, and predicted.surfaces_not_logged counts them.
+        If that is not enough, the rows of the tracks longest unheard from go, then readers, and last a track a light is over
+        the glare limit at, which is what the gate most needs to read. inputs.tracks_not_logged counts those. They stay in the
         plan: this only decides what the line says. The last track always stays."""
         if len(events.dumps(record)) <= LINE_ROOM:
             return record

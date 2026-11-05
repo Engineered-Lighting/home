@@ -31,6 +31,35 @@ def _section(entry, name):
     return entry.get(name) if type(entry.get(name)) is dict else {}
 
 
+def _across_lines(revisions):
+    """The last revision, each of its camera entries checked against the same entry on every other line.
+
+    An entry may only gain `invalidated` and `confirmed`, and an invalidation is for
+    good, as rung 1's own resolve has it: two overlapping check-mount runs can leave
+    a confirmation after an invalidation, and the last line alone would hide it.
+    """
+    def key(entry):
+        return entry.get("camera_id"), entry.get("version")
+
+    def bare(entry):
+        return {k: v for k, v in entry.items() if k not in ("invalidated", "confirmed")}
+
+    current = revisions[-1]
+    earlier = [entry for revision in revisions if type(revision.get("cameras")) is list
+               for entry in revision["cameras"] if type(entry) is dict]
+    for entry in (current["cameras"] if type(current.get("cameras")) is list else []):
+        if type(entry) is not dict:
+            continue
+        same = [other for other in earlier if key(other) == key(entry)]
+        if any(bare(other) != bare(entry) for other in same):
+            raise RegistrationRefused(f"{key(entry)[0]}@{key(entry)[1]} names different camera entries on different "
+                                      "lines of the file")
+        gone = next((other["invalidated"] for other in same if other.get("invalidated")), None)
+        if gone:
+            entry["invalidated"] = gone
+    return current
+
+
 def load(path):
     """The current RoomModel: the file's last revision. One document alone is a file of one revision.
 
@@ -51,7 +80,7 @@ def load(path):
         raise RegistrationRefused(f"no readable RoomModel at {path}: a line is not JSON") from None
     if not revisions or not all(type(revision) is dict for revision in revisions):
         raise RegistrationRefused(f"no readable RoomModel at {path}: not one JSON object per line")
-    return revisions[-1]
+    return _across_lines(revisions)
 
 
 def parse_transform_id(transform_id):

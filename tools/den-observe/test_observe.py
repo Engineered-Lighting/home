@@ -573,6 +573,29 @@ class Rung1FileChecks:
         self.assertIn(self.transform_id(self.lines[1]), err.getvalue())
         self.assertFalse(case.out.exists())
 
+    def lines_in_order(self, *order):
+        return "".join(self.lines[i] + "\n" for i in order).encode("utf-8")
+
+    def test_an_invalidation_on_an_earlier_line_is_not_hidden_by_a_later_one(self):
+        # Two overlapping check-mount runs each append to the line they read, so the confirmation can land after the
+        # invalidation. Rung 1's resolve says invalidated on that file; so must this, scored or not.
+        case = self.case("rung1-reordered", 4, room_bytes=self.lines_in_order(0, 1, 3, 2))
+        self.assert_refused(case, "invalidated")
+        self.assert_refused(case, "invalidated", scored=True, method_path=closed_method(case.work / "closed"))
+
+    def test_a_repeated_line_changes_nothing(self):
+        case = self.case("rung1-repeated", 3, room_bytes=self.lines_in_order(0, 1, 2, 2))
+        run, records = case.run(scored=True, method_path=closed_method(case.work / "closed"))
+        self.assertEqual(run["mount"]["status"], "confirmed")
+        self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
+
+    def test_two_different_entries_under_one_id_across_the_file_are_refused(self):
+        earlier = json.loads(self.lines[1])
+        earlier["cameras"][0]["pose"]["room_from_camera"][0][3] += 0.5
+        changed = json.dumps(earlier)
+        case = self.case("rung1-ambiguous", 3, room_bytes=f"{changed}\n{self.lines[2]}\n".encode("utf-8"))
+        self.assert_refused(case, "different camera entries")
+
     def test_a_torn_last_line_is_refused_not_skipped(self):
         torn = "".join(line + "\n" for line in self.lines[:1]) + self.lines[1][:200]
         case = self.case("rung1-torn", 2, room_bytes=torn.encode("utf-8"))

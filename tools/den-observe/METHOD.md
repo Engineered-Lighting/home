@@ -16,9 +16,12 @@ lists it in the run file; `replay.py --scored` refuses while any slot is open.
 - **A RoomModel camera entry**, which `transform_id` (`<camera_id>@<version>`)
   resolves to, from rung 1's `room-model.jsonl`: JSON Lines, one RoomModel
   revision per line, the last line the current room. A line that does not read
-  refuses the run. The contracts say `intrinsics` names its source, the EEPROM
-  values today, and give no inner form; `den-observe-camera-1` (slot
-  `camera_entry_form`) is the one den-register writes and this tool reads:
+  refuses the run. An entry on the last line is read with its other lines, as rung
+  1 resolves it: one that differs apart from `invalidated` and `confirmed` refuses
+  the run, and an invalidation on any line holds. The contracts say `intrinsics`
+  names its source, the EEPROM values today, and give no inner form;
+  `den-observe-camera-1` (slot `camera_entry_form`) is the one den-register writes
+  and this tool reads:
   `intrinsics` holds `source`, `rectified_left` and `rgb` ({fx, fy, cx, cy} or
   3x3), `rgb_distortion` (8 terms), `rgb_from_rectified_left` {rotation,
   translation_m}, `stereo_baseline_m`, `depth_size` and `rgb_size`; `pose` holds

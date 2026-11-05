@@ -58,6 +58,7 @@ exposure_quantum_us = 50       # open: the frame-time quantum the camera reports
 
 # Response fit and global check
 fit_iterations = 30            # open: alternating least squares rounds
+fit_smoothing = 10             # open: the knot update's smoothing weight, per sample at a code
 residual_max_codes = 4         # open: R
 region_code_low = 16           # the region test's codes
 region_code_high = 235
@@ -181,16 +182,25 @@ repeat):
   frame without a reported ISO gives no samples (it fails gain agreement).
 - **Start.** f(z) = z / `normalise_code` for z = 0 … 255.
 - **Each of `fit_iterations` rounds:**
-  1. E_i = Σ f(z)·X / Σ X² over pixel i's samples (least squares for E_i).
-  2. For every code z with n_z > 0 samples, f(z) = the mean of X·E_i over
-     those samples (least squares for the knot at z).
-  3. Pool-adjacent-violators, weighted by n_z, makes f non-decreasing over
-     the codes with samples.
-  4. A code with no samples takes the linear interpolation of its nearest
-     sampled neighbours, or the nearest one's value beyond the ends.
+  1. E_i = Σ w(z)·f(z)·X / Σ w(z)·X² over pixel i's samples: least squares
+     for E_i, each sample weighted by the hat w(z) = min(z, 255 − z), so codes
+     near 0 and near clipping, where f is least certain, count least.
+  2. For every code z with n_z > 0 samples, m_z = the mean of X·E_i over those
+     samples (the knot's least-squares value).
+  3. Smooth: f minimises Σ n_z·(f(z) − m_z)² + λ·Σ (f(z−1) − 2f(z) + f(z+1))²
+     over all 256 codes, with λ = `fit_smoothing` times the mean n_z of the
+     codes that have samples. A code with no samples is filled by this step.
+     Fewer than two codes with samples is degenerate.
+  4. Pool-adjacent-violators, weighted by n_z (an empty code weighs almost
+     nothing), makes f non-decreasing; values below 0 become 0.
   5. Divide f by f(`normalise_code`). If that is not above 0, the fit is
      degenerate.
 - **End.** E_i once more from the final f.
+
+Why the weight and the smoothing: with exposures in one fixed ratio (√2), the
+data fix the curve only up to a ripple that repeats every √2 in exposure.
+Unsmoothed, a synthetic S-curve came back with ripples of 2 to 5%; with both,
+within 1% at 1 code of noise.
 
 The curve is piecewise linear between the integer codes. Its inverse F(y) is
 the code where f reaches y, by linear interpolation between the codes either

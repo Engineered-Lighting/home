@@ -174,6 +174,12 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(len(whole.surfaces["room"]), 12)
         self.assertGreater(mapped.predict({FL: scene(254)})["room"], whole.predict({FL: scene(254)})["room"])
 
+    def test_a_prediction_can_stop_at_the_surfaces_it_needs(self):
+        whole = {b: scene(200) for b in events.LIGHTS}
+        some = self.light.predict(whole, ["counter-1"])
+        self.assertEqual(some, {"counter-1": self.light.predict(whole)["counter-1"]})
+        self.assertEqual(self.light.predict(whole, []), {})
+
     def test_a_mask_is_the_same_length_for_any_blocks_and_reads_back(self):
         points = self.light.points
         self.assertEqual(self.light.mask([]), "000")
@@ -387,7 +393,7 @@ class RecordedLevelsTest(unittest.TestCase):
         p.handle(ev(T0, "mode", {**mode()["data"], "normal": {b: blank for b in events.LIGHTS}}, "incumbent"))
         [base] = feed(p, ev(T0 + 1, "occupancy", {"value": "on", "via": "t"}))
         self.assertEqual(base["requested_scene"][FL], blank)
-        self.assertEqual(base["predicted"]["surfaces"]["counter-1"], None)
+        self.assertEqual(base["predicted"]["surfaces"]["room"], None)
         [read] = feed(p, ps(T0 + 10))  # the look has levels, so reading is still solved
         self.assertEqual(read["requested_scene"][FR]["brightness"], 200)
         self.assertIsNotNone(read["predicted"]["surfaces"]["counter-1"])
@@ -842,6 +848,76 @@ class FullGridLineTest(unittest.TestCase):
                 events.validate(ev(item["t"], "decision", {**out["data"], "actuation": "replay"}, "decide"))
                 made += 1
         self.assertGreaterEqual(made, 3)
+
+
+class WideMapLineTest(unittest.TestCase):
+    """A surface map's width is the owner's. With every bulb held, a map once broke the line at 120 to 180 surfaces with
+    10-character names and 40 to 60 with 30-character ones, and the run wrote no log."""
+
+    def wide(self, count, width):
+        blocks = ["other/%d" % n for n in range(576 - 12)]
+        surfaces = {"s" + str(n).zfill(width - 1): [blocks[n % len(blocks)]] for n in range(count)}
+        return {"source": "fake", "params": {"filler": len(blocks)}, "surfaces": {**surfaces, "room": blocks[:144]}}
+
+    def every_bulb_held(self, p, surface):
+        out = feed(p, ps(T0 + 5, "A", "engaged", surface), ps(T0 + 6, "B", "none", "room"))
+        holds = []
+        for n, b in enumerate(events.LIGHTS):
+            holds.append(hold(b, 60 + 20 * n, T0 + 10 + n))
+            out += feed(p, ev(T0 + 10 + n, "mode", mode(2 + n, holds)["data"], "incumbent"),
+                        ev(T0 + 10 + n, "correction", {"correction_id": "c%d" % n, "entity_id": b, "after": scene(60 + 20 * n), "source": "t",
+                                                       "who": {"track_id": "A"}}))
+        return out
+
+    def test_a_map_of_any_width_fits_with_every_bulb_held(self):
+        for count, width in ((180, 10), (60, 30), (576, 10), (576, 30)):
+            for option in ("P1", "P2", "P3"):
+                with self.subTest(count=count, width=width, option=option):
+                    spec = self.wide(count, width)
+                    p = policy(light_model=spec, compensation={"option": option, "form": "strict"})
+                    start(p)
+                    out = self.every_bulb_held(p, next(iter(spec["surfaces"])))
+                    self.assertEqual(len(out[-1]["inputs"]["hold_set"]["held"]), 4)
+                    for d in out:
+                        events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
+
+    def test_one_surface_per_block_fits_and_binds_at_the_blocks(self):
+        model = fake_light.build(filler=576 - 12, surfaces=False)
+        names = [p["point_id"] for p in model["sample_points"]]
+        spec = {"source": "fake", "params": {"filler": 576 - 12, "surfaces": False}, "surfaces": {"block-%s" % n: [n] for n in names}}
+        p = policy(light_model=spec, compensation={"option": "P1", "form": "mode"})
+        start(p)
+        for d in self.every_bulb_held(p, "block-counter-1/0"):
+            events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
+        self.assertEqual(sorted(d["predicted"]["surfaces"]), ["block-counter-1/0", "room", "unit"])
+
+    def test_predicted_is_room_and_each_tracked_persons_surface(self):
+        p = policy()
+        self.assertEqual(sorted(start(p)[0]["predicted"]["surfaces"]), ["room", "unit"])  # nobody tracked yet
+        feed(p, ps(T0 + 4, "B", "none", "armchair-book"))
+        [d] = feed(p, ps(T0 + 5, "A", "engaged", "counter-1"))
+        self.assertEqual(sorted(d["predicted"]["surfaces"]), ["armchair-book", "counter-1", "room", "unit"])
+        self.assertEqual(d["predicted"]["surfaces"]["counter-1"], round(p.light.predict(d["requested_scene"])["counter-1"], 3))
+
+    def test_a_surface_a_person_is_not_at_is_still_scored_from_the_scene(self):
+        p = policy()
+        start(p)
+        [d] = feed(p, ps(T0 + 5, "A", "engaged", "counter-1"))
+        self.assertNotIn("wall-west", d["predicted"]["surfaces"])
+        self.assertIsNotNone(p.light.predict(d["requested_scene"])["wall-west"])
+
+    def test_a_wide_map_stays_under_100_ms(self):
+        def rounds():
+            p = policy(light_model=self.wide(576, 30), compensation={"option": "P1", "form": "strict"})
+            start(p)
+            spans = []
+            for item in TimingTest.scenario(self):
+                begin = time.perf_counter()
+                p.handle(item)
+                spans.append(time.perf_counter() - begin)
+            return spans
+        fastest = [min(column) for column in zip(rounds(), rounds(), rounds())]
+        self.assertLess(max(fastest), 0.1, "slowest %.1f ms" % (max(fastest) * 1000))
 
 
 def evening_log(tmp, name="log.jsonl", configs=None, source="synthetic", actuation=None, **options):

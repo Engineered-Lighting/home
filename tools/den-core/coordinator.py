@@ -166,7 +166,7 @@ def eye_rows(inputs, scene, light, slots):
 def recipients_of(scene, tasks, rows, light, slots):
     """Decision.recipients for an actual resulting scene: per channel that is on, the tracks it serves (share of a task
     at least s_serve) and exposes. V_c(i) is taken as 1: visibility comes after rung 8."""
-    total = light.predict(scene)
+    total = light.predict(scene, tasks.values())
     p90 = light.error.get("p90_pct")
     out = {}
     for channel in LIGHTS:
@@ -465,7 +465,7 @@ class Coordinator:
             return None
         weights = self.slots["look_weights"]
         known = {b: s for b, s in pinned.items() if self.light.contribution(b, s) is not None}
-        total = self.light.predict({**known, **free_scene})
+        total = self.light.predict({**known, **free_scene}, targets)
         cost = 0.0
         for surface, target in targets.items():
             gap = (target - (total[surface] or 0.0)) / target if target > EPS else 0.0
@@ -568,7 +568,7 @@ class Coordinator:
     def _hold_limited(self, requested, targets):
         """Target surfaces a hold's bound leaves under target: the candidate's own diagnostic, never a delivery miss."""
         bound = {s: h for h in sorted(self.refs) for s in targets if not self.light.members[s].isdisjoint(self._bound(h)[1])}
-        total = self.light.predict({b: s for b, s in requested.items() if self.light.contribution(b, s) is not None})
+        total = self.light.predict({b: s for b, s in requested.items() if self.light.contribution(b, s) is not None}, targets)
         return [{"point_id": s, "target": round(t, 3),
                  "reason": "%s held (%s): the bound keeps free light from making up for it" % (
                      bound[s], self.refs[bound[s]]["direction"])}
@@ -601,7 +601,7 @@ class Coordinator:
         rule = base["rule"]
         targets = {}
         if rule == "reading_look":
-            reference = self.light.predict({b: self.look for b in LIGHTS})
+            reference = self.light.predict({b: self.look for b in LIGHTS}, readers.values())
             targets = {s: reference[s] for s in readers.values() if reference[s] is not None}  # none on a dead surface
             candidates = self._candidates(free, pinned, targets, conflicts)
             best = min(candidates, key=lambda c: c["cost"])
@@ -720,8 +720,9 @@ class Coordinator:
         rows = eye_rows(record["inputs"], result, self.light, self.slots)
         tasks = {track: surface_of(p, self.light) for track, p in sorted(self.people.items())}
         record["recipients"] = recipients_of(result, tasks, rows, self.light, self.slots)
+        at = sorted({light_adapter.ROOM, *tasks.values()})  # a map can be wide; any other surface follows from the scene
         record["predicted"] = {
-            "surfaces": {**{s: None if v is None else round(v, 3) for s, v in self.light.predict(result).items()},
+            "surfaces": {**{s: None if v is None else round(v, 3) for s, v in self.light.predict(result, at).items()},
                          "unit": self.light.unit},
             "eyes": rows,
             "eyes_note": ("predictions only; no camera verifies eyes" if self.light.glare_table else

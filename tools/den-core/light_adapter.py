@@ -129,9 +129,10 @@ class LightModel:
         bits = int(mask, 16)
         return [p for n, p in enumerate(self.points) if bits >> n & 1]
 
-    def predict(self, scene):
-        """{surface: Ê} for a whole scene {entity_id: Hue scene}. A value is None while any bulb has no level."""
-        total = dict.fromkeys(self.surfaces, 0.0)
+    def predict(self, scene, surfaces=None):
+        """{surface: Ê} for a whole scene {entity_id: Hue scene}, at every surface or at the ones named, since a map can be
+        wide and a solve asks often. A value is None while any bulb has no level."""
+        total = dict.fromkeys(self.surfaces if surfaces is None else surfaces, 0.0)
         for entity_id, one in scene.items():
             part = self.contribution(entity_id, one)
             for name in total:

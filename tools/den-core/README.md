@@ -657,14 +657,15 @@ four synthetic evenings' whole logs, header included.
 
 ### A Decision's size
 
-`events.validate` refuses a line over 16,384 bytes, and the run then stops with no log. A Decision speaks in surfaces and
-tracks, never in blocks, so rung 8's 576-block grid costs nothing: at 4 to 144 blocks per surface the longest line is about
-8.4 KB on the one `room` track and 9.8 KB with two people and holds, under every option. `test_coordinator.py` runs every
-hold fixture under every option on the full grid through `runner.run`, which validates each line.
+`events.validate` refuses a line over 16,384 bytes, and the run then stops with no log. A Decision never lists blocks, and
+of the map it lists only `room` and each tracked person's surface, as the schema's example does: any other surface
+follows from the scene. So neither rung 8's 576 blocks nor the map's width costs anything: with every bulb held, a map of
+576 surfaces with 30-character names logs the same line as a map of 40. A hold's footprint is the same length for any
+blocks (144 hex digits on the grid). `test_coordinator.py` runs every hold fixture under every option on the full grid
+through `runner.run`, which validates each line.
 
-A line does grow with the rest: about 50 bytes per surface in the map, so about 180 surfaces reach the limit, and about
-1.6 KB per track the coordinator has seen, because it never forgets one, so about six tracks reach it. need v0 has one
-track, so that waits for per-person need (rungs 5 and 6).
+A line does grow with the tracks: about 1.5 KB per track the coordinator has seen, because it never forgets one, so about
+six tracks reach it. need v0 has one track, so that waits for per-person need (rungs 5 and 6).
 
 ### Keys the contracts do not name
 

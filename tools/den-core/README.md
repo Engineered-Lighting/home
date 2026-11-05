@@ -561,11 +561,12 @@ the header, prints no verdict and is never a gate.
 - a log run under a compensation option other than the gate's. Those are the counterfactual scenes the register
   suggests: preview them;
 - a surface map that can't stand behind a score. Rung 8 v1's blocks have no surface id, so which blocks form each surface
-  is the owner's mark on its grid (Stage 1 names them `rRRcCC`), in the `surface_map` slot. A closed map reaches the run
-  with no flag. It must name
-  `room`, because need v0 has no working region, so its one track is scored at `room`, and an unnamed `room` is the whole
-  view's mean. Every surface needs a block and every block must be in the model. A log run on another map (`--surfaces`)
-  refuses; preview it. The slot's proposal names no block, so closing it at the proposal still refuses.
+  is the owner's mark on its grid (Stage 1 names them `rRRcCC`), in the `surface_map` slot. A closed map reaches a run on
+  a real model with no flag; a fake keeps its own surfaces, so plumbing runs do not change when the slot closes. It must
+  name `room`, because need v0 has no working region, so its one track is scored at `room`, and an unnamed `room` is the
+  whole view's mean. Every surface needs a block and every block must be in the model: `run.py` and a preview name any
+  surface that breaks this. A log run on another map (`--surfaces`) refuses; preview it. The slot's proposal names no
+  block, so closing it at the proposal still refuses.
 
 ### What it gates and what it reports
 

@@ -15,6 +15,7 @@ from pathlib import Path
 import coordinator
 import events
 import incumbent
+import light_adapter
 import runner
 import sources
 import synthetic
@@ -281,6 +282,11 @@ def _coordinator_lines(header):
                 coordinator.option_name(config["compensation"]), header["actuation"])]
     if config["gate"]["open"]:
         lines.append("coordinator: %d open slot(s) at their proposals; score.py --slots lists them" % len(config["gate"]["open"]))
+    light = coordinator.make_policy(config).light
+    bad = light_adapter.bad_surfaces(light.surfaces, light.points)
+    if bad:
+        lines.append("coordinator: surface map: %s: no block, or a block the light model does not have; those surfaces' light is "
+                     "wrong or unknown in this log" % ", ".join(bad))
     return lines
 
 

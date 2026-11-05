@@ -15,8 +15,8 @@ is imported and unchanged, because check.py pins each policy's file hash: an edi
 log refuse with `code changed: decide`. This module's dependencies are pinned in its own config instead.
 
 Stand-ins, all logged in the header: one seed Look, a Preference with level factor 1 and mired_shift and contrast_shift
-at 0. A track's surface is its working_region.surface_id, else 'room': the blocks the gate's surface_map names for it,
-else the whole view. An eye is named by its track_id, because need v0 has no attention and rung 8 writes `glare: null`.
+at 0. A track's surface is its working_region.surface_id, else 'room': the blocks the gate's surface_map names for it on
+a real model, else the whole view. An eye is named by its track_id, because need v0 has no attention and rung 8 writes `glare: null`.
 
 Standard library only. handle() reads no clock, randomness, file or network; make_policy reads the gate file and a
 light-model file, once.
@@ -44,8 +44,8 @@ EPS = 1e-9
 HARD_PENALTY = 1000.0  # added to a candidate's cost when a hard constraint or a bound rejects it
 
 
-def load_gate(path=GATE_FILE):
-    gate = json.loads(Path(path).read_bytes().decode("utf-8-sig"))
+def load_gate(path=None):
+    gate = json.loads(Path(path or GATE_FILE).read_bytes().decode("utf-8-sig"))
     for name, slot in gate["slots"].items():
         if slot["status"] not in ("open", "closed") or (slot["status"] == "closed" and slot["value"] is None):
             raise ValueError("gate slot %s: closed needs a value, else status open" % name)
@@ -749,9 +749,9 @@ def make_policy(config=None):
         raise ValueError("unknown local-completion option: %s" % effective["local_completion"])
     if effective["gaming"] not in ("non-gaming-stratified", "complete-policy"):
         raise ValueError("unknown gaming option: %s" % effective["gaming"])
-    spec, chosen = effective["light_model"], effective["gate"]["slots"].get("surface_map")
-    if chosen and not spec.get("surfaces"):  # the gate's map, unless the run names another, which score.py refuses
-        spec["surfaces"] = chosen
-    model, logged = light_adapter.describe(spec)
+    model, logged = light_adapter.describe(effective["light_model"])
+    chosen = effective["gate"]["slots"].get("surface_map")
+    if chosen and not logged.get("surfaces") and not logged["fake"]:  # a run may name another, which score.py refuses
+        logged["surfaces"] = chosen  # the owner's map is over rung 8's blocks: a fake has its own, and is never a gate
     effective["light_model"] = logged
     return Coordinator(effective, light_adapter.LightModel(model, surfaces=logged.get("surfaces")))

@@ -43,6 +43,7 @@ import light_adapter  # noqa: E402
 
 LABEL = "predicted, replay surrogate"
 DEFINITIONS = "need-raise-v0"
+BAD_MAP = "no block, or a block the light model does not have"
 CARRIED = ("requested_scene", "applied_scene", "recipients", "predicted", "targets", "hard_conflicts")
 
 
@@ -65,9 +66,9 @@ def surface_map_refusals(wanted, ran, light):
     if light_adapter.ROOM not in wanted:
         reasons.append("surface_map names no '%s': a person with no working region, need v0's only track, would be scored "
                        "at the whole view" % light_adapter.ROOM)
-    bad = sorted(name for name, blocks in wanted.items() if not blocks or not set(blocks) <= set(light.points))
+    bad = light_adapter.bad_surfaces(wanted, light.points)
     if bad:
-        reasons.append("surface_map: %s: no block, or a block the light model does not have" % ", ".join(bad))
+        reasons.append("surface_map: %s: %s" % (", ".join(bad), BAD_MAP))
     return reasons
 
 
@@ -89,7 +90,7 @@ def refusals(header, entry, gate, light):
                        % (coordinator.option_name(comp), slots["compensation_option"], slots["compensation_form"]))
     if slots["surrogate_definitions"] != DEFINITIONS:
         reasons.append("this tool only computes the %s definitions of the surrogates" % DEFINITIONS)
-    if "surface_map" not in gate["open"]:
+    if "surface_map" not in gate["open"] and not light.fake:  # the map is over rung 8's blocks; a fake keeps its own
         reasons += surface_map_refusals(slots["surface_map"], entry["config"]["light_model"].get("surfaces"), light)
     return reasons
 
@@ -328,7 +329,7 @@ def read_marks(path):
     return marks
 
 
-def report(log_path, marks_path=None, preview=False, gate_path=coordinator.GATE_FILE):
+def report(log_path, marks_path=None, preview=False, gate_path=None):
     """(lines, exit code)."""
     try:
         header, log = events.read(log_path)
@@ -360,6 +361,9 @@ def report(log_path, marks_path=None, preview=False, gate_path=coordinator.GATE_
     lines.append("stand-ins, logged in the header: seed Look %s, level factor 1, mired_shift 0, contrast_shift 0" % decide.LOOK)
     lines.append("surfaces: %s, of %d blocks" % (", ".join("%s %d" % (name, len(light.surfaces[name])) for name in sorted(light.surfaces)),
                                                  len(light.points)))
+    bad = light_adapter.bad_surfaces(light.surfaces, light.points)
+    if bad:
+        lines.append("surface map: %s: %s" % (", ".join(bad), BAD_MAP))
 
     failures = []
 

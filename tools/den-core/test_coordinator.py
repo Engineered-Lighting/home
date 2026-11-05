@@ -486,21 +486,51 @@ class StandInTest(unittest.TestCase):
         self.assertEqual(p.config["gate"]["open"], sorted(gate["slots"]))
         self.assertEqual(p.config["compensation"]["option"], gate["slots"]["compensation_option"]["proposed"])
 
+    def real_model(self):
+        """A model file that does not call itself fake, as rung 8 writes it: no surfaces of its own."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        model = fake_light.build(surfaces=False)
+        del model["fake"]
+        path = tmp / "light-model.json"
+        path.write_text(json.dumps(model), encoding="utf-8")
+        return {"source": "file", "path": str(path)}
+
     def test_the_gates_surface_map_is_the_run_unless_the_run_names_another(self):
         blocks = {"room": ["counter-1/0"], "desk": ["counter-1/1"]}
         slots = {**SLOTS, "surface_map": blocks}
         gate = {**GATE, "slots": slots}
-        p = coordinator.make_policy({"gate": gate})
+        spec = self.real_model()
+        p = coordinator.make_policy({"gate": gate, "light_model": spec})
         self.assertEqual(p.config["light_model"]["surfaces"], blocks)
         self.assertEqual(p.light.surfaces, blocks)
         self.assertEqual(events.sha256_json(coordinator.make_policy(p.config).config), events.sha256_json(p.config))
         other = {"room": ["counter-1/2"]}
-        q = coordinator.make_policy({"gate": gate, "light_model": {"source": "fake", "params": {}, "surfaces": other}})
+        q = coordinator.make_policy({"gate": gate, "light_model": {**spec, "surfaces": other}})
         self.assertEqual(q.config["light_model"]["surfaces"], other)
         self.assertEqual(q.light.surfaces, other)
         # The proposal names no block: the model's own surfaces stand, as they always have for a preview.
         self.assertNotIn("surfaces", policy().config["light_model"])
         self.assertIn("counter-1", policy().light.surfaces)
+
+    def test_the_gates_map_is_over_rung_8s_blocks_so_a_fake_run_keeps_its_own_surfaces(self):
+        # The owner's map names rRRcCC blocks. On the default fake none of them exists, so applied there it left a run with
+        # no targets and no light at 'room', and no word from run.py. A fake's surfaces are its own, and a fake is never a gate.
+        gate = {**GATE, "slots": {**SLOTS, "surface_map": {"room": ["r00c00", "r00c01"]}}}
+        p = coordinator.make_policy({"gate": gate})
+        self.assertNotIn("surfaces", p.config["light_model"])
+        self.assertIn("counter-1", p.light.surfaces)
+        self.assertEqual(len(p.light.surfaces["room"]), 12)
+        start(p)
+        [d] = feed(p, ps(T0 + 10))
+        self.assertEqual(d["targets"]["A"]["surface_id"], "counter-1")
+        self.assertIn("reading_look: chose look:reading@0", d["why"])
+        self.assertGreater(d["predicted"]["surfaces"]["counter-1"], 0.0)
+        # A fake the run named a map for still takes it: that is a preview's own choice.
+        named = {"room": ["counter-1/0"]}
+        q = coordinator.make_policy({"gate": gate, "light_model": {"source": "fake", "params": {}, "surfaces": named}})
+        self.assertEqual(q.light.surfaces, named)
+        self.assertEqual(events.sha256_json(coordinator.make_policy(p.config).config), events.sha256_json(p.config))
 
 
 class PurityTest(unittest.TestCase):
@@ -757,6 +787,39 @@ class RunFlagsTest(unittest.TestCase):
         self.assertEqual((logged["source"], logged["unit"], logged["surfaces"]),
                          ("file", "relative", {"desk": ["counter-1/0", "counter-1/1"]}))
         self.assertTrue(check.check(self.tmp / "out" / "log.jsonl")["ok"])
+
+    def test_readmes_plumbing_run_is_the_same_once_the_owner_closes_the_map(self):
+        # The verifier's scenario: the slot closed at rRRcCC blocks, then README's own command on the default fake.
+        def mine(name):
+            _, log = events.read(self.tmp / name / "log.jsonl")
+            return [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+
+        argv = ["--synthetic", "evening", "--touch", "--policies", "need", "incumbent", "coordinator"]
+        with mock.patch("builtins.print"):
+            run.main(["--out", str(self.tmp / "open"), *argv])
+        gate = coordinator.load_gate()
+        gate["slots"]["surface_map"].update(status="closed", value={"room": ["r%02dc00" % n for n in range(24)]})
+        closed = self.tmp / "gate.json"
+        closed.write_text(json.dumps(gate), encoding="utf-8")
+        with mock.patch("builtins.print") as printed, mock.patch.object(coordinator, "GATE_FILE", closed):
+            run.main(["--out", str(self.tmp / "closed"), *argv])
+            lines, code = score.report(self.tmp / "closed" / "log.jsonl", preview=True, gate_path=closed)
+        text = "\n".join(lines)
+        self.assertNotIn("does not have", "\n".join(str(call.args[0]) for call in printed.call_args_list))
+        self.assertEqual(code, 0, text)
+        self.assertEqual([d["requested_scene"] for d in mine("closed")], [d["requested_scene"] for d in mine("open")])
+        self.assertEqual(sum(bool(d["targets"]) for d in mine("closed")), sum(bool(d["targets"]) for d in mine("open")))
+        self.assertIn("surfaces: armchair-book 4, counter-1 4, room 12, wall-west 4, of 12 blocks", text)
+        self.assertNotIn("another surface map", text)
+        self.assertIn("fake light model: plumbing only, never a gate", text)
+
+    def test_a_map_naming_a_block_the_model_lacks_is_said_out_loud(self):
+        surfaces = self.tmp / "surfaces.json"
+        surfaces.write_text(json.dumps({"room": ["r00c00"], "desk": ["counter-1/0"], "bare": []}), encoding="utf-8")
+        text = self.main("--synthetic", "evening", "--policies", "need", "incumbent", "coordinator", "--surfaces", str(surfaces))
+        self.assertIn("coordinator: surface map: bare, room: no block, or a block the light model does not have", text)
+        lines, _ = score.report(self.tmp / "out" / "log.jsonl", preview=True)
+        self.assertIn("surface map: bare, room: no block, or a block the light model does not have", "\n".join(lines))
 
     def test_a_run_on_the_full_grid_under_the_proposed_option_writes_its_log(self):
         # The review's scenario as the owner meets it: on the cloud build this stopped with

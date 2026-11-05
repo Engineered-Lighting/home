@@ -28,6 +28,12 @@ def _predict(scene, model):
     return fake_light.predict(scene, model)
 
 
+def bad_surfaces(surfaces, points):
+    """The surfaces of a map with no block, or with a block the model lacks, which its mean would leave out with no word."""
+    known = set(points)
+    return sorted(name for name, blocks in surfaces.items() if not blocks or not known.issuperset(blocks))
+
+
 def describe(spec):
     """(model dict, what to log) for a config's light_model spec: {source: fake, params} or {source: file, path}."""
     if spec["source"] == "fake":

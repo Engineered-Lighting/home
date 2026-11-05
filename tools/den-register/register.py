@@ -394,9 +394,10 @@ def build_records(sheet, take, row, bundle, m, room_models, verdict, digest, now
         "supersedes": None,
     }
     if previous:
+        pose = previous.get("pose")
         record.update(supersedes=previous.get("calibration_id") or records.transform_id(camera_id, previous.get("version")),
                       supersedes_method=previous.get("method"),
-                      supersedes_value=(previous.get("pose") or {}).get("room_from_camera", previous.get("pose")))
+                      supersedes_value=pose.get("room_from_camera", pose) if type(pose) is dict else pose)
     return {"transform_id": tid, "revision": revision, "record": record}
 
 

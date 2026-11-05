@@ -1240,6 +1240,36 @@ class FreshTakesTest(Base):
         self.assertEqual((earlier[0]['passed'], earlier[0]['takes']), (False, 3))
         self.assertNotEqual(earlier[0]['code_fingerprint'], method.code_fingerprint())
 
+    def test_a_run_of_failed_sessions_is_counted_whole_not_as_one(self):
+        """Five failures of one size under one method and code, each noted in two places: five runs, and each once."""
+        def one_crossing(block):
+            block['scoring'].update(min_crossings=1, crossings_plan={'crossing': 1})
+        meth = self.closed_method('METHOD-one.md', one_crossing)
+        for seed in range(100, 105):
+            take = self.make_take(seed=seed, meth=meth)
+            lines = records.read_jsonl(take[2])
+            for line in [l for l in lines if l['kind'] == 'frame'][-3:]:
+                line['labels'] = {o: {'A': 'B', 'B': 'A'}.get(p, p) for o, p in line['labels'].items()}
+            records.write_jsonl(take[2], lines)
+            code, text = cli(*self.score_args([take], 'fail-%d' % seed, scored=True, meth=meth))
+            self.assertEqual(code, 1, text)
+        code, text = cli(*self.score_args([self.make_take(seed=500, meth=meth)], 'pass', scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('this record holds 5 other scored run(s): 5 failed', text)
+        with open(self.path('pass', 'score.json'), encoding='utf-8') as f:
+            self.assertEqual([run['passed'] for run in json.load(f)['earlier_scored_runs']], [False] * 5)
+        self.assertEqual(len(records.read_jsonl(den_track.ledger_path())), 6)
+
+    def test_a_scored_run_noted_in_two_places_counts_once(self):
+        self.score_once(self.takes())
+        code, text = cli(*self.score_args(self.takes(first=100), 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        latest = self.takes(first=200)
+        shutil.copyfile(den_track.ledger_path(), os.path.splitext(latest[0][0])[0] + den_track.SCORE_RUNS_SUFFIX)
+        code, text = cli(*self.score_args(latest, 'score-3', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('this record holds 2 other scored run(s)', text)
+
     def test_a_take_looked_at_alone_and_left_out_leaves_a_trace_in_the_report(self):
         """Nothing ties it to the session, so it cannot be refused. It can be seen."""
         takes = self.takes()

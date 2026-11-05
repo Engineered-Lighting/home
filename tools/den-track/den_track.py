@@ -245,15 +245,16 @@ def used_problems(current, takes, earlier):
 
 
 def earlier_scored(current, takes):
-    """Other scored runs this record holds, from any takes: a run after a failed one should say so."""
-    out = []
+    """Other scored runs this record holds, from any takes: a run after a failed one should say so.
+
+    One run is noted in up to two places, and counts once. Two runs are two, whatever they have in common.
+    """
+    distinct = []
     for run in earlier_runs(takes):
-        if run.get('scored') is True and not same_look(run, current):
-            row = {'passed': run.get('passed'), 'takes': len(run['takes']), 'method_fingerprint': run.get('method_fingerprint'),
-                   'code_fingerprint': run.get('code_fingerprint')}
-            if row not in out:
-                out.append(row)
-    return out
+        if run.get('scored') is True and not same_look(run, current) and run not in distinct:
+            distinct.append(run)
+    return [{'passed': run.get('passed'), 'takes': len(run['takes']), 'method_fingerprint': run.get('method_fingerprint'),
+             'code_fingerprint': run.get('code_fingerprint')} for run in distinct]
 
 
 def other_takes_looked_at(current, takes):

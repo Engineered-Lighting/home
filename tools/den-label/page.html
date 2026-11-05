@@ -9,7 +9,7 @@
   header { padding: 6px 10px; background: #222; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
   header b { color: #fff; }
   #msg { margin-left: auto; }
-  #msg.error { color: #ff7b7b; }
+  #msg.error, #saveerr { color: #ff7b7b; }
   main { display: flex; gap: 10px; padding: 10px; align-items: flex-start; }
   #view { width: 960px; max-width: 70vw; image-rendering: pixelated; background: #000; cursor: crosshair; }
   aside { flex: 1; min-width: 260px; max-height: 76vh; overflow: auto; background: #1d1d1d; padding: 6px 8px; }
@@ -32,6 +32,7 @@
   <button id="end" title="Shift+Enter">End pass</button>
   <button id="person" title="!">Second person in view</button>
   <span id="msg"></span>
+  <span id="saveerr"></span>
 </header>
 <main>
   <canvas id="view" width="640" height="360"></canvas>
@@ -366,19 +367,26 @@ function commitOpen() {
   }
 }
 function changed() { commitOpen(); side(); bar(); scheduleSave(); }
-function labelKey(e) {
-  const n = nAt(idx), k = e.key;
-  if (k === "o" || k === "O") {
+function nearestEnd(it, n) {
+  return it.offset_n !== null && Math.abs(n - it.offset_n) < Math.abs(n - it.onset_n) ? "offset" : "onset";
+}
+function labelKey(e, k) {  // k is e.key in lower case, so Caps Lock changes nothing; Shift picks no touch
+  const n = nAt(idx);
+  if (k === "o") {
     if (openItem) { say("Finish the open item first (offset, band and case).", true); return true; }
-    const it = {onset_n: n, onset_kind: edgeKind(n, "onset", k === "O" ? "no_touch" : "touch"), offset_n: null,
+    const it = {onset_n: n, onset_kind: edgeKind(n, "onset", e.shiftKey ? "no_touch" : "touch"), offset_n: null,
                 offset_kind: null, band: null, case: null, sure: {onset: true, offset: true, band: true}, by: "owner"};
     openItem = selected = {t: "interval", it, start: n};
-  } else if (k === "p" || k === "P") {
+  } else if (k === "p") {
     const target = openItem && openItem.t === "interval" ? openItem : null;
     if (!target) { say("Press O at the onset first.", true); return true; }
     if (n <= target.it.onset_n || segOf(n) !== segOf(target.it.onset_n)) { say("The offset must come after the onset, in the same segment.", true); return true; }
     target.it.offset_n = n;
-    target.it.offset_kind = edgeKind(n, "offset", k === "P" ? "no_touch" : "release");
+    target.it.offset_kind = edgeKind(n, "offset", e.shiftKey ? "no_touch" : "release");
+  } else if (k === "k" && selected && selected.t === "interval") {
+    const it = selected.it, end = nearestEnd(it, n), kind = it[`${end}_kind`];
+    if (kind === "carried") { say("A carried end sits on a segment edge and stays carried.", true); return true; }
+    it[`${end}_kind`] = kind === "no_touch" ? (end === "onset" ? "touch" : "release") : "no_touch";
   } else if (k === "f" || k === "c") {
     const x = selected && selected.t === "interval" ? selected : null;
     if (!x) return true;
@@ -400,7 +408,7 @@ function labelKey(e) {
       openItem = selected = {t: "span", it, start: n};
     }
   } else if (k === "n" && selected && selected.t === "interval") {
-    const it = selected.it, end = it.offset_n !== null && Math.abs(n - it.offset_n) < Math.abs(n - it.onset_n) ? "offset" : "onset";
+    const it = selected.it, end = nearestEnd(it, n);
     it.sure[end] = !it.sure[end];
   } else if (k === "b" && selected && selected.t === "interval") {
     selected.it.sure.band = !selected.it.sure.band;
@@ -468,45 +476,77 @@ function addSurface() {
 function surfacesChanged() { side(); show(idx); scheduleSave(); }
 
 // ---- saving and ending ----
-let saveTimer = null, saving = false, dirty = false;
+let saveTimer = null, saving = false, edits = 0, savedEdits = 0, saveError = null, ending = false;
+const dirty = () => edits !== savedEdits;  // a change the server has not accepted yet
 function body() {
   if (S.mode === "boxes") return {keyframes: S.keyframes, audited: auditedRanges()};
   if (S.mode === "surfaces") return {reference_n: S.reference_n === null ? nAt(idx) : S.reference_n, surfaces: S.surfaces};
   return labelBody();
 }
 function scheduleSave() {
-  dirty = true;
+  edits++;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveNow, 400);
 }
+function showSaveError(text) {  // shown until the next accepted save
+  saveError = text;
+  $("saveerr").textContent = text ? `Not saved: ${text}` : "";
+}
 async function saveNow() {
   if (saving) { saveTimer = setTimeout(saveNow, 150); return; }
-  if (!dirty || ended) return;
+  if (!dirty() || ended) return;
   saving = true;
-  dirty = false;
+  const at = edits;
   try {
-    const r = await api("/api/save", body()), reply = await r.json();
-    if (r.ok) say("saved"); else say(`Not saved: ${reply.error}`, true);
+    const r = await api("/api/save", body()), reply = await r.json().catch(() => ({}));
+    if (r.ok) { savedEdits = at; showSaveError(null); say("saved"); }
+    else showSaveError(reply.error || `status ${r.status}`);
   } catch (err) {
-    say(`Not saved: ${err}`, true);
+    showSaveError(String(err.message || err));
   }
   saving = false;
 }
 async function flush() {
   clearTimeout(saveTimer);
   while (saving) await sleep(50);
-  if (dirty) await saveNow();
+  if (dirty()) await saveNow();
+}
+function unfinished() {  // the open item labelBody would leave out, named for the owner
+  if (!isLabels() || !openItem) return null;
+  const it = openItem.it;
+  return openItem.t === "interval" ? `open interval at frame ${it.onset_n}`
+    : `open ${it.kind} span at frame ${it.start_n}`;
 }
 async function endPass(reason) {
-  if (ended) return;
-  const question = reason === "second_person"
-    ? "A second person is in view. End this pass now? The console then lists the earlier spans to type at check.py."
-    : "End this pass? Everything is saved.";
-  if (!confirm(question)) return;
-  playing = false;
-  await flush();
-  const r = await api("/api/stop", {reason});
-  if (!r.ok) { say("Could not end the pass.", true); return; }
+  if (ended || ending) return;
+  ending = true;
+  try {
+    if (reason === "done") {
+      const open = unfinished();
+      if (open) { say(`Not ended: finish the ${open}, or select it and press Del.`, true); return; }
+      playing = false;
+      await flush();
+      if (dirty()) {
+        say(`Not ended: the last save was refused (${saveError}). Fix it first, or press Ctrl+C in the ` +
+            "PowerShell window to stop without it.", true);
+        return;
+      }
+      if (!confirm("End this pass? Everything is saved.")) return;
+    } else {
+      if (!confirm("A second person is in view. End this pass now? The console then lists the earlier " +
+                   "spans to type at check.py.")) return;
+      playing = false;
+      await flush();  // the pass ends even if this save is refused; the console says so
+    }
+    const r = await api("/api/stop", {reason});
+    if (!r.ok) {
+      const reply = await r.json().catch(() => ({}));
+      say(`Not ended: ${reply.error || r.status}`, true);
+      return;
+    }
+  } finally {
+    ending = false;
+  }
   ended = true;
   document.body.innerHTML = `<div class="ended">Pass ended${reason === "second_person" ? " (second person in view)" : ""}. ` +
     "Follow the console window. You can close this tab.</div>";
@@ -516,7 +556,7 @@ async function endPass(reason) {
 const HELP = {
   common: "Space play/pause  Left/Right step (Shift x10)  Home/End  [ ] speed  G brightness  Shift+Enter end pass  ! second person",
   boxes: "Drag: draw, move or resize the tight body box (makes a keyframe)  X person not in view from here  Del remove keyframe  , . previous/next keyframe  A audit mode (padded box)",
-  labels: "O onset (touch; Shift+O no touch)  P offset (release; Shift+P no touch)  F fine  C casual  1-9 case  N toggle sure (nearest end)  B toggle band sure\nQ quiet  L low light  U uncertain (press at start and at end)  Tab select  Del delete  E labelled end to end",
+  labels: "O onset (touch; Shift+O no touch)  P offset (release; Shift+P no touch)  K change the nearest end's kind  F fine  C casual  1-9 case  N toggle sure (nearest end)  B toggle band sure\nQ quiet  L low light  U uncertain (press at start and at end)  Tab select  Del delete  E labelled end to end",
   surfaces: "Click corners, then Enter (or Add) with id, type and height  Backspace remove corner  R set reference frame here",
 };
 document.addEventListener("keydown", e => {
@@ -524,7 +564,7 @@ document.addEventListener("keydown", e => {
     if (S && !ended && e.key === "Enter" && S.mode === "surfaces" && e.target.closest("input, select")) addSurface();
     return;
   }
-  const k = e.key;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;  // Caps Lock changes no key
   if (k === "!") { e.preventDefault(); endPass("second_person"); return; }
   if (k === "Enter" && e.shiftKey) { e.preventDefault(); endPass("done"); return; }
   if (k === " ") { e.preventDefault(); playing = !playing; if (playing) playLoop(); bar(); return; }
@@ -536,23 +576,23 @@ document.addEventListener("keydown", e => {
   }
   if (k === "Home" || k === "End") { e.preventDefault(); playing = false; show(k === "Home" ? 0 : S.frames.length - 1); return; }
   if (k === "[" || k === "]") { speedIx = Math.max(0, Math.min(SPEEDS.length - 1, speedIx + (k === "]" ? 1 : -1))); bar(); return; }
-  if (k === "g" || k === "G") { gammaIx = (gammaIx + 1) % 3; makeLut(); show(idx); return; }
+  if (k === "g") { gammaIx = (gammaIx + 1) % 3; makeLut(); show(idx); return; }
   if (S.mode === "boxes") {
     const n = nAt(idx);
-    if (k === "x" || k === "X") setKeyframe(n, null);
+    if (k === "x") setKeyframe(n, null);
     else if (k === "Delete" || k === "Backspace") deleteKeyframe(n);
-    else if (k === "a" || k === "A") { audit = !audit; lastAuditIdx = null; if (audit) recordAudit(idx); show(idx); }
+    else if (k === "a") { audit = !audit; lastAuditIdx = null; if (audit) recordAudit(idx); show(idx); }
     else if (k === "," || k === ".") {
       const ks = S.keyframes.map(x => x[0]).filter(m => idxOf.has(m) && (k === "," ? m < n : m > n));
       if (ks.length) show(idxOf.get(k === "," ? ks[ks.length - 1] : ks[0]));
     } else return;
     e.preventDefault();
   } else if (isLabels()) {
-    if (labelKey(e)) e.preventDefault();
+    if (labelKey(e, k)) e.preventDefault();
   } else if (S.mode === "surfaces") {
     if (k === "Backspace") { corners.pop(); side(); show(idx); }
     else if (k === "Enter") addSurface();
-    else if (k === "r" || k === "R") { S.reference_n = nAt(idx); surfacesChanged(); }
+    else if (k === "r") { S.reference_n = nAt(idx); surfacesChanged(); }
     else return;
     e.preventDefault();
   }

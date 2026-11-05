@@ -1014,21 +1014,90 @@ class DryRunTests(Base):
         self.assertEqual(surface["reference"]["take"], "c1")
 
 
+# ---- round two: fixes from the second review --------------------------------------------
+
+class SaveRefusalTests(Base):
+    """Item 1: a refused save is never reported as saved, and End pass waits for an accepted one."""
+
+    def setUp(self):
+        super().setUp()
+        staged_take(self.takes, "s1")
+        self.w = self.ws()
+        self.w.scan()
+        self.boxes_done(self.w, "s1")
+        self.good = self.interval(self.w, "s1", 40, 50)
+        self.bad = self.interval(self.w, "s1", 52, 55)  # the same case 2 s later: the pause rule refuses it
+
+    def test_end_pass_is_refused_while_the_last_save_failed(self):
+        seen = {}
+
+        def drive(client):
+            client.save({"intervals": [self.good], "spans": [], "end_to_end": False})
+            seen["save"] = client.call("POST", "/api/save", {"intervals": [self.good, self.bad], "spans": [],
+                                                             "end_to_end": False})
+            seen["stop"] = client.stop("done")
+            if seen["stop"][0] == 200:
+                return  # the pass ended on a refused save
+            client.save({"intervals": [self.good], "spans": [], "end_to_end": False})
+            seen["stop2"] = client.stop("done")
+        code, text = run_main(["labels", "s1", "--takes", str(self.takes)], drive)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(seen["save"][0], 400)
+        self.assertEqual(seen["stop"][0], 400, seen["stop"])
+        self.assertIn("last save was refused", seen["stop"][1]["error"])
+        self.assertIn("pause of 6 s or less", seen["stop"][1]["error"])
+        self.assertEqual(seen["stop2"][0], 200)
+        self.assertIn("Saved. labels pass on s1 ended.", text)
+
+    def test_the_second_person_key_still_ends_the_pass_and_says_what_was_not_saved(self):
+        seen = {}
+
+        def drive(client):
+            client.save({"intervals": [self.good], "spans": [], "end_to_end": False})
+            client.call("POST", "/api/save", {"intervals": [self.good, self.bad], "spans": [], "end_to_end": False})
+            seen["stop"] = client.stop("second_person")
+        code, text = run_main(["labels", "s1", "--takes", str(self.takes)], drive)
+        self.assertEqual((code, seen["stop"][0]), (0, 200))
+        self.assertIn("Second person seen in s1", text)
+        self.assertIn("The last change was not saved (", text)
+        self.assertNotIn("the draft is saved", text)
+        self.assertEqual(len(self.w.load_draft(self.w.draft_path("labels", "s1"))["intervals"]), 1)
+
+
 def browser_fixture(folder):
-    """For test-page-browser.mjs: one synthetic take, then a boxes and a labels pass for the browser."""
+    """For test-page-browser.mjs: two synthetic takes, then the passes the browser plays, in order.
+
+    Prints "URL <step> <address>" when a pass is up and "END {json}" with label.py's output when it
+    ends: surfaces, boxes and labels on s1 (each pass type once more for the "!" key), then the
+    re-mark of s2, whose first pass is made here."""
     takes = Path(folder) / "takes"
     takes.mkdir(parents=True)
     staged_take(takes, "s1", "hard-a", BASE_UNIX, typed="none", activity=30.0)
+    staged_take(takes, "s2", "hard-b", BASE_UNIX + 3600, typed="none", activity=30.0)
     argv = ["--takes", str(takes), "--no-browser"]
     out = io.StringIO()
     if label.main(["sessions"] + argv[:2], out=out) != 0:
         raise SystemExit(out.getvalue())
-    for mode in ("boxes", "labels"):
-        code = label.main([mode, "s1"] + argv, out=io.StringIO(),
-                          ready=lambda url, mode=mode: print(f"URL {mode} {url}", flush=True))
+
+    def serve(step, command):
+        text = io.StringIO()
+        code = label.main(command + argv, out=text, ready=lambda url: print(f"URL {step} {url}", flush=True))
+        print("END " + json.dumps({"step": step, "code": code, "text": text.getvalue()}), flush=True)
         if code != 0:
-            raise SystemExit(f"{mode} pass failed")
+            raise SystemExit(f"{step} pass failed")
+    serve("surfaces-person", ["surfaces", "s1"])
+    serve("boxes", ["boxes", "s1"])
+    serve("boxes-person", ["boxes", "s1"])
+    serve("labels", ["labels", "s1"])
+    serve("labels-person", ["labels", "s1"])
     ws = n1.Workspace(takes, takes / "n1")
+    with mock.patch.object(n1, "now", return_value=BASE_UNIX + DAY):
+        p = label.Pass(ws, "boxes", "s2", out=io.StringIO())
+        p.save({"keyframes": [[p.usable[0]["n"], [100, 50, 300, 340]]],
+                "audited": [[p.usable[0]["n"], p.usable[-1]["n"]]]})
+        label.Pass(ws, "labels", "s2", out=io.StringIO()).save({"intervals": [], "spans": [], "end_to_end": True})
+    with mock.patch.object(n1, "now", return_value=BASE_UNIX + 5 * DAY):
+        serve("remark-person", ["remark"])
     state = ws.state("s1")
     frames = n1.read_frames(state.folder)
     usable = n1.usable_frames(state, frames)
@@ -1039,7 +1108,8 @@ def browser_fixture(folder):
                                                                                                 usable),
                                   "tight": {str(f["n"]): b for f, b in zip(usable, tight)},
                                   "intervals": labels["intervals"], "spans": labels["spans"],
-                                  "end_to_end": labels["actor"]["end_to_end"] is not None}), flush=True)
+                                  "end_to_end": labels["actor"]["end_to_end"] is not None,
+                                  "remark_started": ws.draft_path("remark", "s2").exists()}), flush=True)
 
 
 if __name__ == "__main__":

@@ -80,6 +80,7 @@ class Pass:
         self.ws, self.mode, self.practice, self.out = ws, mode, practice, out
         self.stop_reason, self.stopped, self.lock = None, threading.Event(), threading.Lock()
         self.split = None
+        self.refused = None  # the reason the last save was refused, until a save is accepted
         if mode == "remark":
             take_id = ws.remark_take()
         self.take = take_id
@@ -160,43 +161,57 @@ class Pass:
         with self.lock:
             if self.stopped.is_set():
                 raise n1.Refused("this pass has ended")
-            if type(body) is not dict:
-                raise n1.Refused("a save is a JSON object")
-            now_state = n1.take_state(self.state.folder, allow_commissioning=self.allow_commissioning)
-            if now_state.check_names != self.state.check_names:
-                raise n1.Refused("the take's check files changed since this pass opened; end it and run "
-                                 "label.py again")
-            draft = json.loads(json.dumps(self.draft))
-            if self.mode == "boxes":
-                if self.boxes_locked():
-                    raise n1.Refused("boxes are locked: this session's label pass has started")
-                allowed = set(self.by_n) | {k[0] for k in draft["keyframes"]}
-                draft["keyframes"] = n1.check_keyframes(body.get("keyframes"), allowed)
-                draft["audited"] = n1.check_ranges(body.get("audited"))
-            elif self.mode in ("labels", "remark"):
-                draft["intervals"], draft["spans"] = n1.check_labels(
-                    body.get("intervals"), body.get("spans"), self.ws.protocol, self.segments, self.t_of)
-                if type(body.get("end_to_end")) is not bool:
-                    raise n1.Refused("end_to_end must be true or false")
-                actor = draft["actor"]
-                actor["end_to_end"] = (actor["end_to_end"] or n1.now()) if body["end_to_end"] else None
-            else:
-                n = body.get("reference_n")
-                if type(n) is not int or n not in self.by_n:
-                    raise n1.Refused("the reference frame must be a usable frame")
-                draft["surfaces"] = check_surfaces(body.get("surfaces"))
-                draft["reference"] = {"take": self.take, "n": n,
-                                      "frame_sha256": n1.sha256_bytes(n1.read_nv12(self.state.folder,
-                                                                                   self.by_n[n]))}
-            draft["actor"]["saved_unix"] = n1.now()
-            n1.write_json(self.path, draft)
-            self.draft = draft
-            return {"ok": True, "saved_unix": draft["actor"]["saved_unix"]}
+            try:
+                reply = self.save_checked(body)
+            except n1.Refused as exc:
+                self.refused = str(exc)
+                raise
+            self.refused = None
+            return reply
+
+    def save_checked(self, body):
+        """Check one save and write it."""
+        if type(body) is not dict:
+            raise n1.Refused("a save is a JSON object")
+        now_state = n1.take_state(self.state.folder, allow_commissioning=self.allow_commissioning)
+        if now_state.check_names != self.state.check_names:
+            raise n1.Refused("the take's check files changed since this pass opened; end it and run "
+                             "label.py again")
+        draft = json.loads(json.dumps(self.draft))
+        if self.mode == "boxes":
+            if self.boxes_locked():
+                raise n1.Refused("boxes are locked: this session's label pass has started")
+            allowed = set(self.by_n) | {k[0] for k in draft["keyframes"]}
+            draft["keyframes"] = n1.check_keyframes(body.get("keyframes"), allowed)
+            draft["audited"] = n1.check_ranges(body.get("audited"))
+        elif self.mode in ("labels", "remark"):
+            draft["intervals"], draft["spans"] = n1.check_labels(
+                body.get("intervals"), body.get("spans"), self.ws.protocol, self.segments, self.t_of)
+            if type(body.get("end_to_end")) is not bool:
+                raise n1.Refused("end_to_end must be true or false")
+            actor = draft["actor"]
+            actor["end_to_end"] = (actor["end_to_end"] or n1.now()) if body["end_to_end"] else None
+        else:
+            n = body.get("reference_n")
+            if type(n) is not int or n not in self.by_n:
+                raise n1.Refused("the reference frame must be a usable frame")
+            draft["surfaces"] = check_surfaces(body.get("surfaces"))
+            draft["reference"] = {"take": self.take, "n": n,
+                                  "frame_sha256": n1.sha256_bytes(n1.read_nv12(self.state.folder,
+                                                                               self.by_n[n]))}
+        draft["actor"]["saved_unix"] = n1.now()
+        n1.write_json(self.path, draft)
+        self.draft = draft
+        return {"ok": True, "saved_unix": draft["actor"]["saved_unix"]}
 
     def stop(self, reason):
+        """End the pass. "done" waits for an accepted last save; "second_person" always ends it."""
         if reason not in ("done", "second_person"):
             raise n1.Refused("reason must be done or second_person")
         with self.lock:
+            if reason == "done" and self.refused:
+                raise n1.Refused(f"not ended: the last save was refused ({self.refused}). Fix it on the page, "
+                                 "or press Ctrl+C in the PowerShell window to stop without it")
             self.stop_reason = self.stop_reason or reason
             self.stopped.set()
 
@@ -302,9 +317,14 @@ def serve(p, *, open_browser=True, ready=None, out=sys.stdout):
 
 
 def after_pass(ws, p, reason, out):
+    not_saved = (f"The last change was not saved ({p.refused}); the draft holds the last accepted save."
+                 if p.refused else None)
     if reason == "second_person":
         union = n1.take_state(p.state.folder, allow_commissioning=p.allow_commissioning).union
-        print(f"Second person seen in {p.take}. The pass ended and the draft is saved.", file=out)
+        print(f"Second person seen in {p.take}. The pass ended" + ("." if not_saved else " and the draft is saved."),
+              file=out)
+        if not_saved:
+            print(not_saved, file=out)
         print(f"Re-run: python -B tools\\den-take\\check.py {ws.takes / p.take}", file=out)
         if union == "(no earlier spans)":
             print("Earlier spans: (no earlier spans). At check.py's prompt type only the new spans.", file=out)
@@ -315,6 +335,8 @@ def after_pass(ws, p, reason, out):
         print(f"Saved. {p.mode} pass on {p.take} ended.", file=out)
     else:
         print(f"Stopped ({reason}). Everything saved so far is kept.", file=out)
+        if not_saved:
+            print(not_saved, file=out)
 
 
 def run_pass(ws, mode, take_id, practice, args, out, ready):

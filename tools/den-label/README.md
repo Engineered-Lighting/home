@@ -102,6 +102,11 @@ python -B tools\den-label\label.py surfaces c1
 
 Each command prints the page's address and opens it. Leave the PowerShell
 window open; the page ends the pass (Shift+Enter, or the End pass button).
+Every change saves by itself. If the server refuses a save, the reason stays
+in red at the top until a save is accepted, and End pass waits: fix the item
+(or select it and press Del), or press Ctrl+C in the PowerShell window to stop
+without it. End pass also names an item you have not finished (an onset
+with no offset, band or case, or a span with no end) instead of dropping it.
 
 ## Step 5, after each staged take
 
@@ -137,7 +142,9 @@ python -B tools\den-label\label.py boxes --pad 25
 It opens only after the audit is complete, and from then on the session's
 boxes are locked. At each engagement, step frame by frame to the first touch
 and press O, press F or C for the band and a number for the case, then step to
-the last contact and press P. Mark quiet, low-light and uncertain spans with
+the last contact and press P. Hold Shift with O or P for a no-touch end;
+Caps Lock changes nothing. K changes a saved interval's nearest end between
+touch (or release) and no touch. Mark quiet, low-light and uncertain spans with
 Q, L and U at their start and end (a number sets a quiet span's case). Never
 guess: N toggles "not sure" on the nearest end, B on the band, and an
 uncertain span covers "is this engagement at all?". When done, press E to mark
@@ -148,7 +155,7 @@ the session labelled end to end.
 | Space, Left/Right (Shift x10), Home/End, [ ] | play, step, speed | the same |
 | G | brightness for dim frames | the same |
 | X, Del, `,` `.`, A | not in view, remove keyframe, previous/next keyframe, audit | |
-| O / Shift+O, P / Shift+P | | onset touch / no touch, offset release / no touch |
+| O / Shift+O, P / Shift+P, K | | onset touch / no touch, offset release / no touch, change the nearest end's kind |
 | F, C, 1-9, N, B | | fine, casual, case, toggle sure (end), toggle sure (band) |
 | Q, L, U, Tab, Del, E | | quiet, low light, uncertain, select, delete, end to end |
 | `!` | second person in view: ends the pass | the same |

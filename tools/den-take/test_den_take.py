@@ -461,16 +461,20 @@ class PollerTests(Workspace):
 
     def test_unreadable_health_is_not_called_unreachable(self):
         camera = self.camera()
-        camera.response = lambda path: (200, "text/html", b"<!doctype html><title>Sign in</title>\n")
+        answered = f"camera at 127.0.0.1:{camera.server.server_address[1]} answered but /health was unreadable"
+        html = (200, "text/html", b"<!doctype html><title>Sign in</title>\n")
         cut_short = mock.patch.object(take.Camera, "get", side_effect=http.client.IncompleteRead(b"{", 40))
-        for name, patch, error in (("html", contextlib.nullcontext(), "JSONDecodeError"),
-                                   ("cut", cut_short, "IncompleteRead")):
+        for name, reply, patch, expected in (
+                ("html", html, contextlib.nullcontext(), rf"{answered} \(JSONDecodeError\)"),
+                ("cut", html, cut_short, rf"{answered} \(IncompleteRead\)"),
+                ("503", (503, "text/plain", b"Service Unavailable\n"), contextlib.nullcontext(),
+                 r"not healthy \(status 503, JSONDecodeError\)")):
+            camera.response = lambda path, reply=reply: reply
             with self.subTest(name), patch:
                 with self.assertRaises(take.Refused) as refused:
                     take.run(self.args(camera, name=name), say=lambda t: None, settings=FAST)
                 message = str(refused.exception)
-                self.assertRegex(message, f"camera at 127.0.0.1:{camera.server.server_address[1]} answered "
-                                          rf"but /health was unreadable \({error}\)")
+                self.assertRegex(message, expected)
                 self.assertNotIn("cannot reach", message)
                 self.assertFalse((self.tmp / "takes" / name).exists())
 

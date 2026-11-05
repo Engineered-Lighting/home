@@ -1384,6 +1384,18 @@ class MethodAndCommandLine(unittest.TestCase):
         self.assertEqual(list(method.parse(text).open), ["delta_hit_rate"])
         self.assertIsNone(method.parse(text).scored())
 
+    def test_the_rules_for_holds_and_dims_each_refuse_a_scored_run_while_open(self):
+        d, f, c = syn.v11_evening()
+        for slot, proposed in (("change_allowance", "0.15"), ("held_rule", '"free_bulbs_count"'), ("held_share_min", "0.05")):
+            text = method.closed_copy(method.lf_text(HERE / "VERIFY-V1.md"))
+            text = re.sub(rf"^{slot} = .*$", f"{slot} = open  # open, proposed {proposed}", text, flags=re.M)
+            with tempfile.TemporaryDirectory() as tmp:
+                argv = write_case(tmp, d, f, syn.v11_model(), c, method_text=text)
+                with Quiet() as q:
+                    self.assertEqual(cli.main(argv), 2, slot)
+                self.assertIn(f"refused: VERIFY-V1.md has 1 open slot(s): {slot}", q.buf.getvalue())
+                self.assertFalse((Path(tmp) / "out").exists(), slot)
+
     def test_slots_command_is_ascii(self):
         with Quiet() as q:
             self.assertEqual(cli.main(["slots"]), 0)

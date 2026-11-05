@@ -8,9 +8,10 @@ type: added
 bulbs it checks the next settled metering frame against the light model's
 prediction for the state the bulbs actually reached (±15%, hit rate at least
 85%), writes `Decision.verify` and the `LightState` residual, and reports which
-misses daylight, a shadow or drift explain. A held or superseded bulb's own light
-cannot make a miss, and a free bulb's fault still shows beside it: such a point
-counts both ways unless the decision's own bulbs could not show there. Dims and
+misses daylight, a shadow or drift explain. Under the proposed read-frame
+background, a held or superseded bulb that stayed put cannot make a miss, and a
+free bulb's fault still shows beside it: such a point counts both ways unless the
+decision's own bulbs could not show there. Dims and
 offs are judged to the wider of 15% of the level and an allowance on the bulbs
 that changed, and every level check carries the meter's noise, so a perfect dim is
 a hit and a bulb that stayed on is a miss. A fault inside those bounds cannot be

@@ -45,13 +45,24 @@ Status: plan only. Nothing here is built or run. Written 2026-11-05.
      request that could see the touch) against 3 s − P/2 = 1 s; report raw
      d_on. This removes the schedule's phase from the gate, not S.
   3. **Report only.** Onset gates nothing and is marked untested.
-- **What this plan does.** P stays 4 s and development measures S. If
-  2 s + median S_dev ≤ 3 s, onset is gated as written. If not, GATE-V1 sets
-  `pacing_s` and `onset_mode` before the held-out set opens. Recommended
-  fallback: pacing, with P chosen so P/2 + median S_dev leaves room under 3 s,
-  because it keeps the owner's 3 s target gated. If no P fits, onset is
-  report-only, so a not_feasible verdict never rests on cadence and service
-  time, which are not the need premise.
+- **What this plan does.** P stays 4 s. For each timed development onset,
+  score.py reports d_on and w, the wait from the touch to the next request on
+  the schedule. The rule uses D_dev, the development median of max(d_on − w,
+  0) (a missed onset is +∞): the part of d_on the schedule's phase doesn't
+  explain, S + 4 s × m. S alone would hide m, so a first reply that usually
+  reads `transition` could pass development and then fail held-out on cadence.
+  - If P/2 + D_dev ≤ 3 s (2 s + D_dev at P = 4 s), onset is gated as
+    written.
+  - If not, GATE-V1 sets `pacing_s` and `onset_mode` before the held-out set
+    opens. Recommended fallback: pacing, because it keeps the owner's 3 s
+    target gated. Pick the largest P whose prediction from the P = 4 s
+    onsets fits: P/2 + the median of S + P × m (0 for an onset already on, +∞
+    for a miss) ≤ 3 s. Then ask and replay development again at that P and
+    check P/2 + its own D_dev ≤ 3 s. That costs one more development ask, at
+    4/P times the requests (section 10).
+  - If no P fits, or the re-check misses, onset is report-only, so a
+    not_feasible verdict never rests on cadence and service time, which are
+    not the need premise.
 
 ### (b) Vocabulary
 
@@ -305,7 +316,8 @@ The first rule that applies decides:
     `gold_set` schema gains `regions_status` and a nullable `regions` then;
   - `split`; `metrics` (unit, counted-per, orientation, value, interval, bound
     method, threshold, status, low-light split); `sample_gates`; `cases`;
-  - `service` (S median and p95; re-send, invalid and failed counts);
+  - `service` (S median and p95; D, the median of max(d_on − w, 0); re-send,
+    invalid and failed counts);
     `excluded` (uncertain seconds, unsure marks, carried pieces, onset tags,
     misses); `replay` (each log's sha256 and `check.py` result);
   - `promoted: false`; no working-region, room-position, two-person or
@@ -437,14 +449,14 @@ gate, one re-send. N2's ask step reuses that pattern; this names its interface.
 |---|---|
 | `scope` | the owner, at plan review |
 | `prompt` (prompt-1 or prompt-2, with its sha256) | development step |
-| `pacing_s`, `onset_mode` | development step, from S_dev |
+| `pacing_s`, `onset_mode` | development step, from D_dev (section 1(a)) |
 | `facts_map`, `confidence_table` | fitted on development |
 | rule values changed from A7, if any | development step |
 | `floor.competence.fine`, `.casual`, `.none` | the owner, on development |
 | `floor.fine_recall`, `floor.coverage` | the owner, on development |
 | `cap.early_off`, `cap.false_on` | the owner, on development |
 | `detector` (option 1 only) | development step |
-| stand-in versions and hashes, S_dev, the look-test tool's JPEG and gate settings | mechanical |
+| stand-in versions and hashes, S_dev, D_dev, the look-test tool's JPEG and gate settings | mechanical |
 
 ## 9. Build order and sizes
 
@@ -473,9 +485,9 @@ v1 unchanged.
   LA's RAM disk. The earlier figure was about 270 requests per 21-minute take;
   N1's revised takes give about 375 to 400, so about 1,500 to 1,600 for 4
   development sessions (twice with prompt-2) and the same for 4 held-out. A
-  smaller `pacing_s` multiplies this by 4/P; option 1 adds the detector's
-  install and GPU time. Building, synthetic tests, replays and scoring need
-  no go-ahead.
+  smaller `pacing_s` multiplies this by 4/P, and its re-check asks
+  development once more at that P; option 1 adds the detector's install and
+  GPU time. Building, synthetic tests, replays and scoring need no go-ahead.
 
 ## 11. Risks
 

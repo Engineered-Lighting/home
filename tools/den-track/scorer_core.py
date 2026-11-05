@@ -54,12 +54,29 @@ def _inside(time, window):
     return window['start'] <= time <= window['end']
 
 
-def score_take(links, windows):
-    """One take's crossings. windows: [{'id', 'kind', 'start', 'end'}].
+def _why_no_trial(inside, window, min_people):
+    """Why a window cannot show that identities held, or None if it can."""
+    named = [l for l in inside if l[2] is not None]
+    if len({l[2] for l in named}) < min_people:
+        return 'fewer than %d people scored' % min_people
+    mark = window.get('mark')
+    if mark and min(l[0] for l in named) >= mark[0]:
+        return 'nobody scored before the mark'
+    if mark and max(l[0] for l in named) <= mark[1]:
+        return 'nobody scored after the mark'
+    return None
+
+
+def score_take(links, windows, min_people=2):
+    """One take's crossings. windows: [{'id', 'kind', 'start', 'end'}], and 'mark',
+    the owner's [t0, t1] inside the padded window, when there is one.
 
     Switches are found on the whole take (so a track's person before a window
     is known) and counted in the window they fall in. IDF1 uses each window's
-    own best mapping.
+    own best mapping. A window is a trial (`admitted`) only if it holds a silent
+    swap, or scored observations of at least min_people people, on both sides of
+    the mark: one that saw one person, nobody, or nothing after the contact (a
+    take cut short) cannot show that identities held.
     """
     all_switches = switches(links)
     rows = []
@@ -69,13 +86,18 @@ def score_take(links, windows):
         sw = [s for s in all_switches if _inside(s['time'], w)]
         tracked = [l for l in inside if l[3] is not None]
         doubted = sum(1 for l in tracked if not l[4])
+        silent = sum(1 for s in sw if s['silent'])
+        why = None if silent else _why_no_trial(inside, w, min_people)
         rows.append({
             'id': w['id'], 'kind': w.get('kind'), 'start': w['start'], 'end': w['end'],
             'observations': len(inside),
+            'people_scored': sorted({l[2] for l in inside if l[2] is not None}),
+            'admitted': why is None,
+            'excluded_because': why,
             'idtp': counts['idtp'], 'idfp': counts['idfp'], 'idfn': counts['idfn'],
             'idf1': idf1(counts),
             'mapping': counts['mapping'],
-            'switches': len(sw), 'silent_swaps': sum(1 for s in sw if s['silent']),
+            'switches': len(sw), 'silent_swaps': silent,
             'flagged_switches': sum(1 for s in sw if not s['silent']),
             'ambiguous_share': (doubted / len(tracked)) if tracked else None,
             'switch_detail': sw,
@@ -100,13 +122,15 @@ def summarize(takes, idf1_gate, alpha=0.05):
     """Pooled E2 numbers and the gate, over score_take results.
 
     A silent swap anywhere fails the gate. The bound is per crossing: how many
-    of the n crossings held a silent swap. Pooled IDF1 sums the windows' counts;
-    whole-take IDF1, one mapping per take, is reported beside it.
+    of the n admitted crossings held a silent swap. Pooled IDF1 sums the admitted
+    windows' counts; whole-take IDF1, one mapping per take, is reported beside it.
+    A window that is not admitted counts for nothing and is listed as excluded.
     """
     rows = [r for take in takes for r in take['windows']]
-    n = len(rows)
-    failed = sum(1 for r in rows if r['silent_swaps'] > 0)
-    pooled = {k: sum(r[k] for r in rows) for k in ('idtp', 'idfp', 'idfn')}
+    admitted = [r for r in rows if r['admitted']]
+    n = len(admitted)
+    failed = sum(1 for r in admitted if r['silent_swaps'] > 0)
+    pooled = {k: sum(r[k] for r in admitted) for k in ('idtp', 'idfp', 'idfn')}
     whole = {k: sum(take['whole'][k] for take in takes) for k in ('idtp', 'idfp', 'idfn')}
     outside_silent = sum(take['outside']['silent_swaps'] for take in takes)
     tracked = sum(take['outside']['tracked'] for take in takes)
@@ -116,6 +140,9 @@ def summarize(takes, idf1_gate, alpha=0.05):
     idf1_met = pooled_idf1 is not None and pooled_idf1 >= idf1_gate
     return {
         'crossings': n,
+        'crossings_marked': len(rows),
+        'crossings_excluded': [{'take': r.get('take'), 'id': r['id'], 'people_scored': r['people_scored'],
+                                'because': r['excluded_because']} for r in rows if not r['admitted']],
         'crossings_with_silent_swap': failed,
         'silent_swaps': sum(r['silent_swaps'] for r in rows),
         'flagged_switches': sum(r['flagged_switches'] for r in rows),
@@ -134,7 +161,7 @@ def summarize(takes, idf1_gate, alpha=0.05):
     }
 
 
-def score_windows(links, windows, idf1_gate, alpha=0.05):
+def score_windows(links, windows, idf1_gate, alpha=0.05, min_people=2):
     """One take: per-window rows and the pooled numbers."""
-    take = score_take(links, windows)
+    take = score_take(links, windows, min_people)
     return dict(summarize([take], idf1_gate, alpha), windows=take['windows'])

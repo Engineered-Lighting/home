@@ -175,7 +175,10 @@ python -B tools\den-track\den_track.py score --scored --out C:\den-takes\crossin
 ```
 
 **7. Read it.** `score.json` has each crossing, the pooled numbers, the bound, the gate
-and the method's fingerprint. An agent may read `score.json` and `track-run.json`, which
+and the method's fingerprint. A crossing whose window does not hold scored observations
+of two people on both sides of the mark (the detector stalled, a time was mistyped, the
+take was cut short) is listed as excluded and does not count; a scored run refuses when
+too few are left. An agent may read `score.json` and `track-run.json`, which
 hold counts and ids, but not `observations.jsonl`, `tracks.jsonl`, `truth.jsonl` or any
 frame. If geometry alone misses the gate, the ladder's next step is session appearance
 as its own rung, after the owner's decision on learning permissions. A take used to

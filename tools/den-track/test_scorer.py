@@ -140,6 +140,39 @@ class WindowTest(unittest.TestCase):
         self.assertFalse(res['gate']['passed'])
         self.assertIsNone(res['silent_swap_rate_upper_95'])
 
+    def test_a_window_without_two_people_is_no_trial(self):
+        rows = [('A', 1), ('B', 2)] * 5 + [('A', 1)] * 10 + [(None, 3)] * 10
+        windows = [{'id': 'two', 'start': 0, 'end': 9}, {'id': 'one', 'start': 10, 'end': 19},
+                   {'id': 'none', 'start': 20, 'end': 29}, {'id': 'empty', 'start': 100, 'end': 110}]
+        res = scorer_core.score_windows(links_from(rows), windows, 0.9)
+        self.assertEqual(res['crossings'], 1)
+        self.assertEqual(res['crossings_marked'], 4)
+        self.assertEqual([(e['id'], e['people_scored']) for e in res['crossings_excluded']],
+                         [('one', ['A']), ('none', []), ('empty', [])])
+        self.assertAlmostEqual(res['silent_swap_rate_upper_95'], upper_bound(0, 1))
+        self.assertEqual((res['pooled']['idtp'], res['pooled']['idfp']), (10, 0), 'IDF1 counts only the admitted window')
+
+    def test_only_excluded_windows_never_pass(self):
+        rows = [('A', 1)] * 20
+        windows = [{'id': 'c%d' % k, 'start': 2 * k, 'end': 2 * k + 1} for k in range(10)]
+        res = scorer_core.score_windows(links_from(rows), windows, 0.9)
+        self.assertEqual(res['crossings'], 0)
+        self.assertFalse(res['gate']['passed'])
+
+    def test_a_silent_swap_in_a_window_with_one_person_still_fails_and_counts_in_the_bound(self):
+        links = links_from([('A', 1)] * 5 + [('B', 1)] * 5)
+        res = scorer_core.score_windows(links, [{'id': 'w', 'start': 4.5, 'end': 9}], 0.9)
+        self.assertEqual(res['windows'][0]['people_scored'], ['B'])
+        self.assertEqual(res['crossings'], 1)
+        self.assertEqual(res['crossings_with_silent_swap'], 1)
+        self.assertFalse(res['gate']['passed'])
+
+    def test_a_flagged_switch_in_an_excluded_window_is_still_reported(self):
+        links = links_from([('A', 1)] * 5 + [('B', 1)] * 5, confident=False)
+        res = scorer_core.score_windows(links, [{'id': 'w', 'start': 4.5, 'end': 9}], 0.9)
+        self.assertEqual(res['crossings'], 0)
+        self.assertEqual(res['flagged_switches'], 1)
+
 
 def good_truth_lines():
     return [

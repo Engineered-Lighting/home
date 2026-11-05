@@ -128,17 +128,25 @@ person. A link joins an observation's person to the track that listed it in
   observation level). The gate's number sums the windows' counts. Whole-take IDF1,
   one mapping per take, is reported beside it and is harsher: a flagged swap costs
   everything after it.
-- **The bound**: one-sided Clopper-Pearson at `alpha` on crossings with a silent swap.
-  With 0 of n it is `1 - alpha ** (1 / n)`: 13.9% at 20, 9.5% at 30.
+- **Which crossings count**: a crossing is a trial only if its window holds a silent
+  swap, or scored observations of at least `min_people_per_crossing` people, with some
+  before the owner's mark and some after it. One that saw one person or nobody (the
+  detector stalled, a mistyped time) or nothing after the contact (a take cut short) shows
+  nothing about identity. It is listed as excluded, and left out of n, the bound and IDF1.
+  A scored observation has a person's letter and could have been tracked: it is valid,
+  with a position. "Not a person" and rejected observations do not count.
+- **The bound**: one-sided Clopper-Pearson at `alpha` on the admitted crossings with a
+  silent swap. With 0 of n it is `1 - alpha ** (1 / n)`: 13.9% at 20, 9.5% at 30.
 - **The gate**: no silent swap anywhere in the takes, inside a crossing or not, and
-  IDF1 at least `idf1_gate`, on at least `min_crossings` crossings.
+  IDF1 at least `idf1_gate`, on at least `min_crossings` admitted crossings.
 - **Reported beside the gate, with no limit in the contracts**: flagged switches; the
   ambiguous share of tracked observations inside each crossing, inside its mark, and
   outside every crossing, so a tracker cannot pass by doubting everything; a stand-in
   for E2's "how often a face is even visible".
 
 A scored run also refuses tracks made under another method, changed files, unlabelled
-observations, a crossing with no observations, or crossings that overlap once padded.
+observations, fewer than `min_crossings` admitted crossings, or crossings that overlap
+once padded.
 
 ## The block
 
@@ -187,6 +195,7 @@ observations, a crossing with no observations, or crossings that overlap once pa
     "idf1_gate": 0.9,
     "alpha": 0.05,
     "min_crossings": 20,
+    "min_people_per_crossing": 2,
     "window_pad_s": {"open": true, "proposed": 2.0, "why": "Padding on each side of the owner's mark, so a window holds frames before and after and a swap shows in its own IDF1. The contracts name none. Proposed 2.0: about what walkers need to come together and part. Staged crossings must be further apart than twice this."},
     "face_visible_score_min": {"open": true, "proposed": 0.4, "why": "E2 asks how often a face is even visible. Without reading frames, the stand-in is nose and both eyes above this keypoint score. Proposed 0.4, rung 2's proposed keypoint_score_min."}
   }
@@ -198,6 +207,7 @@ observations, a crossing with no observations, or crossings that overlap once pa
 | Numbers | Source |
 |---|---|
 | `idf1_gate`, `min_crossings`, `alpha` | ladder rung 3 and the brief: IDF1 at least 0.9, 20-30 crossings, a one-sided 95% bound |
+| `min_people_per_crossing` | a swap takes two people |
 | `gate_chi2` | chi-square, 2 degrees of freedom, 99.9% |
 | `accel_sigma`, `ambiguous_below`, `risk_floor`, `p_detect_unseen`, `hidden_reach_mps`, `clutter_density`, `birth_density`, `confirm_hits`, `confirm_window` | tuned below: these are the values that moved the results |
 | `p_detect`, `exit_coast_s`, `coast_velocity_tau_s`, `new_track_speed_sigma`, `robust_d2` | swept below, and the results barely moved |

@@ -70,7 +70,7 @@ def take_links(observations, track_lines, truth):
 
 
 def windows_of(truth, pad_s):
-    return [{'id': c['crossing_id'], 'kind': c['type'],
+    return [{'id': c['crossing_id'], 'kind': c['type'], 'mark': c['interval'],
              'start': c['interval'][0] - pad_s, 'end': c['interval'][1] + pad_s} for c in truth.crossings]
 
 
@@ -103,7 +103,7 @@ def score_session(takes, scoring):
         for k in left_out:
             left_out[k] += skipped[k]
         windows = windows_of(take['truth'], scoring['window_pad_s'])
-        result = scorer_core.score_take(links, windows)
+        result = scorer_core.score_take(links, windows, scoring['min_people_per_crossing'])
         faces = face_share(take['observations'], take['truth'], windows, scoring['face_visible_score_min'])
         for row, crossing in zip(result['windows'], take['truth'].crossings):
             row['take'] = take['name']

@@ -28,6 +28,22 @@ def no_connections(*args, **kwargs):
     raise AssertionError('den-track must not open a socket')
 
 
+def reject_person(person):
+    """An edit of a take's observations: every observation of this person becomes rejected, with no position."""
+    def edit(obs_path, truth_path):
+        labels = {}
+        for line in records.read_jsonl(truth_path):
+            if line['kind'] == 'frame':
+                labels.update(line['labels'])
+        rows = records.read_jsonl(obs_path)
+        for row in rows:
+            if labels.get(row['obs_id']) == person:
+                row['validity'] = 'rejected:no_room_position:depth_absent'
+                row.pop('room_position', None)
+        records.write_jsonl(obs_path, rows)
+    return edit
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -53,11 +69,13 @@ class Base(unittest.TestCase):
             f.write('```json den-track-method\n%s\n```\n' % json.dumps(block, indent=2))
         return path
 
-    def make_take(self, scene='clean_crossing', seed=0, noise='clean', meth=None):
+    def make_take(self, scene='clean_crossing', seed=0, noise='clean', meth=None, edit_observations=None):
         """Synth, then track. Returns [observations, tracks, truth] paths."""
         folder = self.path('takes', '%s-%d' % (scene, seed))
         code, text = cli('synth', '--scene', scene, '--seed', str(seed), '--noise', noise, '--out', folder)
         self.assertEqual(code, 0, text)
+        if edit_observations:
+            edit_observations(os.path.join(folder, 'observations.jsonl'), os.path.join(folder, 'truth.jsonl'))
         run_folder = os.path.join(folder, 'track-1')
         args = ['--method', meth] if meth else []
         code, text = cli(*args, 'track', '--observations', os.path.join(folder, 'observations.jsonl'), '--out', run_folder)
@@ -149,6 +167,9 @@ class ScoredRunTest(Base):
     def twenty(self, meth):
         return [self.make_take(seed=seed, meth=meth) for seed in range(20)]
 
+    def twenty_more(self, meth):
+        return [self.make_take(seed=seed, meth=meth) for seed in range(100, 120)]
+
     def assert_refused(self, args, needle):
         out = args[args.index('--out') + 1]
         code, text = cli(*args)
@@ -231,13 +252,74 @@ class ScoredRunTest(Base):
         records.write_jsonl(takes[0][2], lines)
         self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'no label')
 
-    def test_refused_with_a_crossing_that_holds_no_observation(self):
+    def test_one_real_crossing_and_nineteen_empty_windows_are_refused(self):
+        meth = self.closed_method()
+        take = self.make_take(meth=meth)
+        lines = records.read_jsonl(take[2])
+        end = max(l['capture_ts'] for l in lines if l['kind'] == 'frame')
+        for k in range(19):
+            start = end + 10 + 8 * k
+            lines.append({'kind': 'crossing', 'crossing_id': 'v%02d' % k, 'type': 'crossing', 'interval': [start, start + 2]})
+        records.write_jsonl(take[2], lines)
+        self.assert_refused(self.score_args([take], scored=True, meth=meth), 'at least 20')
+
+    def one_person_take(self, seed, meth):
+        """A crossing in which B is never scored: every B observation is rejected, as in a depth stall."""
+        return self.make_take(seed=seed, meth=meth, edit_observations=reject_person('B'))
+
+    def test_twenty_crossings_with_only_one_person_scored_are_refused_not_passed(self):
+        meth = self.closed_method()
+        takes = [self.one_person_take(seed, meth) for seed in range(20)]
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'at least 20')
+
+    def test_a_refusal_for_too_few_crossings_names_the_ones_left_out(self):
+        meth = self.closed_method()
+        takes = self.twenty(meth)[:19] + [self.one_person_take(50, meth)]
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'clean_crossing-50/c1')
+
+    def test_a_crossing_with_one_person_is_excluded_named_and_not_counted(self):
+        meth = self.closed_method()
+        takes = self.twenty(meth) + [self.one_person_take(50, meth)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('EXCLUDED', text)
+        self.assertIn('clean_crossing-50/c1', text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertEqual(report['crossings'], 20)
+        self.assertEqual(report['crossings_marked'], 21)
+        self.assertEqual(report['crossings_excluded'], [{'take': 'clean_crossing-50', 'id': 'c1', 'people_scored': ['A'],
+                                                         'because': 'fewer than 2 people scored'}])
+        self.assertAlmostEqual(report['silent_swap_rate_upper_95'], 1 - 0.05 ** (1 / 20))
+
+    def test_a_take_cut_short_at_the_contact_is_excluded(self):
+        def cut(obs_path, truth_path):
+            lines = records.read_jsonl(truth_path)
+            start = next(l for l in lines if l['kind'] == 'crossing')['interval'][0]
+            kept = [l for l in lines if l['kind'] != 'frame' or l['capture_ts'] < start]
+            gone = {o for l in lines if l['kind'] == 'frame' and l['capture_ts'] >= start for o in l['labels']}
+            records.write_jsonl(truth_path, kept)
+            records.write_jsonl(obs_path, [o for o in records.read_jsonl(obs_path) if o['obs_id'] not in gone])
+
+        meth = self.closed_method()
+        short = self.make_take(seed=50, meth=meth, edit_observations=cut)
+        self.assert_refused(self.score_args(self.twenty(meth)[:19] + [short], scored=True, meth=meth), 'clean_crossing-50/c1')
+        code, text = cli(*self.score_args(self.twenty_more(meth) + [short], 'score2', scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('nobody scored after the mark', text)
+
+    def test_a_crossing_that_holds_no_observation_is_excluded_named_and_not_counted(self):
         meth = self.closed_method()
         takes = self.twenty(meth)
         lines = records.read_jsonl(takes[0][2])
         lines.append({'kind': 'crossing', 'crossing_id': 'empty', 'type': 'crossing', 'interval': [5.0, 6.0]})
         records.write_jsonl(takes[0][2], lines)
-        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'empty')
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('EXCLUDED', text)
+        self.assertIn('clean_crossing-0/empty', text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['crossings'], 20)
 
     def test_refused_when_two_crossings_overlap_once_padded(self):
         meth = self.closed_method()

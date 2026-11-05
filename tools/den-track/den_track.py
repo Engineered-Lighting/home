@@ -151,12 +151,12 @@ def check_scored(method, takes, report):
             problems.append('%s: its tracks changed after they were written' % take['name'])
     need = method.scoring['min_crossings']
     if report['crossings'] < need:
-        problems.append('%d crossings, and a scored run needs at least %d' % (report['crossings'], need))
+        left = ['%s/%s' % (e['take'], e['id']) for e in report['crossings_excluded']]
+        problems.append('%d of %d marked crossings count as trials, and a scored run needs at least %d%s'
+                        % (report['crossings'], report['crossings_marked'], need,
+                           ' (excluded: %s)' % ', '.join(left) if left else ''))
     if report['left_out']['unlabelled']:
         problems.append('%d observations have no label' % report['left_out']['unlabelled'])
-    empty = [r['id'] for r in report['windows'] if not r['observations']]
-    if empty:
-        problems.append('crossings with no labelled observation: %s' % ', '.join(empty))
     for take in takes:
         rows = sorted((r for r in report['windows'] if r['take'] == take['name']), key=lambda r: r['start'])
         for a, b in zip(rows, rows[1:]):
@@ -172,14 +172,20 @@ def fmt(v, spec='%.3f'):
 
 
 def print_report(report):
-    print('%-24s %-18s %5s %7s %6s %7s %8s %6s' % ('take', 'crossing', 'obs', 'switches', 'silent', 'IDF1', 'contact', 'face'))
+    print('%-24s %-18s %5s %6s %7s %6s %7s %8s %6s'
+          % ('take', 'crossing', 'obs', 'people', 'switches', 'silent', 'IDF1', 'contact', 'face'))
     for r in report['windows']:
-        print('%-24s %-18s %5d %7d %6d %7s %8s %6s' % (
-            r['take'][:24], ('%s %s' % (r['id'], r['kind']))[:18], r['observations'], r['switches'], r['silent_swaps'],
-            fmt(r['idf1']), fmt(r['contact_ambiguous_share'], '%.2f'), fmt(r['face_visible_share'], '%.2f')))
+        print('%-24s %-18s %5d %6s %7d %6d %7s %8s %6s' % (
+            r['take'][:24], ('%s %s' % (r['id'], r['kind']))[:18], r['observations'], ','.join(r['people_scored']) or '-',
+            r['switches'], r['silent_swaps'], fmt(r['idf1']), fmt(r['contact_ambiguous_share'], '%.2f'),
+            fmt(r['face_visible_share'], '%.2f')))
     pooled = report['pooled']
-    print('crossings %d, with a silent swap %d; 95%% upper bound on the silent-swap rate: %s'
-          % (report['crossings'], report['crossings_with_silent_swap'], fmt(report['silent_swap_rate_upper_95'])))
+    print('crossings %d of %d marked, with a silent swap %d; 95%% upper bound on the silent-swap rate: %s'
+          % (report['crossings'], report['crossings_marked'], report['crossings_with_silent_swap'],
+             fmt(report['silent_swap_rate_upper_95'])))
+    if report['crossings_excluded']:
+        print('EXCLUDED, not counted: %s'
+              % '; '.join('%s/%s (%s)' % (e['take'], e['id'], e['because']) for e in report['crossings_excluded']))
     print('silent swaps %d, flagged switches %d; outside crossings: %d switches, %d silent'
           % (report['silent_swaps'], report['flagged_switches'], report['switches_outside_crossings'],
              report['silent_swaps_outside_crossings']))
@@ -287,7 +293,7 @@ def cmd_practice(args):
         contacts = [w['contact_ambiguous_share'] for w in r['windows'] if w['contact_ambiguous_share'] is not None]
         silent += r['silent_swaps'] + r['silent_swaps_outside_crossings']
         print('%-26s %5d %8d %7d %7s %8s %8s %7.1f %7s' % (
-            r['scene'], r['crossings'], r['silent_swaps'] + r['flagged_switches'],
+            r['scene'], r['crossings_marked'], r['silent_swaps'] + r['flagged_switches'],
             r['silent_swaps'] + r['silent_swaps_outside_crossings'], fmt(r['pooled']['idf1']),
             fmt(sum(contacts) / len(contacts) if contacts else None, '%.2f'),
             fmt(r['ambiguous_share_outside_crossings'], '%.2f'), r['tracks_per_run'],

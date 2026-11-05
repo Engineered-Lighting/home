@@ -160,6 +160,17 @@ def note_score(method, takes):
                 f.write(json.dumps(stamp) + '\n')
 
 
+def plan_problems(plan, counts):
+    """Why the crossings that count do not meet the plan. A plan that asks for nothing checks nothing, so it is one too."""
+    good = (isinstance(plan, dict) and plan and
+            all(k in truth_mod.CROSSING_TYPES and type(v) is int and v > 0 for k, v in plan.items()))
+    if not good:
+        return ['scoring.crossings_plan must give at least one kind of crossing (%s) a count above 0'
+                % ', '.join(truth_mod.CROSSING_TYPES)]
+    return ['the plan wants %d %s, and %d count' % (c['planned'], kind, c['counted'])
+            for kind, c in counts.items() if c['counted'] < c['planned']]
+
+
 def check_scored(method, takes, report):
     """Everything a scored run needs that a practice run does not. Raises Refused."""
     try:
@@ -194,6 +205,7 @@ def check_scored(method, takes, report):
         problems.append('%d of %d marked crossings count as trials, and a scored run needs at least %d%s'
                         % (report['crossings'], report['crossings_marked'], need,
                            ' (excluded: %s)' % ', '.join(left) if left else ''))
+    problems += plan_problems(method.scoring['crossings_plan'], report['plan'])
     if report['left_out']['unlabelled']:
         problems.append('%d observations have no label' % report['left_out']['unlabelled'])
     for take in takes:
@@ -222,6 +234,8 @@ def print_report(report):
     print('crossings %d of %d marked, with a silent swap %d; 95%% upper bound on the silent-swap rate: %s'
           % (report['crossings'], report['crossings_marked'], report['crossings_with_silent_swap'],
              fmt(report['silent_swap_rate_upper_95'])))
+    print('counted against the plan: %s'
+          % ', '.join('%s %d of %d' % (kind, c['counted'], c['planned']) for kind, c in report['plan'].items()))
     if report['crossings_excluded']:
         print('EXCLUDED, not counted: %s'
               % '; '.join('%s/%s (%s)' % (e['take'], e['id'], e['because']) for e in report['crossings_excluded']))

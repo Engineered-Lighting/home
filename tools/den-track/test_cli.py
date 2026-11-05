@@ -63,6 +63,7 @@ class Base(unittest.TestCase):
         floor, exits = den_track.synth_room()
         block['room'] = {'floor_m': floor, 'exits_m': exits}
         block['freeze']['frozen_on'] = '2026-11-04'
+        block['scoring']['crossings_plan'] = {'crossing': 20}
         if change:
             change(block)
         path = self.path(name)
@@ -322,6 +323,35 @@ class ScoredRunTest(Base):
         with open(self.path('score', 'score.json'), encoding='utf-8') as f:
             self.assertEqual(json.load(f)['crossings'], 20)
 
+    def plan(self, plan, name='METHOD-plan.md'):
+        def change(block):
+            block['scoring']['crossings_plan'] = plan
+        return self.closed_method(name, change)
+
+    def test_refused_when_a_kind_falls_short_of_the_plan(self):
+        meth = self.plan({'crossing': 19, 'door': 1})
+        self.assert_refused(self.score_args(self.twenty(meth), scored=True, meth=meth), 'the plan wants 1 door, and 0 count')
+
+    def test_an_excluded_crossing_does_not_fill_the_plan(self):
+        meth = self.plan({'crossing': 21})
+        takes = self.twenty(meth) + [self.one_person_take(50, meth)]
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'the plan wants 21 crossing, and 20 count')
+
+    def test_more_than_planned_passes_and_the_report_says_what_counted(self):
+        meth = self.plan({'crossing': 15})
+        code, text = cli(*self.score_args(self.twenty(meth), scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertEqual(report['plan'], {'crossing': {'planned': 15, 'counted': 20}})
+
+    def test_a_plan_that_checks_nothing_is_refused(self):
+        meth = self.closed_method()
+        takes = self.twenty(meth)
+        for n, plan in enumerate(({}, {'crossing': 0}, {'dance': 20}, {'crossing': '20'}, [20], None)):
+            other = self.plan(plan, 'METHOD-bad-%d.md' % n)
+            self.assert_refused(self.score_args(takes, 'bad-%d' % n, scored=True, meth=other), 'crossings_plan')
+
     def test_refused_when_two_crossings_overlap_once_padded(self):
         meth = self.closed_method()
         takes = self.twenty(meth)
@@ -543,6 +573,12 @@ class MethodFileTest(Base):
                 f.write(text)
             with self.assertRaises(method.MethodError):
                 method.read_block(p)
+
+    def test_the_plan_is_an_open_slot_with_the_readmes_script_as_its_proposal(self):
+        m = method.Method()
+        self.assertIn('scoring.crossings_plan', [name for name, _ in m.open])
+        self.assertEqual(m.scoring['crossings_plan'], {'crossing': 12, 'crossing_occluded': 5, 'occlusion': 3,
+                                                       'near_pass': 3, 'door': 2})
 
     def test_the_contract_numbers_are_closed(self):
         scoring = method.read_block()['scoring']

@@ -148,7 +148,8 @@ person. A link joins an observation's person to the track that listed it in
 
 A scored run also refuses tracks made under another method or another version of the
 code, changed files, unlabelled observations, fewer than `min_crossings` admitted
-crossings, or crossings that overlap once padded.
+crossings, admitted crossings of any kind short of `crossings_plan`, or crossings that
+overlap once padded. More than the plan is allowed, and the report shows the counts.
 
 **A take is scored once.** Any `score`, practice or scored, shows results, so it notes
 what it looked at in `truth.score-runs.jsonl` beside the take's truth file: the method's
@@ -206,7 +207,8 @@ folder, so an earlier one stays.
     "min_crossings": 20,
     "min_people_per_crossing": 2,
     "window_pad_s": {"open": true, "proposed": 2.0, "why": "Padding on each side of the owner's mark, so a window holds frames before and after and a swap shows in its own IDF1. The contracts name none. Proposed 2.0: about what walkers need to come together and part. Staged crossings must be further apart than twice this."},
-    "face_visible_score_min": {"open": true, "proposed": 0.4, "why": "E2 asks how often a face is even visible. Without reading frames, the stand-in is nose and both eyes above this keypoint score. Proposed 0.4, rung 2's proposed keypoint_score_min."}
+    "face_visible_score_min": {"open": true, "proposed": 0.4, "why": "E2 asks how often a face is even visible. Without reading frames, the stand-in is nose and both eyes above this keypoint score. Proposed 0.4, rung 2's proposed keypoint_score_min."},
+    "crossings_plan": {"open": true, "proposed": {"crossing": 12, "crossing_occluded": 5, "occlusion": 3, "near_pass": 3, "door": 2}, "why": "E2 says 20 to 30 staged crossings and occlusions, not how many of each. Fixed before recording, so the sample is set in advance: a scored run refuses when the crossings that count fall short of it for any kind, so the hard ones cannot quietly go missing. Proposed: the README's script, 25 crossings weighted toward what geometry finds hard (bound 11.3% at 0 failures). 30 would give 9.5%."}
   }
 }
 ```

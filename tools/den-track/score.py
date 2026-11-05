@@ -94,6 +94,13 @@ def contact_ambiguous_share(links, interval):
     return (sum(1 for l in tracked if not l[4]) / len(tracked)) if tracked else None
 
 
+def plan_counts(rows, plan):
+    """{kind: {planned, counted}}: how many crossings of each kind count as trials, beside the plan."""
+    kinds = set(plan if isinstance(plan, dict) else ()) | {r['kind'] for r in rows if r['admitted']}
+    return {k: {'planned': plan.get(k, 0) if isinstance(plan, dict) else 0,
+                'counted': sum(1 for r in rows if r['admitted'] and r['kind'] == k)} for k in sorted(kinds)}
+
+
 def score_session(takes, scoring):
     """takes: [{'name', 'observations', 'tracks', 'truth'}]. Returns the full report body."""
     results, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0}
@@ -121,5 +128,6 @@ def score_session(takes, scoring):
     summary['face_visible_share_mean'] = (sum(faces) / len(faces)) if faces else None
     summary['left_out'] = left_out
     summary['windows'] = rows
+    summary['plan'] = plan_counts(rows, scoring['crossings_plan'])
     summary['crossing_lines'] = crossing_lines
     return summary

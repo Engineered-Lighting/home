@@ -205,6 +205,7 @@ the value.
 | `tracker.reconfirm_s` | 1.5 s | How long after doubt a track is confident again; while it is not, no narrow beam and no teaching |
 | `scoring.window_pad_s` | 2.0 s | How much of each crossing's before and after is scored |
 | `scoring.face_visible_score_min` | 0.4 | The keypoint score that counts as a visible face (a stand-in) |
+| `scoring.crossings_plan` | the script above: 12 `crossing`, 5 `crossing_occluded`, 3 `occlusion`, 3 `near_pass`, 2 `door` | How many of each kind must count. A scored run refuses when any kind falls short |
 
 ## Owner questions
 

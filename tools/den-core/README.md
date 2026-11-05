@@ -664,8 +664,12 @@ follows from the scene. So neither rung 8's 576 blocks nor the map's width costs
 blocks (144 hex digits on the grid). `test_coordinator.py` runs every hold fixture under every option on the full grid
 through `runner.run`, which validates each line.
 
-A line does grow with the tracks: about 1.5 KB per track the coordinator has seen, because it never forgets one, so about
-six tracks reach it. need v0 has one track, so that waits for per-person need (rungs 5 and 6).
+A line does grow with the tracks: about 1.5 KB each, or 3.3 KB in the worst shape the contracts allow, with a glare table
+and every bulb held. The coordinator never forgets a track, because an id is never reused and a PersonState says nothing
+when its track ends, so a long evening on rungs 5 and 6 would pass the limit. When a Decision would not fit, the rows of
+the tracks longest unheard from go, readers last, and `inputs.tracks_not_logged` counts them. They go whole, from every
+list, so `predicted.eyes` still reproduces, and they stay in the plan: a track left off the line is still kept under the
+glare limit. `score.py` says when this happened. need v0 has one track, so it never does today.
 
 ### Keys the contracts do not name
 
@@ -683,12 +687,15 @@ Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear 
 - `inputs.hold_set.held[].footprint`: the contracts name it and give it no type. Here it is
   `{points, of, mask, surfaces}`: how many blocks of how many, the blocks as hex bits over the model's `sample_points`
   (bit 0 the first; `LightModel.unmask` reads it), and which of the tracked people's surfaces it touches.
+- `inputs.tracks_not_logged`: only on a Decision that left a track's rows out to fit its line.
 
 ### Left for later
 
 The simulated-spot execution cases V9a-V9h, V9k, V9l and V65(b); rung 9's loop check (non-inferiority, every delta
 open); per-person need and eye positions (rungs 5 and 6: today a track's surface is its `working_region.surface_id`, else
-`room`, and an eye is named by its `track_id`); and the kept_current outcome, whose deadline is pending.
+`room`, and an eye is named by its `track_id`); when a track has left (rungs 5 and 6: a PersonState says nothing when its
+track ends and need v0 has no heartbeat, so a track stays in the plan, a reader who left included); and the kept_current
+outcome, whose deadline is pending.
 
 ## Choices the interface left open
 

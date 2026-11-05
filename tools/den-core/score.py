@@ -378,6 +378,10 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
         calls, slowest, fixed["max_decision_ms"]))
     for name, (ok, text) in structural(log, light, slots).items():
         gate_line(name, ok, text)
+    left_out = sum("tracks_not_logged" in e["data"]["inputs"] for e in log if e["kind"] == "decision" and e["source"] == "decide")
+    if left_out:
+        lines.append("tracks not logged: %d decision(s) left out the rows of the tracks longest unheard from, to fit the line; "
+                     "they still planned for them" % left_out)
 
     timeline = Timeline(header, log)
     rate, hits, episodes, unknown = anticipation(timeline, light, slots)

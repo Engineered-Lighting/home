@@ -44,6 +44,8 @@ PINS = {"decide": decide, "light_adapter": light_adapter, "fake_light": fake_lig
 OPTIONS = ("P0", "P1", "P2", "P3")
 EPS = 1e-9
 HARD_PENALTY = 1000.0  # added to a candidate's cost when a hard constraint or a bound rejects it
+SUPPORT_KEYS = ("last_support_capture_ts", "support_status")  # what the schema's Decision.inputs.field_support carries
+LINE_ROOM = events.MAX_LINE_BYTES - 200  # a Decision's own bytes, leaving room for the runner's envelope and actuation
 
 
 def load_gate(path=None):
@@ -233,6 +235,7 @@ class Coordinator:
                 state["actuator_state"][data["entity_id"]] = seen
             return "mode change"
         if kind == "person_state":
+            self.people.pop(data["track_id"], None)  # latest last, so the line knows who was heard from longest ago
             self.people[data["track_id"]] = copy.deepcopy(data)
             return "person_state change"
         if kind == "mode":
@@ -639,7 +642,8 @@ class Coordinator:
             held.append(entry)
         return {
             "person_state": [p["state_id"] for p in people],
-            "field_support": {p["state_id"]: p.get("field_support") for p in people},
+            "field_support": {p["state_id"]: {name: {key: support.get(key) for key in SUPPORT_KEYS}
+                                              for name, support in (p.get("field_support") or {}).items()} for p in people},
             "hold_set": {"revision": mode["revision"], "held": held},
             "revisions": {"hold_set": mode["revision"], "mode": mode["revision"]},
             "actuator_state": copy.deepcopy(self.state["actuator_state"]),
@@ -717,8 +721,16 @@ class Coordinator:
         self.applied.update({b: result[b] for b, entry in applied.items() if b in result and entry["status"] != "superseded"})
         self._ratchet(moved)
         record["inputs"]["t_exec"], record["applied_scene"], record["transitions"] = t_exec, applied, transitions
-        rows = eye_rows(record["inputs"], result, self.light, self.slots)
         tasks = {track: surface_of(p, self.light) for track, p in sorted(self.people.items())}
+        if self.config["compensation"]["option"] != "P0":
+            record["hold_limited"] = plan["hold_limited"]
+        self._rows(record, result, tasks)
+        self._fit_the_line(record, result, tasks)
+        return {"kind": "decision", "data": copy.deepcopy(record)}
+
+    def _rows(self, record, result, tasks):
+        """What a Decision says per track about the actual resulting state."""
+        rows = eye_rows(record["inputs"], result, self.light, self.slots)
         record["recipients"] = recipients_of(result, tasks, rows, self.light, self.slots)
         at = sorted({light_adapter.ROOM, *tasks.values()})  # a map can be wide; any other surface follows from the scene
         record["predicted"] = {
@@ -728,9 +740,30 @@ class Coordinator:
             "eyes_note": ("predictions only; no camera verifies eyes" if self.light.glare_table else
                           "no numbers: rung 8 writes glare null, and no glare model or numeric limit exists yet"),
             "daylight": "excluded: rung 8 does not model it"}
-        if self.config["compensation"]["option"] != "P0":
-            record["hold_limited"] = plan["hold_limited"]
-        return {"kind": "decision", "data": copy.deepcopy(record)}
+
+    def _fit_the_line(self, record, result, tasks):
+        """events.validate refuses a line over its limit and the run then stops with no log, and a track is never forgotten:
+        its id is never reused and a PersonState says nothing when it ends. So when a Decision would not fit, the rows of the
+        tracks longest unheard from go, readers last, and inputs.tracks_not_logged counts them. They stay in the plan: this
+        only decides what the line says. Every row of a track goes together, so predicted.eyes still reproduces."""
+        inputs = record["inputs"]
+        order = sorted(self.people, key=lambda track: decide.reading(self.people[track]))  # oldest first, each group
+        for track in order[:-1]:
+            if len(events.dumps(record)) <= LINE_ROOM:
+                break
+            inputs["person_state"] = [s for s in inputs["person_state"] if s.split("@")[0] != track]
+            inputs["field_support"] = {s: v for s, v in inputs["field_support"].items() if s.split("@")[0] != track}
+            inputs["tracks_not_logged"] = inputs.get("tracks_not_logged", 0) + 1
+            record["targets"].pop(track, None)
+            record["hard_conflicts"] = [row for row in record["hard_conflicts"] if row["track"] != track]
+            tasks.pop(track, None)
+            kept = set(tasks.values())
+            for held in inputs["hold_set"]["held"]:
+                if "footprint" in held:
+                    held["footprint"]["surfaces"] = [s for s in held["footprint"]["surfaces"] if s in kept]
+            if "hold_limited" in record:
+                record["hold_limited"] = [row for row in record["hold_limited"] if row["point_id"] in kept]
+            self._rows(record, result, tasks)
 
     def handle(self, event):
         t, out = event["t"], []

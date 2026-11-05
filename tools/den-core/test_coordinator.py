@@ -920,6 +920,149 @@ class WideMapLineTest(unittest.TestCase):
         self.assertLess(max(fastest), 0.1, "slowest %.1f ms" % (max(fastest) * 1000))
 
 
+class ManyTracksLineTest(unittest.TestCase):
+    """A track id is never reused and a PersonState says nothing when its track ends, so the coordinator keeps every track
+    it has seen. Seven once broke the line, and the run wrote no log. need v0 has one track; rungs 5 and 6 would get there."""
+    FIELDS = ("position", "working_region", "attention", "heading", "posture", "motion", "visual_demand", "focused_engagement")
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def full_state(self, t, track, surface, state="engaged"):
+        """A PersonState with every field_support the schema names, each with every key."""
+        person = person_state(t, track, state, surface)
+        person["field_support"] = {name: {"last_support_capture_ts": t - 1.0, "value_set_ts": t, "support_status": "observed",
+                                          "hold_reason": "association", "deadband": 0.1, "cov_ts": t - 1.0} for name in self.FIELDS}
+        return person
+
+    def valid(self, decisions):
+        for d in decisions:
+            events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
+        return decisions
+
+    def seen(self, n, reading=(), config=None, where=lambda k: "counter-1"):
+        p = policy(compensation={"option": "P1", "form": "mode"}, **(config or {}))
+        start(p)
+        out = []
+        for k in range(n):
+            track = "T%d" % k
+            out += self.valid(feed(p, ev(T0 + 2 + k, "person_state",
+                                         self.full_state(T0 + 2 + k, track, where(k), "engaged" if k in reading else "none"), "need")))
+        return p, out
+
+    def tracks(self, d):
+        return [state_id.split("@")[0] for state_id in d["inputs"]["person_state"]]
+
+    def test_a_decision_fits_however_many_tracks_were_seen(self):
+        p, out = self.seen(50, reading=[49])
+        d = out[-1]
+        self.assertEqual(d["targets"]["T49"]["surface_id"], "counter-1")
+        self.assertIn("T49", self.tracks(d))
+        self.assertGreater(d["inputs"]["tracks_not_logged"], 0)
+        self.assertEqual(len(self.tracks(d)) + d["inputs"]["tracks_not_logged"], 50)
+
+    def test_few_tracks_leave_nothing_out(self):
+        _, out = self.seen(2, reading=[1])
+        self.assertEqual(self.tracks(out[-1]), ["T0", "T1"])
+        for d in out:
+            self.assertNotIn("tracks_not_logged", d["inputs"])
+
+    def test_the_tracks_longest_unheard_from_go_first_and_readers_last(self):
+        p, _ = self.seen(30, reading=[0])  # T0 reads and is the oldest; the rest idle
+        feed(p, ev(T0 + 40, "person_state", self.full_state(T0 + 40, "T1", "counter-1", "none"), "need"))  # T1 is heard from again
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T0")))
+        self.assertIn("T0", self.tracks(d))
+        self.assertIn("T29", self.tracks(d))
+        self.assertIn("T1", self.tracks(d))
+        self.assertNotIn("T2", self.tracks(d))
+
+    def test_what_a_decision_logs_of_a_track_is_all_or_nothing(self):
+        glare = {b: {"T%d" % k: {"G": 3.0, "sd": 0.01} for k in range(30)} for b in events.LIGHTS}
+        p, _ = self.seen(30, reading=[29], config={"light_model": {"source": "fake", "params": {"glare": glare}}})
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 200, "T29")))  # held over the limit, so a conflict at every eye
+        kept = set(self.tracks(d))
+        self.assertLess(len(kept), 30)
+        self.assertEqual(set(state.split("@")[0] for state in d["inputs"]["field_support"]), kept)
+        self.assertEqual({row["track_id"] for row in d["predicted"]["eyes"]}, kept)
+        self.assertEqual({row["track_id"] for r in d["recipients"].values() for row in r["targets"]}, kept)
+        self.assertEqual({row["track"] for row in d["hard_conflicts"]}, kept)
+        self.assertLessEqual(set(d["targets"]), kept)
+        result = {b: e["readback"] for b, e in d["applied_scene"].items()}
+        self.assertEqual(coordinator.eye_rows(d["inputs"], result, p.light, SLOTS), d["predicted"]["eyes"])
+
+    def test_a_surface_only_a_left_out_track_was_at_leaves_the_line_too(self):
+        # The oldest readers are at the armchair and the newest at the counter, so only the armchair's readers go.
+        p, _ = self.seen(30, reading=range(30), where=lambda k: "armchair-book" if k < 15 else "counter-1")
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T29")))
+        self.assertEqual({row["surface_id"] for row in d["targets"].values()}, {"counter-1"})
+        self.assertEqual([row["point_id"] for row in d["hold_limited"]], ["counter-1"])
+        self.assertEqual(d["inputs"]["hold_set"]["held"][0]["footprint"]["surfaces"], ["counter-1"])
+        self.assertEqual(sorted(d["predicted"]["surfaces"]), ["counter-1", "room", "unit"])
+        self.assertLess(d["predicted"]["surfaces"]["counter-1"], d["targets"]["T29"]["value"])
+
+    def test_the_room_left_on_the_line_covers_the_runners_envelope(self):
+        event = ev(T0 + 1234567.125, "decision", {"actuation": "synthetic"}, "decide")
+        event["seq"] = 10 ** 9
+        self.assertLessEqual(coordinator.LINE_ROOM + len(events.dumps(event)), events.MAX_LINE_BYTES)
+
+    def test_a_track_left_out_of_the_line_is_still_in_the_plan(self):
+        # Only the oldest track's eye is near front right, so only the plan can know to keep that bulb under the limit.
+        glare = {FR: {"T0": {"G": 1.5, "sd": 0.1}}}
+        p, _ = self.seen(30, reading=[29], config={"light_model": {"source": "fake", "params": {"glare": glare}}})
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T29")))
+        self.assertNotIn("T0", self.tracks(d))
+        self.assertLessEqual(1.5 * d["requested_scene"][FR]["brightness"] / 254 + 0.2, 1.0)
+
+    def test_the_worst_shape_a_contract_record_allows_fits(self):
+        names = ["track-%06d" % k for k in range(12)]
+        surfaces = {"a-surface-with-a-thirty-char-%d" % n: ["other/%d" % (n * 10 + m) for m in range(10)] for n in range(8)}
+        glare = {b: {name: {"G": 3.0, "sd": 0.01} for name in names} for b in events.LIGHTS}
+        spec = {"source": "fake", "params": {"filler": 576 - 12, "glare": glare, "error": {"median_pct": 8.0, "p90_pct": 20.0}}, "surfaces": surfaces}
+        p = policy(light_model=spec, compensation={"option": "P3", "form": "strict"})
+        start(p)
+        out, holds = [], []
+        for k, name in enumerate(names):
+            out += feed(p, ev(T0 + 2 + k, "person_state", self.full_state(T0 + 2 + k, name, list(surfaces)[k % 8]), "need"))
+        for k, b in enumerate(events.LIGHTS):
+            holds.append(hold(b, 100 + 30 * k, T0 + 30 + k))
+            out += feed(p, ev(T0 + 30 + k, "mode", mode(2 + k, holds)["data"], "incumbent"),
+                        ev(T0 + 30 + k, "correction", {"correction_id": "c%d" % k, "entity_id": b, "after": scene(100 + 30 * k), "source": "t",
+                                                       "who": {"track_id": names[0]}}))
+        self.valid(out)
+        self.assertEqual(len(out[-1]["inputs"]["hold_set"]["held"]), 4)
+
+    def test_field_support_is_the_schemas_two_keys(self):
+        _, out = self.seen(1, reading=[0])
+        [support] = out[-1]["inputs"]["field_support"].values()
+        self.assertEqual(sorted(support), sorted(self.FIELDS))
+        for field in support.values():
+            self.assertEqual(sorted(field), ["last_support_capture_ts", "support_status"])
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_a_run_through_the_runner_writes_replays_and_says_so(self):
+        script = [[T0 + 2 + k, "T%d" % k, "engaged" if k == 39 else "none", "counter-1"] for k in range(40)]
+        inputs = [(T0, "light_observed", {"entity_id": e, **scene(180), "context": "unknown"}) for e in events.LIGHTS]
+        inputs += [(T0 + 1, "occupancy", {"value": "on", "via": "t"}), (T0 + 60, "occupancy", {"value": "on", "via": "t"})]
+        policies = [hold_fixtures.ScriptedNeed({"script": script}), incumbent.make_policy(), policy(compensation={"option": "P1", "form": "mode"})]
+        header, log = runner.run(runner.tagged(inputs, "synthetic"), policies, synthetic=True, tail_s=10.0, sources=[])
+        self.assertLess(longest_decision(log), events.MAX_LINE_BYTES)
+        path = self.tmp / "log.jsonl"
+        events.write(path, header, log)
+        self.assertTrue(check.check(path)["ok"])
+        lines, code = score.report(path, preview=True)
+        self.assertEqual(code, 0, "\n".join(lines))
+        self.assertRegex("\n".join(lines), r"tracks not logged: \d+ decision\(s\) left out")
+        for name, (ok, text) in score.structural(log, coordinator.make_policy(policies[2].config).light, SLOTS).items():
+            self.assertTrue(ok, (name, text))
+
+    def test_a_report_with_every_track_logged_does_not_mention_it(self):
+        header, log = hold_fixtures.run_case("V62", "P1-mode")
+        path = self.tmp / "log.jsonl"
+        events.write(path, header, log)
+        self.assertNotIn("tracks not logged", "\n".join(score.report(path, preview=True)[0]))
+
+
 def evening_log(tmp, name="log.jsonl", configs=None, source="synthetic", actuation=None, **options):
     items, _, _ = synthetic.evening(unclear_rate=0.0, invalid_rate=0.0, fail_rate=0.0, **options)
     synthetic_run = source == "synthetic"

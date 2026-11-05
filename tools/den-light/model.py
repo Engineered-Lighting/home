@@ -32,7 +32,7 @@ STAGE1_KEYS = (
     "dimming_levels", "full_level", "dark_level_max", "dark_run_limit_s", "step_estimate_s", "bracket_every",
     "holdouts", "random_holdouts", "holdout_on_probability", "holdout_level_low", "holdout_level_high",
     "near_full_holdouts", "near_full_share", "gaming_level", "schedule_seed",
-    "frames_per_capture", "settle_limit_s", "frame_timeout_s",
+    "frames_per_capture", "step_dwell_s", "settle_limit_s", "frame_timeout_s",
     "signal_rich_fraction", "shared_curve_percent", "shared_curve_from_level", "bracket_tolerance_multiple",
     "noise_floor_multiple", "gate_median_percent", "gate_p90_percent",
     "poll_s", "vacancy_s", "start_wait_limit_s", "hold_brightness_tolerance", "hold_mired_tolerance",

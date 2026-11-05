@@ -336,7 +336,8 @@ schedule_seed = open               # open, proposed 20261110
 
 # Capture
 frames_per_capture = open          # open, proposed 3: settled frames per step; the step value is their median
-settle_limit_s = open              # open, proposed 5: a step's settled frames must start within this
+step_dwell_s = open                # open, proposed 1: frames count only from this long after a step's send, since HA shows a Hue bulb's target before it lands
+settle_limit_s = open              # open, proposed 5: a step's settled frames must start within this of its send
 frame_timeout_s = 15               # 15 s without a frame aborts
 
 # Fit
@@ -422,6 +423,58 @@ log-uniform from `holdout_level_low` to `holdout_level_high` that is not a
 fitted level, and a temperature uniform in mired that was not captured. The
 first random scene has all four on at levels near full, so at least
 `near_full_holdouts` are near full combined output.
+
+## One capture
+
+A step sends what differs from the tool's last write, then waits until HA shows
+every target. That says nothing about the light: HA shows a Hue bulb's target
+as soon as the command is sent. So frames count only from `step_dwell_s` after
+the step's first send (the send's time when the step changes nothing).
+
+A step **settles** on `frames_per_capture` consecutive frames that agree under
+Stage 0's noise tolerance. A frame that disagrees with one earlier counted
+frame starts the run again. A frame that disagrees with two or more aborts
+("frames within a settled step disagree"). No settled run within
+`settle_limit_s` of the send aborts too. A held frame must report the hold's
+generation and pass Stage 0's gain agreement, or the session aborts.
+
+**The brackets.** Each all-off capture's first frame must agree, under the same
+tolerance, with the previous all-off capture's first frame. Otherwise something
+other than the bulbs changed the room, and the session aborts ("all-off
+brackets disagree"). `noise_and_flags` is a finer check per block afterwards:
+it flags steps and does not abort.
+
+## The step log
+
+Each clean step adds one `step` line to `probes.jsonl`. Times are seconds:
+
+| Field | Meaning |
+|---|---|
+| `sent_pc` | PC wall clock (Unix time) just before the step's first write |
+| `send_s` | from then until HA had answered the step's last write |
+| `settle_s` | from then until the first received frame that already agrees with the step's settled frames, dwell frames included: when the camera saw the light land, within one frame |
+| `capture_s` | from then until the step's last frame was in |
+
+A step whose light barely changes (the lowest dimming levels, within Stage 0's
+noise tolerance) reads as landing on its first frame.
+
+## Own or foreign
+
+A bulb's state is the tool's when it matches the tool's latest intent within
+`Scene.matches()` tolerance, or the intent before when the latest got no
+response. Among states that match, with `last_updated` moved:
+
+- a context the tool has seen is the tool's;
+- a context it has not seen, with a value that differs from the last read, is
+  the tool's too, and its context is then known. Either a device's own report
+  of the target (den_lighting's code notes these may lose their context), or the
+  first report of a write whose reply named no state;
+- a context it has not seen, with the same value as the last read, is foreign:
+  the value left and came back.
+
+A state that matches no intent is foreign. A bulb coming back from unavailable
+is not a person's change. Before any restore write the tool reads HA once more
+and applies these rules, so a change since the last check is never overwritten.
 
 ## The fit, the prediction and the score
 

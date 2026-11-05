@@ -55,7 +55,8 @@ def method1(**changes):
     """METHOD-V1's Stage 1 numbers with every slot closed at its proposed value, then test timings."""
     base = model.load_stage1().proposed()
     fast = dict(block_px=40, reduce_pixel_step=10, vacancy_s=0.2, poll_s=0.02, start_wait_limit_s=10,
-                settle_limit_s=2, frames_per_capture=2, resume_check_s=3, off_check_s=0.3, walkthrough_limit_s=3,
+                settle_limit_s=2, frames_per_capture=2, step_dwell_s=0, resume_check_s=3, off_check_s=0.3,
+                walkthrough_limit_s=3,
                 unavailable_wait_s=1.0, ha_timeout_s=5, frame_timeout_s=3, hold_check_wait_s=0.05)
     fast.update(changes)
     return base.closed(**fast)

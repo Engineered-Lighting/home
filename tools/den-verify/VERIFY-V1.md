@@ -8,8 +8,10 @@ light landed where rung 8's light model predicted. It reads `decision`,
 unnamed are listed under "Keys the contracts do not name" and sit behind an
 open slot.
 
-This note was committed before any code. Nothing here has run on real light.
-Running needs the owner's go-ahead; building does not.
+This note was committed before any code, and revised on 2026-11-05 after the
+pipeline review, with no session yet run: the held rule and the rule for dims.
+Nothing here has run on real light. Running needs the owner's go-ahead; building
+does not.
 
 ## What is scored
 
@@ -72,12 +74,28 @@ uncertainty, computed only from bounds fixed before the run:
 u(E) = `uncertainty_rel`·|E| + `uncertainty_abs_lx` (the lux term only when
 anchored). An increment's is u(after) + u(before).
 
-**Held and superseded channels.** A point where channels whose applied status
-is `held` or `superseded`, or that a later hold pinned, give at least
-`held_share_min` of the predicted light is still written with its status, but
-an `outside` there is **excluded from misses** and explained as `held`. It is
-never explained as drift, and its LightState residual never carries a `drift`
-flag. A held point that is `within` counts as a hit (see owner questions).
+**Held and superseded channels.** Let H be a point's predicted light from
+channels whose applied status is `held` or `superseded`, or that a later hold
+pinned. A person or an earlier decision set those channels, so this decision
+cannot answer for them. A point with H below `held_share_min` of its predicted
+light counts like any other. A point with H at or above it is still written with
+its status, but it is never a hit, and the slot `held_rule` says when it is a
+miss:
+
+- `far_misses_count` (proposed): only when |measured − predicted| >
+  `tolerance` × predicted + H, a miss those channels could not account for even
+  by giving none of their light. So a free bulb's fault still shows during a
+  hold.
+- `exclude_both`: never. This is simpler, but during a hold a free bulb's fault
+  goes uncounted.
+
+Keeping the hits and dropping the misses is not an option: it lets any hold lift
+a failing session to a pass. An `outside` left out is explained as `held`. A
+point where a held or superseded channel gives any light is never explained as
+drift, and its LightState residual never carries a `drift` flag. The report
+gives the points left out, in total and by status
+(`excluded_held_or_superseded`, `excluded_held_by_status`), and the console says
+how many. A run with nothing left to count is `insufficient`, never a pass.
 
 **The gate.** A hit is a scored surface point (`within` or `outside`, basis
 `measured` or `fallback_patch`, not excluded, admitted) that is `within`. The
@@ -224,7 +242,8 @@ bootstrap_rounds = 10000            # owner choice 6
 # Open: the contracts leave these to the owner
 settle_margin_s = open              # open, proposed 1; Hue landing after a fade (den_lighting's own readback window is 3)
 background = open                   # open, proposed "reference_frame"; or "zero"
-held_share_min = open               # open, proposed 0.05; share of a point's light from held or superseded channels
+held_share_min = open               # open, proposed 0.15; share of a point's light from held or superseded channels; a smaller share cannot alone push an on-target point out of tolerance
+held_rule = open                    # open, proposed "far_misses_count"; or "exclude_both"; when a held-lit point is a miss
 uncertainty_rel = open              # open, proposed 0.03; per frame, a fraction of the estimate
 uncertainty_abs_lx = open           # open, proposed 10; anchored frames only, rung 7's meter tolerance once set
 spill_band_top = open               # open, proposed "target_lx"; T_hi is Decision.targets[track].lx

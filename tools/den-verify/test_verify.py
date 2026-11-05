@@ -239,6 +239,138 @@ class HeldAndSuperseded(unittest.TestCase):
         self.assertIn("held", r["flags"])
 
 
+class HeldPointsCount(unittest.TestCase):
+    """A hold cannot lift a failing session to a pass: hits and misses answer to one rule."""
+
+    names = [f"p{i:02d}" for i in range(20)]
+    # front_left 0.2 -> 0.8 with front_right at 0.3: front_right gives 45 of 365 (12%) at every point,
+    # below the proposed held_share_min of 0.15
+    before, after = 400 * 0.2 + 150 * 0.3, 400 * 0.8 + 150 * 0.3
+
+    def setUp(self):
+        self.model = syn.hue_model({n: {B0: 400.0, B1: 150.0} for n in self.names}, kelvins=(2700,))
+
+    def case(self, did, t, held, values):
+        ref = syn.light_state(t, {n: self.before for n in self.names}, anchored=False, ident=f"ls-{did}")
+        applied = {B0: {"level": 0.8, "steps": send(t + 0.5)},
+                   B1: {"status": "held" if held else "sent", "level": 0.3}}
+        hold_set = None
+        if held:
+            hold_set = {"revision": 4, "held": [{"entity_id": B1, "channels": [B1],
+                                                 "pinned": {"level_pct": 30, "cct_k": 2700, "source": "read-back"}}]}
+        dec = syn.hue_decision(did, t + 0.5, {B0: 0.2, B1: 0.3}, applied, f"ls-{did}", hold_set=hold_set,
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)})
+        return [dec], [ref, syn.light_state(t + 5, values, anchored=False)]
+
+    def landing(self, n_within, low=0.6):
+        return {n: self.after if i < n_within else self.after * low for i, n in enumerate(self.names)}
+
+    def run_cases(self, cases, overrides=None):
+        decisions = [d for c in cases for d in c[0]]
+        frames = [f for c in cases for f in c[1]]
+        return score(decisions, frames, self.model, overrides=overrides)
+
+    def test_a_failing_decision_under_a_hold_fails_like_the_same_one_with_no_hold(self):
+        t = syn.T0
+        for held in (False, True):
+            decisions, _, report = self.run_cases([self.case("d-1", t, held, self.landing(3))])
+            hr = report["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (3, 17, 0.15, "fail"), held)
+            self.assertIs(decisions[0]["verify"]["within_tolerance"], False, held)
+
+    def test_a_session_failing_on_its_free_decisions_does_not_pass_on_its_held_ones(self):
+        t = syn.T0
+        cases = [self.case(f"d-{i}", t + 100 * i, i >= 2, self.landing(16)) for i in range(4)]
+        hr = self.run_cases(cases)[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (64, 16, 0.8, "fail"))
+
+    def test_a_free_bulbs_fault_under_a_hold_is_a_miss_and_never_drift(self):
+        t = syn.T0
+        fault = {n: 400 * 0.4 + 150 * 0.3 for n in self.names}  # front_left landed at 0.4, not 0.8
+        cases = [self.case("d-free", t, False, self.landing(20)), self.case("d-hold", t + 600, True, fault)]
+        decisions, states, report = self.run_cases(cases)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (20, 20, 0.5, "fail"))
+        self.assertEqual(report["excluded_held_or_superseded"], 0)
+        causes = {e["cause"] for e in by_id(decisions, "decision_id", "d-hold")["verify"]["explanation"]}
+        self.assertEqual(causes, {"unexplained"})
+        r = residual(states, t + 605, "p00")
+        self.assertIn("outside", r["flags"])
+        self.assertNotIn("drift", r["flags"])
+
+    def test_closing_the_share_lower_never_lets_a_failing_decision_pass(self):
+        t = syn.T0
+        lower = {"held_share_min": 0.05}
+        decisions, _, report = self.run_cases([self.case("d-1", t, True, self.landing(3))], lower)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 17, "fail"))
+        self.assertEqual(report["excluded_held_by_status"], {"within": 3, "outside": 0})
+        self.assertIs(decisions[0]["verify"]["within_tolerance"], False)
+
+    def lit_mostly_by_the_hold(self, values, overrides=None):
+        """front_right, held at 0.5, gives 200 of 360 (56%) at each point."""
+        model = syn.hue_model({n: {B0: 200.0, B1: 400.0} for n in values}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {n: 200 * 0.2 + 400 * 0.5 for n in values}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-held", t + 0.5, {B0: 0.2, B1: 0.5},
+                               {B0: {"level": 0.8, "steps": send(t + 0.5)}, B1: {"status": "held", "level": 0.5}},
+                               "ls-ref", targets={f"T{i}": {"surface_id": n} for i, n in enumerate(values)},
+                               hold_set={"revision": 4, "held": [{"entity_id": B1, "channels": [B1],
+                                                                  "pinned": {"level_pct": 50, "cct_k": 2700}}]})
+        return [dec], [ref, syn.light_state(t + 5, values, anchored=False)], model
+
+    def test_a_held_lit_hit_and_a_miss_the_held_light_could_explain_are_both_left_out(self):
+        d, f, model = self.lit_mostly_by_the_hold({"a": 360.0, "b": 360.0 * 0.7})
+        decisions, _, report = score(d, f, model)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (0, 0, None, "insufficient"))
+        self.assertEqual(report["excluded_held_or_superseded"], 2)
+        self.assertEqual(report["excluded_held_by_status"], {"within": 1, "outside": 1})
+        v = decisions[0]["verify"]
+        self.assertEqual([p["status"] for p in v["points"]], ["within", "outside"])  # still written
+        self.assertEqual([e["cause"] for e in v["explanation"]], ["held"])
+        self.assertIsNone(v["within_tolerance"])
+
+    def test_a_miss_beyond_what_the_held_light_could_do_still_counts(self):
+        d, f, model = self.lit_mostly_by_the_hold({"a": 360.0, "b": 360.0 * 0.1})
+        _, _, report = score(d, f, model)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 1, "fail"))
+        self.assertEqual(report["excluded_held_by_status"], {"within": 1, "outside": 0})
+
+    def test_the_other_named_rule_leaves_every_held_lit_point_out(self):
+        t = syn.T0
+        both = {"held_rule": "exclude_both", "held_share_min": 0.05}
+        decisions, _, report = self.run_cases([self.case("d-1", t, True, self.landing(3))], both)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"))
+        self.assertEqual(report["excluded_held_or_superseded"], 20)
+        self.assertEqual(report["excluded_held_by_status"], {"within": 3, "outside": 17})
+        self.assertIsNone(decisions[0]["verify"]["within_tolerance"])
+        cases = [self.case(f"d-{i}", t + 100 * i, i >= 2, self.landing(16)) for i in range(4)]
+        hr = self.run_cases(cases, both)[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (32, 8, 0.8, "fail"))
+
+    def test_the_rule_is_the_owners_and_only_a_named_one_is_read(self):
+        text = method.lf_text(HERE / "VERIFY-V1.md")
+        m = method.parse(text)
+        self.assertEqual(m.open["held_rule"], "far_misses_count")
+        self.assertIsNone(m.scored())
+        with self.assertRaises(ValueError):
+            method.parse(text.replace('proposed "far_misses_count"', 'proposed "hits_kept"'))
+
+    def test_the_owner_is_told_on_the_console(self):
+        d, f, model = self.lit_mostly_by_the_hold({"a": 360.0, "b": 360.0 * 0.7})
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = write_case(tmp, d, f, model)
+            with Quiet() as q:
+                self.assertEqual(cli.main(argv), 0)
+        out = q.buf.getvalue()
+        self.assertIn("gate 0.85: insufficient", out)
+        self.assertIn("left out of the hit rate: 2 point(s) lit by held or superseded bulbs", out)
+        out.encode("ascii")
+
+
 class MidFade(unittest.TestCase):
     """Frames mid-fade or mid-move are excluded; the settle rule follows den_lighting."""
 
@@ -485,7 +617,7 @@ class MethodAndCommandLine(unittest.TestCase):
         m = method.load()
         self.assertIsNone(m.scored())
         self.assertEqual(sorted(m.open), sorted([
-            "settle_margin_s", "background", "held_share_min", "uncertainty_rel", "uncertainty_abs_lx",
+            "settle_margin_s", "background", "held_share_min", "held_rule", "uncertainty_rel", "uncertainty_abs_lx",
             "spill_band_top", "spill_allowance_lx", "daylight_change_min", "shadow_radius_m",
             "max_frame_gap_s", "delta_hit_rate", "record_extensions"]))
         self.assertEqual(m.values["tolerance"], 0.15)
@@ -534,7 +666,7 @@ class MethodAndCommandLine(unittest.TestCase):
             self.assertEqual(out, ["report-preview.json"])
             preview = json.loads((Path(tmp) / "out" / "report-preview.json").read_text(encoding="utf-8"))
             self.assertFalse(preview["scored"])
-            self.assertEqual(len(preview["method"]["open"]), 12)
+            self.assertEqual(len(preview["method"]["open"]), 13)
 
     def test_one_open_slot_is_enough_to_refuse(self):
         text = method.closed_copy(method.lf_text(HERE / "VERIFY-V1.md"))
@@ -547,7 +679,7 @@ class MethodAndCommandLine(unittest.TestCase):
             self.assertEqual(cli.main(["slots"]), 0)
         out = q.buf.getvalue()
         out.encode("ascii")
-        self.assertIn("12 open slot(s)", out)
+        self.assertIn("13 open slot(s)", out)
         self.assertIn("pending decision envelope-parameters", out)
 
     def test_outputs_are_never_overwritten(self):

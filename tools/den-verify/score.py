@@ -275,10 +275,12 @@ class Run:
             predicted = None if background is None else background + after[sid]
             row.update(measured=measured, why=why, predicted=predicted, ref_value=ref_val,
                        predicted_change=after[sid] - before[sid])
+            held_light = sum(parts[c][sid] for c in held if c in parts)
             if predicted is not None and predicted > 0:
-                row["held_share"] = sum(parts[c][sid] for c in held if c in parts) / predicted
+                row["held_share"] = held_light / predicted
             else:
                 row["held_share"] = 0.0
+            row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
             if measured is None:
                 row["status"] = "prior_only" if why == "prior_only" else "unverifiable"
             elif predicted is None:
@@ -300,7 +302,10 @@ class Run:
                 row["increment"] = {"point_id": sid, "measured_change": None,
                                     "predicted_change": row["predicted_change"],
                                     "status": "unverifiable", "uncertainty": None}
-            row["excluded_held"] = row["status"] == "outside" and row["held_share"] >= m["held_share_min"]
+            # A held-lit point is never a hit; it is a miss only beyond what the held light could account for.
+            row["excluded_held"] = (row["held_lit"] and row["status"] in ("within", "outside")
+                                    and (m["held_rule"] == "exclude_both"
+                                         or within(measured, predicted, m["tolerance"], held_light)))
             out[sid] = row
         return out, revision
 
@@ -323,7 +328,7 @@ class Run:
             if common and abs(change) >= self.m["daylight_change_min"] and _sign(change) == _sign(res):
                 return {"cause": "daylight", "basis": f"window daylight changed by {change:+.3f}"}
         inc = row["increment"]
-        if (inc["status"] == "outside" and not occ
+        if (inc["status"] == "outside" and not occ and row["held_share"] == 0
                 and _sign(inc["measured_change"] - inc["predicted_change"]) == _sign(res)):
             return {"cause": "drift", "basis": "the change itself landed off in the same direction"}
         return {"cause": "unexplained", "basis": "no daylight change, shadow or drift"}
@@ -440,7 +445,7 @@ class Run:
             if row["measured"] is None or row.get("residual") is None:
                 continue
             flags = []
-            if row["held_share"] >= self.m["held_share_min"]:
+            if row["held_lit"]:
                 flags.append("held")
             if occ:
                 flags.append("occupied")
@@ -537,6 +542,7 @@ class Run:
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
         excluded_held = fallback_scored = eyes_total = 0
+        excluded_by_status = {"within": 0, "outside": 0}
         not_admitted, not_verified = [], []
         spill_counts, inc_counts = {}, {}
         for i, d in enumerate(self.decs):
@@ -576,6 +582,7 @@ class Run:
                 for r in counted:
                     if r["excluded_held"]:
                         excluded_held += 1
+                        excluded_by_status[r["status"]] += 1
                         continue
                     if r["basis"] == "fallback_patch":
                         fallback_scored += 1
@@ -623,6 +630,7 @@ class Run:
             "frames": frame_counts,
             "hit_rate": self.hit_rate(counted_by_day),
             "excluded_held_or_superseded": excluded_held,
+            "excluded_held_by_status": excluded_by_status,
             "fallback_patch_points_scored": fallback_scored,
             "misses_explained": {
                 **causes, "misses": misses,

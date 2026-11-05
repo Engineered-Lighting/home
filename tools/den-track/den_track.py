@@ -147,14 +147,34 @@ def take_id(observations):
     return 'sha256:' + hashlib.sha256('\n'.join(frames).encode('utf-8')).hexdigest()
 
 
+def capture_span(observations):
+    """[first, last] capture time of a take, or None if it has none."""
+    times = [obs['capture_ts'] for obs in observations if records.is_number(obs.get('capture_ts'))]
+    return [min(times), max(times)] if times else None
+
+
+def footage_row(take):
+    """What a take's footage is known by: its exact frames, and the moments they span."""
+    return {'take_id': take_id(take['observations']), 'span': capture_span(take['observations'])}
+
+
+def same_footage(a, b):
+    """Do two takes hold footage of the same moments? A capture time never comes round again, so any overlap is
+    one recording, whichever frames each kept: a frame short, cut in two, or re-saved with its times rounded."""
+    if a.get('take_id') == b.get('take_id'):
+        return True
+    x, y = a.get('span'), b.get('span')
+    return bool(x and y) and x[0] <= y[1] and y[0] <= x[1]
+
+
 def take_stamp(take):
     obs_path, tracks_path, truth_path = take['paths']
-    return {'take_id': take_id(take['observations']), 'observations_sha256': text_sha256(obs_path),
-            'tracks_sha256': text_sha256(tracks_path), 'truth_sha256': text_sha256(truth_path)}
+    return dict(footage_row(take), observations_sha256=text_sha256(obs_path),
+                tracks_sha256=text_sha256(tracks_path), truth_sha256=text_sha256(truth_path))
 
 
 def run_stamp(method, takes, scored):
-    """What a score looked at: its takes, together, as hashes only."""
+    """What a score looked at: its takes, together, as hashes and capture times only."""
     return {'scored': bool(scored), 'method_fingerprint': method.fingerprint, 'code_fingerprint': method.code_fingerprint,
             'takes': sorted((take_stamp(t) for t in takes), key=lambda row: row['take_id'])}
 
@@ -164,14 +184,19 @@ def note_paths(takes):
     return sorted({ledger_path()} | {os.path.splitext(t['paths'][0])[0] + SCORE_RUNS_SUFFIX for t in takes})
 
 
+def readable_span(span):
+    return span is None or (isinstance(span, list) and len(span) == 2 and all(records.is_number(v) for v in span))
+
+
 def earlier_runs(takes):
     """Every look noted anywhere these takes keep their record."""
     runs = []
     for path in note_paths(takes):
         for run in records.read_jsonl(path) if os.path.exists(path) else []:
-            if not isinstance(run.get('takes'), list) or not all(isinstance(row, dict) for row in run['takes']):
-                raise Refused('%s holds a line that says no takes. It is the record of what has been scored: '
-                              'mend it rather than delete it.' % path)
+            if not isinstance(run.get('takes'), list) or not all(isinstance(row, dict) and readable_span(row.get('span'))
+                                                                 for row in run['takes']):
+                raise Refused('%s holds a line that says no takes, or a span it cannot read. It is the record of what has '
+                              'been scored: mend it rather than delete it.' % path)
             runs.append(run)
     return runs
 
@@ -183,29 +208,34 @@ def same_look(a, b):
 def used_problems(current, takes, earlier):
     """Why earlier looks bar this scored run. Any score shows results, so it uses its takes.
 
-    A scored run naming a take already looked at must be that same look: the same takes, with
+    A scored run holding footage already looked at must be that same look: the same takes, with
     nothing changed. So a retune cannot be tried on them, a take cannot be dropped or added
-    once results are known, and new labels cannot be tried. Replaying a scored run is allowed,
-    whatever else has looked at its takes since, because it gives the same report.
+    once results are known, new labels cannot be tried, and the same footage cannot come back
+    with a frame less. Replaying a scored run is allowed, whatever else has looked at its takes
+    since, because it gives the same report.
     """
     names = {take_id(t['observations']): t['name'] for t in takes}
 
-    def ids_of(run):
-        return {row.get('take_id') for row in run['takes']}
+    def shared(run):
+        return [row for row in current['takes'] if any(same_footage(row, old) for old in run['takes'])]
 
-    looks = [run for run in earlier if ids_of(run) & set(names)]
+    looks = [run for run in earlier if shared(run)]
     if any(run.get('scored') is True and same_look(run, current) for run in looks):
         return []
     found = []
     for run in looks:
         if same_look(run, current):
             continue
-        shared = ', '.join(sorted(names[i] for i in ids_of(run) & set(names)))
-        if ids_of(run) != set(names):
+        ids = {row.get('take_id') for row in run['takes']}
+        listed = ', '.join(sorted(names[row['take_id']] for row in shared(run)))
+        if any(row['take_id'] not in ids for row in shared(run)):
+            text = ('%s: already scored in part: its capture times overlap a take in the record, so it is that footage with '
+                    'frames dropped, added or re-saved' % listed)
+        elif ids != set(names):
             text = '%s: already scored together with other takes: a session of %d, of which this run names %d, and this run has %d' % (
-                shared, len(ids_of(run)), len(ids_of(run) & set(names)), len(names))
+                listed, len(ids), len(ids & set(names)), len(names))
         else:
-            text = '%s: already scored under other code, another method, or other tracks, labels or observations' % shared
+            text = '%s: already scored under other code, another method, or other tracks, labels or observations' % listed
         if text not in found:
             found.append(text)
     if not found:
@@ -255,12 +285,11 @@ def plan_problems(plan, counts):
 
 def repeated_takes(takes):
     """The same detection, or the same footage, in two takes would count its crossings twice."""
-    owner, frames, found = {}, {}, []
+    rows = [(take['name'], footage_row(take)) for take in takes]
+    found = ['%s and %s share capture times, so they are one piece of footage, and a take counts once' % (a, b)
+             for n, (b, row) in enumerate(rows) for a, other in rows[:n] if same_footage(other, row)]
+    owner = {}
     for take in takes:
-        other = frames.setdefault(take_id(take['observations']), take['name'])
-        if other != take['name']:
-            found.append('%s and %s are the same frames, and a take counts once' % (other, take['name']))
-            continue
         for oid in (obs.get('obs_id') for obs in take['observations']):
             other = owner.setdefault(oid, take['name'])
             if other != take['name']:

@@ -114,7 +114,7 @@ How the command line behaves:
   CRLF or a BOM read the same.
 - **Folders.** `--out` is refused inside a git checkout or OneDrive, and nothing is
   overwritten: a new run needs a new folder.
-- **The record of what has been scored.** `score` adds a line of hashes to
+- **The record of what has been scored.** `score` adds a line of hashes and capture times to
   `observations.score-runs.jsonl` beside each take's observations, and to
   `%LOCALAPPDATA%\den-track\score-runs.jsonl` for this Windows user. Keep both: a scored
   run reads them to refuse takes already used (METHOD.md). `DEN_TRACK_LEDGER` names another
@@ -213,12 +213,13 @@ listed as excluded, with why, and does not count: for most kinds, both people se
 both sides of the mark and in the window, unseen across it for no longer than a track coasts,
 and near each other in it. A detector that stalled on someone until their track ended, a
 mistyped time or a take cut short ends up there. A scored run refuses when too few are left. An agent may read `score.json`, `track-run.json` and
-`observations.score-runs.jsonl`, which hold counts, ids and hashes, but not `observations.jsonl`,
+`observations.score-runs.jsonl`, which hold counts, ids, hashes and times, but not `observations.jsonl`,
 `tracks.jsonl`, `truth.jsonl` or any frame. If geometry alone misses the gate, the ladder's
 next step is session appearance as its own rung, after the owner's decision on learning
 permissions. A take that has been scored is used. A re-score after any change to the numbers,
 the code or the labels needs fresh takes, and so does dropping or adding a take once results
-are known: a scored run refuses them. Replaying with nothing changed gives the same numbers.
+are known, or running rung 2 again on the same footage: a scored run refuses them, by their
+capture times. Replaying with nothing changed gives the same numbers.
 
 ## Open slots
 

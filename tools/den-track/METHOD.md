@@ -201,17 +201,23 @@ name the observations it labels (`observations_sha256`), and takes with more tha
 labeller. The report says what the truth files say.
 
 **A take is scored once.** Any `score`, practice or scored, shows results, so it uses the
-takes it looked at. It notes them, together, as hashes: the method's and the code's
-fingerprints and, per take, a `take_id` over its frames (sensor and `capture_ts`) and the
-hashes of its observations, tracks and truth. The note goes beside each take's observations
-(`observations.score-runs.jsonl`), which travels with the take's folder, and in this Windows
-user's record (`%LOCALAPPDATA%\den-track\score-runs.jsonl`), which stays when files are
-copied, moved or deleted.
+takes it looked at. It notes them, together, as hashes and capture times: the method's and the
+code's fingerprints and, per take, a `take_id` over its frames (sensor and `capture_ts`), its
+`span` (first and last `capture_ts`) and the hashes of its observations, tracks and truth. The
+note goes beside each take's observations (`observations.score-runs.jsonl`), which travels with
+the take's folder, and in this Windows user's record
+(`%LOCALAPPDATA%\den-track\score-runs.jsonl`), which stays when files are copied, moved or deleted.
 
-A scored run that names a take in any note must be that same look: the same takes, with
-nothing changed. So a retune, of the numbers or the code, cannot be tried on takes that have
-been looked at, new labels cannot be tried, and a take cannot be dropped or added once results
-are known. Replaying a scored run is allowed, and gives the same numbers. Each report goes
+Two takes are the same footage if they have the same `take_id` or their spans overlap, on any
+sensor: a capture time never comes round again, so an overlap is one recording, whichever frames
+each kept. That covers rung 2 run again with other settings, which can drop a frame, since a
+frame with nobody seen is no frame; a take cut in two; and a file re-saved with its times rounded.
+
+A scored run holding footage in any note must be that same look: the same takes, with nothing
+changed. So a retune, of the numbers or the code, cannot be tried on takes that have been looked
+at, new labels cannot be tried, a take cannot be dropped or added once results are known, and the
+same footage cannot come back with a frame less. Two takes in one scored run may not be the same
+footage. Replaying a scored run is allowed, and gives the same numbers. Each report goes
 to a new folder, so an earlier one stays, and a scored run on fresh takes lists the earlier
 scored runs the record holds and whether they passed (`earlier_scored_runs`), so a pass after
 a failure says so. A refused run shows no result and uses no take.
@@ -219,9 +225,9 @@ a failure says so. A refused run shows no result and uses no take.
 Three things get past it. Deleting both notes by hand, which nothing can stop. A take looked
 at alone and then left out of the session: nothing ties it to the others, so it cannot be
 refused, the plan catches it only if a kind falls short, and the report counts it among
-`other_takes_looked_at`, beside any pilot takes. So run `score` only on a complete session. And rung
-2 run again on the footage if its frames come out different: one with nobody seen is no
-frame, so that is a new take to this tool.
+`other_takes_looked_at`, beside any pilot takes. So run `score` only on a complete session. And
+footage whose capture times have moved, by a hand or by a clock corrected between the two runs: the
+tool has only those times to know it by. Frames of a recording that no look has reached are fresh.
 
 ## The block
 

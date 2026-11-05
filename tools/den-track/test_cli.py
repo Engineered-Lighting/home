@@ -705,6 +705,30 @@ class ScoredRunTest(Base):
         again = [obs, os.path.join(run_folder, 'tracks.jsonl'), truth_path]
         self.assert_refused(self.score_args([take, again], scored=True, meth=meth), 'a take counts once')
 
+    def test_one_take_cut_in_two_that_share_capture_times_is_refused(self):
+        """Other obs_ids and not quite the same frames: only the capture times show it is one piece of footage."""
+        meth = self.small_method()
+        take = self.make_take(seed=0, meth=meth)
+        folder = self.path('takes', 'cut-again')
+        os.makedirs(folder)
+        rows = records.read_jsonl(take[0])
+        last = max(row['capture_ts'] for row in rows)
+        rename = {row['obs_id']: row['obs_id'] + '-again' for row in rows}
+        obs = os.path.join(folder, 'observations.jsonl')
+        records.write_jsonl(obs, [dict(row, obs_id=rename[row['obs_id']]) for row in rows if row['capture_ts'] != last])
+        lines = [l for l in records.read_jsonl(take[2]) if l['kind'] != 'frame' or l['capture_ts'] != last]
+        lines[0].update(take='cut-again', observations_sha256=den_track.text_sha256(obs))
+        for line in lines:
+            if line['kind'] == 'frame':
+                line['labels'] = {rename[o]: p for o, p in line['labels'].items()}
+        truth_path = os.path.join(folder, 'truth.jsonl')
+        records.write_jsonl(truth_path, lines)
+        run_folder = os.path.join(folder, 'track-1')
+        code, text = cli('--method', meth, 'track', '--observations', obs, '--out', run_folder)
+        self.assertEqual(code, 0, text)
+        again = [obs, os.path.join(run_folder, 'tracks.jsonl'), truth_path]
+        self.assert_refused(self.score_args([take, again], scored=True, meth=meth), 'a take counts once')
+
     def test_refused_when_two_crossings_overlap_once_padded(self):
         meth = self.closed_method()
         takes = self.twenty(meth)
@@ -1033,6 +1057,109 @@ class FreshTakesTest(Base):
             records.write_jsonl(truth_path, lines)
         self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
 
+    def cut(self, takes, name, keep=None, times=None, meth=None):
+        """The takes again with only the frames keep(ts, every_ts) says, or with their capture times changed. Rung 2 run
+        again with a higher threshold can drop a frame, since a frame with nobody seen is no frame. Ids and labels carry over."""
+        keep, times = keep or (lambda ts, every: True), times or (lambda ts: ts)
+        out = []
+        for obs, _, truth_path in takes:
+            folder = os.path.join(os.path.dirname(obs), name)
+            os.makedirs(folder)
+            rows = records.read_jsonl(obs)
+            every = sorted({row['capture_ts'] for row in rows})
+            path = os.path.join(folder, 'observations.jsonl')
+            records.write_jsonl(path, [dict(row, capture_ts=times(row['capture_ts'])) for row in rows if keep(row['capture_ts'], every)])
+            lines = [dict(line, capture_ts=times(line['capture_ts'])) if line['kind'] == 'frame' else line
+                     for line in records.read_jsonl(truth_path) if line['kind'] != 'frame' or keep(line['capture_ts'], every)]
+            lines[0]['observations_sha256'] = den_track.text_sha256(path)
+            truth_copy = os.path.join(folder, 'truth.jsonl')
+            records.write_jsonl(truth_copy, lines)
+            out.append([path, os.path.join(folder, 'none', 'tracks.jsonl'), truth_copy])
+        return self.retrack(out, 'track-1', meth)
+
+    @staticmethod
+    def all_but_the_last(ts, every):
+        return ts != every[-1]
+
+    def test_the_same_footage_a_frame_short_after_a_retune_is_refused_and_the_first_report_stays(self):
+        takes = self.takes()
+        first = self.score_once(takes)
+        self.retune_the_code()
+        self.assert_refused_as_used(self.score_args(self.cut(takes, 'short', self.all_but_the_last), 'score-2', scored=True, meth=self.meth))
+        self.assert_first_report_kept(first)
+
+    def test_the_same_footage_a_frame_short_cannot_turn_a_failed_gate_into_a_pass(self):
+        takes = self.failing_session()
+        self.retune_the_code()
+        short = self.cut(takes, 'short', lambda ts, every: ts not in every[-3:])
+        self.assert_refused_as_used(self.score_args(short, 'score-2', scored=True, meth=self.meth))
+
+    def test_the_same_footage_a_frame_short_is_refused_with_nothing_else_changed(self):
+        takes = self.takes()
+        self.score_once(takes)
+        self.assert_refused_as_used(self.score_args(self.cut(takes, 'short', self.all_but_the_last), 'score-2', scored=True, meth=self.meth))
+
+    def test_capture_times_rounded_on_re_saving_do_not_make_a_fresh_take(self):
+        takes = self.takes()
+        self.score_once(takes)
+        rounded = self.cut(takes, 'rounded', times=lambda ts: round(ts, 2))
+        self.assert_refused_as_used(self.score_args(rounded, 'score-2', scored=True, meth=self.meth))
+
+    def test_a_part_of_a_scored_take_is_not_a_fresh_take(self):
+        takes = self.takes()
+        self.score_once(takes)
+        half = self.cut(takes, 'half', lambda ts, every: ts <= every[len(every) // 2])
+        self.assert_refused_as_used(self.score_args(half, 'score-2', scored=True, meth=self.meth))
+
+    def test_a_practice_look_at_footage_a_frame_short_uses_the_whole_take(self):
+        takes = self.takes()
+        code, text = cli(*self.score_args(self.cut(takes, 'short', self.all_but_the_last), 'peek', meth=self.meth))
+        self.assertEqual(code, 0, text)
+        self.assert_refused_as_used(self.score_args(takes, 'score-1', scored=True, meth=self.meth))
+
+    def test_the_refusal_says_the_footage_overlaps(self):
+        takes = self.takes()
+        self.score_once(takes)
+        code, text = cli(*self.score_args(self.cut(takes, 'short', self.all_but_the_last), 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 2, text)
+        self.assertIn('capture times overlap', text)
+        self.assertIn('clean_crossing-0', text)
+
+    def test_frames_nobody_has_looked_at_are_a_fresh_take_even_from_one_recording(self):
+        takes = self.takes()
+        mark = {t[0]: next(l for l in records.read_jsonl(t[2]) if l['kind'] == 'crossing')['interval'][0] for t in takes}
+
+        def split(earlier):
+            out = []
+            for take in takes:
+                out += self.cut([take], 'part-%s' % earlier, lambda ts, every, at=mark[take[0]]: (ts < at - 1.0) == earlier)
+            return out
+
+        code, text = cli(*self.score_args(split(True), 'peek', meth=self.meth))
+        self.assertEqual(code, 0, text)
+        code, text = self.scored_exit(split(False), 'score-1')
+        self.assertEqual(code, 0, text)
+        self.assertIn('other take', text)
+
+    def test_two_rows_are_the_same_footage_if_their_capture_times_overlap_or_their_frames_match(self):
+        row = {'take_id': 'a', 'span': [100.0, 200.0]}
+        for other, same in (({'take_id': 'b', 'span': [150.0, 160.0]}, True), ({'take_id': 'b', 'span': [50.0, 100.0]}, True),
+                            ({'take_id': 'b', 'span': [200.0, 300.0]}, True), ({'take_id': 'a', 'span': [900.0, 901.0]}, True),
+                            ({'take_id': 'b', 'span': [200.25, 300.0]}, False), ({'take_id': 'b', 'span': [50.0, 99.75]}, False),
+                            ({'take_id': 'b', 'span': None}, False), ({'take_id': 'b'}, False)):
+            with self.subTest(other=other):
+                self.assertEqual(den_track.same_footage(row, other), same)
+                self.assertEqual(den_track.same_footage(other, row), same)
+
+    def test_a_record_line_with_a_span_it_cannot_read_is_a_refusal(self):
+        takes = self.takes()
+        os.makedirs(os.path.dirname(den_track.ledger_path()))
+        with open(den_track.ledger_path(), 'w', encoding='utf-8') as f:
+            f.write('{"takes": [{"take_id": "x", "span": "soon"}]}\n')
+        code, text = self.scored_exit(takes, 'score-1')
+        self.assertEqual(code, 2, text)
+        self.assertIn(den_track.ledger_path(), text)
+
     def failing_session(self):
         """Three takes, one with a silent swap: the gate fails."""
         takes = self.takes(first=0) + self.takes(first=2)[:1]
@@ -1199,7 +1326,7 @@ class FreshTakesTest(Base):
         code, text = cli(*self.score_args(takes, 'practice-after'))
         self.assertEqual(code, 0, text)
 
-    def test_the_report_names_the_code_and_the_note_holds_only_hashes(self):
+    def test_the_report_names_the_code_and_the_note_holds_only_hashes_and_capture_times(self):
         takes = self.takes()
         self.score_once(takes)
         with open(self.path('score-1', 'score.json'), encoding='utf-8') as f:
@@ -1213,8 +1340,9 @@ class FreshTakesTest(Base):
         self.assertIs(notes[0]['passed'], True)
         self.assertEqual(len(notes[0]['takes']), 2)
         for row in notes[0]['takes']:
-            self.assertEqual(set(row), {'take_id', 'observations_sha256', 'tracks_sha256', 'truth_sha256'})
-            self.assertTrue(all(v.startswith('sha256:') for v in row.values()))
+            self.assertEqual(set(row), {'take_id', 'span', 'observations_sha256', 'tracks_sha256', 'truth_sha256'})
+            self.assertTrue(all(v.startswith('sha256:') for k, v in row.items() if k != 'span'))
+            self.assertTrue(all(isinstance(v, float) for v in row['span']))
         self.assertEqual(sorted(t['take_id'] for t in report['takes']), [row['take_id'] for row in notes[0]['takes']])
 
 
@@ -1380,6 +1508,19 @@ class SafetyTest(unittest.TestCase):
     def test_the_tool_names_no_real_data_path(self):
         for name, text in self.sources():
             self.assertIsNone(self.ABSOLUTE_DATA.search(text), name)
+
+    def test_each_synthetic_scene_has_its_own_place_on_the_clock_as_real_footage_does(self):
+        spans = {}
+        for name in sorted(synth.SCENES):
+            for seed in (0, 1, 2000):
+                for noise in sorted(synth.NOISE):
+                    times = [f['t'] for f in synth.scenario(name, seed=seed, noise=noise)['frames']]
+                    spans[(name, seed, noise)] = (min(times), max(times))
+        for a, (a0, a1) in spans.items():
+            for b, (b0, b1) in spans.items():
+                if a < b:
+                    self.assertTrue(a1 < b0 or b1 < a0, (a, b))
+        self.assertEqual(synth.scenario('near_pass', seed=1)['frames'][0]['t'], synth.scenario('near_pass', seed=1)['frames'][0]['t'])
 
     def test_synthetic_people_are_letters(self):
         self.assertEqual({w for s in ('near_pass',) for w in {o['pid'] for f in synth.scenario(s)['frames'] for o in f['obs']}} - {None},

@@ -131,6 +131,14 @@ def ray_noise(point, noise, rng):
     return (point[0] + along * ux - across * uy, point[1] + along * uy + across * ux), along_sigma
 
 
+def clock_start(name, seed, noise):
+    """When a scene is captured. Each has its own place on the clock, as real footage does, since the tool takes
+    overlapping capture times for one recording. Whole seconds, so a frame's fraction of a second never depends on this."""
+    noises = sorted(NOISE)
+    at_noise = noises.index(noise) if isinstance(noise, str) else len(noises)
+    return 1000.0 + 1000.0 * (seed + 10000 * (sorted(SCENES).index(name) + 10 * at_noise))
+
+
 def scenario(name, seed=0, noise='typical', fps=4.0):
     """Build one scene. Returns a dict with 'frames' (list of {t, obs: [{
     'id', 'pid', 'xy', 'z', 'depth_sigma', 'lateral', 'facing'}]}), 'events' and
@@ -141,7 +149,7 @@ def scenario(name, seed=0, noise='typical', fps=4.0):
     duration = max(w.t_end for w in walkers) + 1.5
     frames = []
     n = int(duration * fps)
-    t0 = 1000.0 + rng.random()
+    t0 = clock_start(name, seed, noise) + rng.random()
     for k in range(n):
         t = round(t0 + k / fps + rng.uniform(-0.01, 0.01), 4)
         local = t - t0

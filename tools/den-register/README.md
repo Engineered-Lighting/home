@@ -14,13 +14,14 @@ follow `docs/architecture/live-v1/schemas.json`.
 | `page.html`, `serve.py` | The click page, served on 127.0.0.1 only. |
 | `rigid.py` | The rigid fit, its residuals and the leave-one-out bound. |
 | `scene.py` | Reads one R take frame: left image, depth plane, intrinsics. |
+| `rig.py` | The camera's own geometry for the entry, from a frame and the camera's `/calibration` reply. |
 | `worksheet.py`, `records.py` | Your worksheet; the RoomModel and CalibrationRecord files. |
 | `REGISTER-V1.md` | The method and its numbers, some still open. |
 | `test_den_register.py`, `synthetic.py` | Tests on synthetic scenes only. |
 
 It needs Python 3.12 and the standard library only. It never opens the camera
 or contacts the Jetson, LA or Home Assistant: it reads takes that R's
-`take.py` already saved on this PC.
+`take.py` already saved on this PC, and one camera reply you save in step 4b.
 
 ## Privacy rules
 
@@ -87,6 +88,22 @@ Do the start slate as usual, then step out of the camera's view. About 20
 seconds after "Begin.", press Enter, then do the end slate. Use a new folder
 name for each take.
 
+## Step 4b, once, R's go-ahead: the camera's own geometry
+
+Rung 2 needs the camera's stereo baseline and the offset between its depth and
+colour cameras. They are in the camera's factory calibration, which no take
+saves. Save the camera's `/calibration` reply in the working folder, with R's
+token. It is a single read:
+
+```powershell
+$token = (Get-Content C:\den-takes\private\camera-token.txt).Trim()
+Invoke-WebRequest -UseBasicParsing -Headers @{ Authorization = "Bearer $token" } -Uri http://192.168.1.168:8090/calibration -OutFile C:\den-register\camera-calibration.json
+```
+
+If the camera cannot be reached directly, use R's tunnel and
+`http://127.0.0.1:18090/calibration` instead. A 503 means the camera server is
+not ready yet; try again. Save it again only if the camera itself is replaced.
+
 ## Step 5: click each point
 
 ```powershell
@@ -123,6 +140,8 @@ writes `fit-N.json`; a pass also adds a line to `room-model.jsonl` and to
 | Reason | What to do |
 |---|---|
 | `slots_open` | Step 6. |
+| `camera_calibration_missing`, `camera_calibration_invalid` | Step 4b. |
+| `intrinsics_missing` | Use another take; if it stays, tell the agent the reason's text. |
 | `too_few_pairs`, `too_few_checks` | Click at least 3 fit points and 2 checks. |
 | `collinear` | Add a fit point away from the line the others are on. |
 | `depth_missing` | Click that point again, a little to the side, or clear it. |

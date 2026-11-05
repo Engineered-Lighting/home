@@ -140,6 +140,22 @@ def read_bundle(data):
             "left_frame": left, "depth_frame": depth}
 
 
+def rgb_geometry(bundle):
+    """The RGB frame's own intrinsics, 8-term distortion and size, or Refused intrinsics_missing."""
+    rgb = bundle["full"]["frames"].get("rgb")
+    k = _intrinsics(rgb) if type(rgb) is dict and rgb.get("transformation_valid") is True else None
+    if k is None:
+        raise Refused("intrinsics_missing", "the RGB frame carries no valid intrinsics")
+    terms = rgb.get("source_distortion_coefficients")
+    if (type(terms) is not list or len(terms) > 14 or not all(_finite(v) for v in terms)
+            or any(abs(v) > 1e-12 for v in terms[8:])):
+        raise Refused("intrinsics_missing", "the RGB frame carries no usable 8-term distortion")
+    width, height = rgb.get("width"), rgb.get("height")
+    if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        raise Refused("intrinsics_missing", "the RGB frame carries no size")
+    return {"rgb": k, "rgb_distortion": ([float(v) for v in terms] + [0.0] * 8)[:8], "rgb_size": [width, height]}
+
+
 def frame_depth_skew(bundle, max_skew_s):
     """Refuse a left image and a depth plane from different stereo frames."""
     left, depth = bundle["left_frame"], bundle["depth_frame"]

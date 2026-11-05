@@ -25,6 +25,7 @@ from pathlib import Path
 
 import method as method_file
 import records
+import rig
 import rigid
 import scene
 import serve
@@ -41,6 +42,7 @@ SCHEMA_MOUNT = "den-register-mount-1"
 WORKSHEET = "worksheet.json"
 ROOM_MODEL = "room-model.jsonl"
 CALIBRATIONS = "calibration-records.jsonl"
+CAMERA_CALIBRATION = "camera-calibration.json"
 METHOD = "tape + fit"
 RECHECK = [
     "the camera's mount: if it was bumped, turned or re-seated, the old registration no longer holds",
@@ -212,7 +214,7 @@ def _cm(metres):
     return f"{metres * 100:.1f} cm"
 
 
-def evaluate(sheet, clicks, take, row, bundle, m, room_models, calibrations, *, now):
+def evaluate(sheet, clicks, take, row, bundle, intrinsics, m, room_models, calibrations, *, now):
     """The verdict for one fit, and what to write if it passes. Reads and writes no file."""
     reasons = []
     gate = m["gate_m"]
@@ -314,7 +316,7 @@ def evaluate(sheet, clicks, take, row, bundle, m, room_models, calibrations, *, 
         refuse("already_registered", f"these inputs were registered as {earlier['inputs'].get('transform_id')}")
         return verdict
 
-    verdict["write"] = build_records(sheet, take, row, bundle, m, room_models, verdict, digest, now)
+    verdict["write"] = build_records(sheet, take, row, bundle, intrinsics, m, room_models, verdict, digest, now)
     if verdict["write"] is None:
         refuse("round_trip_failed", "the written transform_id does not resolve back to the fitted transform")
     return verdict
@@ -326,7 +328,7 @@ def inputs_digest(sheet, clicks, row, m):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def build_records(sheet, take, row, bundle, m, room_models, verdict, digest, now):
+def build_records(sheet, take, row, bundle, intrinsics, m, room_models, verdict, digest, now):
     camera_id, fit = sheet["camera_id"], verdict["fit"]
     base = records.current(room_models, sheet["room_id"])
     previous = records.camera_entry(base, camera_id)
@@ -338,10 +340,9 @@ def build_records(sheet, take, row, bundle, m, room_models, verdict, digest, now
     signature = scene.mount_signature(bundle)
     entry = {
         "camera_id": camera_id,
-        "intrinsics": {"source": "EEPROM, as the bundle's depth frame carries it", "frame": "rectified_left",
-                       "width": scene.WIDTH, "height": scene.HEIGHT, **k},
+        "intrinsics": intrinsics,
         "pose": {"room_from_camera": verdict["matrix"], "camera_frame": records.CAMERA_FRAME,
-                 "room_frame": records.FRAME["name"], "unit": "m",
+                 "camera_axes": records.CAMERA_AXES, "room_frame": records.FRAME["name"], "unit": "m",
                  "position_m": records.rounded(fit["camera_position_m"])},
         "method": METHOD,
         "version": version,
@@ -369,7 +370,8 @@ def build_records(sheet, take, row, bundle, m, room_models, verdict, digest, now
         "parameter": f"RoomModel.cameras[{camera_id}].pose",
         "value": verdict["matrix"],
         "unit": "m",
-        "unit_note": f"4x4 rigid room_from_camera, from {records.CAMERA_FRAME} to {records.FRAME['name']}; "
+        "unit_note": f"4x4 rigid room_from_camera, from {records.CAMERA_FRAME} ({records.CAMERA_AXES}) "
+                     f"to {records.FRAME['name']}; "
                      "the rotation is unitless, the translation in metres",
         "method": METHOD,
         "residual_m_rms": records.rounded(fit["rms_m"]),
@@ -439,10 +441,11 @@ def run_fit(work, take_dir, frame=None, *, m=None, now=time.time, out=sys.stdout
         clicks = read_clicks(path)
         n = clicks["frame"].get("n") if frame is None else frame
         take, row, _, bundle = scene.load_frame(take_dir, n)
+        intrinsics = rig.entry_intrinsics(bundle, rig.read_calibration(work / CAMERA_CALIBRATION))
         room_models = records.read_jsonl(work / ROOM_MODEL, "room_model_unreadable")
         calibrations = records.read_jsonl(work / CALIBRATIONS, "calibration_records_unreadable")
         records.current(room_models, sheet["room_id"])
-        verdict = evaluate(sheet, clicks, take, row, bundle, m, room_models, calibrations, now=now())
+        verdict = evaluate(sheet, clicks, take, row, bundle, intrinsics, m, room_models, calibrations, now=now())
     except Refused as exc:
         verdict["reasons"] = [{"reason": exc.reason, "detail": exc.detail}]
     write = verdict.pop("write", None)

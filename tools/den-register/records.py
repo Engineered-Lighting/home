@@ -17,7 +17,8 @@ import rigid
 
 FRAME = {"name": "z_up_metric_floor0", "unit": "m", "origin": "the minimum corner of the scan, on the floor",
          "axes": "x along the room's long axis, z up from the floor, y completing a right-handed frame"}
-CAMERA_FRAME = "rectified_left: +x right, +y down, +z forward, metres"
+CAMERA_FRAME = "rectified_left"
+CAMERA_AXES = "+x right, +y down, +z forward, metres"
 PHOTOMETRIC_UNCALIBRATED = {"k_L": None, "unit": "(cd/m²)/nc", "normalisation_version": None,
                             "calibration_id": None, "status": "uncalibrated"}
 CAMERA_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")

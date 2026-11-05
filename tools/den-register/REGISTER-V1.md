@@ -6,7 +6,8 @@ in `docs/architecture/live-v1/schemas.json` (`room_model`,
 `calibration_record`). A change to this file is a new method: commit it as
 REGISTER-V2 and register again. Before any registration had run, the 2026-11-05
 review's fixes changed REGISTER-V1 in place: "A moved camera" below no longer
-lets a depth comparison confirm a registration.
+lets a depth comparison confirm a registration, and the camera entry now holds
+the geometry rung 2 needs.
 
 ## What is measured
 
@@ -51,8 +52,10 @@ largest of the fit residuals, the check errors and the leave-one-out errors.
 Refused before any fit, each with its name: open slots in the block below
 (`slots_open`), a worksheet that does not read (`worksheet_invalid`), a take
 or bundle that does not read (`take_unreadable`, `bundle_unreadable`,
-`frame_missing`), no intrinsics in the depth frame (`intrinsics_missing`), a
-left image and depth plane from different stereo frames or more than
+`frame_missing`), no intrinsics in the depth frame or no intrinsics or distortion
+in the RGB frame (`intrinsics_missing`), no saved or usable /calibration reply
+(`camera_calibration_missing`, `camera_calibration_invalid`), a left image and
+depth plane from different stereo frames or more than
 `max_left_depth_skew_s` apart (`frame_depth_different_times`), a click with too
 little depth around it (`depth_missing`), clicks saved for another frame or for
 ids the worksheet does not hold (`clicks_stale`), a point whose optional scan
@@ -70,8 +73,18 @@ CalibrationRecord to `calibration-records.jsonl`, both JSON Lines, UTF-8, LF.
   `intrinsics` (with its `source`), `pose`, `method` (`tape + fit`), `version`,
   `error_bound_m` and `photometric` (carried over from the previous entry, or
   `uncalibrated`), plus `calibration_id` and `mount`. `pose.room_from_camera`
-  is a 4x4 rigid matrix from the rectified left camera frame (+x right, +y
-  down, +z forward, metres) to the room frame.
+  is a 4x4 rigid matrix from the rectified left camera frame (`camera_frame`
+  `rectified_left`; `camera_axes` +x right, +y down, +z forward, metres) to the
+  room frame.
+- The contract says `intrinsics` names its source, the EEPROM values today, and
+  every later Observation's `transform_id` resolves to this one entry. So it
+  holds the form rung 2 reads (den-observe's `den-observe-camera-1`): `source`;
+  from the registration frame's own metadata, `rectified_left` and `rgb`
+  ({fx, fy, cx, cy}), `rgb_distortion` (8 terms), `depth_size` and `rgb_size`;
+  and from the camera's /calibration reply, which no take saves and the owner
+  saves once as `camera-calibration.json`, `stereo_baseline_m` and
+  `rgb_from_rectified_left` {rotation, translation_m}, composed as
+  `depth_association.eeprom_rgb_from_rectified_left` does.
 - `version` is the take's local date, `YYYY-MM-DD.N`, where N counts this
   camera's registrations in the file. It is never reused, so an Observation's
   `transform_id`, `<camera_id>@<version>`, resolves to exactly one entry.

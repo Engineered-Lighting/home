@@ -14,6 +14,8 @@ from pathlib import Path
 
 W, H = 640, 400
 K = [[450.0, 0.0, 320.0], [0.0, 450.0, 200.0], [0.0, 0.0, 1.0]]
+RGB_K = [[500.0, 0.0, 320.0], [0.0, 500.0, 180.0], [0.0, 0.0, 1.0]]
+RGB_DISTORTION = [0.05, -0.02, 0.001, 0.0005] + [0.0] * 10  # the camera's frames carry 14 terms
 SESSION = "synthetic-camera-session"
 
 
@@ -170,15 +172,29 @@ def metadata(seq=100, t_device=50.0, depth_seq=None, depth_t=None, intrinsics=Tr
                  "transformation_valid": k is not None}
         if k is not None:
             frame["intrinsics"] = k
+            frame["source_distortion_coefficients"] = RGB_DISTORTION if k is RGB_K else [0.0] * 14
         return frame
     k = K if intrinsics else None
     return {"schema": 1, "session": SESSION, "captured_unix_ns": 1_800_000_000_000_000_000,
             "captured_unix_ns_semantics": "bundle_packaging_time_not_sensor_exposure",
             "depth_alignment": "rectified_left", "depth_units": "millimetres", "invalid_depth": 0,
-            "frames": {"rgb": plane(640, 360, seq, t_device),
+            "frames": {"rgb": plane(640, 360, seq, t_device, RGB_K if intrinsics else None),
                        "depth": plane(W, H, seq if depth_seq is None else depth_seq,
                                       t_device if depth_t is None else depth_t, k),
                        "left": plane(W, H, seq, t_device, k), "right": plane(W, H, seq, t_device, k)}}
+
+
+def calibration_reply(rectified_left=None, rgb_link=True):
+    """The camera's /calibration reply, as the capture server sends it: left to right to RGB, in centimetres."""
+    identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    right = {"rotationMatrix": identity, "translation": {"x": 3.75, "y": 0.0, "z": 0.0}, "toCameraSocket": 0}
+    return {"session": SESSION, "depth_alignment": "rectified_left", "depth_units": "millimetres", "invalid_depth": 0,
+            "eeprom": {"stereoRectificationData": {"leftCameraSocket": 1, "rightCameraSocket": 2,
+                                                   "rectifiedRotationLeft": rectified_left or identity},
+                       "cameraData": [[0, {"extrinsics": {"toCameraSocket": -1}}],
+                                      [1, {"extrinsics": {"rotationMatrix": identity, "toCameraSocket": 2,
+                                                          "translation": {"x": -7.5, "y": 0.0, "z": 0.0}}}],
+                                      [2, {"extrinsics": right if rgb_link else {"toCameraSocket": -1}}]]}}
 
 
 def bundle(meta, depth, left):

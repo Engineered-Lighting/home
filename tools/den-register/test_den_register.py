@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 import method  # noqa: E402
 import records  # noqa: E402
 import register  # noqa: E402
+import rig  # noqa: E402
 import rigid  # noqa: E402
 import scene  # noqa: E402
 import serve  # noqa: E402
@@ -73,6 +74,7 @@ class Scene:
         self.work.mkdir(exist_ok=True)
         self.sheet = sheet or synthetic.worksheet(self.points, fit, checks, offsets, scan=scan)
         (self.work / "worksheet.json").write_text(json.dumps(self.sheet), encoding="utf-8")
+        (self.work / "camera-calibration.json").write_text(json.dumps(synthetic.calibration_reply()), encoding="utf-8")
 
     def session(self):
         sheet = worksheet.load(self.work / "worksheet.json", need_positions=False)
@@ -316,6 +318,103 @@ class FitTests(Base):
             f for f in contracts["calibration_record"]["fields"] if f["name"] == "method")["meaning"])
         example = contracts["observation"]["example"]["transform_id"]
         self.assertEqual(records.parse_transform_id(example), ("den-oak", "2026-10-18"))
+
+    def test_the_camera_entry_holds_what_rung_2_needs_to_lift_a_pixel(self):
+        # schemas.json: `intrinsics` names its source, "the EEPROM values today". den-observe's METHOD.md
+        # calls this form den-observe-camera-1, and refuses an entry without it.
+        s = Scene(self)
+        s.click_all()
+        self.assertEqual(s.fit()[0], 0, s.out)
+        [revision] = s.room_models()
+        entry = revision["cameras"][0]
+        k = entry["intrinsics"]
+        self.assertEqual(set(k), {"source", "rectified_left", "rgb", "rgb_distortion", "rgb_from_rectified_left",
+                                  "stereo_baseline_m", "depth_size", "rgb_size"})
+        self.assertIn("EEPROM", k["source"])
+        self.assertEqual(k["rectified_left"], {"fx": 450.0, "fy": 450.0, "cx": 320.0, "cy": 200.0})
+        self.assertEqual(k["rgb"], {"fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 180.0})
+        self.assertEqual(k["rgb_distortion"], synthetic.RGB_DISTORTION[:8])
+        self.assertEqual((k["depth_size"], k["rgb_size"]), ([640, 400], [640, 360]))
+        self.assertAlmostEqual(k["stereo_baseline_m"], 0.075, places=9)
+        self.assertEqual(k["rgb_from_rectified_left"]["rotation"], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        for got, wanted in zip(k["rgb_from_rectified_left"]["translation_m"], [-0.0375, 0.0, 0.0]):
+            self.assertAlmostEqual(got, wanted, places=9)
+        self.assertEqual(entry["pose"]["camera_frame"], "rectified_left")
+        self.assertEqual(entry["pose"]["room_from_camera"][3], [0, 0, 0, 1])
+        self.assertEqual(revision["frame"]["name"], "z_up_metric_floor0")
+
+    def test_no_camera_calibration_refuses_the_fit_and_writes_nothing(self):
+        s = Scene(self)
+        s.click_all()
+        (s.work / "camera-calibration.json").unlink()
+        code, report = s.fit()
+        self.assertEqual((code, reasons(report)), (1, ["camera_calibration_missing"]))
+        self.assertIn("/calibration", report["reasons"][0]["detail"])
+        self.assertFalse((s.work / "room-model.jsonl").exists())
+
+    def test_an_unusable_camera_calibration_refuses_the_fit_and_writes_nothing(self):
+        broken = (b"not json", json.dumps({"session": "s"}).encode(), json.dumps({"eeprom": {}}).encode(),
+                  json.dumps(synthetic.calibration_reply(rgb_link=False)).encode(),
+                  json.dumps(synthetic.calibration_reply(rectified_left=[[2.0, 0, 0], [0, 1, 0], [0, 0, 1]])).encode())
+        for data in broken:
+            with self.subTest(data=data[:30]):
+                self.tearDown()
+                self.setUp()
+                s = Scene(self)
+                s.click_all()
+                (s.work / "camera-calibration.json").write_bytes(data)
+                code, report = s.fit()
+                self.assertEqual((code, reasons(report)), (1, ["camera_calibration_invalid"]))
+                self.assertFalse((s.work / "room-model.jsonl").exists())
+
+    def test_a_bom_from_powershell_still_reads(self):
+        s = Scene(self)
+        s.click_all()
+        path = s.work / "camera-calibration.json"
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+        self.assertEqual(s.fit()[0], 0, s.out)
+
+    def test_an_rgb_frame_without_intrinsics_or_distortion_refuses_the_fit(self):
+        no_k = synthetic.metadata()
+        no_k["frames"]["rgb"].update(transformation_valid=False)
+        del no_k["frames"]["rgb"]["intrinsics"]
+        no_d = synthetic.metadata()
+        del no_d["frames"]["rgb"]["source_distortion_coefficients"]
+        long_d = synthetic.metadata()
+        long_d["frames"]["rgb"]["source_distortion_coefficients"] = [0.0] * 13 + [0.1]
+        for meta in (no_k, no_d, long_d):
+            self.tearDown()
+            self.setUp()
+            s = Scene(self, meta=meta)
+            s.click_all()
+            code, report = s.fit()
+            self.assertEqual((code, reasons(report)), (1, ["intrinsics_missing"]))
+            self.assertFalse((s.work / "room-model.jsonl").exists())
+
+    def test_the_eeprom_chain_composes_rectification_and_extrinsics(self):
+        # The numbers of perception-lab's test_depth_association, for the function this follows.
+        angle = 0.02
+        r1 = [[math.cos(angle), 0, math.sin(angle)], [0, 1, 0], [-math.sin(angle), 0, math.cos(angle)]]
+        identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        eeprom = {"stereoRectificationData": {"leftCameraSocket": 1, "rightCameraSocket": 2,
+                                              "rectifiedRotationLeft": r1},
+                  "cameraData": [[0, {"extrinsics": {"toCameraSocket": -1}}],
+                                 [1, {"extrinsics": {"rotationMatrix": identity, "toCameraSocket": 2,
+                                                     "translation": {"x": -7.5, "y": 0, "z": 0}}}],
+                                 [2, {"extrinsics": {"rotationMatrix": identity, "toCameraSocket": 0,
+                                                     "translation": {"x": 3.75, "y": 0.1, "z": 0}}}]]}
+        got = rig.eeprom_geometry(eeprom)
+        for i in range(3):
+            for j in range(3):
+                self.assertAlmostEqual(got["rgb_from_rectified_left"]["rotation"][i][j], r1[j][i], places=12)
+        for value, wanted in zip(got["rgb_from_rectified_left"]["translation_m"], [-0.0375, 0.001, 0.0]):
+            self.assertAlmostEqual(value, wanted, places=12)
+        self.assertAlmostEqual(got["stereo_baseline_m"], 0.075, places=12)
+        metres = json.loads(json.dumps(eeprom))
+        metres["cameraData"][1][1]["extrinsics"]["translation"]["x"] = -750.0  # a baseline of 7.5 m: wrong units
+        with self.assertRaises(Refused) as caught:
+            rig.eeprom_geometry(metres)
+        self.assertEqual(caught.exception.reason, "camera_calibration_invalid")
 
     def test_three_fit_pairs_pass_without_a_leave_one_out_bound(self):
         s = Scene(self, fit=("p1", "p2", "p3"), checks=("c1", "c2"))

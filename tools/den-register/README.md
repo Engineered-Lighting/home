@@ -96,7 +96,7 @@ saves. Save the camera's `/calibration` reply in the working folder, with R's
 token. It is a single read:
 
 ```powershell
-$token = (Get-Content C:\den-takes\private\camera-token.txt).Trim()
+$token = (Get-Content -Raw C:\den-takes\private\camera-token.txt).Trim()
 Invoke-WebRequest -UseBasicParsing -Headers @{ Authorization = "Bearer $token" } -Uri http://192.168.1.168:8090/calibration -OutFile C:\den-register\camera-calibration.json
 ```
 
@@ -200,4 +200,4 @@ python -B -m unittest discover -s tools/den-register -v
 ```
 
 They use synthetic scenes and a page on 127.0.0.1 only, with no camera and no
-network. They take a few seconds.
+network. They take about 15 seconds.

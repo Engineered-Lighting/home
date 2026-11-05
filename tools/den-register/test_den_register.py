@@ -253,8 +253,11 @@ class SceneTests(Base):
         for n, by, status in ((33, 91, "changed"), (32, 91, "no_large_change"), (64, 89, "no_large_change")):
             with self.subTest(n=n, by=by):
                 self.assertEqual(scene.check_mount(base, signature(n, by), **settings)["status"], status)
-        self.assertEqual(scene.check_mount(base, {"grid": [8, 8], "shape": [400, 640],
-                                                  "cells": [[None] * 8] * 8}, **settings)["status"], "unknown")
+        few = signature(0, 0)
+        few["cells"] = [[None] * 8 for _ in range(6)] + [[3000.0] * 8, [3000.0] * 7 + [None]]  # 15 of 16 needed
+        self.assertEqual(scene.check_mount(base, few, **settings)["status"], "unknown")
+        few["cells"][7][7] = 3000.0
+        self.assertEqual(scene.check_mount(base, few, **settings)["status"], "no_large_change")
 
     def test_intrinsics_missing(self):
         depth, left, _ = synthetic.render()

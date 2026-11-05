@@ -287,3 +287,157 @@ sweeps). A too-dark refusal is not a rerun. Each sweep writes its own
 Before the first sweep frame, this file may be revised in place, in its own
 commit, and the code follows. After it, the Stage 0 block never changes: a new
 Stage 0 rule is `METHOD-V2.md`, with a new approval 1 as the plan says.
+
+# METHOD-V1: Stage 1 part (the light model)
+
+This part is Stage 1's. It is committed before any probe; `model.py` and
+`probe.py` read every number they use from the one fenced block below whose
+info string is `method-v1 stage1`. Stage 1 reuses the Stage 0 block's
+`noise_tolerance_codes`, clipping limits and `meter-norm/v1` unchanged.
+`session.json`, `readings.json`, `light-model.json` and `score.json` record
+this file's sha256 and the Stage 1 block's, both taken over the text with LF
+line ends, so a Windows checkout with CRLF hashes the same.
+
+A line is `name = value  # note`. A value is a number, a list of numbers in
+square brackets, or `open` with a proposed value in the note
+(`# open, proposed 20`): a number the plan or the live-v1 contracts leave
+open. Synthetic tests may use the proposed values, but `probe.py` refuses to
+start a session, and `model.py` refuses to write a scored `light-model.json`
+or `score.json`, while any slot is open. The owner confirms or changes each
+one and the slots close in one commit, before any probe.
+
+```method-v1 stage1
+# Blocks and the reduction rule
+block_px = open                    # open, proposed 20: square blocks of 20 x 20 px, 32 x 18 of them
+reduce_pixel_step = open           # open, proposed 2: every 2nd pixel each way, inside each block
+min_unmasked_share = open          # open, proposed 0.5: a block below this unmasked share is excluded
+
+# The held exposure
+exposure_percentile = 98           # all four at full and cool: this percentile of Y stays below the clip limit
+exposure_search_steps = open       # open, proposed 8: at most this many steps of sqrt(2) down from auto's pick
+confirm_ratios = open              # open, proposed [0.25, 0.5, 1]: one bulb at full at these multiples of the held t·G
+
+# The schedule
+dimming_levels = [1, 2, 4, 8, 16, 32, 64, 96, 128, 176, 224]
+full_level = 254                   # full; Zigbee caps brightness at 254
+dark_level_max = 4                 # levels 1 to 4 count as dark, as all-off does
+dark_run_limit_s = 10              # about 10 s of dark steps without one bulb at full in between
+step_estimate_s = open             # open, proposed 2.5: one step's time, for the dark-run rule
+bracket_every = open               # open, proposed 6: an all-off capture after at most this many lit steps
+holdouts = 16
+random_holdouts = 12
+holdout_on_probability = 0.7
+holdout_level_low = 8
+holdout_level_high = 254
+near_full_holdouts = 3
+near_full_share = open             # open, proposed 0.75: summed level over 4 x 254 at or above this is near full
+gaming_level = 38                  # den_lighting's gaming scene
+schedule_seed = open               # open, proposed 20261110
+
+# Capture
+frames_per_capture = open          # open, proposed 3: settled frames per step; the step value is their median
+settle_limit_s = open              # open, proposed 5: a step's settled frames must start within this
+frame_timeout_s = 15               # 15 s without a frame aborts
+
+# Fit
+signal_rich_fraction = 0.2         # dimming uses blocks at least this share of the bulb's brightest
+shared_curve_percent = 3           # a pair shares one curve when it agrees within this
+shared_curve_from_level = 16       # from this level up
+bracket_tolerance_multiple = open  # open, proposed 5: brackets disagree beyond this times the block's all-off noise
+
+# Gate
+noise_floor_multiple = 5           # pairs with E below this times the block's all-off noise are excluded
+gate_median_percent = 8
+gate_p90_percent = 19
+
+# Probe safety
+poll_s = 1                         # about once a second
+vacancy_s = 120                    # den_lighting's vacancy window
+start_wait_limit_s = 600           # about 10 minutes for the room to empty
+hold_brightness_tolerance = 1
+hold_mired_tolerance = 2
+hold_check_wait_s = open           # open, proposed 5: after the last restore write, before the hold check (den_lighting learns a report that lands more than 3 s late)
+unavailable_wait_s = 300           # about 5 min for a bulb that went unavailable
+walkthrough_limit_s = 1800         # about 30 min for a walk-through
+off_check_s = 120                  # bulbs off about 120 s after the walk-through
+resume_check_s = open              # open, proposed 30: bulbs must read off this long after resume_automatic
+ha_timeout_s = open                # open, proposed 10: an HA request with no whole reply in this time is HA unreachable
+```
+
+## The block grid and the reduction rule
+
+Blocks are `block_px` squares from the top left of the 640 x 360 view, row
+by row; block b is row b // cols, column b % cols. A block's pixels are its
+sampled pixels: x and y multiples of `reduce_pixel_step`. v1 blocks have no
+kind, `xyz` or `normal`.
+
+A pixel is **masked** if `meter-norm/v1` flags it in any frame of any capture
+the session fits or scores (all-off, basis, dimming, drift and hold-out
+captures). The session mask is that union, fixed before any reading, so every
+reading, D included, averages the same pixels in every step. A block's
+**unmasked share** is its unmasked pixels over its pixels. A block below
+`min_unmasked_share`, or with no reading in any basis capture, is excluded
+from fitting and from every hold-out pair, and counted in `score.json`.
+
+A frame's block value is the mean `meter-norm/v1` value of the block's
+unmasked pixels. A step's reading is the median of its settled frames' block
+values; its spread is their standard deviation. A block's **all-off noise** is
+the root mean square of its spread over the all-off captures. Two consecutive
+all-off captures whose readings differ by more than
+`bracket_tolerance_multiple` times the block's noise flag that block in every
+step between them; a flagged value is not used.
+
+## The held exposure
+
+At session start, with all four bulbs at full and at the cool end, `probe.py`
+reads auto's pick (t, G) and holds t·G, then t·G/√2, and so on, at most
+`exposure_search_steps` times, until the `exposure_percentile`th percentile of
+Y over the sampled pixels is below the lowest clipping limit. That (t, G) is
+held for every fitted and scored capture. Blocks on the bulbs may clip: their
+pixels are masked. Then one bulb at full and the middle temperature is
+captured at `confirm_ratios` times the held t·G (time changes, not gain) to
+confirm the Stage 0 curve; those captures are reported, not fitted.
+
+## The schedule
+
+`model.schedule()` is pure and the same for the same seed. Temperatures are
+the warm end, the middle in mired and the cool end of the range all four
+share (the largest `min_color_temp_kelvin` and the smallest
+`max_color_temp_kelvin`). The order is: all-off, all four at full and middle
+(drift start), the confirm captures, then for each bulb: full at the middle,
+the bright dimming levels high to low, full at the warm end, all-off, the
+dark levels, full at the cool end; all-off captures go in after at most
+`bracket_every` lit steps. Then the hold-outs with their own brackets, all
+four at full and middle again (drift end), and a last all-off. No run of
+all-off or dark steps lasts longer than `dark_run_limit_s` at
+`step_estimate_s` each without a bulb at full.
+
+The 16 hold-outs (two or more bulbs on, none fitted): den_lighting's normal
+scene from the snapshot, as its arrival turns it on (each bulb on at its
+snapshot level and temperature); its gaming scene (all four at
+`gaming_level`, each at its own warmest); all four at full and middle; all
+four at full, front warm and rear cool; and `random_holdouts` seeded random
+scenes: each bulb on with `holdout_on_probability`, at a level drawn
+log-uniform from `holdout_level_low` to `holdout_level_high` that is not a
+fitted level, and a temperature uniform in mired that was not captured. The
+first random scene has all four on at levels near full, so at least
+`near_full_holdouts` are near full combined output.
+
+## The fit, the prediction and the score
+
+D(b, t) is the all-off reading, linear in time between brackets and held
+flat outside them. E = reading − D. B_c(b, k) is bulb c alone at full at
+temperature k. g_c(u) is the median over signal-rich blocks of E / B_c(b,
+k_mid) at each dimming level, made monotone by pool-adjacent-violators, with
+g(0) = 0 and g(full) = 1, linear in u between levels. A pair whose curves
+agree within `shared_curve_percent` from `shared_curve_from_level` up shares
+their mean curve. B_c(b, k) between captured temperatures is linear in mired
+and clamped outside. The prediction is Ê(b) = Σ g_c(u_c) · B_c(b, k_c) over
+the bulbs that are on.
+
+For each hold-out and included, unflagged block, the error is |Ê − E| / E.
+Pairs with E below `noise_floor_multiple` times the block's all-off noise
+are excluded and counted. The gate passes when the pooled median is at most
+`gate_median_percent` and the pooled p90 at most `gate_p90_percent`, with
+percentiles by linear interpolation as in den-take's CHECK-V1. Nothing else
+enters the verdict.

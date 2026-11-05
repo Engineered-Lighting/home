@@ -61,6 +61,8 @@ def read_take(folder):
         raise Refused("take_unreadable", f"take.json schema is not {TAKE_SCHEMA}")
     if not take.get("cues") or take.get("ended_unix") is None:
         raise Refused("take_unreadable", "take.json was never finished; take.py stopped before saving")
+    if not _finite(take["ended_unix"]):
+        raise Refused("take_unreadable", "take.json's ended_unix is not a number; take.py writes one, so it was edited")
     if not frames or [f["n"] for f in frames] != list(range(1, len(frames) + 1)):
         raise Refused("take_unreadable", "frames.csv frame numbers are not 1, 2, 3, ...")
     if not all(FRAME_FILE.fullmatch(f["file"]) for f in frames):

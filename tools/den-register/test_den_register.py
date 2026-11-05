@@ -558,6 +558,20 @@ class FitTests(Base):
         code, report = s.fit()
         self.assertEqual(reasons(report), ["frame_depth_different_times"])
 
+    def test_a_take_whose_end_time_is_not_a_number_is_refused_by_name(self):
+        for value in ("2027-01-15", True, None, float("nan"), [1]):
+            with self.subTest(value=value):
+                self.tearDown()
+                self.setUp()
+                s = Scene(self)
+                s.click_all()
+                path = s.take / "take.json"
+                path.write_text(json.dumps(dict(json.loads(path.read_text(encoding="utf-8")), ended_unix=value)),
+                                encoding="utf-8")
+                code, report = s.fit()
+                self.assertEqual((code, reasons(report)), (1, ["take_unreadable"]), s.out)
+                self.assertFalse((s.work / "room-model.jsonl").exists())
+
     def test_open_slots_refuse_a_scored_fit(self):
         s = Scene(self, m=method.load())
         s.click_all()
@@ -997,6 +1011,50 @@ class MountTests(Base):
                     (s.work / "worksheet.json").write_text(json.dumps(sheet), encoding="utf-8")
                     code, report, text = self.check(s, later.take)
                     self.assertEqual((code, report["result"]), (code_wanted, expected), text)
+
+    def test_a_later_take_whose_end_time_is_not_a_number_is_refused_by_name(self):
+        s, fitted = self.furnished()
+        later = self.later_in_the_room()
+        later.click_all()
+        path = later.take / "take.json"
+        path.write_text(json.dumps(dict(json.loads(path.read_text(encoding="utf-8")), ended_unix="2027-01-15")),
+                        encoding="utf-8")
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"], report["reason"]), (1, "refused", "take_unreadable"), text)
+        self.assertNotIn("CONFIRMED", text)
+        self.assertEqual(len(s.room_models()), 1)
+
+    def rewrite_entry(self, s, change):
+        path = s.work / "room-model.jsonl"
+        model = json.loads(path.read_text(encoding="utf-8"))
+        change(model["cameras"][0])
+        path.write_text(json.dumps(model) + "\n", encoding="utf-8")
+
+    def test_an_entry_without_a_usable_mount_record_is_refused_by_name(self):
+        changes = {"no end time": lambda e: e["mount"].pop("take_ended_unix"),
+                   "text end time": lambda e: e["mount"].update(take_ended_unix="2027-01-15"),
+                   "no marks": lambda e: e["mount"].pop("marks"),
+                   "too few marks": lambda e: e["mount"].update(marks=e["mount"]["marks"][:4]),
+                   "a mark with no position": lambda e: e["mount"]["marks"][0].pop("camera_xyz_m"),
+                   "no signature": lambda e: e["mount"].pop("signature"),
+                   "no mount": lambda e: e.pop("mount")}
+        for name, change in changes.items():
+            with self.subTest(name):
+                self.tearDown()
+                self.setUp()
+                s, fitted = self.furnished()
+                later = self.later_in_the_room()
+                later.click_all()
+                self.rewrite_entry(s, change)
+                code, report, text = self.check(s, later.take)
+                self.assertEqual((code, report["result"], report["reason"]), (1, "refused", "transform_unknown"), text)
+
+    def test_a_refit_refuses_when_the_invalidating_check_has_no_readable_time(self):
+        s, fitted = self.furnished()
+        self.rewrite_entry(s, lambda e: e.update(invalidated={"reason": "mount_changed", "take_ended_unix": "soon"}))
+        s.click_all(["p1"], shift={"p1": (0.4, 0)})
+        code, report = s.fit()
+        self.assertEqual((code, reasons(report)), (1, ["mount_changed"]), s.out)
 
     def test_the_registration_take_cannot_confirm_itself(self):
         s, fitted = self.furnished()

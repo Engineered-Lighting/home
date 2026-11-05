@@ -259,7 +259,7 @@ def evaluate(sheet, clicks, take, row, bundle, intrinsics, m, room_models, calib
     for revision in room_models:
         for entry in revision.get("cameras") or []:
             gone = entry.get("invalidated") if entry.get("camera_id") == sheet["camera_id"] else None
-            if gone and take.get("ended_unix", 0) <= gone.get("take_ended_unix", 0):
+            if gone and not (scene._finite(gone.get("take_ended_unix")) and take["ended_unix"] > gone["take_ended_unix"]):
                 refuse("mount_changed", f"this take was recorded before the mount check on take {gone.get('take')} "
                                         f"found {sheet['camera_id']} moved; record a new take")
                 break

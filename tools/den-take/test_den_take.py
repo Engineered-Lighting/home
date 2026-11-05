@@ -631,6 +631,19 @@ class TakeScriptTests(Workspace):
         self.assertEqual((code, report["verdict"]), (1, "FAIL"))
         self.assertIn("B1_complete", report["failures"])
 
+    def test_take_json_never_finished_is_refused_as_such(self):
+        args, writers = self.args(self.camera()), []
+        self.addCleanup(lambda: [writer.close() for writer in writers])  # before the folder is removed
+
+        def power_cut(camera, writer, *rest):  # take.py dies right after its first take.json write
+            writers.append(writer)
+            raise SystemExit("synthetic power cut")
+        with mock.patch.object(take, "Poller", power_cut), self.assertRaises(SystemExit):
+            take.run(args, say=lambda t: None, settings=FAST)
+        self.assertEqual(json.loads((Path(args.out) / "take.json").read_text(encoding="utf-8"))["cues"], [])
+        with self.assertRaisesRegex(check.Refused, "^take.json was never finished; take.py stopped before saving$"):
+            run_check(Path(args.out))
+
     def test_no_new_frame_for_stall_s_stops_the_take(self):
         camera = self.camera()
         threading.Timer(1.5, camera.close).start()

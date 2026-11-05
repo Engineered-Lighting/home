@@ -265,8 +265,10 @@ def read_take(take_dir, m, out=None):
         cues = [(c["cue"], float(c["pc_mono_s"])) for c in take["cues"]]
     except (OSError, ValueError, KeyError, TypeError):
         raise Refused("take.json or frames.csv is missing or malformed") from None
-    if type(take) is not dict or take.get("schema") != TAKE_SCHEMA or not cues:
+    if type(take) is not dict or take.get("schema") != TAKE_SCHEMA:
         raise Refused(f"take.json schema is not {TAKE_SCHEMA}")
+    if not cues:  # take.py's first write, left by a crash or a power cut
+        raise Refused("take.json was never finished; take.py stopped before saving")
     method_sha = file_sha256(HERE / METHOD_FILE)
     if take.get("method") != {"file": METHOD_FILE, "sha256": method_sha}:
         raise Refused(f"take was recorded under a different CHECK file than {METHOD_FILE} "

@@ -1,6 +1,8 @@
 # N2 plan: the offline need test on one person
 
-Status: plan only. Nothing here is built or run. Written 2026-11-05.
+Status: plan only. Nothing here is built or run. Written 2026-11-05, revised
+the same day after an independent review (an onset already on, missed
+intervals, prompt-2's parser, the pacing rule, the prompt-2 trigger).
 
 ## Context
 
@@ -427,8 +429,9 @@ gate, one re-send. N2's ask step reuses that pattern; this names its interface.
    exists before this; the ask step refuses.
 2. **Development step**, development sessions only: ask with prompt-1, replay,
    and run `score.py --split development` (every metric with its interval, S,
-   the case × row table); then fill GATE-V1's slots. A prompt-2 is allowed here
-   and only here; if written, development is asked and fitted again under it.
+   d_on and w per onset with D_dev, the case × row table and its prompt-2
+   trigger); then fill GATE-V1's slots. A prompt-2 is allowed here and only
+   here; if written, development is asked and fitted again under it.
 3. **GATE-V1.md committed** with every slot filled, and pushed. Its commit time,
    before the first held-out ask line, shows the order.
 4. **The held-out set, opened once:** ask, replay, `check.py`, `score.py
@@ -480,7 +483,8 @@ gate, one re-send. N2's ask step reuses that pattern; this names its interface.
 | **Total, option 2** | | **about 2,900 lines** | **about 4 agent-days** |
 
 Tests are all synthetic. score.py: every window, mark, carried piece, onset
-tag, bound, verdict rule and refusal, and development mode never opening
+tag (`stayed_on` among them), missed interval, bound, verdict rule and
+refusal, D_dev, the prompt-2 trigger, and development mode never opening
 held-out labels. need v1: v0 unchanged, each transition, the exit clock, rise
 and fall, `check.py` OK on a v1 log. Ask step: the schedule and its resets,
 exact NV12 crops, the freeze refusal, no image or reply text in any log, and

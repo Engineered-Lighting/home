@@ -2,9 +2,10 @@
 
 This is rung R's check method, version 1. It was first committed alone, as the
 first commit on `claude/rung-r`, before any camera read. Before any take
-existed it was revised twice in place, along with the code, by the commits
+existed it was revised in place: twice along with the code, by the commits
 "Call a split or wide slate window unreadable, so take.py retries it" and "Let
-max_window_s rise with epsilon_s at commissioning". `check.py` reads every
+max_window_s rise with epsilon_s at commissioning", and then twice more, in
+this paragraph only, to record those revisions. `check.py` reads every
 number it uses from the one fenced block below. `take.py` reads the slate
 length from it, and `slate.html` repeats the four pattern numbers (a test keeps
 them equal). `take.json` and every `check-N.json` record the sha256 of this

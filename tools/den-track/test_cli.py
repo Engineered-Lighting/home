@@ -714,6 +714,47 @@ class OutputFolderTest(Base):
         self.assertEqual(code, 2)
         self.assertIn('REFUSED', text)
 
+    def test_a_file_powershell_wrote_is_a_refusal_not_a_crash(self):
+        """Exit 1 means the gate failed, so a file the tool cannot read must never exit 1."""
+        take = self.make_take()
+        text = ''.join(json.dumps(r) + '\n' for r in records.read_jsonl(take[0]))
+        wide, ansi = self.path('utf16.jsonl'), self.path('ansi.jsonl')
+        with open(wide, 'w', encoding='utf-16') as f:   # what PowerShell 5.1's > writes
+            f.write(text)
+        with open(ansi, 'wb') as f:                     # what Set-Content writes, with a character UTF-8 cannot read
+            f.write(text.encode('ascii') + b'{"note": "caf\xe9"}\n')
+        commands = [lambda path: ('hash', '--observations', path),
+                    lambda path: ('track', '--observations', path, '--out', self.path('track-of-it')),
+                    lambda path: ('score', '--take', path, take[1], take[2], '--out', self.path('score-of-it')),
+                    lambda path: ('score', '--take', take[0], take[1], path, '--out', self.path('score-of-truth'))]
+        for path, needle in ((wide, 'UTF-16'), (ansi, 'UTF-8')):
+            for command in commands:
+                with self.subTest(file=needle, command=command(path)[0]):
+                    code, out = cli(*command(path))
+                    self.assertEqual(code, 2, out)
+                    self.assertIn('REFUSED', out)
+                    self.assertIn(needle, out)
+                    self.assertFalse(os.path.exists(self.path('score-of-it', 'score.json')))
+
+    def test_a_method_file_powershell_wrote_is_a_refusal_not_a_crash(self):
+        path = self.path('METHOD-wide.md')
+        with open(method.METHOD_PATH, encoding='utf-8') as f:
+            text = f.read()
+        with open(path, 'w', encoding='utf-16') as f:
+            f.write(text)
+        code, out = cli('--method', path, 'slots')
+        self.assertEqual(code, 2, out)
+        self.assertIn('UTF-16', out)
+
+    def test_an_unexpected_error_never_reads_as_the_gate_failing(self):
+        take = self.make_take()
+        rows = records.read_jsonl(take[0])
+        rows[0].pop('obs_id')
+        records.write_jsonl(take[0], rows)
+        code, out = cli(*self.score_args([take]))
+        self.assertEqual(code, 2, out)
+        self.assertIn('REFUSED', out)
+
     def test_two_takes_may_not_share_a_name(self):
         take = self.make_take()
         code, text = cli(*self.score_args([take, take]))

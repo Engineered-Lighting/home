@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import sys
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -38,8 +39,7 @@ class Refused(Exception):
 
 def text_sha256(path):
     """Over the file's text, so CRLF and LF hash alike."""
-    with open(path, encoding='utf-8-sig', newline=None) as f:
-        return 'sha256:' + hashlib.sha256(f.read().encode('utf-8')).hexdigest()
+    return 'sha256:' + hashlib.sha256(records.read_text(path).encode('utf-8')).hexdigest()
 
 
 def inside_private_risk(path):
@@ -198,8 +198,7 @@ def check_scored(method, takes, report):
         if not os.path.exists(run_path):
             problems.append('%s: no %s beside its tracks' % (take['name'], TRACK_RUN_FILE))
             continue
-        with open(run_path, encoding='utf-8-sig') as f:
-            run = json.load(f)
+        run = json.loads(records.read_text(run_path))
         if run.get('method', {}).get('fingerprint') != method.fingerprint:
             problems.append('%s: its tracks were made under another method; run track again' % take['name'])
         if run.get('method', {}).get('code_fingerprint') != method.code_fingerprint:
@@ -450,6 +449,10 @@ def main(argv=None):
     except (Refused, method_mod.MethodError, records.RecordError, truth_mod.TruthError, score_mod.ScoreError,
             OSError) as e:
         print('REFUSED: %s' % e, file=sys.stderr)
+        return EXIT_REFUSED
+    except Exception as e:      # exit 1 means the gate failed, so a crash must not end that way
+        traceback.print_exc()
+        print('REFUSED: unexpected %s: %s' % (type(e).__name__, e), file=sys.stderr)
         return EXIT_REFUSED
 
 

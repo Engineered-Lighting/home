@@ -28,8 +28,11 @@ class MethodError(Exception):
 
 
 def read_block(path=METHOD_PATH):
-    with open(path, encoding='utf-8-sig', newline=None) as f:   # universal newlines: CRLF == LF
-        lines = f.read().split('\n')
+    try:
+        with open(path, encoding='utf-8-sig', newline=None) as f:   # universal newlines: CRLF == LF
+            lines = f.read().split('\n')
+    except UnicodeDecodeError:
+        raise MethodError('%s is not UTF-8 (PowerShell 5.1 can write UTF-16 or ANSI): save it as UTF-8' % path)
     starts = [i for i, line in enumerate(lines) if line.strip() == FENCE]
     if len(starts) != 1:
         raise MethodError('%s must hold exactly one "%s" block, found %d' % (path, FENCE, len(starts)))

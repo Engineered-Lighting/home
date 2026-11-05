@@ -24,24 +24,32 @@ class RecordError(Exception):
     pass
 
 
-def read_jsonl(path):
+def read_text(path):
+    """A file's text with LF line ends, from UTF-8 with or without a BOM. Anything else is refused."""
     with open(path, 'rb') as f:
-        head = f.read(2)
-    if head in UTF16_BOMS:
+        raw = f.read()
+    if raw[:2] in UTF16_BOMS:
         raise RecordError("%s is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8" % path)
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        raise RecordError("%s is not UTF-8 (PowerShell 5.1's Set-Content writes ANSI): save it as UTF-8" % path)
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
+def read_jsonl(path):
     out = []
-    with open(path, encoding='utf-8-sig', newline=None) as f:
-        for n, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError as e:
-                raise RecordError('%s line %d: not JSON (%s)' % (path, n, e))
-            if not isinstance(rec, dict):
-                raise RecordError('%s line %d: not a JSON object' % (path, n))
-            out.append(rec)
+    for n, line in enumerate(read_text(path).split('\n'), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError as e:
+            raise RecordError('%s line %d: not JSON (%s)' % (path, n, e))
+        if not isinstance(rec, dict):
+            raise RecordError('%s line %d: not a JSON object' % (path, n))
+        out.append(rec)
     return out
 
 

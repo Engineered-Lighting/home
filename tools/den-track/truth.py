@@ -3,10 +3,16 @@
 JSON Lines, UTF-8, one take per file. The first line is the header; then come
 frames and crossings, in any order:
 
-    {"version": "den-track-truth/1", "kind": "header", "take": "2026-11-10-1", "people": ["A", "B"]}
+    {"version": "den-track-truth/1", "kind": "header", "take": "2026-11-10-1", "people": ["A", "B"],
+     "labeller": "owner", "blind": true, "observations_sha256": "sha256:..."}
     {"kind": "frame", "capture_ts": 1793066610.42, "labels": {"o-den-oak-1793066610420-0": "A", "o-den-oak-1793066610420-1": null}}
     {"kind": "crossing", "crossing_id": "c01", "type": "crossing", "interval": [1793066608.0, 1793066611.5]}
 
+- The header says how the labels were made, and a scored run refuses a file without
+  it. `labeller` is `owner`, one capital letter, or `synthetic`, never a name. `blind`
+  is true if the labeller had seen no system output: self-declared, so a scored run can
+  only refuse a false one. `observations_sha256` is what `den_track.py hash` prints for
+  the observations labelled, so the labels are known to belong to them.
 - A frame's `labels` give, per observation at that capture time, the true person
   or null for "not a person". Rung 2 writes one observation per detector box, so a
   person normally has one; a duplicate box of one person gets the same letter.
@@ -22,6 +28,7 @@ import records
 VERSION = 'den-track-truth/1'
 CROSSING_TYPES = ('crossing', 'crossing_occluded', 'occlusion', 'near_pass', 'door')
 PERSON = re.compile(r'^[A-Z]$')
+LABELLER = re.compile(r'^(owner|synthetic|[A-Z])$')
 
 
 class TruthError(Exception):
@@ -29,8 +36,10 @@ class TruthError(Exception):
 
 
 class Truth:
-    def __init__(self, take, people, labels, frame_ts, crossings):
+    def __init__(self, take, people, labels, frame_ts, crossings, labeller=None, blind=None, observations_sha256=None):
         self.take, self.people = take, people
+        self.labeller, self.blind = labeller, blind     # None: the file does not say
+        self.observations_sha256 = observations_sha256
         self.labels = labels            # obs_id -> person or None
         self.frame_ts = frame_ts        # obs_id -> the frame's capture_ts
         self.crossings = crossings      # [{'crossing_id', 'type', 'interval'}]
@@ -49,6 +58,13 @@ def parse(lines, source='truth'):
         if not isinstance(person, str) or not PERSON.match(person):
             raise TruthError('%s: person %r is not one capital letter (people are A and B, never names)'
                              % (source, person))
+    labeller, blind, obs_hash = head.get('labeller'), head.get('blind'), head.get('observations_sha256')
+    if labeller is not None and not (isinstance(labeller, str) and LABELLER.match(labeller)):
+        raise TruthError('%s: labeller %r is not owner, synthetic or one capital letter (never a name)' % (source, labeller))
+    if blind is not None and not isinstance(blind, bool):
+        raise TruthError('%s: blind must be true or false' % source)
+    if obs_hash is not None and not (isinstance(obs_hash, str) and obs_hash.startswith('sha256:')):
+        raise TruthError('%s: observations_sha256 must be what den_track.py hash prints' % source)
     labels, frame_ts, crossings = {}, {}, []
     ids = set()
     for rec in lines[1:]:
@@ -77,16 +93,20 @@ def parse(lines, source='truth'):
         else:
             raise TruthError('%s: a line has kind %r (frame or crossing, after the header)' % (source, kind))
     crossings.sort(key=lambda c: (c['interval'][0], c['crossing_id']))
-    return Truth(head.get('take'), people, labels, frame_ts, crossings)
+    return Truth(head.get('take'), people, labels, frame_ts, crossings, labeller, blind, obs_hash)
 
 
 def read(path):
     return parse(records.read_jsonl(path), path)
 
 
-def write(path, take, people, frames, crossings):
+def write(path, take, people, frames, crossings, labeller=None, blind=None, observations_sha256=None):
     """frames: [(capture_ts, {obs_id: person})]; crossings: [{crossing_id, type, interval}]."""
-    lines = [{'version': VERSION, 'kind': 'header', 'take': take, 'people': list(people)}]
+    head = {'version': VERSION, 'kind': 'header', 'take': take, 'people': list(people)}
+    for key, value in (('labeller', labeller), ('blind', blind), ('observations_sha256', observations_sha256)):
+        if value is not None:
+            head[key] = value
+    lines = [head]
     lines += [{'kind': 'frame', 'capture_ts': ts, 'labels': labels} for ts, labels in frames]
     lines += [dict(c, kind='crossing') for c in crossings]
     records.write_jsonl(path, lines)

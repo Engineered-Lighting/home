@@ -114,9 +114,10 @@ How the command line behaves:
   METHOD.md says what each field holds and which stay empty.
 - **Inputs.** `observation` lines with the schema's fields. Other keys are ignored,
   so a `version` or rung 2's `freshness` makes no difference.
-- **`den-track-truth/1`.** See `truth.py`. One line per frame gives each observation's
-  true person (one capital letter, or null for "not a person"), and one line per
-  crossing gives the owner's mark.
+- **`den-track-truth/1`.** See `truth.py`. A header says who labelled, whether blind, and
+  which observations; one line per frame gives each observation's true person (one
+  capital letter, or null for "not a person"), and one line per crossing gives the
+  owner's mark.
 - **`crossings.jsonl`.** `score` also writes the crossings as rung 5's gate reads them,
   `{crossing_id, track_ids, interval}`, for its "`association_safe` false through
   every annotated crossing" check. A one-person occlusion or a door swap is not included.
@@ -163,7 +164,13 @@ python -B tools\den-take\take.py --script free --out C:\den-takes\crossings-1\ta
 with a delayed re-mark of a sample (`owner-choices.md` item 2). With rung 4's labeller,
 mark each observation's person and each crossing's `interval`: from when the two come
 within arm's reach, or one goes out of sight, until they are apart again or back in
-view. It writes `truth.jsonl` in the take's folder.
+view. It writes `truth.jsonl` in the take's folder, and its header says `"labeller":
+"owner"`, `"blind": true` and the `observations_sha256` that this prints; a scored run
+refuses a file without them:
+
+```powershell
+python -B tools\den-track\den_track.py hash --observations C:\den-takes\crossings-1\take-01\observe-1\observations.jsonl
+```
 
 **6. Track and score.** Once per take:
 
@@ -227,6 +234,9 @@ the value.
 5. **Crossing annotations** (rung 5 asks too). This tool reads `den-track-truth/1` and
    writes rung 5's `{crossing_id, track_ids, interval}` from it. Should rung 4's gold set
    adopt `den-track-truth/1`?
+6. **The delayed re-mark.** `owner-choices.md` item 2 asks for a delayed self re-mark of a
+   sample. `den-track-truth/1` has no place for it, and the report says nothing of it.
+   Where should the sample and its agreement live?
 
 ## What is deliberately not here
 

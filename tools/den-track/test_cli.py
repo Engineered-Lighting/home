@@ -71,6 +71,13 @@ class Base(unittest.TestCase):
             f.write('```json den-track-method\n%s\n```\n' % json.dumps(block, indent=2))
         return path
 
+    def small_method(self, name='METHOD-small.md', plan=None):
+        """A closed method that wants only two crossings, for tests about something else: quicker than twenty."""
+        def change(block):
+            block['scoring']['min_crossings'] = 2
+            block['scoring']['crossings_plan'] = {'crossing': 2} if plan is None else plan
+        return self.closed_method(name, change)
+
     def make_take(self, scene='clean_crossing', seed=0, noise='clean', meth=None, edit_observations=None):
         """Synth, then track. Returns [observations, tracks, truth] paths."""
         folder = self.path('takes', '%s-%d' % (scene, seed))
@@ -78,6 +85,9 @@ class Base(unittest.TestCase):
         self.assertEqual(code, 0, text)
         if edit_observations:
             edit_observations(os.path.join(folder, 'observations.jsonl'), os.path.join(folder, 'truth.jsonl'))
+            lines = records.read_jsonl(os.path.join(folder, 'truth.jsonl'))
+            lines[0]['observations_sha256'] = den_track.text_sha256(os.path.join(folder, 'observations.jsonl'))
+            records.write_jsonl(os.path.join(folder, 'truth.jsonl'), lines)
         run_folder = os.path.join(folder, 'track-1')
         args = ['--method', meth] if meth else []
         code, text = cli(*args, 'track', '--observations', os.path.join(folder, 'observations.jsonl'), '--out', run_folder)
@@ -168,9 +178,6 @@ class PracticeRunTest(Base):
 class ScoredRunTest(Base):
     def twenty(self, meth):
         return [self.make_take(seed=seed, meth=meth) for seed in range(20)]
-
-    def twenty_more(self, meth):
-        return [self.make_take(seed=seed, meth=meth) for seed in range(100, 120)]
 
     def assert_refused(self, args, needle):
         out = args[args.index('--out') + 1]
@@ -275,24 +282,24 @@ class ScoredRunTest(Base):
         self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'at least 20')
 
     def test_a_refusal_for_too_few_crossings_names_the_ones_left_out(self):
-        meth = self.closed_method()
-        takes = self.twenty(meth)[:19] + [self.one_person_take(50, meth)]
+        meth = self.small_method()
+        takes = [self.make_take(meth=meth), self.one_person_take(50, meth)]
         self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'clean_crossing-50/c1')
 
     def test_a_crossing_with_one_person_is_excluded_named_and_not_counted(self):
-        meth = self.closed_method()
-        takes = self.twenty(meth) + [self.one_person_take(50, meth)]
+        meth = self.small_method()
+        takes = [self.make_take(seed=seed, meth=meth) for seed in range(2)] + [self.one_person_take(50, meth)]
         code, text = cli(*self.score_args(takes, scored=True, meth=meth))
         self.assertEqual(code, 0, text)
         self.assertIn('EXCLUDED', text)
         self.assertIn('clean_crossing-50/c1', text)
         with open(self.path('score', 'score.json'), encoding='utf-8') as f:
             report = json.load(f)
-        self.assertEqual(report['crossings'], 20)
-        self.assertEqual(report['crossings_marked'], 21)
+        self.assertEqual(report['crossings'], 2)
+        self.assertEqual(report['crossings_marked'], 3)
         self.assertEqual(report['crossings_excluded'], [{'take': 'clean_crossing-50', 'id': 'c1', 'people_scored': ['A'],
                                                          'because': 'fewer than 2 people scored'}])
-        self.assertAlmostEqual(report['silent_swap_rate_upper_95'], 1 - 0.05 ** (1 / 20))
+        self.assertAlmostEqual(report['silent_swap_rate_upper_95'], 1 - 0.05 ** (1 / 2))
 
     def test_a_take_cut_short_at_the_contact_is_excluded(self):
         def cut(obs_path, truth_path):
@@ -303,16 +310,17 @@ class ScoredRunTest(Base):
             records.write_jsonl(truth_path, kept)
             records.write_jsonl(obs_path, [o for o in records.read_jsonl(obs_path) if o['obs_id'] not in gone])
 
-        meth = self.closed_method()
+        meth = self.small_method()
         short = self.make_take(seed=50, meth=meth, edit_observations=cut)
-        self.assert_refused(self.score_args(self.twenty(meth)[:19] + [short], scored=True, meth=meth), 'clean_crossing-50/c1')
-        code, text = cli(*self.score_args(self.twenty_more(meth) + [short], 'score2', scored=True, meth=meth))
+        good = [self.make_take(seed=seed, meth=meth) for seed in range(2)]
+        self.assert_refused(self.score_args(good[:1] + [short], scored=True, meth=meth), 'clean_crossing-50/c1')
+        code, text = cli(*self.score_args(good + [short], 'score2', scored=True, meth=meth))
         self.assertEqual(code, 0, text)
         self.assertIn('nobody scored after the mark', text)
 
     def test_a_crossing_that_holds_no_observation_is_excluded_named_and_not_counted(self):
-        meth = self.closed_method()
-        takes = self.twenty(meth)
+        meth = self.small_method()
+        takes = [self.make_take(seed=seed, meth=meth) for seed in range(2)]
         lines = records.read_jsonl(takes[0][2])
         lines.append({'kind': 'crossing', 'crossing_id': 'empty', 'type': 'crossing', 'interval': [5.0, 6.0]})
         records.write_jsonl(takes[0][2], lines)
@@ -321,36 +329,40 @@ class ScoredRunTest(Base):
         self.assertIn('EXCLUDED', text)
         self.assertIn('clean_crossing-0/empty', text)
         with open(self.path('score', 'score.json'), encoding='utf-8') as f:
-            self.assertEqual(json.load(f)['crossings'], 20)
+            self.assertEqual(json.load(f)['crossings'], 2)
 
-    def plan(self, plan, name='METHOD-plan.md'):
-        def change(block):
-            block['scoring']['crossings_plan'] = plan
-        return self.closed_method(name, change)
+    def two_takes(self, meth):
+        return [self.make_take(seed=seed, meth=meth) for seed in range(2)]
 
     def test_refused_when_a_kind_falls_short_of_the_plan(self):
-        meth = self.plan({'crossing': 19, 'door': 1})
-        self.assert_refused(self.score_args(self.twenty(meth), scored=True, meth=meth), 'the plan wants 1 door, and 0 count')
+        meth = self.small_method(plan={'crossing': 1, 'door': 1})
+        self.assert_refused(self.score_args(self.two_takes(meth), scored=True, meth=meth), 'the plan wants 1 door, and 0 count')
 
     def test_an_excluded_crossing_does_not_fill_the_plan(self):
-        meth = self.plan({'crossing': 21})
-        takes = self.twenty(meth) + [self.one_person_take(50, meth)]
-        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'the plan wants 21 crossing, and 20 count')
+        meth = self.small_method(plan={'crossing': 3})
+        takes = self.two_takes(meth) + [self.one_person_take(50, meth)]
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'the plan wants 3 crossing, and 2 count')
 
     def test_more_than_planned_passes_and_the_report_says_what_counted(self):
-        meth = self.plan({'crossing': 15})
-        code, text = cli(*self.score_args(self.twenty(meth), scored=True, meth=meth))
+        meth = self.small_method(plan={'crossing': 1})
+        code, text = cli(*self.score_args(self.two_takes(meth), scored=True, meth=meth))
         self.assertEqual(code, 0, text)
         with open(self.path('score', 'score.json'), encoding='utf-8') as f:
             report = json.load(f)
-        self.assertEqual(report['plan'], {'crossing': {'planned': 15, 'counted': 20}})
+        self.assertEqual(report['plan'], {'crossing': {'planned': 1, 'counted': 2}})
 
     def test_a_plan_that_checks_nothing_is_refused(self):
-        meth = self.closed_method()
-        takes = self.twenty(meth)
-        for n, plan in enumerate(({}, {'crossing': 0}, {'dance': 20}, {'crossing': '20'}, [20], None)):
-            other = self.plan(plan, 'METHOD-bad-%d.md' % n)
+        meth = self.small_method()
+        takes = self.two_takes(meth)
+        for n, plan in enumerate(({}, {'crossing': 0}, {'dance': 20}, {'crossing': '20'}, [20])):
+            other = self.small_method('METHOD-bad-%d.md' % n, plan)
             self.assert_refused(self.score_args(takes, 'bad-%d' % n, scored=True, meth=other), 'crossings_plan')
+
+    def test_a_plan_closed_as_null_is_refused(self):
+        def change(block):
+            block['scoring']['crossings_plan'] = None
+        meth = self.closed_method('METHOD-null.md', change)
+        self.assert_refused(self.score_args([self.make_take(meth=meth)], scored=True, meth=meth), 'crossings_plan')
 
     def test_refused_when_two_crossings_overlap_once_padded(self):
         meth = self.closed_method()
@@ -368,15 +380,76 @@ class ScoredRunTest(Base):
         self.assert_refused(self.score_args(takes, scored=True, meth=meth), den_track.TRACK_RUN_FILE)
 
 
+class LabellingTest(Base):
+    """Owner choice 2: labelled alone, blind to system output, a single labeller reported."""
+
+    def setUp(self):
+        super().setUp()
+        self.meth = self.small_method()
+        self.takes = [self.make_take(seed=seed, meth=self.meth) for seed in range(2)]
+
+    def header(self, change, take=0):
+        lines = records.read_jsonl(self.takes[take][2])
+        change(lines[0])
+        records.write_jsonl(self.takes[take][2], lines)
+
+    def assert_refused(self, needle):
+        code, text = cli(*self.score_args(self.takes, scored=True, meth=self.meth))
+        self.assertEqual(code, 2, text)
+        self.assertIn(needle, text)
+        self.assertFalse(os.path.exists(self.path('score', 'score.json')))
+
+    def test_labels_made_after_seeing_the_tracker_are_refused(self):
+        self.header(lambda h: h.update(blind=False))
+        self.assert_refused('blind')
+
+    def test_a_truth_file_that_does_not_say_how_it_was_labelled_is_refused(self):
+        self.header(lambda h: h.pop('blind'))
+        self.assert_refused('blind')
+        self.header(lambda h: h.update(blind=True))
+        self.header(lambda h: h.pop('labeller'))
+        self.assert_refused('labeller')
+
+    def test_labels_for_other_observations_are_refused(self):
+        self.header(lambda h: h.update(observations_sha256='sha256:' + '0' * 64))
+        self.assert_refused('labels other observations')
+        self.header(lambda h: h.pop('observations_sha256'))
+        self.assert_refused('observations_sha256')
+
+    def test_two_labellers_are_refused(self):
+        self.header(lambda h: h.update(labeller='A'))
+        self.assert_refused('single labeller')
+
+    def test_the_report_says_what_the_truth_files_say_not_a_fixed_claim(self):
+        code, text = cli(*self.score_args(self.takes, scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertEqual(report['labelling'], {'labellers': ['synthetic'], 'takes': 2, 'declared_blind': 2})
+        self.assertEqual((report['takes'][0]['labeller'], report['takes'][0]['blind']), ('synthetic', True))
+
+    def test_a_practice_run_reports_a_truth_file_that_claims_nothing(self):
+        self.header(lambda h: (h.pop('blind'), h.pop('labeller')))
+        code, text = cli(*self.score_args(self.takes[:1]))
+        self.assertEqual(code, 0, text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['labelling'], {'labellers': [], 'takes': 1, 'declared_blind': 0})
+
+    def test_the_hash_command_prints_what_a_truth_file_names(self):
+        code, text = cli('hash', '--observations', self.takes[0][0])
+        self.assertEqual(code, 0, text)
+        self.assertEqual(text.strip(), records.read_jsonl(self.takes[0][2])[0]['observations_sha256'])
+
+
 class FreshTakesTest(Base):
     """A take that has been scored is used: looking again after a retune needs fresh takes (the ladder's rule)."""
 
     def setUp(self):
         super().setUp()
-        self.meth = self.closed_method()
+        self.meth = self.small_method()
 
     def takes(self, first=0, meth=None):
-        return [self.make_take(seed=seed, meth=meth or self.meth) for seed in range(first, first + 20)]
+        return [self.make_take(seed=seed, meth=meth or self.meth) for seed in range(first, first + 2)]
 
     def retrack(self, takes, name, meth=None):
         out = []
@@ -426,7 +499,10 @@ class FreshTakesTest(Base):
     def test_the_same_takes_under_a_changed_method_are_refused(self):
         takes = self.takes()
         self.score_once(takes)
-        other = self.closed_method('METHOD-other.md', lambda b: b['tracker'].update(accel_sigma=0.7))
+        def nudge(block):
+            block['scoring'].update(min_crossings=2, crossings_plan={'crossing': 2})
+            block['tracker']['accel_sigma'] = 0.7
+        other = self.closed_method('METHOD-other.md', nudge)
         self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2', other), 'score-2', scored=True, meth=other))
 
     def test_labels_changed_after_a_score_are_refused(self):

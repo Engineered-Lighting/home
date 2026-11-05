@@ -189,6 +189,13 @@ class TruthFormatTest(unittest.TestCase):
         self.assertEqual(t.frame_ts['o1'], 10.0)
         self.assertEqual(t.crossings[0]['interval'], [9.0, 11.0])
 
+    def test_reads_how_it_was_labelled_and_claims_nothing_when_silent(self):
+        lines = good_truth_lines()
+        self.assertEqual((truth.parse(lines).labeller, truth.parse(lines).blind), (None, None))
+        lines[0].update(labeller='owner', blind=True, observations_sha256='sha256:abc')
+        t = truth.parse(lines)
+        self.assertEqual((t.labeller, t.blind, t.observations_sha256), ('owner', True, 'sha256:abc'))
+
     def test_refuses(self):
         def broken(change):
             lines = good_truth_lines()
@@ -206,6 +213,9 @@ class TruthFormatTest(unittest.TestCase):
             'an unknown crossing type': lambda l: l[2].update(type='dance'),
             'a backward interval': lambda l: l[2].update(interval=[11.0, 9.0]),
             'an unknown line': lambda l: l.append({'kind': 'note'}),
+            'a name as the labeller': lambda l: l[0].update(labeller='Alice'),
+            'blind as a word': lambda l: l[0].update(blind='yes'),
+            'a hash that is not one': lambda l: l[0].update(observations_sha256=12),
         }
         for name, change in cases.items():
             with self.subTest(name):

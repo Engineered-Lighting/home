@@ -150,6 +150,10 @@ A scored run also refuses tracks made under another method or another version of
 code, changed files, unlabelled observations, fewer than `min_crossings` admitted
 crossings, admitted crossings of any kind short of `crossings_plan`, or crossings that
 overlap once padded. More than the plan is allowed, and the report shows the counts.
+It also refuses a truth file that does not name a labeller, say the labels were made
+blind to system output (`blind`, self-declared, so this catches only an honest no), and
+name the observations it labels (`observations_sha256`), and takes with more than one
+labeller. The report says what the truth files say.
 
 **A take is scored once.** Any `score`, practice or scored, shows results, so it notes
 what it looked at in `truth.score-runs.jsonl` beside the take's truth file: the method's

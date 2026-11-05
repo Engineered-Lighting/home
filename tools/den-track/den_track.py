@@ -5,6 +5,7 @@
     python -B tools\\den-track\\den_track.py practice
     python -B tools\\den-track\\den_track.py synth --scene near_pass --out <folder>
     python -B tools\\den-track\\den_track.py slots
+    python -B tools\\den-track\\den_track.py hash --observations <file>
 
 Exit codes: 0 written or passed, 1 the gate failed, 2 refused (nothing written).
 It reads and writes files on this PC and never contacts anything.
@@ -178,8 +179,20 @@ def check_scored(method, takes, report):
     except method_mod.MethodError as e:
         raise Refused(str(e))
     problems = []
+    labellers = sorted({take['truth'].labeller for take in takes if take['truth'].labeller})
+    if len(labellers) > 1:
+        problems.append('the labels come from %s, and the owner chose a single labeller' % ' and '.join(labellers))
     for take in takes:
         obs_path, tracks_path, _ = take['paths']
+        truth = take['truth']
+        if truth.labeller is None:
+            problems.append('%s: its truth file names no labeller' % take['name'])
+        if truth.blind is not True:
+            problems.append('%s: its truth file does not say the labels were made blind to system output' % take['name'])
+        if truth.observations_sha256 is None:
+            problems.append('%s: its truth file does not name its observations_sha256' % take['name'])
+        elif truth.observations_sha256 != text_sha256(obs_path):
+            problems.append('%s: its truth file labels other observations' % take['name'])
         run_path = os.path.join(os.path.dirname(tracks_path), TRACK_RUN_FILE)
         if not os.path.exists(run_path):
             problems.append('%s: no %s beside its tracks' % (take['name'], TRACK_RUN_FILE))
@@ -261,13 +274,18 @@ def cmd_score(args):
     note_score(method, takes)
     crossing_lines = body.pop('crossing_lines')
     report = dict(body, tool='den-track', command='score', scored=bool(args.scored), method=method_stamp(method),
-                  labelling='a single labeller, the owner, blind to system output',
-                  takes=[{'name': t['name'], 'observations_sha256': text_sha256(t['paths'][0]),
+                  labelling={'labellers': sorted({t['truth'].labeller for t in takes if t['truth'].labeller}),
+                             'takes': len(takes), 'declared_blind': sum(1 for t in takes if t['truth'].blind is True)},
+                  takes=[{'name': t['name'], 'labeller': t['truth'].labeller, 'blind': t['truth'].blind,
+                          'observations_sha256': text_sha256(t['paths'][0]),
                           'tracks_sha256': text_sha256(t['paths'][1]), 'truth_sha256': text_sha256(t['paths'][2])}
                          for t in takes])
     write_json(os.path.join(args.out, SCORE_FILE), report)
     records.write_jsonl(os.path.join(args.out, CROSSINGS_FILE), crossing_lines)
     print_report(report)
+    print('labelled by %s; %d of %d takes declared blind to system output'
+          % (', '.join(report['labelling']['labellers']) or 'nobody named', report['labelling']['declared_blind'],
+             report['labelling']['takes']))
     gate = report['gate']
     print('wrote %s' % os.path.join(args.out, SCORE_FILE))
     if not args.scored:
@@ -299,8 +317,10 @@ def synth_room():
 def cmd_synth(args):
     check_out_folder(args.out, ('observations.jsonl', 'truth.jsonl'))
     observations, truth, frames, crossings = scene_take(args.scene, args.seed, args.noise, args.fps)
-    records.write_jsonl(os.path.join(args.out, 'observations.jsonl'), observations)
-    truth_mod.write(os.path.join(args.out, 'truth.jsonl'), truth.take, truth.people, frames, crossings)
+    obs_path = os.path.join(args.out, 'observations.jsonl')
+    records.write_jsonl(obs_path, observations)
+    truth_mod.write(os.path.join(args.out, 'truth.jsonl'), truth.take, truth.people, frames, crossings,
+                    labeller='synthetic', blind=True, observations_sha256=text_sha256(obs_path))
     print('wrote %d synthetic observations and their truth to %s' % (len(observations), args.out))
     return EXIT_OK
 
@@ -366,6 +386,11 @@ def cmd_slots(args):
     return EXIT_OK
 
 
+def cmd_hash(args):
+    print(text_sha256(args.observations))
+    return EXIT_OK
+
+
 def parser():
     ap = argparse.ArgumentParser(prog='den_track.py', description='Rung 3: Tracks from geometry, and E2\'s scorer.')
     ap.add_argument('--method', help='another METHOD.md; the default is the one beside this file')
@@ -401,6 +426,10 @@ def parser():
 
     p = sub.add_parser('slots', help='list the open slots')
     p.set_defaults(fn=cmd_slots)
+
+    p = sub.add_parser('hash', help='print the observations_sha256 a truth file names')
+    p.add_argument('--observations', required=True)
+    p.set_defaults(fn=cmd_hash)
     return ap
 
 

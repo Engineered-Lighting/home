@@ -23,10 +23,12 @@ and the lost share is kept as named rivals (swapped with whom, or a newcomer).
 The record reports it through `association`. Status is `ambiguous` while
 confidence is below `ambiguous_below` or another confirmed track is within reach
 (`crossing_radius_m`, wider while either has been unseen), and stays so until the
-track has been seen with no doubt for `reconfirm_s`. Nothing in geometry can show
-that a mix-up did not happen, so the return to `confident` does not claim that it
-did not: it restarts the claim, from `since_ts`. The track is one person from then
-on, and whether that is the person from before the ambiguity is not stated.
+track has been seen with no doubt for `reconfirm_s`. A new track starts that way,
+since its first sightings can be two people and it has no history to say otherwise,
+and the line that confirms it claims nothing. Nothing in geometry can show that a
+mix-up did not happen, so the return to `confident` does not claim that it did not:
+it restarts the claim, from `since_ts`. The track is one person from then on, and
+whether that is the person from before the ambiguity is not stated.
 """
 import math
 
@@ -44,9 +46,9 @@ class Track:
         self.confirmed = False
         self.confidence = 1.0
         self.rivals = {}            # other track's id, or None for a newcomer -> probability
-        self.ambiguous = False
+        self.ambiguous = True       # a new track has no history to be sure of
         self.since_ts = t
-        self.last_doubt = None      # the last frame with any doubt about this track
+        self.last_doubt = t         # the last frame with any doubt about this track
         self.near = []              # ids of confirmed tracks within crossing_radius_m this frame
         self.heading = None         # (deg, sd_deg)
         self.heading_as_of = None
@@ -153,7 +155,7 @@ class TrackerCore:
     def _status(self, tr, t, seen):
         p = self.p
         quiet = tr.last_doubt is None or t - tr.last_doubt >= p['reconfirm_s']
-        if seen and quiet and not tr.near and (tr.ambiguous or tr.confidence < 1.0):
+        if seen and quiet and tr.confirmed and not tr.near and (tr.ambiguous or tr.confidence < 1.0):
             tr.confidence, tr.rivals, tr.last_doubt = 1.0, {}, None
             if tr.ambiguous:
                 tr.ambiguous, tr.since_ts = False, t
@@ -232,8 +234,6 @@ class TrackerCore:
                 x, P = kalman.initial(det['xy'], det['R'], p['new_track_speed_sigma'])
                 born = Track(self.next_id, x, P, t, det['obs_ids'])
                 born.near = [o.id for o in confirmed if self._within_reach(born, o, t)]
-                if born.near:
-                    born.ambiguous, born.last_doubt = True, t
                 self._accept_heading(born, det, t)
                 self.tracks.append(born)
                 self.next_id += 1

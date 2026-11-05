@@ -316,6 +316,18 @@ def touching_crossing(rng):
     return [a, b], [{'id': 'c1', 'kind': 'crossing', 'start': s, 'end': e}]
 
 
+def close_at_start(rng):
+    """A and B stand close as the take starts, part, and cross later. When they are closest, no track has any history."""
+    gap = rng.uniform(0.2, 0.8)
+    y = rng.uniform(2.2, 3.2)
+    a = Walker('A', [(-gap / 2, y, 1.5), (-1.9, y - 0.25, 0.5), (1.9, y - 0.25, 0)], rng.uniform(0.8, 1.3))
+    b = Walker('B', [(gap / 2, y, 1.5), (1.9, y + 0.25, 0.5), (-1.9, y + 0.25, 0)], rng.uniform(0.8, 1.3))
+    times = [k / 20 for k in range(int(max(a.t_end, b.t_end) * 20) + 1)]
+    parted = next(t for t in times if math.dist(a.at(t), b.at(t)) > 2.5)
+    close = [t for t in times if t > parted and math.dist(a.at(t), b.at(t)) < 1.0]
+    return [a, b], [{'id': 'c1', 'kind': 'crossing', 'start': close[0], 'end': close[-1]}]
+
+
 def armchair_occlusion(rng):
     """A walks behind the armchair and out again; B stands by the window."""
     speed = rng.uniform(0.7, 1.1)
@@ -370,6 +382,7 @@ SCENES = {
     'clean_crossing': clean_crossing,
     'close_crossing': close_crossing,
     'touching_crossing': touching_crossing,
+    'close_at_start': close_at_start,
     'armchair_occlusion': armchair_occlusion,
     'crossing_behind_armchair': crossing_behind_armchair,
     'near_pass': near_pass,

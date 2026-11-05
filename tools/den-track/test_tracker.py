@@ -1,5 +1,6 @@
 """The tracker on scripted detections and synthetic scenes. Nothing here is real."""
 import json
+import math
 import random
 import unittest
 
@@ -170,6 +171,83 @@ class CrossingTest(unittest.TestCase):
         self.assertEqual(lines[-1][1][1].confidence, 1.0)
 
 
+class NewTrackTest(unittest.TestCase):
+    """A new track has no history, and two sightings can be two people: it claims nothing until it has been seen a while."""
+
+    def test_a_new_track_reads_ambiguous_until_it_has_been_seen_for_reconfirm_s(self):
+        core = tracker_core.TrackerCore(params())
+        lines = walk(core, 100.0, 0.25, [[(0.0, 0.0)]] * 12)
+        settled = [k for k, line in enumerate(lines) if not line[1][1].ambiguous]
+        self.assertEqual(settled[0] * 0.25, core.p['reconfirm_s'])
+        self.assertEqual(settled, list(range(settled[0], 12)))
+        self.assertEqual(lines[settled[0] - 1][1][1].since_ts, 100.0)
+        self.assertEqual(lines[settled[0]][1][1].since_ts, 100.0 + settled[0] * 0.25, 'the claim starts when it is made')
+
+    def test_the_line_that_confirms_a_track_claims_nothing_whatever_reconfirm_s_is(self):
+        core = tracker_core.TrackerCore(dict(params(), reconfirm_s=0.0))
+        lines = walk(core, 100.0, 0.25, [[(0.0, 0.0)]] * 4)
+        self.assertEqual([line[1][0] for line in lines[:3]], ['tentative', 'confirmed', 'confirmed'])
+        self.assertEqual([line[1][1].ambiguous for line in lines[:3]], [True, True, False])
+
+    def test_one_person_on_the_first_frame_and_another_on_the_next_read_as_doubt(self):
+        """A is missed on the next frame and B on the first: the only track takes B, on the line that confirms it."""
+        core = tracker_core.TrackerCore(params())
+        core.step(100.0, [det('a', 0.0, 0.0)])
+        (track, state), = core.step(100.25, [det('b', 0.7, 0.7)])
+        self.assertEqual((state, track.obs_ids), ('confirmed', ['b']))
+        self.assertTrue(track.ambiguous)
+
+    def test_two_new_tracks_side_by_side_claim_nothing_on_the_line_that_confirms_them(self):
+        core = tracker_core.TrackerCore(params())
+        lines = walk(core, 100.0, 0.25, [[(0.0, 2.0), (0.45, 2.0)]] * 3)
+        self.assertEqual([line[1][0] for line in lines], ['tentative', 'confirmed', 'confirmed'])
+        for line in lines:
+            self.assertEqual((line[1][1].ambiguous, line[2][1].ambiguous), (True, True))
+
+    def test_a_person_far_from_anyone_is_named_no_rival_while_settling(self):
+        core = tracker_core.TrackerCore(params())
+        for k in range(8):
+            core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
+        rows = core.step(102.0, [det('a8', 0.0, 0.0), det('far', 4.0, 0.0)])
+        far = {tr.id: tr for tr, _ in rows}[2]
+        self.assertTrue(far.ambiguous)
+        self.assertEqual([h['hypothesis'] for h in records.track_record(far, 'tentative')['association']['hypotheses']], ['kept'])
+
+    def test_a_phantom_beside_a_settled_person_casts_no_doubt_on_them(self):
+        core = tracker_core.TrackerCore(params())
+        for k in range(8):
+            core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
+        rows = core.step(102.0, [det('a8', 0.0, 0.0), det('phantom', 1.0, 0.0)])     # in reach, and out of the person's gate
+        by_id = {tr.id: tr for tr, _ in rows}
+        self.assertEqual((by_id[1].near, by_id[2].near), ([], [1]))
+        self.assertFalse(by_id[1].ambiguous)
+        self.assertTrue(by_id[2].ambiguous)
+
+    def test_two_people_close_when_a_take_starts_do_not_read_as_a_silent_swap(self):
+        for noise in ('typical', 'noisy'):
+            for seed in range(60):
+                with self.subTest(noise=noise, seed=seed):
+                    run = run_scene('close_at_start', seed=seed, noise=noise)
+                    start, _ = run['truth'].crossings[0]['interval']
+                    self.assertEqual([s for s in scorer_core.switches(run['links']) if s['silent'] and s['time'] < start], [])
+
+    def test_a_scene_that_starts_close_is_a_crossing_later_with_both_people_apart_between(self):
+        for seed in range(10):
+            data = synth.scenario('close_at_start', seed=seed, noise='clean')
+            start = data['events'][0]['start']
+            before = [f['truth_xy'] for f in data['frames'] if f['t'] < start and 'A' in f['truth_xy'] and 'B' in f['truth_xy']]
+            self.assertLess(math.dist(before[0]['A'], before[0]['B']), 1.0)
+            self.assertGreater(max(math.dist(f['A'], f['B']) for f in before), 2.5)
+
+    def test_the_takes_where_a_first_link_read_as_a_silent_swap(self):
+        for scene, seed, rate, noise in (('close_crossing', 4001, 0.20, 'typical'), ('armchair_occlusion', 4062, 0.0, 'noisy'),
+                                         ('touching_crossing', 4007, 0.0, 'noisy')):
+            with self.subTest(scene=scene, seed=seed):
+                _, links = with_duplicates(scene, seed, rate, noise)
+                early = min(l[0] for l in links) + 1.0
+                self.assertEqual([s for s in scorer_core.switches(links) if s['silent'] and s['time'] < early], [])
+
+
 def with_duplicates(scene, seed, rate, noise='typical'):
     """A scene where a share of the keypoints observations get a box-only near-duplicate: 4 px and about 4 cm off."""
     data = synth.scenario(scene, seed=seed, noise=noise)
@@ -197,7 +275,8 @@ def with_duplicates(scene, seed, rate, noise='typical'):
 
 
 class DuplicateBoxTest(unittest.TestCase):
-    """A near-duplicate box of one person is a second detection. It may cost IDF1, and it must never read as a silent swap."""
+    """A near-duplicate box of one person is a second detection. It costs IDF1. These seeds read as a silent swap before a
+    new track doubted itself; METHOD.md gives the rates it was measured at, and how rarely it still does at the heavy ones."""
 
     def test_a_track_born_beside_a_person_doubts_itself_on_every_line(self):
         core = tracker_core.TrackerCore(params())
@@ -229,18 +308,12 @@ class DuplicateBoxTest(unittest.TestCase):
             core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
         rows = core.step(101.0, [det('a4', 0.0, 0.0), det('far', reach + 0.3, 0.0)])
         born = {tr.id: tr for tr, _ in rows}[2]
-        self.assertFalse(born.ambiguous, 'beyond reach when it starts')
+        self.assertEqual(born.near, [], 'beyond reach when it starts')
         rows = core.step(101.25, [det('a5', 0.0, 0.0), det('near', reach - 0.6, 0.0)])
         state = {tr.id: state for tr, state in rows}[2]
         self.assertEqual(state, 'confirmed')
+        self.assertEqual(born.near, [1])
         self.assertTrue(born.ambiguous, 'in reach on the line that confirms it, so that line claims no confidence')
-
-    def test_a_person_far_from_anyone_starts_a_track_with_no_doubt(self):
-        core = tracker_core.TrackerCore(params())
-        for k in range(4):
-            core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
-        rows = core.step(101.0, [det('a4', 0.0, 0.0), det('far', 4.0, 0.0)])
-        self.assertFalse({tr.id: tr for tr, _ in rows}[2].ambiguous)
 
     def test_the_takes_where_one_duplicate_read_as_a_silent_swap(self):
         """Seen on 5% of observations: a track born from A's duplicate took B's detection on a line that read confident."""
@@ -429,28 +502,28 @@ class HeadingTest(unittest.TestCase):
         L, R = (0.8, 1.0), (1.2, 1.0)
         box = {'obs_id': 'b', 'capture_ts': 2.0, 'source': {'sensor_id': 'c'}, 'kind': 'person_box', 'validity': 'valid',
                'room_position': {'x': 1.0, 'y': 1.0, 'z': 1.0, 'cov': [[0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01]]}}
-        observations = [self.keypoints('k0', 0.0, 1, 1, L, R), self.keypoints('k1', 0.25, 1, 1, L, R),
-                        self.keypoints('k2', 0.5, 1, 1, L, R), box]
+        observations = [self.keypoints('k%d' % k, k * 0.25, 1, 1, L, R) for k in range(8)] + [box]
         lines, _ = records.run_tracker(observations, params())
-        self.assertEqual(lines[0]['heading_as_of'], 0.0)
-        self.assertEqual(lines[2]['heading_as_of'], 0.5)
-        self.assertEqual(lines[2]['heading']['deg'], 0.0)
-        self.assertEqual(lines[3]['heading_as_of'], 0.5, 'a box is no shoulder and hip evidence')
+        self.assertIsNone(lines[0]['heading_as_of'], 'a new track is not yet sure whose shoulders they are')
+        self.assertEqual(lines[6]['heading_as_of'], params()['reconfirm_s'])
+        self.assertEqual(lines[7]['heading_as_of'], 1.75)
+        self.assertEqual(lines[7]['heading']['deg'], 0.0)
+        self.assertEqual(lines[8]['heading_as_of'], 1.75, 'a box is no shoulder and hip evidence')
 
     def test_heading_as_of_does_not_move_on_a_prediction_or_while_ambiguous(self):
         core = tracker_core.TrackerCore(params())
         t, first = 100.0, None
-        for k in range(4):
+        for k in range(8):
             rows = core.step(t, [det('a%d' % k, 0.0, 0.0, heading=(90.0, 5.0)),
                                  det('b%d' % k, 6.0, 0.0, heading=(270.0, 5.0))])
             first = {tr.id: tr for tr, _ in rows}[1]
             t += 0.25
         as_of = first.heading_as_of
         self.assertEqual(as_of, t - 0.25)
-        core.step(t, [det('b4', 6.0, 0.0)])         # the first track is unseen: a prediction only
+        core.step(t, [det('b8', 6.0, 0.0)])         # the first track is unseen: a prediction only
         self.assertEqual(first.heading_as_of, as_of)
         x = 6.0
-        for k in range(5, 40):                      # the second person walks up to the first
+        for k in range(9, 44):                      # the second person walks up to the first
             t += 0.25
             x = max(0.5, x - 0.3)
             core.step(t, [det('a%d' % k, 0.0, 0.0, heading=(90.0, 5.0)),
@@ -462,9 +535,13 @@ class HeadingTest(unittest.TestCase):
 
     def test_too_noisy_a_heading_is_not_accepted(self):
         core = tracker_core.TrackerCore(params())
-        rows = core.step(1.0, [det('a', 0.0, 0.0, heading=(90.0, 60.0))])
+        for k in range(10):
+            rows = core.step(1.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0, heading=(90.0, 60.0))])
+        self.assertFalse(rows[0][0].ambiguous, 'settled, so only the evidence can keep it out')
         self.assertIsNone(rows[0][0].heading)
         self.assertIsNone(rows[0][0].heading_as_of)
+        rows = core.step(3.5, [det('a10', 0.0, 0.0, heading=(90.0, 5.0))])
+        self.assertEqual(rows[0][0].heading_as_of, 3.5)
 
     def test_synthetic_heading_follows_the_body(self):
         data = synth.scenario('clean_crossing', seed=1, noise='clean')

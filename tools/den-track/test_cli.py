@@ -485,6 +485,17 @@ class ScoredRunTest(Base):
         self.assertEqual(code, 0, text)
         self.assertNotIn('EXCLUDED', text)
 
+    def test_takes_that_start_with_the_two_people_close_do_not_fail_on_a_tracks_first_lines(self):
+        def plan(block):
+            block['scoring']['crossings_plan'] = {'crossing': 20}
+        meth = self.closed_method('METHOD-start.md', plan)
+        takes = [self.make_take('close_at_start', seed=seed, noise='typical', meth=meth) for seed in range(40, 60)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertIn('SCORED', text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertEqual(report['silent_swaps'] + report['silent_swaps_outside_crossings'], 0, text)
+
     def test_a_detector_stall_that_outlasts_a_tracks_coast_is_no_trial(self):
         """The owner marks twenty real crossings, and the detector saw nobody until the tracks had ended: no track spans
         a crossing, so no swap could happen, and passing would say the tracker held identities through them."""

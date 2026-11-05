@@ -43,8 +43,10 @@ Status: plan only. Nothing here is built or run. Written 2026-11-04.
   Frames never leave the PC.
 - It reuses R's bundle reader (`check.read_bundle`) at run time and R's
   synthetic take helpers in tests.
-- From a take it reads only `frames.csv`, its `check-N.json` files, and two
-  fields of `take.json` (`script`, `started_unix`). It never reads cue times.
+- From a take it reads only `frames.csv`, the bundle files `frames.csv` lists
+  (`frames/*.npz`, which the frame server opens through `check.read_bundle` for
+  each frame's NV12 image), its `check-N.json` files, and two fields of
+  `take.json` (`script`, `started_unix`). It never reads cue times.
 - **Boxes are drawn by the owner**: a box on keyframes, straight lines in
   between, then an audit playback. This is simpler than a fixed detector. A
   detector needs LA GPU use (a go-ahead) with frames copied off the PC, or a
@@ -52,8 +54,11 @@ Status: plan only. Nothing here is built or run. Written 2026-11-04.
   Owner-drawn keyframes need no go-ahead, install nothing, and keep frames on
   the PC.
 - **Hard cases are staged inside R's takes** by two new spoken scripts that
-  R's `take.py` plays (`--script hard-a`, `--script hard-b`). This small
-  `take.py` change is N1's only change outside `tools/den-label/`.
+  R's `take.py` plays (`--script hard-a`, `--script hard-b`). Outside
+  `tools/den-label/`, N1 changes only `tools/den-take/` (take.py's `--script`,
+  two new files under `scripts/`, and `make_take`'s `started_unix` and
+  `script` parameters plus staged-script tests in `test_den_take.py`) and adds
+  the release note.
 - All N1 output lives on the PC in `C:\den-takes\n1\`, outside git and
   OneDrive. Git gets the code, the protocol, and one line per freeze with
   versions, hashes and counts. Boxes and labels never go to git or the cloud.
@@ -160,8 +165,11 @@ C:\den-takes\n1\
   - `gold_set.n1 = {fixture: {version, hash}, labels: {version, hash}}`;
   - `n_intervals`, `label_version`, `hash` (the labels hash), `refreshed` (the
     freeze date).
-- N2 writes the EvalRecord. `gold_set.regions`, `R_eval` and `tau_R` stay null,
-  with the status "no worked-patch marks (N1/N2 make no working-region claim)".
+- N2 writes the EvalRecord. It writes `gold_set.regions: null`, `R_eval: []`
+  and `tau_R: null`, and keeps `tau_R_status` as "pending
+  (reference-geometry)". A new field, `gold_set.regions_status`, carries "no
+  worked-patch marks (N1/N2 make no working-region claim)". The `gold_set`
+  schema gains `regions_status` and a nullable `regions` when N2 is built.
 - Every interval is owner-made. No model ever makes a label.
 
 ## Session staging
@@ -226,7 +234,8 @@ C:\den-takes\n1\
 2. The surface map, once for all sessions.
 3. The fixture pass (boxes), then its audit.
 4. The label pass. It opens only after that session's audit is complete. Once
-   it starts, that session's boxes are locked.
+   it starts, that session's boxes are locked, except for label.py's own
+   cut-driven drops (see "A second person R's check missed").
 5. The re-mark of one session, at least 3 days after its label pass.
 6. Freeze the fixture, freeze the labels, and commit the two lines. Only then
    may N2 run.
@@ -261,11 +270,46 @@ C:\den-takes\n1\
   often, raise the pad for every session. The page records the audited range.
   The freeze refuses a session that was not audited end to end.
 - Keyframes stay in `work\`. Only the padded per-frame boxes enter the fixture.
-- If the owner sees a second person that R's check missed, `label.py` prints
-  the previous check's `second_person.typed` text. The owner re-runs check.py
-  and types that text plus the new span. label.py refuses a newer check unless
-  its second-person cuts cover all those of the check it replaces, so frames
-  only ever enter cuts. It then drops any boxes and labels now inside a cut.
+
+### A second person R's check missed
+
+- If the owner sees a second person in any pass, they end the pass with the
+  page's second-person key. `label.py` prints the union of the second-person
+  spans typed in every earlier `check-N.json` of that take, as `mm:ss-mm:ss`
+  spans (the typed spans merged, without the pad), or `(no earlier spans)`. It
+  never prints the raw word `none`.
+- The owner re-runs check.py on the take. At its prompt they type those spans
+  plus the new ones. If there were none, they type only the new spans.
+  check.py's span parser takes a bare `none` but not `none` next to a span.
+- **The union test.** check.py never deletes a `check-N.json`, and the newest
+  one counts, so a check label.py refuses stays the newest. label.py therefore
+  compares a newer check with every earlier one, not only the one before it.
+  It accepts a newer check only if it says PASS and its `second_person` cuts
+  cover the union of the `second_person` cuts in every earlier `check-N.json`
+  of that take. So frames only ever enter cuts.
+- **Blocked.** While the newest check fails this test, the session is blocked.
+  label.py refuses its passes, saves and freeze, and prints the union again,
+  until a newer check covers it. `status` shows the session as blocked, with
+  no spans.
+- **When a newer check is accepted**, label.py:
+  - clips every interval and span in that session's drafts (the re-mark's
+    too) to the new usable segments. It drops the parts inside cuts and splits
+    a straddling interval into one piece per remaining segment, each cut-side
+    end set to `carried`. Spans split the same way. It drops empty pieces,
+    and any interval piece too short to keep its onset before its offset. For
+    example, an interval at 65 to 75 s against a new [69, 71) cut becomes 65
+    to 69 s (offset `carried`) and 71 to 75 s (onset `carried`);
+  - drops the boxes inside the new cuts: cut frames get no fixture row. The
+    keyframes stay as they are in `work\`, so no box outside a cut changes and
+    the audit still holds. These cut-driven drops are the one change to boxes
+    allowed after the label pass starts;
+  - prints each change, and clears the session's `end_to_end` mark so the
+    owner looks again and re-confirms it;
+  - rewrites `check_sha256` (and the check file name) in that session's
+    drafts to the accepted check's, so both manifests the next freeze writes
+    name it. A frozen folder is never edited, so after a freeze this means a
+    new fixture version and a new labels version. `freeze` refuses any draft
+    or session still tied to a superseded check.
 
 ### The protocol (PROTOCOL-V1, the gate)
 
@@ -334,7 +378,8 @@ It is committed before the first label, and the owner okays it first.
 - Quiet, low-light and uncertain spans get a start key and an end key. They
   need not be frame-exact.
 - When done, the owner marks the session labelled end to end. `freeze` refuses
-  a session without that mark, as it refuses an unaudited one.
+  a session without that mark, as it refuses an unaudited one. An accepted
+  newer check clears the mark (see "A second person R's check missed").
 - The server checks every save: each interval inside one usable segment, onset
   before offset, no overlaps, bands and cases from the fixed lists.
 
@@ -344,8 +389,11 @@ It is committed before the first label, and the owner okays it first.
   the first `hard-b`). The owner re-marks it from scratch in label mode at
   least 3 days after its label pass, with the first labels hidden. `label.py
   remark` refuses before 3 days.
-- n1.py reports interval matches (overlap of at least half), onset and offset
-  differences (median and p90, sure marks only), and band and case agreement.
+- n1.py reports interval matches (overlap of at least half), and band and case
+  agreement. It reports onset and offset differences (median and p90) only
+  over ends that both passes marked sure and placed by hand: onsets `touch` or
+  `no_touch`, offsets `release` or `no_touch`. Carried ends are left out of
+  the differences and counted separately.
 - The first-pass labels stay the gold. The re-mark only reports consistency.
 
 ## Split
@@ -380,9 +428,23 @@ All tests use synthetic takes made with R's own test helpers (`make_take`,
   staged script feeds this reader, so a rename in take.py fails a test.
 - **Split.** Per-script alternation in recording order. Stable when sessions
   are added. Never reassigns. Refuses an edited `split.json`.
-- **Second person.** With 60 s of activity and check-1 typed `00:40-00:45`, a
-  check-2 typed `01:10` is refused. One typed `00:40-00:45, 01:10` is accepted
-  and drops boxes and labels inside 69 to 71 s.
+- **Second person: the union test.** With 60 s of activity, check-1 typed
+  `00:40-00:45`. A check-2 typed `01:10` is refused and blocks the session:
+  passes, saves and freeze are refused, and `status` shows it blocked. A
+  check-3 typed `01:10, 01:30` is refused too: it covers check-2 but not
+  check-1, and label.py printed `00:40-00:45, 01:10-01:10` as the union. A
+  check-4 typed `00:40-00:45, 01:10, 01:30` is accepted and unblocks it.
+- **Second person: no earlier spans.** With check-1 typed `none`, label.py
+  prints `(no earlier spans)`, never `none`, and a check-2 typed `01:10` is
+  accepted.
+- **Second person: clipping.** An interval at 65 to 75 s, labelled under a
+  check without a cut there, becomes 65 to 69 s (offset `carried`) and 71 to
+  75 s (onset `carried`) when a check with a new [69, 71) cut is accepted. A
+  span is split the same way, and a piece too short to keep an onset before
+  its offset is dropped. Each change is printed. Boxes outside the cut are
+  unchanged, and no fixture row is written for a cut frame. The `end_to_end`
+  mark is cleared. Every draft of the session then names the accepted check's
+  sha256, and `freeze` refuses a draft still naming a superseded check.
 - **Frame server.** Serves only usable-segment frames of the named take
   (slate and cut frames get 404). Returns raw NV12 of 345,600 bytes. Binds
   127.0.0.1 only. Refuses a wrong token or Host header. Sends no CORS header.
@@ -391,14 +453,17 @@ All tests use synthetic takes made with R's own test helpers (`make_take`,
   and the clip are exact. The pad can only grow.
 - **Fixture.** Exactly one row per usable frame. One id. Only whitelisted
   fields, so no hand, contact or region field can enter. Refuses an unaudited
-  session. Refuses box edits once the label pass has started.
+  session. Refuses box edits once the label pass has started; label.py's own
+  cut-driven drops after an accepted newer check are the one exception.
 - **Labels.** Every protocol check: bounds, order, overlaps, segment edges and
-  `carried`, fixed lists, the 6 s pause rule. `by` on every item. Refuses a
-  session not marked labelled end to end.
+  `carried`, fixed lists, the 6 s pause rule (never applied across a cut).
+  `by` on every item. Refuses a session not marked labelled end to end.
 - **Label mode sends no boxes.** Its endpoints carry no box data.
 - **Re-mark.** Picks the second development session. Refuses before 3 days.
   Hides the first labels. `remark.json` names the session and its check
-  sha256. Agreement figures are right on hand-made cases.
+  sha256. Agreement figures are right on hand-made cases. A matched interval
+  with a `carried` end contributes no difference for that end and is counted
+  as carried; an end either pass marked unsure contributes none either.
 - **Freeze.** Canonical bytes give fixed hashes. Frozen folders refuse writes
   and overwrites. Versions go up. `verify` catches one changed byte. Drafts
   made under another protocol sha256 are refused. The two hashes are
@@ -454,18 +519,20 @@ Steps marked **[go-ahead]** need the owner's yes. Nothing else does.
    four each". R asks for a go-ahead per take or per named batch, because a
    camera fault during polling could briefly drop Frigate's den feed, which
    the den lights follow.
-3. **[go-ahead] Merging the `take.py` change** and its `make_take` parameters.
-   It is built after R lands on `main`, so the two sessions never edit
-   `take.py` at once. It changes `take.py`'s hash, not CHECK-V1.
+3. **[go-ahead] Merging the `tools/den-take/` change**: take.py's `--script`,
+   the two script files, and `make_take`'s parameters and the staged-script
+   tests. It is built after R lands on `main`, so the two sessions never edit
+   `take.py` at once. It changes `take.py`'s hash, not CHECK-V1 or check.py.
 4. No go-ahead needed: running `label.py` (PC only, 127.0.0.1, no camera),
-   the surface map, the passes, the re-mark, the freezes.
+   the practice run, the surface map, the passes, re-running check.py for a
+   missed second person, the re-mark, the freezes.
 5. An owner action, not a go-ahead: paste the two freeze lines to an agent.
 
 ## Risks
 
 | Risk | Effect | What N1 does |
 |---|---|---|
-| Owner time | About 10 to 11 hours in all | Short staged takes, a keyboard page, autosave, stop any time. Label the first two takes fully before recording the rest. Stop rule: if the first `hard-a` and `hard-b` each take clearly more than about 75 min, simplify the box workflow before recording the other six, for example by holding the box until the next keyframe instead of straight lines, or by folding the audit into the drawing pass. |
+| Owner time | About 9 to 12 hours in all | Short staged takes, a keyboard page, autosave, stop any time. Label the first two takes fully before recording the rest. Stop rule: if boxes and audit on the first `hard-a` and `hard-b` each take more than about 35 min (planned 15 to 25), simplify the box workflow before recording the other six, for example by holding the box until the next keyframe instead of straight lines, or by folding the audit into the drawing pass. |
 | Small or hidden contacts (phone at the counter, hands behind the body) at 640x360 | Unsure onsets | `sure` flags and uncertain spans, counted and reported. Never guessed. |
 | About 4 frames a second | Onsets quantised to 0.2 to 0.27 s | Stated in the protocol. Small against the 3 s target. |
 | A box that encodes the onset | The fixture leaks the answer | Body-only tight box, fixed pad, no activity keyframes, field whitelist, boxes locked before labels. |
@@ -487,13 +554,15 @@ Steps marked **[go-ahead]** need the owner's yes. Nothing else does.
 | R's check and second-person scan | 4 to 5 min |
 | Boxes and audit | 15 to 25 min |
 | Labels | 20 to 30 min |
-| **Total** | **about 1 to 1.25 hours** |
+| **Total** | **about 60 to 81 min (1 to 1.35 hours)** |
 
-One-time: read and okay the protocol (10 min), the surface map (15 min), the
+One-time, about 70 min: read and okay the protocol (10 min), the practice run
+of the page on the commissioning take (15 min), the surface map (15 min), the
 re-mark of one session (25 min), and the freezes (5 min).
 
-All of N1: 8 staged takes at about 1 to 1.25 hours each, plus about 1 hour
-one-time. That is about 10 to 11 hours, over about 2 weeks of evenings.
+All of N1: 8 staged takes at about 60 to 81 min each is 8 to 10.8 hours. With
+the one-time 70 min, that is about 9 to 12 hours, over about 2 weeks of
+evenings.
 
 ## Effort
 
@@ -524,9 +593,9 @@ Before R's first real take (no camera, no real frames):
 
 Waits for R's first real take (the commissioning take, once it passes):
 
-- A practice run of the page on the commissioning take. Nothing from it is
-  ever frozen, because it is not retained. This also checks page speed on real
-  bundles.
+- A practice run of the page on the commissioning take (about 15 min of owner
+  time, counted under "Owner time per take"). Nothing from it is ever frozen,
+  because it is not retained. This also checks page speed on real bundles.
 - The surface map, which needs a real frame, and the check that the counter is
   in view.
 - A first look at the pad on real frames.

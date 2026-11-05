@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import math
+import random
 import re
 import socket
 import tempfile
@@ -240,114 +241,232 @@ class HeldAndSuperseded(unittest.TestCase):
 
 
 class HeldPointsCount(unittest.TestCase):
-    """A hold cannot lift a failing session to a pass: hits and misses answer to one rule."""
+    """A hold neither lifts nor sinks a session: the channel leaves the error, the point still counts."""
 
     names = [f"p{i:02d}" for i in range(20)]
-    # front_left 0.2 -> 0.8 with front_right at 0.3: front_right gives 45 of 365 (12%) at every point,
-    # below the proposed held_share_min of 0.15
-    before, after = 400 * 0.2 + 150 * 0.3, 400 * 0.8 + 150 * 0.3
+    K = 300.0
+    # B0, B1, B2 go 0.2 -> 0.8 and B3 stays at 0.5: it gives 150 of 870 (17%) at every point
+    on_target = K * 2.9
 
     def setUp(self):
-        self.model = syn.hue_model({n: {B0: 400.0, B1: 150.0} for n in self.names}, kelvins=(2700,))
+        self.model = syn.hue_model({n: {b: self.K for b in syn.HUE} for n in self.names}, kelvins=(2700,))
 
-    def case(self, did, t, held, values):
-        ref = syn.light_state(t, {n: self.before for n in self.names}, anchored=False, ident=f"ls-{did}")
-        applied = {B0: {"level": 0.8, "steps": send(t + 0.5)},
-                   B1: {"status": "held" if held else "sent", "level": 0.3}}
+    def case(self, did, t, held, values, level=0.5):
+        before = {B0: 0.2, B1: 0.2, B2: 0.2, B3: level}
+        ref = syn.light_state(t, {n: self.K * sum(before.values()) for n in self.names}, anchored=False, ident=f"ls-{did}")
+        applied = {b: {"level": 0.8, "steps": send(t + 0.5)} for b in (B0, B1, B2)}
+        applied[B3] = {"status": "held" if held else "sent", "level": level}
         hold_set = None
         if held:
-            hold_set = {"revision": 4, "held": [{"entity_id": B1, "channels": [B1],
-                                                 "pinned": {"level_pct": 30, "cct_k": 2700, "source": "read-back"}}]}
-        dec = syn.hue_decision(did, t + 0.5, {B0: 0.2, B1: 0.3}, applied, f"ls-{did}", hold_set=hold_set,
+            hold_set = {"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                                 "pinned": {"level_pct": level * 100, "cct_k": 2700, "source": "read-back"}}]}
+        dec = syn.hue_decision(did, t + 0.5, before, applied, f"ls-{did}", hold_set=hold_set,
                                targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)})
-        return [dec], [ref, syn.light_state(t + 5, values, anchored=False)]
+        return [dec], [ref, syn.light_state(t + 5, values, anchored=False, ident=f"ls-{did}-after")]
 
     def landing(self, n_within, low=0.6):
-        return {n: self.after if i < n_within else self.after * low for i, n in enumerate(self.names)}
+        return {n: self.on_target if i < n_within else self.on_target * low for i, n in enumerate(self.names)}
 
-    def run_cases(self, cases, overrides=None):
+    def run_cases(self, cases, overrides=None, **kw):
         decisions = [d for c in cases for d in c[0]]
         frames = [f for c in cases for f in c[1]]
-        return score(decisions, frames, self.model, overrides=overrides)
+        return score(decisions, frames, self.model, overrides=overrides, **kw)
+
+    def hit_rate(self, cases, overrides=None):
+        hr = self.run_cases(cases, overrides)[2]["hit_rate"]
+        return hr["hits"], hr["misses"], hr["value"], hr["verdict"]
 
     def test_a_failing_decision_under_a_hold_fails_like_the_same_one_with_no_hold(self):
         t = syn.T0
         for held in (False, True):
-            decisions, _, report = self.run_cases([self.case("d-1", t, held, self.landing(3))])
+            cases = [self.case("d-1", t, held, self.landing(3))]
+            decisions, _, report = self.run_cases(cases)
             hr = report["hit_rate"]
             self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (3, 17, 0.15, "fail"), held)
             self.assertIs(decisions[0]["verify"]["within_tolerance"], False, held)
+            self.assertEqual(report["excluded_held_or_superseded"], 0, held)
 
     def test_a_session_failing_on_its_free_decisions_does_not_pass_on_its_held_ones(self):
         t = syn.T0
         cases = [self.case(f"d-{i}", t + 100 * i, i >= 2, self.landing(16)) for i in range(4)]
-        hr = self.run_cases(cases)[2]["hit_rate"]
-        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (64, 16, 0.8, "fail"))
+        self.assertEqual(self.hit_rate(cases), (64, 16, 0.8, "fail"))
+
+    def stuck(self):
+        """One free bulb never left 0.2: every point reads 21% low, which 15% + the held 17% would have forgiven."""
+        return {n: self.K * (0.2 + 0.8 + 0.8 + 0.5) for n in self.names}
+
+    def test_a_stuck_free_bulb_reads_the_same_with_or_without_a_hold(self):
+        t = syn.T0
+        for held in (False, True):
+            cases = [self.case("d-free", t, False, self.landing(20)), self.case("d-2", t + 600, held, self.stuck())]
+            self.assertEqual(self.hit_rate(cases), (20, 20, 0.5, "fail"), held)
+
+    def test_many_held_decisions_with_a_stuck_free_bulb_do_not_vanish(self):
+        t = syn.T0
+        cases = [self.case("d-free", t, False, self.landing(20))]
+        cases += [self.case(f"d-{i}", t + 600 * (i + 1), True, self.stuck()) for i in range(9)]
+        self.assertEqual(self.hit_rate(cases), (20, 180, 0.1, "fail"))
+
+    def test_soft_misses_under_a_hold_count(self):
+        t = syn.T0
+        cases = [self.case("d-free", t, False, self.landing(20))]
+        cases += [self.case(f"d-{i}", t + 600 * (i + 1), True, self.landing(8, 0.75)) for i in range(4)]
+        self.assertEqual(self.hit_rate(cases), (52, 48, 0.52, "fail"))
+
+    def test_the_only_free_bulb_doing_nothing_beside_an_equal_hold_is_a_miss(self):
+        # B3, held at the free bulb's level, gives half the light: 37.5% low was within 15% + 50%
+        model = syn.hue_model({n: {B0: self.K, B3: self.K} for n in self.names}, kelvins=(2700,))
+        targets = {f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}
+
+        def scene(did, t, held, reading):
+            ref = syn.light_state(t, {n: self.K for n in self.names}, anchored=False, ident=f"ls-{did}")
+            applied = {B0: {"level": 0.8, "steps": send(t + 0.5)}, B3: {"status": "held" if held else "sent", "level": 0.8}}
+            hold_set = {"revision": 4, "held": [{"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 80, "cct_k": 2700}}]}
+            dec = syn.hue_decision(did, t + 0.5, {B0: 0.2, B3: 0.8}, applied, f"ls-{did}", targets=targets,
+                                   hold_set=hold_set if held else None)
+            return [dec], [ref, syn.light_state(t + 5, {n: reading for n in self.names}, anchored=False, ident=f"ls-{did}-a")]
+
+        a, b = scene("d-free", syn.T0, False, self.K * 1.6), scene("d-hold", syn.T0 + 600, True, self.K)
+        hr = score(a[0] + b[0], a[1] + b[1], model)[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (20, 20, "fail"))
+
+    def test_one_far_point_under_a_hold_costs_one_point(self):
+        t = syn.T0
+        for far in (0.3, 0.6):  # a shadow at one point of twenty
+            values = {**self.landing(20), self.names[0]: self.on_target * far}
+            for held in (False, True):
+                decisions, _, report = self.run_cases([self.case("d-1", t, held, values)])
+                hr = report["hit_rate"]
+                self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (19, 1, 0.95, "pass"), (far, held))
+                self.assertIs(decisions[0]["verify"]["within_tolerance"], False)
+
+    def test_a_shadow_under_a_hold_is_explained_as_a_shadow(self):
+        t = syn.T0
+        values = {**self.landing(20), self.names[0]: self.on_target * 0.6}
+        occupancy = [{"start": t + 1, "end": t + 10, "people": [{"track_id": "A", "xy": [0.0, 0.0]}]}]
+        decisions, _, report = self.run_cases([self.case("d-1", t, True, values)], occupancy=occupancy)
+        self.assertEqual([e["cause"] for e in decisions[0]["verify"]["explanation"]], ["shadow"])
+        self.assertEqual(report["hit_rate"]["hits"], 19)
+
+    def test_sessions_of_held_decisions_read_what_their_points_read(self):
+        t = syn.T0
+        one_far = {**self.landing(20), self.names[0]: self.on_target * 0.6}
+        cases = [self.case("d-free", t, False, self.landing(20))]
+        cases += [self.case(f"d-{i}", t + 600 * (i + 1), True, one_far) for i in range(4)]
+        self.assertEqual(self.hit_rate(cases), (96, 4, 0.96, "pass"))
+        cases = [self.case("d-free", t, False, self.landing(17))]
+        cases += [self.case(f"d-{i}", t + 600 * (i + 1), True, one_far) for i in range(3)]
+        self.assertEqual(self.hit_rate(cases), (74, 6, 0.925, "pass"))
 
     def test_a_free_bulbs_fault_under_a_hold_is_a_miss_and_never_drift(self):
         t = syn.T0
-        fault = {n: 400 * 0.4 + 150 * 0.3 for n in self.names}  # front_left landed at 0.4, not 0.8
-        cases = [self.case("d-free", t, False, self.landing(20)), self.case("d-hold", t + 600, True, fault)]
+        cases = [self.case("d-free", t, False, self.landing(20)), self.case("d-hold", t + 600, True, self.stuck())]
         decisions, states, report = self.run_cases(cases)
-        hr = report["hit_rate"]
-        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (20, 20, 0.5, "fail"))
-        self.assertEqual(report["excluded_held_or_superseded"], 0)
         causes = {e["cause"] for e in by_id(decisions, "decision_id", "d-hold")["verify"]["explanation"]}
         self.assertEqual(causes, {"unexplained"})
         r = residual(states, t + 605, "p00")
         self.assertIn("outside", r["flags"])
+        self.assertIn("held", r["flags"])
         self.assertNotIn("drift", r["flags"])
 
-    def test_closing_the_share_lower_never_lets_a_failing_decision_pass(self):
+    def test_the_share_decides_nothing_where_the_decisions_own_change_shows(self):
         t = syn.T0
-        lower = {"held_share_min": 0.05}
-        decisions, _, report = self.run_cases([self.case("d-1", t, True, self.landing(3))], lower)
-        hr = report["hit_rate"]
-        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 17, "fail"))
-        self.assertEqual(report["excluded_held_by_status"], {"within": 3, "outside": 0})
-        self.assertIs(decisions[0]["verify"]["within_tolerance"], False)
+        for share in (0, 0.01, 0.05, 0.15, 0.5):
+            self.assertEqual(self.hit_rate([self.case("d-1", t, True, self.landing(3))], {"held_share_min": share}),
+                             (3, 17, 0.15, "fail"), share)
 
     def test_a_share_closed_at_zero_leaves_out_nothing_no_held_light_reaches(self):
         t = syn.T0
-        for rule in ("far_misses_count", "exclude_both"):
-            hr = self.run_cases([self.case("d-1", t, False, self.landing(3))],
-                                {"held_share_min": 0, "held_rule": rule})[2]["hit_rate"]
-            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (3, 17, "fail"), rule)
+        for rule in ("own_change_counts", "exclude_both"):
+            self.assertEqual(self.hit_rate([self.case("d-1", t, False, self.landing(3))],
+                                            {"held_share_min": 0, "held_rule": rule}), (3, 17, 0.15, "fail"), rule)
 
-    def lit_mostly_by_the_hold(self, values, overrides=None):
-        """front_right, held at 0.5, gives 200 of 360 (56%) at each point."""
-        model = syn.hue_model({n: {B0: 200.0, B1: 400.0} for n in values}, kelvins=(2700,))
+    def lit_mostly_by_the_hold(self, values, overrides=None, full=(100.0, 900.0)):
+        """B0 goes 0.2 -> 0.8 for a change of 60; B1, held at full, gives 900 of 980 (92%)."""
+        model = syn.hue_model({n: {B0: full[0], B1: full[1]} for n in values}, kelvins=(2700,))
         t = syn.T0
-        ref = syn.light_state(t, {n: 200 * 0.2 + 400 * 0.5 for n in values}, anchored=False, ident="ls-ref")
-        dec = syn.hue_decision("d-held", t + 0.5, {B0: 0.2, B1: 0.5},
-                               {B0: {"level": 0.8, "steps": send(t + 0.5)}, B1: {"status": "held", "level": 0.5}},
+        ref = syn.light_state(t, {n: full[0] * 0.2 + full[1] for n in values}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-held", t + 0.5, {B0: 0.2, B1: 1.0},
+                               {B0: {"level": 0.8, "steps": send(t + 0.5)}, B1: {"status": "held", "level": 1.0}},
                                "ls-ref", targets={f"T{i}": {"surface_id": n} for i, n in enumerate(values)},
                                hold_set={"revision": 4, "held": [{"entity_id": B1, "channels": [B1],
-                                                                  "pinned": {"level_pct": 50, "cct_k": 2700}}]})
+                                                                  "pinned": {"level_pct": 100, "cct_k": 2700}}]})
         return [dec], [ref, syn.light_state(t + 5, values, anchored=False)], model
 
-    def test_a_held_lit_hit_and_a_miss_the_held_light_could_explain_are_both_left_out(self):
-        d, f, model = self.lit_mostly_by_the_hold({"a": 360.0, "b": 360.0 * 0.7})
+    def test_a_point_whose_own_change_cannot_show_is_left_out_whatever_it_reads(self):
+        d, f, model = self.lit_mostly_by_the_hold({"a": 980.0, "b": 980.0 * 0.7, "c": 980.0 * 0.1, "d": 980.0 * 2})
         decisions, _, report = score(d, f, model)
         hr = report["hit_rate"]
         self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (0, 0, None, "insufficient"))
-        self.assertEqual(report["excluded_held_or_superseded"], 2)
-        self.assertEqual(report["excluded_held_by_status"], {"within": 1, "outside": 1})
+        self.assertEqual(report["excluded_held_or_superseded"], 4)
+        self.assertEqual(report["excluded_held_by_status"], {"within": 1, "outside": 3})
         v = decisions[0]["verify"]
-        self.assertEqual([p["status"] for p in v["points"]], ["within", "outside"])  # still written
-        self.assertEqual([e["cause"] for e in v["explanation"]], ["held"])
+        self.assertEqual([p["status"] for p in v["points"]], ["within", "outside", "outside", "outside"])  # still written
+        self.assertEqual({e["cause"] for e in v["explanation"]}, {"held"})
         self.assertIsNone(v["within_tolerance"])
 
-    def test_a_miss_beyond_what_the_held_light_could_do_still_counts(self):
-        d, f, model = self.lit_mostly_by_the_hold({"a": 360.0, "b": 360.0 * 0.1})
-        _, _, report = score(d, f, model)
+    def test_a_point_lit_mostly_by_a_hold_counts_where_the_change_shows(self):
+        # B0's change of 120 is past the 15% of 360 here, though B1 gives 56% of the light
+        for reading, status in ((360.0, "within"), (360.0 * 0.7, "outside"), (360.0 * 1.3, "outside")):
+            d, f, model = self.lit_mostly_by_the_hold({"a": reading}, full=(200.0, 200.0))
+            decisions, _, report = score(d, f, model)
+            self.assertEqual(point(decisions[0], "a")["status"], status, reading)
+            hr = report["hit_rate"]
+            self.assertEqual(hr["hits"] + hr["misses"], 1, reading)
+            self.assertEqual(report["excluded_held_or_superseded"], 0, reading)
+
+    def hand_off(self, model_b3=300.0, truth_b3=390.0, own=False):
+        """A person turned B3 off and it is held off; the model is 30% low on B3. B0 is untouched unless own."""
+        pts = ["a", "b"]
+        model = syn.hue_model({n: {B0: 300.0, B3: model_b3} for n in pts}, kelvins=(2700,))
+        t = syn.T0
+        b0 = 0.2 if own else 0.8
+        ref = syn.light_state(t, {n: 300 * b0 + truth_b3 * 0.8 for n in pts}, anchored=False, ident="ls-3")
+        dec = syn.hue_decision("d-3", t + 0.5, {B0: b0, B3: 0.8},
+                               {B0: {"level": 0.8, "steps": send(t + 0.5)}, B3: {"status": "held", "level": 0.0}},
+                               "ls-3", targets={f"T{i}": {"surface_id": n} for i, n in enumerate(pts)},
+                               hold_set={"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                                                  "pinned": {"level_pct": 0, "cct_k": 2700}}]})
+        return score([dec], [ref, syn.light_state(t + 5, {n: 300 * 0.8 for n in pts}, anchored=False)], model)
+
+    def test_a_channel_held_off_is_still_held(self):
+        # it gives no light after, but the whole error is its own; this decision changed nothing here
+        decisions, states, report = self.hand_off()
         hr = report["hit_rate"]
-        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 1, "fail"))
-        self.assertEqual(report["excluded_held_by_status"], {"within": 1, "outside": 0})
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"))
+        self.assertEqual(report["excluded_held_or_superseded"], 2)
+        v = decisions[0]["verify"]
+        self.assertEqual([e["cause"] for e in v["explanation"]], ["held", "held"])
+        self.assertIsNone(v["within_tolerance"])
+        r = residual(states, syn.T0 + 5, "a")
+        self.assertIn("held", r["flags"])
+        self.assertNotIn("drift", r["flags"])
+
+    def test_a_held_channels_move_widens_the_bound_of_a_point_that_still_counts(self):
+        # B0 went 0.2 -> 0.8 too: its change shows, and the error on B3's fall is inside 15% of what moved
+        decisions, _, report = self.hand_off(own=True)
+        self.assertEqual(point(decisions[0], "a")["status"], "within")
+        self.assertEqual(point(decisions[0], "a")["level_bound"], 72.0)
+        self.assertEqual(report["hit_rate"]["hits"], 2)
+        self.assertEqual(report["excluded_held_or_superseded"], 0)
+
+    def test_a_hold_from_a_correction_after_the_read_frame_counts_the_same_way(self):
+        t = syn.T0
+        before = {B0: 0.2, B1: 0.2, B2: 0.2, B3: 0.1}
+        ref = syn.light_state(t, {n: self.K * sum(before.values()) for n in self.names}, anchored=False, ident="ls-d")
+        dec = syn.hue_decision("d-c", t + 0.5, before, {b: {"level": 0.8, "steps": send(t + 0.5)} for b in (B0, B1, B2)},
+                               "ls-d", targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)})
+        correction = {"correction_id": "c-1", "ts": t + 2.0, "action": {"settle_s": 0.0}, "snapshot": {"light_state": ["ls-d"]},
+                      "hold": {"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 50, "cct_k": 2700},
+                               "since": t + 2.0, "ended": None, "hold_set_revision": 5}}
+        for values, expected in ((self.landing(20), (20, 0, 1.0, "pass")), (self.landing(3), (3, 17, 0.15, "fail"))):
+            after = syn.light_state(t + 9, values, anchored=False)
+            hr = score([dec], [ref, after], self.model, corrections=[correction])[2]["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), expected)
 
     def test_the_other_named_rule_leaves_every_held_lit_point_out(self):
         t = syn.T0
-        both = {"held_rule": "exclude_both", "held_share_min": 0.05}
+        both = {"held_rule": "exclude_both"}
         decisions, _, report = self.run_cases([self.case("d-1", t, True, self.landing(3))], both)
         hr = report["hit_rate"]
         self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"))
@@ -355,19 +474,28 @@ class HeldPointsCount(unittest.TestCase):
         self.assertEqual(report["excluded_held_by_status"], {"within": 3, "outside": 17})
         self.assertIsNone(decisions[0]["verify"]["within_tolerance"])
         cases = [self.case(f"d-{i}", t + 100 * i, i >= 2, self.landing(16)) for i in range(4)]
-        hr = self.run_cases(cases, both)[2]["hit_rate"]
-        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (32, 8, 0.8, "fail"))
+        self.assertEqual(self.hit_rate(cases, both), (32, 8, 0.8, "fail"))
+
+    def test_what_the_other_rule_costs_is_what_the_note_says(self):
+        t = syn.T0
+        two_stuck = {n: self.K * (0.2 + 0.2 + 0.8 + 0.5) for n in self.names}  # 41% low
+        cases = [self.case("d-free", t, False, self.landing(20)), self.case("d-hold", t + 600, True, two_stuck)]
+        self.assertEqual(self.hit_rate(cases, {"held_rule": "exclude_both"}), (20, 0, 1.0, "pass"))
+        self.assertEqual(self.hit_rate(cases), (20, 20, 0.5, "fail"))
 
     def test_the_rule_is_the_owners_and_only_a_named_one_is_read(self):
         text = method.lf_text(HERE / "VERIFY-V1.md")
         m = method.parse(text)
-        self.assertEqual(m.open["held_rule"], "far_misses_count")
+        self.assertEqual(m.open["held_rule"], "own_change_counts")
+        self.assertEqual(m.open["held_share_min"], 0.05)
         self.assertIsNone(m.scored())
         with self.assertRaises(ValueError):
-            method.parse(text.replace('proposed "far_misses_count"', 'proposed "hits_kept"'))
+            method.parse(text.replace('proposed "own_change_counts"', 'proposed "hits_kept"'))
+        with self.assertRaises(ValueError):
+            method.parse(text.replace('proposed "own_change_counts"', 'proposed "far_misses_count"'))
 
     def test_the_owner_is_told_on_the_console(self):
-        d, f, model = self.lit_mostly_by_the_hold({"a": 360.0, "b": 360.0 * 0.7})
+        d, f, model = self.lit_mostly_by_the_hold({"a": 980.0, "b": 980.0 * 0.7})
         with tempfile.TemporaryDirectory() as tmp:
             argv = write_case(tmp, d, f, model)
             with Quiet() as q:
@@ -376,6 +504,74 @@ class HeldPointsCount(unittest.TestCase):
         self.assertIn("gate 0.85: insufficient", out)
         self.assertIn("left out of the hit rate: 2 point(s) lit by held or superseded bulbs", out)
         out.encode("ascii")
+
+
+class WhatCountsIgnoresTheReading(unittest.TestCase):
+    """Whether a point counts comes from predictions alone, so no reading can leave a miss out or keep only hits."""
+
+    READINGS = (0.0, 0.01, 0.1, 0.5, 0.85, 1.0, 1.15, 1.5, 2.0, 10.0)
+
+    def scene(self, rng, held, anchored, ref_scale=1.0):
+        """One decision on one point: random bulbs, levels and daylight, B3 held or free, read at `reading`."""
+        basis = {b: rng.choice((0.0, 5.0, 40.0, 100.0, 300.0)) for b in syn.HUE}
+        model = syn.hue_model({"pt": basis}, unit="lx" if anchored else "relative", kelvins=(2700,))
+        before = {b: rng.choice((0.0, 0.1, 0.2, 0.5, 0.8, 1.0)) for b in syn.HUE}
+        after = {b: rng.choice((0.0, 0.1, 0.2, 0.5, 0.8, 1.0)) for b in syn.HUE}
+        after[B3] = before[B3] if rng.random() < 0.7 else after[B3]
+        t = syn.T0
+        daylight = rng.choice((0.0, 0.0, 20.0, 200.0))
+        err = rng.choice((0.9, 1.0, 1.1))
+        ref_value = daylight + err * sum(basis[b] * before[b] for b in syn.HUE)
+        applied = {b: {"level": after[b], "steps": send(t + 0.5)} for b in (B0, B1, B2)}
+        applied[B3] = {"status": "held" if held else "sent", "level": after[B3], "steps": [] if held else send(t + 0.5)}
+        hold_set = None
+        if held:
+            hold_set = {"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                                 "pinned": {"level_pct": after[B3] * 100, "cct_k": 2700}}]}
+        dec = syn.hue_decision("d", t + 0.5, before, applied, "ls-r", targets={"A": {"surface_id": "pt"}}, hold_set=hold_set)
+        ref = syn.light_state(t, {"pt": ref_value}, anchored=anchored, ident="ls-r")
+        centre = max(1.0, sum(basis[b] * after[b] for b in syn.HUE) + daylight)
+        return model, dec, ref, centre
+
+    def outcomes(self, m, model, dec, ref, centre, anchored):
+        seen = set()
+        for factor in self.READINGS:
+            after = syn.light_state(syn.T0 + 5, {"pt": centre * factor}, anchored=anchored, ident="ls-a")
+            _, _, report = Run(m, LightModel(model), [dec], [ref, after], clock=Clock(syn.UTC_OFFSET_S)).run()
+            hr = report["hit_rate"]
+            seen.add((hr["hits"] + hr["misses"], report["excluded_held_or_superseded"], report["below_meter_noise"]))
+        return seen
+
+    def test_no_reading_changes_whether_a_point_counts(self):
+        rng = random.Random(20261105)
+        for overrides in ({}, {"background": "zero"}, {"held_rule": "exclude_both"}):
+            m = closed(overrides)
+            for i in range(120):
+                held, anchored = rng.random() < 0.6, rng.random() < 0.5
+                model, dec, ref, centre = self.scene(rng, held, anchored)
+                seen = self.outcomes(m, model, dec, ref, centre, anchored)
+                self.assertEqual(len(seen), 1, (overrides, i, seen))
+
+    def test_a_hold_that_stayed_put_changes_no_hit_or_miss_where_the_point_still_counts(self):
+        rng = random.Random(7)
+        m = closed()
+        compared = 0
+        for i in range(200):
+            state = rng.getstate()
+            model, held_dec, ref, centre = self.scene(rng, True, False)
+            rng.setstate(state)
+            _, free_dec, _, _ = self.scene(rng, False, False)
+            if held_dec["inputs"]["actuator_state"][B3]["level"] != held_dec["applied_scene"][B3]["readback"]["level"]:
+                continue
+            for factor in self.READINGS:
+                after = syn.light_state(syn.T0 + 5, {"pt": centre * factor}, anchored=False, ident="ls-a")
+                run = lambda d: Run(m, LightModel(model), [d], [ref, after], clock=Clock(syn.UTC_OFFSET_S)).run()[2]
+                with_hold, without = run(held_dec), run(free_dec)
+                if with_hold["excluded_held_or_superseded"]:
+                    continue
+                compared += 1
+                self.assertEqual(with_hold["points"], without["points"], (i, factor))
+        self.assertGreater(compared, 300)
 
 
 class MidFade(unittest.TestCase):

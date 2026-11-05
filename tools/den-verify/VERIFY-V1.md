@@ -9,9 +9,10 @@ unnamed are listed under "Keys the contracts do not name" and sit behind an
 open slot.
 
 This note was committed before any code, and revised on 2026-11-05 after the
-pipeline review, with no session yet run: the held rule and the rule for dims.
-Nothing here has run on real light. Running needs the owner's go-ahead; building
-does not.
+pipeline review, with no session yet run: the held rule, the rule for dims and
+the meter's noise in the level check. Which points count now comes from
+predictions alone, never from a reading. Nothing here has run on real light.
+Running needs the owner's go-ahead; building does not.
 
 ## What is scored
 
@@ -117,28 +118,42 @@ whatever it reads, and the report and the console count these
 stuck on a 60 to 12 lx dim reads 12 lx high, and is a hit. Relative frames have no
 lux term, and none of this changes their result.
 
-**Held and superseded channels.** Let H be a point's predicted light from
-channels whose applied status is `held` or `superseded`, or that a later hold
-pinned. A person or an earlier decision set those channels, so this decision
-cannot answer for them. A point with H below `held_share_min` of its predicted
-light counts like any other. A point with H at or above it is still written with
-its status, but it is never a hit, and the slot `held_rule` says when it is a
-miss:
+**Held and superseded channels.** The ladder says a held or superseded channel
+is excluded from misses. Here that means the channel, not the point: a person or
+an earlier decision set it, so its light must not make a miss, and a free bulb's
+fault must still show beside it. The prediction pins these channels where they
+are. Under `reference_frame` one that stayed put is in both frames, so its light
+and the model's error on it cancel; one that moved since the read frame adds its
+brighter level to the allowance above, like any bulb that changed. Under `zero`
+its error stays in the point's error, like every channel's, and the ±15% covers
+it.
 
-- `far_misses_count` (proposed): only when |measured − predicted| >
-  `tolerance` × predicted + H, a miss those channels could not account for even
-  by giving none of their light. So a free bulb's fault still shows during a
-  hold.
-- `exclude_both`: never. This is simpler, but during a hold a free bulb's fault
-  goes uncounted.
+Let H be a point's light from channels whose applied status is `held` or
+`superseded`, or that a hold pinned, each at its brighter level between the read
+frame's state and the verify frame's, so a bulb held off still counts as held. A
+point with H below `held_share_min` of its predicted light counts like any other.
+At or above it, the slot `held_rule` says:
 
-Keeping the hits and dropping the misses is not an option: it lets any hold lift
-a failing session to a pass. An `outside` left out is explained as `held`. A
-point where a held or superseded channel gives any light is never explained as
-drift, and its LightState residual never carries a `drift` flag. The report
-gives the points left out, in total and by status
-(`excluded_held_or_superseded`, `excluded_held_by_status`), and the console says
-how many. A run with nothing left to count is `insufficient`, never a pass.
+- `own_change_counts` (proposed): the point counts, hit or miss, unless this
+  decision's own change there, the summed change of its free bulbs, is inside the
+  point's bound. A free bulb failing outright could not show there, so the point
+  is left out both ways. With one bulb of four held at 17% of the light, a stuck
+  free bulb reads 21% low and is a miss, and one point in A's shadow costs one
+  point of twenty, as they do with no hold. A bulb A turned off by hand, on a
+  decision that changed nothing at that point, leaves the point out.
+- `exclude_both`: every such point is left out both ways. This is simpler and is
+  the plainer reading of the ladder's words, but during a hold a free bulb's fault
+  goes uncounted: one free decision at 20 of 20 and one held decision with two free
+  bulbs stuck 41% low reads 1.0, a pass.
+
+Neither rule looks at the reading. Keeping hits and dropping misses lets any hold
+lift a failing session to a pass; dropping hits and keeping misses lets one far
+point sink a good one. An `outside` left out is explained as `held`. A point where
+a held or superseded channel gave any light, before or after, is never explained
+as drift, and its LightState residual never carries a `drift` flag. The report
+gives the points left out, in total and by status (`excluded_held_or_superseded`,
+`excluded_held_by_status`), and the console says how many. A run with nothing left
+to count is `insufficient`, never a pass.
 
 **The gate.** A hit is a scored surface point (`within` or `outside`, basis
 `measured` or `fallback_patch`, not excluded, admitted) that is `within`. The
@@ -157,7 +172,7 @@ many days had none) and the margin `delta_hit_rate`, which the owner has not set
    `daylight_change_min` between the read frame and the verify frame, in the
    same direction as the residual.
 3. `drift`: the increment at the point also misses in the same direction, the
-   frame is not occupied, and no held or superseded channel contributes.
+   frame is not occupied, and no held or superseded channel gave any light there.
 4. `unexplained`.
 
 The report gives the share explained (daylight, shadow, drift) and the count
@@ -290,8 +305,8 @@ bootstrap_rounds = 10000            # owner choice 6
 settle_margin_s = open              # open, proposed 1; Hue landing after a fade (den_lighting's own readback window is 3)
 background = open                   # open, proposed "reference_frame"; or "zero"
 change_allowance = open             # open, proposed 0.15; the read-frame prediction's share of each changed bulb's brighter level (rung 8's gate: median 8%, p90 19%); 0 is the ladder's literal level check
-held_share_min = open               # open, proposed 0.15; held or superseded share of a point's light; below the tolerance they alone cannot push it out
-held_rule = open                    # open, proposed "far_misses_count"; or "exclude_both"; when a held-lit point is a miss
+held_share_min = open               # open, proposed 0.05; held or superseded share of a point's light, from which held_rule applies
+held_rule = open                    # open, proposed "own_change_counts"; or "exclude_both"; which held-lit points count
 uncertainty_rel = open              # open, proposed 0.03; per frame, a fraction of the estimate
 uncertainty_abs_lx = open           # open, proposed 10; anchored frames only, rung 7's meter tolerance once set
 spill_band_top = open               # open, proposed "target_lx"; T_hi is Decision.targets[track].lx

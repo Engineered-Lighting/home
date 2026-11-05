@@ -276,18 +276,16 @@ class Run:
             predicted = None if background is None else background + after[sid]
             row.update(measured=measured, why=why, predicted=predicted, ref_value=ref_val,
                        predicted_change=after[sid] - before[sid])
-            held_light = sum(parts[c][sid] for c in held if c in parts)
-            if predicted is not None and predicted > 0:
-                row["held_share"] = held_light / predicted
-            else:
-                row["held_share"] = 0.0
-            row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
-            brightest = own = 0.0
+            # each channel at its brighter level: one held off gives no light now, and is still why a point moved
+            brightest = own = others = 0.0
             for c in parts:
                 now, was = parts[c][sid], parts_before[c][sid] if c in parts_before else 0.0
+                others += max(now, was) if c in held else 0.0
                 if now != was:
                     brightest += max(now, was)
                     own += abs(now - was) if c not in held else 0.0
+            row["held_share"] = others / max(predicted, others) if others > 0 and predicted is not None else 0.0
+            row["held_lit"] = others > 0 and row["held_share"] >= m["held_share_min"]
             if measured is None:
                 row["status"] = "prior_only" if why == "prior_only" else "unverifiable"
             elif predicted is None:
@@ -306,10 +304,9 @@ class Run:
                 row["increment"] = {"point_id": sid, "measured_change": None,
                                     "predicted_change": row["predicted_change"],
                                     "status": "unverifiable", "uncertainty": None}
-            # A held-lit point is never a hit; it is a miss only beyond what the held light could account for.
+            # Out both ways where this decision's own change could not show; the reading plays no part.
             row["excluded_held"] = (row["held_lit"] and row["status"] in ("within", "outside")
-                                    and (m["held_rule"] == "exclude_both"
-                                         or within(measured, predicted, m["tolerance"], held_light)))
+                                    and (m["held_rule"] == "exclude_both" or own <= row["level_bound"]))
             out[sid] = row
         return out, revision
 

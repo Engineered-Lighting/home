@@ -48,9 +48,11 @@ when the records' clock strings are not in this PC's time zone. Run folders
 stay on the PC: no records, frames or reports go into git.
 
 The console gives the verdict, then how many points were left out of the hit
-rate: points lit by held or superseded bulbs, and deep dims whose change landed
-but whose level cannot be judged. `VERIFY-V1.md` gives both rules. A run with
-nothing left to count reads `insufficient`.
+rate (lit by held or superseded bulbs where the decision's own change could not
+show, or with a change below the meter's noise) and how many hits are beyond 15%
+of the level, on dims and offs, with the hit rate if those had missed.
+`VERIFY-V1.md` gives each rule. Which points count never depends on what they
+read. A run with nothing left to count reads `insufficient`.
 
 Running on real records needs the owner's go-ahead, and the records come from
 rungs that have not run yet (rung 7's metering frames, rung 8's model, rung 9's

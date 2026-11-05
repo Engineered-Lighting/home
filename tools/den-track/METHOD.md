@@ -131,6 +131,11 @@ person. A link joins an observation's person to the track that listed it in
 - **Silent swap**: a track moves from one labelled person to another on a line whose
   status is `confident`. On an `ambiguous` line it is a flagged switch. A false
   person on a track is not a switch, and neither is a person moving to a new track.
+- **Cannot tell**: an observation labelled `?` is left out of the score and counted. It
+  names nobody, so a move across such labels happened somewhere in the span, and every
+  line of that track from the first `?` to the new person's link is read: all `confident`
+  is silent, all `ambiguous` is flagged, and a mix is unresolved. `unresolved_switch` says
+  how an unresolved one counts at the gate, and the report gives their number.
 - **Per crossing**: each crossing is the owner's marked `interval`, padded by
   `window_pad_s` on each side so the window holds frames before and after. Switches
   are found over the whole take and counted in the window they fall in.
@@ -223,6 +228,7 @@ folder, so an earlier one stays.
     "min_people_per_crossing": 2,
     "window_pad_s": {"open": true, "proposed": 2.0, "why": "Padding on each side of the owner's mark, so a window holds frames before and after and a swap shows in its own IDF1. The contracts name none. Proposed 2.0: about what walkers need to come together and part. Staged crossings must be further apart than twice this."},
     "face_visible_score_min": {"open": true, "proposed": 0.4, "why": "E2 asks how often a face is even visible. Without reading frames, the stand-in is nose and both eyes above this keypoint score. Proposed 0.4, rung 2's proposed keypoint_score_min."},
+    "unresolved_switch": {"open": true, "proposed": "flagged", "why": "A track changes person across cannot-tell labels, with the tracker confident for part of that span: the labels cannot say whether the change came while it was sure. flagged: it does not fail the gate, and its number is reported. A swap made while confident, then ambiguous before the labels resume, would pass; the review saw that only on constructed records, never on tracker output. silent: it fails the gate. A labeller who stays unsure about a second past the parting then fails a swap the tracker did report; the review saw 1 flip in 80 hard takes. flagged or silent."},
     "crossings_plan": {"open": true, "proposed": {"crossing": 12, "crossing_occluded": 5, "occlusion": 3, "near_pass": 3, "door": 2}, "why": "E2 says 20 to 30 staged crossings and occlusions, not how many of each. Fixed before recording, so the sample is set in advance: a scored run refuses when the crossings that count fall short of it for any kind, so the hard ones cannot quietly go missing. Proposed: the README's script, 25 crossings weighted toward what geometry finds hard (bound 11.3% at 0 failures). 30 would give 9.5%."}
   }
 }

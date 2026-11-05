@@ -5,8 +5,12 @@ A link is one observation as both sides saw it:
 person is the owner's label ('A', 'B', ...) or None for "not a person"; track
 is the track the tracker put the observation on, or None; confident is whether
 that track's record reported confidence (association.status is `confident`).
+An observation the owner cannot tell is no link. It is passed apart, as a link
+whose person is UNSURE, and only its track and status are used, by switches().
 """
 from scorer_math import best_matching, upper_bound
+
+UNSURE = '?'
 
 
 def id_counts(links):
@@ -31,21 +35,31 @@ def idf1(counts):
     return None if d == 0 else 2 * counts['idtp'] / d
 
 
-def switches(links):
+def switches(links, unsure=(), unresolved_is_silent=False):
     """Every time a track moves from one labelled person to another.
 
-    Returns [{time, obs_id, track, from, to, silent}] in time order. A switch
-    is silent when the track's record reported confidence at that link.
+    Returns [{time, obs_id, track, from, to, silent, unresolved}] in time order. A
+    switch is silent when the track's record reported confidence at that link.
+    Across cannot-tell observations the move happened somewhere in the span, so it
+    is judged on every record from the first of them to the new person's link:
+    silent if all reported confidence, flagged if none did, and unresolved if some
+    did, which is not silent unless unresolved_is_silent says to read it so.
     """
-    last = {}
+    last, span = {}, {}
     out = []
-    for time, obs_id, person, track, confident in sorted(links, key=lambda l: (l[0], str(l[3]), l[1])):
+    for time, obs_id, person, track, confident in sorted(list(links) + list(unsure), key=lambda l: (l[0], str(l[3]), l[1])):
         if person is None or track is None:
             continue
+        if person == UNSURE:
+            span.setdefault(track, []).append(confident)
+            continue
+        seen = span.pop(track, []) + [confident]
         before = last.get(track)
         if before is not None and before != person:
+            sure, doubted = all(s is True for s in seen), any(s is not True for s in seen)
+            unresolved = doubted and any(s is True for s in seen)
             out.append({'time': time, 'obs_id': obs_id, 'track': track, 'from': before, 'to': person,
-                        'silent': confident is True})
+                        'silent': sure or (unresolved and unresolved_is_silent), 'unresolved': unresolved})
         last[track] = person
     return out
 
@@ -67,7 +81,7 @@ def _why_no_trial(inside, window, min_people):
     return None
 
 
-def score_take(links, windows, min_people=2):
+def score_take(links, windows, min_people=2, unsure=(), unresolved_is_silent=False):
     """One take's crossings. windows: [{'id', 'kind', 'start', 'end'}], and 'mark',
     the owner's [t0, t1] inside the padded window, when there is one.
 
@@ -78,7 +92,7 @@ def score_take(links, windows, min_people=2):
     the mark: one that saw one person, nobody, or nothing after the contact (a
     take cut short) cannot show that identities held.
     """
-    all_switches = switches(links)
+    all_switches = switches(links, unsure, unresolved_is_silent)
     rows = []
     for w in windows:
         inside = [l for l in links if _inside(l[0], w)]
@@ -108,6 +122,7 @@ def score_take(links, windows, min_people=2):
     whole = id_counts(links)
     return {
         'windows': rows,
+        'unresolved_switches': sum(1 for s in all_switches if s['unresolved']),
         'whole': {k: whole[k] for k in ('idtp', 'idfp', 'idfn')},
         'outside': {
             'switches': len(outside_switches),
@@ -146,6 +161,7 @@ def summarize(takes, idf1_gate, alpha=0.05):
         'crossings_with_silent_swap': failed,
         'silent_swaps': sum(r['silent_swaps'] for r in rows),
         'flagged_switches': sum(r['flagged_switches'] for r in rows),
+        'unresolved_switches': sum(take['unresolved_switches'] for take in takes),
         'silent_swap_rate_upper_95': upper_bound(failed, n, alpha),
         'pooled': dict(pooled, idf1=pooled_idf1),
         'whole_take': dict(whole, idf1=idf1(whole)),

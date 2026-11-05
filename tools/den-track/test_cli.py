@@ -411,6 +411,88 @@ class ScoredRunTest(Base):
         self.assert_refused(self.score_args(takes, scored=True, meth=meth), den_track.TRACK_RUN_FILE)
 
 
+def label_span(path, start, end, change):
+    """Rewrite the labels of the truth file's frames from start to end, inclusive, in frame order."""
+    lines = records.read_jsonl(path)
+    frames = sorted((l for l in lines if l['kind'] == 'frame'), key=lambda l: l['capture_ts'])
+    for frame in frames[start:end]:
+        frame['labels'] = {o: change(p) for o, p in frame['labels'].items()}
+    records.write_jsonl(path, lines)
+
+
+class CannotTellLabelTest(Base):
+    """The scenario: the owner cannot tell who is who through the contact, and the people really did change places."""
+
+    SWAP = {'A': 'B', 'B': 'A'}
+
+    def swapped_take(self, meth, seed=0, edge=None):
+        """Labels say cannot tell through the crossing's mark, and A and B change places after it."""
+        take = self.make_take(seed=seed, meth=meth)
+        lines = records.read_jsonl(take[2])
+        mark = next(l for l in lines if l['kind'] == 'crossing')['interval']
+        frames = sorted((l for l in lines if l['kind'] == 'frame'), key=lambda l: l['capture_ts'])
+        for frame in frames:
+            if mark[0] <= frame['capture_ts'] <= mark[1] + (edge or 0.0):
+                frame['labels'] = {o: ('?' if p else p) for o, p in frame['labels'].items()}
+            elif frame['capture_ts'] > mark[1]:
+                frame['labels'] = {o: self.SWAP.get(p, p) for o, p in frame['labels'].items()}
+        records.write_jsonl(take[2], lines)
+        return take
+
+    def score(self, meth, takes):
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            return code, text, json.load(f)
+
+    def test_a_label_of_cannot_tell_is_read_and_counted_not_refused(self):
+        meth = self.small_method()
+        takes = [self.make_take(seed=seed, meth=meth) for seed in range(2)]
+        label_span(takes[0][2], 0, 2, lambda p: '?' if p else p)
+        code, text, report = self.score(meth, takes)
+        self.assertEqual(code, 0, text)
+        self.assertGreater(report['left_out']['unsure'], 0)
+        self.assertEqual(report['left_out']['unlabelled'], 0)
+        self.assertIn('cannot tell', text)
+
+    def test_a_swap_under_doubt_is_not_called_silent_because_the_labels_resume_late(self):
+        meth = self.small_method()
+        takes = [self.swapped_take(meth, seed) for seed in range(2)]
+        _, text, report = self.score(meth, takes)
+        self.assertEqual(report['silent_swaps'] + report['silent_swaps_outside_crossings'], 0, text)
+        self.assertGreater(report['unresolved_switches'] + report['flagged_switches'], 0)
+        self.assertTrue(report['gate']['silent_swaps_zero'])
+
+    def test_unresolved_switches_are_reported_and_fail_the_gate_when_the_owner_reads_them_as_silent(self):
+        def strict(block):
+            block['scoring'].update(min_crossings=2, crossings_plan={'crossing': 2}, unresolved_switch='silent')
+        meth = self.closed_method('METHOD-strict.md', strict)
+        takes = [self.swapped_take(meth, seed, edge=0.75) for seed in range(2)]
+        code, text, report = self.score(meth, takes)
+        self.assertGreater(report['unresolved_switches'], 0, text)
+        self.assertFalse(report['gate']['silent_swaps_zero'])
+        self.assertEqual(code, 1, text)
+        self.assertIn('unresolved', text)
+
+    def test_an_unknown_reading_of_unresolved_switches_is_refused(self):
+        def bad(block):
+            block['scoring'].update(min_crossings=2, crossings_plan={'crossing': 2}, unresolved_switch='ignore')
+        meth = self.closed_method('METHOD-bad.md', bad)
+        takes = [self.make_take(seed=seed, meth=meth) for seed in range(2)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 2, text)
+        self.assertIn('unresolved_switch', text)
+
+    def test_all_cannot_tell_in_a_crossing_is_excluded_not_counted(self):
+        meth = self.small_method()
+        take = self.make_take(seed=50, meth=meth)
+        label_span(take[2], 0, 100000, lambda p: '?' if p else p)
+        good = [self.make_take(seed=seed, meth=meth) for seed in range(2)]
+        code, text, report = self.score(meth, good + [take])
+        self.assertEqual(code, 0, text)
+        self.assertEqual((report['crossings'], report['crossings_marked']), (2, 3))
+        self.assertIn('clean_crossing-50/c1', text)
+
+
 class LabellingTest(Base):
     """Owner choice 2: labelled alone, blind to system output, a single labeller reported."""
 
@@ -680,6 +762,11 @@ class MethodFileTest(Base):
                 f.write(text)
             with self.assertRaises(method.MethodError):
                 method.read_block(p)
+
+    def test_how_to_read_an_unresolved_switch_is_an_open_slot(self):
+        m = method.Method()
+        self.assertIn('scoring.unresolved_switch', [name for name, _ in m.open])
+        self.assertEqual(m.scoring['unresolved_switch'], 'flagged')
 
     def test_the_time_field_is_an_open_slot_that_keeps_to_the_schema_as_proposed(self):
         m = method.Method()

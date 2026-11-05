@@ -220,6 +220,8 @@ def check_scored(method, takes, report):
                         % (report['crossings'], report['crossings_marked'], need,
                            ' (excluded: %s)' % ', '.join(left) if left else ''))
     problems += plan_problems(method.scoring['crossings_plan'], report['plan'])
+    if method.scoring['unresolved_switch'] not in ('flagged', 'silent'):
+        problems.append('scoring.unresolved_switch must be flagged or silent, not %r' % (method.scoring['unresolved_switch'],))
     if report['left_out']['unlabelled']:
         problems.append('%d observations have no label' % report['left_out']['unlabelled'])
     for take in takes:
@@ -256,6 +258,11 @@ def print_report(report):
     print('silent swaps %d, flagged switches %d; outside crossings: %d switches, %d silent'
           % (report['silent_swaps'], report['flagged_switches'], report['switches_outside_crossings'],
              report['silent_swaps_outside_crossings']))
+    if report['unresolved_switches']:
+        print('%d of the switches are unresolved: a track changed person across cannot-tell labels, with the tracker '
+              'sure for part of that span' % report['unresolved_switches'])
+    if report['left_out']['unsure']:
+        print('left out of the score: %d observations labelled cannot tell' % report['left_out']['unsure'])
     print('IDF1 pooled over crossings %s; whole takes %s' % (fmt(pooled['idf1']), fmt(report['whole_take']['idf1'])))
     print('ambiguous share outside crossings: %s; face visible (stand-in), mean per crossing: %s'
           % (fmt(report['ambiguous_share_outside_crossings'], '%.2f'), fmt(report['face_visible_share_mean'], '%.2f')))

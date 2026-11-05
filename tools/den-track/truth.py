@@ -16,6 +16,8 @@ frames and crossings, in any order:
 - A frame's `labels` give, per observation at that capture time, the true person
   or null for "not a person". Rung 2 writes one observation per detector box, so a
   person normally has one; a duplicate box of one person gets the same letter.
+- `?` is a label too: "cannot tell". The observation is left out of the score and
+  counted, and its track line's status still counts for a switch across it. See METHOD.md.
 - A person is one capital letter. People are A and B, never names.
 - A crossing's `interval` is the owner's mark of the contact: from when two
   people come within arm's reach, or one goes out of sight, until they are apart
@@ -28,6 +30,7 @@ import records
 VERSION = 'den-track-truth/1'
 CROSSING_TYPES = ('crossing', 'crossing_occluded', 'occlusion', 'near_pass', 'door')
 PERSON = re.compile(r'^[A-Z]$')
+UNSURE = '?'
 LABELLER = re.compile(r'^(owner|synthetic|[A-Z])$')
 
 
@@ -36,11 +39,13 @@ class TruthError(Exception):
 
 
 class Truth:
-    def __init__(self, take, people, labels, frame_ts, crossings, labeller=None, blind=None, observations_sha256=None):
+    def __init__(self, take, people, labels, frame_ts, crossings, labeller=None, blind=None, observations_sha256=None,
+                 unsure=()):
         self.take, self.people = take, people
         self.labeller, self.blind = labeller, blind     # None: the file does not say
         self.observations_sha256 = observations_sha256
         self.labels = labels            # obs_id -> person or None
+        self.unsure = set(unsure)       # obs_ids labelled "cannot tell"
         self.frame_ts = frame_ts        # obs_id -> the frame's capture_ts
         self.crossings = crossings      # [{'crossing_id', 'type', 'interval'}]
 
@@ -65,7 +70,7 @@ def parse(lines, source='truth'):
         raise TruthError('%s: blind must be true or false' % source)
     if obs_hash is not None and not (isinstance(obs_hash, str) and obs_hash.startswith('sha256:')):
         raise TruthError('%s: observations_sha256 must be what den_track.py hash prints' % source)
-    labels, frame_ts, crossings = {}, {}, []
+    labels, frame_ts, crossings, unsure = {}, {}, [], set()
     ids = set()
     for rec in lines[1:]:
         kind = rec.get('kind')
@@ -74,11 +79,15 @@ def parse(lines, source='truth'):
             if not records.is_number(ts) or not isinstance(row, dict):
                 raise TruthError('%s: a frame needs a numeric capture_ts and a labels object' % source)
             for obs_id, person in row.items():
-                if obs_id in labels:
+                if obs_id in frame_ts:
                     raise TruthError('%s: observation %s is labelled twice' % (source, obs_id))
+                frame_ts[obs_id] = ts
+                if person == UNSURE:
+                    unsure.add(obs_id)
+                    continue
                 if person is not None and person not in people:
                     raise TruthError('%s: observation %s has person %r, not in the header' % (source, obs_id, person))
-                labels[obs_id], frame_ts[obs_id] = person, ts
+                labels[obs_id] = person
         elif kind == 'crossing':
             cid, ctype, span = rec.get('crossing_id'), rec.get('type'), rec.get('interval')
             if not isinstance(cid, str) or not cid or cid in ids:
@@ -93,7 +102,7 @@ def parse(lines, source='truth'):
         else:
             raise TruthError('%s: a line has kind %r (frame or crossing, after the header)' % (source, kind))
     crossings.sort(key=lambda c: (c['interval'][0], c['crossing_id']))
-    return Truth(head.get('take'), people, labels, frame_ts, crossings, labeller, blind, obs_hash)
+    return Truth(head.get('take'), people, labels, frame_ts, crossings, labeller, blind, obs_hash, unsure)
 
 
 def read(path):

@@ -117,8 +117,8 @@ How the command line behaves:
   so a `version` or rung 2's `freshness` makes no difference.
 - **`den-track-truth/1`.** See `truth.py`. A header says who labelled, whether blind, and
   which observations; one line per frame gives each observation's true person (one
-  capital letter, or null for "not a person"), and one line per crossing gives the
-  owner's mark.
+  capital letter, null for "not a person", or `?` for "cannot tell"), and one line per
+  crossing gives the owner's mark.
 - **`crossings.jsonl`.** `score` also writes the crossings as rung 5's gate reads them,
   `{crossing_id, track_ids, interval}`, for its "`association_safe` false through
   every annotated crossing" check. A one-person occlusion or a door swap is not included.
@@ -163,8 +163,8 @@ python -B tools\den-take\take.py --script free --out C:\den-takes\crossings-1\ta
 
 **5. Annotate, before any tracks exist.** You label alone and blind to system output,
 with a delayed re-mark of a sample (`owner-choices.md` item 2). With rung 4's labeller,
-mark each observation's person and each crossing's `interval`: from when the two come
-within arm's reach, or one goes out of sight, until they are apart again or back in
+mark each observation's person (`?` when you cannot tell) and each crossing's `interval`:
+from when the two come within arm's reach, or one goes out of sight, until they are apart again or back in
 view. It writes `truth.jsonl` in the take's folder, and its header says `"labeller":
 "owner"`, `"blind": true` and the `observations_sha256` that this prints; a scored run
 refuses a file without them:
@@ -214,6 +214,7 @@ the value.
 | `tracker.reconfirm_s` | 1.5 s | How long after doubt a track is confident again; while it is not, no narrow beam and no teaching |
 | `scoring.window_pad_s` | 2.0 s | How much of each crossing's before and after is scored |
 | `scoring.face_visible_score_min` | 0.4 | The keypoint score that counts as a visible face (a stand-in) |
+| `scoring.unresolved_switch` | `flagged` | How a track's change of person counts when it crosses cannot-tell labels and the tracker was sure for part of them: `flagged` or `silent` |
 | `scoring.crossings_plan` | the script above: 12 `crossing`, 5 `crossing_occluded`, 3 `occlusion`, 3 `near_pass`, 2 `door` | How many of each kind must count. A scored run refuses when any kind falls short |
 
 ## Owner questions

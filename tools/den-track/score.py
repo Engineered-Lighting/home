@@ -42,7 +42,7 @@ def take_links(observations, track_lines, truth):
 
     A rejected Observation cannot be tracked, and neither can one with no
     position, so neither is scored. An unlabelled one is left out and counted; a
-    scored run refuses any.
+    scored run refuses any. One labelled cannot tell is left out and counted.
     """
     by_id = {o['obs_id']: o for o in observations}
     listed = _listed(track_lines, by_id)
@@ -52,7 +52,7 @@ def take_links(observations, track_lines, truth):
         if by_id[oid]['capture_ts'] != ts:
             raise ScoreError('truth puts observation %s in the frame at %s, it was captured at %s'
                              % (oid, ts, by_id[oid]['capture_ts']))
-    links, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0}
+    links, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0, 'unsure': 0}
     for obs in observations:
         if obs.get('kind') not in records.PERSON_KINDS:
             continue
@@ -61,12 +61,21 @@ def take_links(observations, track_lines, truth):
             left_out['rejected'] += 1
         elif oid not in listed and records.floor_measurement(obs) is None:
             left_out['no_position'] += 1
+        elif oid in truth.unsure:
+            left_out['unsure'] += 1
         elif oid not in truth.labels:
             left_out['unlabelled'] += 1
         else:
             track, confident = listed.get(oid, (None, False))
             links.append((obs['capture_ts'], oid, truth.labels[oid], track, confident))
     return links, left_out
+
+
+def unsure_links(observations, track_lines, truth):
+    """Cannot-tell observations a track listed: they name nobody, but their line's status counts for a switch."""
+    listed = _listed(track_lines, {o['obs_id'] for o in observations})
+    return [(truth.frame_ts[oid], oid, scorer_core.UNSURE, listed[oid][0], listed[oid][1])
+            for oid in sorted(truth.unsure) if oid in listed]
 
 
 def windows_of(truth, pad_s):
@@ -103,14 +112,16 @@ def plan_counts(rows, plan):
 
 def score_session(takes, scoring):
     """takes: [{'name', 'observations', 'tracks', 'truth'}]. Returns the full report body."""
-    results, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0}
+    results, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0, 'unsure': 0}
     crossing_lines = []
     for take in takes:
         links, skipped = take_links(take['observations'], take['tracks'], take['truth'])
         for k in left_out:
             left_out[k] += skipped[k]
         windows = windows_of(take['truth'], scoring['window_pad_s'])
-        result = scorer_core.score_take(links, windows, scoring['min_people_per_crossing'])
+        result = scorer_core.score_take(links, windows, scoring['min_people_per_crossing'],
+                                        unsure_links(take['observations'], take['tracks'], take['truth']),
+                                        scoring['unresolved_switch'] == 'silent')
         faces = face_share(take['observations'], take['truth'], windows, scoring['face_visible_score_min'])
         for row, crossing in zip(result['windows'], take['truth'].crossings):
             row['take'] = take['name']

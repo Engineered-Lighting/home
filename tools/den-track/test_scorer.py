@@ -87,6 +87,73 @@ class SwitchTest(unittest.TestCase):
         self.assertEqual(scorer_core.switches(links_from(rows)), [])
 
 
+def unsure_links(rows):
+    """rows: [(time, track, confident)]: observations labelled cannot tell."""
+    return [(float(t), 'u%d' % t, scorer_core.UNSURE, track, confident) for t, track, confident in rows]
+
+
+class CannotTellTest(unittest.TestCase):
+    """A switch across cannot-tell labels happened somewhere in the span, and the span's status decides how it reads."""
+
+    def setUp(self):
+        self.links = [(0.0, 'o0', 'A', 1, True), (1.0, 'o1', 'A', 1, True), (6.0, 'o6', 'B', 1, True)]
+
+    def one(self, unsure_rows, links=None, **kw):
+        found = scorer_core.switches(links or self.links, unsure_links(unsure_rows), **kw)
+        self.assertEqual(len(found), 1)
+        return found[0]
+
+    def test_doubt_reported_during_the_swap_is_not_silent_because_the_labels_resume_later(self):
+        s = self.one([(2, 1, False), (3, 1, False), (4, 1, True), (5, 1, True)])
+        self.assertEqual((s['silent'], s['unresolved']), (False, True))
+
+    def test_a_swap_labelled_cannot_tell_while_confident_is_not_hidden_by_later_doubt(self):
+        links = self.links[:2] + [(6.0, 'o6', 'B', 1, False)]
+        s = self.one([(2, 1, True), (3, 1, True), (4, 1, False)], links)
+        self.assertEqual((s['silent'], s['unresolved']), (False, True))
+
+    def test_confident_all_through_the_span_is_silent(self):
+        s = self.one([(2, 1, True), (3, 1, True)])
+        self.assertEqual((s['silent'], s['unresolved']), (True, False))
+
+    def test_in_doubt_all_through_the_span_is_flagged(self):
+        links = self.links[:2] + [(6.0, 'o6', 'B', 1, False)]
+        s = self.one([(2, 1, False), (3, 1, False)], links)
+        self.assertEqual((s['silent'], s['unresolved']), (False, False))
+
+    def test_unresolved_can_be_read_as_silent(self):
+        s = self.one([(2, 1, False), (3, 1, True)], unresolved_is_silent=True)
+        self.assertEqual((s['silent'], s['unresolved']), (True, True))
+
+    def test_a_span_on_another_track_or_before_the_old_person_does_not_count(self):
+        s = self.one([(2, 2, False), (3, 2, False)])
+        self.assertEqual((s['silent'], s['unresolved']), (True, False))
+        s = self.one([(-1, 1, False)])
+        self.assertEqual((s['silent'], s['unresolved']), (True, False))
+
+    def test_the_same_person_after_a_span_is_no_switch(self):
+        links = [(0.0, 'o0', 'A', 1, True), (6.0, 'o6', 'A', 1, True)]
+        self.assertEqual(scorer_core.switches(links, unsure_links([(2, 1, False)])), [])
+
+    def test_the_gate_reads_the_slot(self):
+        rows = [(0.0, 'a0', 'A', 1, True), (0.0, 'b0', 'B', 2, True), (6.0, 'a6', 'B', 1, True), (6.0, 'b6', 'A', 2, True)]
+        windows = [{'id': 'w', 'start': 0.0, 'end': 7.0}]
+        unsure = unsure_links([(2, 1, False), (3, 2, False)])
+        kept = scorer_core.summarize([scorer_core.score_take(rows, windows, 2, unsure)], 0.1)
+        self.assertEqual((kept['silent_swaps'], kept['unresolved_switches'], kept['flagged_switches']), (0, 2, 2))
+        self.assertTrue(kept['gate']['silent_swaps_zero'])
+        strict = scorer_core.summarize([scorer_core.score_take(rows, windows, 2, unsure, True)], 0.1)
+        self.assertEqual((strict['silent_swaps'], strict['unresolved_switches']), (2, 2))
+        self.assertFalse(strict['gate']['passed'])
+
+    def test_a_window_of_only_cannot_tell_labels_is_no_trial(self):
+        links = [(100.0, 'a', 'A', 1, True), (100.0, 'b', 'B', 2, True)]
+        unsure = unsure_links([(2, 1, True), (3, 2, True)])
+        res = scorer_core.summarize([scorer_core.score_take(links, [{'id': 'w', 'start': 0.0, 'end': 7.0}], 2, unsure)], 0.9)
+        self.assertEqual(res['crossings'], 0)
+        self.assertFalse(res['gate']['passed'])
+
+
 class WindowTest(unittest.TestCase):
     def test_per_window_and_pooled(self):
         rows = [('A', 1), ('B', 2)] * 5 + [('A', 1), ('B', 2)] * 5 + [('B', 1), ('A', 2)] * 5
@@ -189,6 +256,14 @@ class TruthFormatTest(unittest.TestCase):
         self.assertEqual(t.frame_ts['o1'], 10.0)
         self.assertEqual(t.crossings[0]['interval'], [9.0, 11.0])
 
+    def test_cannot_tell_is_its_own_label_and_not_a_person(self):
+        lines = good_truth_lines()
+        lines[1]['labels']['o3'] = '?'
+        t = truth.parse(lines)
+        self.assertEqual(t.unsure, {'o3'})
+        self.assertNotIn('o3', t.labels)
+        self.assertEqual(t.frame_ts['o3'], 10.0)
+
     def test_reads_how_it_was_labelled_and_claims_nothing_when_silent(self):
         lines = good_truth_lines()
         self.assertEqual((truth.parse(lines).labeller, truth.parse(lines).blind), (None, None))
@@ -208,6 +283,7 @@ class TruthFormatTest(unittest.TestCase):
             'a name instead of a letter': lambda l: l[0].update(people=['Alice', 'B']),
             'two letters': lambda l: l[0].update(people=['AB']),
             'a person not in the header': lambda l: l[1]['labels'].update(o1='C'),
+            'cannot tell as a person': lambda l: l[0].update(people=['A', '?']),
             'a label twice': lambda l: l.append({'kind': 'frame', 'capture_ts': 11.0, 'labels': {'o1': 'A'}}),
             'a crossing id twice': lambda l: l.append(dict(l[2])),
             'an unknown crossing type': lambda l: l[2].update(type='dance'),
@@ -237,7 +313,15 @@ class TakeLinksTest(unittest.TestCase):
         t = truth.parse([good_truth_lines()[0], {'kind': 'frame', 'capture_ts': 10.0, 'labels': {'o1': 'A'}}])
         links, left = score.take_links(self.OBS, self.lines(status='ambiguous'), t)
         self.assertEqual(links, [(10.0, 'o1', 'A', 't1', False)])
-        self.assertEqual(left, {'rejected': 1, 'no_position': 1, 'unlabelled': 0})
+        self.assertEqual(left, {'rejected': 1, 'no_position': 1, 'unlabelled': 0, 'unsure': 0})
+
+    def test_cannot_tell_is_left_out_and_counted_and_keeps_its_status_for_the_switch(self):
+        t = truth.parse([good_truth_lines()[0], {'kind': 'frame', 'capture_ts': 10.0, 'labels': {'o1': '?'}}])
+        links, left = score.take_links(self.OBS, self.lines(status='ambiguous'), t)
+        self.assertEqual(links, [])
+        self.assertEqual((left['unsure'], left['unlabelled']), (1, 0))
+        self.assertEqual(score.unsure_links(self.OBS, self.lines(status='ambiguous'), t),
+                         [(10.0, 'o1', scorer_core.UNSURE, 't1', False)])
 
     def test_unlabelled_is_counted(self):
         t = truth.parse([good_truth_lines()[0]])

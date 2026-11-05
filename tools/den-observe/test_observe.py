@@ -589,12 +589,14 @@ class Rung1FileChecks:
         self.assertEqual(run["mount"]["status"], "confirmed")
         self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
 
-    def test_two_different_entries_under_one_id_across_the_file_are_refused(self):
-        earlier = json.loads(self.lines[1])
-        earlier["cameras"][0]["pose"]["room_from_camera"][0][3] += 0.5
-        changed = json.dumps(earlier)
-        case = self.case("rung1-ambiguous", 3, room_bytes=f"{changed}\n{self.lines[2]}\n".encode("utf-8"))
-        self.assert_refused(case, "different camera entries")
+    def test_a_revision_that_only_changes_the_light_scale_is_read(self):
+        # Rung 7 writes a revision of the same camera entry with a measured photometric scale.
+        scaled = json.loads(self.lines[2])
+        scaled["cameras"][0]["photometric"] = {"k_L": 0.1, "status": "measured"}
+        room = f"{self.lines[1]}\n{self.lines[2]}\n{json.dumps(scaled)}\n".encode("utf-8")
+        case = self.case("rung1-light-scale", 3, room_bytes=room)
+        run, records = case.run()
+        self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
 
     def test_a_torn_last_line_is_refused_not_skipped(self):
         torn = "".join(line + "\n" for line in self.lines[:1]) + self.lines[1][:200]

@@ -31,33 +31,26 @@ def _section(entry, name):
     return entry.get(name) if type(entry.get(name)) is dict else {}
 
 
-def _across_lines(revisions):
-    """The last revision, each of its camera entries checked against the same entry on every other line.
+def _last_with_invalidations(revisions):
+    """The last revision, with an invalidation of one of its camera entries from any line of the file.
 
-    An entry may only gain `invalidated` and `confirmed`, and an invalidation is for
-    good, as rung 1's own resolve has it: two overlapping check-mount runs can leave
-    a confirmation after an invalidation, and the last line alone would hide it.
+    An invalidation is for good, as rung 1's own resolve has it: two overlapping
+    check-mount runs can leave a confirmation after one, and the last line alone
+    would hide it.
     """
+    def entries(revision):
+        cameras = revision.get("cameras")
+        return [c for c in cameras if type(c) is dict] if type(cameras) is list else []
+
     def key(entry):
         return entry.get("camera_id"), entry.get("version")
 
-    def bare(entry):
-        return {k: v for k, v in entry.items() if k not in ("invalidated", "confirmed")}
-
-    current = revisions[-1]
-    earlier = [entry for revision in revisions if type(revision.get("cameras")) is list
-               for entry in revision["cameras"] if type(entry) is dict]
-    for entry in (current["cameras"] if type(current.get("cameras")) is list else []):
-        if type(entry) is not dict:
-            continue
-        same = [other for other in earlier if key(other) == key(entry)]
-        if any(bare(other) != bare(entry) for other in same):
-            raise RegistrationRefused(f"{key(entry)[0]}@{key(entry)[1]} names different camera entries on different "
-                                      "lines of the file")
-        gone = next((other["invalidated"] for other in same if other.get("invalidated")), None)
-        if gone:
-            entry["invalidated"] = gone
-    return current
+    gone = {key(entry): entry["invalidated"] for revision in revisions for entry in entries(revision)
+            if entry.get("invalidated")}
+    for entry in entries(revisions[-1]):
+        if key(entry) in gone:
+            entry["invalidated"] = gone[key(entry)]
+    return revisions[-1]
 
 
 def load(path):
@@ -80,7 +73,7 @@ def load(path):
         raise RegistrationRefused(f"no readable RoomModel at {path}: a line is not JSON") from None
     if not revisions or not all(type(revision) is dict for revision in revisions):
         raise RegistrationRefused(f"no readable RoomModel at {path}: not one JSON object per line")
-    return _across_lines(revisions)
+    return _last_with_invalidations(revisions)
 
 
 def parse_transform_id(transform_id):

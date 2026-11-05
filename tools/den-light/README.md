@@ -494,5 +494,5 @@ python -B -m unittest discover -s tools/den-light -v
 They use synthetic data and fakes on 127.0.0.1 only: no Jetson, no camera,
 no Home Assistant, no real token. Stage 1's fake HA runs den_lighting
 1.0.4's own `policy.py` (a byte-identical copy in
-`tools/fixtures/den_lighting-1.0.4/`, pinned by sha256). They take about two
+`tools/fixtures/den_lighting-1.0.4/`, pinned by sha256). They take about four
 minutes. Synthetic runs prove plumbing; they are never evidence for the gate.

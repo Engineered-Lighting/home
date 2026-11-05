@@ -95,6 +95,11 @@ class MethodStage1Tests(unittest.TestCase):
             m.refuse_if_open("A scored run")
         m.proposed().refuse_if_open("A scored run")
 
+    def test_the_readme_lists_every_open_slot_with_its_proposal(self):
+        readme = (HERE / "README.md").read_text(encoding="utf-8")
+        for name, proposed in model.load_stage1().open.items():
+            self.assertIn(f"| `{name}` | {json.dumps(proposed)} |", readme)
+
     def test_crlf_and_lf_read_and_hash_the_same(self):
         text = (HERE / meter.METHOD_FILE).read_text(encoding="utf-8")
         lf, crlf = model.parse_stage1(text), model.parse_stage1(text.replace("\n", "\r\n"))
@@ -882,9 +887,11 @@ class ProbeEndToEndTests(unittest.TestCase):
         self.assertTrue(any(line.startswith(f"{e} was not restored: its normal now carries the probe's level")
                             for line in lines), lines)
         self.assertEqual(rig.normal()[e], {"on": True, "brightness": 60, "kelvin": 2703}, "learned from the change")
-        self.assertIn(e, rig.holds(), "den_lighting keeps the person's hold")
+        resumed = next(c for c in rig.ha.calls if c[1] == "den_lighting")
+        self.assertNotIn(e, resumed[3]["entity_id"], "the hold is the person's: the tool does not clear it")
         rig.assert_normal_is_snapshot(self, [x for x in guard.LIGHTS if x != e])
-        self.assertEqual(set(rig.holds()), {e})
+        # den_lighting itself drops it after 2 minutes of vacancy, 0.2 s here at the fake's speed, so it may be gone
+        self.assertLessEqual(set(rig.holds()), {e}, "every other hold was resumed")
 
     def test_a_bulb_unavailable_then_back_is_restored(self):
         rig = Rig(self)

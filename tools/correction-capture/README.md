@@ -235,8 +235,9 @@ for rung 11, not a promotion gate.
 `corrections.jsonl` (with `--events`): den-event-1 `correction` lines. They
 cover every hold den_lighting opened from outside (counted, outside exposure
 or held at the start), but not restored holds or its own reports. A den-core
-replay can use them to hold bulbs the way the live controller did. den-core's
-`run.py` has no flag that reads them yet.
+replay holds bulbs the way the live controller did with them: `run.py
+--corrections` (see "Replaying from the Home Assistant exports alone" in
+`tools/den-core/README.md`).
 
 ## Limits
 

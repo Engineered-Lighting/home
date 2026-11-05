@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import events
 from events import LIGHTS
 
 LAB = Path(__file__).resolve().parents[2] / "stack" / "services" / "perception-lab"
@@ -18,6 +19,8 @@ LA_LATENCY = Path(__file__).resolve().parents[1] / "la-latency"
 DEN_OCCUPANCY = "binary_sensor.den_oak_person_occupancy"
 COMMAND_KEYS = frozenset({"entity_id", "revision", "target", "context_id"})
 LIGHT_KEYS = frozenset({"last_updated_ts", "entity_id", "state", "context_id", "context_user_id", "context_parent_id"})
+STATUS_KEYS = frozenset({"last_updated_ts", "entity_id", "state", "attributes"})
+CORRECTION_KEYS = frozenset({"correction_id", "entity_id", "after", "source"})
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -254,3 +257,111 @@ def recorder_lights(paths, own=()):
             found.append((float(t), "light_observed", {"entity_id": row["entity_id"], "on": row["state"] == "on",
                                                        "brightness": None, "kelvin": None, "context": label}))
     return sorted(found, key=lambda item: item[0])
+
+
+def correction_capture(paths):
+    """The holds the live den_lighting opened from outside, from tools/correction-capture's corrections.jsonl
+    (capture.py --events): den-event-1 correction lines from source correction_capture, as correction items at
+    their t, in time order.
+
+    One action that changed several bulbs is one line per bulb under one correction_id. A line repeated in
+    overlapping files counts once; the same correction_id and bulb with other values, a line that is not such a
+    correction, or a bulb that is not one of the four raises ValueError. Blank lines are skipped.
+    """
+    found, seen = [], {}
+    for path in paths:
+        for number, raw in enumerate(_text(path).splitlines(), 1):
+            if not raw.strip():
+                continue
+            try:
+                event = json.loads(raw)
+                events.validate(event)
+                data = event["data"]
+                if (event["kind"] != "correction" or event["source"] != "correction_capture"
+                        or set(data) != CORRECTION_KEYS or data["entity_id"] not in LIGHTS
+                        or not isinstance(data["correction_id"], str) or not isinstance(data["source"], str)
+                        or not isinstance(data["after"], dict) or not _scene(data["after"])):
+                    raise ValueError
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise ValueError("%s line %d is not a correction-capture correction line" % (path, number)) from None
+            item = (float(event["t"]), "correction", data)
+            key = (data["correction_id"], data["entity_id"])
+            if key in seen:
+                if seen[key] != item:
+                    raise ValueError("%s line %d repeats correction %s for %s with other values"
+                                     % (path, number, data["correction_id"], data["entity_id"]))
+                continue
+            seen[key] = item
+            found.append(item)
+    return sorted(found, key=lambda item: (item[0], LIGHTS.index(item[2]["entity_id"])))
+
+
+def _status(attributes):
+    """(automatic, gaming, occupancy, revision) from den_lighting's status attributes, or None for a row without
+    them (the sensor unavailable, as across an HA restart)."""
+    if not isinstance(attributes, dict) or not {"automatic", "gaming_session", "occupancy", "revision"} <= set(attributes):
+        return None
+    automatic, gaming, occupancy, revision = (attributes[key] for key in ("automatic", "gaming_session", "occupancy",
+                                                                         "revision"))
+    if (type(automatic) is not bool or type(gaming) is not bool or occupancy not in ("on", "off", "unknown")
+            or type(revision) is not int):
+        raise ValueError
+    return automatic, gaming, occupancy, revision
+
+
+def den_lighting_status(paths):
+    """(items, restarts) from den_lighting's status sensor export (tools/correction-capture's step 4): one JSON
+    object per line, {last_updated_ts, entity_id, state, attributes}, in time order.
+
+    - occupancy {value, via: 'den_lighting_status'} on each change of the occupancy den_lighting itself held: its
+      Controller.occupancy, which its status shows. A row without status attributes (the sensor unavailable) is
+      'unknown': den_lighting was not running. A row whose revision went down follows an HA restart, which starts
+      den_lighting at unknown, so it gives unknown and then its own value at the same t. Each of the two counts
+      as one restart.
+    - live_status {automatic, gaming} on each change, a reference (events.REFERENCE_KINDS): whether the live
+      den_lighting was automatic and in a game (gaming_session), null for a row without status attributes.
+
+    A line repeated in overlapping exports counts once. A bad row, or rows for more than one entity, raises
+    ValueError; blank lines are skipped.
+    """
+    rows, seen, entities = [], set(), set()
+    for path in paths:
+        for number, raw in enumerate(_text(path).splitlines(), 1):
+            raw = raw.strip()
+            if not raw or raw in seen:
+                continue
+            seen.add(raw)
+            try:
+                row = json.loads(raw)
+                t = row["last_updated_ts"]
+                if (set(row) != STATUS_KEYS or type(t) not in (int, float) or not math.isfinite(t)
+                        or not isinstance(row["entity_id"], str)):
+                    raise ValueError
+                status = _status(row["attributes"])
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise ValueError("%s line %d is not a den_lighting status sensor export row" % (path, number)) from None
+            entities.add(row["entity_id"])
+            rows.append((float(t), status))
+    if len(entities) > 1:
+        raise ValueError("the status export holds more than one entity: %s" % ", ".join(sorted(entities)))
+    items, occupancy, live, revision, restarts = [], None, None, None, 0
+    for t, status in sorted(rows, key=lambda row: row[0]):
+        values = ["unknown"]
+        if status is None:
+            restarts += revision is not None  # the sensor went unavailable after a status row
+        else:
+            if revision is not None and status[3] < revision:
+                restarts += 1
+                values = ["unknown", status[2]]
+            else:
+                values = [status[2]]
+        for value in values:
+            if value != occupancy:
+                items.append((t, "occupancy", {"value": value, "via": "den_lighting_status"}))
+                occupancy = value
+        now = {"automatic": None, "gaming": None} if status is None else {"automatic": status[0], "gaming": status[1]}
+        if now != live:
+            items.append((t, "live_status", now))
+            live = now
+        revision = None if status is None else status[3]
+    return items, restarts

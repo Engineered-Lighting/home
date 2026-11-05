@@ -62,8 +62,11 @@ reader's journal edges: real occupancy for facts replays), `--assume-occupied`
 (den_lighting_command events exported from the HA recorder: a reference to
 compare with, never a policy input; needs `incumbent` in `--policies`),
 `--lights FILE ...` (the four bulbs' on/off states exported from the HA
-recorder; needs `--live-commands`, and turns the plant off), `--no-plant`,
-`--policies need incumbent decide`.
+recorder; needs `--live-commands`, and turns the plant off), `--status FILE
+...` (den_lighting's own status sensor export: its occupancy; no other
+occupancy source with it), `--corrections FILE ...` (correction-capture's
+`corrections.jsonl`: the holds the live den_lighting opened; needs `incumbent`),
+`--no-plant`, `--policies need incumbent decide`.
 
 `check.py LOG` re-imports each logged policy module, refuses `code changed:
 <module>` when its file's sha256 differs, rebuilds it from the logged config
@@ -97,7 +100,7 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 | File | What it is |
 | --- | --- |
 | `events.py` | den-event-1: constants, `dumps`, `validate`, `read`, `write`, `inside_checkout`, `scene_matches` |
-| `sources.py` | file adapters: `fact_log`, `poll_log`, `mqtt_timeline`, `occupancy_journal`, `recorder_commands`, `recorder_lights` |
+| `sources.py` | file adapters: `fact_log`, `poll_log`, `mqtt_timeline`, `occupancy_journal`, `recorder_commands`, `recorder_lights`, `den_lighting_status`, `correction_capture` |
 | `synthetic.py` | `evening()`: a fake evening in the real la-fact-log-1 format, built with the perceiver's own builders |
 | `runner.py` | `run()`: the deterministic heap runner; `load_policies()` |
 | `incumbent.py` | den_lighting's `policy.py`, loaded by path and unchanged, as a policy; `Shadow`, the same re-run beside a logged run for the comparisons |
@@ -146,9 +149,13 @@ workstation, outside every checkout, and these tools replay them.
   states" below. HA's recorder keeps no light brightness or colour
   temperature, so no export can give past levels. Each state comes with its
   `context`: own, person or unknown. Turning a person's change into a
-  `correction` needs the attribution rules, which are still parked.
-  den_lighting's status entity is not used: its `holds` belong to that parked
-  work.
+  `correction` needs the attribution rules, which are still parked; until then
+  `--corrections` takes den_lighting's own holds from correction-capture.
+- **den_lighting's status sensor** from the HA recorder: `--status FILE ...`
+  works now (adapter `den_lighting_status`), for den_lighting's own occupancy.
+  See "Replaying from the Home Assistant exports alone" below.
+- **correction-capture's `corrections.jsonl`**: `--corrections FILE ...` works
+  now (adapter `correction_capture`). See the same section.
 - **Eventually a live writer** that emits den-event-1 lines itself. It needs
   the owner's approval, and it only replaces the adapter.
 
@@ -347,10 +354,77 @@ How the export is used:
 - **`--lights` turns the plant off.** The recorded states are what the live
   den_lighting really saw, including the effects of its own commands, so the
   replay sees the same thing instead of its own echoes.
-- **A person's change is not a correction yet.** The live den_lighting holds a
-  bulb a person changed and leaves it alone. The replay only observes the
-  change, so it may set the bulb back where the live one did not. The
-  `person` and `unknown` rows show where that can happen.
+- **A person's change is a correction only with `--corrections`.** The live
+  den_lighting holds a bulb a person changed and leaves it alone. Without
+  `--corrections` the replay only observes the change, so it may set the bulb
+  back where the live one did not. The `person` and `unknown` rows show where
+  that can happen.
+
+### Replaying from the Home Assistant exports alone
+
+correction-capture's README (steps 4 to 6 and 8) already has the owner export
+den_lighting's status sensor, the four bulbs' states and den_lighting's
+commands, and write `corrections.jsonl` with `--events`. Those four files
+replay an evening on den_lighting's own inputs, with no Jetson journal. From
+the worktree root, in PowerShell 5.1:
+
+```powershell
+python -B tools/den-core/run.py --status C:/tmp/den-core/in/den-status.jsonl --lights C:/tmp/den-core/in/den-bulbs.jsonl --live-commands C:/tmp/den-core/in/den-lighting-commands.jsonl --corrections C:/tmp/den-core/cph-1/corrections.jsonl --policies incumbent --out C:/tmp/den-core/ha-1
+```
+
+```powershell
+python -B tools/den-core/check.py C:/tmp/den-core/ha-1/log.jsonl
+```
+
+Add `--facts` with the evening's fact files to run need and decide beside it
+(`--policies need incumbent decide`); the status is then cut to the span the
+facts replay.
+
+How `--status` is used:
+
+- Each change of the occupancy den_lighting held (its status's `occupancy`)
+  becomes `occupancy` with `via: den_lighting_status`, at `last_updated_ts`. It
+  is the occupancy den_lighting itself acted on, so it needs no `--journal`;
+  `run.py` refuses it together with any other occupancy source.
+- A row without den_lighting's status attributes (the sensor unavailable, as
+  across an HA restart) is `unknown`: den_lighting was not running. A row whose
+  revision went down follows a restart, which starts den_lighting at unknown,
+  so it gives `unknown` and then its own value at the same instant. `run.py`
+  prints how many restarts it read.
+- Each change of whether the live den_lighting was automatic and in a game
+  (`automatic`, `gaming_session`) becomes `live_status`, a reference like
+  `live_command`: no policy sees it. The export carries no gaming samples, so
+  the replayed den_lighting never enters a game and is never disabled. The
+  comparison with the live commands therefore leaves out the time the latest
+  `live_status` shows a game, den_lighting switched off, or no status. A hold a
+  game's exit cleared live may outlast it in the replay.
+- With other inputs (`--facts`) the status is cut to their span. The latest
+  occupancy and `live_status` before the span are carried to its start, or to
+  150 s before it when older, so an empty den is still empty long enough for
+  den_lighting to take the next arrival as one. Alone, the whole export
+  replays: about 15 s and 30 MB of log per week of span.
+
+How `--corrections` is used:
+
+- Each line of `corrections.jsonl` (den-event-1 `correction`, source
+  `correction_capture`) is a hold the live den_lighting opened from outside:
+  the replayed den_lighting holds the bulb at `after` with `manual()`, as the
+  live one did. One action on several bulbs is one line per bulb. A line
+  repeated in two files counts once; the same correction and bulb with other
+  values stops the run.
+- The corrections are cut to the span the other inputs replay and never set
+  it. `run.py` prints how many it kept.
+- With `--lights`, each correction is paired with the recorded row of its bulb
+  that it explains: the nearest one within 5 s (correction-capture's window),
+  not den_lighting's own, turning the bulb the way the hold says. That row
+  takes the hold's brightness and kelvin, which den_lighting's status read
+  from the bulb and the recorder drops. A row before the correction (a switch:
+  the bulb changes, then den_lighting holds it) takes the correction just
+  ahead of it; a row after it (the app: den_lighting holds at the call) leaves
+  it in place. Either way the replay holds the bulb first and finds it already
+  there, so, like the live one, it sends nothing.
+- In the comparison, the live side takes a correction's bulb target too: the
+  live den_lighting held the bulb where the person put it and sent nothing.
 
 ### Recording the bulb levels on Victoria HA (draft, owner's change)
 
@@ -451,7 +525,10 @@ This was tested in a Home Assistant 2026.2.3 core with the real recorder:
   log byte for byte like any other.
 - `recorder_lights` states go first among inputs at one instant, so a
   replay's opening instant observes the bulbs before its occupancy, as
-  den_lighting's start does.
+  den_lighting's start does. A correction paired with a later row goes just
+  ahead of it.
+- `live_status` is the second reference kind, for the same reason as
+  `live_command`.
 - `poll_log` emits a row's light edges before its occupancy edge, like the
   synthetic preamble. The synthetic fact files are named by the UTC day of
   `available_at`, as `la_fact_log` names its own.
@@ -564,6 +641,7 @@ need -> incumbent -> decide.
 
 The two adapters built after the three briefs extend the text above without
 changing it:
-- More source adapter names: 'occupancy_journal' (emits occupancy, via 'jetson_journal'), 'recorder_commands' and 'recorder_lights' (emits light_observed with brightness and kelvin null).
+- More source adapter names: 'occupancy_journal' (emits occupancy, via 'jetson_journal'), 'recorder_commands' and 'recorder_lights' (emits light_observed with brightness and kelvin null), 'den_lighting_status' (emits occupancy, via 'den_lighting_status', and live_status) and 'correction_capture' (emits correction).
 - Reference kinds: logged with the inputs, but never handed to a policy, and they set neither the span nor the ticks.
   - live_command: {entity_id, revision: int, target: scene, context_id: str}, one den_lighting_command event as the live integration fired it, at its time_fired_ts.
+  - live_status: {automatic: bool|null, gaming: bool|null}, whether den_lighting's status sensor showed it automatic and in a game (null without its status), on each change.

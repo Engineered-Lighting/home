@@ -64,7 +64,7 @@ python -B tools\den-track\den_track.py practice
 | `silent` | it moved while the record said `confident`: the gate wants 0 |
 | `IDF1` | pooled over the scene's crossings: the gate wants at least 0.9 |
 | `contact` | share of tracked observations reported ambiguous inside the crossing's mark |
-| `outside` | the same share outside every crossing: high means it doubts everything |
+| `outside` | the same share outside every crossing: high means it doubts everything. A new track reads ambiguous for its first `reconfirm_s`, which is a large share of these short scenes |
 | `tracks`, `face` | tracks per run; the stand-in for how often a face is visible |
 
 To walk the whole path on one synthetic scene, with the record of what was scored (see
@@ -235,7 +235,7 @@ the value.
 | `room.exits_m` | `[]`, known to be wrong | The door's position in the room frame |
 | `tracker.max_coast_s` | 6.0 s | How long someone can stay hidden and come back as themselves |
 | `tracker.crossing_radius_m` | 1.2 m | How close counts as a crossing; the owner's mark is about 1 m |
-| `tracker.reconfirm_s` | 1.5 s | How long after doubt a track is confident again; while it is not, no narrow beam and no teaching |
+| `tracker.reconfirm_s` | 1.5 s | How long after doubt a track is confident again, and how long a new track waits to be; until then, no narrow beam and no teaching |
 | `scoring.window_pad_s` | 2.0 s | How much of each crossing's before and after is scored |
 | `scoring.face_visible_score_min` | 0.4 | The keypoint score that counts as a visible face (a stand-in) |
 | `scoring.trial_rule` | `sides` `take`, `min_scored` 2, `contact_reach_m` 2.0, `unseen_s` 0.6 | What a marked crossing must show to count. `take` counts someone hidden past the padding if they are seen again within `tracker.max_coast_s`, and `window` does not. Past the coast neither counts: the track has ended (METHOD.md) |
@@ -247,8 +247,9 @@ the value.
 1. **Back to `confident` after a crossing.** A track goes back to `confident` once doubt
    has been quiet for `reconfirm_s`. That means "one person since `since_ts`", not "the
    same person as before". Rung 5's fixture assumes it, and staying ambiguous for life
-   would leave both people unlocated for narrow beams after any close pass. Is this
-   the reading you want?
+   would leave both people unlocated for narrow beams after any close pass. A new track
+   starts the same way, so someone who has just appeared waits `reconfirm_s` for a narrow
+   beam. Is this the reading you want?
 2. **Track has no time of its own** (rung 5 asks too). A coasting or ended line lists no
    observation, so rung 5 dates it at the line before. Rung 3's scorer needs no time on
    the line, so none is written. Should Track gain an `as_of`? Answer in the slot

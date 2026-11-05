@@ -75,10 +75,14 @@ record, and `identity.confidence` belongs to the identity layer.
   `ambiguous_below`, or another confirmed track is within reach. Reach is
   `crossing_radius_m`, plus `hidden_reach_mps` times the seconds either has been
   unseen. Geometry can be sure of a crossing and the status is still ambiguous:
-  rung 5's gate wants `association_safe` false through every annotated crossing. A
-  tentative track within reach of a confirmed one reads `ambiguous` too, from its first
-  line, so the line that confirms it cannot claim confidence. It is not someone within
-  reach of that confirmed track: a phantom still casts no doubt on a person.
+  rung 5's gate wants `association_safe` false through every annotated crossing.
+- **A new track** reads `ambiguous` from its first line, whoever is near, until it has been
+  seen with no doubt for `reconfirm_s`, and the line that confirms it claims nothing whatever
+  that slot says. It has no history, and two sightings can be two people: when two stand close
+  as a take starts and each is missed on one of the first frames, the one track takes both. So
+  someone new gets no narrow beam, no teaching and no `heading_as_of` for that long. A
+  tentative track within reach of a confirmed one is still not someone within reach of that
+  confirmed track: a phantom casts no doubt on a person.
 - **`association.hypotheses`**, while ambiguous: `{"hypothesis": "kept", "p": ...}`,
   then `swapped:<track_id>` per rival and `newcomer`. They sum to 1. Empty while
   confident, as in the schema's example.
@@ -177,7 +181,7 @@ person. A link joins an observation's person to the track that listed it in
   the same as a detector stalling on them. Under `take` both count if the person is seen
   again within `tracker.max_coast_s`: the track is still coasting, and the tracker has to give
   it back to the right person, which is a real test. So `take` and `window` differ only for
-  someone unseen from before the end of the window until no later than the coast allows.
+  someone back after the window closes and within the coast.
   Near a door a track ends sooner, after `exit_coast_s`, and the rule does not read that. What
   the rule cannot judge is the owner's intent: a mark typed where the two stand a metre apart
   and do nothing passes it. The marks stay the owner's.
@@ -226,7 +230,7 @@ Three things get past it. Deleting both notes by hand, which nothing can stop. A
 at alone and then left out of the session: nothing ties it to the others, so it cannot be
 refused, the plan catches it only if a kind falls short, and the report counts it among
 `other_takes_looked_at`, beside any pilot takes. So run `score` only on a complete session. And
-footage whose capture times have moved, by a hand or by a clock corrected between the two runs: the
+footage whose capture times have moved, by hand or by a clock corrected between the two runs: the
 tool has only those times to know it by. Frames of a recording that no look has reached are fresh.
 
 ## The block
@@ -272,7 +276,7 @@ tool has only those times to know it by. Frames of a recording that no look has 
     "max_hypotheses": 20000,
     "max_coast_s": {"open": true, "proposed": 6.0, "why": "How long an unseen person keeps their track. Synthetic scenes barely move between 3 and 12 s, and longer only adds ambiguous time, so the den decides: how long can someone stay hidden behind the armchair and come back as themselves? A pilot take can show it."},
     "crossing_radius_m": {"open": true, "proposed": 1.2, "why": "How close counts as a crossing; the contracts name no distance. Rung 5's gate wants association_safe false through every annotated crossing, so status must be ambiguous before the owner's mark starts. The mark is arm's reach, about 1 m, so 1.2 leaves a margin. Larger costs narrow-beam and teaching time for people near each other."},
-    "reconfirm_s": {"open": true, "proposed": 1.5, "why": "How long a track is seen with no doubt before status returns to confident. No contract sets it. While ambiguous a person gets no narrow beam and no teaching, so longer costs that; 1.0 let a silent swap through on noisy depth in tuning. Proposed 1.5 also leaves room for the owner's mark ending late."}
+    "reconfirm_s": {"open": true, "proposed": 1.5, "why": "How long a track is seen with no doubt before status returns to confident, and before a new track first reads confident. No contract sets it. While ambiguous a person gets no narrow beam and no teaching, so longer costs that; 1.0 let a silent swap through on noisy depth in tuning. Proposed 1.5 also leaves room for the owner's mark ending late."}
   },
   "scoring": {
     "idf1_gate": 0.9,
@@ -302,7 +306,7 @@ tool has only those times to know it by. Frames of a recording that no look has 
 
 ## How the values were tuned
 
-Synthetic scenes only (`synth.py`): a made-up den, two people, eight scenes, three
+Synthetic scenes only (`synth.py`): a made-up den, two people, nine scenes, three
 noise profiles, at 4 frames a second. One value at a time, first for no silent swaps,
 then for the least ambiguity outside crossings, then for IDF1. Each line runs
 `python -B tools\den-track\den_track.py practice --first-seed <s> --seeds <n> --noise <p>`
@@ -311,31 +315,39 @@ with `--set tracker.<name>=<value>` to try a value.
 - **Seeds 0-59** tuned the numbers.
 - **Seeds 1000-1099** were looked at to diagnose silent swaps, which led to the reach
   rule and the door's radius, so they count as tuning too.
-- **Seeds 2000-2199** were run once, after the numbers stopped moving (1,600 runs at
-  each noise). They and the conditions below were run again after three later changes, with
+- **Seeds 2000-2199** were run once, after the numbers stopped moving (1,800 runs at
+  each noise). They and the conditions below were run again after four later changes, with
   no value changed, and these are the results of that run: the reader stopped merging
-  overlapping boxes, a tentative track beside a person reads `ambiguous`, and a crossing
-  along the view ends with the near person stepping aside, so both are seen again. The
-  second took silent swaps at typical noise from 3 to 1. IDF1 is over the crossings that
-  count: all but 3 at noisy, and all but 56 of the 800 at 2 frames a second, where
-  `min_scored` is a lot to ask.
+  overlapping boxes, a tentative track beside a person reads `ambiguous`, a crossing along the
+  view ends with the near person stepping aside, so both are seen again, and a new track reads
+  `ambiguous` until it has been seen for `reconfirm_s`. The last took silent swaps at noisy
+  from 7 to 3. The ninth scene, `close_at_start`, came with it: synthetic scenes had all started
+  with the two apart, so they never showed what it fixed. On seeds 2000-2049 of the first eight
+  scenes it raised the ambiguous share outside crossings at typical noise from 0.22 to 0.36:
+  these takes last 5 to 14 s, and for someone who stays it is only their first `reconfirm_s`. IDF1
+  is over the crossings that count: all but 3 at noisy, and all but 56 of the 900 at 2 frames a
+  second, where `min_scored` is a lot to ask.
 
 | Noise | Silent swaps | Flagged switches | IDF1 by scene, lowest to highest | Lowest scene |
 |---|---|---|---|---|
 | clean | 0 | 181 | 0.954 to 1.000 | `near_pass` |
-| typical | 1 | 379 | 0.914 to 0.987 | `crossing_behind_armchair` |
-| noisy | 7 | 531 | 0.858 to 0.977 | `near_pass` |
+| typical | 1 | 426 | 0.914 to 0.987 | `crossing_behind_armchair` |
+| noisy | 3 | 585 | 0.858 to 0.977 | `near_pass` |
 
-**Other conditions**, seeds 3000-3099 at typical noise, 800 runs each:
+**Other conditions**, seeds 3000-3099 at typical noise, 900 runs each:
 
 | Condition | Silent swaps | Flagged switches | IDF1 | Lowest scene |
 |---|---|---|---|---|
-| 2 frames a second | 2 | 343 | 0.908 | `near_pass` 0.658 |
-| 4.75 frames a second (R6) | 0 | 151 | 0.971 | `touching_crossing` 0.937 |
-| 8 frames a second | 0 | 183 | 0.972 | `crossing_behind_armchair` 0.938 |
-| 15 frames a second | 0 | 217 | 0.969 | `crossing_behind_armchair` 0.942 |
-| Observations' covariance half too small | 0 | 196 | 0.936 | `near_pass` 0.879 |
-| Observations' covariance twice too big | 1 | 162 | 0.962 | `crossing_behind_armchair` 0.900 |
+| 2 frames a second | 2 | 367 | 0.915 | `near_pass` 0.658 |
+| 4.75 frames a second (R6) | 0 | 160 | 0.972 | `touching_crossing` 0.937 |
+| 8 frames a second | 0 | 198 | 0.972 | `crossing_behind_armchair` 0.938 |
+| 15 frames a second | 0 | 246 | 0.969 | `crossing_behind_armchair` 0.942 |
+| Observations' covariance half too small | 0 | 229 | 0.937 | `near_pass` 0.879 |
+| Observations' covariance twice too big | 1 | 182 | 0.965 | `crossing_behind_armchair` 0.900 |
+
+**Two people close when a take starts**, 200 takes at each distance (0.2 to 1.5 m) and noise,
+standing 2 s and then parting: no silent swap at any. Before a new track doubted itself, 14 of
+200 takes at 0.45 m and typical noise had one, mostly on a track's second line.
 
 None of this is a score. It says the method works on the scenes it was written for.
 
@@ -352,13 +364,29 @@ None of this is a score. It says the method works on the scenes it was written f
   through, it is a second detection and starts a tentative track, which reads `ambiguous`
   on every line while a confirmed track is in reach. It casts no doubt on the person beside
   it. Before it fades it can take the other person's next detection and be confirmed on it,
-  so that person is listed on a third track for a while: a flagged switch and lost IDF1,
-  never a silent swap. On 400 runs at typical noise with a box-only duplicate 4 cm off, there
-  were 0 silent swaps at both rates, and IDF1 fell from 0.958 to 0.925 at 5% of observations
-  and 0.817 at 20%, which would miss the gate. How often the real detector does this is
-  unknown: the report counts `second_boxes`, so a pilot take shows it, and the place to act
-  is the detector's own overlap filter in rung 2. The tool does not merge two boxes that
-  overlap and agree on the floor: rung 2 places a box-only person at the median depth in
+  so that person is listed on a third track for a while: a flagged switch and lost IDF1. It
+  can still read as a silent swap, rarely: a box placed well off its person can land by someone
+  else, whose settled track takes it with nobody within reach to doubt it. Measured on seeds
+  4000-4099, 900 runs a row, with a box-only duplicate on a share of observations, each one or a
+  burst of frames, and its position off by a Gaussian of the size given:
+
+  | Noise | Duplicates | Off by | Silent swaps | Flagged switches | IDF1 |
+  |---|---|---|---|---|---|
+  | typical | none | | 0 | 226 | 0.955 |
+  | typical | 5% | 4 cm | 0 | 426 | 0.919 |
+  | typical | 20% | 4 cm | 0 | 1077 | 0.813 |
+  | typical | 5%, bursts of 4 | 30 cm | 0 | 955 | 0.839 |
+  | typical | 5%, bursts of 4 | 60 cm | 1 | 1105 | 0.850 |
+  | typical | 20%, bursts of 4 | 60 cm | 1 | 3621 | 0.695 |
+  | noisy | none | | 2 | 348 | 0.930 |
+  | noisy | 5% | 4 cm | 1 | 565 | 0.895 |
+  | noisy | 20% | 4 cm | 1 | 1286 | 0.793 |
+  | clean | 20%, bursts of 4 | 60 cm | 0 | 3610 | 0.727 |
+
+  So the cost is IDF1, which misses the gate at 20%, more than swaps. How often the real
+  detector does this is unknown: the report counts `second_boxes`, so a pilot take shows it, and
+  the place to act is the detector's own overlap filter in rung 2. The tool does not merge two
+  boxes that overlap and agree on the floor: rung 2 places a box-only person at the median depth in
   their box, which for someone behind another person is often the front person's depth, so
   those two would agree too.
 - **Noisy depth along the line of sight.** Stereo error grows with the square of the

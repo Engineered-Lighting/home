@@ -27,5 +27,7 @@ a take once results are known needs fresh takes, and so does the same footage co
 with a frame less. The tool refuses the old ones, from a record of hashes and capture times
 kept beside each take and for the Windows user. Truth files say who
 labelled, whether blind, and which observations, and may say "cannot tell". Overlapping
-boxes are never merged, since rung 2 writes one observation per detector box, and a
-duplicate box costs some IDF1 but never reads as a silent swap.
+boxes are never merged, since rung 2 writes one observation per detector box. A new track
+claims nothing until it has been seen for a while, so two people close as a take starts no
+longer read as a silent swap. A duplicate box costs IDF1 and rarely reads as one, at the rates
+`METHOD.md` gives.

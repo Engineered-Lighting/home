@@ -486,9 +486,7 @@ class ScoredRunTest(Base):
         self.assertNotIn('EXCLUDED', text)
 
     def test_takes_that_start_with_the_two_people_close_do_not_fail_on_a_tracks_first_lines(self):
-        def plan(block):
-            block['scoring']['crossings_plan'] = {'crossing': 20}
-        meth = self.closed_method('METHOD-start.md', plan)
+        meth = self.closed_method()
         takes = [self.make_take('close_at_start', seed=seed, noise='typical', meth=meth) for seed in range(40, 60)]
         code, text = cli(*self.score_args(takes, scored=True, meth=meth))
         self.assertIn('SCORED', text)
@@ -504,8 +502,7 @@ class ScoredRunTest(Base):
                 meth = self.closed_method('METHOD-stall-%d.md' % n)
                 takes = [self.walked_take(100 * n + seed, meth, lost, past, written) for seed in range(20)]
                 self.assert_refused(self.score_args(takes, 'stall-%d' % n, scored=True, meth=meth), 'at least 20')
-                out = takes and self.score_args(takes, 'peek-%d' % n, meth=meth)
-                code, text = cli(*out)
+                code, text = cli(*self.score_args(takes, 'peek-%d' % n, meth=meth))
                 self.assertEqual(code, 0, text)
                 self.assertIn('max_coast_s', text, 'the practice report says why they do not count')
 
@@ -527,14 +524,15 @@ class ScoredRunTest(Base):
         self.assertNotIn('EXCLUDED', text)
 
     def test_a_max_coast_the_scorer_cannot_read_is_a_refusal(self):
-        def bad(block):
-            block['tracker']['max_coast_s'] = 'six'
         meth = self.small_method()
         takes = [self.walked_take(seed, meth) for seed in range(2)]
-        other = self.closed_method('METHOD-bad-coast.md', bad)
-        code, text = cli(*self.score_args(takes, meth=other))
-        self.assertEqual(code, 2, text)
-        self.assertIn('max_coast_s', text)
+        for n, value in enumerate(('six', 0, -1.0, None)):
+            def bad(block, value=value):
+                block['tracker']['max_coast_s'] = value
+            other = self.closed_method('METHOD-bad-coast-%d.md' % n, bad)
+            code, text = cli(*self.score_args(takes, 'bad-%d' % n, meth=other))
+            self.assertEqual(code, 2, text)
+            self.assertIn('tracker.max_coast_s must be a number above 0', text)
 
     def test_twenty_windows_each_holding_one_sighting_of_each_person_are_refused(self):
         meth = self.closed_method()

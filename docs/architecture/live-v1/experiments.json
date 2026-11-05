@@ -1,0 +1,226 @@
+{
+  "about": "Every experiment from the design discussion, each tied to the decision it settles. Costs are rough and assume today's den: four Hue lights, no engineered fixture installed, physical output of engineered fixtures needs a separate owner approval.",
+  "experiments": [
+    {
+      "id": "E1",
+      "area": "corrections",
+      "name": "Log every correction with its context",
+      "how": "Capture every human action on the real lights as one Correction, with its changes, the last decision, person states, light state and whose light it was; den_lighting's per-bulb holds are the raw events. After a few weeks hand-sort a sample into the five links or cannot tell, with whose light it was, and compare with the automatic attribution; report abstention and shared rates, and whether glare (comfort) corrections can be told from preference, a class that needs the changer's report as its reference.",
+      "decides": "Whether attribution is reliable enough for corrections to train perception and need, or only preferences, and how many corrections can be learned from at all; whether they may then train perception and need is the owner's decision {{dec:learning-permissions}}.",
+      "cost": "cheap; extends the virtual den's decision-bound correction log to real lights",
+      "order": 1
+    },
+    {
+      "id": "E2",
+      "area": "tracking",
+      "name": "Crossing study",
+      "how": "Stage 20–30 crossings and occlusions. Count identity switches with geometry only; the body-appearance and face arms run only after the owner's decision {{dec:learning-permissions}}; record how often a face is even visible.",
+      "decides": "Whether face would earn a place in tracking or only in naming tracks, if the owner allows either {{dec:learning-permissions}}.",
+      "cost": "an evening of staged walks plus labeling",
+      "order": 1
+    },
+    {
+      "id": "E3",
+      "area": "person state",
+      "name": "Need from geometry alone",
+      "how": "A simple model of 'focused task at a surface' from pose, hands, objects and dwell, compared with Qwen on a small owner-confirmed set, scoring demand per band (fine recall, coverage) as well as calibration.",
+      "decides": "How much a large vision-language model is needed for the states lighting cares about.",
+      "cost": "days; needs the gold set",
+      "order": 2
+    },
+    {
+      "id": "E4",
+      "area": "student",
+      "name": "Student backbone ablation",
+      "how": "Need heads on pose, objects and geometry alone; then adding V-JEPA features; then a small vision-language model's image features. Score on the confirmed set and on predicting corrections.",
+      "decides": "Which on-device model, and whether V-JEPA earns its GPU.",
+      "cost": "weeks; needs logged bundles and the gold set",
+      "order": 3
+    },
+    {
+      "id": "E5",
+      "area": "efficiency",
+      "name": "Edge budget run",
+      "how": "Run the candidate perception stack on the Orin Nano in Victoria or a 16 GB Orin NX; measure rate, latency and power per stage.",
+      "decides": "The hardware class. Deliberately later: build the great system first.",
+      "cost": "days, later",
+      "order": 5
+    },
+    {
+      "id": "E6",
+      "area": "latency",
+      "name": "A real Qwen latency benchmark",
+      "how": "Vary clip length (4–30 frames), answer length (short JSON vs free text), cold vs warm, with no cache reuse. For per-person requests, a paced replay of recorded sessions at the declared single-track cadence (one request per 4 s) measures each request's service time; only the capture-to-request schedule is emulated. The whole-room stills receipt (1.25 s median, 1.97 s p95) times a different workload, so it does not qualify the per-person requests [[R3]].",
+      "decides": "Qwen's live role and how many teaching calls are affordable.",
+      "cost": "a day on the LA GPU, scheduled around voice",
+      "order": 1
+    },
+    {
+      "id": "E7",
+      "area": "light model",
+      "name": "Channel contribution capture",
+      "how": "Lock exposure and white balance, read linear values, subtract an all-off frame, step each channel through its dimming levels; check whether channels of one type share one dimming curve, and whether the sum predicts a mixed scene, including scenes near full combined output. Frames are normalised under the same version as the camera scale (`normalisation_version` `meter-norm/v1`).",
+      "decides": "Whether the camera can be the room's light sensor, and whether locked exposure plus differencing beats the three failed footprint runs.",
+      "cost": "cheap; can start on the den's four Hue lights with den_lighting paused while the room is empty, its saved normal scene written back from a pre-probe snapshot before resume",
+      "order": 1
+    },
+    {
+      "id": "E8",
+      "area": "light model",
+      "name": "Camera-meter calibration and a day of daylight",
+      "how": "Fix the camera scale `k_L` from one grey card of known reflectance and one lux-meter reading at the card, pass the known-card round trip, and hold back later days and the other meter points (desk and sofa) as checks against a tolerance in lux fixed beforehand {{dec:photometry-commissioning}}; then track window daylight for a full day against sun position and blind state.",
+      "decides": "Whether camera estimates can be absolute (the round trip and the held-out checks in lux are both needed; a passing relative camera score establishes neither), and how daylight is modelled.",
+      "cost": "cheap",
+      "order": 2
+    },
+    {
+      "id": "E9",
+      "area": "light model",
+      "name": "Aim verification",
+      "how": "Predicted versus observed spot position for the gimbal spot, including shadowing by the person, predicted with the person's nominal body envelope (versioned); first, the fixture's stop, aim-readback and fade-pre-emption capabilities, which stay unknown until measured {{dec:fixture-capabilities}}.",
+      "decides": "Whether verify can catch delivery errors on the spot.",
+      "cost": "cheap once a gimbal fixture is installed (none in the den today)",
+      "order": 3
+    },
+    {
+      "id": "E10",
+      "area": "coordinator",
+      "name": "Coordinator v0 against today's Hue policy, on replay",
+      "how": "Guidance targets plus the light model and an optimizer, scored by replay against the scenes the frozen den_lighting version showed on the same logged evenings, with each evening's actual holds pinned in both arms and both arms run through the same Hue light model: anticipation and stability as replay surrogates against floors fixed before the run, and predicted service coverage and missed service at the owner's marks on gold-labelled replay sessions, labelled 'predicted, replay surrogate'. Corrections per occupied hour come only from rung 11's canary. A virtual-den run against the rule table (assumed photometry) is a separate, separately versioned synthetic claim (`comparator.kind = synthetic`).",
+      "decides": "Whether optimizing is promising enough to earn the real-light canary.",
+      "cost": "weeks of logged evenings; a virtual-den run is a separate synthetic check",
+      "order": 3
+    },
+    {
+      "id": "E11",
+      "area": "beauty",
+      "name": "The DP session",
+      "how": "A lighting designer or DP lights the den with its fixtures for four or five moments, narrating why; capture fixed-exposure images, settings and reasons; check whether a weighted objective lands near their choices.",
+      "decides": "How far simple weights on perceptual terms go.",
+      "cost": "one session with an expert",
+      "order": 2
+    },
+    {
+      "id": "E12",
+      "area": "beauty",
+      "name": "Taste agreement",
+      "how": "Show designers and ordinary people the same pairs of scenes.",
+      "decides": "If designers agree with each other far more than users do, taste should come from experts and comfort from users.",
+      "cost": "small study",
+      "order": 3
+    },
+    {
+      "id": "E13",
+      "area": "beauty",
+      "name": "Automatic commissioning",
+      "how": "From the den scan, detect surfaces and focal points, generate three looks, compare side by side with the DP's.",
+      "decides": "Whether day-one beauty can be generated automatically.",
+      "cost": "weeks",
+      "order": 4
+    },
+    {
+      "id": "E14",
+      "area": "beauty",
+      "name": "Intent transfer",
+      "how": "Apply the same looks to a second room (the LA living room) without re-tuning.",
+      "decides": "Whether looks in perceptual terms really transfer between rooms.",
+      "cost": "days, after E11",
+      "order": 4
+    },
+    {
+      "id": "E15",
+      "area": "calibration",
+      "name": "Radial zone probe",
+      "how": "Light each radial zone alone at locked exposure, fit anchor angle and order, compare with the owner's call.",
+      "decides": "Whether zone orientation can be measured instead of judged.",
+      "cost": "minutes once an engineered fixture is installed; physical output needs owner approval",
+      "order": 3
+    },
+    {
+      "id": "E16",
+      "area": "calibration",
+      "name": "Spotlight as wand",
+      "how": "Sweep pan and tilt; fit the commanded angles to the 3D landing points (at least four well-spread aims) for fixture position and gimbal zeros; compare with tape.",
+      "decides": "Whether the tape-measure worksheet can go.",
+      "cost": "cheap once a gimbal fixture is installed",
+      "order": 4
+    },
+    {
+      "id": "E17",
+      "area": "calibration",
+      "name": "Blink identification",
+      "how": "Blink each channel in a unique pattern and match smart-home entities to physical channels automatically. The run aborts on the occupancy gate or on any state change it did not send, and no remaining flash or restore overwrites a light a person changed.",
+      "decides": "Safe automatic entity mapping (the repo refuses mapping by name).",
+      "cost": "cheap; can start on the four Hue lights with den_lighting paused, its saved normal scene written back from a pre-probe snapshot before resume",
+      "order": 2
+    },
+    {
+      "id": "E18",
+      "area": "mapping",
+      "name": "Camera-only room map",
+      "how": "Build the den's rough map from OAK depth alone (planes and boxes); measure wall and table-height error against the Scaniverse mesh.",
+      "decides": "Whether the phone scan can become optional.",
+      "cost": "days",
+      "order": 3
+    },
+    {
+      "id": "E19",
+      "area": "mapping",
+      "name": "Map from use",
+      "how": "Infer seats, tables and floor from a few days of tracks; compare with labelled anchors.",
+      "decides": "Whether use can label the room.",
+      "cost": "needs tracking (E2) first",
+      "order": 4
+    }
+  ],
+  "build_order": [
+    {
+      "step": 1,
+      "name": "Track each person; per-person state with Qwen still interpreting",
+      "detail": "Per-person tracking and PersonState, with Qwen still interpreting, now per person and within today's request caps; video and a faster rate follow E6. In the ladder it is proposed to come after an offline need test on one person (N1, N2) {{dec:need-test-order}}. Alone, this gives each person a state of their own; per-person light (a task light for A at the counter while B keeps the reading beam, instead of ambient for both) comes once coordinator v0 reads it.",
+      "unblocks": "everything per-person"
+    },
+    {
+      "step": 2,
+      "name": "Log at every interface",
+      "detail": "Bundles, features, Qwen descriptions, person states, light states, decisions and corrections. Cheap now; it is the data every later model is trained and judged on. Keeping the camera recordings themselves, on a validated capture clock, is its own step (ladder R), which needs the owner's approval {{dec:recording-retention}} and can start first.",
+      "unblocks": "E1, E3, E4, evaluation"
+    },
+    {
+      "step": 3,
+      "name": "A small owner-confirmed gold set",
+      "detail": "Owner-confirmed intervals per need state, refreshed now and then; model-made labels never score. A single-person part, as a fixed input and separate blind labels (ladder N1), is proposed to come first and score the early need test (N2) before any tracker {{dec:need-test-order}}; the two-person, per-track part follows tracking (rung 4), with the owner's marks of the worked patch where service is measured.",
+      "unblocks": "honest promotion decisions"
+    },
+    {
+      "step": 4,
+      "name": "Measure light and build the light model",
+      "detail": "E7 and E8 on the den's Hue lights, then the light model; coordinator v0 (E10) joins this with step 1's person state and is compared on replay with the den_lighting scenes shown on the Hue bulbs, through the same light model.",
+      "unblocks": "verify, delivery attribution, beauty"
+    },
+    {
+      "step": 5,
+      "name": "Looks from a designer",
+      "detail": "The DP session (E11) seeds the first intent library; preferences learn inside its guardrails.",
+      "unblocks": "day-one beauty"
+    },
+    {
+      "step": 6,
+      "name": "Structured-slot student",
+      "detail": "Need heads on pose, objects and geometry; add V-JEPA only if the ablation (E4) says it helps.",
+      "unblocks": "throughput, more rooms, edge later"
+    },
+    {
+      "step": 7,
+      "name": "Self-calibration",
+      "detail": "Zone probe and spotlight wand once engineered fixtures are installed; blink identification can start earlier on the Hue lights. Manual values remain the test set.",
+      "unblocks": "install without a technician"
+    },
+    {
+      "step": 8,
+      "name": "Spatial memory last",
+      "detail": "Per-landmark counts of episode kinds; its main job is ranking hypotheses during occlusion.",
+      "unblocks": "anticipation"
+    }
+  ]
+}

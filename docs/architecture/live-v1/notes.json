@@ -1,0 +1,198 @@
+{
+  "about": "Repo notes: what the repository says exists, checked 2026-10-27; R14's den_lighting behaviour re-read from its working-checkout source on 2026-10-28 and 2026-10-29. Each note is source and dated receipts, not freshly queried live state. Paths are relative to C:\\claude\\home; 'origin/main:' means the committed main branch, which is newer than the shared checkout for these services.",
+  "notes": [
+    {
+      "id": "R1",
+      "text": "The occupancy gate is Frigate 0.18 on a Raspberry Pi 5 with a Hailo accelerator (hailo8l backend): whole-room person detection on the den camera at 1280×720, 10 fps, about 10–12 ms a frame (measured 2026-09-25). The HA occupancy sensor wakes Qwen fail-closed.",
+      "sources": [
+        "docs/VICTORIA-HAOS-COMMISSIONING-2026-09-25.md",
+        "docs/PERCEPTION-ACCURACY-CODEX-PROMPT-2026-10-10.md"
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "The den camera is a Luxonis OAK-D Pro on a Jetson Orin Nano Super 8 GB: RGB 1920×1080 at 30 fps, 640×400 depth from on-device stereo at 15 fps, 640×360 previews. IR emitters are off; night depth is about 6% valid.",
+      "sources": [
+        "tools/victoria-camera/capture.py",
+        "docs/OAK-DEN-NIGHT-MODE.md"
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "Live Qwen3.6-35B-A3B-FP8 (served since 2026-10-20 under the old alias qwen3-vl-30b; source still names Qwen3-VL) gets 2–4 still 640×360 JPEGs over about 3 s, every 4 s at most, one request in flight, and returns 10 closed-enum lab-live-scene-1 facts. Live facts end to end: 1.25 s median, 1.97 s p95 (n=21), for whole-room stills; that receipt does not qualify a per-person workload. A 4-frame clip alone took 0.54 s median (n=6, offline, 2026-10-23). vLLM holds about 48 GB.",
+      "sources": [
+        "stack/services/perception-lab/qwen_scene.py",
+        "docs/VLLM-QWEN36-SWAP.md",
+        "docs/plans/household-context-2026-10-22/qwen-video-metadata-comparison-results-20261023.md"
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "In the den activity loop (held at operator_stop since 2026-10-21 apart from short owner-approved windows, R5), the activity call is made downstream of Qwen by a third-party cloud judge (JEV jev-1.13.0) from words only, smoothed by an HMM with hysteresis, as one of seven classes. It is shown here only as a note, never as an arbiter; on 2026-10-20 it mostly answered insufficient_evidence.",
+      "sources": [
+        "docs/plans/den-activity-lighting/MVP-SPEC-20261019.md",
+        "docs/plans/den-activity-lighting/CODEX-HANDOFF-20261020.md"
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "The den activity loop (YOLO26s + RTMPose-m + same-frame depth lifting + an approximate camera-to-room alignment) is held at operator_stop since 2026-10-21/22 and ran only in short owner-approved windows; in the 10-22 window 115 of 228 detector results expired (capture to completion about 1.46 s). The owner stopped all den, Qwen and backend work on 2026-10-25.",
+      "sources": [
+        "origin/main:stack/services/perception-lab/activity_loop.py",
+        "origin/main:stack/services/perception-lab/continuous_app.py",
+        "docs/plans/den-activity-lighting/TICKETS.md"
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "A lab fast-skeleton path (YOLO26s on the LA GPU, RTMPose on CPU, paired depth) sustained about 4.6–4.9 Hz with camera-to-GPU latency p50 284–460 ms; seated, a median of 5 of 17 joints were supported.",
+      "sources": [
+        "tools/_tmp/den-pipeline-e2e-20261020T163441Z/fast-la-paired-depth-change/LIVE-TRIAL-RESULT.md"
+      ]
+    },
+    {
+      "id": "R7",
+      "text": "There is no multi-person tracker in the den's live path: person events carry a per-frame 'slot-N' id with no cross-frame association; a 2D IoU association exists only for the Home viewing panel, and a sole-reader binding covers exactly one person. LA has a per-person Kalman spatial-tracker (0 tracks on 2026-09-25). Face recognition is excluded by design at Victoria; people are anonymous tracks with explicit profile binding. Two-person tracking is the first post-MVP ticket (AL-P1).",
+      "sources": [
+        "docs/plans/den-activity-lighting/CONTRACT.md",
+        "stack/services/spatial-tracker/README.md",
+        "docs/VICTORIA-HAOS-COMMISSIONING-2026-09-25.md",
+        "https://github.com/Engineered-Lighting/home/issues/328"
+      ]
+    },
+    {
+      "id": "R8",
+      "text": "No mmWave is installed: an Everything Presence Pro (LD2450 radar + SEN0609 + PIR) and an Inovelli mmWave switch were ordered on 2026-10-18 for lights-off arrival and vacancy.",
+      "sources": [
+        "docs/plans/first-live-den-mvp-tickets/den-low-light-presence-research.md",
+        "docs/plans/first-live-den-replan-2026-10-15/handoffs/apartment-live-repair-20261018.md"
+      ]
+    },
+    {
+      "id": "R9",
+      "text": "A frozen V-JEPA 2.1 ViT-B lab worker with trained heads runs on the LA GPU for Lab recordings only; the always-on loop has excluded it since 2026-10-19. Den probes: computer_work F1 0.93–0.98, reading below the sample gate, no sofa data. The 2026-10-20 research advises against more reading probes because reading is object- and state-defined.",
+      "sources": [
+        "stack/services/perception-lab/vjepa_scene.py",
+        "tools/la-vjepa-worker/vjepa_worker.py",
+        "docs/plans/den-activity-lighting/VJEPA-TUNING-PLAN.md"
+      ]
+    },
+    {
+      "id": "R10",
+      "text": "The den has a Scaniverse scan (mesh + splat) in the z_up_metric_floor0 frame, activated for viewing 2026-10-15, scale checked against the owner's measured spans (the scan pack records them as tape measures: length 4.572 m, width 3.759 m, height 2.438 m; within 1%, passed 2026-10-14). Every OAK-to-scan registration (depth ICP, photometric atlas, landmark PnP) was refused; the camera uses a presentation-only approximate placement, and the room mapper has never saved a map.",
+      "sources": [
+        "tools/spatial-pipeline",
+        "stack/services/perception-lab/room_mapper.py",
+        "docs/plans/first-live-den-replan-2026-10-15/handoffs/apartment-live-repair-20261018.md",
+        "app/data/home-content/victoria/local-2026-10-15-den-scan-r1-review-v1/frame.json"
+      ]
+    },
+    {
+      "id": "R11",
+      "text": "Fixture models: engineered_gimbal_v1 has a 20° spot (Carclo 10511) on a ±180°/±90° gimbal and six radial zones with orientation_calibration {anchor_zone, anchor_world_angle_deg, order, fine_adjust_deg}; engineered_den_fixture_v1 adds a downlight ring and per-field provenance, all assumed except the spot beam. The planned C12 hardware has 24 channels per fixture (six radial and one down zone, each warm/neutral/cool, plus three spot channels) and is not commissioned; there is no physical command path.",
+      "sources": [
+        "app/src/home-apartment-aiming.js",
+        "origin/main:app/src/home-den-fixtures.js",
+        "docs/plans/first-live-den-replan-2026-10-15/HARDWARE-EXECUTION-PLAN.md"
+      ]
+    },
+    {
+      "id": "R12",
+      "text": "Aiming math exists: solveAim (inverse kinematics) and beamTrace (a centre ray plus 48 rim rays against the collision mesh). In LA, light footprints are drawn by hand in the /spatial tool: the camera-measured footprint calibration was abandoned after three failed runs (auto-exposure and ambient light). The den has no measured footprints.",
+      "sources": [
+        "app/src/home-apartment-aiming.js",
+        "app/src/home-3d/picking.js",
+        "app/src/home-spatial.jsx",
+        "docs/HOME_SYSTEM_OVERVIEW.md"
+      ]
+    },
+    {
+      "id": "R13",
+      "text": "The lighting brain (AL-1, rules v1.1, Python standard library) runs on the LA box at :8101, deployed 2026-10-20: it sets ambient level and colour for four virtual den fixtures and a reading spot aimed by an over-shoulder planner, keeps the newest 20 decisions with a 'why', pauses a fixture on a manual change, and gives 2+ people ambient only. Output is virtual only. The deployed release (f05bd86d) predates main's bound-reading rule (4fa86f46), which also requires activity and pose bound to one reader; the installed release was not re-verified on 2026-10-25.",
+      "sources": [
+        "origin/main:stack/services/lighting-brain/README.md",
+        "origin/main:stack/services/lighting-brain/lighting_brain/rules.py",
+        "origin/main:stack/services/lighting-brain/lighting_brain/aim.py"
+      ]
+    },
+    {
+      "id": "R14",
+      "text": "The den's four physical Hue bulbs are run by the den_lighting Home Assistant integration (installed 2026-10-27; manifest 1.0.4 in source on 2026-10-28): occupancy on/off with a 120 s vacancy-off, a Steam gaming scene (brightness 38/255 at each bulb's warmest white), and per-fixture manual holds detected from HA Context ids and service-call events. A hold covers only the changed bulb; the others stay automatic. Outside a game a hold ends 120 s after the later of vacancy start and the latest touch, and a manual level also becomes that bulb's normal scene, even while paused. During a game a hold ends at the game's end, and vacancy turns held bulbs off without ending their holds. Game exit clears every hold and restores the pre-game normal snapshot; resume_automatic clears holds and drives each bulb to its current normal. Before each call it re-checks its revision and the light's current target, retries only while that target is unchanged, cancels pending readback on a person's command, and repairs a late report of its own old write once. These are source and dated receipts, not live state.",
+      "sources": [
+        "ha-config/custom_components/den_lighting/policy.py",
+        "ha-config/custom_components/den_lighting/__init__.py",
+        "ha-config/custom_components/den_lighting/manifest.json",
+        "ha-config/custom_components/den_lighting/tests/test_policy.py",
+        "docs/VICTORIA-DEN-LIGHTING.md"
+      ]
+    },
+    {
+      "id": "R15",
+      "text": "A virtual den (lab, untracked or on a branch) maps context to scenes, requests and lighting-decision-1 records with hard constraints (envelope, line of sight, eye boxes, quiet) and weighted costs; its physics sums direct light and one diffuse wall bounce with all photometry assumed, and saves corrections bound to their run, decision, fixture and target.",
+      "sources": [
+        "app/src/home-lighting-policy.js",
+        "app/src/home-fixture-controller.js",
+        "docs/VIRTUAL-DEN-LIGHTING.md",
+        "app/src/home-virtual-den-physics.js"
+      ]
+    },
+    {
+      "id": "R16",
+      "text": "LA's older Living Lights stack has an 8-state classifier per zone, Adaptive Lighting for colour (2000 K at night to 4000 K at midday), manual-touch detection from HA context user and parent ids plus predicted-vs-actual brightness, and JSONL decision and override ledgers.",
+      "sources": [
+        "docs/HOME_SYSTEM_OVERVIEW.md",
+        "ha-config/packages/adaptive_lighting.yaml"
+      ]
+    },
+    {
+      "id": "R17",
+      "text": "No lux sensor or blinds control feeds any lighting logic. Daylight appears only as the sun above or below the horizon, a fixed night window in the brain, LA's Adaptive Lighting curve, and an untracked NOAA preview. The Lit view's lux is modeled and labelled not photometric.",
+      "sources": [
+        "origin/main:stack/services/lighting-brain/lighting_brain/settings.py",
+        "origin/main:app/src/home-3d/lit-model.mjs"
+      ]
+    },
+    {
+      "id": "R18",
+      "text": "No student or distillation exists. V-JEPA tuning uses label tiers (gold, owner, weak = Qwen+JEV agreement) where weak labels train but never score, and a label never scores an arm that consumed its source. A 2026-10-08 rule forbids pseudo-labels in calibrated heads. Den gold is under a minute, all computer_work.",
+      "sources": [
+        "docs/plans/den-activity-lighting/VJEPA-TUNING-PLAN.md",
+        "docs/HOME-CONTEXT-REBUILD-DESIGN-2026-10-08.md"
+      ]
+    },
+    {
+      "id": "R19",
+      "text": "The LA AI host (Ryzen 9 9950X, RTX PRO 6000 Blackwell, 97,887 MiB) serves one shared vLLM endpoint for voice, camera chat, Intelligence and the den perceiver, beside speech models and a leased V-JEPA worker. vLLM has no priority scheduling. The LA pilot keeps camera chat ahead of live Qwen on separate workers and refuses live Qwen with 429 whenever vLLM reports a waiting request, three or more running, or metrics older than 1 s; a thermal ladder refuses live work at GPU 77 °C or Tctl 88 °C. Voice goes to vLLM directly, past the pilot, so one voice request in flight does not by itself stop a live request.",
+      "sources": [
+        "docs/LA-INFERENCE-SPEED-PLAN-2026-10-08.md",
+        "docs/LA-SPEED-OPERATIONS-RUNBOOK.md",
+        "stack/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "R20",
+      "text": "Room-frame 'room facts' (position zone, looking_at by head pose, hands_near, posture, motion) are built in the Lab but not selected: the configured wire is den-facts-7. They are the nearest existing thing to person-state fields.",
+      "sources": [
+        "stack/services/perception-lab/room_facts.py",
+        "stack/services/perception-lab/README.md"
+      ]
+    },
+    {
+      "id": "R21",
+      "text": "Accepted decisions that constrain this design: one engagement authority per room, stable scenes with adaptive delivery, continuous spatial context (ADR 0005–0007, 2026-10-14, accepted in local, untracked files; origin/main's decision index lists only ADR-001 to 004); LA is trusted compute and 'cloud' means third parties; anonymous tracking with explicit profile binding; basic local behavior must survive the loss of LA.",
+      "sources": [
+        "docs/adr/0005-shared-context-and-engagement-authority.md",
+        "docs/HOME-CONTEXT-LIGHTING-AGREEMENT-2026-10-14.md"
+      ]
+    },
+    {
+      "id": "R22",
+      "text": "Existing latency targets: occupancy edge to first Qwen send p50 ≤ 0.5 s and Qwen request to fact p50 ≤ 1.05 s / p95 ≤ 1.4 s (LA speed plan); the den MVP's spotlight within about 5 s; a later 100 ms physical command cadence (APT-Z03). The earlier 'about 4.2 s scene to fact' was inferred on 2026-10-08 on the previous model, about half of it the wait for the 4 s tick.",
+      "sources": [
+        "docs/LA-INFERENCE-SPEED-PLAN-2026-10-08.md",
+        "docs/VICTORIA-LA-LATENCY-BASELINE-2026-10.md",
+        "docs/plans/den-activity-lighting/MVP-SPEC-20261019.md"
+      ]
+    }
+  ]
+}

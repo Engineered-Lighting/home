@@ -10,6 +10,7 @@ What the tracker uses from an Observation: `obs_id`, `capture_ts`, `source.senso
 """
 import json
 import math
+import statistics
 
 import tracker_core
 
@@ -246,4 +247,6 @@ def run_tracker(observations, params, floor=None, exits=()):
     counts['frames'] = len(frames)
     counts['tracks'] = core.next_id - 1
     counts['track_lines'] = len(lines)
+    gaps = [b['t'] - a['t'] for a, b in zip(frames, frames[1:])]
+    counts['median_frame_gap_s'] = statistics.median(gaps) if gaps else None
     return lines, counts

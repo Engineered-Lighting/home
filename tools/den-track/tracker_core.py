@@ -21,12 +21,12 @@ at 1 and is multiplied, at every link, by one minus the link's identity risk,
 and the lost share is kept as named rivals (swapped with whom, or a newcomer).
 
 The record reports it through `association`. Status is `ambiguous` while
-confidence is below `ambiguous_below` or another confirmed track is within
-`crossing_radius_m`, and stays so until the track has been seen with no doubt
-for `reconfirm_s`. Nothing in geometry can show that a mix-up did not happen,
-so the return to `confident` does not claim that it did not: it restarts the
-claim, from `since_ts`. The track is one person from then on, and whether that
-is the person from before the ambiguity is not stated.
+confidence is below `ambiguous_below` or another confirmed track is within reach
+(`crossing_radius_m`, wider while either has been unseen), and stays so until the
+track has been seen with no doubt for `reconfirm_s`. Nothing in geometry can show
+that a mix-up did not happen, so the return to `confident` does not claim that it
+did not: it restarts the claim, from `since_ts`. The track is one person from then
+on, and whether that is the person from before the ambiguity is not stated.
 """
 import math
 

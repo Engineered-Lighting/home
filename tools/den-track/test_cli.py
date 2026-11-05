@@ -239,6 +239,15 @@ class ScoredRunTest(Base):
         records.write_jsonl(takes[0][2], lines)
         self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'empty')
 
+    def test_refused_when_two_crossings_overlap_once_padded(self):
+        meth = self.closed_method()
+        takes = self.twenty(meth)
+        lines = records.read_jsonl(takes[0][2])
+        first = next(l for l in lines if l['kind'] == 'crossing')
+        lines.append({'kind': 'crossing', 'crossing_id': 'again', 'type': 'crossing', 'interval': first['interval']})
+        records.write_jsonl(takes[0][2], lines)
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'overlap')
+
     def test_refused_with_no_track_run_beside_the_tracks(self):
         meth = self.closed_method()
         takes = self.twenty(meth)

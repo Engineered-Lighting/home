@@ -111,6 +111,9 @@ def cmd_track(args):
           % (counts['track_lines'], counts['tracks'], counts['frames'], tracks_path))
     print('left out: %d not a person, %d rejected, %d with no position'
           % (counts['not_person'], counts['rejected'], counts['no_position']))
+    gap = counts['median_frame_gap_s']
+    if gap:
+        print('frames arrive about %.1f times a second; the method was tuned at 4 and is weak at 2' % (1.0 / gap))
     print_open(method)
     return EXIT_OK
 
@@ -154,6 +157,12 @@ def check_scored(method, takes, report):
     empty = [r['id'] for r in report['windows'] if not r['observations']]
     if empty:
         problems.append('crossings with no labelled observation: %s' % ', '.join(empty))
+    for take in takes:
+        rows = sorted((r for r in report['windows'] if r['take'] == take['name']), key=lambda r: r['start'])
+        for a, b in zip(rows, rows[1:]):
+            if b['start'] <= a['end']:
+                problems.append('%s: crossings %s and %s overlap once padded, so they are not two crossings'
+                                % (take['name'], a['id'], b['id']))
     if problems:
         raise Refused('refusing a scored run: ' + '; '.join(problems))
 
@@ -192,6 +201,7 @@ def cmd_score(args):
         check_scored(method, takes, body)
     crossing_lines = body.pop('crossing_lines')
     report = dict(body, tool='den-track', command='score', scored=bool(args.scored), method=method_stamp(method),
+                  labelling='a single labeller, the owner, blind to system output',
                   takes=[{'name': t['name'], 'observations_sha256': text_sha256(t['paths'][0]),
                           'tracks_sha256': text_sha256(t['paths'][1]), 'truth_sha256': text_sha256(t['paths'][2])}
                          for t in takes])

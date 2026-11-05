@@ -107,7 +107,7 @@ class CrossingTest(unittest.TestCase):
             self.assertEqual(scorer_core.idf1(c), 1.0)
 
     def test_an_ambiguous_crossing_lowers_confidence_instead_of_swapping_silently(self):
-        flagged = 0
+        flagged, lowest = 0, 1.0
         for seed in range(12):
             run = run_scene('touching_crossing', seed=seed, noise='clean')
             switches = scorer_core.switches(run['links'])
@@ -115,7 +115,12 @@ class CrossingTest(unittest.TestCase):
             flagged += len(switches)
             statuses = {l['association']['status'] for l in run['lines']}
             self.assertIn('ambiguous', statuses)
+            for line in run['lines']:
+                for hypothesis in line['association']['hypotheses']:
+                    if hypothesis['hypothesis'] == 'kept':
+                        lowest = min(lowest, hypothesis['p'])
         self.assertGreater(flagged, 0, 'touching crossings should swap sometimes: the test must see one')
+        self.assertLess(lowest, 0.7, 'and confidence must really fall, not just the status')
 
     def test_hypotheses_are_named_and_sum_to_one_while_ambiguous(self):
         run = run_scene('touching_crossing', seed=3, noise='clean')

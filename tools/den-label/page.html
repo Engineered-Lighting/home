@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>den-label</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.35 system-ui, sans-serif; background: #161616; color: #e8e8e8; }
+  header { padding: 6px 10px; background: #222; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  header b { color: #fff; }
+  #msg { margin-left: auto; }
+  #msg.error { color: #ff7b7b; }
+  main { display: flex; gap: 10px; padding: 10px; align-items: flex-start; }
+  #view { width: 960px; max-width: 70vw; image-rendering: pixelated; background: #000; cursor: crosshair; }
+  aside { flex: 1; min-width: 260px; max-height: 76vh; overflow: auto; background: #1d1d1d; padding: 6px 8px; }
+  aside h3 { margin: 4px 0 6px; font-size: 14px; }
+  .item { padding: 2px 4px; cursor: pointer; border-left: 4px solid transparent; font-family: monospace; }
+  .item.sel { background: #333; border-left-color: #ffd34d; }
+  .item.open { color: #ffd34d; }
+  #timeline { display: block; width: calc(100% - 20px); height: 28px; margin: 0 10px; cursor: pointer; }
+  footer { padding: 6px 10px; color: #aaa; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+  button, input, select { font: inherit; }
+  .ended { padding: 40px; font-size: 18px; }
+  label.f { display: block; margin: 3px 0; }
+</style>
+</head>
+<body>
+<header>
+  <span><b id="take">…</b> <span id="mode"></span></span>
+  <span id="pos"></span>
+  <span id="info"></span>
+  <button id="end" title="Shift+Enter">End pass</button>
+  <button id="person" title="!">Second person in view</button>
+  <span id="msg"></span>
+</header>
+<main>
+  <canvas id="view" width="640" height="360"></canvas>
+  <aside id="side"></aside>
+</main>
+<canvas id="timeline" width="1600" height="28"></canvas>
+<footer id="help"></footer>
+<script>
+"use strict";
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+const W = 640, H = 360, SPEEDS = [0.5, 1, 2, 4];
+const view = document.getElementById("view"), ctx = view.getContext("2d");
+const line = document.getElementById("timeline"), lctx = line.getContext("2d");
+const $ = id => document.getElementById(id);
+let S = null, idx = 0, playing = false, speedIx = 1, gammaIx = 0, ended = false;
+let audit = false, lastAuditIdx = null, drag = null, selected = null, openItem = null, corners = [];
+let auditSet = new Uint8Array(0);
+const cache = new Map(), pending = new Map(), tOf = new Map(), idxOf = new Map();
+let lut = null;
+
+function api(path, body) {
+  const opts = {headers: {"X-N1-Token": TOKEN}, cache: "no-store"};
+  if (body !== undefined) {
+    opts.method = "POST";
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(path, opts);
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const clampIdx = i => Math.max(0, Math.min(S.frames.length - 1, i));
+const nAt = i => S.frames[i][0];
+const r6 = v => Math.round(v * 1e6) / 1e6;
+const isLabels = () => S.mode === "labels" || S.mode === "remark";
+
+function say(text, error) {
+  const m = $("msg");
+  if (!m) return;
+  m.textContent = text;
+  m.className = error ? "error" : "";
+}
+
+function makeLut() {
+  const g = [1, 1.8, 2.6][gammaIx];
+  lut = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) lut[v] = Math.round(255 * Math.pow(v / 255, 1 / g));
+}
+
+// ---- frames ----
+function getFrame(i) {
+  const n = nAt(i);
+  if (cache.has(n)) return Promise.resolve(cache.get(n));
+  if (!pending.has(n)) {
+    pending.set(n, api(`/api/frame/${n}`).then(r => {
+      if (!r.ok) throw new Error(`frame ${n}: ${r.status}`);
+      return r.arrayBuffer();
+    }).then(buf => {
+      const a = new Uint8Array(buf);
+      cache.set(n, a);
+      pending.delete(n);
+      if (cache.size > 96) cache.delete(cache.keys().next().value);
+      return a;
+    }, err => { pending.delete(n); throw err; }));
+  }
+  return pending.get(n);
+}
+
+function drawNv12(a) {
+  const img = ctx.createImageData(W, H), d = img.data, base = W * H;
+  for (let y = 0; y < H; y++) {
+    const row = base + (y >> 1) * W;
+    for (let x = 0; x < W; x++) {
+      const c = 1.164 * (a[y * W + x] - 16), k = row + (x & ~1);
+      const u = a[k] - 128, v = a[k + 1] - 128, o = (y * W + x) * 4;
+      d[o] = lut[Math.max(0, Math.min(255, c + 1.596 * v)) | 0];
+      d[o + 1] = lut[Math.max(0, Math.min(255, c - 0.392 * u - 0.813 * v)) | 0];
+      d[o + 2] = lut[Math.max(0, Math.min(255, c + 2.017 * u)) | 0];
+      d[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+async function show(i) {
+  i = clampIdx(i);
+  idx = i;
+  try {
+    const a = await getFrame(i);
+    if (idx !== i || ended) return;
+    drawNv12(a);
+    overlay();
+    if (audit) recordAudit(i);
+  } catch (err) {
+    say(String(err.message || err), true);
+  }
+  for (let k = 1; k <= 8 && i + k < S.frames.length; k++) getFrame(i + k).catch(() => {});
+  bar();
+}
+
+async function playLoop() {
+  while (playing && !ended) {
+    if (idx >= S.frames.length - 1) break;
+    const dt = Math.min(1.0, S.frames[idx + 1][1] - S.frames[idx][1]) / SPEEDS[speedIx] * 1000;
+    const start = performance.now();
+    await show(idx + 1);
+    await sleep(Math.max(0, dt - (performance.now() - start)));
+  }
+  playing = false;
+  bar();
+}
+
+// ---- boxes ----
+function keyT(n) { return tOf.has(n) ? tOf.get(n) : S.keyframe_times[n]; }
+function tightAt(n) {
+  const kf = S.keyframes;
+  let k = -1;
+  while (k + 1 < kf.length && kf[k + 1][0] <= n) k++;
+  if (k < 0 || kf[k][1] === null) return null;
+  const [n0, b0] = kf[k];
+  if (k + 1 < kf.length && kf[k + 1][1] !== null && n !== n0) {
+    const [n1, b1] = kf[k + 1], w = (keyT(n) - keyT(n0)) / (keyT(n1) - keyT(n0));
+    return b0.map((a, j) => a + (b1[j] - a) * w);
+  }
+  return b0.slice();
+}
+function padBox(b) {
+  const px = Math.max(S.pad.min_px, S.pad.fraction * (b[2] - b[0]));
+  const py = Math.max(S.pad.min_px, S.pad.fraction * (b[3] - b[1]));
+  return [Math.max(0, Math.floor(r6(b[0] - px))), Math.max(0, Math.floor(r6(b[1] - py))),
+          Math.min(W, Math.ceil(r6(b[2] + px))), Math.min(H, Math.ceil(r6(b[3] + py)))];
+}
+function neighbours(n) {
+  let prev = -Infinity, next = Infinity;
+  for (const [m] of S.keyframes) {
+    if (m < n) prev = m;
+    if (m > n && next === Infinity) next = m;
+  }
+  return [prev, next];
+}
+function invalidateAudit(n) {  // frames whose box a change at keyframe n can move
+  const [prev, next] = neighbours(n);
+  S.frames.forEach(([m], i) => { if (m > prev && m < next) auditSet[i] = 0; });
+  lastAuditIdx = null;
+}
+function setKeyframe(n, box) {
+  if (S.locked) { say("Boxes are locked: the label pass has started.", true); return; }
+  invalidateAudit(n);
+  S.keyframes = S.keyframes.filter(k => k[0] !== n);
+  S.keyframes.push([n, box]);
+  S.keyframes.sort((a, b) => a[0] - b[0]);
+  invalidateAudit(n);
+  if (audit) recordAudit(idx);
+  scheduleSave();
+  show(idx);
+  side();
+}
+function deleteKeyframe(n) {
+  if (S.locked || !S.keyframes.some(k => k[0] === n)) return;
+  invalidateAudit(n);
+  S.keyframes = S.keyframes.filter(k => k[0] !== n);
+  invalidateAudit(n);
+  scheduleSave();
+  show(idx);
+  side();
+}
+function recordAudit(i) {  // only frames shown in audit mode, with the padded box
+  if (!auditSet[i]) { auditSet[i] = 1; scheduleSave(); }
+  lastAuditIdx = i;
+}
+function auditedRanges() {
+  const out = [];
+  for (let i = 0; i < S.frames.length; i++) {
+    if (!auditSet[i]) continue;
+    if (out.length && out[out.length - 1].end === i - 1) out[out.length - 1].end = i;
+    else out.push({start: i, end: i});
+  }
+  return out.map(r => [nAt(r.start), nAt(r.end)]);
+}
+function auditedShare() {
+  let covered = 0;
+  for (let i = 0; i < S.frames.length; i++) covered += auditSet[i];
+  return covered / S.frames.length;
+}
+function pos(e) {
+  const r = view.getBoundingClientRect();
+  return [Math.max(0, Math.min(W, (e.clientX - r.left) * W / r.width)),
+          Math.max(0, Math.min(H, (e.clientY - r.top) * H / r.height))];
+}
+function normBox(b) {
+  const x0 = Math.round(Math.min(b[0], b[2])), x1 = Math.round(Math.max(b[0], b[2]));
+  const y0 = Math.round(Math.min(b[1], b[3])), y1 = Math.round(Math.max(b[1], b[3]));
+  return [Math.max(0, x0), Math.max(0, y0), Math.min(W, x1), Math.min(H, y1)];
+}
+
+// ---- overlay and bars ----
+function overlay() {
+  if (S.mode === "boxes") {
+    const b = drag ? drag.box : tightAt(nAt(idx));
+    if (b) {
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = audit ? "rgba(255,255,255,0.6)" : "#4dff88";
+      ctx.setLineDash(audit ? [4, 3] : []);
+      ctx.strokeRect(b[0] + 0.5, b[1] + 0.5, b[2] - b[0] - 1, b[3] - b[1] - 1);
+      ctx.setLineDash([]);
+      if (audit && !drag) {
+        const p = padBox(b);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#ffd34d";
+        ctx.strokeRect(p[0] + 1, p[1] + 1, p[2] - p[0] - 2, p[3] - p[1] - 2);
+      }
+    }
+  } else if (S.mode === "surfaces") {
+    ctx.lineWidth = 2;
+    for (const s of S.surfaces) {
+      if (!s.polygon) continue;
+      ctx.strokeStyle = s === selected ? "#ffd34d" : "#4dc3ff";
+      ctx.beginPath();
+      s.polygon.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fillStyle = "#4dc3ff";
+      ctx.fillText(`${s.id} ${s.height_cm} cm`, s.polygon[0][0] + 3, s.polygon[0][1] + 12);
+    }
+    ctx.fillStyle = "#ff5d5d";
+    for (const [x, y] of corners) ctx.fillRect(x - 2, y - 2, 5, 5);
+  }
+}
+
+function segOf(n) { return S.segments.findIndex(([a, b]) => a <= n && n <= b); }
+function bar() {
+  if (!S || ended) return;
+  const [n, t] = S.frames[idx];
+  $("pos").textContent = `frame ${n} (${idx + 1}/${S.frames.length}) t ${t.toFixed(2)} s, segment ${segOf(n) + 1}`;
+  let info = `${SPEEDS[speedIx]}x${playing ? " playing" : ""}${gammaIx ? " bright" + gammaIx : ""}`;
+  if (S.mode === "boxes") {
+    const b = tightAt(n);
+    info += ` | box ${b ? b.map(v => v.toFixed(2)).join(",") : "none"}`;
+    info += S.keyframes.some(k => k[0] === n) ? " (keyframe)" : "";
+    info += ` | audited ${(100 * auditedShare()).toFixed(1)}%${audit ? " AUDIT" : ""}${S.locked ? " LOCKED" : ""}`;
+  } else if (isLabels()) {
+    info += ` | ${S.intervals.length} intervals, ${S.spans.length} spans${S.end_to_end ? " | labelled end to end" : ""}`;
+  }
+  $("info").textContent = info;
+  drawTimeline();
+}
+
+function drawTimeline() {
+  const w = line.width, h = line.height, N = S.frames.length, x = i => i / Math.max(1, N - 1) * (w - 1);
+  lctx.fillStyle = "#2a2a2a";
+  lctx.fillRect(0, 0, w, h);
+  lctx.fillStyle = "#555";
+  for (const [a, b] of S.segments) lctx.fillRect(x(idxOf.get(a)), 10, Math.max(1, x(idxOf.get(b)) - x(idxOf.get(a))), 8);
+  const span = (a, b, color, y, hh) => {
+    if (!idxOf.has(a) || !idxOf.has(b)) return;
+    lctx.fillStyle = color;
+    lctx.fillRect(x(idxOf.get(a)), y, Math.max(2, x(idxOf.get(b)) - x(idxOf.get(a))), hh);
+  };
+  if (S.mode === "boxes") {
+    for (const [a, b] of auditedRanges()) span(a, b, "#3fbf6f", 20, 6);
+    lctx.fillStyle = "#ffd34d";
+    for (const [n, b] of S.keyframes) if (idxOf.has(n)) lctx.fillRect(x(idxOf.get(n)), 2, 2, 8);
+  } else if (isLabels()) {
+    for (const it of S.intervals) span(it.onset_n, it.offset_n, it.band === "fine" ? "#ff9d3d" : "#4dc3ff", 2, 8);
+    for (const s of S.spans) span(s.start_n, s.end_n, {quiet: "#9a9a9a", uncertain: "#b77dff", low_light: "#3a3aa0"}[s.kind], 20, 6);
+  }
+  lctx.fillStyle = "#ff4d4d";
+  lctx.fillRect(x(idx) - 1, 0, 3, h);
+}
+
+// ---- labels ----
+function edgeKind(n, which, chosen) {
+  const [a, b] = S.segments[segOf(n)];
+  if (which === "onset" && n === a) return "carried";
+  if (which === "offset" && n === b) return "carried";
+  return chosen;
+}
+function items() {
+  const all = S.intervals.map(it => ({t: "interval", it, start: it.onset_n}))
+    .concat(S.spans.map(it => ({t: "span", it, start: it.start_n})));
+  if (openItem && !all.some(x => x.it === openItem.it)) all.push(openItem);
+  return all.sort((p, q) => p.start - q.start);
+}
+function describe(x) {
+  const it = x.it;
+  if (x.t === "interval") {
+    const sure = `${it.sure.onset ? "" : " onset?"}${it.sure.offset ? "" : " offset?"}${it.sure.band ? "" : " band?"}`;
+    return `${it.band || "band?"} ${it.case || "case?"} ${it.onset_n}(${it.onset_kind})-${it.offset_n === null ? "open" : `${it.offset_n}(${it.offset_kind})`}${sure}`;
+  }
+  return `${it.kind}${it.kind === "quiet" ? " " + (it.case || "case?") : ""} ${it.start_n}-${it.end_n === null ? "open" : it.end_n}`;
+}
+function complete(x) {
+  const it = x.it;
+  return x.t === "interval" ? it.offset_n !== null && it.band && it.case : it.end_n !== null && (it.kind !== "quiet" || it.case);
+}
+function side() {
+  const el = $("side");
+  el.textContent = "";
+  if (S.mode === "boxes") {
+    const h = document.createElement("h3");
+    h.textContent = `Keyframes (${S.keyframes.length})`;
+    el.append(h);
+    for (const [n, b] of S.keyframes) {
+      const d = document.createElement("div");
+      d.className = "item" + (n === nAt(idx) ? " sel" : "");
+      d.textContent = `${n}: ${b ? b.join(",") : "not in view"}`;
+      d.onclick = () => idxOf.has(n) && show(idxOf.get(n));
+      el.append(d);
+    }
+    return;
+  }
+  if (S.mode === "surfaces") return sideSurfaces(el);
+  const h = document.createElement("h3");
+  h.textContent = "Intervals and spans";
+  el.append(h);
+  for (const x of items()) {
+    const d = document.createElement("div");
+    d.className = "item" + (selected && selected.it === x.it ? " sel" : "") + (complete(x) ? "" : " open");
+    d.textContent = describe(x);
+    d.onclick = () => { selected = x; const n = x.start; if (idxOf.has(n)) show(idxOf.get(n)); side(); };
+    el.append(d);
+  }
+}
+function labelBody() {
+  const done = items().filter(complete);
+  return {intervals: done.filter(x => x.t === "interval").map(x => x.it),
+          spans: done.filter(x => x.t === "span").map(x => x.it), end_to_end: S.end_to_end};
+}
+function commitOpen() {
+  if (openItem && complete(openItem)) {
+    (openItem.t === "interval" ? S.intervals : S.spans).push(openItem.it);
+    openItem = null;
+  }
+}
+function changed() { commitOpen(); side(); bar(); scheduleSave(); }
+function labelKey(e) {
+  const n = nAt(idx), k = e.key;
+  if (k === "o" || k === "O") {
+    if (openItem) { say("Finish the open item first (offset, band and case).", true); return true; }
+    const it = {onset_n: n, onset_kind: edgeKind(n, "onset", k === "O" ? "no_touch" : "touch"), offset_n: null,
+                offset_kind: null, band: null, case: null, sure: {onset: true, offset: true, band: true}, by: "owner"};
+    openItem = selected = {t: "interval", it, start: n};
+  } else if (k === "p" || k === "P") {
+    const target = openItem && openItem.t === "interval" ? openItem : null;
+    if (!target) { say("Press O at the onset first.", true); return true; }
+    if (n <= target.it.onset_n || segOf(n) !== segOf(target.it.onset_n)) { say("The offset must come after the onset, in the same segment.", true); return true; }
+    target.it.offset_n = n;
+    target.it.offset_kind = edgeKind(n, "offset", k === "P" ? "no_touch" : "release");
+  } else if (k === "f" || k === "c") {
+    const x = selected && selected.t === "interval" ? selected : null;
+    if (!x) return true;
+    x.it.band = k === "f" ? "fine" : "casual";
+  } else if (/^[1-9]$/.test(k) && selected) {
+    const list = selected.t === "interval" ? S.lists.interval_cases : (selected.it.kind === "quiet" ? S.lists.quiet_cases : []);
+    const pick = list[Number(k) - 1];
+    if (pick) selected.it.case = pick;
+  } else if (k === "q" || k === "l" || k === "u") {
+    const kind = {q: "quiet", l: "low_light", u: "uncertain"}[k];
+    if (openItem && openItem.t === "span" && openItem.it.kind === kind) {
+      if (n < openItem.it.start_n || segOf(n) !== segOf(openItem.it.start_n)) { say("A span ends after its start, in the same segment.", true); return true; }
+      openItem.it.end_n = n;
+    } else if (openItem) {
+      say("Finish the open item first.", true); return true;
+    } else {
+      const it = {kind, start_n: n, end_n: null, by: "owner"};
+      if (kind === "quiet") it.case = null;
+      openItem = selected = {t: "span", it, start: n};
+    }
+  } else if (k === "n" && selected && selected.t === "interval") {
+    const it = selected.it, end = it.offset_n !== null && Math.abs(n - it.offset_n) < Math.abs(n - it.onset_n) ? "offset" : "onset";
+    it.sure[end] = !it.sure[end];
+  } else if (k === "b" && selected && selected.t === "interval") {
+    selected.it.sure.band = !selected.it.sure.band;
+  } else if ((k === "Delete" || k === "Backspace") && selected) {
+    if (!confirm(`Delete ${describe(selected)}?`)) return true;
+    if (openItem && openItem.it === selected.it) openItem = null;
+    S.intervals = S.intervals.filter(it => it !== selected.it);
+    S.spans = S.spans.filter(it => it !== selected.it);
+    selected = null;
+  } else if (k === "Tab") {
+    const all = items(), at = selected ? all.findIndex(x => x.it === selected.it) : -1;
+    if (!all.length) return true;
+    selected = all[(at + (e.shiftKey ? -1 : 1) + all.length) % all.length];
+    if (idxOf.has(selected.start)) show(idxOf.get(selected.start));
+  } else if (k === "e") {
+    if (!S.end_to_end && openItem) { say("Finish the open item first.", true); return true; }
+    if (!S.end_to_end && !confirm("Mark this session labelled end to end?")) return true;
+    S.end_to_end = !S.end_to_end;
+  } else return false;
+  changed();
+  return true;
+}
+
+// ---- surfaces ----
+function sideSurfaces(el) {
+  const h = document.createElement("h3");
+  h.textContent = `Surfaces (reference frame ${S.reference_n === null ? "not set: press R" : S.reference_n})`;
+  el.append(h);
+  for (const s of S.surfaces) {
+    const d = document.createElement("div");
+    d.className = "item" + (s === selected ? " sel" : "");
+    const hcm = s.type === "handheld" ? `seated ${s.height_cm.seated}, standing ${s.height_cm.standing}` : s.height_cm;
+    d.textContent = `${s.id} (${s.type}) ${hcm} cm`;
+    d.onclick = () => { selected = s; side(); show(idx); };
+    el.append(d);
+  }
+  const form = document.createElement("div");
+  form.innerHTML = `<h3>New surface (${corners.length} corners)</h3>
+    <label class="f">id <input id="sid" size="10"></label>
+    <label class="f">type <select id="stype">${S.lists.surface_types.filter(t => t !== "handheld").map(t => `<option>${t}</option>`).join("")}</select></label>
+    <label class="f">height cm <input id="sh" size="5"></label>
+    <button id="sadd">Add (Enter)</button> <button id="sdel">Delete selected</button>
+    <label class="f">handheld seated <input id="hs" size="4"> standing <input id="hst" size="4"></label>`;
+  el.append(form);
+  const handheld = S.surfaces.find(s => s.type === "handheld");
+  if (handheld) { $("hs").value = handheld.height_cm.seated; $("hst").value = handheld.height_cm.standing; }
+  $("stype").onchange = () => { if ($("stype").value === "lap" && !$("sh").value) $("sh").value = S.default_lap_cm; };
+  $("sadd").onclick = addSurface;
+  $("sdel").onclick = () => { if (selected && selected.type !== "handheld") { S.surfaces = S.surfaces.filter(s => s !== selected); selected = null; surfacesChanged(); } };
+  const setHand = () => {
+    const a = Number($("hs").value), b = Number($("hst").value);
+    if (handheld && a > 0 && b > 0) { handheld.height_cm = {seated: a, standing: b}; surfacesChanged(); }
+  };
+  $("hs").onchange = setHand;
+  $("hst").onchange = setHand;
+}
+function addSurface() {
+  const id = $("sid").value.trim(), type = $("stype").value, height = Number($("sh").value);
+  if (corners.length < 3 || !id || !(height > 0)) { say("Click 3 or more corners, then give an id and a height.", true); return; }
+  if (S.reference_n === null) S.reference_n = nAt(idx);
+  S.surfaces.push({id, type, height_cm: height, polygon: corners.map(([x, y]) => [Math.round(x), Math.round(y)])});
+  corners = [];
+  surfacesChanged();
+}
+function surfacesChanged() { side(); show(idx); scheduleSave(); }
+
+// ---- saving and ending ----
+let saveTimer = null, saving = false, dirty = false;
+function body() {
+  if (S.mode === "boxes") return {keyframes: S.keyframes, audited: auditedRanges()};
+  if (S.mode === "surfaces") return {reference_n: S.reference_n === null ? nAt(idx) : S.reference_n, surfaces: S.surfaces};
+  return labelBody();
+}
+function scheduleSave() {
+  dirty = true;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, 400);
+}
+async function saveNow() {
+  if (saving) { saveTimer = setTimeout(saveNow, 150); return; }
+  if (!dirty || ended) return;
+  saving = true;
+  dirty = false;
+  try {
+    const r = await api("/api/save", body()), reply = await r.json();
+    if (r.ok) say("saved"); else say(`Not saved: ${reply.error}`, true);
+  } catch (err) {
+    say(`Not saved: ${err}`, true);
+  }
+  saving = false;
+}
+async function flush() {
+  clearTimeout(saveTimer);
+  while (saving) await sleep(50);
+  if (dirty) await saveNow();
+}
+async function endPass(reason) {
+  if (ended) return;
+  const question = reason === "second_person"
+    ? "A second person is in view. End this pass now? The console then lists the earlier spans to type at check.py."
+    : "End this pass? Everything is saved.";
+  if (!confirm(question)) return;
+  playing = false;
+  await flush();
+  const r = await api("/api/stop", {reason});
+  if (!r.ok) { say("Could not end the pass.", true); return; }
+  ended = true;
+  document.body.innerHTML = `<div class="ended">Pass ended${reason === "second_person" ? " (second person in view)" : ""}. ` +
+    "Follow the console window. You can close this tab.</div>";
+}
+
+// ---- keys and mouse ----
+const HELP = {
+  common: "Space play/pause  Left/Right step (Shift x10)  Home/End  [ ] speed  G brightness  Shift+Enter end pass  ! second person",
+  boxes: "Drag: draw, move or resize the tight body box (makes a keyframe)  X person not in view from here  Del remove keyframe  , . previous/next keyframe  A audit mode (padded box)",
+  labels: "O onset (touch; Shift+O no touch)  P offset (release; Shift+P no touch)  F fine  C casual  1-9 case  N toggle sure (nearest end)  B toggle band sure\nQ quiet  L low light  U uncertain (press at start and at end)  Tab select  Del delete  E labelled end to end",
+  surfaces: "Click corners, then Enter (or Add) with id, type and height  Backspace remove corner  R set reference frame here",
+};
+document.addEventListener("keydown", e => {
+  if (!S || ended || e.target.closest("input, select")) {
+    if (S && !ended && e.key === "Enter" && S.mode === "surfaces" && e.target.closest("input, select")) addSurface();
+    return;
+  }
+  const k = e.key;
+  if (k === "!") { e.preventDefault(); endPass("second_person"); return; }
+  if (k === "Enter" && e.shiftKey) { e.preventDefault(); endPass("done"); return; }
+  if (k === " ") { e.preventDefault(); playing = !playing; if (playing) playLoop(); bar(); return; }
+  if (k === "ArrowRight" || k === "ArrowLeft") {
+    e.preventDefault();
+    playing = false;
+    show(idx + (k === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 10 : 1));
+    return;
+  }
+  if (k === "Home" || k === "End") { e.preventDefault(); playing = false; show(k === "Home" ? 0 : S.frames.length - 1); return; }
+  if (k === "[" || k === "]") { speedIx = Math.max(0, Math.min(SPEEDS.length - 1, speedIx + (k === "]" ? 1 : -1))); bar(); return; }
+  if (k === "g" || k === "G") { gammaIx = (gammaIx + 1) % 3; makeLut(); show(idx); return; }
+  if (S.mode === "boxes") {
+    const n = nAt(idx);
+    if (k === "x" || k === "X") setKeyframe(n, null);
+    else if (k === "Delete" || k === "Backspace") deleteKeyframe(n);
+    else if (k === "a" || k === "A") { audit = !audit; lastAuditIdx = null; if (audit) recordAudit(idx); show(idx); }
+    else if (k === "," || k === ".") {
+      const ks = S.keyframes.map(x => x[0]).filter(m => idxOf.has(m) && (k === "," ? m < n : m > n));
+      if (ks.length) show(idxOf.get(k === "," ? ks[ks.length - 1] : ks[0]));
+    } else return;
+    e.preventDefault();
+  } else if (isLabels()) {
+    if (labelKey(e)) e.preventDefault();
+  } else if (S.mode === "surfaces") {
+    if (k === "Backspace") { corners.pop(); side(); show(idx); }
+    else if (k === "Enter") addSurface();
+    else if (k === "r" || k === "R") { S.reference_n = nAt(idx); surfacesChanged(); }
+    else return;
+    e.preventDefault();
+  }
+});
+view.addEventListener("mousedown", e => {
+  if (!S || ended) return;
+  const p = pos(e);
+  if (S.mode === "surfaces") { corners.push(p); side(); show(idx); return; }
+  if (S.mode !== "boxes" || S.locked) return;
+  playing = false;
+  const b = tightAt(nAt(idx)), near = 8;
+  if (b) {
+    const edges = {l: Math.abs(p[0] - b[0]) < near, r: Math.abs(p[0] - b[2]) < near,
+                   t: Math.abs(p[1] - b[1]) < near, b: Math.abs(p[1] - b[3]) < near};
+    const inside = p[0] > b[0] && p[0] < b[2] && p[1] > b[1] && p[1] < b[3];
+    if (edges.l || edges.r || edges.t || edges.b) { drag = {kind: "edge", edges, box: b.slice(), start: p, box0: b.slice()}; return; }
+    if (inside) { drag = {kind: "move", box: b.slice(), start: p, box0: b.slice()}; return; }
+  }
+  drag = {kind: "new", start: p, box: [p[0], p[1], p[0], p[1]]};
+});
+window.addEventListener("mousemove", e => {
+  if (!drag) return;
+  const p = pos(e), d = drag, dx = p[0] - d.start[0], dy = p[1] - d.start[1];
+  if (d.kind === "new") d.box = [d.start[0], d.start[1], p[0], p[1]];
+  else if (d.kind === "move") d.box = [d.box0[0] + dx, d.box0[1] + dy, d.box0[2] + dx, d.box0[3] + dy];
+  else d.box = [d.box0[0] + (d.edges.l ? dx : 0), d.box0[1] + (d.edges.t ? dy : 0),
+                d.box0[2] + (d.edges.r ? dx : 0), d.box0[3] + (d.edges.b ? dy : 0)];
+  show(idx);
+});
+window.addEventListener("mouseup", () => {
+  if (!drag) return;
+  const box = normBox(drag.box);
+  drag = null;
+  if (box[2] - box[0] >= 4 && box[3] - box[1] >= 4) setKeyframe(nAt(idx), box); else show(idx);
+});
+line.addEventListener("click", e => {
+  if (!S || ended) return;
+  const r = line.getBoundingClientRect();
+  playing = false;
+  show(Math.round((e.clientX - r.left) / r.width * (S.frames.length - 1)));
+});
+$("end").onclick = () => endPass("done");
+$("person").onclick = () => endPass("second_person");
+
+async function start() {
+  makeLut();
+  const r = await api("/api/state");
+  if (!r.ok) { document.body.innerHTML = `<div class="ended">This page needs the address label.py printed (${r.status}).</div>`; return; }
+  S = await r.json();
+  S.frames.forEach(([n, t], i) => { tOf.set(n, t); idxOf.set(n, i); });
+  S.keyframe_times = S.keyframe_times || {};
+  auditSet = new Uint8Array(S.frames.length);
+  if (S.mode === "boxes") S.frames.forEach(([n], i) => { if (S.audited.some(r => r[0] <= n && n <= r[1])) auditSet[i] = 1; });
+  $("take").textContent = S.take;
+  $("mode").textContent = `${S.mode}${S.practice ? " (practice, never frozen)" : ""}`;
+  $("help").textContent = `${HELP.common}\n${isLabels() ? HELP.labels : HELP[S.mode]}`;
+  side();
+  await show(0);
+}
+start();
+</script>
+</body>
+</html>

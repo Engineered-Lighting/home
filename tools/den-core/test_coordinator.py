@@ -929,6 +929,7 @@ class WideMapLineTest(unittest.TestCase):
 
     def test_a_map_too_wide_keeps_each_tracked_surface_and_counts_the_rest(self):
         spec = self.wide(576, 30)
+        spec["surfaces"].update({"z": ["other/0"], "zz": ["other/1"]})  # short, but past where the line ran out, so it stays off
         names = sorted(spec["surfaces"])
         target = names[-1]  # the last by name, so only being someone's surface can keep it
         p = policy(light_model=spec, compensation={"option": "P1", "form": "strict"})

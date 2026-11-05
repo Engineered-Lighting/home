@@ -261,6 +261,15 @@ class SurfaceMapTest(Base):
         whole = light_adapter.LightModel(fake_light.build(surfaces=False)).predict(look)["room"]
         self.assertNotEqual(decision["targets"]["room"]["value"], round(whole, 3))
 
+    def test_need_v0s_one_track_still_logs_the_whole_closed_map(self):
+        # Rung 10 takes its points from these keys, and need v0's only track is at 'room', so the desk has to be listed to be scored.
+        text, code, _, log = self.scored(closed_gate(self.tmp, surface_map={"desk": self.COUNTER, "room": self.COUNTER}))
+        self.assertEqual(code, 0, text)
+        decisions = [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+        self.assertTrue(decisions)
+        for decision in decisions:
+            self.assertEqual(sorted(decision["predicted"]["surfaces"]), ["desk", "room", "unit"])
+
     def test_a_log_run_on_another_map_is_a_counterfactual_and_refuses(self):
         gate = closed_gate(self.tmp, surface_map={"room": self.COUNTER})
         text, code, _, _ = self.scored(gate, surfaces={"room": self.COUNTER[:2]})

@@ -426,7 +426,10 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
     finally:
         poller.halt.set()
         print("Asking the camera's /health once more (up to about 25 s); please wait.", flush=True)
-        poller.join(timeout=15)
+        try:
+            poller.join(timeout=15)
+        except KeyboardInterrupt:  # a second Ctrl+C while the poller finishes its last request
+            pass
         writer.close()
         try:
             take["health_after"] = final_health(camera, settings)

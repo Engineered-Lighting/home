@@ -631,6 +631,33 @@ class TakeScriptTests(Workspace):
         self.assertEqual((code, report["verdict"]), (1, "FAIL"))
         self.assertIn("B1_complete", report["failures"])
 
+    def test_second_ctrl_c_during_poller_join_still_saves_the_take(self):
+        camera = self.camera()
+
+        def say(text):
+            if text == "Begin.":
+                raise KeyboardInterrupt
+        join = mock.patch.object(take.Poller, "join", autospec=True, side_effect=KeyboardInterrupt)
+        try:
+            with join as joined:  # the second Ctrl+C lands while take.py waits for the poller
+                code, record, output = self.run_take(self.args(camera), say=say)
+        except KeyboardInterrupt:
+            self.fail("the second Ctrl+C escaped take.run")
+        poller = joined.call_args.args[0]
+        joined.assert_called_once_with(poller, timeout=15)
+        poller.join(5)  # the real join, so the poller is gone before the folder is removed
+        self.assertEqual((code, record["complete"], record["stop_reason"]), (1, False, "interrupted"))
+        self.assertEqual(record["health_after"]["body"]["session"], camera.session)  # still asked
+        self.assertEqual(record["cues"][-1]["cue"], "begin")
+        rows = (Path(self.args(camera).out) / "frames.csv").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(record["counts"]["kept"], len(rows) - 1)
+        self.assertGreater(record["counts"]["kept"], 0)
+        self.assertIn("frames.csv", record["sha256"])
+        self.assertLess(output.index("Asking the camera's /health once more"), output.index("Saved "))
+        code, report, _ = run_check(Path(self.args(camera).out))  # a FAIL, not a refusal
+        self.assertEqual((code, report["verdict"]), (1, "FAIL"))
+        self.assertIn("B1_complete", report["failures"])
+
     def test_take_json_never_finished_is_refused_as_such(self):
         args, writers = self.args(self.camera()), []
         self.addCleanup(lambda: [writer.close() for writer in writers])  # before the folder is removed

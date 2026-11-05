@@ -8,6 +8,7 @@ counts as an error. Tests use fakes.FakeClock and fakes.FakeSender; nothing in
 this tool talks to LA.
 """
 from assemble import assemble, has_box
+from method import require_closed
 from records import EPS, REQUEST_VERSION
 
 OUTCOMES = ('ok', 'refused', 'error')
@@ -16,8 +17,7 @@ OUTCOMES = ('ok', 'refused', 'error')
 class Router:
     def __init__(self, store, method, rule, clock, sender, scored=False):
         if scored:
-            method.require_closed('a scored routed run')
-            rule.require_closed('a scored routed run')
+            require_closed([method, rule], 'a scored routed run')
         self.store, self.method, self.rule = store, method, rule
         self.clock, self.sender = clock, sender
         self.starts = []             # start times of every request sent, refused or not

@@ -19,6 +19,7 @@ The checks are written apart from assemble.py so they don't repeat its
 mistakes. A practice check runs with open slots and says so; a scored check
 refuses while any slot is open.
 """
+from method import require_closed
 from records import EPS, camera_of, is_valid
 
 BUNDLE_CLAUSES = ('window', 'aligned', 'verbatim', 'missing', 'crossing', 'no_wait')
@@ -133,8 +134,7 @@ def check(bundles, store, method, crossings=(), requests=None, scored=False, rul
     """The whole gate. Returns {'verdict', 'practice', 'open', 'clauses': {name: {'checked', 'failures'}}}."""
     settings = [method] + ([rule] if rule is not None else [])
     if scored:
-        for s in settings:
-            s.require_closed('a scored gate check')
+        require_closed(settings, 'a scored gate check')
     clauses = {c: {'checked': 0, 'failures': []} for c in BUNDLE_CLAUSES}
     for b in bundles:
         for clause, fails in check_bundle(b, store, method).items():

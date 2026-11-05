@@ -99,6 +99,13 @@ class Settings:
             raise MethodError('%s refuses: %s has open slots: %s' % (what, self.source, ', '.join(self.open)))
 
 
+def require_closed(settings, what='a scored run'):
+    """Refuse, naming every open slot in every file, unless all are closed."""
+    open_slots = ['%s %s' % (s.source, k) for s in settings for k in s.open]
+    if open_slots:
+        raise MethodError('%s refuses: open slots: %s' % (what, ', '.join(open_slots)))
+
+
 def method_from(block, source='(inline)'):
     s = Settings(block, METHOD_KEYS, 'method', source)
     for key in ('window_s', 'max_gap_s', 'depth_skew_s', 'pad_fraction', 'pad_min_px'):

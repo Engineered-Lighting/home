@@ -1,0 +1,5 @@
+ALL  survived  M3+M12+M4 together :: Ran 50 tests in 722.074s; OK (724 s)
+
+TABLE
+ALL  | survived  | M3+M12+M4 together | Ran 50 tests in 722.074s; OK (724 s)
+RESULT caught 0 survived 1

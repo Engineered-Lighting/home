@@ -1,0 +1,5 @@
+ORIGINAL: fit: 20261110-1 | held_out: incomplete | missing: ['no held-out reading logged under daylight'] | gate: incomplete
+MUTANT:   fit: 20261110-1 | held_out: pass | missing: [] | gate: pass
+RESULT behaviour: mutant changes the verdict incomplete -> pass
+full suite on mutant: rc=0 Ran 58 tests in 249.472s last='OK' first_fail='' secs=250
+RESULT suite: SURVIVED (whole suite passes with the mutant)

@@ -1,0 +1,5 @@
+baseline: exit=0 Ran 113 tests in 82.150s | OK (skipped=1) (84.7s)
+RESULT CTRL_code | tools/den-core/check.py | caught | FAIL: test_changed_header_config_or_code (test_spine.CheckTest.test_changed_header_config_or_code) | Ran 63 tests in 5.977s (7.5s)
+RESULT C_trunc | tools/den-core/check.py | survived | OK (skipped=1) | Ran 113 tests in 75.494s (78.0s)
+RESULT E_match_b | tools/den-core/events.py | survived | OK (skipped=1) | Ran 113 tests in 73.914s (76.0s)
+exit 0

@@ -1,0 +1,5 @@
+RESULT 1: gaming_sample literals per file: {'sources.py': 0, 'synthetic.py': 1}
+RESULT recorded on/off bulbs, plant off | no gaming samples (as every real adapter): incumbent decisions forced-on=0 gaming-switch-off=0 automatic-off=0; same incumbent requests=True; same decide requests=True; same modes (less revision)=True
+RESULT recorded on/off bulbs, plant off | WITH synthetic game samples: incumbent decisions forced-on=1 gaming-switch-off=0 automatic-off=0; same incumbent requests=False; same decide requests=True; same modes (less revision)=False
+RESULT bulbs seen once with levels, plant on | no gaming samples (as every real adapter): incumbent decisions forced-on=3 gaming-switch-off=3 automatic-off=0; same incumbent requests=True; same decide requests=True; same modes (less revision)=True
+RESULT bulbs seen once with levels, plant on | WITH synthetic game samples: incumbent decisions forced-on=5 gaming-switch-off=3 automatic-off=0; same incumbent requests=False; same decide requests=True; same modes (less revision)=False

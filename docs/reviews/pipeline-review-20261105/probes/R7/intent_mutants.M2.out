@@ -1,0 +1,9 @@
+SEM-ORIG M1 open marks left: 15 | ready_problems refuses: True
+SEM-ORIG M2 |e| = 14.00 lx, tol 10 -> pass False
+SEM-ORIG M4 d = 4.40 % (tol 3) -> invariance_pass False
+SEM-ORIG M5 drift = 6.76 % (max 5) -> used False
+SEM-MUT  M1 open marks left: 15 | ready_problems refuses: True
+SEM-MUT  M2 |e| = 14.00 lx, tol 10 -> pass True
+SEM-MUT  M4 d = 4.40 % (tol 3) -> invariance_pass False
+SEM-MUT  M5 drift = 6.76 % (max 5) -> used False
+RESULT M2-held-out-tol-x1.5: survived (Ran 41 tests in 546.133s; OK; 548s)  tests=test_card test_photometry.ScoreTests test_photometry.WorksheetTests

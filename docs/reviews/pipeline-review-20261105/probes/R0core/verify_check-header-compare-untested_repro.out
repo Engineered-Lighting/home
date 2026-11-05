@@ -1,0 +1,16 @@
+RESULT: header keys: ['actuation', 'assume_occupied', 'plant', 'policies', 'schema', 'shown', 'sources', 'synthetic', 'tail_s', 'tick_s'] sources: [{'name': 'synthetic:evening', 'params': {'game': False, 'seed': 20261103, 'touch': True}}]
+RESULT: [original] sources[0].params.seed changed -> exit 0: OK: 1495 lines replayed byte-identically
+RESULT: [original] sources replaced               -> exit 0: OK: 1495 lines replayed byte-identically
+RESULT: [original] policies[0].version changed    -> exit 1: FAIL: line 1 differs
+RESULT: [original] actuation synthetic->replay    -> exit 1: FAIL: line 1 differs
+RESULT: [original] extra header key               -> exit 1: FAIL: line 1 differs
+RESULT: [M1] sources[0].params.seed changed -> exit 0: OK: 1495 lines replayed byte-identically
+RESULT: [M1] sources replaced               -> exit 0: OK: 1495 lines replayed byte-identically
+RESULT: [M1] policies[0].version changed    -> exit 0: OK: 1495 lines replayed byte-identically
+RESULT: [M1] actuation synthetic->replay    -> exit 0: OK: 1495 lines replayed byte-identically
+RESULT: [M1] extra header key               -> exit 0: OK: 1495 lines replayed byte-identically
+RESULT: M1 test_spine.CheckTest exit 0: OK
+RESULT: M1 full den-core suite exit 0: Ran 113 tests in 56.973s | OK (skipped=1)
+RESULT: header-only edits caught by the original but passed by M1: ['policies[0].version changed', 'actuation synthetic->replay', 'extra header key']
+RESULT: header-only edits passed even by the original: ['sources[0].params.seed changed', 'sources replaced']
+FAIL: M1 survives the suite

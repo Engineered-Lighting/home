@@ -1,0 +1,10 @@
+BASELINE test_observe.GeometryTests: PASS (Ran 4 tests in 7.015s OK) 
+BASELINE ALL: PASS (Ran 50 tests in 41.668s OK) 
+M06-torso-indep-over-n observe.py:119: SURVIVED -- whole suite passes (Ran 50 tests in 30.076s OK)
+M07-torso-no-cal observe.py:121: SURVIVED -- whole suite passes (Ran 50 tests in 25.669s OK)
+
+RESULT table
+mutant                             where                  result    by
+M06-torso-indep-over-n             observe.py:119         survived  whole suite passes (Ran 50 tests in 30.076s OK)
+M07-torso-no-cal                   observe.py:121         survived  whole suite passes (Ran 50 tests in 25.669s OK)
+RESULT 0 caught, 2 survived, 0 not run

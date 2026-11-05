@@ -1,0 +1,24 @@
+RESULT baseline exit=0 Ran 40 tests in 20.079s OK (21 s)
+SEM-ORIG SEM band_of(0.6) = fine
+SEM-ORIG M04-no-days-rule: SEM 3 sessions/1 day, n=30: False
+SEM-ORIG M05-units-off-by-one: SEM exactly 30 units, 3s/2d: True
+SEM-ORIG M06-bootstrap-90pct: SEM interval: [0.11666666666666667, 0.4166666666666667]
+SEM-ORIG M07-identity-resample: SEM interval: [0.05, 0.475]
+SEM-ORIG M08-no-data-passes: SEM verdict: ('insufficient', ['rule 4: a gated metric straddled', 'ece.engagement no_data'])
+RESULT M01-cut-fine-strict survived (25 s) Ran 40 tests in 24.134s OK
+SEM-MUT M01-cut-fine-strict: SEM band_of(0.6) = casual
+RESULT M02-ece-9-bins survived (22 s) Ran 40 tests in 20.818s OK
+RESULT M03-stale-is-a-hit survived (33 s) Ran 40 tests in 31.896s OK
+RESULT M04-no-days-rule survived (36 s) Ran 40 tests in 35.311s OK
+SEM-MUT M04-no-days-rule: SEM 3 sessions/1 day, n=30: True
+RESULT M05-units-off-by-one survived (32 s) Ran 40 tests in 30.689s OK
+SEM-MUT M05-units-off-by-one: SEM exactly 30 units, 3s/2d: False
+RESULT M06-bootstrap-90pct survived (34 s) Ran 40 tests in 33.403s OK
+SEM-MUT M06-bootstrap-90pct: SEM interval: [0.13333333333333333, 0.4]
+RESULT M07-identity-resample survived (36 s) Ran 40 tests in 34.755s OK
+SEM-MUT M07-identity-resample: SEM interval: [0.25, 0.25]
+RESULT M08-no-data-passes survived (46 s) Ran 40 tests in 44.705s OK
+SEM-MUT M08-no-data-passes: SEM verdict: ('feasible', ['rule 5: every gated metric was met'])
+RESULT M09-skip-fixture-verify survived (45 s) Ran 40 tests in 44.105s OK
+RESULT M10-skip-tick-standin survived (49 s) Ran 40 tests in 47.169s OK
+RESULT M11-data-gate-vacuous survived (47 s) Ran 40 tests in 45.646s OK

@@ -1,0 +1,11 @@
+RESULT gate=pass RoomModel surfaces=['art-1', 'counter-1', 'wall-west'] LightState surface_ids=['counter-1', 'desk', 'sofa']
+FAIL LightState surface_ids with no RoomModel surface, written without a warning: ['desk', 'sofa'] (anchored=[True], unit=lx)
+RESULT --score after one interrupted capture: Refused: no readable day-20261111\capture-99\capture.json
+RESULT README tells the owner what to do with such a folder: True
+FAIL one interrupted capture blocks every later score until the folder is removed by hand
+RESULT FAIL
+
+real	0m57.965s
+user	0m9.663s
+sys	0m0.558s
+exit=1

@@ -1,0 +1,13 @@
+RESULT A canonical fixed values: verdict=insufficient reasons=['rule 2: a sample gate is unmet', 'sample gate units.fine unmet']
+RESULT A edited fixed sample.* = 1: verdict=feasible gate.commit=None dirty=None
+RESULT A RESULTS.md line: den-n2 held_out verdict=feasible eval=905da5903f8d811afeff80a78825a938fbdaa7b7f483af868c3f7eed629932e6 gate=079de4564fe3bb7496ad4eb4927a50c4c8604fac4059f6d46adb8bed79e64fae labels=labels-v1/88be357bd5b01f4659c140234c83934d964150c895eb1b651c9abfc3b5f45d3a scored=2026-11-05 sessions=2s/2d units=fine16/casual16 onsets=32
+FAIL A: an edited fixed sample gate turns insufficient into feasible without a refusal
+RESULT B interval.level 0.95: verdict=insufficient competence.fine=[0.891119, 1.0] straddled
+RESULT B interval.level 0.5: verdict=feasible competence.fine=[0.957603, 1.0] met
+FAIL B: an edited fixed interval.level turns insufficient into feasible without a refusal
+FAIL C: a gate that was never committed still gets a held-out verdict (gate.commit=None); held-out runs in this world: 2
+RESULT defect reproduced: fixed values and the gate's commit order are not enforced
+
+real	0m8.257s
+user	0m3.461s
+sys	0m0.064s

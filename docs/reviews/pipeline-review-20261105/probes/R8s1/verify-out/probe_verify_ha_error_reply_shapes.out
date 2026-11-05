@@ -1,0 +1,13 @@
+RESULT 500 text (aiohttp default, service raised)    HAUnreachable(reply is not JSON) -> Session turns it into Abort(ha_lost): handled
+RESULT 400 text (HTTPBadRequest)                     HAUnreachable(reply is not JSON) -> Session turns it into Abort(ha_lost): handled
+RESULT 401 text (HTTPUnauthorized)                   HAUnreachable(reply is not JSON) -> Session turns it into Abort(ha_lost): handled
+RESULT 503 empty (HA is_stopping)                    sweep.Refused(Home Assistant answered 503 to POST /api/services/light/turn_on) -> escapes Session.run: 'changed nothing'
+RESULT 400 JSON (the tool's fake)                    sweep.Refused(Home Assistant answered 400 to POST /api/services/light/turn_on) -> escapes Session.run: 'changed nothing'
+RESULT the finding's cited triggers (500/401 text bodies) are handled as HA lost: True
+RESULT 503-empty reaches the Refused path: True
+RESULT e2e exit=2 stderr='Refused: Home Assistant answered 503 to POST /api/services/light/turn_off. This command changed nothing.'
+RESULT e2e session.json phase='probing' outcome='probing' restore=None
+RESULT e2e den_lighting automatic switch='off'; bulbs left on=['light.den_front_left']
+FAIL e2e: a 503 empty-body reply (HA stopping) mid-session is reported as 'changed nothing' with den_lighting paused
+RESULT FAIL (defect reproduced via the 503-empty trigger)
+exit=0 secs=11

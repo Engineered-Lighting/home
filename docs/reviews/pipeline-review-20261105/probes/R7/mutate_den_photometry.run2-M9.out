@@ -1,0 +1,4 @@
+
+MUTANT                                 RESULT   CAUGHT BY
+M9-score-skips-capture-block-check     survived -
+RESULT 0 caught or not-run, 1 survived of 1

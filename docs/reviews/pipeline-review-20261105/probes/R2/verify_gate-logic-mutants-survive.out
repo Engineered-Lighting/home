@@ -1,0 +1,16 @@
+control          | full suite: survived | Ran 50 tests in 44.443s; OK
+                 | BEHAVIOUR {"below_floor": ["rejected:below_floor", -2.00008], "check_record(stereo,too_old)": ["stereo lift from depth that was not used"], "gap+100ms": ["too_old", 0], "joint9_u700": ["unsupported", "none"], "plane_torso_cov_trace": 1.25977, "row_ts_10ms_off": ["refused", "row 1: capture_ts differs from the take's RGB time for that "]}
+one-sided-gap    | full suite: survived | Ran 50 tests in 45.122s; OK
+                 | BEHAVIOUR {"below_floor": ["rejected:below_floor", -2.00008], "check_record(stereo,too_old)": ["stereo lift from depth that was not used"], "gap+100ms": ["used", 17], "joint9_u700": ["unsupported", "none"], "plane_torso_cov_trace": 1.25977, "row_ts_10ms_off": ["refused", "row 1: capture_ts differs from the take's RGB time for that "]}
+no-stereo-check  | full suite: survived | Ran 50 tests in 47.067s; OK
+                 | BEHAVIOUR {"below_floor": ["rejected:below_floor", -2.00008], "check_record(stereo,too_old)": [], "gap+100ms": ["too_old", 0], "joint9_u700": ["unsupported", "none"], "plane_torso_cov_trace": 1.25977, "row_ts_10ms_off": ["refused", "row 1: capture_ts differs from the take's RGB time for that "]}
+common-n2        | full suite: survived | Ran 50 tests in 46.102s; OK
+                 | BEHAVIOUR {"below_floor": ["rejected:below_floor", -2.00008], "check_record(stereo,too_old)": ["stereo lift from depth that was not used"], "gap+100ms": ["too_old", 0], "joint9_u700": ["unsupported", "none"], "plane_torso_cov_trace": 0.317433, "row_ts_10ms_off": ["refused", "row 1: capture_ts differs from the take's RGB time for that "]}
+out-of-frame     | full suite: survived | Ran 50 tests in 41.922s; OK
+                 | BEHAVIOUR {"below_floor": ["rejected:below_floor", -2.00008], "check_record(stereo,too_old)": ["stereo lift from depth that was not used"], "gap+100ms": ["too_old", 0], "joint9_u700": ["uncertain", "plane:1.05"], "plane_torso_cov_trace": 1.25977, "row_ts_10ms_off": ["refused", "row 1: capture_ts differs from the take's RGB time for that "]}
+no-below-floor   | full suite: survived | Ran 50 tests in 38.442s; OK
+                 | BEHAVIOUR {"below_floor": ["valid", -2.00008], "check_record(stereo,too_old)": ["stereo lift from depth that was not used"], "gap+100ms": ["too_old", 0], "joint9_u700": ["unsupported", "none"], "plane_torso_cov_trace": 1.25977, "row_ts_10ms_off": ["refused", "row 1: capture_ts differs from the take's RGB time for that "]}
+ts-mismatch      | full suite: survived | Ran 50 tests in 34.693s; OK
+                 | BEHAVIOUR {"below_floor": ["rejected:below_floor", -2.00008], "check_record(stereo,too_old)": ["stereo lift from depth that was not used"], "gap+100ms": ["too_old", 0], "joint9_u700": ["unsupported", "none"], "plane_torso_cov_trace": 1.25977, "row_ts_10ms_off": ["accepted", 0.014000177383422852]}
+RESULT control survived; mutants survived full suite 6 of 6; of those, behaviour differs from control in 6
+FAIL: surviving non-equivalent mutants on gate logic

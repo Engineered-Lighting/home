@@ -1,0 +1,12 @@
+RESULT M01: caught by test_den_take.FaultTests (24s) FAIL: test_offset_between_slates (test_den_take.FaultTests.test_offset_between_slates)
+RESULT M02: survived by full module (221s) Ran 72 tests in 168.544s
+RESULT M03: survived by full module (251s) Ran 72 tests in 160.375s
+RESULT M04: caught by test_den_take.FaultTests (35s) FAIL: test_one_stale_frame_inside_a_slate (test_den_take.FaultTests.test_one_stale_frame_inside_a_slate)
+RESULT M05: caught by test_den_take.SlateRuleTests test_den_take.CutTests (0s) FAIL: test_first_readable_attempt_is_judged_never_a_later_one (test_den_take.SlateRuleTests.test_first_readable_attempt_is_judged_never_a_later_one)
+RESULT M06: caught by test_den_take.SlateFitTests test_den_take.FaultTests (1s) FAIL: test_recovers_offset_at_about_4_fps (test_den_take.SlateFitTests.test_recovers_offset_at_about_4_fps)
+RESULT M07: caught by test_den_take.FaultTests (69s) FAIL: test_t_host_bump_off_the_two_clock_line (test_den_take.FaultTests.test_t_host_bump_off_the_two_clock_line)
+RESULT M08: caught by test_den_take.FaultTests (69s) FAIL: test_step_in_t_host_only (test_den_take.FaultTests.test_step_in_t_host_only)
+RESULT M09: caught by test_den_take.FaultTests (11s) FAIL: test_clean_take_passes (test_den_take.FaultTests.test_clean_take_passes)
+RESULT M10: caught by test_den_take.FaultTests (59s) FAIL: test_slates_too_far_apart (test_den_take.FaultTests.test_slates_too_far_apart)
+RESULT M11: caught by test_den_take.FaultTests (36s) FAIL: test_offset_near_five_seconds_wraps (test_den_take.FaultTests.test_offset_near_five_seconds_wraps)
+RESULT M12: caught by test_den_take.SlateFitTests test_den_take.MethodTests (2s) FAIL: test_unreadable_with_fewer_than_12_flashes (test_den_take.SlateFitTests.test_unreadable_with_fewer_than_12_flashes)

@@ -1,0 +1,6 @@
+RESULT committed block sha: bd351a5838bb edited block sha: fccf4715fc18
+RESULT committed block: {'median': 0.056464553809866425, 'p90': 0.24172808587289138, 'verdict': 'fail'}
+RESULT edited block, same session: {'median': 0.056464553809866425, 'p90': 0.24172808587289138, 'verdict': 'pass'}
+RESULT session.json block sha bd351a5838bb != score.json block sha fccf4715fc18 : True
+FAIL: editing the Stage 1 block after the session flips the verdict from fail to pass and model.py neither refuses nor warns
+exit=0 secs=19

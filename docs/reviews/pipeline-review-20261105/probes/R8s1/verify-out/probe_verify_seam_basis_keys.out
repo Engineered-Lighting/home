@@ -1,0 +1,9 @@
+RESULT Stage 1 channels: ['den_front_left.white', 'front_right.white', 'den_rear_left.white', 'den_rear_right.white']
+RESULT Stage 1 basis keys (first 3 of 12): ['den_front_left.white@2202K', 'den_front_left.white@3294K', 'den_front_left.white@6535K']
+FAIL schemas.json LightModel.basis is 'per channel: B_c(p) at full output'; Stage 1 keys it per channel@temperature, so `basis` holds no channel key
+RESULT Stage 1 predict on its own record: r01c01 = 0.274348
+FAIL rung 10 adapter, as built: KeyError: 'light model lm-den-s1 has no basis for den_front_left.white'
+FAIL rung 10 adapter with Stage 1's predict swapped in: KeyError: 'light model lm-den-s1 has no basis for den_front_left.white'
+FAIL adapter with the channel check bypassed: TypeError: unsupported operand type(s) for +: 'int' and 'NoneType' (excluded points are None)
+RESULT 4 FAIL
+exit=1 secs=5

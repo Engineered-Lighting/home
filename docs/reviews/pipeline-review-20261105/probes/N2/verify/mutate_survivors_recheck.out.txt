@@ -1,0 +1,13 @@
+RESULT baseline passes (49 s) Ran 40 tests in 47.271s OK
+RESULT A4-sample-gate-ignores-sessions survived (44 s) Ran 40 tests in 42.254s OK
+RESULT A7-tick-stand-in-unchecked survived (51 s) Ran 40 tests in 49.653s OK
+RESULT A8-prompt-version-unchecked survived (40 s) Ran 40 tests in 38.507s OK
+RESULT A9-tie-counts-as-on survived (41 s) Ran 40 tests in 39.761s OK
+
+| mutant | result | suite |
+|---|---|---|
+| baseline | passes | Ran 40 tests in 47.271s OK |
+| A4-sample-gate-ignores-sessions | survived | Ran 40 tests in 42.254s OK |
+| A7-tick-stand-in-unchecked | survived | Ran 40 tests in 49.653s OK |
+| A8-prompt-version-unchecked | survived | Ran 40 tests in 38.507s OK |
+| A9-tie-counts-as-on | survived | Ran 40 tests in 39.761s OK |

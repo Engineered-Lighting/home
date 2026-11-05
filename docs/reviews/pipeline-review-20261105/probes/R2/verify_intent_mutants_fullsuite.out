@@ -1,0 +1,7 @@
+RESULT survived  | one-sided depth gap                              | Ran 50 tests in 47.582s OK
+RESULT survived  | check_record stereo-from-unused-depth check disabled | Ran 50 tests in 46.155s OK
+RESULT survived  | torso common term / n^2                          | Ran 50 tests in 48.626s OK
+RESULT survived  | out-of-frame joints lifted                       | Ran 50 tests in 42.785s OK
+RESULT survived  | below_floor rejection removed                    | Ran 50 tests in 43.845s OK
+RESULT survived  | row capture_ts vs take t_host check removed      | Ran 50 tests in 42.036s OK
+RESULT survived 6 of 6 against the full suite

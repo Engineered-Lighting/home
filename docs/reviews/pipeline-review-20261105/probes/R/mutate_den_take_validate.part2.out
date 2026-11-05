@@ -1,0 +1,17 @@
+RESULT M15: caught by test_den_take.StagedScriptTests (6s) FAIL: test_enter_ends_a_staged_script_early_on_a_fake_clock (test_den_take.StagedScriptTests.test_enter_ends_a_staged_script_early_on_a_fake_clock)
+RESULT M14: caught by test_den_take.TakeScriptTests (7s) FAIL: test_ctrl_c_keeps_an_incomplete_take (test_den_take.TakeScriptTests.test_ctrl_c_keeps_an_incomplete_take)
+RESULT M17: caught by test_den_take.SlateFitTests (3s) FAIL: test_peek_calls_a_repeated_image_unreadable (test_den_take.SlateFitTests.test_peek_calls_a_repeated_image_unreadable)
+RESULT M18: caught by test_den_take.TakeScriptTests (27s) FAIL: test_take_json_never_finished_is_refused_as_such (test_den_take.TakeScriptTests.test_take_json_never_finished_is_refused_as_such)
+RESULT M16: caught by test_den_take.StagedScriptTests test_den_take.ScriptFileTests (84s) 
+RESULT M13: survived by full module (213s) Ran 72 tests in 212.610s
+
+mutant | result | change | where
+M13 | survived | check.py: 'or len(rows) != (take.get("counts") or {}).get("kept")):' -> 'or False):' | full module (213s)
+M14 | caught | take.py: 'take["complete"] = take["stop_reason"] is None' -> 'take["complete"] = True' | test_den_take.TakeScriptTests (7s)
+M15 | caught | take.py: 'if self.pause(begin + block["at_s"] - clock(), until=enter):' -> 'if self.pause(begin + block["at_s"] - cl' | test_den_take.StagedScriptTests (6s)
+M16 | caught | take.py: 'if end > settings.free_max_s:' -> 'if False:' | test_den_take.StagedScriptTests test_den_take.ScriptFileTests (84s)
+M17 | caught | take.py: 'if len({hashlib.sha256(rgb).digest() for _, rgb in rgbs}) < ' -> 'if False:' | test_den_take.SlateFitTests (3s)
+M18 | caught | check.py: "if not cues:  # take.py's first write" -> "if False:  # take.py's first write" | test_den_take.TakeScriptTests (27s)
+
+SUMMARY caught=5 survived=1 not-run=0
+exit 0

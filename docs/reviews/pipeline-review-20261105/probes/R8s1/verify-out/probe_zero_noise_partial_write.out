@@ -1,0 +1,12 @@
+RESULT probe session outcome: complete
+RESULT main attempt 1: exit=2 stdout='' stderr='Refused: Out of range float values are not JSON compliant: inf. Nothing was written.'
+RESULT files after attempt 1: ['readings.json', 'light-model.json', 'score.json']
+RESULT all-off spreads: 2304 values, max 0.0
+RESULT score.json is NOT valid JSON (1186 bytes, ends '    "median_error": 0.013022555127479131,\n    "median_snr": '): Expecting value: line 42 column 19 (char 1186)
+RESULT light-model.json error block: {'median_pct': 2.3065, 'p90_pct': 11.3624, 'verdict': 'pass'}
+RESULT main attempt 2: exit=2 stdout='' stderr='Refused: readings.json already exists. Nothing was written.'
+RESULT files after attempt 2: ['readings.json', 'light-model.json', 'score.json']
+FAIL score.json was left on disk as truncated, unparseable JSON
+FAIL main printed 'Nothing was written' but left ['readings.json', 'light-model.json', 'score.json']
+RESULT 2 FAIL
+exit=1 secs=47

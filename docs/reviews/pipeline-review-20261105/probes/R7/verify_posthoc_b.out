@@ -1,0 +1,17 @@
+RESULT B score-1: gate=fail held_out=not scored fit={'all': ('20261110-1', 0.1)} points=[('20261110-4', 32.9, False), ('20261110-5', -4.37, True), ('20261111-1', -11.09, False), ('20261111-2', -5.54, True)]
+RESULT B score-1: unused=[('20261110-2', 'repeats the fit (same point and day)')]
+RESULT B score-1: gate=fail invariance=fail worst=66.666666667 failing_boxes=[('20261110-4', 'card', 66.67)]
+RESULT B score-1: k_L record value=0.100000043 supersedes=None supersedes_value=None
+RESULT B score-2: gate=fail held_out=not scored fit={'all': ('20261110-2', 0.108862)} points=[('20261110-4', 44.5, False), ('20261110-5', -0.5, True), ('20261111-1', 1.22, True), ('20261111-2', 0.61, True)]
+RESULT B score-2: unused=[('20261110-1', 'a card box only: no reading and no surface box')]
+RESULT B score-2: gate=fail invariance=fail worst=66.666666667 failing_boxes=[('20261110-4', 'card', 66.67)]
+RESULT B score-2: k_L record value=0.108861981 supersedes=cal-den-oak-kL-1 supersedes_value=0.100000043
+RESULT B score-1: gate=fail held_out=fail fit={'all': ('20261110-1', 0.1)} points=[('20261110-4', -10.73, False), ('20261110-5', -4.37, True), ('20261111-1', -11.09, False), ('20261111-2', -5.54, True)]
+RESULT B score-1: unused=[('20261110-2', 'repeats the fit (same point and day)')]
+RESULT B score-1: gate=fail invariance=pass worst=1.307189542 failing_boxes=[]
+RESULT B score-1: k_L record value=0.100000043 supersedes=None supersedes_value=None
+RESULT B score-2: gate=pass held_out=pass fit={'all': ('20261110-2', 0.108862)} points=[('20261110-4', -3.0, True), ('20261110-5', -0.5, True), ('20261111-1', 1.22, True), ('20261111-2', 0.61, True)]
+RESULT B score-2: unused=[('20261110-1', 'a card box only: no reading and no surface box')]
+RESULT B score-2: gate=pass invariance=pass worst=1.307189542 failing_boxes=[]
+RESULT B score-2: k_L record value=0.108861981 supersedes=cal-den-oak-kL-1 supersedes_value=0.100000043
+RESULT gates per run (score-1, score-2): [('fail', 'fail'), ('fail', 'pass')]

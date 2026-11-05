@@ -1,0 +1,16 @@
+baseline: exit 0, OK
+ # file         mutant                                           result    by
+ 1 register.py  fit-residual gate doubled                        survived  OK
+ 2 register.py  check gate +2 mm                                 caught    FAIL: test_a_check_just_under_five_cm_passes_and_just_over_is_refused (test_den_register.FitTests.test_a_check_just_under_five_cm_passes_and_just_over_is_refused) (offset=0.051)
+ 3 register.py  collinearity floor /100                          survived  OK
+ 4 register.py  camera-below-floor at -5 m                       caught    FAIL: test_a_mirrored_floor_worksheet_puts_the_camera_below_the_floor (test_den_register.FitTests.test_a_mirrored_floor_worksheet_puts_the_camera_below_the_floor)
+ 5 register.py  checks leak into the fit                         caught    FAIL: test_a_check_just_under_five_cm_passes_and_just_over_is_refused (test_den_register.FitTests.test_a_check_just_under_five_cm_passes_and_just_over_is_refused) (offset=0.049)
+ 6 register.py  one check accepted                               caught    FAIL: test_too_few_pairs_and_too_few_checks (test_den_register.FitTests.test_too_few_pairs_and_too_few_checks)
+ 7 register.py  takes up to 1 h before a failed mount check accepted caught    FAIL: test_a_moved_camera_invalidates_and_old_takes_cannot_be_reused (test_den_register.MountTests.test_a_moved_camera_invalidates_and_old_takes_cannot_be_reused)
+ 8 scene.py     mount 'changed' needs 95% of cells               survived  OK
+ 9 scene.py     mount tolerance x4                               survived  OK
+10 records.py   ambiguous transform_id resolves                  caught    FAIL: test_two_different_entries_under_one_id_are_ambiguous (test_den_register.TransformIdTests.test_two_different_entries_under_one_id_are_ambiguous)
+11 records.py   invalidation read from the last revision only    survived  OK
+12 serve.py     Origin check removed                             caught    FAIL: test_bound_to_loopback_with_token_host_and_origin_checks (test_den_register.PageTests.test_bound_to_loopback_with_token_host_and_origin_checks)
+13 method.py    open slots no longer refuse                      caught    ERROR: test_open_slots_refuse_a_scored_fit (test_den_register.FitTests.test_open_slots_refuse_a_scored_fit)
+RESULT 8 caught, 5 survived, 0 not run

@@ -1,0 +1,13 @@
+result    | file         | mutant                                                         | caught by
+caught    | observe.py   | depth staleness limit doubled (134 ms)                         | FAIL: test_depth_is_used_within_one_stereo_frame_either_side (test_observe.DepthTimingTests.test_depth_is_used_within_one_stereo_frame_either_side)
+survived  | observe.py   | one-sided gap: depth >67 ms AFTER the RGB is used              | test_observe.DepthTimingTests (OK)
+survived  | observe.py   | gate check no longer flags stereo lift from unused depth       | test_observe.ContractTests (OK)
+survived  | observe.py   | torso: common plane-height error divided by n^2 (too small)    | test_observe (OK)
+survived  | observe.py   | joints outside the RGB frame are lifted                        | test_observe (OK)
+survived  | observe.py   | below-floor rejection removed                                  | test_observe (OK)
+caught    | replay.py    | freshness gate ignores max_expired_fraction                    | FAIL: test_a_scored_run_with_every_slot_closed (test_observe.FreshnessTests.test_a_scored_run_with_every_slot_closed)
+caught    | method.py    | scored run allowed with open slots                             | FAIL: test_an_open_freshness_slot_refuses_a_scored_run (test_observe.FreshnessTests.test_an_open_freshness_slot_refuses_a_scored_run)
+caught    | roommodel.py | superseded registration accepted                               | FAIL: test_a_superseded_registration_is_stale (test_observe.RegistrationTests.test_a_superseded_registration_is_stale)
+caught    | roommodel.py | registration error bound gate loosened 10x                     | FAIL: test_an_unvalidated_registration_is_refused (test_observe.RegistrationTests.test_an_unvalidated_registration_is_refused)
+survived  | replay.py    | detector row whose capture_ts differs from the take frame accepted | test_observe (OK)
+RESULT caught 5, survived 6, not-run 0

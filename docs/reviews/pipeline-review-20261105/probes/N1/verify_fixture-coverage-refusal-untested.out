@@ -1,0 +1,16 @@
+== baseline ==
+INFO den-n1 fixture-v1 sha256=31bb37f26abafdddd324530171c2dd1993baf69ffb0d9ee98d92442e1f038734 protocol=b8f0524603e1aab7da3c8fc17622d7fd3a2ce37bb05a985817d964f52a191767 frozen=2026-11-05 sessions=2 frames=530 pad=0.2/16px
+INFO registered after fixture freeze: [('a2', 'held_out')] []
+RESULT refused: fixture-v1 does not cover these sessions and checks; freeze the fixture again first ['OK']
+PASS baseline refuses a labels freeze against a stale fixture
+== mutant (coverage check -> if False) ==
+INFO den-n1 fixture-v1 sha256=e3deea0c45fc9876a6bb419b3eb63292762b35b4a09fa1e8811c2c8a6561db28 protocol=b8f0524603e1aab7da3c8fc17622d7fd3a2ce37bb05a985817d964f52a191767 frozen=2026-11-05 sessions=2 frames=530 pad=0.2/16px
+INFO registered after fixture freeze: [('a2', 'held_out')] []
+RESULT frozen: den-n1 labels-v1 sha256=c9a8e2f2dce37b3583c84e5eb9c84f0f1b1f425dab7ee531e94bbed2fb8b4914 protocol=b8f0524603e1aab7da3c8fc17622d7fd3a2ce37bb05a985817d964f52a191767 split=50ebe5b634efdf808aff2c58fd4681741c3b83391f3f1118221d7b1c2da4c462 remark=c53d2e0c403711968f4c2af0c44aff2349df1b798eacbf144d56f66ebaab8aac frozen=2026-11-08 development=2s/1d/fine2/casual2 held_out=1s/1d/fine1/casual1
+INFO fixture-v1 sessions: ['a1', 'b1']
+INFO labels-v1 sessions: [('a1', 'development'), ('b1', 'development'), ('a2', 'held_out')]
+INFO labels.json top-level keys: ['counts', 'frozen_unix', 'n_intervals', 'phone_at_counter_band', 'protocol', 'remark', 'schema', 'sessions', 'split', 'tools', 'version']
+INFO printed record: {"n1": {"fixture": {"version": 1, "hash": "e3deea0c45fc9876a6bb419b3eb63292762b35b4a09fa1e8811c2c8a6561db28"}, "labels": {"version": 1, "hash": "c9a8e2f2dce37b3583c84e5eb9c84f0f1b1f425dab7ee531e94bbed2fb8b4914"}}} ['OK']
+PASS mutant freezes labels against the stale fixture (not equivalent)
+RESULT full suite on mutant: survived (Ran 50 tests in 180.718s; OK; 181 s) 
+exit=0

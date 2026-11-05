@@ -1,0 +1,38 @@
+RESULT semantics original: M1-case matches 0
+RESULT semantics original: M2-case matches 0
+RESULT semantics original: M5-case gap 6.0 refused (a pause of 6 s or less does not end an interval (frames 80 t)
+RESULT semantics original: M6-case shared-frame refused (a quiet or uncertain span at frames 20 to 40 overlaps anothe)
+RESULT semantics original: M6-case adjacent-frame accepted
+RESULT semantics M1: M1-case matches 1
+RESULT semantics M1: M2-case matches 0
+RESULT semantics M1: M5-case gap 6.0 refused (a pause of 6 s or less does not end an interval (frames 80 t)
+RESULT semantics M1: M6-case shared-frame refused (a quiet or uncertain span at frames 20 to 40 overlaps anothe)
+RESULT semantics M1: M6-case adjacent-frame accepted
+RESULT semantics M2: M1-case matches 0
+RESULT semantics M2: M2-case matches 1
+RESULT semantics M2: M5-case gap 6.0 refused (a pause of 6 s or less does not end an interval (frames 80 t)
+RESULT semantics M2: M6-case shared-frame refused (a quiet or uncertain span at frames 20 to 40 overlaps anothe)
+RESULT semantics M2: M6-case adjacent-frame accepted
+RESULT semantics M5: M1-case matches 0
+RESULT semantics M5: M2-case matches 0
+RESULT semantics M5: M5-case gap 6.0 accepted
+RESULT semantics M5: M6-case shared-frame refused (a quiet or uncertain span at frames 20 to 40 overlaps anothe)
+RESULT semantics M5: M6-case adjacent-frame accepted
+RESULT semantics M6: M1-case matches 0
+RESULT semantics M6: M2-case matches 0
+RESULT semantics M6: M5-case gap 6.0 refused (a pause of 6 s or less does not end an interval (frames 80 t)
+RESULT semantics M6: M6-case shared-frame accepted
+RESULT semantics M6: M6-case adjacent-frame accepted
+PASS original: 40%/40% overlap is no match
+PASS M1 changes it to a match
+PASS original: 100%/20% overlap is no match
+PASS M2 changes it to a match
+PASS original refuses a same-case gap of exactly 6.0 s
+PASS M5 accepts it
+PASS original refuses a quiet span ending on the interval's onset frame
+PASS M6 accepts it
+PASS original accepts a quiet span ending one frame before the onset
+RESULT narrow-M1  survived  Ran 1 test in 0.014s; OK (1 s) tests=-f test_den_label.RemarkTests.test_agreement_on_hand_made_cases
+RESULT narrow-M2  survived  Ran 1 test in 0.015s; OK (1 s) tests=-f test_den_label.RemarkTests.test_agreement_on_hand_made_cases
+RESULT narrow-M5  survived  Ran 2 tests in 27.691s; OK (29 s) tests=-f test_den_label.LabelTests.test_the_pause_rule_never_applies_across_a_cut test_den_label.LabelTests.test_every_protocol_check
+RESULT narrow-M6  survived  Ran 1 test in 23.554s; OK (25 s) tests=-f test_den_label.LabelTests.test_every_protocol_check

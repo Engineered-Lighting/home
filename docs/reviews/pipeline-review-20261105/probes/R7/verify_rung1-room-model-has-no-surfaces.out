@@ -1,0 +1,6 @@
+rung-1 RoomModel surfaces: [] cameras: ['den-oak']
+capture 1: kept
+control (contract example RoomModel): score ran, gate incomplete reflectance {'counter-1': 0.2714}
+rung-1 RoomModel: REFUSED: the RoomModel has no surface counter-1; add it there or rename the point
+score folders written: ['score-1']
+RESULT: DEFECT REPRODUCED (rung 1's RoomModel blocks the score)

@@ -1,0 +1,4 @@
+LABELS daylight + blinds closed accepted by check_labels
+DAYLIGHT held-out points: 1 missing: []
+GATE PASS
+RESULT one daylight capture behind closed blinds completes coverage and the gate passes: YES

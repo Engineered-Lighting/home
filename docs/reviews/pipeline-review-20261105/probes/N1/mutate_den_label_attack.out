@@ -1,0 +1,12 @@
+mutant                             file      result    detail
+m1-union-covers-or                 n1.py     caught    FAILED (failures=1) (67 s) FAIL: test_the_union_test (test_den_label.SecondPersonTests.test_the_union_test)
+m2-audited-any                     n1.py     caught    FAILED (failures=1) (93 s) FAIL: test_refuses_an_unaudited_session_and_box_edits_after_the_label_pass_starts (test_den_label.FixtureTests.test_refuses_an_unaudited_session_and_box_edits_after_the_label_pass_starts)
+m4-remark-wait-hours               label.py  caught    FAILED (failures=1) (112 s) FAIL: test_picks_the_second_development_session_waits_and_hides_the_first_labels (test_den_label.RemarkTests.test_picks_the_second_development_session_waits_and_hides_the_first_labels)
+m5-origin-unchecked                label.py  caught    FAILED (failures=1) (54 s) FAIL: test_binds_loopback_and_refuses_wrong_token_host_or_origin (test_den_label.FrameServerTests.test_binds_loopback_and_refuses_wrong_token_host_or_origin)
+m7-no-tau-off                      n1.py     caught    FAILED (failures=1) (84 s) FAIL: test_counts_per_split_and_band_quiet_past_tau_off_and_days_no_times (test_den_label.StatusTests.test_counts_per_split_and_band_quiet_past_tau_off_and_days_no_times)
+m8-no-first-pass-lock-at-freeze    n1.py     caught    FAILED (failures=1) (151 s) FAIL: test_agreement_comes_from_the_locked_first_pass (test_den_label.RemarkBlindTests.test_agreement_comes_from_the_locked_first_pass)
+m11-carried-iff-edge-dropped       n1.py     caught    FAILED (failures=1) (46 s) FAIL: test_every_protocol_check (test_den_label.LabelTests.test_every_protocol_check)
+m12-save-skips-remark-lock         label.py  caught    FAILED (failures=1) (397 s) FAIL: test_the_first_pass_locks_when_the_remark_starts (test_den_label.RemarkBlindTests.test_the_first_pass_locks_when_the_remark_starts)
+m15-union-test-dropped             n1.py     caught    FAILED (failures=1) (226 s) FAIL: test_the_union_test (test_den_label.SecondPersonTests.test_the_union_test)
+m16-freeze-labels-fixture-coverage-dropped n1.py     survived  OK (403 s) 
+RESULT 9 caught, 1 survived of 10

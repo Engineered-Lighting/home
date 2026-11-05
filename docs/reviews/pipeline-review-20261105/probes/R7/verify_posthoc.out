@@ -1,0 +1,17 @@
+RESULT A score-1: gate=fail held_out=fail fit={'all': ('20261110-1', 0.1)} points=[('20261110-3', 0.02, True), ('20261110-4', -16.37, False), ('20261110-5', -0.27, True), ('20261111-1', -1.59, True), ('20261111-2', -0.54, True)]
+RESULT A score-1: unused=[]
+RESULT A score-2: gate=pass held_out=pass fit={'all': ('20261110-1', 0.1)} points=[('20261110-3', 0.02, True), ('20261110-5', -0.27, True), ('20261111-1', -1.59, True), ('20261111-2', -0.54, True)]
+RESULT A score-2: unused=[('20261110-4', 'nothing typed')]
+FAIL A: a held-out point that failed was dropped after the score showed it OUT; the re-score passes and names no earlier failure
+RESULT B score-1: gate=fail held_out=not scored fit={'all': ('20261110-1', 0.1)} points=[('20261110-4', -10.73, False), ('20261110-5', -4.37, True), ('20261111-1', -46.46, False), ('20261111-2', -5.54, True)]
+RESULT B score-1: unused=[('20261110-2', 'repeats the fit (same point and day)')]
+RESULT B score-2: gate=fail held_out=not scored fit={'all': ('20261110-2', 0.108862)} points=[('20261110-4', -3.0, True), ('20261110-5', -0.5, True), ('20261111-1', -37.28, False), ('20261111-2', 0.61, True)]
+RESULT B score-2: unused=[('20261110-1', 'a card box only: no reading and no surface box')]
+PASS B: the fit moved from 20261110-1 to 20261110-2 (capture 2, excluded by score-1 as a repeat of the fit) after held-out errors were seen; re-score passes
+RESULT C score-1: gate=fail held_out=fail fit={'all': ('20261110-1', 0.1)} points=[('20261110-3', -10.73, False), ('20261110-4', -4.37, True), ('20261111-1', -11.09, False), ('20261111-2', -5.54, True)]
+RESULT C score-1: unused=[]
+RESULT C score-2: gate=fail held_out=fail fit={'all': ('20261101-1', 0.108862)} points=[('20261110-1', 15.47, False), ('20261110-3', -3.0, True), ('20261110-4', -0.5, True), ('20261111-1', 1.22, True), ('20261111-2', 0.61, True)]
+RESULT C score-2: unused=[]
+RESULT C: day folders now ['day-20261101', 'day-20261110', 'day-20261111']; fit 20261110-1 -> 20261101-1; score-2 gate fail
+FAIL C: a day folder dated before day 1, made after a failed score, was accepted, became day 1 and re-fitted k_L (the old fit is now a held-out point)
+RESULT FAIL (2 of 3 post-hoc changes went through silently)

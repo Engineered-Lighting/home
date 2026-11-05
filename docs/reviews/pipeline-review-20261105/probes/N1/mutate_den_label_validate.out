@@ -1,0 +1,27 @@
+M1   survived  re-mark match threshold 0.5 -> 0.3 of each length :: OK (1 s) tests=RemarkTests.test_agreement_on_hand_made_cases
+M2   survived  re-mark match drops the second interval's half-length condition :: OK (1 s) tests=RemarkTests.test_agreement_on_hand_made_cases
+M3   survived  verify_folder no longer reports an extra file in a frozen folder :: OK (67 s) tests=FreezeTests.test_freeze_verify_versions_and_refusals FreezeLogTests
+M4   survived  load_split drops the split == rule(order) check :: OK (1 s) tests=SplitTests
+M5   survived  pause rule '<= pause_s' -> '< pause_s' :: OK (24 s) tests=LabelTests.test_the_pause_rule_never_applies_across_a_cut LabelTests.test_every_protocol_check
+M6   survived  quiet/uncertain overlap test made strict (touching ends allowed) :: OK (18 s) tests=LabelTests.test_every_protocol_check
+M7   caught    freeze_labels skips the 'first pass saved after the re-mark started' refusal :: FAILED (failures=1) (48 s) tests=RemarkBlindTests
+M8   caught    re-mark wait counted from the end-to-end mark instead of the last edit :: FAILED (failures=1) (35 s) tests=RemarkBlindTests.test_the_wait_counts_from_the_first_passs_last_edit
+M9   caught    union test compares the newest check with the previous check only :: FAILED (failures=1) (30 s) tests=SecondPersonTests.test_the_union_test
+M10  caught    freeze_fixture skips the audited-end-to-end refusal :: FAILED (failures=1) (32 s) tests=FixtureTests.test_refuses_an_unaudited_session_and_box_edits_after_the_label_pass_starts
+M11  caught    quiet seconds past tau_off ignore tau_off :: FAILED (failures=1) (30 s) tests=StatusTests
+M12  survived  verify_folder no longer checks that the manifest is canonical JSON :: OK (105 s) tests=FreezeTests.test_freeze_verify_versions_and_refusals FreezeLogTests
+
+TABLE
+M1   | survived  | re-mark match threshold 0.5 -> 0.3 of each length
+M2   | survived  | re-mark match drops the second interval's half-length condition
+M3   | survived  | verify_folder no longer reports an extra file in a frozen folder
+M4   | survived  | load_split drops the split == rule(order) check
+M5   | survived  | pause rule '<= pause_s' -> '< pause_s'
+M6   | survived  | quiet/uncertain overlap test made strict (touching ends allowed)
+M7   | caught    | freeze_labels skips the 'first pass saved after the re-mark started' refusal
+M8   | caught    | re-mark wait counted from the end-to-end mark instead of the last edit
+M9   | caught    | union test compares the newest check with the previous check only
+M10  | caught    | freeze_fixture skips the audited-end-to-end refusal
+M11  | caught    | quiet seconds past tau_off ignore tau_off
+M12  | survived  | verify_folder no longer checks that the manifest is canonical JSON
+RESULT caught 5 survived 7 not-run 0

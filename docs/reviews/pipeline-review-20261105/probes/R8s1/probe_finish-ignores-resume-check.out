@@ -1,0 +1,10 @@
+RESULT outcome: complete
+RESULT printed lines: ['Every bulb was restored and den_lighting resumed.']
+RESULT session.json resume: {'automatic': False, 'bulbs_off': False, 'holds_left': [], 'occupancy': 'off'}
+RESULT switch: off | bulbs lit at the end: ['light.den_front_left', 'light.den_rear_left', 'light.den_rear_right']
+FAIL 'complete' and 'den_lighting resumed' printed (exit 0) although the resume check failed
+
+real	0m30.355s
+user	0m6.854s
+sys	0m1.040s
+exit=1

@@ -1,0 +1,12 @@
+FAIL yaw 1.0 deg                  check-mount unchanged (1 of 64 cells changed); old registration off by: room centre 1.0 m up 4.3 cm, seat 0.5 m up 6.3 cm, far floor 8.1 cm
+FAIL yaw 2.0 deg                  check-mount unchanged (6 of 64 cells changed); old registration off by: room centre 1.0 m up 8.7 cm, seat 0.5 m up 12.6 cm, far floor 16.1 cm
+FAIL yaw 3.0 deg                  check-mount unchanged (13 of 64 cells changed); old registration off by: room centre 1.0 m up 13.0 cm, seat 0.5 m up 19.0 cm, far floor 24.2 cm
+FAIL yaw 5.0 deg                  check-mount unchanged (27 of 64 cells changed); old registration off by: room centre 1.0 m up 21.7 cm, seat 0.5 m up 31.6 cm, far floor 40.3 cm
+FAIL pitch 1.0 deg                check-mount unchanged (2 of 64 cells changed); old registration off by: room centre 1.0 m up 4.7 cm, seat 0.5 m up 6.8 cm, far floor 8.7 cm
+ok   roll 2.0 deg                 check-mount unchanged (1 of 64 cells changed); old registration off by: room centre 1.0 m up 1.5 cm, seat 0.5 m up 2.3 cm, far floor 3.1 cm
+FAIL shift 8 cm along the wall    check-mount unchanged (5 of 64 cells changed); old registration off by: room centre 1.0 m up 8.0 cm, seat 0.5 m up 8.0 cm, far floor 8.0 cm
+RESULT FAIL: 6 motions break the 5 cm gate while check-mount says unchanged
+
+real	0m32.207s
+user	0m11.868s
+sys	0m0.095s

@@ -1,0 +1,46 @@
+A: committed _both(null-level ON, level ON) = False, _both(level ON, null-level ON) = False
+A: one-way    (null-level ON, level ON) = True, one-way(level ON, null-level ON) = False
+B: seed=20261103 plant=True  touch=False null_touch=False game=False compares=4080 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=True  touch=False null_touch=False game=True  compares=3800 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=True  touch=True  null_touch=False game=False compares=4080 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=True  touch=True  null_touch=False game=True  compares=3800 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=True  touch=True  null_touch=True  game=False compares=4080 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=True  touch=True  null_touch=True  game=True  compares=3800 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=False touch=False null_touch=False game=False compares=4080 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=False touch=False null_touch=False game=True  compares=3800 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=False touch=True  null_touch=False game=False compares=4080 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=False touch=True  null_touch=False game=True  compares=3800 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=False touch=True  null_touch=True  game=False compares=4080 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=20261103 plant=False touch=True  null_touch=True  game=True  compares=3800 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=True  touch=False null_touch=False game=False compares=4140 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=True  touch=False null_touch=False game=True  compares=3852 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=True  touch=True  null_touch=False game=False compares=4140 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=True  touch=True  null_touch=False game=True  compares=3852 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=True  touch=True  null_touch=True  game=False compares=4140 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=True  touch=True  null_touch=True  game=True  compares=3852 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=False touch=False null_touch=False game=False compares=4140 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=False touch=False null_touch=False game=True  compares=3852 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=False touch=True  null_touch=False game=False compares=4140 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=False touch=True  null_touch=False game=True  compares=3852 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=False touch=True  null_touch=True  game=False compares=4140 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=7        plant=False touch=True  null_touch=True  game=True  compares=3852 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=True  touch=False null_touch=False game=False compares=4124 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=True  touch=False null_touch=False game=True  compares=3836 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=True  touch=True  null_touch=False game=False compares=4124 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=True  touch=True  null_touch=False game=True  compares=3836 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=True  touch=True  null_touch=True  game=False compares=4124 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=True  touch=True  null_touch=True  game=True  compares=3836 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=False touch=False null_touch=False game=False compares=4124 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=False touch=False null_touch=False game=True  compares=3836 decide-null-level-ON bulb requests=16 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=False touch=True  null_touch=False game=False compares=4124 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=False touch=True  null_touch=False game=True  compares=3836 decide-null-level-ON bulb requests=15 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=False touch=True  null_touch=True  game=False compares=4124 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+B: seed=11       plant=False touch=True  null_touch=True  game=True  compares=3836 decide-null-level-ON bulb requests=17 decide-null/den-level compares=0 spans equal=True
+RESULT B: 36 logs; decide-null/den-level comparisons=0; logs where one-way spans differ=0
+C: edited decide's base decision at -600.0 s: light.den_rear_left requests a null-level ON
+RESULT C committed rear-left diff spans=[(-600.0, -470.0), (188.6, 514.7), (675.6, 720.0)] check3=('FAIL', "light.den_rear_left differs from den_lighting from 2026-11-04T03:50:00.0Z (+0.0 s) to 2026-11-04T03:52:10.0Z (+130.0 s); decide's decision at 2026-11-04T03:50:0
+RESULT C one-way   rear-left diff spans=[(188.6, 514.7), (675.6, 720.0)] check3=('OK', "8 interval(s), each decide's labelled placeholder reading look; all of them while need is reading")
+RESULT D baseline exit=0 Ran 113 tests in 83.499s | OK (skipped=1) 
+RESULT D RD_both  exit=0 Ran 113 tests in 80.503s | OK (skipped=1) 
+RESULT: mutant survives the suite=True; distinguishable on an edited log=True; reachable with decide-v0 in part B=False
+PASS (finding reproduced as a test gap): RD_both survives and is not equivalent at run.diff's input

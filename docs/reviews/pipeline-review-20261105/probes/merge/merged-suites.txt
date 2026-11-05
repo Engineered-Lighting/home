@@ -1,0 +1,32 @@
+== run 1
+tools/den-take rc=0 487s Ran 82 tests in 486.982s OK 
+tools/den-label rc=0 629s Ran 50 tests in 628.361s OK 
+tools/den-n2 rc=0 11s Ran 40 tests in 10.828s OK 
+tools/den-core rc=1 31s Ran 146 tests in 30.821s FAILED (failures=2, skipped=1) 
+tools/correction-capture rc=0 0s Ran 22 tests in 0.369s OK 
+tools/den-register rc=0 4s Ran 44 tests in 4.236s OK 
+tools/den-observe rc=0 9s Ran 50 tests in 9.137s OK 
+tools/den-track rc=0 3s Ran 58 tests in 2.560s OK 
+tools/den-bundle rc=0 3s Ran 81 tests in 2.263s OK 
+tools/den-light rc=0 115s Ran 139 tests in 114.821s OK 
+tools/den-photometry rc=1 0s Ran 27 tests in 0.009s FAILED (errors=25) 
+tools/den-verify rc=0 1s Ran 30 tests in 0.539s OK 
+ha-config/custom_components/den_lighting/tests rc=1 5s Ran 51 tests in 0.638s FAILED (errors=1) 
+logs in $SCRATCH/tests/merged/run1
+== run 2
+tools/den-take rc=0 207s Ran 82 tests in 206.619s OK 
+tools/den-label rc=0 300s Ran 50 tests in 298.496s OK 
+tools/den-n2 rc=0 11s Ran 40 tests in 11.274s OK 
+tools/den-core rc=1 29s Ran 146 tests in 28.508s FAILED (failures=1, skipped=1) 
+tools/correction-capture rc=0 1s Ran 22 tests in 0.270s OK 
+tools/den-register rc=0 4s Ran 44 tests in 4.062s OK 
+tools/den-observe rc=0 11s Ran 50 tests in 10.263s OK 
+tools/den-track rc=0 2s Ran 58 tests in 2.753s OK 
+tools/den-bundle rc=0 3s Ran 81 tests in 1.994s OK 
+tools/den-light rc=0 118s Ran 139 tests in 118.214s OK 
+tools/den-photometry rc=1 1s Ran 27 tests in 0.007s FAILED (errors=25) 
+tools/den-verify rc=0 0s Ran 30 tests in 0.286s OK 
+ha-config/custom_components/den_lighting/tests rc=1 2s Ran 51 tests in 0.233s FAILED (errors=1) 
+logs in $SCRATCH/tests/merged/run2
+
+[exited with code 0]

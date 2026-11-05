@@ -1,0 +1,13 @@
+RESULT b1 check-1: verdict PASS, retained True, usable minutes 0.0, segments with frames 0
+RESULT registered: [('a1', 'development'), ('b1', 'development')] notes: []
+RESULT boxes pass on b1 refused: b1 has no usable frames
+RESULT labels pass on b1 refused: b1 has no usable frames
+RESULT freeze fixture refused: b1 has no boxes draft
+RESULT dropping b1 from split.json refused: split.json was edited; its head hash does not match its last entry
+RESULT label.py commands: ['aside', 'boxes', 'freeze', 'labels', 'remark', 'sessions', 'status', 'surfaces', 'verify']
+FAIL a registered session with no usable frames can never be boxed, labelled or dropped, so no fixture or labels freeze is possible
+
+real	0m33.724s
+user	0m5.756s
+sys	0m0.892s
+exit=1

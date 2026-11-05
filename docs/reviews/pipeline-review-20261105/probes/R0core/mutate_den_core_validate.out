@@ -1,0 +1,64 @@
+baseline: exit=0 OK (skipped=1) (16.7s)
+C_trunc       survived check: a truncated log or one with appended lines passes     OK (skipped=1)
+C_code        caught   check: no 'code changed' refusal                             FAIL: test_changed_header_config_or_code (test_spine.CheckTest.test_changed_header_config_or_code)
+E_req         caught   events.validate: required data keys not checked              FAIL: test_validate_refuses (test_spine.EventsTest.test_validate_refuses) (bad={'schema': 'den-event-1', 't': 
+E_match_b     survived events.scene_matches: brightness tolerance 1 -> 3            OK (skipped=1)
+E_match_none  caught   events.scene_matches: a missing scene matches anything       FAIL: test_assumed_occupancy (test_validate.RealDataShape.test_assumed_occupancy)
+R_ref         caught   runner: live_command handed to the policies                  FAIL: test_reference_kind_is_logged_never_handed_to_a_policy (test_spine.RunnerTest.test_reference_kind_is_log
+R_order       caught   runner: decide runs before the incumbent                     FAIL: test_a_hold_during_a_vacancy (test_spine.DiffTest.test_a_hold_during_a_vacancy) (correction_at=150.0)
+R_roundtrip   survived runner: no canonical round trip before policies see an event OK (skipped=1)
+I_cfg         caught   incumbent: a logged config that differs from den_lighting's  FAIL: test_changed_header_config_or_code (test_spine.CheckTest.test_changed_header_config_or_code)
+N_entry       caught   need: engage on the 3rd playing sample                       FAIL: test_on_off_timing_matches_den_lighting_dwell (test_need.DenLightingParity.test_on_off_timing_matches_de
+N_start       caught   need: first non-none output delayed to the 2nd sample        FAIL: test_on_off_timing_matches_den_lighting_dwell (test_need.DenLightingParity.test_on_off_timing_matches_de
+N_onset       caught   need: onset_ts is the arrival time, not the capture time     FAIL: test_capture_gap_over_ttl_resets_the_count (test_need.Dwell.test_capture_gap_over_ttl_resets_the_count)
+N_exit        caught   need: exit dwell boundary >= -> >                            FAIL: test_idle_ends_after_exit_dwell (test_need.Dwell.test_idle_ends_after_exit_dwell)
+D_vac         caught   decide: vacancy OFF boundary < -> <=                         FAIL: test_exact_sequence_of_ten_minutes (test_decide.ComposedScenarioTest.test_exact_sequence_of_ten_minutes)
+D_pin         caught   decide: a held bulb requests its normal scene instead of its FAIL: test_exact_sequence_of_ten_minutes (test_decide.ComposedScenarioTest.test_exact_sequence_of_ten_minutes)
+D_game        caught   decide: decides during games                                 FAIL: test_no_decisions_while_gaming_then_replan (test_decide.GamingTest.test_no_decisions_while_gaming_then_r
+D_read        caught   decide: reading look on expired support                      ERROR: test_engaged_with_expired_support_gives_base (test_decide.ReadingTest.test_engaged_with_expired_support
+D_chain       caught   decide: plans on the mode of an occupancy change before seei FAIL: test_decide_waits_for_an_arrival_in_the_same_chain (test_spine.DiffTest.test_decide_waits_for_an_arrival
+D_unknown     caught   decide: does not fail closed on unknown occupancy            FAIL: test_unknown_occupancy_fails_closed_even_when_reading (test_decide.OccupancyTest.test_unknown_occupancy_
+V_skip        caught   validate check 4: skipped list not checked                   FAIL: test_a_held_bulb_missing_from_skipped_fails_check_4 (test_validate.Mutations.test_a_held_bulb_missing_fr
+V_quiet_game  caught   validate check 5: decisions in games pass                    FAIL: test_a_decide_decision_in_a_game_or_unknown_occupancy_fails_check_5 (test_validate.Mutations.test_a_deci
+V_parity      caught   validate check 2: move times not compared                    FAIL: test_a_shifted_engaged_moment_fails_check_2 (test_validate.Mutations.test_a_shifted_engaged_moment_fails
+V_inforce     survived validate check 3: decisions made during a diff interval not  OK (skipped=1)
+V_pass        caught   validate: overall OK with one failed check                   FAIL: test_a_failure_exits_1 (test_validate.Cli.test_a_failure_exits_1)
+V_replay      caught   validate check 1: replay always OK                           FAIL: test_a_failure_exits_1 (test_validate.Cli.test_a_failure_exits_1)
+V_holdvac     survived validate check 4: holds never checked during vacancy         OK (skipped=1)
+V_look_scene  caught   validate check 3: the look's scene on the bulb not checked   FAIL: test_a_look_decision_with_another_scene_on_the_bulb_fails_check_3 (test_validate.Mutations.test_a_look_d
+RD_both       survived run.diff: one-way scene comparison                           OK (skipped=1)
+RD_gaming     caught   run.diff: game time not left out                             FAIL: test_leaves_out_gaming (test_spine.DiffTest.test_leaves_out_gaming)
+LD_found      caught   run.live_diff: no 'found already there' inference for the li FAIL: test_live_diff_when_both_find_a_bulb_already_there (test_spine.DiffTest.test_live_diff_when_both_find_a_
+
+RESULT table (id | file | result | caught by | mutation)
+RESULT C_trunc | tools/den-core/check.py | survived | OK (skipped=1) | check: a truncated log or one with appended lines passes
+RESULT C_code | tools/den-core/check.py | caught | FAIL: test_changed_header_config_or_code (test_spine.CheckTest.test_changed_header_config_or_code) | check: no 'code changed' refusal
+RESULT E_req | tools/den-core/events.py | caught | FAIL: test_validate_refuses (test_spine.EventsTest.test_validate_refuses) (bad={'schema': 'den-event-1', 't': 1.0, 'seq': 0, 'kind': 'occupancy', 'source': 'synthetic', 'data': {'value': 'on'}}) | events.validate: required data keys not checked
+RESULT E_match_b | tools/den-core/events.py | survived | OK (skipped=1) | events.scene_matches: brightness tolerance 1 -> 3
+RESULT E_match_none | tools/den-core/events.py | caught | FAIL: test_assumed_occupancy (test_validate.RealDataShape.test_assumed_occupancy) | events.scene_matches: a missing scene matches anything
+RESULT R_ref | tools/den-core/runner.py | caught | FAIL: test_reference_kind_is_logged_never_handed_to_a_policy (test_spine.RunnerTest.test_reference_kind_is_logged_never_handed_to_a_policy) | runner: live_command handed to the policies
+RESULT R_order | tools/den-core/runner.py | caught | FAIL: test_a_hold_during_a_vacancy (test_spine.DiffTest.test_a_hold_during_a_vacancy) (correction_at=150.0) | runner: decide runs before the incumbent
+RESULT R_roundtrip | tools/den-core/runner.py | survived | OK (skipped=1) | runner: no canonical round trip before policies see an event
+RESULT I_cfg | tools/den-core/incumbent.py | caught | FAIL: test_changed_header_config_or_code (test_spine.CheckTest.test_changed_header_config_or_code) | incumbent: a logged config that differs from den_lighting's is accepted
+RESULT N_entry | tools/den-core/need.py | caught | FAIL: test_on_off_timing_matches_den_lighting_dwell (test_need.DenLightingParity.test_on_off_timing_matches_den_lighting_dwell) | need: engage on the 3rd playing sample
+RESULT N_start | tools/den-core/need.py | caught | FAIL: test_on_off_timing_matches_den_lighting_dwell (test_need.DenLightingParity.test_on_off_timing_matches_den_lighting_dwell) | need: first non-none output delayed to the 2nd sample
+RESULT N_onset | tools/den-core/need.py | caught | FAIL: test_capture_gap_over_ttl_resets_the_count (test_need.Dwell.test_capture_gap_over_ttl_resets_the_count) | need: onset_ts is the arrival time, not the capture time
+RESULT N_exit | tools/den-core/need.py | caught | FAIL: test_idle_ends_after_exit_dwell (test_need.Dwell.test_idle_ends_after_exit_dwell) | need: exit dwell boundary >= -> >
+RESULT D_vac | tools/den-core/decide.py | caught | FAIL: test_exact_sequence_of_ten_minutes (test_decide.ComposedScenarioTest.test_exact_sequence_of_ten_minutes) | decide: vacancy OFF boundary < -> <=
+RESULT D_pin | tools/den-core/decide.py | caught | FAIL: test_exact_sequence_of_ten_minutes (test_decide.ComposedScenarioTest.test_exact_sequence_of_ten_minutes) | decide: a held bulb requests its normal scene instead of its pinned scene
+RESULT D_game | tools/den-core/decide.py | caught | FAIL: test_no_decisions_while_gaming_then_replan (test_decide.GamingTest.test_no_decisions_while_gaming_then_replan) | decide: decides during games
+RESULT D_read | tools/den-core/decide.py | caught | ERROR: test_engaged_with_expired_support_gives_base (test_decide.ReadingTest.test_engaged_with_expired_support_gives_base) | decide: reading look on expired support
+RESULT D_chain | tools/den-core/decide.py | caught | FAIL: test_decide_waits_for_an_arrival_in_the_same_chain (test_spine.DiffTest.test_decide_waits_for_an_arrival_in_the_same_chain) | decide: plans on the mode of an occupancy change before seeing the occupancy
+RESULT D_unknown | tools/den-core/decide.py | caught | FAIL: test_unknown_occupancy_fails_closed_even_when_reading (test_decide.OccupancyTest.test_unknown_occupancy_fails_closed_even_when_reading) | decide: does not fail closed on unknown occupancy
+RESULT V_skip | tools/den-core/validate.py | caught | FAIL: test_a_held_bulb_missing_from_skipped_fails_check_4 (test_validate.Mutations.test_a_held_bulb_missing_from_skipped_fails_check_4) | validate check 4: skipped list not checked
+RESULT V_quiet_game | tools/den-core/validate.py | caught | FAIL: test_a_decide_decision_in_a_game_or_unknown_occupancy_fails_check_5 (test_validate.Mutations.test_a_decide_decision_in_a_game_or_unknown_occupancy_fails_check_5) | validate check 5: decisions in games pass
+RESULT V_parity | tools/den-core/validate.py | caught | FAIL: test_a_shifted_engaged_moment_fails_check_2 (test_validate.Mutations.test_a_shifted_engaged_moment_fails_check_2) | validate check 2: move times not compared
+RESULT V_inforce | tools/den-core/validate.py | survived | OK (skipped=1) | validate check 3: decisions made during a diff interval not checked
+RESULT V_pass | tools/den-core/validate.py | caught | FAIL: test_a_failure_exits_1 (test_validate.Cli.test_a_failure_exits_1) | validate: overall OK with one failed check
+RESULT V_replay | tools/den-core/validate.py | caught | FAIL: test_a_failure_exits_1 (test_validate.Cli.test_a_failure_exits_1) | validate check 1: replay always OK
+RESULT V_holdvac | tools/den-core/validate.py | survived | OK (skipped=1) | validate check 4: holds never checked during vacancy
+RESULT V_look_scene | tools/den-core/validate.py | caught | FAIL: test_a_look_decision_with_another_scene_on_the_bulb_fails_check_3 (test_validate.Mutations.test_a_look_decision_with_another_scene_on_the_bulb_fails_check_3) | validate check 3: the look's scene on the bulb not checked
+RESULT RD_both | tools/den-core/run.py | survived | OK (skipped=1) | run.diff: one-way scene comparison
+RESULT RD_gaming | tools/den-core/run.py | caught | FAIL: test_leaves_out_gaming (test_spine.DiffTest.test_leaves_out_gaming) | run.diff: game time not left out
+RESULT LD_found | tools/den-core/run.py | caught | FAIL: test_live_diff_when_both_find_a_bulb_already_there (test_spine.DiffTest.test_live_diff_when_both_find_a_bulb_already_there) | run.live_diff: no 'found already there' inference for the live side
+RESULT: 30 mutants, 24 caught, 6 survived, 0 not run

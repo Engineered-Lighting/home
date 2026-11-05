@@ -1,0 +1,12 @@
+RESULT p=0: C1=100.0000 C2=100.0000 C=100.0000 (offset-free 100) u_C=0.0000 (0.00%) d=0.000% invariance_pass=True |bias|/u_C=nan
+RESULT p=0: k_L=0.100000 (-0.00% vs offset-free 0.1) confidence_pct_1sigma tool=7.47% with full bias added=7.47% (ratio 1.00x)
+RESULT p=0: production frame at auto's exposure: E_hat=174.533 lx vs meter 174.533 lx -> +0.00% (u_C/C=0.00%)
+RESULT p=0: held-out 60 nc point (auto ~similar codes, d=1.82%): E_hat_lx=104.922 error_lx=0.203 u_error_lx=7.473 (meter 104.720 lx)
+RESULT p=2: C1=101.5625 C2=103.1250 C=102.3438 (offset-free 100) u_C=0.7812 (0.76%) d=1.527% invariance_pass=True |bias|/u_C=3.00
+RESULT p=2: k_L=0.097710 (-2.29% vs offset-free 0.1) confidence_pct_1sigma tool=7.51% with full bias added=7.85% (ratio 1.05x)
+RESULT p=2: production frame at auto's exposure: E_hat=173.201 lx vs meter 174.533 lx -> -0.76% (u_C/C=0.76%)
+RESULT p=2: held-out 60 nc point (auto ~similar codes, d=0.66%): E_hat_lx=104.577 error_lx=-0.143 u_error_lx=7.451 (meter 104.720 lx)
+RESULT p=4: C1=103.1250 C2=106.2500 C=104.6875 (offset-free 100) u_C=1.5625 (1.49%) d=2.985% invariance_pass=True |bias|/u_C=3.00
+RESULT p=4: k_L=0.095522 (-4.48% vs offset-free 0.1) confidence_pct_1sigma tool=7.62% with full bias added=8.84% (ratio 1.16x)
+RESULT p=4: production frame at auto's exposure: E_hat=171.928 lx vs meter 174.533 lx -> -1.49% (u_C/C=1.49%)
+RESULT p=4: held-out 60 nc point (auto ~similar codes, d=2.29%): E_hat_lx=104.630 error_lx=-0.090 u_error_lx=7.659 (meter 104.720 lx)

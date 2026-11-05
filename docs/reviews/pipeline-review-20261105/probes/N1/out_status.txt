@@ -1,0 +1,21 @@
+RESULT splits: {'a1': 'development', 'a2': 'held_out'}
+RESULT label.py status exit 0; output:
+   | a2 boxes: keyframes unchanged; frames in the new cuts get no fixture row
+   | a2 boxes: now tied to check-2.json (79c0e284d70f)
+   | a2 labels: interval still_reader at frames 290 to 335: 290 to 306 offset carried, 316 to 335 onset carried
+   | a2 labels: the end-to-end mark is cleared; look again and re-confirm it
+   | a2 labels: now tied to check-2.json (79c0e284d70f)
+   | N1 status. Protocol PROTOCOL-V1.md b8f0524603e1, phone band casual.
+   | Sessions: 2 registered, 0 blocked.
+   |   a1  hard-a  development  boxes: none  labels: none
+   |   a2  hard-a  held_out  boxes: audited  labels: in progress
+   | Split development: 1 sessions over 1 days; intervals fine 0, casual 0; cases none; quiet none; uncertain 0.0 s.
+   | Split held_out: 1 sessions over 1 days; intervals fine 2, casual 0; cases still_reader 2; quiet none; uncertain 0.0 s.
+   | Re-mark: needs a second development session.
+   | Frozen: fixture none; labels none.
+FAIL status printed held-out label contents: 'a2 labels: interval still_reader at frames 290 to 335: 290 to 306 offset carried, 316 to 335 onset carried'
+
+real	0m36.877s
+user	0m6.974s
+sys	0m0.970s
+exit=1

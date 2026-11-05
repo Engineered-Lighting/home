@@ -1,0 +1,14 @@
+== original (exit 0)
+  INFO den-n1 fixture-v1 ['a1', 'b1', 'a2', 'b2']
+  INFO registered later: [('a3', 'development')]
+  RESULT freeze labels REFUSED: fixture-v1 does not cover these sessions and checks; freeze the fixture again first
+== mutant-m16 (exit 0)
+  INFO den-n1 fixture-v1 ['a1', 'b1', 'a2', 'b2']
+  INFO registered later: [('a3', 'development')]
+  RESULT freeze labels SUCCEEDED: den-n1 labels-v1
+  INFO EvalRecord gold_set: 1 fixture version named
+  RESULT N2 load_n1(development) REFUSED: fixture-v1 does not hold a3 under the labels' check
+  RESULT N2 load_n1(held_out) ACCEPTED the stale pair
+RESULT original refuses: True
+RESULT mutant freezes against the stale fixture: True
+RESULT N2 refuses the mutant's pair in some split: True

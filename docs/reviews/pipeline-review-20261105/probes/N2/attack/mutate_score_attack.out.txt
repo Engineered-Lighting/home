@@ -1,0 +1,22 @@
+RESULT baseline exit=0 OK (30 s)
+RESULT A1-floor-judged-on-point-estimate caught (1 s) FAILED (failures=1)
+RESULT A2-failed-before-unmet caught (1 s) FAILED (failures=1)
+RESULT A3-case-fails-on-lower-bound caught (9 s) FAILED (failures=1)
+RESULT A4-sample-gate-ignores-sessions survived (26 s) OK
+RESULT A5-stayed-on-scores-zero caught (1 s) FAILED (failures=1)
+RESULT A6-false-fine-counts-fresh-only caught (1 s) FAILED (failures=1)
+RESULT A7-tick-stand-in-unchecked survived (31 s) OK
+RESULT A8-prompt-version-unchecked survived (37 s) OK
+RESULT A9-tie-counts-as-on survived (47 s) OK
+
+| mutant | result | suite tail |
+|---|---|---|
+| A1-floor-judged-on-point-estimate | caught | FAILED (failures=1) |
+| A2-failed-before-unmet | caught | FAILED (failures=1) |
+| A3-case-fails-on-lower-bound | caught | FAILED (failures=1) |
+| A4-sample-gate-ignores-sessions | survived | OK |
+| A5-stayed-on-scores-zero | caught | FAILED (failures=1) |
+| A6-false-fine-counts-fresh-only | caught | FAILED (failures=1) |
+| A7-tick-stand-in-unchecked | survived | OK |
+| A8-prompt-version-unchecked | survived | OK |
+| A9-tie-counts-as-on | survived | OK |

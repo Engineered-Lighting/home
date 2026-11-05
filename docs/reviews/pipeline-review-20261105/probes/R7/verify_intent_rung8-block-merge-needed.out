@@ -1,0 +1,7 @@
+INFO this branch's rung 8 METHOD-V1 open lines: 21 (white_balance_kelvin, clip_limit_r, clip_limit_g, clip_limit_b, ...)
+INFO rung-8 closed copy open lines: 0; block sha differs from this branch's: True
+RESULT A (no merge):            REFUSED rung 8's METHOD-V1 still has open lines: white_balance_kelvin, clip_limit_r, clip_limit_g, clip_limit_b, weight_r, weight_g, weight_b, pixel_step, noise_tolerance_codes, still_span_s, poll_s, settle_limit_s, frames_per_step, max_exposure_us, iso_max, exposure_quantum_us, fit_iterations, fit_smoothing, residual_max_codes, region_tolerance_percent, region_min_code_samples
+RESULT B (open tuple stripped): REFUSED rung 8's Stage 0 block is not the one this sweep used
+RESULT C (closing text merged): MADE day-20261110
+RESULT REPRODUCED: step 4 refuses until rung 8's closing commit is on this branch
+INFO refusal text mentions a merge or the rung-8 branch: False

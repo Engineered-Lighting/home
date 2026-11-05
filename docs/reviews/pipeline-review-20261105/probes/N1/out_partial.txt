@@ -1,0 +1,12 @@
+RESULT freeze fixture raised OSError: [Errno 28] No space left on device (not a Refused)
+RESULT fixture-v1 holds: ['boxes', 'surface-map.json']
+RESULT verify exit 1; last line: FileNotFoundError: [Errno 2] No such file or directory: '$SCRATCH/probes/N1/tmp-attack/n1-attack-partial-9lzcw1zb/takes/n1/fixture-v1/fixture.json'
+RESULT status exit 0; ['Frozen: fixture v1; labels none.']
+RESULT boxes --pad 30 exit 2; Refused: the pad is fixed once a fixture is frozen
+RESULT freeze labels exit 1; last line: FileNotFoundError: [Errno 2] No such file or directory: '$SCRATCH/probes/N1/tmp-attack/n1-attack-partial-9lzcw1zb/takes/n1/fixture-v1/fixture.json'
+FAIL verify crashes with a traceback on a half-written frozen folder instead of reporting it; status counts it as frozen and the pad is fixed by it
+
+real	0m31.520s
+user	0m5.054s
+sys	0m0.978s
+exit=1

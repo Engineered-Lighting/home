@@ -1,0 +1,28 @@
+RESULT gate-median-boundary: survived in 3s (test_stage1.ModelTests) OK
+RESULT gate-drop-median: survived in 4s (test_stage1.ModelTests test_stage1.ReductionTests test_stage1.LightModelTests) OK
+RESULT gate-drop-p90: caught in 2s (test_stage1.ModelTests) FAIL: test_the_floor_excludes_and_counts_and_only_median_and_p90_decide (test_stage1.ModelTests.test_the_floor_excludes_and_counts_and_only_median_and_p90_decide)
+RESULT model-open-slot-refusal-removed: survived in 149s (test_stage1 test_den_light) OK
+RESULT score-denominator-reading: survived in 2s (test_stage1.ModelTests test_stage1.ReductionTests) OK
+RESULT score-ignores-bracket-flags: survived in 3s (test_stage1.ReductionTests test_stage1.ModelTests) OK
+RESULT score-no-noise-floor: caught in 2s (test_stage1.ModelTests) FAIL: test_the_floor_excludes_and_counts_and_only_median_and_p90_decide (test_stage1.ModelTests.test_the_floor_excludes_and_counts_and_only_median_and_p90_decide)
+RESULT predict-mired-weights-swapped: caught in 1s (test_stage1.LightModelTests test_stage1.ModelTests) FAIL: test_predict_matches_the_fit_and_returns_every_point (test_stage1.LightModelTests.test_predict_matches_the_fit_and_returns_every_point)
+RESULT holdout-may-use-fitted-level: caught in 1s (test_stage1.ScheduleTests) FAIL: test_no_holdout_repeats_a_fitted_step (test_stage1.ScheduleTests.test_no_holdout_repeats_a_fitted_step)
+RESULT probe-open-slot-refusal-removed: caught in 155s (test_stage1.ProbeEndToEndTests.test_a_session_refuses_while_a_slot_is_open) FAIL: test_a_session_refuses_while_a_slot_is_open (test_stage1.ProbeEndToEndTests.test_a_session_refuses_while_a_slot_is_open)
+RESULT guard-context-check-removed: caught in 4s (test_stage1.GuardTests) FAIL: test_own_and_foreign (test_stage1.GuardTests.test_own_and_foreign)
+RESULT restore-writes-person-owned-bulbs: caught in 5s (test_stage1.ProbeEndToEndTests.test_a_foreign_change_is_never_written_again_and_is_listed) FAIL: test_a_foreign_change_is_never_written_again_and_is_listed (test_stage1.ProbeEndToEndTests.test_a_foreign_change_is_never_written_again_and_is_listed)
+
+mutant | file | result | evidence
+gate-median-boundary | model.py | survived | OK
+gate-drop-median | model.py | survived | OK
+gate-drop-p90 | model.py | caught | FAIL: test_the_floor_excludes_and_counts_and_only_median_and_p90_decide (test_stage1.ModelTests.test_the_floor_excludes_and_counts_and_only_median_and_p90_decide)
+model-open-slot-refusal-removed | model.py | survived | OK
+score-denominator-reading | model.py | survived | OK
+score-ignores-bracket-flags | model.py | survived | OK
+score-no-noise-floor | model.py | caught | FAIL: test_the_floor_excludes_and_counts_and_only_median_and_p90_decide (test_stage1.ModelTests.test_the_floor_excludes_and_counts_and_only_median_and_p90_decide)
+predict-mired-weights-swapped | predict.py | caught | FAIL: test_predict_matches_the_fit_and_returns_every_point (test_stage1.LightModelTests.test_predict_matches_the_fit_and_returns_every_point)
+holdout-may-use-fitted-level | model.py | caught | FAIL: test_no_holdout_repeats_a_fitted_step (test_stage1.ScheduleTests.test_no_holdout_repeats_a_fitted_step)
+probe-open-slot-refusal-removed | probe.py | caught | FAIL: test_a_session_refuses_while_a_slot_is_open (test_stage1.ProbeEndToEndTests.test_a_session_refuses_while_a_slot_is_open)
+guard-context-check-removed | guard.py | caught | FAIL: test_own_and_foreign (test_stage1.GuardTests.test_own_and_foreign)
+restore-writes-person-owned-bulbs | probe.py | caught | FAIL: test_a_foreign_change_is_never_written_again_and_is_listed (test_stage1.ProbeEndToEndTests.test_a_foreign_change_is_never_written_again_and_is_listed)
+
+12 mutants: 7 caught or not-run, 5 survived

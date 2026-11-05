@@ -1,0 +1,5 @@
+INFO labels-v1 sessions: [('a1', 'development'), ('b1', 'development'), ('a2', 'held_out'), ('b2', 'held_out')]
+INFO removed sessions/a2.json
+INFO removed sessions/b2.json
+RESULT N2 development load SUCCEEDED without the held-out label files: ['a1', 'b1']
+RESULT N2 held_out load REFUSED (it opens/verifies held-out files): labels-v1: missing sessions/a2.json; missing sessions/b2.json

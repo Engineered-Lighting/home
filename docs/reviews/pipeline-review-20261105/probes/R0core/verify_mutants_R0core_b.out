@@ -1,0 +1,5 @@
+baseline: exit=0 Ran 113 tests in 79.170s | OK (skipped=1) (81.9s)
+RESULT CTRL_look | tools/den-core/validate.py | caught | FAIL: test_a_look_decision_with_another_scene_on_the_bulb_fails_check_3 (test_validate.Mutations.test_a_look_decision_with_another_scene_on_the_bulb_fails_check_3) | Ran 105 tests in 54.454s (56.6s)
+RESULT V_inforce | tools/den-core/validate.py | survived | OK (skipped=1) | Ran 113 tests in 74.892s (77.5s)
+RESULT V_holdvac | tools/den-core/validate.py | survived | OK (skipped=1) | Ran 113 tests in 78.868s (81.5s)
+RESULT RD_both | tools/den-core/run.py | survived | OK (skipped=1) | Ran 113 tests in 70.837s (73.3s)

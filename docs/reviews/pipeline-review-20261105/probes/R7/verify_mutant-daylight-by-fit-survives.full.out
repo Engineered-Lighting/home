@@ -1,0 +1,2 @@
+mutant                       file:line                            result     secs  caught by
+M6-daylight-by-fit           tools/den-photometry/card.py:423     caught        0  python3 -m unittest: error: unrecognized arguments: -s tools/den-photometry

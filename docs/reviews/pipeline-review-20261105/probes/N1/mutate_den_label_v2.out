@@ -1,0 +1,30 @@
+RESULT M01 survived (2 s) re-mark match threshold 0.5 -> 0.3 of each length :: Ran 1 test in 0.021s OK :: tests=test_den_label.RemarkTests.test_agreement_on_hand_made_cases
+RESULT M02 survived (2 s) re-mark match drops the second interval's half-length condition :: Ran 1 test in 0.026s OK :: tests=test_den_label.RemarkTests.test_agreement_on_hand_made_cases
+RESULT M03 survived (2 s) re-mark pairing in index order instead of largest overlap first :: Ran 1 test in 0.022s OK :: tests=test_den_label.RemarkTests.test_agreement_on_hand_made_cases
+RESULT M15 survived (1 s) re-mark p90 of end differences computed as p95 :: Ran 1 test in 0.015s OK :: tests=test_den_label.RemarkTests.test_agreement_on_hand_made_cases
+RESULT M08 survived (1 s) load_split no longer checks split == rule(order) :: Ran 3 tests in 0.066s OK :: tests=test_den_label.SplitTests
+RESULT M09 survived (30 s) pause rule '<= pause_s' -> '< pause_s' :: Ran 2 tests in 28.917s OK :: tests=test_den_label.LabelTests.test_the_pause_rule_never_applies_across_a_cut test_den_label.LabelTests.test_every_protocol_check
+RESULT M10 caught (44 s) re-mark wait 3 days -> 2 days :: Ran 1 test in 42.929s FAILED (failures=1) [FAIL: test_picks_the_second_development_session_waits_and_hides_the_first_labels (test_den_label.RemarkTests.test_picks_the_second_development_session_waits_and_hides_the_first_labels)] :: tests=test_den_label.RemarkTests.test_picks_the_second_development_session_waits_and_hides_the_first_labels test_den_label.RemarkBlindTests.test_the_wait_counts_from_the_first_passs_last_edit
+RESULT M12 caught (26 s) union test skipped (newest check need not cover earlier cuts) :: Ran 1 test in 24.563s FAILED (failures=1) [FAIL: test_the_union_test (test_den_label.SecondPersonTests.test_the_union_test)] :: tests=test_den_label.SecondPersonTests.test_the_union_test
+RESULT M13 caught (40 s) quiet seconds past tau_off ignore tau_off :: Ran 1 test in 38.958s FAILED (failures=1) [FAIL: test_counts_per_split_and_band_quiet_past_tau_off_and_days_no_times (test_den_label.StatusTests.test_counts_per_split_and_band_quiet_past_tau_off_and_days_no_times)] :: tests=test_den_label.StatusTests
+RESULT M11 caught (34 s) freeze labels no longer refuses a first pass saved after the re-mark started :: Ran 1 test in 32.751s FAILED (failures=1) [FAIL: test_agreement_comes_from_the_locked_first_pass (test_den_label.RemarkBlindTests.test_agreement_comes_from_the_locked_first_pass)] :: tests=test_den_label.RemarkBlindTests.test_agreement_comes_from_the_locked_first_pass
+RESULT M04 survived (71 s) verify_folder no longer reports a missing file of a frozen folder :: Ran 4 tests in 70.700s OK :: tests=test_den_label.FreezeTests.test_freeze_verify_versions_and_refusals test_den_label.FreezeLogTests
+RESULT M05 survived (30 s) verify_folder no longer reports an extra file in a frozen folder :: Ran 4 tests in 29.357s OK :: tests=test_den_label.FreezeTests.test_freeze_verify_versions_and_refusals test_den_label.FreezeLogTests
+RESULT M06 survived (27 s) verify_folder no longer checks the manifest is canonical JSON :: Ran 4 tests in 27.037s OK :: tests=test_den_label.FreezeTests.test_freeze_verify_versions_and_refusals test_den_label.FreezeLogTests
+RESULT M07 survived (36 s) freeze labels no longer checks the fixture covers the same sessions and checks :: Ran 6 tests in 36.029s OK :: tests=test_den_label.FreezeTests test_den_label.FreezeRecheckTests test_den_label.LabelTests.test_saves_go_through_the_checks_and_freeze_needs_end_to_end
+
+mutant  result    description
+M01     survived  re-mark match threshold 0.5 -> 0.3 of each length
+M02     survived  re-mark match drops the second interval's half-length condition
+M03     survived  re-mark pairing in index order instead of largest overlap first
+M15     survived  re-mark p90 of end differences computed as p95
+M08     survived  load_split no longer checks split == rule(order)
+M09     survived  pause rule '<= pause_s' -> '< pause_s'
+M10     caught    re-mark wait 3 days -> 2 days
+M12     caught    union test skipped (newest check need not cover earlier cuts)
+M13     caught    quiet seconds past tau_off ignore tau_off
+M11     caught    freeze labels no longer refuses a first pass saved after the re-mark started
+M04     survived  verify_folder no longer reports a missing file of a frozen folder
+M05     survived  verify_folder no longer reports an extra file in a frozen folder
+M06     survived  verify_folder no longer checks the manifest is canonical JSON
+M07     survived  freeze labels no longer checks the fixture covers the same sessions and checks

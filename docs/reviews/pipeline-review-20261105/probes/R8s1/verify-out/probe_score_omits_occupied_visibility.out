@@ -1,0 +1,6 @@
+RESULT score verdict=pass light-model verdict=pass
+RESULT score top-level keys: ['absolute', 'blocks_excluded', 'camera_scale', 'day_to_day_stability', 'error', 'information_only']
+RESULT score['absolute'] = 'not run, waits on photometry-commissioning'
+RESULT words about the occupied-visibility part found in either output: []
+FAIL a 'pass' rung 8 score and light model with 'absolute: not run' but no statement that the occupied-visibility qualification (ladder rung 8 gate) was not run
+exit=1 secs=4

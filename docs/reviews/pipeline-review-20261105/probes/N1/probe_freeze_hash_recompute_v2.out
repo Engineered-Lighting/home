@@ -1,0 +1,44 @@
+RESULT freeze lines:
+  den-n1 fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d protocol=b8f0524603e1aab7da3c8fc17622d7fd3a2ce37bb05a985817d964f52a191767 frozen=2026-11-05 sessions=4 frames=1060 pad=0.2/16px
+  den-n1 labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d protocol=b8f0524603e1aab7da3c8fc17622d7fd3a2ce37bb05a985817d964f52a191767 split=96bd67ea8a40721a3cf886581fc3e353369b692e2150d27932c2278190888118 remark=950a34979d8a3fa9f787dc9f80d415cd52797c70074896d7d5bf0d9f74884328 frozen=2026-11-05 development=2s/1d/fine2/casual2 held_out=2s/1d/fine2/casual2
+RESULT printed EvalRecord fields: {"gold_set": {"n1": {"fixture": {"hash": "4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d", "version": 1}, "labels": {"hash": "9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d", "version": 1}}}, "hash": "9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d", "label_version": 1, "n_intervals": 8, "refreshed": "2026-11-05"}
+PASS fixture: my sha256 of fixture.json 4632841f2218 equals the freeze line's
+PASS fixture: equals the printed gold_set.n1.fixture.hash
+PASS fixture: fixture.json is canonical by my own encoder
+PASS fixture: the manifest lists exactly the folder's other files (5)
+PASS fixture: every listed file's sha256 recomputes (5 files)
+PASS labels: my sha256 of labels.json 9bb424c51409 equals the freeze line's
+PASS labels: equals the printed gold_set.n1.labels.hash
+PASS labels: labels.json is canonical by my own encoder
+PASS labels: the manifest lists exactly the folder's other files (6)
+PASS labels: every listed file's sha256 recomputes (6 files)
+PASS fixture: every a1 row holds the hand-padded box 60,0,340,360 ({('60', '0', '340', '360')})
+RESULT T1-label-edited: verify -> flagged: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: sessions/a2.json changed
+RESULT T1-label-edited: label.py verify exit/out -> 1 :: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: sessions/a2.json changed
+PASS T1-label-edited: verify reports the problem (no crash) and label.py verify exits 1
+RESULT T2a-label-edited-manifest-rehashed-logged: verify -> flagged: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=7e07f65da3aa6d3d02d50ae879c3b001e96fc70b69f99563f1fa985bffd2a196: manifest hash differs from FREEZES.md (9bb424c51409)
+RESULT T2a-label-edited-manifest-rehashed-logged: label.py verify exit/out -> 1 :: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=7e07f65da3aa6d3d02d50ae879c3b001e96fc70b69f99563f1fa985bffd2a196: manifest hash differs from FREEZES.md (9bb424c51409)
+PASS T2a-label-edited-manifest-rehashed-logged: verify reports the problem (no crash) and label.py verify exits 1
+RESULT T2b-label-edited-manifest-rehashed-not-yet-logged: verify -> ok: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK (not yet in FREEZES.md) | labels-v1 sha256=7e07f65da3aa6d3d02d50ae879c3b001e96fc70b69f99563f1fa985bffd2a196: OK (not yet in FREEZES.md)
+RESULT T2b-label-edited-manifest-rehashed-not-yet-logged: label.py verify exit/out -> 0 :: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK (not yet in FREEZES.md) | labels-v1 sha256=7e07f65da3aa6d3d02d50ae879c3b001e96fc70b69f99563f1fa985bffd2a196: OK (not yet in FREEZES.md)
+RESULT T3-remark-json-deleted: verify -> flagged: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: missing remark.json
+RESULT T3-remark-json-deleted: label.py verify exit/out -> 1 :: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: missing remark.json
+PASS T3-remark-json-deleted: verify reports the problem (no crash) and label.py verify exits 1
+RESULT T4-extra-file: verify -> flagged: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: extra file sessions/zz.json
+RESULT T4-extra-file: label.py verify exit/out -> 1 :: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: extra file sessions/zz.json
+PASS T4-extra-file: verify reports the problem (no crash) and label.py verify exits 1
+RESULT T5-manifest-non-canonical-not-yet-logged: verify -> flagged: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK (not yet in FREEZES.md) | labels-v1 sha256=4ef50a568a3a40a895605425c1c2c32ea3378d49ea7840b290bab0f047a84c94: labels.json is not canonical JSON (not yet in FREEZES.md)
+RESULT T5-manifest-non-canonical-not-yet-logged: label.py verify exit/out -> 1 :: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: OK (not yet in FREEZES.md) | labels-v1 sha256=4ef50a568a3a40a895605425c1c2c32ea3378d49ea7840b290bab0f047a84c94: labels.json is not canonical JSON (not yet in FREEZES.md)
+PASS T5-manifest-non-canonical-not-yet-logged: verify reports the problem (no crash) and label.py verify exits 1
+RESULT T6-box-row-edited: verify -> flagged: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: boxes/b2.csv changed | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: OK
+RESULT T6-box-row-edited: label.py verify exit/out -> 1 :: fixture-v1 sha256=4632841f2218c48f90b3ae3a05cf2613f96572f5d81d2a4d0ec962a576bcf41d: boxes/b2.csv changed | labels-v1 sha256=9bb424c51409fce2a9c21962635b3f0d7a56443b2ee7538357e5f6199451d20d: OK
+PASS T6-box-row-edited: verify reports the problem (no crash) and label.py verify exits 1
+RESULT T7-interrupted-fixture-freeze: verify -> crash: FileNotFoundError: [Errno 2] No such file or directory: '/tmp/n1v2-T7-interrupted-fixture-freeze-v6zqn1tg/takes/n1/fixture-v2/fixture.json'
+RESULT T7-interrupted-fixture-freeze: label.py verify exit/out -> uncaught FileNotFoundError :: [Errno 2] No such file or directory: '/tmp/n1v2-T7-interrupted-fixture-freeze-v6zqn1tg/takes/n1/fixture-v2/fixture.json'
+FAIL T7-interrupted-fixture-freeze: verify reports the problem (no crash) and label.py verify exits 1
+RESULT T8-fixture-json-deleted: verify -> crash: FileNotFoundError: [Errno 2] No such file or directory: '/tmp/n1v2-T8-fixture-json-deleted-u90z51ty/takes/n1/fixture-v1/fixture.json'
+RESULT T8-fixture-json-deleted: label.py verify exit/out -> uncaught FileNotFoundError :: [Errno 2] No such file or directory: '/tmp/n1v2-T8-fixture-json-deleted-u90z51ty/takes/n1/fixture-v1/fixture.json'
+FAIL T8-fixture-json-deleted: verify reports the problem (no crash) and label.py verify exits 1
+RESULT FAIL (2 failed checks)
+  failed: T7-interrupted-fixture-freeze: verify reports the problem (no crash) and label.py verify exits 1
+  failed: T8-fixture-json-deleted: verify reports the problem (no crash) and label.py verify exits 1

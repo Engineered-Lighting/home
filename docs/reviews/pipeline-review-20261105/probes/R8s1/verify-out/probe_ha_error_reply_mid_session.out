@@ -1,0 +1,8 @@
+RESULT exit=2 stdout='Start checks passed. Leave the den now and keep it empty for about 15 minutes.'
+RESULT stderr='Refused: Home Assistant answered 400 to POST /api/services/light/turn_off. This command changed nothing.'
+RESULT session.json phase='probing' outcome='probing' restore=None resume=None
+RESULT den_lighting automatic switch='off'; bulbs left on=['light.den_front_left']; camera still held=True
+FAIL the CLI says 'This command changed nothing' (exit 2, README: nothing was changed) while den_lighting is left paused and the session never restored or resumed
+FAIL bulbs ['light.den_front_left'] left at a probe level with no restore
+RESULT 2 FAIL
+exit=1 secs=14

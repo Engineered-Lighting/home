@@ -1,0 +1,6 @@
+----------------------------------------------------------------------
+Ran 25 tests in 227.308s
+
+OK
+FIRST FAILURE: none
+RESULT M9 SURVIVED test_photometry (exit 0)

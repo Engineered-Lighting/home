@@ -1,0 +1,10 @@
+RESULT: evening plain      decide bulb-requests ON with a null level where den_lighting wants a level: 0 of 32
+RESULT: evening touch      decide bulb-requests ON with a null level where den_lighting wants a level: 0 of 36
+RESULT: evening game       decide bulb-requests ON with a null level where den_lighting wants a level: 0 of 32
+RESULT: evening touch+game decide bulb-requests ON with a null level where den_lighting wants a level: 0 of 36
+RESULT: edited decide's 'base' decision at +540.0 s: rear-left requests ON with null levels
+RESULT committed run.diff rear-left intervals covering it: [(540.0, 1114.7)]
+RESULT committed check 3: FAIL: light.den_rear_left differs from den_lighting from 2026-11-04T03:59:00.0Z (+540.0 s) to 2026-11-04T04:08:34.7Z (+1114.7 s); decide's decision at 2026-11-04T03:59:00.0Z (+540.0 s) chose base, not the look
+RESULT RD_both   run.diff rear-left intervals covering it: []
+RESULT RD_both   check 3: OK: 8 interval(s), each decide's labelled placeholder reading look; all of them while need is reading
+PASS (finding reproduced): committed spans=[(540.0, 1114.7)] check3=FAIL; mutant spans=[] check3=OK

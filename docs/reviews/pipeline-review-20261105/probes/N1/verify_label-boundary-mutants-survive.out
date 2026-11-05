@@ -1,0 +1,23 @@
+PART A  n1.check_labels on synthetic frames (pause_s = 6)
+  case                                                             CONTROL        M5        M6      POS5      POS6
+  same case, gap exactly 6.0 s (t 50.0 -> 56.0)                    refused  accepted   refused  accepted   refused
+  same case, gap 5.9 s                                             refused   refused   refused  accepted   refused
+  same case, gap 6.1 s                                            accepted  accepted  accepted  accepted  accepted
+  quiet 300-400 ends on interval 400-500's onset frame             refused   refused  accepted   refused  accepted
+  uncertain 500-550 starts on interval 400-500's offset frame      refused   refused  accepted   refused  accepted
+  quiet 300-400 and uncertain 400-450 share frame 400              refused   refused  accepted   refused  accepted
+  quiet 300-399 ends one frame before onset 400                   accepted  accepted  accepted  accepted  accepted
+RESULT M5 changes check_labels on 1 case(s): ['same case, gap exactly 6.0 s (t 50.0 -> 56.0)']
+RESULT M6 changes check_labels on 3 case(s): ["quiet 300-400 ends on interval 400-500's onset frame", "uncertain 500-550 starts on interval 400-500's offset frame", 'quiet 300-400 and uncertain 400-450 share frame 400']
+
+PART B  narrow tests (failfast)
+  CONTROL  survived  no change :: Ran 2 tests in 44.133s; OK (47 s) tests=LabelTests.test_the_pause_rule_never_applies_across_a_cut LabelTests.test_every_protocol_check
+  M5       survived  pause rule '<= pause_s' -> '< pause_s' :: Ran 2 tests in 49.421s; OK (51 s) tests=LabelTests.test_the_pause_rule_never_applies_across_a_cut LabelTests.test_every_protocol_check
+  M6       survived  span overlap test strict (shared end frame allowed) :: Ran 1 test in 34.767s; OK (37 s) tests=LabelTests.test_every_protocol_check
+  POS5     caught    positive control: pause limit pause_s - 1 (5 s) :: Ran 1 test in 24.696s; FAILED (failures=1) (27 s) tests=LabelTests.test_the_pause_rule_never_applies_across_a_cut LabelTests.test_every_protocol_check
+  POS6     caught    positive control: span overlap check removed :: Ran 1 test in 28.088s; FAILED (failures=1) (30 s) tests=LabelTests.test_every_protocol_check
+PASS runner sanity: control passes, both positive controls caught
+
+FULL  whole test_den_label module with M5+M6 together: survived :: Ran 50 tests in 920.425s; OK (922 s)
+RESULT M5 narrow tests: survived
+RESULT M6 narrow tests: survived

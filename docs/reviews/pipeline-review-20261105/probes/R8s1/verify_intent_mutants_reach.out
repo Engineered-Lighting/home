@@ -1,0 +1,4 @@
+RESULT gate-drop-median: survived in 41s; Ran 20 tests in 39.657s; OK; []
+RESULT score-denominator-reading: survived in 42s; Ran 20 tests in 40.681s; OK; []
+RESULT score-ignores-bracket-flags: survived in 37s; Ran 20 tests in 35.986s; OK; []
+RESULT gate-median-boundary: survived in 35s; Ran 20 tests in 33.937s; OK; []

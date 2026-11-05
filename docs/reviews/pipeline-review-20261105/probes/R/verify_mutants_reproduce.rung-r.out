@@ -1,0 +1,4 @@
+checkout $SCRATCH/wt/rung-r
+RESULT M13: caught (274s exit=1) FAIL: test_take_py_output_passes_check_py (test_den_take.EndToEndTests.test_take_py_output_passes_check_py) Ran 9 tests in 270.657s FAILED (failures=1)
+RESULT M02: survived (871s exit=0) Ran 72 tests in 869.162s OK
+RESULT M03: survived (882s exit=0) Ran 72 tests in 880.027s OK

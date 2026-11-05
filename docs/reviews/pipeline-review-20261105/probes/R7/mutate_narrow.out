@@ -1,0 +1,11 @@
+mutant                       file:line                            result     secs  caught by
+M1-open-proposals-ignored    tools/den-photometry/card.py:144     survived     13  OK
+M2-held-out-tol-x1.5         tools/den-photometry/card.py:336     survived    134  OK
+M3-held-out-no-abs           tools/den-photometry/card.py:336     caught       12  FAIL: test_held_out_checks_are_in_lux_and_rho_card_cancels (test_card.BoxTests.test_held_out_checks_are_in_lux_and_rho_card_cancels)
+M4-invariance-tol-x1.5       tools/den-photometry/card.py:293     survived    185  OK
+M5-drift-x1.5                tools/den-photometry/card.py:309     survived    246  OK
+M6-daylight-by-fit           tools/den-photometry/card.py:423     survived    252  OK
+M7-fit-latest                tools/den-photometry/card.py:400     caught       18  FAIL: test_per_illuminant_class_fits_one_scale_per_class (test_card.SelectionTests.test_per_illuminant_class_fits_one_scale_per_class)
+M8-no-fit-not-missing        tools/den-photometry/card.py:426     caught       16  FAIL: test_day_one_is_the_first_day_with_any_capture (test_card.SelectionTests.test_day_one_is_the_first_day_with_any_capture)
+M9-score-no-ready            tools/den-photometry/photometry.py:581 caught        2  FAIL: test_a_day_a_capture_and_a_score_refuse_while_a_line_is_open (test_photometry.RefusalTests.test_a_day_a_capture_and_a_score_refuse_while_a_line_is_open)
+M10-capture-no-ready         tools/den-photometry/photometry.py:373 caught        3  FAIL: test_a_day_a_capture_and_a_score_refuse_while_a_line_is_open (test_photometry.RefusalTests.test_a_day_a_capture_and_a_score_refuse_while_a_line_is_open)

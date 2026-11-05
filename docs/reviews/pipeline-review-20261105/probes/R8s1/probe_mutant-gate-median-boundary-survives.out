@@ -1,0 +1,38 @@
+RESULT original       M-tie                  median=0.08                     p90=0.08                     count=11 verdict=pass
+RESULT original       P-tie                  median=0.0                      p90=0.19                     count=11 verdict=pass
+RESULT original       M-ulp-below            median=0.07999999999999999      p90=0.1                      count=3 verdict=pass
+RESULT original       M-ulp-above            median=0.08000000000000002      p90=0.1                      count=3 verdict=fail
+RESULT original       P-ulp-below            median=0.05                     p90=0.18999999999999997      count=3 verdict=pass
+RESULT original       P-ulp-above            median=0.05                     p90=0.19000000000000003      count=3 verdict=fail
+RESULT original       R clean noise 2e-5     median=0.019824840879742407     p90=0.11564049173873127      count=2220 verdict=pass
+RESULT original       R saturating 0.6       median=0.13455188318742034      p90=1.181634102464388        count=2288 verdict=fail
+RESULT original       R wrong response       median=None                     p90=None                     count=0 verdict=fail
+RESULT median-strict  M-tie                  median=0.08                     p90=0.08                     count=11 verdict=fail
+RESULT median-strict  P-tie                  median=0.0                      p90=0.19                     count=11 verdict=pass
+RESULT median-strict  M-ulp-below            median=0.07999999999999999      p90=0.1                      count=3 verdict=pass
+RESULT median-strict  M-ulp-above            median=0.08000000000000002      p90=0.1                      count=3 verdict=fail
+RESULT median-strict  P-ulp-below            median=0.05                     p90=0.18999999999999997      count=3 verdict=pass
+RESULT median-strict  P-ulp-above            median=0.05                     p90=0.19000000000000003      count=3 verdict=fail
+RESULT median-strict  R clean noise 2e-5     median=0.019824840879742407     p90=0.11564049173873127      count=2220 verdict=pass
+RESULT median-strict  R saturating 0.6       median=0.13455188318742034      p90=1.181634102464388        count=2288 verdict=fail
+RESULT median-strict  R wrong response       median=None                     p90=None                     count=0 verdict=fail
+RESULT p90-strict     M-tie                  median=0.08                     p90=0.08                     count=11 verdict=pass
+RESULT p90-strict     P-tie                  median=0.0                      p90=0.19                     count=11 verdict=fail
+RESULT p90-strict     M-ulp-below            median=0.07999999999999999      p90=0.1                      count=3 verdict=pass
+RESULT p90-strict     M-ulp-above            median=0.08000000000000002      p90=0.1                      count=3 verdict=fail
+RESULT p90-strict     P-ulp-below            median=0.05                     p90=0.18999999999999997      count=3 verdict=pass
+RESULT p90-strict     P-ulp-above            median=0.05                     p90=0.19000000000000003      count=3 verdict=fail
+RESULT p90-strict     R clean noise 2e-5     median=0.019824840879742407     p90=0.11564049173873127      count=2220 verdict=pass
+RESULT p90-strict     R saturating 0.6       median=0.13455188318742034      p90=1.181634102464388        count=2288 verdict=fail
+RESULT p90-strict     R wrong response       median=None                     p90=None                     count=0 verdict=fail
+
+SUMMARY M-tie                  DIFFER {'original': 'pass', 'median-strict': 'fail', 'p90-strict': 'pass'}
+SUMMARY P-tie                  DIFFER {'original': 'pass', 'median-strict': 'pass', 'p90-strict': 'fail'}
+SUMMARY M-ulp-below            agree  {'original': 'pass', 'median-strict': 'pass', 'p90-strict': 'pass'}
+SUMMARY M-ulp-above            agree  {'original': 'fail', 'median-strict': 'fail', 'p90-strict': 'fail'}
+SUMMARY P-ulp-below            agree  {'original': 'pass', 'median-strict': 'pass', 'p90-strict': 'pass'}
+SUMMARY P-ulp-above            agree  {'original': 'fail', 'median-strict': 'fail', 'p90-strict': 'fail'}
+SUMMARY R clean noise 2e-5     agree  {'original': 'pass', 'median-strict': 'pass', 'p90-strict': 'pass'}
+SUMMARY R saturating 0.6       agree  {'original': 'fail', 'median-strict': 'fail', 'p90-strict': 'fail'}
+SUMMARY R wrong response       agree  {'original': 'fail', 'median-strict': 'fail', 'p90-strict': 'fail'}
+PASS: committed code is inclusive at exactly 8% / 19% and each strict mutant flips only the exact tie

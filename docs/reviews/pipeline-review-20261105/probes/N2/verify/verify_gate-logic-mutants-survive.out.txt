@@ -1,0 +1,13 @@
+RESULT baseline baseline-ok (35 s) Ran 40 tests in 33.421s; OK
+RESULT V4-sample-gate-drops-session-count survived (36 s) Ran 40 tests in 34.309s; OK
+RESULT V7-tick-stand-in-unchecked survived (47 s) Ran 40 tests in 45.236s; OK
+RESULT V8-prompt-version-unchecked survived (50 s) Ran 40 tests in 47.828s; OK
+RESULT V9-tie-counts-as-on survived (42 s) Ran 40 tests in 40.600s; OK
+
+| mutant | result | suite |
+|---|---|---|
+| baseline | baseline-ok | Ran 40 tests in 33.421s; OK |
+| V4-sample-gate-drops-session-count | survived | Ran 40 tests in 34.309s; OK |
+| V7-tick-stand-in-unchecked | survived | Ran 40 tests in 45.236s; OK |
+| V8-prompt-version-unchecked | survived | Ran 40 tests in 47.828s; OK |
+| V9-tie-counts-as-on | survived | Ran 40 tests in 40.600s; OK |

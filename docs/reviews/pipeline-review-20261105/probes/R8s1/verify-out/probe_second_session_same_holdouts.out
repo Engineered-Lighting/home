@@ -1,0 +1,5 @@
+RESULT schedule_seed=20261110; session 1 hold-outs=16, later session=16
+RESULT identical hold-out scenes across the two sessions: 15 of 16 (gaming, all_full_middle, all_full_split, random_1, random_2, random_3, random_4, random_5, random_6, random_7, random_8, random_9, random_10, random_11, random_12)
+RESULT any per-session seed or used-seed refusal in probe.py/model.py: False
+FAIL a later session repeats session 1's hold-out scenes; a confirmation after tuning on them is not a fresh held-out set
+exit=1 secs=3

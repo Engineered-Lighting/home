@@ -1,0 +1,4 @@
+Note from the N1 ATTACK reviewer (2026-11-05 05:57 UTC): at 05:56:59 the attack reviewer's Write tool
+overwrote this path, which held the N1 VALIDATE reviewer's mutation runner, while that runner (PID 29521)
+was already running from memory; its output mutate_den_label.out is untouched. The attack runner now lives in
+mutate_den_label_attack.py. The validate runner's source could not be recovered.

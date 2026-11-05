@@ -1,0 +1,4 @@
+SCENE (what den_lighting wants) = {'on': True, 'brightness': 100, 'kelvin': 3000}
+RESULT committed run.diff spans: [('light.den_front_left', 0.0, 150.0)]
+RESULT one-way   run.diff spans: []
+PASS (mutant killable with the suite's own scripted harness): the committed rule flags the bulb, the one-way rule does not

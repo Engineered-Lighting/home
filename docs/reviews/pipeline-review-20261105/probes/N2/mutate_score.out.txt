@@ -1,0 +1,31 @@
+RESULT baseline exit=0 OK (19 s)
+RESULT M01-cut-fine-strict survived (11 s) OK
+RESULT M02-ece-9-bins survived (10 s) OK
+RESULT M03-stale-is-a-hit survived (9 s) OK
+RESULT M04-no-days-rule survived (10 s) OK
+RESULT M05-units-off-by-one survived (10 s) OK
+RESULT M06-bootstrap-90pct survived (15 s) OK
+RESULT M07-identity-resample survived (21 s) OK
+RESULT M08-no-data-passes survived (21 s) OK
+RESULT M09-skip-fixture-verify survived (23 s) OK
+RESULT M10-skip-tick-standin survived (25 s) OK
+RESULT M11-data-gate-vacuous survived (31 s) OK
+RESULT M12-ctrl-open-slot caught (1 s) FAIL: test_held_out_refuses_while_any_slot_is_null (test_den_n2.GateTests.test_held_out_refuses_while_any_slot_is_null)
+RESULT M13-ctrl-floor-boundary caught (1 s) FAIL: test_met_failed_straddled (test_den_n2.BoundAndVerdictTests.test_met_failed_straddled)
+
+mutant                     result    caught by / description
+M01-cut-fine-strict        survived  band_of: level >= cut.fine becomes > (a level of exactly 0.6 is no longer fine)
+M02-ece-9-bins             survived  ECE binning uses bins-1 equal-width bins instead of 10
+M03-stale-is-a-hit         survived  fine recall counts a stale fine level as a hit (owner/ladder: stale is a miss)
+M04-no-days-rule           survived  sample gates drop the >= 2 days condition
+M05-units-off-by-one       survived  sample gate needs n > 30 instead of n >= 30
+M06-bootstrap-90pct        survived  bootstrap interval uses 5%/95% tails (90%) instead of 2.5%/97.5%
+M07-identity-resample      survived  bootstrap resamples every session once (no resampling): the interval collapses
+M08-no-data-passes         survived  a gated metric with no data no longer counts as straddled (vacuous pass)
+M09-skip-fixture-verify    survived  held-out run verifies only the labels folder, not the fixture folder
+M10-skip-tick-standin      survived  held-out run no longer refuses a replay log whose tick differs from GATE-V1
+M11-data-gate-vacuous      survived  per-second data gates count every session, data or not
+M12-ctrl-open-slot         caught    FAIL: test_held_out_refuses_while_any_slot_is_null (test_den_n2.GateTests.test_held_out_refuses_while_any_slot_is_null)
+M13-ctrl-floor-boundary    caught    FAIL: test_met_failed_straddled (test_den_n2.BoundAndVerdictTests.test_met_failed_straddled)
+
+RESULT 13 mutants, 11 survived: M01-cut-fine-strict, M02-ece-9-bins, M03-stale-is-a-hit, M04-no-days-rule, M05-units-off-by-one, M06-bootstrap-90pct, M07-identity-resample, M08-no-data-passes, M09-skip-fixture-verify, M10-skip-tick-standin, M11-data-gate-vacuous

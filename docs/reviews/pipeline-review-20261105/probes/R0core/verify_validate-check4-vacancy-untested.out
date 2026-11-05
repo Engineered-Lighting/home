@@ -1,0 +1,11 @@
+RESULT: synthetic touch evening: instants with a hold listed and occupancy off >= 120s: 0 []
+RESULT: synthetic touch evening check 4 (committed): OK: 1 hold(s) pinned and skipped by decide whenever it was deciding
+RESULT: touch-in-vacancy run: instants with a hold listed and occupancy off >= 120s: 25, first 220.0, last 268.0
+RESULT:   decide decision at 0.0 requests rear-left {'brightness': 100, 'kelvin': 3000, 'on': True}, skipped []
+RESULT:   decide decision at 220.0 requests rear-left {'brightness': 80, 'kelvin': 2202, 'on': True}, skipped ['light.den_rear_left']
+RESULT:   decide decision at 270.0 requests rear-left {'brightness': None, 'kelvin': None, 'on': False}, skipped []
+RESULT: touch-in-vacancy run check 4 (committed, decide as built): OK: 1 hold(s) pinned and skipped by decide whenever it was deciding
+RESULT: edited 2 decide decision(s) at or after 220 s to request OFF for the held rear-left bulb
+RESULT committed validate.holds_respected: FAIL: light.den_rear_left held at 80@2202K since 1970-01-01T00:02:30.0Z (+150.0 s); decide's latest decision, at 1970-01-01T00:03:40.0Z (+220.0 s), requests off (seen at 1970-01-01T00:03:40.0Z (+220.0 s))
+RESULT V_holdvac   validate.holds_respected: n/a: all 1 hold(s) fell while decide makes no decision by design
+PASS (finding reproduced): synthetic hits=0 committed=FAIL mutant=n/a

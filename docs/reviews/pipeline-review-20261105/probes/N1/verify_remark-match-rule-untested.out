@@ -1,0 +1,27 @@
+PART A  matched count per synthetic pair (original = CONTROL)
+  case                                                        CONTROL       M1       M2      M2b POSITIVE
+  0-10 vs 5-15 (50% of each)                                        1        1        1        1        1
+  0-10 vs 6-16 (40% of each)                                        0        1        0        0        1
+  0-10 vs 6.5-16.5 (35% of each)                                    0        1        0        0        1
+  0-4 vs 1-13 (75% of first, 25% of second)                         0        0        1        0        1
+  1-13 vs 0-4 (25% of first, 75% of second)                         0        0        0        1        1
+  100-104 vs 102.5-110 (the test's non-match: 37.5%/20%)            0        0        0        0        1
+  band_agreement: fine 0-10 vs casual 6-16                       None      0.0     None     None      0.0
+RESULT M1 changes the report on 3 case(s): ['0-10 vs 6-16 (40% of each)', '0-10 vs 6.5-16.5 (35% of each)', 'band_agreement: fine 0-10 vs casual 6-16']
+RESULT M2 changes the report on 1 case(s): ['0-4 vs 1-13 (75% of first, 25% of second)']
+RESULT M2b changes the report on 1 case(s): ['1-13 vs 0-4 (25% of first, 75% of second)']
+
+PART B  narrow test RemarkTests.test_agreement_on_hand_made_cases (failfast)
+  CONTROL   survived  no change :: Ran 1 test in 0.023s; OK (3 s)
+  M1        survived  threshold 0.5 -> 0.3 on both lengths :: Ran 1 test in 0.027s; OK (3 s)
+  M2        survived  second interval's half-length condition dropped :: Ran 1 test in 0.030s; OK (3 s)
+  M2b       survived  first interval's half-length condition dropped :: Ran 1 test in 0.058s; OK (3 s)
+  POSITIVE  caught    threshold 0.5 -> 0.15 on both lengths (the 37.5%/20% pair now matches) :: Ran 1 test in 0.070s; FAILED (failures=1) (3 s)
+PASS runner sanity: control passes, positive control caught
+
+FULL  every test that reaches agreement(): RemarkTests RemarkBlindTests.test_agreement_comes_from_the_locked_first_pass FreezeTests.test_freeze_verify_versions_and_refusals DryRunTests
+  M1        survived  :: Ran 5 tests in 358.930s; OK (362 s)
+  M2        survived  :: Ran 5 tests in 480.375s; OK (483 s)
+RESULT M1 narrow test: survived
+RESULT M2 narrow test: survived
+RESULT M2b narrow test: survived

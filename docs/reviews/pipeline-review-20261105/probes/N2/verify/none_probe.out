@@ -1,0 +1,6 @@
+RESULT held-out sessions=4 units gates applied=['units.fine', 'units.casual'] none-band units=8 (owner: >= 30 per band) verdict=feasible
+FAIL a held-out set with fewer than 30 none-band units is scored feasible
+
+real	0m2.919s
+user	0m1.667s
+sys	0m0.085s

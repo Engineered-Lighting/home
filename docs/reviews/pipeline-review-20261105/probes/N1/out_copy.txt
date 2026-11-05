@@ -1,0 +1,5 @@
+RESULT splits {'b1': 'development', 'b1b': 'held_out'}; copy's take.json names 'take-7e72f52a'; take.json and frames.csv identical: True
+RESULT hard-a entries (order, split, started_unix): {'a_late': (1, 'development', 1793188800.0), 'a_early': (2, 'held_out', 1793102400.0)}
+INFO hard-a recorded first is assigned second: the alternation follows registration, not recording order (take.json's started_unix) as PROTOCOL-V1 states
+FAIL the same recording is registered as development (b1) and held_out (b1b)
+exit=1

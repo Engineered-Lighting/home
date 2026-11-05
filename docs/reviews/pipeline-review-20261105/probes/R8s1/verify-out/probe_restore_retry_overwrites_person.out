@@ -1,0 +1,7 @@
+RESULT mode=restore outcome=complete abort_reason=None
+RESULT den_lighting normal for light.den_rear_left right after the person's change: {'on': True, 'brightness': 60, 'kelvin': 2703}
+RESULT tool light writes to light.den_rear_left after the person's change: [('turn_on', 90, 2500)]
+RESULT final den_lighting normal for light.den_rear_left: {'on': True, 'brightness': 90, 'kelvin': 2500}; unrestored=[]
+RESULT hold checks: [(1, ['light.den_rear_left']), (2, [])]
+FAIL the tool wrote light.den_rear_left 1 time(s) after a person changed it (outcome complete); the person's scene is gone from den_lighting's normal
+exit=1 secs=38

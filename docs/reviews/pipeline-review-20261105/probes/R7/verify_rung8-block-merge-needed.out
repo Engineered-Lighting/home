@@ -1,0 +1,9 @@
+SETUP stage0 block 21bcf42a1085
+SELF-CHECK exit 0: ROUND TRIP PASS: C_card 100 nc, rho_card 0.18, E_meter 174.533 lx -> k_L 0.100000 (cd/m2)/nc, L 10.000004 cd/m2, E back 174.533 lx; meter-norm/v1
+CASE A exit 2: Refused: rung 8's METHOD-V1 still has open lines: white_balance_kelvin, clip_limit_r, clip_limit_g, clip_limit_b, weight_r, weight_g, weight_b, pixel_step, noise_tolerance_codes, still_span_s, poll_s, settle_limit_s, frames_per_step, max_exposure_us, iso_max, exposure_quantum_us, fit_iterations, fit_smoothing, residual_max_codes, region_tolerance_percent, region_min_code_samples. This command changed nothing.
+CASE B exit 0: Made /tmp/r7-merge-bqz1qxbn/photometry-B/day-20261110 with day.json and an empty worksheet.csv.
+CASE C exit 2: Refused: rung 8's Stage 0 block is not the one this sweep used. This command changed nothing.
+RESULT A refuses on rung 8's open lines: YES
+RESULT A's refusal names a merge or rung 8's branch: NO
+RESULT B (exact merge) makes the day: YES
+RESULT C (closed here by another edit) refuses on the block: YES

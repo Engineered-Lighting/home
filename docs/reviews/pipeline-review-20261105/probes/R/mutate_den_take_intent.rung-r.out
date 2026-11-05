@@ -1,0 +1,8 @@
+RESULT b2: survived (1065s) Ran 72 tests in 1062.302s; OK
+RESULT b4: survived (1068s) Ran 72 tests in 1065.243s; OK
+RESULT b5: survived (1085s) Ran 72 tests in 1082.463s; OK
+
+mutant   | outcome
+b2       | survived
+b4       | survived
+b5       | survived

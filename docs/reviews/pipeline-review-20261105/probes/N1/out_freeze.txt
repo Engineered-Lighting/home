@@ -1,0 +1,31 @@
+RESULT splits {'a1': 'development', 'b1': 'development', 'a2': 'held_out'}
+PASS per-script alternation
+PASS no session registered twice
+PASS split chain link for a1
+PASS split chain link for b1
+PASS split chain link for a2
+PASS split head = sha256(canonical(last entry))
+RESULT den-n1 fixture-v1 sha256=5f646c1697adc87f5ff311060020d2ece1deaba83fe3fa0bd8614d75adb55b6e protocol=b8f0524603e1aab7da3c8fc17622d7fd3a2ce37bb05a985817d964f52a191767 frozen=2026-11-09 sessions=3 frames=795 pad=0.2/16px
+RESULT den-n1 labels-v1 sha256=728744ce73deed591969c0663ba5738096e959e26c9cd1799a449cce521db78e protocol=b8f0524603e1aab7da3c8fc17622d7fd3a2ce37bb05a985817d964f52a191767 split=75ea0412b3f416551351abd1ac2117d1cf9758dbe4492589c1d37d83c9821bbb remark=09a1f70cda7d1c3b617cca3424f60dee8ded265d37611f05b947ed072adab07d frozen=2026-11-09 development=2s/1d/fine2/casual2 held_out=1s/1d/fine1/casual1
+PASS fixture.json is canonical JSON (recomputed)
+PASS labels.json is canonical JSON (recomputed)
+PASS fixture hash by hand 5f646c1697adc87f = freeze line
+PASS labels hash by hand 728744ce73deed59 = freeze line
+PASS EvalRecord gold_set.n1 hashes = hand hashes
+PASS every fixture file sha256 by hand
+PASS every labels file sha256 by hand
+PASS INFO labels.json and the labels line name no fixture version or hash (pairing only in the printout)
+RESULT re-mark of b1 agreement {"band_agreement": null, "case_agreement": null, "intervals": {"label": 2, "matched": 0, "remark": 0}, "offset": {"carried": 0, "median_s": null, "n": 0, "p90_s": null, "unsure": 0}, "onset": {"carried": 0, "median_s": null, "n": 0, "p90_s": null, "unsure": 0}}
+FAIL an empty re-mark (no intervals, marked end to end) was accepted by freeze labels (2 first-pass intervals, 0 matched)
+PASS verify OK on the untouched freeze
+PASS tamper A detected: labels-v1 sha256=728744ce73deed591969c0663ba5738096e959e26c9cd1799a449cce521db78e: sessions/a2.json changed (not yet in FREEZES.md)
+RESULT tamper B, FREEZES.md without the line: True ['fixture-v1 sha256=5f646c1697adc87f5ff311060020d2ece1deaba83fe3fa0bd8614d75adb55b6e: OK (not yet in FREEZES.md)', 'labels-v1 sha256=d0260dfdbf685dad51b7428afeda0a33fb3717611079aec9c7f0f857eaf98c60: OK (not yet in FREEZES.md)']
+RESULT tamper B, FREEZES.md with the line:    False ['fixture-v1 sha256=5f646c1697adc87f5ff311060020d2ece1deaba83fe3fa0bd8614d75adb55b6e: OK', 'labels-v1 sha256=d0260dfdbf685dad51b7428afeda0a33fb3717611079aec9c7f0f857eaf98c60: manifest hash differs from FREEZES.md (728744ce73de)']
+PASS tamper B detected once the labels line is in FREEZES.md
+INFO tamper B is invisible to verify until the freeze line is committed (by design)
+PASS tamper C detected
+RESULT agreement tool {"band_agreement": 0.75, "case_agreement": 1.0, "intervals": {"label": 5, "matched": 4, "remark": 5}, "offset": {"carried": 0, "median_s": 1.75, "n": 4, "p90_s": 2.7, "unsure": 0}, "onset": {"carried": 1, "median_s": 1.0, "n": 2, "p90_s": 1.0, "unsure": 1}}
+RESULT agreement hand {"band_agreement": 0.75, "case_agreement": 1.0, "intervals": {"label": 5, "matched": 4, "remark": 5}, "offset": {"carried": 0, "median_s": 1.75, "n": 4, "p90_s": 2.7, "unsure": 0}, "onset": {"carried": 1, "median_s": 1.0, "n": 2, "p90_s": 1.0, "unsure": 1}}
+PASS re-mark agreement matches the hand computation
+RESULT failures: empty re-mark accepted
+exit=1

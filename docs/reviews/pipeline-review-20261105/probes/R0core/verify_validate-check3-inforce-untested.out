@@ -1,0 +1,6 @@
+RESULT: rear-left diff intervals over 30 s (s from first event): [(788.6, 1114.7), (1266.8, 1596.6)]
+RESULT: inserted a decide decision choosing 'base' with rear-left 120@3000K at +803.6 s, inside the interval +788.6 .. +1114.7 s
+RESULT: in the edited log the decision is still strictly inside a rear-left interval: True
+RESULT committed validate.only_the_look: FAIL: light.den_front_left differs from den_lighting from 2026-11-04T04:03:08.6Z (+788.6 s) to 2026-11-04T04:08:34.7Z (+1114.7 s); decide's decision at 2026-11-04T04:03:23.6Z (+803.6 s) chose base, not the look
+RESULT V_inforce   validate.only_the_look: OK: 8 interval(s), each decide's labelled placeholder reading look; all of them while need is reading
+PASS (finding reproduced): the committed check 3 fails this log, the V_inforce mutant passes it

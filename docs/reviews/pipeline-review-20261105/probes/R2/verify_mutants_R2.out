@@ -1,0 +1,22 @@
+BASELINE whole suite: PASS (Ran 50 tests in 48.062s OK [50s wall]) 
+V01-gap-ge observe.py:138: SURVIVED -- Ran 50 tests in 42.999s OK [45s wall] 
+V02-gap-no-abs observe.py:138: SURVIVED -- Ran 50 tests in 48.589s OK [50s wall] 
+V03-gap-0.0679 METHOD.md:136: SURVIVED -- Ran 50 tests in 45.206s OK [47s wall] 
+V08-expired-ge observe.py:148: SURVIVED -- Ran 50 tests in 41.550s OK [43s wall] 
+V09-gate-fraction-lt replay.py:98: SURVIVED -- Ran 50 tests in 37.441s OK [38s wall] 
+V10-gate-ignores-problems replay.py:100: SURVIVED -- Ran 50 tests in 35.941s OK [37s wall] 
+V12-check-no-stereo-from-unused observe.py:275: SURVIVED -- Ran 50 tests in 33.065s OK [34s wall] 
+V13-check-no-depth-ts observe.py:273: SURVIVED -- Ran 50 tests in 27.545s OK [28s wall] 
+V14-no-below-floor observe.py:215: SURVIVED -- Ran 50 tests in 23.213s OK [24s wall] 
+
+RESULT table
+V01-gap-ge                         observe.py:138     SURVIVED  Ran 50 tests in 42.999s OK [45s wall]
+V02-gap-no-abs                     observe.py:138     SURVIVED  Ran 50 tests in 48.589s OK [50s wall]
+V03-gap-0.0679                     METHOD.md:136      SURVIVED  Ran 50 tests in 45.206s OK [47s wall]
+V08-expired-ge                     observe.py:148     SURVIVED  Ran 50 tests in 41.550s OK [43s wall]
+V09-gate-fraction-lt               replay.py:98       SURVIVED  Ran 50 tests in 37.441s OK [38s wall]
+V10-gate-ignores-problems          replay.py:100      SURVIVED  Ran 50 tests in 35.941s OK [37s wall]
+V12-check-no-stereo-from-unused    observe.py:275     SURVIVED  Ran 50 tests in 33.065s OK [34s wall]
+V13-check-no-depth-ts              observe.py:273     SURVIVED  Ran 50 tests in 27.545s OK [28s wall]
+V14-no-below-floor                 observe.py:215     SURVIVED  Ran 50 tests in 23.213s OK [24s wall]
+RESULT 0 caught, 9 survived

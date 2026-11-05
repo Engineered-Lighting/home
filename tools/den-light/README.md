@@ -1,8 +1,9 @@
-# den-light: rung 8's light model, Stage 0
+# den-light: rung 8's light model
 
 Stage 0 checks, in about one minute of camera time, whether the den's OAK
 camera can meter light at all with exposure, gain and white balance held. The
-owner decides go or no-go before any of Stage 1 is built. The plan is
+owner decides go or no-go before any of Stage 1 runs. Stage 1 (below) fits the
+per-bulb model from one probe session and scores it on held-out scenes. The plan is
 [`docs/plans/rung-8-light-model/PLAN.md`](../../docs/plans/rung-8-light-model/PLAN.md);
 the method, with every number, is [METHOD-V1.md](METHOD-V1.md).
 
@@ -12,7 +13,13 @@ the method, with every number, is [METHOD-V1.md](METHOD-V1.md).
 | `oak-capture-meter.py` | Jetson | The installed camera server plus the metering hold, and nothing else. |
 | `meter.py` | PC | Reads bundles, decodes NV12, fits the inverse response, runs the check. |
 | `sweep.py` | PC | The install lines (`--prepare`, `--install-record`, `--rollback-check`), the sweep (`--run`) and `--recheck`. |
-| `test_den_light.py` | anywhere | Tests on synthetic data and fakes on 127.0.0.1 only. |
+| `test_den_light.py` | anywhere | Stage 0's tests on synthetic data and fakes on 127.0.0.1 only. |
+| `guard.py` | PC | Stage 1's probe safety rules, pure: start checks, own or foreign, aborts, the restore order. |
+| `probe.py` | PC | Stage 1's probe session and `--recover`. |
+| `model.py` | PC | Stage 1's schedule, reduction, fit and score; writes `light-model.json` and `score.json`. |
+| `predict.py` | anywhere | `predict(scene, model)` over `light-model.json`: pure, for rungs 9 and 10. |
+| `synthetic.py` | anywhere | Tests only: a synthetic den, a fake camera and a fake HA running den_lighting 1.0.4. |
+| `test_stage1.py` | anywhere | Stage 1's tests, the same rules as Stage 0's. |
 
 It needs Python 3.12 and the standard library only. `sweep.py` talks only to
 the camera, never to Home Assistant, and writes no lights.
@@ -270,11 +277,195 @@ anything besides the pilot's own `90-` file, and the pilot-release helper
 den-light rollback above, and see `--rollback-check` pass, before any pilot
 command.
 
-## Tests
+# Stage 1: the light model (only after Stage 0 passes)
+
+Stage 1 fits each bulb's contribution to every block of the camera's view
+from one probe session in the empty den after dark, and scores it on 16
+held-out mixed scenes. **Gate: median 8% and p90 19%** relative error against
+the camera's own readings. It needs the meter server from Stage 0 still
+installed, and den_lighting 1.0.4 (the tool refuses another store version or
+sensor attribute set). The light model is relative (`basis_unit: relative`):
+absolute lux waits on photometry-commissioning, which is still pending.
+
+## predict(): what rungs 9 and 10 call
+
+`predict.py` is standard library only, does no I/O and runs nothing on
+import:
+
+```python
+import json, predict
+model = json.load(open(r"C:\den-light\<session-id>\light-model.json", encoding="utf-8"))
+out = predict.predict({"den_front_left.white": {"level": 0.5, "cct_k": 2700}}, model)
+```
+
+`predict(scene, model, daylight=None)` returns
+`{"surfaces": {point_id: value or None, ..., "unit": "relative"}, "version": "lm-den-<session-id>", "daylight": "excluded" | "included"}`.
+
+- `scene` is per channel, keyed `<fixture_id>.<channel_id>` as
+  `light-model.json`'s `channels` list them (`den_front_left.white`,
+  `front_right.white`, `den_rear_left.white`, `den_rear_right.white`), each
+  `{"level": 0..1, "cct_k": kelvin}` as in Decision.requested_scene. `level`
+  is the command as a share of full (Hue's 254). A channel left out, or at
+  level 0, is off; a channel that is on needs `cct_k`; an unknown channel
+  raises ValueError. `predict.scene_from_ha({entity_id: {on, brightness,
+  kelvin}}, model)` converts a Home Assistant scene.
+- `surfaces` holds every sample point (one per block, ids `r<row>c<col>`, in
+  `light-model.json`'s order) plus the `unit` key, the shape of
+  Decision.predicted.surfaces. A point the fit excluded is None.
+- The value is the electric light Ê = Σ g_c(u_c)·B_c(p, k_c). Pass
+  `daylight={point_id: D}` to add daylight; rung 8 does not model it.
+- `predict.prepare(model)` reads the file once; pass its result instead of
+  the dict when calling many times. One call takes a few milliseconds.
+
+## Before the session: the open slots
+
+METHOD-V1's Stage 1 block marks each number the plan or the contracts leave
+open as `open`, with a proposed value. `probe.py` refuses to start and
+`model.py` refuses to score while any slot is open. Tell the agent to keep
+or change each one; the slots close in one commit before any probe:
+
+| Slot | Proposed | What it sets |
+|---|---|---|
+| `block_px` | 20 | block size: 32 x 18 blocks |
+| `reduce_pixel_step` | 2 | every 2nd pixel inside a block |
+| `min_unmasked_share` | 0.5 | a block with less unmasked area is excluded |
+| `exposure_search_steps` | 8 | steps of √2 down from auto's pick for the held exposure |
+| `confirm_ratios` | [0.25, 0.5, 1] | exposures for the Stage 0 curve confirmation |
+| `step_estimate_s` | 2.5 | one step's time, for the dark-run rule |
+| `bracket_every` | 6 | an all-off capture after at most this many lit steps |
+| `near_full_share` | 0.75 | what counts as near full combined output |
+| `schedule_seed` | 20261110 | the hold-outs' random seed |
+| `frames_per_capture` | 3 | settled frames per step |
+| `settle_limit_s` | 5 | how long a step may take to settle |
+| `bracket_tolerance_multiple` | 5 | brackets that disagree by more flag a block |
+| `hold_check_wait_s` | 5 | wait before the restored-hold check |
+| `resume_check_s` | 30 | bulbs must read off this long after the resume |
+| `ha_timeout_s` | 10 | an HA request with no reply in this time counts as HA lost |
+
+## Approval 2, once: a Home Assistant token
+
+In the HA app: your profile, Security, Long-lived access tokens, Create
+token, name it `den-light`, and copy it. Then, in PowerShell 5.1:
+
+```powershell
+New-Item -ItemType Directory -Force C:\den-light\private | Out-Null
+```
+
+```powershell
+notepad C:\den-light\private\ha-token.txt
+```
+
+Paste the token into Notepad, save and close. It is never typed on a command
+line, printed or written anywhere else.
+
+## Approval 3, per session: run probe session 1
+
+The session holds the camera for about 12 minutes, makes about 150 light
+changes over about 10 minutes in the empty den after dark, and pauses
+den_lighting, then restores its saved normal scene and resumes it. In
+PowerShell 5.1, from the branch folder (Step 1 above, with branch
+`claude/rung-8-stage1`), set the names for this window. `$Cam` is as in Stage
+0; `$S0` is the Stage 0 sweep folder that passed; `$H` is your HA ssh login
+(the SSH add-on), if you copy the store file that way:
+
+```powershell
+$HA = 'http://<ha-host>:8123'
+```
+
+```powershell
+$Cam = 'http://<jetson-address>:8090'
+```
+
+```powershell
+$S0 = 'C:\den-light\stage0-<date>\sweep-<n>'
+```
+
+```powershell
+$P = "C:\den-light\s1-$(Get-Date -Format yyyyMMdd)"
+```
+
+```powershell
+$H = '<ha-ssh-user>@<ha-host>'
+```
+
+1. **In the den, copy den_lighting's store file.** It holds the normal
+   scene the session writes back. If no bulb has ever been set by hand, set
+   each one once in the HA app first, so every bulb has a level and a
+   temperature.
+
+   ```powershell
+   scp "${H}:/config/.storage/den_lighting.state" C:\den-light\private\den_lighting.state
+   ```
+
+   On a newer HA OS the folder may be `/homeassistant/.storage/` instead of
+   `/config/.storage/`; a copy over the Samba share works too.
+
+2. **Start the session, then leave when it says so.**
+
+   ```powershell
+   python -B tools\den-light\probe.py --session $P --ha $HA --camera $Cam --stage0 $S0
+   ```
+
+   It refuses, changing nothing, unless the copy has automatic on, no game,
+   no holds and a full normal scene; den_lighting reports automatic, no
+   error and no game; the incumbent automation is off; all four bulbs are
+   available; and the camera is healthy. Then it says "Leave the den now".
+   It waits up to 10 minutes for the den to read empty for 2 minutes with
+   all four bulbs off, pauses den_lighting, and steps the bulbs. Keep the den
+   empty until it prints its outcome (about 12 minutes). Ctrl+C before the
+   pause stops it; after the pause, Ctrl+C aborts and restores.
+
+3. **Read the outcome.** "complete" means every bulb was restored and
+   den_lighting resumed. "aborted" names the reason (someone came in, a bulb
+   changed that the tool did not change, the camera, HA lost, Ctrl+C). A bulb
+   someone changed is never written again; the tool prints, for example,
+   "light.X was not restored: its normal now carries the probe's level and
+   temperature. Set it once by hand in the HA app." If occupancy reads
+   unknown at the end, it asks you to walk through the den once and checks
+   the bulbs go off about 2 minutes later.
+
+4. **If it stopped part-way** (HA lost, the window closed, a game started),
+   finish it once HA answers (after the game, for a game):
+
+   ```powershell
+   python -B tools\den-light\probe.py --recover $P --ha $HA --camera $Cam
+   ```
+
+5. **Fit and score** (no camera, no HA):
+
+   ```powershell
+   python -B tools\den-light\model.py --session $P --stage0 $S0
+   ```
+
+   It prints PASS or FAIL with the median and p90, and writes
+   `readings.json`, `light-model.json` and `score.json` in `$P`. Tell the
+   agent the folder name.
+
+Exit codes as in Stage 0: 0 = complete or pass, 1 = aborted or fail,
+2 = refused (nothing was changed).
+
+## Stage 1 privacy rules
+
+- A session writes only to its own folder, `C:\den-light\<session-id>\`. The
+  tools refuse a folder inside a git checkout or OneDrive, one that already
+  holds a session, one holding a token, and less than 1 GB free.
+- `frames\` keeps the RGB plane and metadata of the frames used (about
+  0.35 MB each). An abort deletes the frames after the last clean step. The
+  rest stay on this PC until you delete them, as your 2026-11-02 answer
+  allows; once `readings.json` exists nothing needs them. They never go to
+  git, OneDrive or the cloud.
+- Agents read `session.json`, `probes.jsonl`, `fixtures.jsonl`,
+  `readings.json`, `light-model.json` and `score.json`, never `frames\`. The
+  store copy and the token stay in `C:\den-light\private\`.
+
+# Tests
 
 ```powershell
 python -B -m unittest discover -s tools/den-light -v
 ```
 
-They use synthetic data and a fake camera on 127.0.0.1 only: no Jetson, no
-camera, no Home Assistant. They take about a minute.
+They use synthetic data and fakes on 127.0.0.1 only: no Jetson, no camera,
+no Home Assistant, no real token. Stage 1's fake HA runs den_lighting
+1.0.4's own `policy.py` (a byte-identical copy in
+`tools/fixtures/den_lighting-1.0.4/`, pinned by sha256). They take about two
+minutes. Synthetic runs prove plumbing; they are never evidence for the gate.

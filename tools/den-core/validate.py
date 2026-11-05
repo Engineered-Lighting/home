@@ -212,9 +212,12 @@ def only_the_look(header, log):
         where = "%s differs from den_lighting from %s to %s" % (bulb, at(start, first), at(end, first))
         for d in in_force:
             pick, wanted = chosen(d["data"]), d["data"]["requested_scene"][bulb]
-            if not (pick or "").startswith("look:"):
+            if (pick or "").startswith("solve:"):  # the coordinator's solved look: its candidate logs the scene it chose
+                look = next(c["scene"] for c in d["data"]["candidates"] if c["scene_id"] == pick).get(bulb)
+            elif (pick or "").startswith("look:"):
+                look = (looks.get(pick[len("look:"):]) or {}).get("scene")
+            else:
                 return fail("%s; decide's decision at %s chose %s, not the look" % (where, at(d["t"], first), pick))
-            look = (looks.get(pick[len("look:"):]) or {}).get("scene")
             if look is None or not events.scene_matches(look, wanted):
                 return fail("%s; decide's decision at %s chose %s but requests %s for the bulb" % (
                     where, at(d["t"], first), pick, scene(wanted)))

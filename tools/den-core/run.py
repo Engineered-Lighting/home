@@ -3,7 +3,7 @@
 python -B tools/den-core/run.py --out ABSDIR [--synthetic evening [--seed N] [--touch] [--game] [--clean]]
     [--facts PATH ...] [--poll FILE ...] [--mqtt FILE --mqtt-t0 EPOCH]
     [--journal FILE ... | --assume-occupied | --status FILE ...] [--corrections FILE ...]
-    [--live-commands FILE ... [--lights FILE ...]] [--policies incumbent] [--no-plant]
+    [--live-commands FILE ... [--lights FILE ...]] [--policies incumbent] [--no-plant] [--actuation shadow]
 """
 import argparse
 import json
@@ -12,6 +12,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+import coordinator
 import events
 import incumbent
 import runner
@@ -249,9 +250,38 @@ def summary(header, log):
                      "commands live/replayed: %s"
                      % (left_out, len(spans), ", ".join("%s %d/%d" % (short(b), live[b], ours[b]) for b in events.LIGHTS)))
         lines += _span_lines(spans, first)
+    lines += _coordinator_lines(header)
     if header["synthetic"]:
         lines.append("synthetic: plumbing only, never a gate")
     return "\n".join(lines)
+
+
+def coordinator_config(args):
+    """The coordinator's config from run.py's flags: only what they set; the gate file gives the rest."""
+    config = {}
+    if args.light_model and args.light_model != "fake":
+        config["light_model"] = {"source": "file", "path": str(Path(args.light_model).resolve())}
+    if args.surfaces:
+        spec = config.setdefault("light_model", {"source": "fake", "params": {}})
+        spec["surfaces"] = json.loads(Path(args.surfaces).read_bytes().decode("utf-8-sig"))
+    comp = {key: value for key, value in (("option", args.compensation), ("form", args.compensation_form)) if value}
+    if comp:
+        config["compensation"] = comp
+    return config
+
+
+def _coordinator_lines(header):
+    """What a rung 9 run stood on, for the summary; nothing for a run without the coordinator."""
+    entry = next((p for p in header["policies"] if p["module"] == "coordinator"), None)
+    if entry is None:
+        return []
+    config, model = entry["config"], entry["config"]["light_model"]
+    lines = ["coordinator: light model %s%s; compensation %s (pending: named option, not a choice); actuation %s"
+             % (model["version"], " (fake: plumbing only, never a gate)" if model["fake"] else "",
+                coordinator.option_name(config["compensation"]), header["actuation"])]
+    if config["gate"]["open"]:
+        lines.append("coordinator: %d open slot(s) at their proposals; score.py --slots lists them" % len(config["gate"]["open"]))
+    return lines
 
 
 def _new_file(path, text):
@@ -284,12 +314,27 @@ def main(argv=None):
                         help="the four bulbs' states exported from the HA recorder (needs --live-commands)")
     parser.add_argument("--policies", nargs="+", default=["incumbent"])
     parser.add_argument("--no-plant", action="store_true")
+    parser.add_argument("--actuation", choices=["replay", "shadow"],
+                        help="the label on each decision; nothing is sent either way (default: replay, or synthetic)")
+    parser.add_argument("--light-model", help="with the coordinator: 'fake' (the default), or rung 8's light-model.json")
+    parser.add_argument("--surfaces", help="with the coordinator: JSON {surface_id: [point_id, ...]} over the light model's blocks")
+    parser.add_argument("--compensation", choices=["P0", "P1", "P2", "P3"],
+                        help="with the coordinator: a named option; the default is the gate file's slot")
+    parser.add_argument("--compensation-form", choices=["strict", "mode"])
     args = parser.parse_args(argv)
     out = Path(args.out)
     if not out.is_absolute() or events.inside_checkout(out):
         parser.error("--out must be an absolute folder outside every git checkout")
     if (out / "log.jsonl").exists():
         parser.error("%s already holds a log" % out)
+    if args.actuation and args.synthetic:
+        parser.error("a synthetic run is only ever actuation synthetic: leave out --actuation")
+    if {"decide", "coordinator"} <= set(args.policies):
+        parser.error("decide and coordinator are one policy in two versions: give one of them")
+    if ((args.light_model or args.surfaces or args.compensation or args.compensation_form)
+            and "coordinator" not in args.policies):
+        parser.error("--light-model, --surfaces and --compensation need coordinator in --policies")
+    configs = {"coordinator": coordinator_config(args)} if "coordinator" in args.policies else None
     if args.journal and args.assume_occupied:
         parser.error("--journal gives real occupancy; it replaces --assume-occupied, so give one or the other")
     if args.status and (args.synthetic or args.poll or args.mqtt or args.journal or args.assume_occupied):
@@ -386,9 +431,9 @@ def main(argv=None):
         described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in paths]
         print("recorder_commands: kept %d of %d live command(s) inside the replayed span" % (len(kept), len(items)))
 
-    header, log = runner.run(inputs, runner.load_policies(args.policies), plant=not (args.no_plant or args.lights),
+    header, log = runner.run(inputs, runner.load_policies(args.policies, configs), plant=not (args.no_plant or args.lights),
                              synthetic=bool(args.synthetic), assume_occupied=args.assume_occupied,
-                             sources=described)
+                             sources=described, actuation=args.actuation)
     out.mkdir(parents=True, exist_ok=True)
     events.write(out / "log.jsonl", header, log)
     if truth is not None:

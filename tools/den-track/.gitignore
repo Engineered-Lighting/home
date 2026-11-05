@@ -1,0 +1,7 @@
+# Real takes never go into git: no observations, tracks, truth files,
+# reports or logs. Keep sessions outside the repository.
+*.jsonl
+*.run.json
+e2-report*.json
+sessions/
+takes/

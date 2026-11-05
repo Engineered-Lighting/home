@@ -10,6 +10,7 @@ own capture time. It checks each take with the method in
 | `check.py` | your PC | Checks a take and writes `check-N.json`. |
 | `slate.html` | your phone | Flashes the CHECK-V1 pattern on the phone's own clock. |
 | `CHECK-V1.md` | repo | The method, with every tolerance in one block. |
+| `scripts/hard-a.json`, `scripts/hard-b.json` | repo | N1's two staged scripts: spoken cues and their times. |
 | `test_den_take.py` | PC | Tests on synthetic data only. |
 
 It needs Python 3.12 and the standard library only. Nothing is installed or
@@ -140,6 +141,27 @@ camera's `/health` once more, up to about 25 s; wait for the "Saved" line. A
 second Ctrl+C there skips that wait, and the take is still saved. A take whose
 `take.json` was never finished (take.py closed or killed, or a power cut) is
 refused by check.py.
+
+## Step 8, a go-ahead per named batch: N1's staged takes
+
+N1 (`tools/den-label`) uses staged takes: a take.py run that speaks a script
+from `scripts\`. Before "Begin.", set out the props: the book in its place
+(the in-view surface you named when you okayed the protocol, never the desk
+top), and the stack of mail and a cloth on the counter (or the spot you
+named). Keep your phone in a pocket between its blocks.
+
+```powershell
+python -B tools\den-take\take.py --script hard-a --out C:\den-takes\2026-11-12-1
+```
+
+The slates are as in Step 6. After "Begin.", take.py speaks and prints each cue
+of `scripts\hard-a.json` at its time, the first one 3 s after "Begin.", and
+after 25 minutes (the script's `end_s`) it starts the end slate by itself.
+Dim the den lights by hand when it says so. Enter still ends the take early,
+and the take is still saved. take.json records the script's name and its
+file's sha256; check.py checks the take as usual (Steps 5 and 7). Alternate
+`hard-a` and `hard-b`, at most two a day. take.py refuses an unknown or
+malformed script before it reads the camera.
 
 Exit codes: take.py 0 = complete, 1 = stopped, 2 = refused (nothing
 recorded). check.py 0 = PASS, 1 = FAIL, 2 = refused (no check file written).

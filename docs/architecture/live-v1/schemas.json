@@ -1,0 +1,2772 @@
+{
+  "about": "Data contracts for the human-context lighting system, revision B. Field names are the canon; examples are illustrative values for one evening in the den (A at the counter, B in the armchair). Status per record: current | partial | proposed | optional. Records changed by the 2026-10-29 corrections pass carry a proposed contract version, which is documentation only: nothing is migrated or deployed. A field that exists only under a pending owner decision is marked as present only under that option, never as required; in the examples an undecided value is null with a status beside it.",
+  "frames": "room frame: the repo's z_up_metric_floor0 (metres; z up from the floor; x along the room's long axis; origin at the minimum corner). Plans in this sheet set draw +y as 'north' for illustration only; the den's compass bearing is unverified. Bearings are measured clockwise from +y, seen from above. Camera frame: pixels of that camera's native resolution. Times: Unix seconds on one synchronised clock (capture time, not arrival time). Record ids (PersonState's `state_id`: A@1793066610.0 is A's record emitted at 19:03:30.0), `emitted_ts`, `capture_ts`, `depth_ts`, `field_as_of` and every `field_support` time are Unix seconds, written as numbers. Logged event times in Decision, Correction and step logs (`t_exec`, `sent_at`, `since`, verify times, and a log entry's own `ts` or read-back `as_of`) may be written as readable local clock strings (19:03:32.55). Quantities are numbers, with the unit in a sibling `unit` key or in the key name (`_lx`, `_pct`, `_s`, `_k`); an undecided value is null with a status beside it.",
+  "groups": [
+    {
+      "id": "perception",
+      "name": "Perception"
+    },
+    {
+      "id": "interface",
+      "name": "Interface"
+    },
+    {
+      "id": "memory",
+      "name": "Memory"
+    },
+    {
+      "id": "light",
+      "name": "Light side"
+    },
+    {
+      "id": "intent",
+      "name": "Intent and preference"
+    },
+    {
+      "id": "decisions",
+      "name": "Decisions and corrections"
+    },
+    {
+      "id": "learning",
+      "name": "Learning and calibration"
+    }
+  ],
+  "records": [
+    {
+      "id": "observation",
+      "name": "Observation",
+      "group": "perception",
+      "status": "partial",
+      "status_note": "Detections exist today (Frigate person events; pose and depth placement in the stopped den loop). Capture, arrival and validity times already ride on Lab ledger events (observed_at, available_at, valid_until); a room-frame covariance, transform id and visibility on every observation, and per-joint room geometry (`joints_room`) on keypoints observations, are proposed.",
+      "proposed_version": "proposed minor: `transform_id` narrows to a reference to exactly one `RoomModel.cameras` entry, `<camera_id>@<version>`. Migration note: `den-cam-align@2026-10-18` maps to `den-oak@2026-10-18`. `joint_set`, `joints_room` and `depth_ts` are additive.",
+      "purpose": "One thing one model saw in one sensor reading. The unit everything downstream is built from.",
+      "producer": "K3 Detectors, enveloped by K4 Alignment (also K2 occupancy gate, K6 identity matches)",
+      "consumers": "K4 Alignment → K5 Tracker; K7 Person-state estimator, through `Track.last_obs_ids`; K4 bundle assembly (`PersonBundle.keypoint_series`)",
+      "rate": "per detection; cameras at their frame rate",
+      "retention": "minutes in a ring buffer; kept longer only inside a PersonBundle that is logged",
+      "fields": [
+        {
+          "name": "obs_id",
+          "type": "string",
+          "meaning": "unique id"
+        },
+        {
+          "name": "source",
+          "type": "{sensor_id, model, model_version}",
+          "meaning": "which sensor and which model produced it"
+        },
+        {
+          "name": "capture_ts",
+          "type": "float s",
+          "meaning": "when the sensor captured it, on the synchronised clock (not when it arrived)"
+        },
+        {
+          "name": "kind",
+          "type": "enum",
+          "meaning": "person_box | keypoints | object_box | depth_point | radar_point | face_match | appearance_vec; face_match and appearance_vec exist only if the owner allows them ({{dec:learning-permissions}})"
+        },
+        {
+          "name": "image_box",
+          "type": "[x0,y0,x1,y1] px",
+          "meaning": "box in that camera's pixels, when the observation is image-based"
+        },
+        {
+          "name": "keypoints",
+          "type": "[[x,y,score] × 17] px",
+          "meaning": "COCO-17 body keypoints in that camera's pixels, when kind = keypoints"
+        },
+        {
+          "name": "joint_set",
+          "type": "string",
+          "meaning": "names the joint set and its order (`coco17`), when kind = keypoints"
+        },
+        {
+          "name": "joints_room",
+          "type": "[{j, xyz m | null, cov 3×3 m² | null, status, lift}]",
+          "meaning": "one entry per joint of `joint_set`, in the room frame: `status` supported | uncertain | unsupported; `lift` stereo | plane:<h> | none. `cov` is A5's Σ_room = R J Σ_meas Jᵀ Rᵀ + Σ_cal. A joint is never zero-filled: an unsupported joint has null `xyz` and `cov`. Calibration bias is common to every joint and frame from one camera, so K7's medians reduce jitter, not that bias"
+        },
+        {
+          "name": "depth_ts",
+          "type": "float s",
+          "meaning": "capture time of the depth frame used. If it is more than one stereo frame (67 ms) from `capture_ts`, the depth is not used, the plane fallback applies and the PersonBundle lists depth as missing"
+        },
+        {
+          "name": "label",
+          "type": "string",
+          "meaning": "object class for object boxes (cutting board, book, phone…)"
+        },
+        {
+          "name": "room_position",
+          "type": "{x,y,z} m + cov 3×3 m²",
+          "meaning": "position in the room frame, only when depth or a floor-plane projection is available; otherwise absent. For keypoints it is the torso reference point (the mean of the supported shoulders and hips), the point K5 projects to the floor. Null when the transform is invalidated"
+        },
+        {
+          "name": "transform_id",
+          "type": "<camera_id>@<version>",
+          "meaning": "resolves to exactly one `RoomModel.cameras` entry: the camera and the calibration version used to go from pixels to the room frame. If that transform is invalidated, `joints_room` and `room_position` are null and K7 makes no geometric update"
+        },
+        {
+          "name": "score",
+          "type": "0–1",
+          "meaning": "the model's own confidence"
+        },
+        {
+          "name": "visibility",
+          "type": "enum",
+          "meaning": "visible | partial | occluded"
+        },
+        {
+          "name": "validity",
+          "type": "enum + reason",
+          "meaning": "valid, or rejected with why (out of frame, too small, implausible depth…)"
+        }
+      ],
+      "example": {
+        "obs_id": "o-19033042-p7",
+        "source": {
+          "sensor_id": "den-oak",
+          "model": "RTMPose",
+          "model_version": "rtmpose-m@den-1"
+        },
+        "capture_ts": 1793066610.42,
+        "kind": "keypoints",
+        "image_box": [
+          212,
+          140,
+          344,
+          470
+        ],
+        "keypoints": [
+          [
+            null,
+            null,
+            null
+          ]
+        ],
+        "keypoints_note": "1 of 17 shown, in coco17 order; the pixel values are not given in the sheets; 11 supported, 6 uncertain",
+        "joint_set": "coco17",
+        "joints_room": [
+          {
+            "j": 10,
+            "xyz": [
+              1.95,
+              0.7,
+              0.95
+            ],
+            "cov": [
+              [
+                0.003,
+                0,
+                0
+              ],
+              [
+                0,
+                0.009,
+                0
+              ],
+              [
+                0,
+                0,
+                0.003
+              ]
+            ],
+            "status": "supported",
+            "lift": "stereo"
+          }
+        ],
+        "joints_room_note": "1 of 17 shown (joint 10, a wrist); 16 more: 10 supported (stereo), 6 uncertain, none zeroed (A5)",
+        "depth_ts": 1793066610.4,
+        "room_position": {
+          "x": 1.95,
+          "y": 0.95,
+          "z": 1.0,
+          "cov": [
+            [
+              0.003,
+              0,
+              0
+            ],
+            [
+              0,
+              0.009,
+              0
+            ],
+            [
+              0,
+              0,
+              0.003
+            ]
+          ]
+        },
+        "room_position_note": "the torso reference point; stereo error plus an assumed 5 cm calibration term (A5)",
+        "transform_id": "den-oak@2026-10-18",
+        "score": 0.86,
+        "visibility": "visible",
+        "validity": "valid"
+      }
+    },
+    {
+      "id": "track",
+      "name": "Track",
+      "group": "perception",
+      "status": "partial",
+      "status_note": "A per-person Kalman tracker exists for the LA apartment (greedy assignment; 0 tracks on 2026-09-25); none runs in the den, where person events carry a per-frame slot id. Face recognition is excluded by design at Victoria; people are anonymous tracks with explicit profile binding, and a binding ends when association becomes ambiguous.",
+      "proposed_version": "additive: `heading_as_of`; `last_obs_ids` now lists every associated observation. `state` keeps its four values, and a coasting track is `state` = coasting, with no second status enum.",
+      "purpose": "One anonymous person followed through time in the room frame, with how sure the system is that it is still the same person.",
+      "producer": "K5 Tracker (+ K6 Identity layer for the identity field)",
+      "consumers": "K7 Person-state estimator (with the Observations named in `last_obs_ids`), K10 Spatial memory, K22 Teaching (association-safe intervals only)",
+      "rate": "updated on every associated observation; predicted forward between them",
+      "retention": "session; history summarised into Episodes",
+      "fields": [
+        {
+          "name": "track_id",
+          "type": "string",
+          "meaning": "anonymous session id (A, B in this sheet); never reused"
+        },
+        {
+          "name": "state",
+          "type": "enum",
+          "meaning": "tentative | confirmed | coasting (predicted forward with no recent associated observation) | ended. A coasting track, like an ambiguous one (`association` ambiguous), is an unlocated person for narrow beams: no new narrow beam is aimed near them, and a current spot whose cone meets their widened bound fades to the room's look (A5, A9). Holding the current scene, with no re-aim on stale evidence, never keeps a narrow beam on such a person. Any τ_keep exception is {{dec:tau-keep}} and is never applied as fact; even the exception option never covers a coasting or ambiguous track"
+        },
+        {
+          "name": "position",
+          "type": "{x,y} m + cov 2×2",
+          "meaning": "floor position in the room frame, Kalman estimate"
+        },
+        {
+          "name": "velocity",
+          "type": "{vx,vy} m/s",
+          "meaning": "from the motion model"
+        },
+        {
+          "name": "heading",
+          "type": "{deg, sd_deg}",
+          "meaning": "body facing, computed from the shoulders and hips in `Observation.joints_room`. It is copied to PersonState with `heading_as_of`, where K7 records its support in `field_support.heading`; copying never refreshes it"
+        },
+        {
+          "name": "heading_as_of",
+          "type": "float s",
+          "meaning": "capture time of the newest accepted shoulder and hip evidence; it moves only on accepted evidence, never on a prediction step or an emission"
+        },
+        {
+          "name": "head_pose",
+          "type": "{yaw, pitch} deg ± deg",
+          "meaning": "head direction from face keypoints; head pose, not eye gaze. A summary: PersonState's `attention`, from K7, is authoritative"
+        },
+        {
+          "name": "posture",
+          "type": "enum + score",
+          "meaning": "standing | sitting | crouching | lying | unknown. A summary: PersonState's `posture`, from K7, is authoritative"
+        },
+        {
+          "name": "linked_objects",
+          "type": "[{object, relation, score}]",
+          "meaning": "objects the hands are on or near (holding | using | near)"
+        },
+        {
+          "name": "appearance",
+          "type": "{vector_ref, updated_ts}",
+          "meaning": "present only if the owner allows session appearance ({{dec:learning-permissions}}): a short-term body and clothing embedding, this session only"
+        },
+        {
+          "name": "association",
+          "type": "{status, hypotheses[], since_ts}",
+          "meaning": "confident, or ambiguous with named hypotheses and their probabilities; nothing is swapped silently"
+        },
+        {
+          "name": "identity",
+          "type": "{binding, person_id, method, confidence, as_of}",
+          "meaning": "unbound by default; bound only by opt-in evidence (face, voice, phone, 'this is me')"
+        },
+        {
+          "name": "last_obs_ids",
+          "type": "[obs_id]",
+          "meaning": "every Observation associated in that update, keypoints included, so K7 can read their joints; never held observations from an ambiguous interval"
+        }
+      ],
+      "example": {
+        "track_id": "A",
+        "state": "confirmed",
+        "position": {
+          "x": 1.95,
+          "y": 0.95,
+          "cov": [
+            [
+              0.03,
+              0
+            ],
+            [
+              0,
+              0.06
+            ]
+          ]
+        },
+        "velocity": {
+          "vx": 0.0,
+          "vy": 0.02
+        },
+        "heading": {
+          "deg": 180,
+          "sd_deg": 12,
+          "note": "bearing from +y, clockwise: facing the counter"
+        },
+        "heading_as_of": 1793066609.8,
+        "head_pose": {
+          "yaw": 180,
+          "pitch": -53,
+          "sd": 15
+        },
+        "posture": {
+          "value": "standing",
+          "score": 0.93
+        },
+        "linked_objects": [
+          {
+            "object": "cutting board",
+            "relation": "using",
+            "score": 0.81
+          },
+          {
+            "object": "knife",
+            "relation": "holding",
+            "score": 0.66
+          }
+        ],
+        "association": {
+          "status": "confident",
+          "hypotheses": [],
+          "since_ts": 1793066440.1
+        },
+        "identity": {
+          "binding": "unbound",
+          "person_id": null,
+          "method": null,
+          "confidence": null
+        },
+        "last_obs_ids": [
+          "o-19032980-p7"
+        ]
+      }
+    },
+    {
+      "id": "person_bundle",
+      "name": "PersonBundle",
+      "group": "perception",
+      "status": "proposed",
+      "status_note": "Today the interpreter receives whole stills for the room, not per-person aligned evidence.",
+      "proposed_version": "additive: `keypoint_series` becomes a typed, verbatim copy of Observations; `missing` can name depth.",
+      "purpose": "Everything observed about one track over a short interval, aligned in time and space. The only thing the interpreter and the student see.",
+      "producer": "K4 Alignment, on request from K8 Router or K22 Teaching",
+      "consumers": "K9 Interpreter, K7 student heads, K22 Teaching",
+      "rate": "on demand: per routed request (seconds)",
+      "retention": "logged with every interpreter call and every teaching sample",
+      "fields": [
+        {
+          "name": "bundle_id",
+          "type": "string",
+          "meaning": "unique id"
+        },
+        {
+          "name": "track_id",
+          "type": "string",
+          "meaning": "whose evidence this is"
+        },
+        {
+          "name": "interval",
+          "type": "[t0, t1] s",
+          "meaning": "the window covered (typically 2–4 s)"
+        },
+        {
+          "name": "frames",
+          "type": "[{camera_id, ts, image_box, crop_ref}]",
+          "meaning": "the frames and this person's box in each"
+        },
+        {
+          "name": "keypoint_series",
+          "type": "[{obs_id, ts, camera_id, transform_id, keypoints px, joints_room}]",
+          "meaning": "pose over the interval, copied verbatim from association-gated Observations; `obs_id` is authoritative"
+        },
+        {
+          "name": "positions",
+          "type": "[{ts, x, y, cov}]",
+          "meaning": "room-frame path"
+        },
+        {
+          "name": "objects",
+          "type": "[{label, relation, room_position}]",
+          "meaning": "linked objects and where they are"
+        },
+        {
+          "name": "others",
+          "type": "[{track_id, image_box per frame}]",
+          "meaning": "other people in the same frames, as context (never interpreted as this person)"
+        },
+        {
+          "name": "missing",
+          "type": "[source]",
+          "meaning": "sources that were stale or absent, including `depth` when a joint used a plane; flagged, not waited for"
+        },
+        {
+          "name": "association_safe",
+          "type": "bool",
+          "meaning": "false if any part of the interval was ambiguous; such bundles are never used for teaching"
+        }
+      ],
+      "example": {
+        "bundle_id": "pb-A-190328",
+        "track_id": "A",
+        "interval": [
+          1793066608.4,
+          1793066611.6
+        ],
+        "frames": [
+          {
+            "camera_id": "den-oak",
+            "ts": 1793066610.42,
+            "image_box": [
+              212,
+              140,
+              344,
+              470
+            ],
+            "crop_ref": null
+          }
+        ],
+        "frames_note": "1 of 4 shown: the frame of Observation o-19033042-p7; crop references are not given in the sheets",
+        "keypoint_series": [
+          {
+            "obs_id": "o-19033042-p7",
+            "ts": 1793066610.42,
+            "camera_id": "den-oak",
+            "transform_id": "den-oak@2026-10-18",
+            "keypoints": [
+              [
+                null,
+                null,
+                null
+              ]
+            ],
+            "joints_room": [
+              {
+                "j": 10,
+                "xyz": [
+                  1.95,
+                  0.7,
+                  0.95
+                ],
+                "cov": [
+                  [
+                    0.003,
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.009,
+                    0
+                  ],
+                  [
+                    0,
+                    0,
+                    0.003
+                  ]
+                ],
+                "status": "supported",
+                "lift": "stereo"
+              }
+            ]
+          }
+        ],
+        "keypoint_series_note": "1 of 4 shown, copied verbatim from Observation o-19033042-p7, with the same elisions as that example",
+        "positions": [
+          {
+            "ts": 1793066609.8,
+            "x": 1.95,
+            "y": 0.95,
+            "cov": [
+              [
+                0.03,
+                0
+              ],
+              [
+                0,
+                0.06
+              ]
+            ]
+          }
+        ],
+        "positions_note": "1 of 4 shown: the Track example's estimate at 19:03:29.8 (sd about 0.17 m in x and 0.24 m in y)",
+        "objects": [
+          {
+            "label": "cutting board",
+            "relation": "using",
+            "room_position": {
+              "x": 1.9,
+              "y": 0.6,
+              "z": 0.91
+            }
+          }
+        ],
+        "others": [
+          {
+            "track_id": "B",
+            "image_box": null
+          }
+        ],
+        "others_note": "B is in frame, in the armchair; B's boxes are not given in the sheets",
+        "missing": [],
+        "association_safe": true
+      }
+    },
+    {
+      "id": "person_state",
+      "name": "PersonState",
+      "group": "interface",
+      "status": "proposed",
+      "status_note": "Today the den loop produces one room-level activity label from Qwen facts plus pose; 2+ people get ambient light only.",
+      "proposed_version": "additive within person_state/v1: `state_id`, `emitted_ts`, `field_support`, `attention.head_cov`, `heading` and posture `unknown`; the shape of the existing `position.cov` is declared. PersonState stays narrow and gains no lighting judgement.",
+      "purpose": "The interface. What crosses from perception to the coordinator, per person, in terms a lighting decision can use. Versioned (person_state/v1, representation rN).",
+      "producer": "K7 Person-state estimator",
+      "consumers": "K16 Coordinator (through `body-envelope/v1`, the one rule K16, K13's V and K18 share), K14 Look selector, K19 Decision log, K10 Spatial memory",
+      "rate": "event-driven: on any field change beyond its hysteresis, plus a heartbeat every few seconds. A heartbeat repeats each field's support record unchanged unless new evidence was accepted",
+      "retention": "every version that a decision or a correction used is logged with it",
+      "fields": [
+        {
+          "name": "schema_version",
+          "type": "string",
+          "meaning": "person_state/v1; additive changes only within a major version"
+        },
+        {
+          "name": "state_id",
+          "type": "<track_id>@<emitted_ts>",
+          "meaning": "this record's instance id, with `emitted_ts` in full Unix seconds (`A@1793066610.0`). Prose and figures may abbreviate it with the clock time, as in A@19:03:30; records never do. Decision inputs and Correction snapshots reference it"
+        },
+        {
+          "name": "emitted_ts",
+          "type": "float s",
+          "meaning": "when the record left K7. It is never a field's support time and never enters an age"
+        },
+        {
+          "name": "track_id / identity",
+          "type": "string / binding",
+          "meaning": "from the Track; identity only if bound"
+        },
+        {
+          "name": "position",
+          "type": "{xyz m, cov 2×2 m² on xy, cov_ts, predicted}",
+          "meaning": "room-frame floor position (z = 0) from the Track's Kalman estimate. `cov` is stated at `cov_ts` and grows only by the Track's motion model; predicted = true once past the last observation (A7 freshness)"
+        },
+        {
+          "name": "working_region",
+          "type": "{surface_id, center xyz m, extent_m, normal, confidence}",
+          "meaning": "where the hands and head are working, as a patch on a room surface (glossary: working region)"
+        },
+        {
+          "name": "focused_engagement",
+          "type": "{state, since_s, confidence}",
+          "meaning": "none | starting | engaged | ending, and for how long (glossary: focused engagement)"
+        },
+        {
+          "name": "visual_demand",
+          "type": "{level 0–1, basis, confidence}",
+          "meaning": "how much detail the task needs: fine work (knife, small print) vs casual. `confidence` is the probability that the band derived from the versioned cut points is correct (a top-label probability); the cut points are {{dec:demand-gates}}"
+        },
+        {
+          "name": "attention",
+          "type": "{head_xyz m, head_cov 3×3 m², head_dir, sd_deg, target, confidence}",
+          "meaning": "head position (the eye position used by the coordinator's glare and face terms), its covariance at the head's last support, and where the head points (surface, person, screen, none); head pose only, never eye gaze. When the 3D fit and the 2D ratios disagree, `head_cov` is widened to cover both; K7 never grows it with age"
+        },
+        {
+          "name": "heading",
+          "type": "{deg, sd_deg}",
+          "meaning": "body facing, copied from the Track with `Track.heading_as_of`; copying never refreshes it"
+        },
+        {
+          "name": "motion",
+          "type": "enum + speed m/s",
+          "meaning": "passing | settling | settled"
+        },
+        {
+          "name": "posture",
+          "type": "enum",
+          "meaning": "standing | sitting | crouching | lying | unknown"
+        },
+        {
+          "name": "affected",
+          "type": "[{track_id, distance_m, facing}]",
+          "meaning": "who else is near and which way they face; the coordinator, not perception, decides whose eyes a light reaches"
+        },
+        {
+          "name": "embedding",
+          "type": "{rep_version, dim, vector_ref}",
+          "meaning": "learned behavior representation (rN); open-ended, not a class list"
+        },
+        {
+          "name": "episodes",
+          "type": "[{episode_id, similarity, viewer_hint}]",
+          "meaning": "nearest reference episodes; viewer hints are explanations only"
+        },
+        {
+          "name": "flags",
+          "type": "set",
+          "meaning": "association_uncertain | occluded | unfamiliar | prior_leaning | stale:<source>. A record-level summary: per-field status is in `field_support`"
+        },
+        {
+          "name": "sources",
+          "type": "{field: [{origin: rules | student | qwen | prior, ref: obs_id | bundle_id | landmark_id}]}",
+          "meaning": "what each field rests on, so current evidence, interpretation and a memory prior stay separately inspectable"
+        },
+        {
+          "name": "field_as_of",
+          "type": "{field: ts}",
+          "meaning": "for position, working_region, attention, heading, posture, motion, visual_demand and focused_engagement: the capture time of the newest accepted evidence, equal to `field_support[f].last_support_capture_ts`. It moves only on accepted evidence, so nothing is presented fresher than its evidence"
+        },
+        {
+          "name": "field_support",
+          "type": "{field: {last_support_capture_ts, value_set_ts, support_status, hold_reason, deadband, cov_ts}}",
+          "meaning": "for each field the coordinator reads. `support_status`: observed (the newest accepted evidence set the value) | deadband_confirmed (accepted evidence lies within a declared deadband of the published value, so the value is kept and the support time moves) | held_unavailable (no accepted evidence) | held_ambiguous (evidence exists but is not accepted for this person). `hold_reason`: occluded | overlap | association | source_silent | late | refused | transform_invalid | null. A heartbeat repeats each support record as it stands; emission, liveness and occupancy never move a support time, and a new track inherits none. Only the working region's 0.10 m deadband is declared today. The coordinator ages each field as `age_f = t_exec − last_support_capture_ts_f`, with no `T_lat` term; how fresh support reaches it is {{dec:freshness}}"
+        },
+        {
+          "name": "interpreter",
+          "type": "{path, version}",
+          "meaning": "rules | student | qwen, and which version produced the learned fields"
+        }
+      ],
+      "example": {
+        "schema_version": "person_state/v1",
+        "state_id": "A@1793066610.0",
+        "emitted_ts": 1793066610.0,
+        "track_id": "A",
+        "identity": "unbound",
+        "position": {
+          "xyz": [
+            1.95,
+            0.95,
+            0.0
+          ],
+          "cov": [
+            [
+              0.03,
+              0.0
+            ],
+            [
+              0.0,
+              0.06
+            ]
+          ],
+          "cov_ts": 1793066610.0,
+          "predicted": false
+        },
+        "working_region": {
+          "surface_id": "counter-1",
+          "center": [
+            1.9,
+            0.6,
+            0.91
+          ],
+          "extent_m": [
+            0.45,
+            0.3
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "confidence": 0.82
+        },
+        "focused_engagement": {
+          "state": "engaged",
+          "since_s": 41,
+          "confidence": 0.77
+        },
+        "visual_demand": {
+          "level": 0.8,
+          "basis": "knife in hand, fine hand motion",
+          "confidence": 0.7
+        },
+        "attention": {
+          "head_xyz": [
+            1.95,
+            0.95,
+            1.62
+          ],
+          "head_cov": [
+            [
+              0.003,
+              0,
+              0
+            ],
+            [
+              0,
+              0.009,
+              0
+            ],
+            [
+              0,
+              0,
+              0.003
+            ]
+          ],
+          "head_dir": [
+            0.0,
+            -0.6,
+            -0.8
+          ],
+          "sd_deg": 15,
+          "target": "counter-1",
+          "confidence": 0.74
+        },
+        "heading": {
+          "deg": 180,
+          "sd_deg": 12
+        },
+        "motion": {
+          "value": "settled",
+          "speed": 0.03
+        },
+        "posture": "standing",
+        "affected": [
+          {
+            "track_id": "B",
+            "distance_m": 3.1,
+            "facing": "away from the counter"
+          }
+        ],
+        "embedding": {
+          "rep_version": "r1",
+          "dim": 256,
+          "vector_ref": "emb/A/190330"
+        },
+        "episodes": [
+          {
+            "episode_id": "ep-0352",
+            "similarity": 0.83,
+            "viewer_hint": "food prep at the counter"
+          }
+        ],
+        "flags": [],
+        "sources": {
+          "working_region": [
+            {
+              "origin": "rules",
+              "ref": "o-19032980-p7"
+            }
+          ],
+          "visual_demand": [
+            {
+              "origin": "rules",
+              "ref": "o-19033000-p7"
+            },
+            {
+              "origin": "student",
+              "ref": "pb-A-190327"
+            }
+          ],
+          "attention": [
+            {
+              "origin": "rules",
+              "ref": "o-19032980-p7"
+            }
+          ]
+        },
+        "field_as_of": {
+          "position": 1793066610.0,
+          "working_region": 1793066609.8,
+          "attention": 1793066609.8,
+          "heading": 1793066609.8,
+          "posture": 1793066609.8,
+          "motion": 1793066610.0,
+          "visual_demand": 1793066610.0
+        },
+        "field_support": {
+          "position": {
+            "last_support_capture_ts": 1793066610.0,
+            "value_set_ts": 1793066610.0,
+            "support_status": "observed",
+            "hold_reason": null,
+            "deadband": null,
+            "cov_ts": 1793066610.0
+          },
+          "working_region": {
+            "last_support_capture_ts": 1793066609.8,
+            "value_set_ts": 1793066565.8,
+            "support_status": "deadband_confirmed",
+            "hold_reason": null,
+            "deadband": 0.10,
+            "cov_ts": null
+          },
+          "attention": {
+            "last_support_capture_ts": 1793066609.8,
+            "value_set_ts": 1793066609.8,
+            "support_status": "observed",
+            "hold_reason": null,
+            "deadband": null,
+            "cov_ts": 1793066609.8
+          },
+          "heading": {
+            "last_support_capture_ts": 1793066609.8,
+            "value_set_ts": 1793066609.8,
+            "support_status": "observed",
+            "hold_reason": null,
+            "deadband": null,
+            "cov_ts": 1793066609.8
+          },
+          "posture": {
+            "last_support_capture_ts": 1793066609.8,
+            "value_set_ts": 1793066609.8,
+            "support_status": "observed",
+            "hold_reason": null,
+            "deadband": null,
+            "cov_ts": null
+          },
+          "motion": {
+            "last_support_capture_ts": 1793066610.0,
+            "value_set_ts": 1793066610.0,
+            "support_status": "observed",
+            "hold_reason": null,
+            "deadband": null,
+            "cov_ts": null
+          },
+          "visual_demand": {
+            "last_support_capture_ts": 1793066610.0,
+            "value_set_ts": 1793066610.0,
+            "support_status": "observed",
+            "hold_reason": null,
+            "deadband": null,
+            "cov_ts": null
+          }
+        },
+        "field_support_note": "illustrative; support times are capture times (A's head last supported at 19:03:29.8); the working region set at 19:02:45.8 has been confirmed since inside its 0.10 m deadband",
+        "interpreter": {
+          "path": "student",
+          "version": "need-heads-v3"
+        }
+      }
+    },
+    {
+      "id": "episode",
+      "name": "Episode",
+      "group": "memory",
+      "status": "proposed",
+      "proposed_version": "additive: `light_outcome` gains whose_light.",
+      "purpose": "A summarised stretch of one track's behavior in one place, with how the light went. Reference points for the embedding and the unit spatial memory counts.",
+      "producer": "K7 at the end of an engagement; K10 indexes it",
+      "consumers": "K10 Spatial memory, PersonState.episodes, K23 Evaluation",
+      "rate": "one per engagement (minutes)",
+      "retention": "long-term, household-scoped; person-scoped only if identity is bound",
+      "fields": [
+        {
+          "name": "episode_id",
+          "type": "string",
+          "meaning": "unique id"
+        },
+        {
+          "name": "scope",
+          "type": "household | person_id",
+          "meaning": "personal only when bound"
+        },
+        {
+          "name": "interval",
+          "type": "[t0, t1] s",
+          "meaning": "when, in runtime times: from the engaged onset (after the entry dwell) to when the negative evidence that ended the engagement began. The Episode is written once the state reaches none, T_exit after t1 (A7). Never the owner's gold interval, which lives in EvalRecord"
+        },
+        {
+          "name": "place",
+          "type": "surface_id / landmark_id",
+          "meaning": "where"
+        },
+        {
+          "name": "embedding_centroid",
+          "type": "vector_ref",
+          "meaning": "average representation over the episode"
+        },
+        {
+          "name": "slots_summary",
+          "type": "{posture, hands_object, motion_type}",
+          "meaning": "structured summary"
+        },
+        {
+          "name": "viewer_hint",
+          "type": "string",
+          "meaning": "explanation for people reading logs (\"food prep\")"
+        },
+        {
+          "name": "light_outcome",
+          "type": "accepted | corrected(correction_id, whose_light) | unknown",
+          "meaning": "what happened to the light during it, written on every affected track's episode. Service against gold lives in EvalRecord, never here, so gold stays out of runtime and teaching records"
+        }
+      ],
+      "example": {
+        "episode_id": "ep-0390",
+        "scope": "household",
+        "interval": [
+          1793066569.0,
+          1793067090.0
+        ],
+        "interval_note": "19:02:49 (engaged, after the entry dwell) to 19:11:30 (when negative evidence began), local clock; the episode is written when the state reaches none, at 19:11:50",
+        "place": "counter-1",
+        "slots_summary": {
+          "posture": "standing",
+          "hands_object": "knife, using",
+          "motion_type": "repetitive fine"
+        },
+        "viewer_hint": "food prep at the counter",
+        "light_outcome": "corrected(c-190405, changer)"
+      }
+    },
+    {
+      "id": "place_memory",
+      "name": "PlaceMemory",
+      "group": "memory",
+      "status": "proposed",
+      "purpose": "What tends to happen where: per landmark, counts of episode kinds by time of day. A labeled prior that ranks hypotheses during occlusion; never evidence.",
+      "producer": "K10 Spatial memory (counts Episodes)",
+      "consumers": "K7 Person-state estimator (hypothesis ranking), K14 Look selector (anticipation, later)",
+      "rate": "updated per Episode",
+      "retention": "decays; resets a landmark when the room model says it moved",
+      "fields": [
+        {
+          "name": "landmark_id",
+          "type": "string",
+          "meaning": "a surface or seat in the room model"
+        },
+        {
+          "name": "scope",
+          "type": "household | person_id",
+          "meaning": "personal only when bound"
+        },
+        {
+          "name": "counts",
+          "type": "{episode_cluster: {time_bucket: n}}",
+          "meaning": "how often each kind happens here, by time of day"
+        },
+        {
+          "name": "decay_half_life_days",
+          "type": "number",
+          "meaning": "how fast old habits fade; fitted from observed change, never a fixed invented schedule"
+        },
+        {
+          "name": "valid_since",
+          "type": "date (YYYY-MM-DD)",
+          "meaning": "the day the current layer started; reset when furniture or a camera moves"
+        }
+      ],
+      "example": {
+        "landmark_id": "counter-1",
+        "scope": "household",
+        "counts": {
+          "cluster-food-prep": {
+            "18-21h": 23,
+            "07-09h": 6
+          },
+          "cluster-phone": {
+            "18-21h": 4
+          }
+        },
+        "decay_half_life_days": null,
+        "decay_half_life_status": "unset (fit from data)",
+        "valid_since": "2026-10-18",
+        "note": "decay is set from data (how fast patterns actually change), not a fixed schedule"
+      }
+    },
+    {
+      "id": "light_state",
+      "name": "LightState",
+      "group": "light",
+      "status": "proposed",
+      "status_note": "No camera light measurement runs today; the den RGB camera runs auto-exposure. The camera-measured footprint calibration failed three runs (auto-exposure, ambient light).",
+      "proposed_version": "proposed minor: `anchored` changes meaning (migration note: it is true only when the frame's normalisation version equals k_L's and k_L's calibration passed its checks). `exposure.black_level`, `exposure.normalisation_version`, `room_version`, `rho_status` and `basis` are additive.",
+      "purpose": "What light is in the room right now, from the cameras: estimates on surfaces and at windows, with the exposure facts that make them comparable.",
+      "producer": "K11 Light measurement",
+      "consumers": "K16 Coordinator, K18 Verify, K7 (so perception knows the system dimmed the room, not the sun)",
+      "rate": "every few seconds from metering frames; on demand for verify",
+      "retention": "summaries logged with every decision and correction. LightState keeps only per-surface summaries, so gold-labelled sessions keep their metering frames, or a per-pixel estimate map with its normalisation version; without them delivered service at R_eval is unknown. Whether to retain them is {{dec:recording-retention}}",
+      "fields": [
+        {
+          "name": "ts",
+          "type": "s",
+          "meaning": "capture time"
+        },
+        {
+          "name": "camera_id",
+          "type": "string",
+          "meaning": "which camera"
+        },
+        {
+          "name": "room_version",
+          "type": "string",
+          "meaning": "the RoomModel version whose camera scale k_L and reflectances converted these estimates"
+        },
+        {
+          "name": "exposure",
+          "type": "{time_ms, gain, black_level, wb_locked, linear, normalisation_version}",
+          "meaning": "the facts that turn pixels into the normalised reading C(s), in normalised counts (nc): the mean over unclipped, unmasked pixels of m·(raw − b)/(t·G), with t the exposure in ms, G the analogue gain multiplier (not ISO; if only ISO is known, G = ISO/ISO_base with the base recorded), b the black level for that gain and m a fixed linear channel weighting with a matrix id. Changing any of these makes a new `normalisation_version`; only linear values count"
+        },
+        {
+          "name": "anchored",
+          "type": "bool",
+          "meaning": "true only when the frame's `normalisation_version` equals that of the camera's k_L and k_L's CalibrationRecord passed its checks (the round trip and independent held-out card and meter checks in lux). Otherwise the estimates are relative and no absolute lux claim is made"
+        },
+        {
+          "name": "surface_estimates",
+          "type": "[{surface_id, value, unit, clipped_frac, rho_status, basis}]",
+          "meaning": "camera estimate of light arriving at each visible surface, Ê(s) = π·k_L·C(s)/ρ_s for matte surfaces, converted with `room_version`'s k_L and ρ. `rho_status` assumed | measured; `basis` measured | fallback_patch | prior. A `fallback_patch` or `prior` estimate never counts as delivered service"
+        },
+        {
+          "name": "window_daylight",
+          "type": "[{window_id, level, unit}]",
+          "meaning": "daylight tracked at the windows, as a number with its unit"
+        },
+        {
+          "name": "sun",
+          "type": "{azimuth, elevation} deg",
+          "meaning": "computed from location and time"
+        },
+        {
+          "name": "blinds",
+          "type": "open | closed | unknown",
+          "meaning": "from vision or smart blinds"
+        },
+        {
+          "name": "residual",
+          "type": "[{surface_id, measured − predicted}]",
+          "meaning": "measured minus predicted for the actual resulting state (Decision.applied_scene at the current hold revision): what neither the light model nor daylight explains, such as something moved or someone in the way. A held channel is never explained as scale drift"
+        }
+      ],
+      "example": {
+        "ts": 1793066609.0,
+        "camera_id": "den-oak",
+        "room_version": "den-v4",
+        "exposure": {
+          "time_ms": 16.6,
+          "gain": 4.0,
+          "black_level": 64,
+          "wb_locked": true,
+          "linear": true,
+          "normalisation_version": "meter-norm/v1"
+        },
+        "anchored": true,
+        "anchored_status": "illustrative: the walkthrough assumes cal-den-oak-kL-1 has passed its round trip and held-out lux checks (rung 7, future qualification); today den-oak is uncalibrated and anchored is false",
+        "surface_estimates": [
+          {
+            "surface_id": "counter-1",
+            "value": 25,
+            "unit": "lx",
+            "clipped_frac": 0.0,
+            "rho_status": "assumed",
+            "basis": "measured",
+            "note": "camera estimate"
+          },
+          {
+            "surface_id": "armchair-book",
+            "value": 300,
+            "unit": "lx",
+            "clipped_frac": 0.0,
+            "rho_status": "assumed",
+            "basis": "measured",
+            "note": "camera estimate; B's reading beam already on"
+          }
+        ],
+        "window_daylight": [
+          {
+            "window_id": "west-1",
+            "level": 0.04,
+            "unit": "fraction of noon",
+            "note": "dusk"
+          }
+        ],
+        "sun": {
+          "azimuth": 262,
+          "elevation": -4
+        },
+        "blinds": "open",
+        "residual": []
+      }
+    },
+    {
+      "id": "room_model",
+      "name": "RoomModel",
+      "group": "light",
+      "status": "partial",
+      "status_note": "The den has a Scaniverse mesh with a room frame and named targets; the camera uses a reviewed approximate alignment (the OAK-to-mesh ICP fit was refused). Reflectance is assumed.",
+      "proposed_version": "additive: `cameras[].photometric`, `cameras[].error_bound_m` and the intrinsics source; `surfaces[].reflectance.calibration_id`.",
+      "purpose": "The room as the light model and the tracker need it: surfaces and what they are, windows, focal points, cameras, with where every number came from.",
+      "producer": "K21 Calibration (manual today: phone scan, tape; later camera-only)",
+      "consumers": "K4 Alignment, K5 Tracker, K11 Light measurement (k_L and reflectance), K13 Light model, K14 Look selector",
+      "rate": "install, then on drift",
+      "retention": "versioned; every decision records the version it used",
+      "fields": [
+        {
+          "name": "room_id / version",
+          "type": "string",
+          "meaning": "which room, which revision"
+        },
+        {
+          "name": "frame",
+          "type": "definition",
+          "meaning": "origin and axes of the room frame"
+        },
+        {
+          "name": "surfaces",
+          "type": "[{surface_id, kind, geometry, reflectance, focal}]",
+          "meaning": "floor, walls, ceiling, counter, table, window, art; reflectance {value, status: assumed | measured, calibration_id}, measured as ρ_s = ρ_card·C_s/C_card with the grey card beside s in the same frame (no camera scale needed); focal = worth lighting"
+        },
+        {
+          "name": "cameras",
+          "type": "[{camera_id, intrinsics, pose, method, version, error_bound_m, photometric}]",
+          "meaning": "where each camera is and how that was found. An Observation's `transform_id`, `<camera_id>@<version>`, resolves to exactly one entry. `intrinsics` names its source (the EEPROM values today); `error_bound_m` is the transform's own uncertainty Σ_cal (null today). `photometric` {k_L, unit \"(cd/m²)/nc\", normalisation_version, calibration_id, status: uncalibrated | measured} is the camera luminance scale, L = k_L·C, owned by K21 and consumed by K11; an inverse, if ever needed, is R_cam = 1/k_L under that name and is never written to k_L"
+        },
+        {
+          "name": "fixtures",
+          "type": "[fixture_id]",
+          "meaning": "references to Fixture records"
+        },
+        {
+          "name": "landmarks",
+          "type": "[{landmark_id, kind, surface_id}]",
+          "meaning": "seats, work surfaces, doorways (from labels and from use)"
+        },
+        {
+          "name": "provenance",
+          "type": "per field: {method, ts, confidence}",
+          "meaning": "`method` is a CalibrationRecord method: assumed | manual | tape | scan | probe | fit | from-use"
+        }
+      ],
+      "example": {
+        "room_id": "den",
+        "version": "den-v4",
+        "surfaces": [
+          {
+            "surface_id": "counter-1",
+            "kind": "work surface",
+            "reflectance": {
+              "value": 0.35,
+              "status": "assumed",
+              "calibration_id": null
+            },
+            "focal": false
+          },
+          {
+            "surface_id": "wall-west",
+            "kind": "wall",
+            "reflectance": {
+              "value": 0.7,
+              "status": "assumed",
+              "calibration_id": null
+            },
+            "focal": false
+          },
+          {
+            "surface_id": "art-1",
+            "kind": "art",
+            "focal": true
+          }
+        ],
+        "cameras": [
+          {
+            "camera_id": "den-oak",
+            "intrinsics": "EEPROM (nominal)",
+            "pose": "approximate visual alignment",
+            "method": "reviewed manual",
+            "version": "2026-10-18",
+            "error_bound_m": null,
+            "photometric": {
+              "k_L": 10.0,
+              "unit": "(cd/m²)/nc",
+              "normalisation_version": "meter-norm/v1",
+              "calibration_id": "cal-den-oak-kL-1",
+              "status": "measured"
+            },
+            "note": "photometric values are illustrative, the scale behind A9's worked chain (5.241 nc → 52.41 cd/m² → 470 lx at ρ 0.35); the walkthrough's anchored frames assume cal-den-oak-kL-1 has passed its checks. Observation transform_id den-oak@2026-10-18 resolves to this entry. No camera has been calibrated: today den-oak is uncalibrated and LightState.anchored is false"
+          }
+        ],
+        "provenance": {
+          "surfaces": {
+            "method": "scan",
+            "ts": null,
+            "confidence": null
+          },
+          "cameras": {
+            "method": "manual",
+            "ts": null,
+            "confidence": null
+          }
+        },
+        "provenance_note": "surfaces from the Scaniverse scan; cameras from a reviewed approximate alignment, because the ICP fit was refused. Times and confidences are not given in the sheets"
+      }
+    },
+    {
+      "id": "fixture",
+      "name": "Fixture",
+      "group": "light",
+      "status": "partial",
+      "status_note": "engineered_den_fixture_v1 (virtual den; F1's model) adds a downlight ring to engineered_gimbal_v1 (Apartment schema), which has a 20° gimbal spot and six radial zones with orientation_calibration and no downlight; every field is marked assumed except the spot's datasheet 20°. Den socket positions are approximate (one taped) and fixture offsets are missing. Engineered fixtures are virtual today; the den has four Hue lights.",
+      "proposed_version": "additive: `channels[].cct_range_k`; the step check's capability fields in `gimbal`, all unknown until commissioned.",
+      "purpose": "One physical light and its channels, with what is known about where each channel points and how it dims.",
+      "producer": "K21 Calibration",
+      "consumers": "K13 Light model, K16 Coordinator, K17 Actuation",
+      "rate": "install, then on drift",
+      "retention": "versioned",
+      "fields": [
+        {
+          "name": "fixture_id / model",
+          "type": "string",
+          "meaning": "e.g. F1, engineered_den_fixture_v1"
+        },
+        {
+          "name": "pose",
+          "type": "{position m, yaw/pitch/roll deg, method}",
+          "meaning": "where it is and how that was measured"
+        },
+        {
+          "name": "channels",
+          "type": "[{channel_id, kind, entity_id, cct_range_k}]",
+          "meaning": "radial_1…radial_6, down, spot; the Home Assistant entity that drives each; `cct_range_k` is the supported white range for tunable channels, written by K21 from the light's reported limits. A hold on an entity pins every channel with that entity_id"
+        },
+        {
+          "name": "orientation_calibration",
+          "type": "{anchor_deg, order, fine_deg, status}",
+          "meaning": "which way radial zone 1 points, clockwise or counter-clockwise, fine adjust; assumed until probed"
+        },
+        {
+          "name": "optics",
+          "type": "per channel {beam_deg, status}",
+          "meaning": "beam shape; assumed until measured"
+        },
+        {
+          "name": "dimming_curve",
+          "type": "per channel, command → output",
+          "meaning": "output is not linear in the command; measured at install"
+        },
+        {
+          "name": "gimbal",
+          "type": "{pan/tilt limits, zero offsets, axis errors, status, move, stop, position_readback, motion_status, retarget, fade_preempt, dark_interlock, on_link_loss}",
+          "meaning": "commanded vs actual angles, from the wand fit, plus the capabilities K17's step check needs: move {rate_deg_s, accel_deg_s2, settle_s}; stop {kind: none | bounded, t_stop_max_s, overrun_max_deg}; position_readback {kind: none | commanded_only | encoder, tol_deg, latency_s}; motion_status; retarget; fade_preempt; dark_interlock {kind: none | sequencer | hardware}; on_link_loss. All are unknown until commissioned, any may turn out to be none, and which must be measured before physical output is {{dec:fixture-capabilities}}. No automatic plan lights a spot whose aim is moving or unknown; what a person's change does to a moving spot is {{dec:moving-spot}}, and a person's \"on\" at an unknown aim is {{dec:unknown-aim-on}}"
+        }
+      ],
+      "example": {
+        "fixture_id": "F1",
+        "model": "engineered_den_fixture_v1",
+        "pose": {
+          "position": [
+            1.95,
+            0.45,
+            2.4
+          ],
+          "method": "tape"
+        },
+        "channels": [
+          {
+            "channel_id": "radial_1 … radial_6",
+            "kind": "radial",
+            "entity_id": null,
+            "cct_range_k": null
+          },
+          {
+            "channel_id": "down",
+            "kind": "down",
+            "entity_id": null,
+            "cct_range_k": null
+          },
+          {
+            "channel_id": "spot",
+            "kind": "gimbal spot",
+            "entity_id": null,
+            "cct_range_k": null
+          }
+        ],
+        "channels_note": "F1 is virtual, so no entity drives it and entity_id is null; cct_range_k stays null until K21 reads the light's reported limits. In the walkthrough, the Correction's change and hold and the hold set name F1.spot as the spot channel's entity, as if F1 were installed (illustrative)",
+        "orientation_calibration": {
+          "anchor_deg": null,
+          "order": null,
+          "fine_deg": 0,
+          "status": "assumed"
+        },
+        "optics": {
+          "status": "assumed until measured"
+        },
+        "gimbal": {
+          "status": "assumed",
+          "move": "unknown",
+          "stop": "unknown",
+          "position_readback": "unknown",
+          "motion_status": "unknown",
+          "retarget": "unknown",
+          "fade_preempt": "unknown",
+          "dark_interlock": "unknown",
+          "on_link_loss": "unknown",
+          "note": "tests use two simulated capability sets until these are measured: K-full (bounded stop, encoder readback, retarget, fade pre-emption) and K-min (none of them)"
+        }
+      }
+    },
+    {
+      "id": "light_model",
+      "name": "LightModel",
+      "group": "light",
+      "status": "partial",
+      "status_note": "Today: aiming math (solveAim), a beam trace against the mesh, hand-drawn footprints, and a virtual den that sums direct light plus one diffuse wall bounce on virtual fixtures. No measured basis exists yet.",
+      "proposed_version": "proposed minor: eye positions now come per decision from PersonState, not from the measured basis, and `error` is scored at surface points only (migration note). The glare spread and validation status are additive.",
+      "purpose": "Predicts light at every sample point for any scene, without trying it: daylight plus each channel's measured contribution scaled by its level.",
+      "producer": "K21 Calibration (probe captures) + physics for the gimbal spot",
+      "consumers": "K16 Coordinator, K18 Verify, K14 (previews), K21 drift checks",
+      "rate": "rebuilt on calibration; evaluated many times per decision",
+      "retention": "versioned",
+      "fields": [
+        {
+          "name": "version / room_version",
+          "type": "string",
+          "meaning": "which calibration it was built from"
+        },
+        {
+          "name": "sample_points",
+          "type": "[{point_id, kind, xyz, normal}]",
+          "meaning": "working regions, wall patches and focal points (surfaces). Eye positions come per decision from PersonState.attention, not from the measured basis"
+        },
+        {
+          "name": "basis / basis_unit",
+          "type": "per channel: B_c(p) at full output / lx | relative",
+          "meaning": "measured contribution of each channel at each sample point (per colour primary for tunable channels); `basis_unit` is lx when built under an anchored room version, otherwise relative. A new k_L or ρ makes a new LightModel version"
+        },
+        {
+          "name": "spot_model",
+          "type": "aim → footprint",
+          "meaning": "the gimbal spot is modelled per aim (beam trace + measured beam), not measured once"
+        },
+        {
+          "name": "dimming",
+          "type": "g_c(u)",
+          "meaning": "per-channel dimming curves"
+        },
+        {
+          "name": "bounce",
+          "type": "measured | one-bounce physics",
+          "meaning": "indirect light is in the measured basis; physics fills unmeasured points"
+        },
+        {
+          "name": "glare",
+          "type": "per channel, per eye position: {G, sd, model_status}",
+          "meaning": "predicted source luminance toward each eye position, for glare limits, with its spread and `model_status` unvalidated | validated@version. No room camera measures it; it is a prediction only"
+        },
+        {
+          "name": "error",
+          "type": "{median_pct, p90_pct} relative error, surface points only",
+          "meaning": "how well it predicts held-out mixed scenes, scored at surface points only"
+        }
+      ],
+      "example": {
+        "version": "lm-den-3",
+        "room_version": "den-v4",
+        "sample_points": [
+          {
+            "point_id": "counter-1",
+            "kind": "task",
+            "xyz": null,
+            "normal": null
+          }
+        ],
+        "sample_points_note": "1 shown of counter-1, table-1, armchair-book, wall-west ×6 patches and art-1; their coordinates are not given in the sheets. Eye positions for A and B come with each decision from PersonState",
+        "basis": {
+          "F1.spot": {
+            "counter-1": null
+          }
+        },
+        "basis_note": "8 channels × 14 points (radials, down, spot per aim); one entry shown, and its value is not given in the sheets",
+        "basis_unit": "lx",
+        "basis_unit_note": "built under den-v4 with den-oak's k_L, which the walkthrough assumes has passed its checks; relative when the room version is not anchored",
+        "bounce": "measured where cameras see; one-bounce physics elsewhere",
+        "glare": {
+          "model_status": "unvalidated",
+          "sd": null,
+          "sd_status": "unknown until supervised glare-model validation (comfort-policy, pending)"
+        },
+        "error": {
+          "median_pct": 8,
+          "p90_pct": 19,
+          "note": "target, to validate",
+          "scored_at": "surface points only"
+        }
+      }
+    },
+    {
+      "id": "look",
+      "name": "Look",
+      "group": "intent",
+      "status": "proposed",
+      "status_note": "The virtual den compares declared task, ambience and quiet intents; designer looks in perceptual terms are proposed.",
+      "proposed_version": "new look versions: a look whose colour guardrail changes unit and sign, from kelvin to mired, gets a new version (for example evening-ambience@2 → evening-ambience@3) once the translation is decided ({{dec:colour-guardrails}}). Targets keep absolute colour temperature in kelvin.",
+      "purpose": "A designer's intent for a moment, in perceptual terms that mean the same in every room. Like a lighting plot, not a scene.",
+      "producer": "Designers (company level); selected and bent by K14 from person state",
+      "consumers": "K16 Coordinator",
+      "rate": "authored rarely; selected per decision",
+      "retention": "versioned library shipped with the product",
+      "fields": [
+        {
+          "name": "look_id / version",
+          "type": "string",
+          "meaning": "e.g. evening-ambience@2"
+        },
+        {
+          "name": "applies_when",
+          "type": "{condition: value}",
+          "meaning": "person-state and time conditions that make this look a candidate, one key each, with the unit or bound in the key name (for example `sun_elevation_deg_max`, `visual_demand_min`)"
+        },
+        {
+          "name": "layers",
+          "type": "[{layer, targets}]",
+          "meaning": "ambient, wall wash, accent, task, path; each with perceptual targets"
+        },
+        {
+          "name": "targets",
+          "type": "perceptual quantities",
+          "meaning": "wall-to-floor ratio, task-to-surround ratio, indirect share, focal emphasis (`focal_emphasis` {surface_id, ratio_to_ambient}), depth (far over near), colour temperature per layer (absolute, in kelvin: `cct_k`), glare limit at eyes"
+        },
+        {
+          "name": "weights",
+          "type": "{term: w}",
+          "meaning": "how much each principle matters in this look"
+        },
+        {
+          "name": "transitions",
+          "type": "{fade_s, min_dwell_s}",
+          "meaning": "how changes feel"
+        },
+        {
+          "name": "guardrails",
+          "type": "per offset: level_factor [lo, hi] ×; mired_shift [lo ≤ 0, hi ≥ 0] mired; contrast_shift [lo, hi] log₂; fixed: [names of targets or rules no preference may move]; per-target minimums such as pool_ratio_min",
+          "meaning": "the range preferences may move each target, as explicit relative ranges: `level_factor` as a factor, `mired_shift` in mired with positive = warmer, `contrast_shift` in log₂. `fixed` lists the targets and rules no preference may move, and a per-target minimum such as cooking@1's `pool_ratio_min` is a floor no preference may push below (A10). An absent or null key holds that offset neutral (cooking@1 and the overlays declare no colour guardrail, so their colour offset stays 0). Today's looks write the colour bound in kelvin (evening-ambience@2: [-300, +200] K, the retired `cct_shift_k`); its mired translation is {{dec:colour-guardrails}}: translated exactly at 2700 K it would be [−25.5, +46.3] mired, keeping the wide side on warming, and renaming without flipping the bounds would reverse the designer's intent. While the translation is pending, `mired_shift` is null with `mired_shift_status`; by the rule above a null key holds the colour offset neutral, so no translation is applied"
+        },
+        {
+          "name": "proposed_guardrails",
+          "type": "as guardrails, plus look_id of the proposed version",
+          "meaning": "documentation only: the guardrails a proposed next look version would carry once the kelvin-to-mired translation is decided ({{dec:colour-guardrails}}). Nothing reads it at runtime, and the current version keeps its own guardrails"
+        }
+      ],
+      "example": {
+        "look_id": "evening-ambience@2",
+        "applies_when": {
+          "sun_elevation_deg_max": 0,
+          "room": "occupied"
+        },
+        "applies_when_note": "task overlays may add light inside their zone",
+        "targets": {
+          "wall_to_floor": [
+            1,
+            1.5
+          ],
+          "focal_emphasis": {
+            "surface_id": "art-1",
+            "ratio_to_ambient": 3
+          },
+          "indirect_share_min": 0.7,
+          "depth_far_over_near": [
+            0.333,
+            0.8
+          ],
+          "cct_k": [
+            2400,
+            2700
+          ],
+          "glare_at_eyes": "none visible"
+        },
+        "targets_note": "ranges are [lo, hi]; every target is illustrative, to validate (E11); A10 also shows this version's layers and weights",
+        "transitions": {
+          "fade_s": 8,
+          "min_dwell_s": 120
+        },
+        "guardrails": {
+          "level_factor": [
+            0.6,
+            1.5
+          ],
+          "cct_shift_k": [
+            -300,
+            200
+          ],
+          "contrast_shift": [
+            -0.5,
+            0.5
+          ],
+          "fixed": [
+            "glare_at_eyes",
+            "eye-box exclusions",
+            "walls_Ev_lx minimum"
+          ]
+        },
+        "guardrails_note": "as on A10: today's evening-ambience@2 writes the colour bound in kelvin. An exact translation at 2700 K would be [-25.5, +46.3] mired, warm side positive; that translation is pending, so the mired form appears only under the proposed version below",
+        "proposed_guardrails": {
+          "look_id": "evening-ambience@3",
+          "level_factor": [
+            0.6,
+            1.5
+          ],
+          "mired_shift": null,
+          "mired_shift_status": "pending (colour-guardrails)",
+          "contrast_shift": [
+            -0.5,
+            0.5
+          ],
+          "fixed": [
+            "glare_at_eyes",
+            "eye-box exclusions",
+            "walls_Ev_lx minimum"
+          ]
+        },
+        "proposed_guardrails_note": "proposed version, documentation only; null holds the colour offset at 0 until the translation is decided"
+      }
+    },
+    {
+      "id": "preference",
+      "name": "Preference",
+      "group": "intent",
+      "status": "proposed",
+      "status_note": "The virtual den stores declared preferences; learning them from corrections, and the separate tighten-only comfort limits, are proposed.",
+      "proposed_version": "proposed major (v2): `cct_shift_k` becomes `mired_shift` (positive = warmer, applied through the reciprocal), and Preference gains `comfort_limits` with a second producer, K20 (where comfort limits live is {{dec:comfort-policy}}). A zero offset is the same in every unit, so existing zero examples stay valid.",
+      "purpose": "How this household, or a bound person, likes a need met: offsets on the look's targets, with how sure we are; and, kept apart, comfort limits that corrections can only tighten.",
+      "producer": "K15 Preference model (offsets, from Corrections attributed to the preference link); K20 attribution (comfort_limits, tighten-only, from AR3 and AR10 only)",
+      "consumers": "K16 Coordinator (the comfort_limits version goes in Decision.inputs)",
+      "rate": "updated per attributed correction",
+      "retention": "household; per person only when identity is bound",
+      "fields": [
+        {
+          "name": "scope",
+          "type": "household | person_id",
+          "meaning": "person-level values shrink toward the household when evidence is thin"
+        },
+        {
+          "name": "context",
+          "type": "{need_kind, look_id, time_bucket}",
+          "meaning": "what situation the offset applies to"
+        },
+        {
+          "name": "offsets",
+          "type": "{level_factor ×, mired_shift mired (+ warmer), contrast_shift log₂}",
+          "meaning": "written by K15 and read by K16, relative to the look's targets: T′ = T·level_factor; CCT*′ = 10⁶/(10⁶/CCT* + clamp(Δm, Δm_lo, Δm_hi)) for every layer of the look in the key, where `mired_shift` Δm = 10⁶/CCT′ − 10⁶/CCT*; contrast bands move by `contrast_shift` in log₂. A colour observation is the light's reported colour temperature after the change (readback), not measured spectrum; a brightness-only change gives none. While colour parameters are unvalidated, `mired_shift` stays 0 and only level is learned"
+        },
+        {
+          "name": "uncertainty",
+          "type": "sd per offset (level: log; colour: mired; contrast: log₂)",
+          "meaning": "shrinks as corrections agree"
+        },
+        {
+          "name": "n",
+          "type": "int",
+          "meaning": "corrections that shaped it"
+        },
+        {
+          "name": "comfort_limits",
+          "type": "{version, entries[{look_id, region, kind: glare | spill, steps, limit}]}",
+          "meaning": "a separate table, versioned and read by K16, that only K20 writes and only tightens: AR10 tightens the glare limit at an eye region in a look by one pre-registered step; AR3 tightens the spill allowance at the changer's region. A correction never loosens or clears it, and an empty-room re-probe never clears a glare flag; that needs supervised validation or an owner action. Never an offsets update. The step, the repeat count and where these limits live are {{dec:comfort-policy}}"
+        },
+        {
+          "name": "guardrail",
+          "type": "look guardrails",
+          "meaning": "a nudge can never produce an ugly room; an absent guardrail key holds that offset neutral"
+        }
+      ],
+      "example": {
+        "scope": "household",
+        "context": {
+          "need_kind": "fine task at counter",
+          "look_id": "cooking@1",
+          "time_bucket": "18-21h"
+        },
+        "offsets": {
+          "level_factor": 0.78,
+          "mired_shift": 0,
+          "contrast_shift": 0
+        },
+        "uncertainty": {
+          "level_factor_sd_log": 0.16
+        },
+        "n": 3,
+        "comfort_limits": {
+          "version": "cl-den-0",
+          "entries": []
+        },
+        "comfort_limits_entry_shape_note": {
+          "look_id": "reading@1",
+          "region": "B's eye region in the armchair",
+          "kind": "glare",
+          "steps": 1,
+          "limit": null,
+          "limit_status": "pending (comfort-policy): the look's limit less one pre-registered step",
+          "note": "hypothetical, the shape of one entry; no comfort correction happens in this evening, so `entries` is empty"
+        },
+        "note": "after three corrections in this context (c-190405 was the first: 1.00 → 0.86); a brightness-only correction leaves mired_shift at 0"
+      }
+    },
+    {
+      "id": "decision",
+      "name": "Decision",
+      "group": "decisions",
+      "status": "partial",
+      "status_note": "The lighting brain logs rule decisions and accepts overrides (change, aim, undo, redo); the virtual den binds corrections to the run and decision; den_lighting already re-checks its revision and the light's current target before each call. Candidates, requested and applied scenes, recipients, predictions and verify are proposed.",
+      "proposed_version": "proposed major (v2): `scene` becomes `requested_scene` plus `applied_scene`; `predicted`, `recipients` and `verify` are for the actual resulting state; the hold set, revisions, actuator state, step log, `hard_conflicts` and the policy tags are new. Option-dependent fields are present only under their pending option: `held[].direction`, `held[].footprint` and `hold_limited` under P1–P3, `held[].changer_track` under P3 ({{dec:compensation}}); `safety_override` under S1/S2 ({{dec:manual-vs-safety}}).",
+      "purpose": "Everything needed to explain a lighting change later and to attribute a correction to it.",
+      "producer": "K16 Coordinator (inputs, targets, candidates, requested_scene); K17 Actuation (applied_scene with the step log, skipped, status); K16 via K13 (predicted and recipients for the actual resulting state, once K17 reports, whatever the status); K18 Verify (verify)",
+      "consumers": "K20 Attribution, K23 Evaluation (targets, recipients and verify points are diagnostics there, never the evaluation region), replay, people reading the log",
+      "rate": "per change",
+      "retention": "long-term",
+      "fields": [
+        {
+          "name": "decision_id / ts",
+          "type": "string / s",
+          "meaning": "identity and time"
+        },
+        {
+          "name": "trigger",
+          "type": "enum",
+          "meaning": "person_state change | light residual | time of day | correction | hold change (a hold opened, replaced or ended)"
+        },
+        {
+          "name": "policy / actuator_domain / actuation",
+          "type": "string / hue-den-4 | virtual-den-4 / enum",
+          "meaning": "which policy and version wrote it (a den_lighting command recorded at rung 0 is `den_lighting@<version>` and counts as no decision for attribution); the actuator domain; `actuation` shown | shadow | replay | synthetic. Corrections per hour are filled only from `shown` decisions; a virtual-den decision is synthetic"
+        },
+        {
+          "name": "inputs",
+          "type": "versions + state",
+          "meaning": "PersonState `state_id` values (each with its `field_support`), light_state id, room, fixture and light model versions, look and preference versions applied (with the comfort_limits version), coordinator, router and recipient-rule versions, `body_envelope` {version, parameters, parameters_status}, the incumbent's mode, place_memory version if a prior re-ranked anything, and the entries below. A log may add `person_state_display`, the clock abbreviation (A@19:03:30) for readers. The envelope parameters are {{dec:envelope-parameters}}, so `parameters` is null with `parameters_status` until decided"
+        },
+        {
+          "name": "inputs.field_support",
+          "type": "{state_id: {field: {last_support_capture_ts s, support_status}}}",
+          "meaning": "the per-field support each PersonState carried when the plan was made, keyed by `state_id`: `last_support_capture_ts` in Unix seconds and `support_status` observed | deadband_confirmed | held_unavailable | held_ambiguous, as in `PersonState.field_support`. Every body field is aged from it to `t_exec`"
+        },
+        {
+          "name": "inputs.hold_set",
+          "type": "{revision, held[{entity_id, channels, pinned {level_pct, cct_k, aim, source}, since, cause, lifetime}]}",
+          "meaning": "the HA-local hold set K20 and K17 keep, copied in at the decision's revision (an integer: revision 7 before c-190405 and 8 after it in the example). `pinned` is the held light's read-back state as numbers, `source: read-back`. Present only under P1–P3 ({{dec:compensation}}): `held[].direction` and `held[].footprint`; under P3 also `held[].changer_track`"
+        },
+        {
+          "name": "inputs.revisions",
+          "type": "{hold_set, mode}",
+          "meaning": "the revisions the plan was made under; the mode revision moves on occupancy, gaming, enable, resume and hold expiry, as den_lighting's controller revision does"
+        },
+        {
+          "name": "inputs.actuator_state",
+          "type": "per channel {on, level 0–1, v_hat 0–1, cct_k, aim, motion_status, source, as_of}",
+          "meaning": "the actual state: `level` is the commanded fraction and `v_hat` (v̂) the output fraction; `motion_status` settled | moving | stopped | unknown; `as_of` is when the value was last read back from the light, not when a poll or connection last succeeded"
+        },
+        {
+          "name": "inputs.t_exec",
+          "type": "per new, changed or kept channel: s, or null + `<channel>_status`",
+          "meaning": "t_exec = max(t_settle, t_chk + T_chk + T_react), the horizon every body field is aged to (`age_f = t_exec − last_support_capture_ts_f`); for a kept channel t_settle = t_chk. T_chk and T_react are {{dec:freshness}}, so a kept channel's t_exec is null with a status that gives the formula. In the example F1's spot settles at 19:03:32.55 as logged (dark move 19:03:30.05–19:03:30.55, then the 2 s fade), so the head support ages at t_exec are 2.75 s for A and 7.65 s for B"
+        },
+        {
+          "name": "targets",
+          "type": "per person {surface_id, lx, cct_k, note} / per layer",
+          "meaning": "what the look and the needs asked for, after preferences: the coordinator's own targets, which evaluation reads only as diagnostics. Each is a target to validate"
+        },
+        {
+          "name": "candidates",
+          "type": "[{scene, cost, why}]",
+          "meaning": "the alternatives the optimizer weighed: `cost` is the weighted total (a number) and `why` says why each was chosen or lost (`chosen`, optionally followed by its reason, or `rejected: <reason>`)"
+        },
+        {
+          "name": "requested_scene",
+          "type": "per channel {level, cct_k, target_cct_k, clip_reason, aim}",
+          "meaning": "the solver's output, with held channels at their pinned read-back values. `cct_k` is the commanded value after the guardrail clamp and the `Fixture.channels[].cct_range_k` clip; `target_cct_k` is the value before the clip, with `clip_reason`. A clip is not a delivery fault"
+        },
+        {
+          "name": "applied_scene",
+          "type": "per channel {status, readback {level, cct_k, aim}, aim_status, aim_source, steps[]}",
+          "meaning": "the actual resulting state of every channel in the decision, whether sent, dropped or held, from `readback` (`cct_k` as reported, not measured spectrum). `status` sent | held | superseded | stopped | repaired | completed_after_check | failed; a channel whose requested value was already in effect is listed with status sent and empty `steps[]`, because nothing went out for it. `aim_status` settled | moving | stopped | unknown; `aim_source` commanded | encoder | unknown, commanded while `Fixture.gimbal` declares no position readback. `steps[{kind, revisions, sent_at, result {status, at, readback}, reason, checks}]` logs K17's step check before every send, fade, move, retry and callback (a Hue bulb today has one send, then readback; an engineered spot has fade-out, move, settle and fade-in, each a step): a held light or a newer owner drops the old plan's remaining steps; after an unrelated revision change, or a step that would finish after its logged t_exec, a step goes out only after fresh checks, and one that cannot be checked on the Pi fails closed ({{dec:local-completion}}). No superseded timer, retry or callback resends an old value; a spot cut short may stay dark; a stop is never a restore. A step logged as sent without passing the check fails replay"
+        },
+        {
+          "name": "skipped",
+          "type": "[{channel, reason, hold_ref}]",
+          "meaning": "each channel that was not sent, with why and the hold it met"
+        },
+        {
+          "name": "status",
+          "type": "applied | partial | superseded | kept_current",
+          "meaning": "superseded if no step went out after a revision change, partial if some did; kept_current if no fresh plan arrived within the deadline D ({{dec:resolve-deadline}}). There is no silent partial send"
+        },
+        {
+          "name": "hard_conflicts",
+          "type": "[{constraint, held_channel, track, eye_or_envelope, G_hi, limit, model_status}]",
+          "meaning": "a held light that alone breaks a hard constraint (the hard glare limit, the head-and-shoulder cone, an eye box). Every hard constraint stays on for the free channels, which may not raise their part of a conflict; nothing is relaxed silently. What happens to the held light itself is {{dec:manual-vs-safety}}"
+        },
+        {
+          "name": "hold_limited",
+          "type": "[{point_id, target, reason}]",
+          "meaning": "present only under P1–P3 ({{dec:compensation}}): points where a footprint bound leaves the decision's own target unmet. The candidate's diagnostic at its own target, never a delivery miss; evaluation recomputes it at the evaluation region"
+        },
+        {
+          "name": "safety_override",
+          "type": "{constraint, track, from, to}",
+          "meaning": "present only under S1/S2 ({{dec:manual-vs-safety}}): a logged limit of a held light, given with notice"
+        },
+        {
+          "name": "recipients",
+          "type": "per applied channel {served[], exposed[], layers[], targets[{target_id, kind: task | eye | layer, track_id | layer, share, lx}]}",
+          "meaning": "share_{c,i} = B_ic·V_c(i)·v_c/E_i with holds pinned, first on the requested scene, rewritten for the actual resulting state when K17 reports. `served`: tracks whose task share is at least s_serve; `exposed`: tracks whose conservative eye envelope at t_exec gets non-negligible predicted eye luminance (a held head never drops a person from it); `layers`. Each share carries the LightModel version and an interval; s_serve and s_aff are {{dec:attribution-thresholds}}. A runtime share at the coordinator's own targets: it is not service and never scores"
+        },
+        {
+          "name": "predicted",
+          "type": "{surfaces {point: E, unit}, eyes [{track_id, channel, G, G_hi, limit, model_status, t_exec, support_age s}], eyes_note}",
+          "meaning": "what the light model expects for the actual resulting state (requested = applied when everything was sent). Eyes are predictions only: G_hi is the upper bound over the conservative eye envelope at t_exec, with each field grown from its support, plus model uncertainty; `model_status` unvalidated | validated@version; `support_age` = t_exec − the head's last support, in seconds. While no glare model or numeric limit exists, G, G_hi and limit are null and `eyes_note` says what is predicted (in the example: well under the limit at A, about 0 at B)"
+        },
+        {
+          "name": "verify",
+          "type": "{ts, light_state, anchored, unit, points[], spill[], increments[], not_verified[], tolerance, tolerance_status, within_tolerance, explanation}",
+          "meaning": "against the prediction for the actual resulting state, from the first frame after the last step that went out has settled (frames taken mid-fade or mid-move are not verify frames). Light values are numbers in `unit` (lx when anchored); `residual` and `tolerance` are relative, (measured − predicted) / predicted. `points[{point_id, kind, status: within | outside | unverifiable | prior_only, camera_estimate, residual}]` are surfaces only. `spill[{track_id, region, measured_after, spill, status}]` with spill_j = max(0, E_j − (T_j^hi + a_j)) is reported and never fires AR1. `increments[{point_id, measured_change, predicted_change, status}]` compares the measured change Ê_after − Ê_before with the light model's own predicted change E_after − E_before (the contribution of the channels the decision changed, never predicted-after minus measured-before), both signed numbers; only it and the served-region level check feed AR1. `not_verified` lists eye ids: no camera measures glare at an eye. A held channel is never explained as scale drift"
+        }
+      ],
+      "example": {
+        "decision_id": "d-190330-f1f2",
+        "ts": "19:03:30",
+        "trigger": "person_state change",
+        "trigger_note": "A's visual demand rose to 0.8 while engaged at counter-1",
+        "policy": "coordinator@k16-v0",
+        "policy_note": "illustrative",
+        "actuator_domain": "virtual-den-4",
+        "actuation": "synthetic",
+        "inputs": {
+          "person_state": [
+            "A@1793066610.0",
+            "B@1793066605.0"
+          ],
+          "person_state_display": [
+            "A@19:03:30",
+            "B@19:03:25"
+          ],
+          "field_support": {
+            "A@1793066610.0": {
+              "attention": {
+                "last_support_capture_ts": 1793066609.8,
+                "support_status": "observed"
+              }
+            },
+            "B@1793066605.0": {
+              "attention": {
+                "last_support_capture_ts": 1793066604.9,
+                "support_status": "observed"
+              }
+            }
+          },
+          "light_state": "ls-190329",
+          "light_model": "lm-den-3",
+          "look": "cooking@1 + reading@1 within evening-ambience@2",
+          "comfort_limits": "cl-den-0",
+          "body_envelope": {
+            "version": "body-envelope/v1",
+            "parameters": null,
+            "parameters_status": "pending (envelope-parameters)"
+          },
+          "hold_set": {
+            "revision": 7,
+            "held": []
+          },
+          "revisions": {
+            "hold_set": 7,
+            "mode": 3
+          },
+          "actuator_state": {
+            "F1.spot": {
+              "on": false,
+              "level": 0,
+              "v_hat": 0,
+              "cct_k": null,
+              "aim": "previous read-back aim",
+              "motion_status": "settled",
+              "source": "read-back",
+              "as_of": "19:03:29.6"
+            },
+            "F1.radial_4+5": {
+              "on": true,
+              "level": 0.35,
+              "aim": null,
+              "motion_status": "settled",
+              "source": "read-back",
+              "as_of": "19:03:29.6"
+            },
+            "F2.spot": {
+              "on": true,
+              "level": 0.45,
+              "cct_k": 2700,
+              "aim": "armchair-book",
+              "motion_status": "settled",
+              "source": "read-back",
+              "as_of": "19:03:29.6"
+            }
+          },
+          "t_exec": {
+            "F1.spot": "19:03:32.55",
+            "F2.spot": null,
+            "F2.spot_status": "kept: 19:03:30 + T_chk + T_react (pending, freshness)"
+          }
+        },
+        "targets": {
+          "A": {
+            "surface_id": "counter-1",
+            "lx": 500,
+            "cct_k": 3500,
+            "note": "no shadow from A's head"
+          },
+          "B": {
+            "surface_id": "armchair-book",
+            "lx": 300,
+            "cct_k": 2700,
+            "note": "warm, no spill toward A"
+          }
+        },
+        "requested_scene": {
+          "F1.spot": {
+            "level": 0.7,
+            "cct_k": 3500,
+            "target_cct_k": 3500,
+            "clip_reason": null,
+            "aim": "counter-1"
+          },
+          "F1.radial_4+5": {
+            "level": 0.35,
+            "note": "fill toward the north wall, unchanged"
+          },
+          "F2.spot": {
+            "level": 0.45,
+            "cct_k": 2700,
+            "target_cct_k": 2700,
+            "clip_reason": null,
+            "aim": "armchair-book",
+            "note": "unchanged"
+          }
+        },
+        "applied_scene": {
+          "F1.spot": {
+            "status": "sent",
+            "readback": {
+              "level": 0.7,
+              "cct_k": 3500,
+              "aim": "counter-1"
+            },
+            "aim_status": "settled",
+            "aim_source": "commanded",
+            "steps": [
+              {
+                "kind": "move",
+                "revisions": {
+                  "hold_set": 7,
+                  "mode": 3
+                },
+                "sent_at": "19:03:30.05",
+                "result": {
+                  "status": "settled_dark",
+                  "at": "19:03:30.55",
+                  "note": "assumed kinematics"
+                },
+                "reason": null,
+                "checks": "d_checks"
+              },
+              {
+                "kind": "fade_in",
+                "revisions": {
+                  "hold_set": 7,
+                  "mode": 3
+                },
+                "sent_at": "19:03:30.55",
+                "result": {
+                  "status": "done",
+                  "at": "19:03:32.55",
+                  "readback": {
+                    "level": 0.7,
+                    "cct_k": 3500
+                  }
+                },
+                "reason": null,
+                "checks": "d_checks"
+              }
+            ]
+          },
+          "F1.radial_4+5": {
+            "status": "sent",
+            "readback": {
+              "level": 0.35
+            },
+            "steps": []
+          },
+          "F2.spot": {
+            "status": "sent",
+            "readback": {
+              "level": 0.45,
+              "cct_k": 2700,
+              "aim": "armchair-book"
+            },
+            "aim_status": "settled",
+            "aim_source": "commanded",
+            "steps": []
+          }
+        },
+        "skipped": [],
+        "status": "applied",
+        "hard_conflicts": [],
+        "recipients": {
+          "F1.spot": {
+            "served": [
+              "A"
+            ],
+            "exposed": [],
+            "layers": [],
+            "targets": [
+              {
+                "target_id": "counter-1",
+                "kind": "task",
+                "track_id": "A",
+                "share": 0.95,
+                "lx": 486
+              },
+              {
+                "target_id": "armchair-book",
+                "kind": "task",
+                "track_id": "B",
+                "share": 0.02,
+                "lx": 6
+              }
+            ]
+          },
+          "F2.spot": {
+            "served": [
+              "B"
+            ],
+            "exposed": [],
+            "layers": [],
+            "targets": [
+              {
+                "target_id": "armchair-book",
+                "kind": "task",
+                "track_id": "B",
+                "share": 0.93,
+                "lx": 280
+              }
+            ]
+          },
+          "F1.radial_4+5": {
+            "served": [],
+            "exposed": [],
+            "layers": [
+              "wall-north fill"
+            ]
+          }
+        },
+        "recipients_note": "recipients/v1; s_serve and s_aff illustrative (pending, attribution-thresholds)",
+        "predicted": {
+          "surfaces": {
+            "counter-1": 510,
+            "armchair-book": 300,
+            "unit": "lx"
+          },
+          "eyes": [
+            {
+              "track_id": "A",
+              "channel": "F1.spot",
+              "G": null,
+              "G_hi": null,
+              "limit": null,
+              "model_status": "unvalidated",
+              "t_exec": "19:03:32.55",
+              "support_age": 2.75
+            },
+            {
+              "track_id": "B",
+              "channel": "F1.spot",
+              "G": null,
+              "G_hi": null,
+              "limit": null,
+              "model_status": "unvalidated",
+              "t_exec": "19:03:32.55",
+              "support_age": 7.65
+            }
+          ],
+          "eyes_note": "predictions only: well under the limit at A's eyes and about 0 at B's; no numbers yet, because the glare model is unvalidated and no numeric limit exists. B's head is past A7's 6 s maximum age at t_exec, so it is bounded from position and posture"
+        },
+        "verify": {
+          "ts": "19:03:33",
+          "light_state": "ls-190333",
+          "anchored": true,
+          "anchored_status": "illustrative: the walkthrough assumes cal-den-oak-kL-1 has passed its round trip and held-out lux checks (rung 7, future qualification); today den-oak is uncalibrated and anchored is false",
+          "unit": "lx",
+          "points": [
+            {
+              "point_id": "counter-1",
+              "kind": "task",
+              "status": "within",
+              "camera_estimate": 470,
+              "residual": -0.08
+            },
+            {
+              "point_id": "armchair-book",
+              "kind": "task",
+              "status": "within",
+              "camera_estimate": 310,
+              "residual": 0.03
+            }
+          ],
+          "spill": [
+            {
+              "track_id": "B",
+              "region": "armchair-book",
+              "measured_after": 310,
+              "spill": 0,
+              "status": "within",
+              "note": "band top 300 lx and allowance 30 lx, illustrative"
+            }
+          ],
+          "increments": [
+            {
+              "point_id": "counter-1",
+              "measured_change": 445,
+              "predicted_change": 486,
+              "status": "within"
+            },
+            {
+              "point_id": "armchair-book",
+              "measured_change": 10,
+              "predicted_change": 6,
+              "status": "within"
+            }
+          ],
+          "not_verified": [
+            "eye-A",
+            "eye-B"
+          ],
+          "tolerance": 0.15,
+          "tolerance_status": "relative, either way; target, to validate",
+          "within_tolerance": true,
+          "explanation": null
+        },
+        "option_fields_note": "absent here: hold_limited (P1–P3 only) and safety_override (S1/S2 only) wait for pending owner decisions (compensation, manual-vs-safety)"
+      }
+    },
+    {
+      "id": "correction",
+      "name": "Correction",
+      "group": "decisions",
+      "status": "partial",
+      "status_note": "Home posts overrides with reasons (change, aim, undo, redo) to the lighting brain, which pauses that virtual fixture; the virtual den saves feedback verdicts bound to the run and decision; den_lighting detects manual changes on the four real Hue bulbs from HA Context ids and service calls and holds each changed bulb on its own; LA's Living Lights detects manual touches. The context snapshot, the action grouping, whose light it was and the attribution are proposed.",
+      "proposed_version": "proposed major (v2): `change` becomes `changes[]`, one Correction per human action; `who` narrows to the single track within reach; `action`, `affected`, `whose_light`, `reason`, `hold` and `attribution.comfort` are new; rules become AR0–AR11 (AR10 = comfort, AR11 = abstain). Present only under P1–P3 ({{dec:compensation}}): `hold.direction` and `hold.footprint`; present only under S1/S2 ({{dec:manual-vs-safety}}): `override_contested`.",
+      "purpose": "A person changed the light. What changed, when, who (if known), what the system had decided, and which link most likely failed.",
+      "producer": "K20 Correction capture (from Home Assistant state changes not caused by the system)",
+      "consumers": "K16 Coordinator and K17 Actuation (the hold, through the hold set), K15 Preference model, K7 thresholds and hysteresis, K22 Teaching queue (only if E1 holds), K23 Evaluation",
+      "rate": "per human action: one HA context, or one physical control within the settle window",
+      "retention": "long-term",
+      "fields": [
+        {
+          "name": "correction_id / ts",
+          "type": "string / s (capture time)",
+          "meaning": "identity and time. `ts` is the action's capture time, written `c.capture_ts` in K20's pseudocode (A11): the capture time of the action's last change, fixed when the settle window closes. Holds, attribution and comfort are all evaluated at it"
+        },
+        {
+          "name": "source",
+          "type": "enum",
+          "meaning": "wall switch | app | voice | scene button"
+        },
+        {
+          "name": "ha_context",
+          "type": "{id, user_id, parent_id}",
+          "meaning": "how the system tells its own changes from a person's"
+        },
+        {
+          "name": "action",
+          "type": "{grouping, settle_s, reports_level_pct}",
+          "meaning": "how the reports were grouped into one human action (the reported levels it merged, in order): one HA context, or one physical control (scene button, group, voice) within the settle window. Per-entity debouncing never splits an action, and the action is the unit corrections per hour count"
+        },
+        {
+          "name": "changes",
+          "type": "[{entity, channels, before {level_pct, cct_k, aim}, after {…}}]",
+          "meaning": "every entity the action changed, with the read-back state before and after as numbers (only the keys that apply); a scene button that sets four bulbs is one Correction with four changes"
+        },
+        {
+          "name": "affected",
+          "type": "[target_id]",
+          "meaning": "the task (surface) targets the change moved by at least s_aff ({{dec:attribution-thresholds}}), written on every affected track's Episode; eye exposure is read only by the comfort rule AR10"
+        },
+        {
+          "name": "whose_light",
+          "type": "enum + rule version",
+          "meaning": "room | shared | changer | another | layers | unknown, tested in that order, from the recipients of the deciding Decision or, with none, from the light model in force; reach is tested on support-aged position bounds. A shared, room-wide or unknown light learns nothing about people (AR11)"
+        },
+        {
+          "name": "decision_id / since_decision_s",
+          "type": "ref / s",
+          "meaning": "the latest Decision that set the entity within T_steady, and how soon after. If that writer was den_lighting, attribution treats it as no decision, and an older coordinator Decision is never used in its place. If the decision was cut short, attribution reads the actual state at the change; if it was still running, {{dec:mid-execution}} decides between judging against its requested scene and abstaining"
+        },
+        {
+          "name": "who",
+          "type": "{track_id, identity, confidence, basis}",
+          "meaning": "the single track within reach of the control, else null (nobody or two people within reach, an app user with no bound profile, or voice naming only the room); an app user names a track only through a bound profile. A track flagged association_uncertain stays named, and the case then goes to AR2"
+        },
+        {
+          "name": "reason",
+          "type": "{kind: glare | too_bright | too_dim | colour | other | none, via: app | voice}",
+          "meaning": "optional explicit report; a glare report is tested first, before delivery. Which report channels exist is {{dec:comfort-policy}}"
+        },
+        {
+          "name": "snapshot",
+          "type": "refs + field_support {state_id: {field: {last_support_capture_ts s, support_status}}}",
+          "meaning": "PersonState `state_id` values with their `field_support` (as in `Decision.inputs.field_support`), which the comfort test ages from; LightState references: the frame the decision read, its verify frame and the first frame after the change has settled, which is appended when attribution reads it (ls-190409 in the example); the decision's applied scene; the actual state at the change, with any step in progress; the holds in force before it (`holds_before`, a hold set `{revision, held[]}` as in `Decision.inputs.hold_set`); the policy in control (`policy`), den_lighting's mode with its revision (`mode`) and the hold's end rule (`hold_end_rule`)"
+        },
+        {
+          "name": "hold",
+          "type": "{entity_id, channels, pinned {level_pct, cct_k, aim, source}, since, lifetime, hold_set_revision, ended}",
+          "meaning": "the hold this change opens or replaces at capture, whatever the attribution: it pins every channel of the entity at its read-back state (`pinned`, as numbers, `source: read-back`) and drops older plans' remaining steps, timers, readback checks and retries for it. `hold_set_revision` is the hold set's new integer revision (8 after c-190405, from 7). Fields the person did not set come from {{dec:unset-hold-fields}}. The lifetime is den_lighting's today: outside a game, until 120 s of vacancy after the later of vacancy start and the latest touch; during a game, until the game ends (game-time vacancy turns held bulbs off without ending their holds; game exit clears every hold); or resume_automatic. Changing it is {{dec:hold-lifetime}}. Whether a hard safety limit may still limit a held light is {{dec:manual-vs-safety}}"
+        },
+        {
+          "name": "override_contested",
+          "type": "bool",
+          "meaning": "present only under S1/S2 ({{dec:manual-vs-safety}}): true when the action raises a light that a safety override (`Decision.safety_override`) is limiting at `ts`. It is tested right after an explicit glare report; a contested correction goes to hand sorting, never to AR3–AR9, and the override re-applies while the conflict lasts. Under S0 there are no safety overrides and the field is absent, not false"
+        },
+        {
+          "name": "attribution",
+          "type": "{link: p} + rule | abstained + reason | hand_sort; comfort {status, basis, G_hi_over_limit, G_hi_over_limit_status}",
+          "meaning": "perception | need | preference | delivery | execution, with the rule (AR0–AR11; AR10 = comfort, AR11 = abstain) that decided, or abstained with its reason (shared, room, unknown, unknown_changer; mid_execution only under the pending abstain option), or sent to hand sorting (override_contested, only under S1/S2). `comfort` {status: reported | suspected | predicted_clear | unknown, basis, G_hi_over_limit} is computed on each person's eye envelope aged from its support in the snapshot to `ts`. `G_hi_over_limit` is the number G_hi / limit, a prediction only, never a measured glare value; while no glare model or numeric limit exists it is null with `G_hi_over_limit_status`. Comfort is never learned as taste"
+        },
+        {
+          "name": "updates",
+          "type": "[{target, delta {from, to, n}, note}]",
+          "meaning": "the value before (`delta.from`) and after (`delta.to`) as numbers, with `delta.n`, the number of corrections behind it; only what the firing rule permits (A11's permission table): AR3 and AR10 only tighten comfort limits, AR11 changes nothing about people, and comfort is never learned as taste"
+        }
+      ],
+      "example": {
+        "correction_id": "c-190405",
+        "ts": "19:04:05",
+        "source": "wall switch",
+        "source_note": "the switch by the counter",
+        "action": {
+          "grouping": "one physical control within the settle window",
+          "settle_s": 3,
+          "reports_level_pct": [
+            62,
+            58,
+            50
+          ],
+          "note": "three wall-switch reports, each with a new HA context, merged into one human action, counted once"
+        },
+        "changes": [
+          {
+            "entity": "F1.spot",
+            "channels": [
+              "spot"
+            ],
+            "before": {
+              "level_pct": 70
+            },
+            "after": {
+              "level_pct": 50
+            }
+          }
+        ],
+        "affected": [
+          "counter-1"
+        ],
+        "whose_light": {
+          "value": "changer",
+          "rule_version": "recipients/v1",
+          "basis": "F1's spot served only A (shares: counter-1 0.95, book 0.02); A changed it"
+        },
+        "decision_id": "d-190330-f1f2",
+        "since_decision_s": 35,
+        "who": {
+          "track_id": "A",
+          "identity": "unbound",
+          "confidence": 0.8,
+          "basis": "only track within reach of the switch"
+        },
+        "reason": {
+          "kind": "none",
+          "via": null
+        },
+        "snapshot": {
+          "person_state": [
+            "A@1793066644.0",
+            "B@1793066635.0"
+          ],
+          "field_support": {
+            "A@1793066644.0": {
+              "attention": {
+                "last_support_capture_ts": null,
+                "support_status": null
+              }
+            },
+            "B@1793066635.0": {
+              "attention": {
+                "last_support_capture_ts": null,
+                "support_status": null
+              }
+            }
+          },
+          "field_support_status": "not given in the sheets",
+          "light_state": [
+            "ls-190329",
+            "ls-190333",
+            "ls-190409"
+          ],
+          "applied_scene": "d-190330-f1f2.applied_scene",
+          "actual_state": {
+            "F1.spot": {
+              "level_pct": 70,
+              "cct_k": 3500,
+              "aim": "counter-1",
+              "motion_status": "settled",
+              "source": "read-back"
+            },
+            "steps_in_progress": []
+          },
+          "holds_before": {
+            "revision": 7,
+            "held": []
+          },
+          "policy": "coordinator@k16-v0",
+          "policy_note": "illustrative",
+          "mode": {
+            "value": "automatic, no game",
+            "revision": 3
+          },
+          "hold_end_rule": "den_lighting's today (hold.lifetime)"
+        },
+        "hold": {
+          "entity_id": "F1.spot",
+          "channels": [
+            "spot"
+          ],
+          "pinned": {
+            "level_pct": 50,
+            "cct_k": 3500,
+            "aim": "counter-1",
+            "source": "read-back"
+          },
+          "since": "19:04:05",
+          "lifetime": "outside a game: 120 s of vacancy after the later of vacancy start and the latest touch; during a game: the game's end; or resume_automatic",
+          "hold_set_revision": 8,
+          "ended": null
+        },
+        "attribution": {
+          "perception": 0.0,
+          "need": 0.1,
+          "preference": 0.7,
+          "delivery": 0.1,
+          "execution": 0.1,
+          "rule": "AR9: same light, dimmer; the changer is the only person it served; verify within tolerance at counter-1 (a surface); perception confident; comfort predicted clear; not right after the change",
+          "comfort": {
+            "status": "predicted_clear",
+            "basis": "F1 sits above A's downward head pose; predicted glare on A's eye envelope, aged from the snapshot's support to 19:04:05, is well under the limit. A prediction: no camera verifies eyes",
+            "G_hi_over_limit": null,
+            "G_hi_over_limit_status": "not given in the sheets; glare model unvalidated"
+          }
+        },
+        "updates": [
+          {
+            "target": "preference(household, fine task at counter, cooking@1, 18-21h).level_factor",
+            "delta": {
+              "from": 1.0,
+              "to": 0.86,
+              "n": 1
+            },
+            "note": "shrunk toward the prior"
+          }
+        ],
+        "option_fields_note": "absent here: override_contested (only under S1/S2; absent, not false, under S0) and hold.direction and hold.footprint (only under P1–P3) wait for pending owner decisions (manual-vs-safety, compensation)"
+      }
+    },
+    {
+      "id": "teaching_sample",
+      "name": "TeachingSample",
+      "group": "learning",
+      "status": "proposed",
+      "status_note": "A video-labeler service has a VLM prelabel step but no training code.",
+      "purpose": "One evidence-only description from the teacher, as structured slots, paired with the features the student will see.",
+      "producer": "K22 Teaching (Qwen in teaching mode)",
+      "consumers": "student training",
+      "rate": "sampled: ordinary, change and unfamiliar intervals",
+      "retention": "the training set; invalidated when the encoder or preprocessing changes",
+      "fields": [
+        {
+          "name": "sample_id / bundle_id",
+          "type": "string",
+          "meaning": "which aligned evidence"
+        },
+        {
+          "name": "reason",
+          "type": "enum",
+          "meaning": "ordinary | change | unfamiliar"
+        },
+        {
+          "name": "teacher",
+          "type": "{model, prompt_version, mode}",
+          "meaning": "mode is evidence-only: no memory prior, no previous result"
+        },
+        {
+          "name": "slots",
+          "type": "{posture, hands_object, motion_type, working_region_hint, visual_demand_hint, other_text}",
+          "meaning": "structured targets with an 'other' option; free text only in other_text"
+        },
+        {
+          "name": "mask",
+          "type": "[slot]",
+          "meaning": "slots the teacher marked unknown; excluded from the loss"
+        },
+        {
+          "name": "features_ref",
+          "type": "{encoder, version}",
+          "meaning": "cached student inputs"
+        },
+        {
+          "name": "label_role",
+          "type": "train_only",
+          "meaning": "model-made labels may train but never score"
+        }
+      ],
+      "example": {
+        "sample_id": "ts-0412",
+        "bundle_id": "pb-A-190328",
+        "reason": "change",
+        "teacher": {
+          "model": "Qwen3.6-35B-A3B FP8",
+          "prompt_version": "slots-v2",
+          "mode": "evidence-only"
+        },
+        "slots": {
+          "posture": "standing",
+          "hands_object": "knife, using",
+          "motion_type": "repetitive fine",
+          "working_region_hint": "counter, in front of torso",
+          "visual_demand_hint": "high",
+          "other_text": null
+        },
+        "mask": [],
+        "label_role": "train_only"
+      }
+    },
+    {
+      "id": "eval_record",
+      "name": "EvalRecord",
+      "group": "learning",
+      "status": "proposed",
+      "purpose": "Scores that decide promotions: per-link checks on owner-confirmed intervals and the end-to-end light outcome, measured where the owner marked the work.",
+      "producer": "K23 Evaluation",
+      "consumers": "promotion gates, the owner",
+      "rate": "per evaluation run",
+      "retention": "long-term",
+      "fields": [
+        {
+          "name": "run_id / versions",
+          "type": "string / {candidate, live, representation, person_state, light_model, band_cut_points, band_cut_points_status}",
+          "meaning": "which models and schemas were scored, the band cut points, the frozen label-set hash, and the pinned activity baseline (below)"
+        },
+        {
+          "name": "baseline",
+          "type": "{wire, validity_window_s, judge_version, smoothing, prior_flag}",
+          "meaning": "the historical activity figures are three dated facts, not a baseline: session 0dc34636 (den-facts-6, about 1 s validity) gave 16–19% coverage and about 0.51 answered accuracy, mostly against Qwen-proposed labels; the facts-bound validity replay gave 43–49% coverage with accuracy not recomputed; the independently labelled subset is only the computer interval (computer_work 0.07/0.00), also hit by a stale-device bug fixed afterwards. Every accuracy is reported with its coverage on the same accepted seconds and validity version"
+        },
+        {
+          "name": "gold_set",
+          "type": "{n_intervals, refreshed, label_version, hash, regions {marked, uncertain, missing}, R_eval[], tau_R, tau_R_status, n1 {fixture {version, hash}, labels {version, hash}}}",
+          "meaning": "owner-confirmed intervals, never model-made labels, with the worked-patch marks that define each `R_eval` (below), drawn from the hands and the worked object, never from where the light falls. The set, geometry included (every `R_eval` outline), is versioned by `label_version` and hashed into `hash` before any candidate output is opened; a region has no freeze time or hash of its own, and a mark redrawn after hashing is not used. `regions` counts the marks of its fine and casual intervals. For N1 and N2, `n1` holds N1's input fixture (per-frame person boxes, one constant id, a static surface map) and its blind labels as two separately versioned, hashed artifacts; the fixture is a fixed input, not gold. τ_R is {{dec:reference-geometry}}, so `tau_R` is null with `tau_R_status`; the missing-geometry rule is pending with it, and marking every interval or a sample is {{dec:labelling}}"
+        },
+        {
+          "name": "R_eval",
+          "type": "{surface_id, outline, source: gold_mark | task_spec, label_version, placement_sd}",
+          "meaning": "the evaluation region R_eval(e, t) of one gold need episode, a patch on a named surface: `outline` is its outline on `surface_id` in room-frame metres. `source` is `gold_mark`, the owner's blind mark of the worked patch, or `task_spec`, on a staged session only, a task location written into the protocol before recording. `label_version` names the label set that holds it; that set, geometry included, is versioned and hashed in `gold_set` before any candidate output is opened. `placement_sd` (cm, in the surface plane) is the annotator's stated placement uncertainty, plus the registration bound when the mark is projected from another camera; it is tested against τ_R, and a mark beyond τ_R is uncertain. A mark covers only the sub-interval it was drawn for, and each person has their own: another person's patch on the same surface never stands in. Never a PersonState working region, a Decision target, `Decision.recipients`, a verify point, a fallback patch or anything else a scored arm produced; the candidate's region never enters the τ_R test"
+        },
+        {
+          "name": "per_link",
+          "type": "{tracking, working_region_cm, engagement, visual_demand {ece, fine_recall, false_fine_rate, coverage_per_band, episodes_per_band}, attribution {kappa_six_class, update_precision {changer, layers}, forced_update_rate, abstained, shared}, camera_scale {round_trip, held_out_error_lx}, …}",
+          "meaning": "checks for each link. `tracking`: id switches per crossing, silent swaps, IDF1; `working_region_cm`: median and p90 error; `engagement`: onset delay, early-off seconds per hour, F1. `visual_demand`: `fine_recall` (with its paired session-bootstrap interval, at the level in `interval_level`; {{dec:promotion-margins}}), `false_fine_rate`, `coverage_per_band`, the confusion matrix with 'no answer', `episodes_per_band` (and sessions per band), and `ece` with its bin count; competence and calibration are both gated ({{dec:demand-gates}}). `attribution`: `kappa_six_class`, `update_precision` per path (changer, layers), `forced_update_rate`, and the `abstained` and `shared` shares, with coverage and abstention by stratum. `camera_scale`: the round trip and the held-out error in lux, lower is better"
+        },
+        {
+          "name": "end_to_end",
+          "type": "{occupied_hours, corrections_per_occupied_hour, rescues_per_h, missed_service_per_h, unserved_need_min_per_h, time_to_good_light_s {median, p90}, false_triggers_per_h, service {served_delivered, served_predicted, missed_rescued, missed_unrescued, unknown {no_gold, geometry, unverifiable, no_frame}, hold_limited_min, hold_limited_status, safety_limited_min, safety_limited_status}, delivered_coverage, rev, rev_status}",
+          "meaning": "the outcome people feel, scored at R_eval: delivered service from retained metering frames with one frozen K11 version; predicted service only where R_eval was unverifiable for a reason the arm did not cause, in its own column and never gated; unknown, with its reason, stays in coverage's denominator. `service` counts gold need episodes; `delivered_coverage` = served_delivered / all episodes, unknown included. `missed_service_per_h` is the needs left unserved (measured where the owner marked the work), (missed_rescued + missed_unrescued) / occupied_hours; a rescue is a person turning a light on or up because the floor was not met at R_eval (A13). `unserved_need_min_per_h` is the minutes of gold need with reference geometry that were not delivered-served at R_eval, per occupied hour; it is gated beside missed service and delivered coverage (A13 Gate 3). Under P1–P3, everyone else's `hold_limited` minutes count inside it ({{dec:compensation}}). `safety_limited_min` exists only under S1/S2 ({{dec:manual-vs-safety}}): the minutes in which a safety override dimmed the changer's own region below F(c), kept in coverage's denominator and left out of `unserved_need_min_per_h`; elsewhere it is null with `safety_limited_status`. The candidate's region, targets, recipients, verify points and fallback patches never score. `hold_limited_min` exists only under P1–P3 ({{dec:compensation}}), so elsewhere it is null with `hold_limited_status`. REV is null with `rev_status` 'undefined (0 system changes)', never 0. Corrections count one per human action, over `occupied_hours` (the sum of `exposure`) per arm and stratum, with the occupancy rule, the allocation unit, the rate ratio ± CI and φ̂ from a quasi-Poisson model with a log-exposure offset over blocks. The delivered statistic is {{dec:delivered-statistic}}; floors and the quiet window are {{dec:service-floors}}"
+        },
+        {
+          "name": "region_diagnostics",
+          "type": "{median_offset_cm, overlap, lit_elsewhere}",
+          "meaning": "the candidate's region against the owner's mark, per episode; reported, never gated and never in a numerator. Replacing the candidate's regions leaves every service outcome unchanged"
+        },
+        {
+          "name": "shadow",
+          "type": "{agreement, disagreements}",
+          "meaning": "candidate vs the live (shown) policy on the same moments, in the same actuator domain"
+        },
+        {
+          "name": "comparator",
+          "type": "{policy, version, actuator_domain, light_model_version, kind}",
+          "meaning": "at rung 9, the frozen den_lighting incumbent (manifest 1.0.4: VACANCY_SECONDS 120, gaming at 38/255 warmest, resume_automatic, read statically), its shown Hue scenes (`actuator_domain` hue-den-4, `kind` shown) through one rung-8 LightModel version, which is null with a status until it exists. The candidate's anticipation and stability rates are replay surrogates against candidate floors fixed before the run, never differences (the incumbent scores 0 and 1 by construction). The virtual-den study is `kind` synthetic (virtual-den-4) and never counts toward rung 9 or promotion"
+        },
+        {
+          "name": "exposure",
+          "type": "{per_session [{session_id, occupied_h, occupancy_source, mode_stratum, corrections}], occupied_h_total, corrections_total, phi_hat, phi_hat_status}",
+          "meaning": "per-session exposure, from rung 0's log: occupied hours, the source that decided occupancy, and den_lighting's mode as the stratum, with the corrections counted one per human action. φ is fitted from these counts by a quasi-Poisson model with a log(occupied_h) offset; until a run exists `phi_hat` is null with a status"
+        },
+        {
+          "name": "replay",
+          "type": "{determinism, holds_pinned, pacing}",
+          "meaning": "replay reproduces every requested and applied scene from the logged inputs, hold sets and step log; paced replay measures each request's service time at the declared single-track cadence (one request per 4 s), and only capture scheduling is emulated"
+        },
+        {
+          "name": "coverage",
+          "type": "{intervals, people, rooms, conditions, eval_region {with_geometry, uncertain, missing, by arm and stratum}}",
+          "meaning": "what the run actually covered, so a pass is not read beyond it; if missing-geometry rates differ between arms, the service comparison is insufficient, not passed"
+        },
+        {
+          "name": "intervals",
+          "type": "per metric: {metric, live, candidate, better, unit, improvement, interval, interval_level, interval_level_status, delta, delta_status, result}",
+          "meaning": "`improvement` is the oriented improvement Δ_m = s_m·(m_candidate − m_live), with s_m = +1 if `better` is higher and −1 if lower, so positive is better, in `unit`; `interval` is its interval from a paired bootstrap over whole held-out sessions. Non-inferiority passes iff the lower bound > −δ_m, superiority iff it is > 0; a candidate only replaces the live policy if no part it touches is worse, beyond a margin set in advance. The interval convention (two-sided 95% recommended, pending) is {{dec:promotion-margins}}, so `interval_level` is null with `interval_level_status`. `result` says in words what the interval means for the gate"
+        },
+        {
+          "name": "intervals[].delta",
+          "type": "δ_m ≥ 0, absolute, in the metric's unit; null + delta_status",
+          "meaning": "the pre-registered margin, frozen with the gate before the run, one per gated metric. This is the record's margins field and the only place δ_m is stored; there is no separate margins table. Every δ_m is {{dec:promotion-margins}}, so `delta` is null with `delta_status` until it is set"
+        },
+        {
+          "name": "sample_gate",
+          "type": "per class and per band: passed | below gate",
+          "meaning": "too few examples means no score (hold), not a good score; for demand, per band ({{dec:demand-gates}})"
+        },
+        {
+          "name": "scored_by",
+          "type": "per check: gold | owner | weak",
+          "meaning": "which label source scored it; weak labels never score"
+        },
+        {
+          "name": "canary",
+          "type": "{share, rollback_trigger, block_schedule, allocation_unit, mode_strata, block_reset, handback, washout}",
+          "meaning": "how much live traffic a promoted model gets first and what rolls it back. The block reset writes the incumbent's normal snapshot, then calls resume_automatic, then checks the status sensor. Game-time strata and washouts are {{dec:gaming}}. Rollback fires on free channels predicted over a hard glare limit or raising their part of an open hard_conflict, or on glare reports per hour above the bound; under S1/S2 also on a held-light conflict open past its deadline ({{dec:manual-vs-safety}}). No rollback cites a measured glare value"
+        },
+        {
+          "name": "decision",
+          "type": "promote | hold | roll back",
+          "meaning": "the gate's result on a promotion run. N2 never promotes: it writes `verdict` (feasible | not_feasible | insufficient) instead"
+        },
+        {
+          "name": "verdict",
+          "type": "feasible | not_feasible | insufficient",
+          "meaning": "N2's result (sheet A14), written in place of a promotion decision: nothing is promoted or changed in the loop, and an unmet sample gate gives insufficient, never a relaxed threshold. When N1 and N2 run is {{dec:need-test-order}}"
+        }
+      ],
+      "example": [
+        {
+          "run_id": "eval-2026-11-03",
+          "note": "a promotion run, as on A13 (hypothetical; nothing like it has been run)",
+          "versions": {
+            "candidate": "need-heads-v4",
+            "live": "need-heads-v3",
+            "representation": "r1",
+            "person_state": "person_state/v1",
+            "light_model": "lm-den-3",
+            "band_cut_points": null,
+            "band_cut_points_status": "pending (demand-gates)"
+          },
+          "baseline": {
+            "wire": "den-facts-6",
+            "validity_window_s": 1,
+            "validity_window_note": "about 1 s",
+            "judge_version": "as logged",
+            "smoothing": "off",
+            "prior_flag": "off"
+          },
+          "gold_set": {
+            "n_intervals": 120,
+            "refreshed": "2026-10-30",
+            "label_version": "gold-den-1",
+            "hash": "sha256:9c1e… (illustrative)",
+            "regions": {
+              "marked": 69,
+              "uncertain": 6,
+              "missing": 4
+            },
+            "tau_R": null,
+            "tau_R_status": "pending (reference-geometry)",
+            "R_eval": [
+              {
+                "surface_id": "counter-1",
+                "outline": "n × [x, y, z] m in the room frame: the owner's blind mark of A's worked patch on counter-1 (illustrative)",
+                "source": "gold_mark",
+                "label_version": "gold-den-1",
+                "placement_sd": 2,
+                "placement_sd_unit": "cm, in the surface plane",
+                "placement_sd_note": "illustrative; tested against tau_R, which is pending (reference-geometry)"
+              }
+            ],
+            "R_eval_note": "one per gold need episode and person; one shown. Hashed with the set above, never on its own"
+          },
+          "per_link": {
+            "tracking": {
+              "id_switches_per_crossing": 0.07,
+              "silent_swaps": 0,
+              "idf1": 0.91
+            },
+            "working_region_cm": {
+              "median": 9,
+              "p90": 24
+            },
+            "engagement": {
+              "onset_delay_s_median": 2.6,
+              "early_off_s_per_h": 7,
+              "f1": 0.88
+            },
+            "visual_demand": {
+              "ece": 0.07,
+              "fine_recall": 0.86,
+              "false_fine_rate": 0.04,
+              "coverage_per_band": {
+                "fine": 0.93,
+                "casual": 0.9,
+                "none": 0.96
+              },
+              "episodes_per_band": {
+                "fine": 38,
+                "casual": 41,
+                "none": 41
+              }
+            },
+            "attribution": {
+              "kappa_six_class": 0.62,
+              "update_precision": {
+                "changer": 0.91,
+                "layers": 0.88
+              },
+              "forced_update_rate": 0.02,
+              "abstained": 0.31,
+              "shared": 0.18
+            },
+            "camera_scale": {
+              "round_trip": null,
+              "round_trip_status": "must pass before day-1 scoring",
+              "held_out_error_lx": null,
+              "held_out_error_status": "target, to validate; lower is better"
+            }
+          },
+          "intervals": [
+            {
+              "metric": "early_off_s_per_h",
+              "live": 4,
+              "candidate": 7,
+              "better": "lower",
+              "unit": "s/h",
+              "improvement": -3,
+              "interval": [
+                -3,
+                -3
+              ],
+              "interval_level": null,
+              "interval_level_status": "pending (promotion-margins)",
+              "delta": null,
+              "delta_status": "pending (promotion-margins)",
+              "result": "hold for any margin of 3 s/h or less"
+            }
+          ],
+          "end_to_end": {
+            "occupied_hours": 31.5,
+            "corrections_per_occupied_hour": 0.9,
+            "rescues_per_h": 0.1,
+            "missed_service_per_h": 0.22,
+            "unserved_need_min_per_h": null,
+            "unserved_need_min_per_h_status": "not illustrated: the sheets give no value",
+            "time_to_good_light_s": {
+              "median": 5,
+              "p90": 38
+            },
+            "false_triggers_per_h": 0.2,
+            "service": {
+              "served_delivered": 49,
+              "served_predicted": 2,
+              "missed_rescued": 3,
+              "missed_unrescued": 4,
+              "unknown": {
+                "no_gold": 0,
+                "geometry": 6,
+                "unverifiable": 3,
+                "no_frame": 1
+              },
+              "hold_limited_min": null,
+              "hold_limited_status": "only under P1–P3 (pending: compensation)",
+              "safety_limited_min": null,
+              "safety_limited_status": "only under S1/S2 (pending: manual-vs-safety)"
+            },
+            "delivered_coverage": 0.72
+          },
+          "region_diagnostics": {
+            "median_offset_cm": 9,
+            "lit_elsewhere": 2
+          },
+          "shadow": {
+            "agreement": 0.93,
+            "disagreements": 41
+          },
+          "exposure": {
+            "per_session": [
+              {
+                "session_id": "den-s1",
+                "occupied_h": 3.5,
+                "occupancy_source": "K2 occupancy gate",
+                "mode_stratum": "non-gaming",
+                "corrections": 3
+              }
+            ],
+            "per_session_note": "one of 9 sessions shown; corrections counted one per human action",
+            "occupied_h_total": 31.5,
+            "corrections_total": 28,
+            "phi_hat": null,
+            "phi_hat_status": "fitted from the per-session counts; not run"
+          },
+          "decision": "hold"
+        },
+        {
+          "run_id": "rung-9 (hypothetical)",
+          "note": "the coordinator against the incumbent; only the comparator block is shown",
+          "comparator": {
+            "policy": "den_lighting",
+            "version": "1.0.4",
+            "version_note": "manifest 1.0.4, frozen at rung 0 and read statically: VACANCY_SECONDS 120, gaming at 38/255 warmest, resume_automatic",
+            "actuator_domain": "hue-den-4",
+            "light_model_version": null,
+            "light_model_version_status": "the rung-8 LightModel; none exists yet",
+            "kind": "shown"
+          },
+          "comparator_note": "the virtual-den study carries kind synthetic and actuator_domain virtual-den-4, and never counts toward rung 9 or promotion"
+        },
+        {
+          "run_id": "n2 (hypothetical)",
+          "note": "N2, semantic need on one person, offline; only the blocks that differ are shown",
+          "gold_set": {
+            "n1": {
+              "fixture": {
+                "version": "n1-fixture-1",
+                "hash": "sha256:… (illustrative)"
+              },
+              "labels": {
+                "version": "n1-labels-1",
+                "hash": "sha256:… (illustrative)"
+              }
+            },
+            "n1_note": "two separately versioned, hashed artifacts, frozen before any estimator output is opened"
+          },
+          "verdict": null,
+          "verdict_status": "not run; one of feasible | not_feasible | insufficient"
+        }
+      ],
+      "status_note": "Proposed. Nothing scores today; the den's hand-checked test set is under a minute of video.",
+      "proposed_version": "additive: oriented intervals with their margins (`improvement`, `delta`); service outcomes at `R_eval` with region diagnostics, unserved-need minutes (`unserved_need_min_per_h`) and, only under S1/S2 ({{dec:manual-vs-safety}}), `safety_limited_min`; N1's two artifacts in `gold_set` and N2's three-valued `verdict`; demand competence; the camera-scale row; the comparator, exposure, replay and canary blocks; exposure-aware dispersion; the pinned activity baseline."
+    },
+    {
+      "id": "calibration_record",
+      "name": "CalibrationRecord",
+      "group": "learning",
+      "status": "partial",
+      "status_note": "Tape and scan workflows record their source today; probe, fit and card-and-meter methods are proposed. No camera scale has been measured.",
+      "proposed_version": "additive: method `meter`, `inputs` and `checks`, and K11 as a reader of the camera scale.",
+      "purpose": "One calibrated parameter with where it came from, so the system always knows how much to trust each number.",
+      "producer": "K21 Calibration",
+      "consumers": "RoomModel, Fixture, LightModel; K11 Light measurement reads k_L through RoomModel.cameras[].photometric",
+      "rate": "install, then on drift",
+      "retention": "versioned; manual values are kept as the test set for automatic ones",
+      "fields": [
+        {
+          "name": "parameter",
+          "type": "path",
+          "meaning": "e.g. F1.orientation_calibration.anchor_deg"
+        },
+        {
+          "name": "value / unit",
+          "type": "number, or an enum for a categorical parameter (for example order: cw | ccw)",
+          "meaning": "the value; a categorical value has no unit. `unit_note` may state the convention, such as the bearing frame"
+        },
+        {
+          "name": "method",
+          "type": "enum",
+          "meaning": "assumed | manual (the owner's own call, such as a zone named in the inspector) | tape | scan | probe | fit | from-use | meter (a grey card plus one lux-meter reading); a combination, such as probe + fit, is written with +"
+        },
+        {
+          "name": "residual / confidence",
+          "type": "number, or a map of numbers per option for a categorical parameter",
+          "meaning": "how well the fit explains the data, as numbers with the unit in the key name (for example `residual_deg_rms` over `n_zones`, `confidence_deg_1sigma`). For a categorical parameter the residual is given per option (order: `residual_deg_rms` {ccw, cw}) and the confidence is the margin between the best two (`confidence_deg_margin`)"
+        },
+        {
+          "name": "inputs",
+          "type": "{normalisation_version, rho_card, E_meter_lx, C_card_nc, exposure, clipped_frac, illuminant}",
+          "meaning": "for method meter: k_L = ρ_card·E_meter/(π·C_card), in (cd/m²)/nc, under the frame's normalisation version (for example `meter-norm/v1`), from one grey card plus one meter reading at the card; the other meter points and later days are held back as checks. `clipped_frac` is the card's clipped fraction"
+        },
+        {
+          "name": "checks",
+          "type": "{round_trip, held_out, exposure_invariance}",
+          "meaning": "the round trip is a software identity check through K21, then the production K11 path: C_card 100 nc, ρ_card 0.18, E_meter 174.533 lx must give k_L 0.100 (cd/m²)/nc, L 10.0 cd/m² and Ê back 174.533 lx. Held-out checks use independent card and meter points and days against a tolerance fixed in lux before the run ({{dec:photometry-commissioning}}). A common scale cancels from relative residuals and camera-fitted relative-error scores, so those can neither be corrupted by a scale error nor detect it; absolute lux values and errors, fixed physical thresholds and independently scaled physics or datasheet terms do scale. Rung 7 needs both the round trip and independent held-out card and meter checks in lux, as future qualification"
+        },
+        {
+          "name": "ts / version / supersedes",
+          "type": "refs",
+          "meaning": "history; `supersedes_method` and `supersedes_value` keep the method and value of the version this one replaces"
+        },
+        {
+          "name": "vs_manual",
+          "type": "delta, a number + vs_manual_unit; or same | differs",
+          "meaning": "difference from the owner's manual value, while both exist: for a numeric parameter, this value minus the manual one, as a signed number with its unit; for a categorical parameter such as order, same | differs"
+        }
+      ],
+      "example": [
+        {
+          "parameter": "RoomModel.cameras[den-oak].photometric.k_L",
+          "value": 10.0,
+          "unit": "(cd/m²)/nc",
+          "method": "meter",
+          "inputs": {
+            "normalisation_version": "meter-norm/v1",
+            "rho_card": 0.18,
+            "E_meter_lx": 174.533,
+            "C_card_nc": 1.0,
+            "exposure": {
+              "time_ms": 16.6,
+              "gain": 4.0,
+              "black_level": 64
+            },
+            "clipped_frac": 0.0,
+            "illuminant": "recorded with the pass; one k_L or one per illuminant class is pending (photometry-commissioning)"
+          },
+          "checks": {
+            "round_trip": {
+              "C_card_nc": 100,
+              "rho_card": 0.18,
+              "E_meter_lx": 174.533,
+              "k_L": 0.100,
+              "L_card_cd_m2": 10.0,
+              "E_back_lx": 174.533,
+              "result": "pass required"
+            },
+            "held_out": {
+              "tolerance_lx": null,
+              "tolerance_status": "pending (photometry-commissioning)",
+              "result": null,
+              "status": "future qualification"
+            },
+            "exposure_invariance": {
+              "result": null,
+              "status": "future qualification"
+            }
+          },
+          "version": "cal-den-oak-kL-1",
+          "note": "illustrative, shown as it stands before its checks run. The walkthrough's anchored LightState and verify examples assume this record later passes rung 7's known-card round trip and held-out card and meter checks in lux; LightState.anchored is true only once both pass. No card-and-meter pass has run: today den-oak is uncalibrated and LightState.anchored is false"
+        },
+        {
+          "parameter": "F1.orientation_calibration.anchor_deg",
+          "value": 212,
+          "unit": "deg",
+          "unit_note": "room bearing: clockwise from +y, seen from above",
+          "method": "probe + fit",
+          "residual_deg_rms": 4.1,
+          "n_zones": 6,
+          "confidence_deg_1sigma": 1.7,
+          "ts": 1793041200,
+          "note": "illustrative",
+          "version": "cal-F1-orient-v3",
+          "supersedes": "cal-F1-orient-v2",
+          "supersedes_method": "manual",
+          "supersedes_value": 220,
+          "vs_manual": -8,
+          "vs_manual_unit": "deg",
+          "vs_manual_note": "all six zones land on the wall the owner named"
+        }
+      ]
+    }
+  ]
+}

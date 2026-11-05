@@ -57,10 +57,10 @@ JOINTS = {"nose": (0.0, 1.62), "left_eye": (0.03, 1.66), "right_eye": (-0.03, 1.
 
 
 class Scene:
-    def __init__(self, room_from_left=None, panel_dx=0.0, panel=True):
+    def __init__(self, room_from_left=None, panel_dx=0.0, panel=True, left_k=None):
         self.room_from_left = room_from_left or camera_pose()
         self.left_from_room = g.inverse(*self.room_from_left)
-        self.k_left = g.intrinsics(LEFT_K)
+        self.k_left = g.intrinsics(left_k or LEFT_K)
         self.k_rgb = g.intrinsics(RGB_K)
         self.d_rgb = g.distortion(RGB_DISTORTION)
         self.panel_dx, self.panel = panel_dx, panel

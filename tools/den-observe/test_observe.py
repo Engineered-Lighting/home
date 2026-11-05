@@ -10,10 +10,12 @@ import contextlib
 import io
 import json
 import math
+import os
 import random
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -34,6 +36,8 @@ import synth  # noqa: E402
 import takes  # noqa: E402
 
 SCHEMAS = HERE.parent.parent / "docs" / "architecture" / "live-v1" / "schemas.json"
+RUNG1_FILE = HERE / "testdata" / "rung1-room-model.jsonl"
+DEN_REGISTER = Path(os.environ.get("DEN_REGISTER_DIR") or HERE.parent / "den-register")
 _REAL_CONNECT = socket.socket.connect
 _DEPTH = {}
 
@@ -413,6 +417,130 @@ class RegistrationTests(unittest.TestCase):
 
     def test_a_room_in_another_frame_is_refused(self):
         self.refused(Case("frame", room=dict(synth.room_model(), frame="y_up")), "z_up_metric_floor0")
+
+
+class Rung1FileChecks:
+    """The file den-register writes, as it stands after each step. `lines` is its three revisions:
+    a first fit, a second fit from a later take, and check-mount's invalidated revision."""
+
+    lines = ()
+
+    def case(self, name, n, room_bytes=None):
+        """A person in view of rung 1's registered camera, with rung 1's file as it stood after n lines."""
+        first = json.loads(self.lines[0])["cameras"][0]
+        scene = synth.Scene(room_from_left=g.from_matrix(first["pose"]["room_from_camera"], "pose"),
+                            left_k=first["intrinsics"]["rectified_left"], panel_dx=2.6)
+        pairs = frames(2)
+        key = "rung1-" + json.dumps(first["pose"]["room_from_camera"])
+        _DEPTH.setdefault(key, scene.depth_mm())
+        pixels = {name: scene.joint_rgb(name) for name in synth.JOINTS}
+        rows = [fake_detector.row(t, rgb_seq=1000 + i, pixels=pixels, latency_s=0.3) for i, (t, _) in enumerate(pairs)]
+        case = Case(name, pairs, _DEPTH[key], rows=rows,
+                    intrinsics={"rgb": first["intrinsics"]["rgb"], "depth": first["intrinsics"]["rectified_left"]})
+        case.room = case.work / "room-model.jsonl"
+        case.room.write_bytes(room_bytes if room_bytes is not None else "".join(
+            line + "\n" for line in self.lines[:n]).encode("utf-8"))
+        case.truth = [sum(scene.joint_room(NAMES[j])[i] for j in observe.TORSO) / 4 for i in range(3)]
+        return case
+
+    def transform_id(self, line):
+        entry = json.loads(line)["cameras"][0]
+        return f"{entry['camera_id']}@{entry['version']}"
+
+    def assert_lifted(self, case, run, records, transform_id):
+        self.assertEqual(run["transform_id"], transform_id)
+        self.assertEqual(run["gate"]["records_with_problems"], 0, run["gate"]["problems"])
+        self.assertEqual({r["transform_id"] for r in records}, {transform_id})
+        self.assertEqual({r["validity"] for r in records}, {"valid"})
+        for record in records:
+            self.assertEqual(sum(j["lift"] == "stereo" for j in record["joints_room"]), 17)
+            self.assertLess(math.dist(position(record)[0], case.truth), 0.05, "through the registered pose")
+
+    def test_one_fit_gives_observations_in_the_room_frame(self):
+        case = self.case("rung1-one", 1)
+        run, records = case.run()
+        self.assert_lifted(case, run, records, self.transform_id(self.lines[0]))
+
+    def test_a_second_revision_is_read_and_its_entry_used(self):
+        case = self.case("rung1-two", 2)
+        run, records = case.run()
+        self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
+
+    def test_a_scored_run_passes_the_gate_on_rung_1s_file(self):
+        case = self.case("rung1-scored", 2)
+        run, records = case.run(scored=True, method_path=closed_method(case.work / "closed"))
+        self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
+        self.assertEqual(run["method"]["open_slots"], {})
+        self.assertEqual(run["method"]["values_used"]["camera_entry_form"], "den-observe-camera-1")
+        self.assertTrue(run["gate"]["pass"], run["gate"])
+
+    def test_the_first_fit_is_stale_after_the_second(self):
+        case = self.case("rung1-stale", 2)
+        with self.assertRaises(replay.Refused) as caught:
+            case.run(transform_id=self.transform_id(self.lines[0]))
+        self.assertIn("stale registration", str(caught.exception))
+        self.assertFalse(case.out.exists())
+
+    def test_a_revision_check_mount_invalidated_is_refused_and_nothing_written(self):
+        case = self.case("rung1-invalidated", 3)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = replay.main(["--take", str(case.take), "--room-model", str(case.room), "--detections",
+                                str(case.rows_path), "--out", str(case.out)])
+        self.assertEqual(code, 2)
+        self.assertIn("invalidated", err.getvalue())
+        self.assertIn(self.transform_id(self.lines[1]), err.getvalue())
+        self.assertFalse(case.out.exists())
+
+    def test_a_torn_last_line_is_refused_not_skipped(self):
+        torn = "".join(line + "\n" for line in self.lines[:1]) + self.lines[1][:200]
+        case = self.case("rung1-torn", 2, room_bytes=torn.encode("utf-8"))
+        with self.assertRaises(replay.Refused) as caught:
+            case.run()
+        self.assertIn("no readable RoomModel", str(caught.exception))
+        self.assertFalse(case.out.exists())
+
+    def test_crlf_and_a_byte_order_mark_read_the_same(self):
+        body = "".join(line + "\r\n" for line in self.lines[:2]).encode("utf-8")
+        case = self.case("rung1-crlf", 2, room_bytes=b"\xef\xbb\xbf" + body)
+        run, records = case.run()
+        self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
+
+
+class Rung1FileTests(Rung1FileChecks, unittest.TestCase):
+    """A copy of den-register's real output, so these run on a branch that does not hold den-register."""
+
+    lines = tuple(RUNG1_FILE.read_text(encoding="utf-8").splitlines())
+
+    def test_an_empty_file_or_a_line_that_is_not_an_object_is_refused(self):
+        for name, data in (("empty", b""), ("array", b"[1, 2]\n"), ("number", b'{"room_id": "den"}\n7\n')):
+            with self.subTest(name):
+                case = self.case(f"rung1-{name}", 1, room_bytes=data)
+                with self.assertRaises(replay.Refused):
+                    case.run()
+                self.assertFalse(case.out.exists())
+
+
+@unittest.skipUnless((DEN_REGISTER / "register.py").exists(),
+                     "den-register is on its own branch until they merge; set DEN_REGISTER_DIR to run this")
+class RealRung1RunTests(Rung1FileChecks, unittest.TestCase):
+    """The seam itself: den-register's own synthetic fit writes the file, then den-observe reads it."""
+
+    @classmethod
+    def setUpClass(cls):
+        out = new_dir("rung1-real-run")
+        done = subprocess.run([sys.executable, "-B", str(HERE / "testdata" / "rung1_run.py"), str(DEN_REGISTER), str(out)],
+                              capture_output=True, text=True, cwd=str(_tmp), timeout=120)
+        if done.returncode:
+            raise AssertionError(f"rung 1's own run failed: {done.stdout}{done.stderr}")
+        cls.lines = tuple((out / "room-model.jsonl").read_text(encoding="utf-8").splitlines())
+
+    def test_the_copy_in_testdata_still_has_the_form_den_register_writes(self):
+        real = json.loads(self.lines[0])["cameras"][0]
+        copy = json.loads(RUNG1_FILE.read_text(encoding="utf-8").splitlines()[0])["cameras"][0]
+        self.assertEqual(set(real), set(copy))
+        self.assertEqual(set(real["intrinsics"]), set(copy["intrinsics"]))
+        self.assertEqual(set(real["pose"]), set(copy["pose"]))
 
 
 class FreshnessTests(unittest.TestCase):

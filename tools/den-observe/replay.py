@@ -5,7 +5,8 @@
     python -B tools/den-observe/replay.py --take <take folder> --room-model <file> --fake --out <folder>
     python -B tools/den-observe/replay.py --take <take folder> --room-model <file> --detections <rows.jsonl> --out <folder> [--scored]
 
-It reads the take's bundles and a RoomModel, never a camera or a network.
+It reads the take's bundles and a RoomModel file (rung 1's room-model.jsonl, whose
+last line is the current room), never a camera or a network.
 --out gets observations.jsonl (one Observation per line) and run.json (what
 was used, the open slots, and the gate's counts). An unscored run uses the
 proposed value of every open slot and says so; --scored refuses while any
@@ -205,8 +206,8 @@ def demo(out=None, log=print):
     frames = [(5000.0 + 0.25 * i, 5000.0 + 0.25 * i - (0.2 if i == 3 else 0.004)) for i in range(6)]
     folder = synth.make_take(work / "take", frames, depth)
     synth.write_check(folder)
-    room = work / "room-model.json"
-    room.write_text(json.dumps(synth.room_model(), indent=1, ensure_ascii=False), encoding="utf-8")
+    room = work / "room-model.jsonl"
+    room.write_text(json.dumps(synth.room_model(), ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     pixels = {name: scene.joint_rgb(name) for name in synth.JOINTS}
     rows = [fake_detector.row(t, rgb_seq=1000 + i, pixels=pixels) for i, (t, _) in enumerate(frames)]
     detections.write_rows(work / "detections.jsonl", rows)
@@ -218,7 +219,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--demo", action="store_true", help="run on a synthetic take; needs nothing else")
     parser.add_argument("--take", help="the R take folder")
-    parser.add_argument("--room-model", help="the RoomModel JSON file")
+    parser.add_argument("--room-model", help="rung 1's room-model.jsonl; its last line is the current room")
     parser.add_argument("--camera", default="den-oak", help="camera_id; its newest entry is used")
     parser.add_argument("--transform-id", help="<camera_id>@<version>, refused unless it is the newest")
     parser.add_argument("--detections", help="den-detections-1 rows (JSON Lines)")

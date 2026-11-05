@@ -4,10 +4,13 @@ An Observation's transform_id, `<camera_id>@<version>`, resolves to exactly
 one `RoomModel.cameras` entry (schemas.json). As room_context.py does, a
 missing or stale registration is refused, never guessed: see METHOD.md,
 "Registration". The entry's inner form is den-observe-camera-1 (METHOD.md,
-"Inputs"), a slot the contracts leave open.
+"Inputs"), which den-register writes. The file is den-register's
+room-model.jsonl: JSON Lines, one RoomModel revision per line, the last line the
+current room.
 """
 import json
 import math
+from pathlib import Path
 
 import camgeom as g
 import lift
@@ -21,12 +24,26 @@ class RegistrationRefused(Exception):
 
 
 def load(path):
+    """The current RoomModel: the file's last revision. One document alone is a file of one revision.
+
+    A line that does not read is refused, never skipped: an append cut short
+    must not bring back the revision before it.
+    """
     try:
-        with open(path, encoding="utf-8-sig") as source:
-            model = json.load(source)
-    except (OSError, ValueError):
+        text = Path(path).read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
+    except (OSError, UnicodeDecodeError):
         raise RegistrationRefused(f"no readable RoomModel at {path}") from None
-    return model
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    try:
+        revisions = [json.loads(line) for line in text.split("\n") if line.strip()]
+    except ValueError:
+        raise RegistrationRefused(f"no readable RoomModel at {path}: a line is not JSON") from None
+    if not revisions or not all(type(revision) is dict for revision in revisions):
+        raise RegistrationRefused(f"no readable RoomModel at {path}: not one JSON object per line")
+    return revisions[-1]
 
 
 def parse_transform_id(transform_id):
@@ -72,11 +89,14 @@ class Camera:
     """A resolved, checked camera entry: its rig, its pose and its error bound."""
 
     def __init__(self, room_model, transform_id, *, max_error_bound_m):
-        entry = resolve(room_model, transform_id)
         self.camera_id, self.version = parse_transform_id(transform_id)
         current = current_transform_id(room_model, self.camera_id)
         if current != transform_id:
-            raise RegistrationRefused(f"stale registration: {transform_id} is superseded by {current}")
+            raise RegistrationRefused(f"stale registration: {transform_id} is not the current entry, {current}")
+        entry = resolve(room_model, transform_id)
+        if entry.get("invalidated"):
+            raise RegistrationRefused(f"{transform_id} was invalidated by rung 1's mount check: the camera moved. "
+                                      "Register again")
         bound = entry.get("error_bound_m")
         if type(bound) not in (int, float) or not math.isfinite(bound) or bound < 0:
             raise RegistrationRefused(f"{transform_id} has no error_bound_m: the registration is not validated")

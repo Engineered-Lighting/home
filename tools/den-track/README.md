@@ -166,10 +166,10 @@ python -B tools\den-take\take.py --script free --out C:\den-takes\crossings-1\ta
 **5. Annotate, before any tracks exist.** You label alone and blind to system output,
 with a delayed re-mark of a sample (`owner-choices.md` item 2). With rung 4's labeller,
 mark each observation's person (`?` when you cannot tell) and each crossing's `interval`:
-from when the two come within arm's reach, or one goes out of sight, until they are apart again or back in
-view. It writes `truth.jsonl` in the take's folder, and its header says `"labeller":
-"owner"`, `"blind": true` and the `observations_sha256` that this prints; a scored run
-refuses a file without them:
+from when the two come within arm's reach, or one goes out of sight, until they are apart
+again or back in view. It writes `truth.jsonl` in the take's folder, and its header says
+`"labeller": "owner"`, `"blind": true` and the `observations_sha256` that this prints; a
+scored run refuses a file without them:
 
 ```powershell
 python -B tools\den-track\den_track.py hash --observations C:\den-takes\crossings-1\take-01\observe-1\observations.jsonl
@@ -188,10 +188,11 @@ python -B tools\den-track\den_track.py score --scored --out C:\den-takes\crossin
 ```
 
 **7. Read it.** `score.json` has each crossing, the pooled numbers, the bound, the gate,
-the counts against the plan, who labelled, and the method's and code's fingerprints. A crossing whose window does not hold scored observations
-of two people on both sides of the mark (the detector stalled, a time was mistyped, the
-take was cut short) is listed as excluded and does not count; a scored run refuses when
-too few are left. An agent may read `score.json`, `track-run.json` and
+the counts against the plan, who labelled, and the method's and code's fingerprints. A
+crossing whose window does not hold scored observations of two people on both sides of
+the mark (the detector stalled, a time was mistyped, the take was cut short) is listed as
+excluded and does not count; a scored run refuses when too few are left. An agent may
+read `score.json`, `track-run.json` and
 `truth.score-runs.jsonl`, which hold counts, ids and hashes, but not `observations.jsonl`,
 `tracks.jsonl`, `truth.jsonl` or any frame. If geometry alone misses the gate, the ladder's
 next step is session appearance as its own rung, after the owner's decision on learning

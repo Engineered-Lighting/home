@@ -208,7 +208,7 @@ Status: plan only. Nothing here is built or run. Written 2026-11-05.
 | Metric | Unit; counted per | Better | Threshold | Bound |
 |---|---|---|---|---|
 | onset | s; median of max(d_on, 0) over timed onsets | lower | ≤ 3 s, or per `onset_mode` | bootstrap |
-| early_off | fraction of scored gold-engaged seconds, from the interval's first on output, with the system off; per second | lower | ≤ `cap.early_off` (target ≈ 0) | bootstrap |
+| early_off | fraction of scored gold-engaged seconds with the system off, counted from the interval's first on output (its onset, if already on), and every scored second of a missed interval; per second | lower | ≤ `cap.early_off` (target ≈ 0) | bootstrap |
 | false_on | fraction of scored gold-none seconds (quiet, and the phone under `none`) with the system on; per second | lower | ≤ `cap.false_on` | bootstrap |
 | band competence, fine and casual | fraction of the band's units that are right; per unit | higher | ≥ `floor.competence.<band>` | exact binomial |
 | fine recall | fraction of scored gold-fine seconds with a fresh fine level; per second | higher | ≥ `floor.fine_recall` | bootstrap |
@@ -219,6 +219,12 @@ Status: plan only. Nothing here is built or run. Written 2026-11-05.
 
 - early_off starts at the interval's first on output: a late start is onset's
   error, and counting it twice would fail early_off by check (a)'s arithmetic.
+- A **missed interval** has no on output from its onset to its offset, so it
+  has no start to count from. All of its scored seconds go to early_off, as
+  A13's "gold engaged, system off" counts them, and it is a missed onset: d_on
+  = +∞ in the median when its onset is timed, and in the miss count either
+  way. Otherwise an estimator that never turns on would add nothing to
+  early_off.
 - false_on is the quiet criterion at band level, per second. N1 gives about 5
   scored quiet units per take (7 with the phone as `none`), about 20 to 28 per
   held-out set: too few for a 30-unit gate.

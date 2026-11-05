@@ -4,8 +4,9 @@ Field names follow docs/architecture/live-v1/schemas.json (`room_model`,
 `calibration_record`). Both files are JSON Lines: one record per line, UTF-8,
 LF. room-model.jsonl holds every RoomModel revision in order; the last line is
 the current room. A camera entry, once written, never changes except that a
-later revision may add `invalidated` to it. So an Observation's
-`transform_id`, `<camera_id>@<version>`, resolves to exactly one entry.
+later revision may add `invalidated` or `confirmed` to it, which is how a mount
+check reaches the consumers. So an Observation's `transform_id`,
+`<camera_id>@<version>`, resolves to exactly one entry.
 """
 import json
 import math
@@ -115,6 +116,15 @@ def invalidated_revision(room_model, camera_id, invalidated):
     return revision
 
 
+def confirmed_revision(room_model, camera_id, confirmed):
+    revision = json.loads(json.dumps(room_model))
+    revision["version"] = next_room_version(room_model.get("version"), room_model["room_id"])
+    for entry in revision["cameras"]:
+        if entry.get("camera_id") == camera_id:
+            entry["confirmed"] = confirmed
+    return revision
+
+
 # ---- transform_id ----------------------------------------------------------------
 
 def transform_id(camera_id, version):
@@ -129,21 +139,23 @@ def parse_transform_id(value):
 
 
 def resolve(room_models, value):
-    """{entry, invalidated}: the one camera entry `<camera_id>@<version>` names.
+    """{entry, invalidated, confirmed}: the one camera entry `<camera_id>@<version>` names.
 
     Every revision that carries the entry must carry the same entry, apart from
-    `invalidated`, which a later revision may add. Refused with
+    `invalidated` and `confirmed`, which a later revision may add. Refused with
     transform_id_invalid, transform_unknown or transform_ambiguous.
     """
     camera_id, version = parse_transform_id(value)
     found = [c for _, c in entries(room_models, camera_id) if c.get("version") == version]
     if not found:
         raise Refused("transform_unknown", f"no RoomModel camera entry is {value}")
-    bare = {json.dumps({k: v for k, v in c.items() if k != "invalidated"}, sort_keys=True) for c in found}
+    bare = {json.dumps({k: v for k, v in c.items() if k not in ("invalidated", "confirmed")}, sort_keys=True)
+            for c in found}
     if len(bare) != 1:
         raise Refused("transform_ambiguous", f"{value} names {len(bare)} different camera entries")
     invalidated = next((c["invalidated"] for c in found if c.get("invalidated")), None)
-    return {"entry": found[-1], "invalidated": invalidated}
+    confirmed = next((c["confirmed"] for c in reversed(found) if c.get("confirmed")), None)
+    return {"entry": found[-1], "invalidated": invalidated, "confirmed": confirmed}
 
 
 def room_from_camera(entry):

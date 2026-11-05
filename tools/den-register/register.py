@@ -554,7 +554,8 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
 
     A large depth change, or a mark past the gate, invalidates. Only every mark of
     the registration re-clicked on this later take can confirm: each within the
-    gate, and the movement they show together within it across the whole view.
+    gate, and the movement they show together within it across the whole view. A
+    confirmation goes into room-model.jsonl, where a scored rung 2 replay looks.
     """
     work = work_dir(work)
     m = m or method_file.load()
@@ -607,6 +608,12 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
         else:
             why_not, next_step, facts = why_not_confirmed(entry, mount, marks, m)
             report.update(facts, result="not_confirmed" if why_not else "confirmed")
+            earlier = (entry.get("confirmed") or {}).get("take_ended_unix")
+            if not why_not and not (scene._finite(earlier) and earlier >= take["ended_unix"]):
+                records.append_jsonl(work / ROOM_MODEL, records.confirmed_revision(latest, camera_id, {
+                    "ts": round(now(), 3), "take": take.get("take"), "take_ended_unix": take["ended_unix"],
+                    "frame": row["n"], "worst_mark_m": max(mark["error_m"] for mark in marks),
+                    "view_movement_m": facts["view_movement_m"]}))
         if marks is not None:
             report["marks"] = marks
     except Refused as exc:
@@ -633,7 +640,8 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
     elif status == "not_confirmed":
         print(f"MOUNT NOT CONFIRMED: {report['transform_id']} is neither confirmed nor invalidated: {why_not}. "
               f"Depth alone cannot see a small turn or slide ({report['check']['changed_cells']} of "
-              f"{report['check']['compared_cells']} cells moved).", file=out)
+              f"{report['check']['compared_cells']} cells moved). A scored replay of a take after the last "
+              "confirmation stays refused.", file=out)
         if next_step:
             print(next_step, file=out)
         else:
@@ -664,6 +672,9 @@ def run_resolve(work, value, *, out=sys.stdout):
     x, y, z = entry["pose"]["position_m"]
     print(f"{value}: {entry['method']}, error bound {_cm(entry['error_bound_m'])}, "
           f"camera at x {x:.3f}, y {y:.3f}, z {z:.3f} m", file=out)
+    confirmed = found["confirmed"]
+    print(f"Mount: confirmed by take {confirmed['take']}" if confirmed
+          else "Mount: not confirmed by any later take yet", file=out)
     if found["invalidated"]:
         print(f"INVALIDATED: {found['invalidated']['reason']} (take {found['invalidated']['take']}); "
               "room positions from this transform are null", file=out)

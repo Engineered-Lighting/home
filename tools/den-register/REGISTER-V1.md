@@ -6,9 +6,9 @@ in `docs/architecture/live-v1/schemas.json` (`room_model`,
 `calibration_record`). A change to this file is a new method: commit it as
 REGISTER-V2 and register again. Before any registration had run, the 2026-11-05
 review's fixes changed REGISTER-V1 in place: "A moved camera" below no longer
-lets a depth comparison confirm a registration, and needs every mark and the
-whole view to agree before it confirms; the camera entry now holds the geometry
-rung 2 needs.
+lets a depth comparison confirm a registration, needs every mark and the whole
+view to agree before it confirms, and writes a confirmation where rung 2 reads
+it; the camera entry now holds the geometry rung 2 needs.
 
 ## What is measured
 
@@ -73,7 +73,9 @@ CalibrationRecord to `calibration-records.jsonl`, both JSON Lines, UTF-8, LF.
 - The RoomModel's camera entry has the contract's fields `camera_id`,
   `intrinsics` (with its `source`), `pose`, `method` (`tape + fit`), `version`,
   `error_bound_m` and `photometric` (carried over from the previous entry, or
-  `uncalibrated`), plus `calibration_id` and `mount`. `pose.room_from_camera`
+  `uncalibrated`), plus `calibration_id` and `mount` (the registration take's
+  end time, its depth signature and each mark's camera-frame position, for "A
+  moved camera" below). `pose.room_from_camera`
   is a 4x4 rigid matrix from the rectified left camera frame (`camera_frame`
   `rectified_left`; `camera_axes` +x right, +y down, +z forward, metres) to the
   room frame.
@@ -132,9 +134,16 @@ looks at a frame of a later take in two steps.
 `changed` appends a RoomModel revision whose entry carries `invalidated`, with
 what the owner must re-check; from then on that `transform_id` resolves as
 invalidated, and a fit from a take recorded before that check is refused.
-`not_confirmed` invalidates nothing and confirms nothing. A take not recorded
-after the registration's own take is refused (`mount_take_not_later`), so a
-registration never confirms itself.
+`confirmed` appends a revision whose entry carries `confirmed`: the take, its
+`take_ended_unix`, the frame, `worst_mark_m` and `view_movement_m`. Only a later
+take than the one already there moves it on. `not_confirmed` writes nothing and
+confirms nothing. A take not recorded after the registration's own take is
+refused (`mount_take_not_later`), so a registration never confirms itself.
+
+A confirmation says the camera had not moved when that take was recorded, so it
+vouches for what came before it, back to the registration's own take. Rung 2's
+scored replay holds a take to that span (its METHOD.md, "Registration"). So the
+owner checks after the takes to be scored, not only before them.
 
 A person in view can go either way. Cells that lose their depth give `unknown`,
 which confirms nothing. But a person has valid depth: one filling over half of

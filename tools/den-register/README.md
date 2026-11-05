@@ -161,9 +161,9 @@ python -B tools\den-register\register.py resolve C:\den-register den-oak@2026-11
 
 ## Later: has the camera moved?
 
-A registration holds only while the camera stays put. Before you rely on it
-for a scored run, or after anything may have knocked the camera, record a new
-take with the room clear and the crosses in place (step 4), then:
+A registration holds only while the camera stays put. After the takes you want
+to score, or after anything may have knocked the camera, record a new take with
+the room clear and the crosses in place (step 4), then:
 
 ```powershell
 python -B tools\den-register\register.py check-mount C:\den-register --take C:\den-takes\2026-11-12-1
@@ -191,6 +191,11 @@ If a single cross is off because you misclicked it, it still invalidates; a new
 take and fit put that right. The same goes for a person standing close to the
 camera during the check take: filling over half of the frame moves the depth
 enough to give `MOUNT CHANGED`. This is why the room stays clear for that take.
+
+`MOUNT CONFIRMED` is saved in `room-model.jsonl`. It vouches for the takes
+recorded since the registration, up to the one you just checked, so a scored
+replay (rung 2) refuses any take after that until you check again. `resolve`
+prints which take last confirmed the registration.
 
 Exit codes: 0 = registered, confirmed or valid; 1 = refused, changed, not
 confirmed or invalidated, with the reason printed and saved in `fit-N.json` or

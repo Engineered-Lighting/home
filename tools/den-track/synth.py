@@ -71,6 +71,16 @@ class Walker:
         p = self.at(t)
         return p is not None and ROOM['x'][0] <= p[0] <= ROOM['x'][1] and ROOM['y'][0] <= p[1] <= ROOM['y'][1]
 
+    def facing(self, t):
+        """The bearing walked (clockwise from +y): the current leg, else the last one with any length."""
+        bearing = 0.0
+        for a, _, p, q in self.legs:
+            if a > t:
+                break
+            if p != q:
+                bearing = math.degrees(math.atan2(q[0] - p[0], q[1] - p[1])) % 360.0
+        return bearing
+
 
 def _segment_hits_box(p, q, box):
     """Does the segment p->q pass through the axis-aligned box (Liang-Barsky)?"""
@@ -123,7 +133,8 @@ def ray_noise(point, noise, rng):
 
 def scenario(name, seed=0, noise='typical', fps=4.0):
     """Build one scene. Returns a dict with 'frames' (list of {t, obs: [{
-    'id', 'pid', 'xy', 'z', 'depth_sigma'}]}), 'events' and 'name'."""
+    'id', 'pid', 'xy', 'z', 'depth_sigma', 'lateral', 'facing'}]}), 'events' and
+    'name'. An event's start and end mark the contact, as the owner would."""
     rng = random.Random('%s/%s/%s' % (name, seed, noise))
     walkers, events = SCENES[name](rng)
     noise_cfg = NOISE[noise] if isinstance(noise, str) else noise
@@ -135,18 +146,21 @@ def scenario(name, seed=0, noise='typical', fps=4.0):
         t = round(t0 + k / fps + rng.uniform(-0.01, 0.01), 4)
         local = t - t0
         truth = [(w.pid, w.at(local)) for w in walkers if w.inside(local)]
+        facing = {w.pid: w.facing(local) for w in walkers}
         obs = []
         for pid, p in truth:
             others = [q for opid, q in truth if opid != pid]
             if hidden(p, others) or rng.random() < noise_cfg['miss']:
                 continue
             xy, sigma = ray_noise(p, noise_cfg, rng)
-            obs.append({'pid': pid, 'xy': xy, 'z': CHEST_HEIGHT_M + rng.gauss(0, 0.05), 'depth_sigma': sigma})
+            obs.append({'pid': pid, 'xy': xy, 'z': CHEST_HEIGHT_M + rng.gauss(0, 0.05), 'depth_sigma': sigma,
+                        'lateral': noise_cfg['lateral'], 'facing': facing[pid]})
         if noise_cfg['false_per_frame'] and rng.random() < noise_cfg['false_per_frame']:
             fx, fy = rng.uniform(*ROOM['x']), rng.uniform(*ROOM['y'])
             r = math.hypot(fx, fy)
             obs.append({'pid': None, 'xy': (fx, fy), 'z': rng.uniform(0.4, 1.6),
-                        'depth_sigma': noise_cfg['depth_base'] + noise_cfg['depth_per_m2'] * r * r})
+                        'depth_sigma': noise_cfg['depth_base'] + noise_cfg['depth_per_m2'] * r * r,
+                        'lateral': noise_cfg['lateral'], 'facing': None})
         rng.shuffle(obs)
         for i, o in enumerate(obs):
             o['id'] = 'obs-%s-%d-%05d-%d' % (name, seed, k, i)
@@ -159,10 +173,101 @@ def scenario(name, seed=0, noise='typical', fps=4.0):
             'fps': fps, 'frames': frames, 'events': events}
 
 
+def _scene_rng(scene, frame_index):
+    return random.Random('%s/%s/%s/records/%d' % (scene['name'], scene['seed'], scene['noise'], frame_index))
+
+
+def _image_box(xy):
+    """A plausible box in 1920 x 1080 pixels for a floor point (made up, not a camera model)."""
+    r = max(math.hypot(xy[0], xy[1]), 0.5)
+    cx = 960 + 900 * xy[0] / max(xy[1], 0.5)
+    w, h = 450 / r, 1530 / r
+    x0, x1 = max(0.0, cx - w / 2), min(1920.0, cx + w / 2)
+    y0, y1 = max(0.0, 540 - h / 2), min(1080.0, 540 + h / 2)
+    if x1 <= x0:
+        x0, x1 = (1800.0, 1900.0) if cx > 960 else (20.0, 120.0)
+    return [round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)]
+
+
+def _floor_cov(xy, depth_sigma, lateral):
+    """A 3x3 covariance from the along-ray and across-ray errors, with z's own."""
+    r = math.hypot(xy[0], xy[1])
+    ux, uy = xy[0] / r, xy[1] / r
+    a, b = depth_sigma ** 2, lateral ** 2
+    return [[round(a * ux * ux + b * uy * uy, 9), round((a - b) * ux * uy, 9), 0.0],
+            [round((a - b) * ux * uy, 9), round(a * uy * uy + b * ux * ux, 9), 0.0],
+            [0.0, 0.0, 0.0025]]
+
+
+def _joints(xy, facing, rng, sigma=0.03, unsure=0.0):
+    """17 joints_room entries: shoulders and hips, the rest unsupported, never zero-filled."""
+    joints = [{'j': j, 'xyz': None, 'cov': None, 'status': 'unsupported', 'lift': 'none'} for j in range(17)]
+    b = math.radians(facing)
+    fx, fy = math.sin(b), math.cos(b)
+    rx, ry = fy, -fx        # the person's right, when facing (fx, fy)
+    for left, right, half, z in ((5, 6, 0.18, 1.4), (11, 12, 0.14, 0.95)):
+        lifted = 'plane:%.2f' % z if rng.random() < unsure else 'stereo'
+        status = 'supported' if lifted == 'stereo' else 'uncertain'
+        for j, side in ((left, -1.0), (right, 1.0)):
+            px = xy[0] + side * half * rx + rng.gauss(0, sigma)
+            py = xy[1] + side * half * ry + rng.gauss(0, sigma)
+            joints[j] = {'j': j, 'xyz': [round(px, 4), round(py, 4), z], 'status': status, 'lift': lifted,
+                         'cov': [[sigma ** 2, 0.0, 0.0], [0.0, sigma ** 2, 0.0], [0.0, 0.0, 0.0025]]}
+    return joints
+
+
+def _keypoints(box, xy, facing):
+    """17 made-up [x, y, score] pixels; the face scores high only when turned to the camera."""
+    x0, y0, x1, y1 = box
+    to_camera = math.degrees(math.atan2(-xy[0], -xy[1])) % 360.0
+    turned = abs((facing - to_camera + 180.0) % 360.0 - 180.0)
+    face = 0.8 if turned < 90.0 else 0.2
+    return [[round(x0 + (x1 - x0) * ((j * 7) % 17) / 16.0, 1), round(y0 + (y1 - y0) * j / 16.0, 1),
+             face if j < 5 else 0.8] for j in range(17)]
+
+
+def to_records(scene, with_boxes=False):
+    """A scene as Observation lines and truth frames, from schemas.json's fields.
+
+    Returns (observations, truth_frames, crossings). Each person gets a keypoints
+    Observation, as rung 2 writes; with_boxes adds their person_box too. A false
+    person is only a person_box. Nothing here is real.
+    """
+    observations, frames = [], []
+    unsure = 0.2 if scene['noise'] == 'noisy' else 0.0
+    source = {'sensor_id': 'synth-cam', 'model': 'synthetic', 'model_version': 'synth-1'}
+    for frame in scene['frames']:
+        rng = _scene_rng(scene, frame['index'])
+        labels = {}
+        for o in frame['obs']:
+            xy = (round(o['xy'][0], 5), round(o['xy'][1], 5))
+            box = _image_box(xy)
+            base = {'version': 'observation/v1', 'source': source, 'capture_ts': frame['t'], 'image_box': box,
+                    'room_position': {'x': xy[0], 'y': xy[1], 'z': round(o['z'], 4),
+                                      'cov': _floor_cov(xy, o['depth_sigma'], o['lateral'])},
+                    'transform_id': 'synth-cam@1', 'score': 0.86, 'visibility': 'visible', 'validity': 'valid',
+                    'depth_ts': frame['t']}
+            if o['pid'] is None:
+                recs = [dict(base, obs_id=o['id'] + '-b', kind='person_box')]
+            else:
+                recs = [dict(base, obs_id=o['id'] + '-k', kind='keypoints', joint_set='coco17',
+                             keypoints=_keypoints(box, xy, o['facing']),
+                             joints_room=_joints(xy, o['facing'], rng, unsure=unsure))]
+                if with_boxes:
+                    recs.append(dict(base, obs_id=o['id'] + '-b', kind='person_box'))
+            for rec in recs:
+                observations.append(rec)
+                labels[rec['obs_id']] = o['pid']
+        frames.append((frame['t'], labels))
+    crossings = [{'crossing_id': e['id'], 'type': e['kind'], 'interval': [e['start'], e['end']]}
+                 for e in scene['events']]
+    return observations, frames, crossings
+
+
 # --- scenes -----------------------------------------------------------------
-# Each returns (walkers, events). Events mark the window the owner would
-# annotate as one crossing: from a little before the two people come within
-# about 1 m of each other (or one goes out of sight) to a little after.
+# Each returns (walkers, events). An event marks the contact as the owner would
+# annotate it: from when the two people come within about 1 m of each other, or
+# one goes out of sight, until they are apart again or back in view.
 
 
 def _cross(rng, gap, along_view):
@@ -179,12 +284,12 @@ def _cross(rng, gap, along_view):
     return a, b
 
 
-def _meet_window(a, b, pad=1.5, near=1.0):
+def _meet_window(a, b, near=1.0):
     times = [k / 20 for k in range(int(max(a.t_end, b.t_end) * 20) + 1)]
     close = [t for t in times if a.at(t) and b.at(t) and math.dist(a.at(t), b.at(t)) < near]
     if not close:
         return 0.0, max(a.t_end, b.t_end)
-    return max(0.0, close[0] - pad), close[-1] + pad
+    return close[0], close[-1]
 
 
 def clean_crossing(rng):
@@ -213,8 +318,8 @@ def armchair_occlusion(rng):
     b = Walker('B', [(-1.5, 1.6, a.t_end + 1.0)], 1.0)
     times = [k / 20 for k in range(int(a.t_end * 20))]
     hid = [t for t in times if hidden(a.at(t), [])]
-    s, e = (hid[0] - 1.5, hid[-1] + 1.5) if hid else (0.0, a.t_end)
-    return [a, b], [{'id': 'o1', 'kind': 'occlusion', 'start': max(0.0, s), 'end': e}]
+    s, e = (hid[0], hid[-1]) if hid else (0.0, a.t_end)
+    return [a, b], [{'id': 'o1', 'kind': 'occlusion', 'start': s, 'end': e}]
 
 
 def crossing_behind_armchair(rng):
@@ -223,7 +328,7 @@ def crossing_behind_armchair(rng):
     gap = rng.uniform(0.3, 0.8)
     a = Walker('A', [(-1.9, 4.2 - gap / 2, 0.3), (2.0, 4.2 - gap / 2, 0)], speed_a)
     b = Walker('B', [(2.0, 4.2 + gap / 2, 0.3), (-1.9, 4.2 + gap / 2, 0)], speed_b)
-    s, e = _meet_window(a, b, pad=2.0)
+    s, e = _meet_window(a, b)
     return [a, b], [{'id': 'x1', 'kind': 'crossing_occluded', 'start': s, 'end': e}]
 
 
@@ -253,7 +358,7 @@ def swap_at_door(rng):
     gap = rng.uniform(1.0, 3.0)
     b = Walker('B', [(DOOR[0], DOOR[1], 0), (-1.2, 4.0, 0), (0.6, 2.4, 1.0)], rng.uniform(0.9, 1.2),
                t0=a.t_end + gap)
-    return [a, b], [{'id': 'd1', 'kind': 'door', 'start': max(0.0, a.t_end - 2.5), 'end': b.t0 + 3.5}]
+    return [a, b], [{'id': 'd1', 'kind': 'door', 'start': a.t_end - 0.5, 'end': b.t0 + 1.5}]
 
 
 SCENES = {

@@ -160,6 +160,12 @@ class TrackerCore:
         elif (tr.confidence < p['ambiguous_below'] or tr.near) and not tr.ambiguous:
             tr.ambiguous, tr.since_ts = True, t
 
+    def _accept_heading(self, tr, det, t):
+        """heading_as_of moves only here: on shoulder and hip evidence this track is sure of."""
+        evidence = det.get('heading')
+        if evidence is not None and not tr.ambiguous and evidence[1] <= self.p['heading_max_sd_deg']:
+            tr.heading, tr.heading_as_of = evidence, t
+
     # -- one frame -------------------------------------------------------------
     def step(self, t, detections):
         """detections: [{'id', 'xy', 'R', 'obs_ids', 'heading'}].
@@ -209,10 +215,8 @@ class TrackerCore:
         for tr in self.tracks:
             j = took[tr.id]
             self._status(tr, t, j is not None)
-            if j is not None and not tr.ambiguous:
-                evidence = dets[j].get('heading')
-                if evidence is not None and evidence[1] <= p['heading_max_sd_deg']:
-                    tr.heading, tr.heading_as_of = evidence, t
+            if j is not None:
+                self._accept_heading(tr, dets[j], t)
 
         window = p['confirm_window']
         keep_tracks = []
@@ -226,7 +230,9 @@ class TrackerCore:
         for j, det in enumerate(dets):
             if j not in taken:
                 x, P = kalman.initial(det['xy'], det['R'], p['new_track_speed_sigma'])
-                self.tracks.append(Track(self.next_id, x, P, t, det['obs_ids']))
+                born = Track(self.next_id, x, P, t, det['obs_ids'])
+                self._accept_heading(born, det, t)
+                self.tracks.append(born)
                 self.next_id += 1
         lines = [(tr, tr.state(t, p['coasting_after_s'])) for tr in self.tracks] + [(tr, 'ended') for tr in ended]
         lines.sort(key=lambda line: line[0].id)

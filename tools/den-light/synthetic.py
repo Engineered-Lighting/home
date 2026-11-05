@@ -67,7 +67,7 @@ def den_lighting_folders():
 
 def check_pins(folder):
     for name, pin in (("policy.py", POLICY_SHA256), ("__init__.py", INIT_SHA256)):
-        digest = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+        digest = hashlib.sha256((folder / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         if digest != pin:
             raise RuntimeError(f"den_lighting changed: {folder / name} hashes {digest[:12]}..., not the 1.0.4 "
                                "pin. Re-read the plan's probe safety section against the new code first.")

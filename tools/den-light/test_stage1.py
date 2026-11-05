@@ -440,7 +440,8 @@ class LightModelTests(unittest.TestCase):
         key = self.lm["channels"][0]["channel_key"]
         self.assertEqual(key, "den_front_left.white")
         zero = predict.predict({}, self.lm)
-        self.assertTrue(all(v == 0 for k, v in zero["surfaces"].items() if k != "unit"))
+        excluded = {p["point_id"] for p in self.lm["sample_points"] if p["excluded"]}
+        self.assertTrue(all(v == 0 for k, v in zero["surfaces"].items() if k != "unit" and k not in excluded))
         self.assertEqual(predict.predict({key: {"level": 0, "cct_k": None}}, self.lm), zero)
         with self.assertRaises(ValueError):
             predict.predict({"F9.spot": {"level": 0.5, "cct_k": 3000}}, self.lm)
@@ -458,6 +459,19 @@ class LightModelTests(unittest.TestCase):
         self.assertEqual(predict.predict({key: {"level": 1.0, "cct_k": 2202}}, prepared), lit)
         clamped = predict.predict({key: {"level": 1.0, "cct_k": 1800}}, self.lm)  # warmer than captured
         self.assertEqual(clamped, lit)
+
+    def test_an_excluded_point_is_none_whatever_the_scene(self):
+        lm = json.loads(json.dumps(self.lm))
+        point = lm["sample_points"][7]
+        point["excluded"] = "mask"
+        for row in lm["basis"].values():
+            row[point["point_id"]] = None
+        key = lm["channels"][0]["channel_key"]
+        daylight = {p["point_id"]: 0.5 for p in lm["sample_points"]}
+        for scene in ({}, {key: {"level": 0.5, "cct_k": 3000}}):
+            for out in (predict.predict(scene, lm), predict.predict(scene, lm, daylight=daylight)):
+                self.assertIsNone(out["surfaces"][point["point_id"]], "not 0: nothing is known there")
+        self.assertEqual(predict.predict({}, lm)["surfaces"][lm["sample_points"][6]["point_id"]], 0)
 
     def test_predict_is_pure_and_imports_without_side_effects(self):
         tree = ast.parse((HERE / "predict.py").read_text(encoding="utf-8"))
@@ -633,8 +647,7 @@ class GuardTests(unittest.TestCase):
 
 class DenLightingPinTests(unittest.TestCase):
     def test_den_lighting_is_pinned_and_loaded_unchanged(self):
-        for name, pin in (("policy.py", synthetic.POLICY_SHA256), ("__init__.py", synthetic.INIT_SHA256)):
-            self.assertEqual(hashlib.sha256((synthetic.FIXTURE_DIR / name).read_bytes()).hexdigest(), pin)
+        synthetic.check_pins(synthetic.FIXTURE_DIR)
         policy, helpers = synthetic.load_den_lighting()
         self.assertEqual(policy.LIGHTS, guard.LIGHTS)
         self.assertEqual(policy.VACANCY_SECONDS, guard.VACANCY_S)
@@ -643,6 +656,13 @@ class DenLightingPinTests(unittest.TestCase):
                          "pending_fixtures", "provisional_fixtures"}, set(guard.STATUS_KEYS))
         self.assertEqual(helpers["command_scene"]("turn_off", {}, policy.Scene(True, 80, 3000)),
                          policy.Scene(False, 80, 3000), "an off learns the level it had")
+
+    def test_the_pins_read_the_same_with_crlf_or_lf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("policy.py", "__init__.py"):
+                raw = (synthetic.FIXTURE_DIR / name).read_bytes()
+                (Path(tmp) / name).write_bytes(raw.replace(b"\n", b"\r\n"))
+            synthetic.check_pins(Path(tmp))
 
     def test_a_changed_den_lighting_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:

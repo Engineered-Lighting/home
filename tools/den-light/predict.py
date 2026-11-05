@@ -88,6 +88,7 @@ class Prepared:
         self.version = model["version"]
         self.unit = model["basis_unit"]
         self.points = [p["point_id"] for p in model["sample_points"]]
+        self.excluded = {p["point_id"] for p in model["sample_points"] if p.get("excluded")}
         self.channels = {}
         for channel in model["channels"]:
             key = channel["channel_key"]
@@ -123,7 +124,7 @@ def predict(scene, model, daylight=None):
     if daylight is not None:
         values = [None if v is None or daylight.get(pid) is None else v + daylight[pid]
                   for v, pid in zip(values, prepared.points)]
-    surfaces = dict(zip(prepared.points, values))
+    surfaces = {pid: None if pid in prepared.excluded else v for pid, v in zip(prepared.points, values)}
     surfaces["unit"] = prepared.unit
     return {"surfaces": surfaces, "version": prepared.version,
             "daylight": "excluded" if daylight is None else "included"}

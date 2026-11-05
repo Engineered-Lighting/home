@@ -66,7 +66,9 @@ recorder; needs `--live-commands`, and turns the plant off), `--status FILE
 ...` (den_lighting's own status sensor export: its occupancy; no other
 occupancy source with it), `--corrections FILE ...` (correction-capture's
 `corrections.jsonl`: the holds the live den_lighting opened; needs `incumbent`),
-`--no-plant`, `--policies need incumbent decide`.
+`--no-plant`, `--policies need incumbent decide`, and for decide (rung 9,
+below) `--actuation shadow`, `--light-model FILE` and `--compensation
+none-v0|P0|P1|P2|P3`.
 
 `check.py LOG` re-imports each logged policy module, refuses `code changed:
 <module>` when its file's sha256 differs, rebuilds it from the logged config
@@ -108,7 +110,128 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 | `validate.py` | the check-by-check consistency check against den_lighting |
 | `victoria_den_bulb_scenes.yaml` | a draft HA package for Victoria that records each bulb's level (below); nothing deploys it |
 | `run.py` | the CLI and its summary/diff |
-| `need.py`, `decide.py` | written on their own branches against the interface below; the runner loads them by name |
+| `need.py`, `decide.py` | written on their own branches against the interface below; the runner loads them by name. `decide.py` is now rung 9's coordinator v0 (below) |
+| `light_model.py` | the one adapter for rung 8's light model, and a fake built from rung 8's plan |
+| `score.py` | rung 9's score on replay against `rung9-gate-v0.json` |
+| `rung9-gate-v0.json` | rung 9's gate, with its open slots |
+| `holds.py` | the hold fixtures V6-V8 and V62-V64 under each compensation option |
+
+## Rung 9: coordinator v0 on replay
+
+`decide` is rung 9's coordinator v0 (`docs/architecture/live-v1/ladder.json`,
+rung 9; E10). It still requests what v0 did: den_lighting's normal scene, a
+labelled placeholder reading look on the free bulbs while someone reads, off
+after 120 s of vacancy, held bulbs pinned at their read-back. Around that,
+every Decision now carries rung 9's record:
+
+- `applied_scene` per channel: nothing is sent, so a held bulb is `held` at
+  its pinned read-back and a free one `not_sent` at its last read-back.
+- `recipients` per channel that is on: its share of the predicted light at
+  each person's task points, on the requested scene with held bulbs pinned,
+  and the tracks it serves (`s_serve`). `predicted` gives the light there.
+- `inputs`: the light model version, the seed Look (`reading@0`), the fixed
+  Preference stand-in (level factor 1, `mired_shift` and `contrast_shift` 0,
+  applied through the look's guardrails), the comfort-limits version,
+  `body_envelope` (body-envelope/v1, parameters pending), `t_exec` per channel,
+  the `exclusions` those give (none on hue-den-4, which has no narrow beam;
+  `decide.replay_exclusions()` recomputes them from the decision alone), the
+  compensation option, the glare check and `open_slots`.
+- `hard_conflicts`: a held bulb that alone breaks the seed Look's glare limit;
+  a free bulb may not be chosen over it. Rung 8 writes `glare: null` and the
+  limit is an open slot, so every check is logged `unchecked` and the list is
+  always empty today.
+
+The light model: every call goes through `light_model.LightModel`. Rung 8
+Stage 1 (`claude/rung-8-stage1`) does not exist yet, so it predicts with the
+plan's formula (each bulb alone at full, times its dimming curve, piecewise
+linear in mired) on `light_model.fake()`, invented numbers in the shape of the
+plan's `light-model.json`. When Stage 1 lands, `LightModel.predict` calls its
+`predict()` and `run.py --light-model FILE` gives its file; nothing else
+changes. Both arms use the model in decide's logged config.
+
+Compensation is pending (decisions.json `compensation`), so it is built as
+named options, `run.py --compensation`: `none-v0` (the default: v0, no solve),
+and `P0` to `P3`, which, while a bulb is held, choose each free bulb's level
+against each person's task light. P1 to P3 log `held[].direction` and
+`footprint`, P3 `changer_track`, and they write `hold_limited`; none-v0 and P0
+leave those fields out, as Decision v2 says.
+
+`actuation`: `synthetic`, `replay` or, with `run.py --actuation shadow`,
+`shadow`: decided beside the live den_lighting on its own inputs, with the
+real bulbs' states (`--lights` or `--no-plant`). Until a live writer exists it
+labels a run of copied files from such a time.
+
+### The hold fixtures
+
+```powershell
+python -B tools/den-core/holds.py
+```
+
+prints V6 (a dim held), V7 (a brighten held), V8 (a hold between solve and
+send), V62 (a shared bulb dimmed while another person still needs light), V63
+(gaming entry and exit under a hold) and V64 (overlapping holds), each under
+none-v0 and P0 to P3. The ladder lists the six cases and six ids in one list;
+`holds.py` pairs them in that order. Their expected results depend on the
+compensation decision, so **none is admitted as pass or fail**. The tests check
+only what holds under every option: held bulbs pinned and skipped, no decision
+in a game, no hard conflict, the same bytes every run, each decision under
+100 ms.
+
+### Scoring
+
+```powershell
+python -B tools/den-core/score.py C:/tmp/den-core/real-1/log.jsonl
+```
+
+`score.py LOG [--gate FILE] [--marks FILE] [--plumbing] [--out FILE]` scores
+a log with need, incumbent and decide against `rung9-gate-v0.json`:
+
+- the log replays byte for byte, with each decide decision timed: each under
+  100 ms (A9; hue-den-4 has no aims);
+- every decide decision carries its requested and applied scenes and the
+  recipients of each channel that is on, its exclusions recompute from its
+  own inputs, and its hard conflicts from its scene;
+- the candidate's anticipation and stability rates, replay surrogates, each
+  against a floor fixed in the gate before the run. The incumbent scores 0
+  and 1 by construction, and is reported beside it;
+- reported, never gated, labelled "predicted, replay surrogate": predicted
+  service coverage and missed service at the owner's marks (`--marks`, one
+  JSON object per line: `{mark_id, track_id, start, end, band: fine|casual,
+  points}`), for both arms, with the owner's 300 and 200 lx floors, 120 s
+  quiet window and 70% area share. They need a light model in lx; until rung 7
+  anchors one they are n/a.
+
+**It refuses a scored run** (exit 2, with every reason) while any slot in the
+gate or in decide's logged config is open, while the light model is the fake,
+for a synthetic log, or when the log used another compensation option than
+the gate's. `--plumbing` runs anyway on the proposed values and labels every
+line `[plumbing]`, not a score. On a synthetic evening:
+
+```powershell
+python -B tools/den-core/score.py C:/tmp/den-core/evening-1/log.jsonl --plumbing
+```
+
+The open slots, each with its proposed value:
+
+| Where | Slot | Proposed |
+| --- | --- | --- |
+| gate | `surrogates.anticipation.floor` | 0.5 |
+| gate | `surrogates.stability.floor` | 0.9 |
+| gate | `parameters.anticipation_window_s` | 10 s |
+| gate | `parameters.anticipation_rise` | 0.2 |
+| gate | `parameters.stability_change` | 0.1 |
+| gate | `parameters.compensation` | P1 (the register's advice: mode form, with P0 and P3 as counterfactual logs) |
+| decide | `task_points` | per track or surface, the light model's task points; the fake's `desk-1` and `armchair-1` |
+| decide | `s_serve` | 0.5 (attribution-thresholds, deferred) |
+| decide | `glare_limit` | `unchecked` on hue-den-4 until rung 8 models glare |
+| decide | `compensation_form` | mode |
+| decide | `footprint_threshold` | 0.1 |
+| decide | `membership` | at or above the threshold is in |
+| decide | `lambda_h` | 1.0 (P2) |
+| decide | `p3_fallback` | P1 |
+
+To fill one, set its `value` and its `status` to `set`. Each changed decide
+slot changes decide's config, so a log made before it stays as it was.
 
 ## Adding a source adapter
 
@@ -642,6 +765,8 @@ need -> incumbent -> decide.
 The two adapters built after the three briefs extend the text above without
 changing it:
 - More source adapter names: 'occupancy_journal' (emits occupancy, via 'jetson_journal'), 'recorder_commands' and 'recorder_lights' (emits light_observed with brightness and kelvin null), 'den_lighting_status' (emits occupancy, via 'den_lighting_status', and live_status) and 'correction_capture' (emits correction).
+- actuation: 'synthetic'|'replay'|'shadow' (set by the runner; shadow needs the plant off).
+- decide's decisions add rung 9's fields (see "Rung 9: coordinator v0 on replay"): applied_scene, recipients, recipients_basis, predicted, hold_limited (P1-P3 only), and inputs.light_model, preference, comfort_limits, body_envelope, t_exec, exclusions, compensation, hard_constraints, open_slots. A person_state may carry working_region {surface_id}; decide keeps one per track_id.
 - Reference kinds: logged with the inputs, but never handed to a policy, and they set neither the span nor the ticks.
   - live_command: {entity_id, revision: int, target: scene, context_id: str}, one den_lighting_command event as the live integration fired it, at its time_fired_ts.
   - live_status: {automatic: bool|null, gaming: bool|null}, whether den_lighting's status sensor showed it automatic and in a game (null without its status), on each change.

@@ -4,6 +4,7 @@ python -B tools/den-core/run.py --out ABSDIR [--synthetic evening [--seed N] [--
     [--facts PATH ...] [--poll FILE ...] [--mqtt FILE --mqtt-t0 EPOCH]
     [--journal FILE ... | --assume-occupied | --status FILE ...] [--corrections FILE ...]
     [--live-commands FILE ... [--lights FILE ...]] [--policies incumbent] [--no-plant]
+    [--actuation replay|shadow] [--light-model FILE] [--compensation none-v0|P0|P1|P2|P3]
 """
 import argparse
 import json
@@ -254,6 +255,10 @@ def summary(header, log):
     return "\n".join(lines)
 
 
+def decide_options():
+    return runner.import_module("decide").OPTIONS
+
+
 def _new_file(path, text):
     with open(path, "x", encoding="ascii", newline="\n") as handle:
         handle.write(text)
@@ -284,6 +289,11 @@ def main(argv=None):
                         help="the four bulbs' states exported from the HA recorder (needs --live-commands)")
     parser.add_argument("--policies", nargs="+", default=["incumbent"])
     parser.add_argument("--no-plant", action="store_true")
+    parser.add_argument("--actuation", choices=["replay", "shadow"], default="replay",
+                        help="shadow: decided beside the live den_lighting on its own inputs (needs the plant off)")
+    parser.add_argument("--light-model", help="a light-model.json for decide, in place of its fake (light_model.py)")
+    parser.add_argument("--compensation", choices=list(decide_options()),
+                        help="decide's compensation option while a bulb is held (pending owner decision)")
     args = parser.parse_args(argv)
     out = Path(args.out)
     if not out.is_absolute() or events.inside_checkout(out):
@@ -301,6 +311,20 @@ def main(argv=None):
         parser.error("--live-commands is compared with the incumbent: add incumbent to --policies")
     if args.lights and not args.live_commands:
         parser.error("--lights needs --live-commands: den_lighting's own bulb changes are known by its commands")
+    if args.actuation == "shadow" and (args.synthetic or not (args.lights or args.no_plant)):
+        parser.error("--actuation shadow is for real inputs with the real bulbs' states: give --lights or --no-plant, "
+                     "and no --synthetic")
+    if (args.light_model or args.compensation) and "decide" not in args.policies:
+        parser.error("--light-model and --compensation configure decide: add decide to --policies")
+    configs = {"decide": {}}
+    if args.light_model:
+        path = Path(args.light_model)
+        try:
+            configs["decide"]["light_model"] = json.loads(sources._text(path))
+        except ValueError:
+            parser.error("%s is not JSON" % path)
+    if args.compensation:
+        configs["decide"]["compensation"] = {"option": args.compensation}
 
     inputs, described, truth, fact_lines = [], [], None, []
     if args.synthetic:
@@ -386,9 +410,10 @@ def main(argv=None):
         described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in paths]
         print("recorder_commands: kept %d of %d live command(s) inside the replayed span" % (len(kept), len(items)))
 
-    header, log = runner.run(inputs, runner.load_policies(args.policies), plant=not (args.no_plant or args.lights),
-                             synthetic=bool(args.synthetic), assume_occupied=args.assume_occupied,
-                             sources=described)
+    header, log = runner.run(inputs, runner.load_policies(args.policies, configs),
+                             plant=not (args.no_plant or args.lights), synthetic=bool(args.synthetic),
+                             assume_occupied=args.assume_occupied, sources=described,
+                             actuation=None if args.synthetic else args.actuation)
     out.mkdir(parents=True, exist_ok=True)
     events.write(out / "log.jsonl", header, log)
     if truth is not None:

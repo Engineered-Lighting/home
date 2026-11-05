@@ -34,7 +34,8 @@ def check(log_path, resolve=None):
         if len({entry["config_sha256"], events.sha256_json(entry["config"]), events.sha256_json(policy.config)}) > 1:
             return _refuse("config changed: %s" % name)
         policies.append(policy)
-    params = {key: header[key] for key in ("tick_s", "tail_s", "plant", "shown", "synthetic", "assume_occupied")}
+    params = {key: header[key] for key in ("tick_s", "tail_s", "plant", "shown", "synthetic", "assume_occupied",
+                                           "actuation")}
     replay_header, replayed = runner.run(inputs, policies, sources=header["sources"], **params)
     want = Path(log_path).read_bytes().decode("ascii").split("\n")[:-1]
     got = [events.dumps(value) for value in [replay_header, *replayed]]

@@ -1,0 +1,49 @@
+{
+  "id": "rung9-gate-v0",
+  "rung": 9,
+  "written": "2026-11-05",
+  "about": "Rung 9's gate on replay (ladder.json rung 9; experiments.json E10), written before any scored run. score.py reads it. A slot is {value, status, proposed}: while any slot here or in decide's logged config is open, score.py refuses a scored run and gives the proposed values only with --plumbing, labelled not a score. Fill a slot by setting value and status 'set'; a filled gate gets a new id if it changes after a scored run.",
+  "comparator": {
+    "policy": "den_lighting",
+    "version": "1.0.4",
+    "kind": "the frozen incumbent re-run beside the log (incumbent.py, den_lighting's policy.py unchanged)",
+    "scene": "per bulb, the target den_lighting last acted on (a command, or a bulb it found already there), else the bulb's last recorded state",
+    "light_model": "the model in decide's logged config, the same version for both arms"
+  },
+  "surrogates": {
+    "anticipation": {
+      "definition": "Per need episode (a track's PersonState from its first state that leaves none to its next none, when it reached engaged in between; onset-protocol: contact-starting), 1 when the arm makes a need-driven change within anticipation_window_s of the onset that raises the mean predicted light at the track's task points by at least anticipation_rise over its value just before the onset. A need-driven change is a decide decision whose rule turns the reading look on or off; every den_lighting change follows its mode, so the incumbent scores 0 by construction. The rate is the mean over episodes whose light is predictable (no unknown level).",
+      "orientation": "higher is better",
+      "unit": "share of need episodes",
+      "label": "replay surrogate",
+      "floor": {"value": null, "status": "open", "proposed": 0.5, "note": "a floor on the candidate, not a difference: the incumbent scores 0"}
+    },
+    "stability": {
+      "definition": "Per need episode, 1 when the arm makes no need-driven change after anticipation_window_s and before the episode ends that moves the mean predicted task light by more than stability_change of its value before the change. The incumbent scores 1 by construction.",
+      "orientation": "higher is better",
+      "unit": "share of need episodes",
+      "label": "replay surrogate",
+      "floor": {"value": null, "status": "open", "proposed": 0.9, "note": "a floor on the candidate, not a difference: the incumbent scores 1"}
+    }
+  },
+  "parameters": {
+    "anticipation_window_s": {"value": null, "status": "open", "proposed": 10, "note": "need v0 reaches engaged 5 s or more after starting (den_lighting's dwell), and decide answers at engaged"},
+    "anticipation_rise": {"value": null, "status": "open", "proposed": 0.2, "note": "relative rise of the mean predicted task light"},
+    "stability_change": {"value": null, "status": "open", "proposed": 0.1, "note": "relative move of the mean predicted task light"},
+    "compensation": {"value": null, "status": "open", "proposed": "P1", "note": "the compensation option the scored log must have used (decisions.json compensation, pending). The register advises P1 in mode form for rung-9 replay, with P0 and P3 scored as counterfactual logs on the same evenings"}
+  },
+  "fixed": {
+    "decision_ms_max": 100,
+    "decision_ms_note": "A9: each decision under 100 ms, aims included (hue-den-4 has no aims)",
+    "service_floors_lx": {"fine": 300, "casual": 200},
+    "quiet_window_s": 120,
+    "service_note": "owner choices 8 and 9: a mark is served at an instant when at least 70% of its points get the floor; coverage counts from the end of the quiet window",
+    "delivered_area_share": 0.7
+  },
+  "reported_not_gated": {
+    "label": "predicted, replay surrogate",
+    "metrics": ["predicted service coverage", "missed service"],
+    "needs": "the owner's marks on gold-labelled replay sessions (score.py --marks) and a light model in lx; otherwise n/a"
+  },
+  "gate": "pass when the log replays byte for byte, every decide decision re-plans in under decision_ms_max, every decide decision carries its requested and applied scenes and the recipients of its scene, its exclusions recompute from its own inputs, its hard_conflicts recompute from its scene (no free channel in them), and the candidate's anticipation and stability rates each reach their floor"
+}

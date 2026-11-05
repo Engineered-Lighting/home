@@ -530,6 +530,16 @@ class Rung1FileChecks:
         self.assertEqual(run["mount"]["status"], "not_confirmed")
         self.assertTrue(any(line.startswith("mount: NOT CONFIRMED") for line in lines), lines)
 
+    def test_the_gate_does_not_pass_on_a_take_rung_1_has_not_vouched_for(self):
+        case = self.case("rung1-gate", 3, ended_unix=1_800_001_501.0)
+        closed = closed_method(case.work / "closed")
+        lines = []
+        replay.replay(case.take, case.room, case.out, detections_path=case.rows_path, method_path=closed,
+                      log=lines.append)
+        gate = json.loads((case.out / "run.json").read_text(encoding="utf-8"))["gate"]
+        self.assertEqual((gate["records_with_problems"], gate["mount"], gate["pass"]), (0, "not_confirmed", False))
+        self.assertIn("gate: FAIL (unscored)", lines)
+
     def test_a_take_recorded_before_the_current_registration_is_refused(self):
         # The verifier's case: a fit, a knock, a fit from a new take, then a take from before the knock.
         for name, n, ended in (("after-a-refit", 5, synth.TAKE_ENDED_UNIX), ("just-before", 2, 1_800_000_899.0)):

@@ -80,8 +80,8 @@ def match_rows(rows, take):
     return out
 
 
-def gate(records, camera, settings, method, *, scored):
-    """Rung 2's gate over the written records (counts, problems, pass)."""
+def gate(records, camera, settings, method, mount, *, scored):
+    """Rung 2's gate over the written records (counts, problems, pass). Rung 1 must vouch for the take as well."""
     resolves = lambda tid: tid == camera.transform_id  # noqa: E731  (resolved once, at the start)
     counts = {"kind": {}, "validity": {}, "depth": {}, "freshness": {}, "joints": {}}
     problems, bad = [], 0
@@ -105,7 +105,8 @@ def gate(records, camera, settings, method, *, scored):
                  "max_expired_fraction": limit, "baseline": R5_BASELINE,
                  "pass": fraction is not None and fraction <= limit and not counts["freshness"].get("unknown")}
     return {"scored": scored, "records": len(records), "records_with_problems": bad, "problems": problems[:20],
-            "counts": counts, "freshness": freshness, "pass": bad == 0 and freshness["pass"]}
+            "counts": counts, "freshness": freshness, "mount": mount["status"],
+            "pass": bad == 0 and freshness["pass"] and mount["status"] == "confirmed"}
 
 
 def replay(take_folder, room_model_path, out, *, detections_path=None, fake=False, camera_id="den-oak",
@@ -172,7 +173,7 @@ def replay(take_folder, room_model_path, out, *, detections_path=None, fake=Fals
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
-    summary = gate(records, camera, settings, method, scored=scored)
+    summary = gate(records, camera, settings, method, mount, scored=scored)
     run = {"schema": RUN_SCHEMA, "scored": scored, "take": take.folder.name,
            "take_check": take.check, "clock": clock, "transform_id": camera.transform_id, "mount": mount,
            "detector": detector, "rows": len(rows), "method": method.record(), "gate": summary}

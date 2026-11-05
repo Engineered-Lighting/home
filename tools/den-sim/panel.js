@@ -1,5 +1,5 @@
 /* Den simulation panel, injected by tools/den-sim/run.mjs into the unchanged Home.
- * A red strip, the hop list and two scripted readers for the real brain to judge.
+ * A red strip, the hop list and two scripted scenes for the pipeline and brain.
  * It reads Home's real overlay, presses Home's own view buttons and selects the
  * fixture as a person would, and posts only to /__sim/feed on this harness. There
  * is no send control. */
@@ -30,6 +30,8 @@
     #den-sim-panel button[data-den-sim-feed] { width: 100%; background: #b00020; border-color: #e0526a; margin-bottom: 5px; }
     #den-sim-panel button[data-den-sim-feed="not_reading"] { background: #222; border-color: #e0526a; }
     #den-sim-panel [data-den-sim-second-try], #den-sim-panel [data-den-sim-notes] { margin: 5px 0; padding: 5px 6px; border-left: 3px solid #a86a00; background: rgba(168,106,0,.18); }
+    #den-sim-panel [data-den-sim-figure] { display: block; width: 100%; margin: 4px 0; background: #000; border: 1px solid #333; border-radius: 4px; }
+    #den-sim-panel [data-den-sim-pipeline-failed] { color: #ff9aa8; font-weight: 600; }
     #den-sim-panel [data-den-sim-command] { margin: 6px 0; padding-top: 6px; border-top: 1px solid #555; }
     #den-sim-panel [data-den-sim-not-sent] { background: #b00020; color: #fff; font: 700 12px/20px system-ui, sans-serif; text-align: center; border-radius: 4px; margin-bottom: 5px; }
     #den-sim-panel pre { margin: 4px 0; padding: 5px; max-height: 220px; overflow: auto; background: #000; border: 1px solid #333; border-radius: 4px;
@@ -48,7 +50,7 @@
     #den-sim-panel .note { color: #a8a8a8; display: block; }
   ` }));
 
-  const strip = el('div', { id: 'den-sim-strip', role: 'status', 'data-den-sim-strip': '1', textContent: 'SIMULATION · scripted reader, no inference ran · nothing is sent to any fixture' });
+  const strip = el('div', { id: 'den-sim-strip', role: 'status', 'data-den-sim-strip': '1', textContent: 'SIMULATION · scripted scene, no inference ran · nothing is sent to any fixture' });
   const feedButtons = [['reading_on_couch', 'Feed: person A reading on the couch'], ['not_reading', 'Feed: person A on the couch, not reading']]
     .map(([scenario, label]) => el('button', { type: 'button', disabled: true, 'data-den-sim-feed': scenario, textContent: label, onclick: () => runScenario(scenario) }));
   const setFeedEnabled = on => feedButtons.forEach(button => { button.disabled = !on; });
@@ -73,7 +75,9 @@
   // Open when there is room for it: the list is the point of the page, not a footnote.
   const hops = el('details', { open: innerHeight >= 800 }, el('summary', { textContent: 'What is real here' }), hopRows);
   const commandBox = el('div', { 'data-den-sim-command': '1', hidden: true });
-  const body = el('div', { 'data-den-sim-body': '1' }, brainBox, readback, commandBox, candidates, proof, hops);
+  const pipelineRows = el('ul', { 'data-den-sim-pipeline': '1' });
+  const pipelineBox = el('details', { open: true, hidden: true }, el('summary', { textContent: 'The pipeline, this click' }), pipelineRows);
+  const body = el('div', { 'data-den-sim-body': '1' }, pipelineBox, brainBox, readback, commandBox, candidates, proof, hops);
   const panel = el('aside', { id: 'den-sim-panel', 'aria-label': 'Den simulation' }, ...feedButtons, el('div', { className: 'row' }, resetButton, hideButton), message, inputNotes, secondTry, body);
   document.body.append(strip, panel);
 
@@ -151,13 +155,13 @@
     const feed = status.feed, decided = feed.summary, first = status.brain.first_try_refused;
     inputNotes.hidden = !status.private_notes.length;
     inputNotes.textContent = status.private_notes.join(' ');
-    secondTry.hidden = !status.brain.invented_camera;
-    if (status.brain.invented_camera) {
-      secondTry.textContent = `First try refused: ${first.refusal}. This is a labelled second try: an INVENTED CAMERA at the nearest fixture makes person A face away from it, which may not be how anyone sits on your couch.`;
-    }
+    secondTry.hidden = false;
+    secondTry.textContent = (status.brain.away_from_fixture
+      ? `With joints facing the room, the brain found no clear fixture: ${first.refusal}. So person A is turned away from the nearest fixture, which may not be how anyone sits on your couch. `
+      : '') + 'The camera is INVENTED, 3 m behind person A, because den-observe cannot read den-register\'s output.';
     values.says.textContent = feed.live?.why || '–';
     values.refusal.textContent = feed.live?.refusal || '–';
-    values.events.textContent = decided ? `${decided.events}, scripted, into the real activity loop` : '–';
+    values.events.textContent = decided ? `${decided.events}, from the adapter, into the real activity loop` : '–';
     const landed = feed.phase === 'swinging' || feed.phase === 'holding';
     values.chose.textContent = landed ? `${decided.fixture_id}, pan ${fmt(decided.pan_deg)}°, tilt ${fmt(decided.tilt_deg)}°` : '–';
     values.hand.textContent = landed ? `${decided.target_m.map(v => fmt(v, 2)).join(', ')}, ${fmt(decided.hand_from_seat_m, 2)} m from the seat` : '–';
@@ -214,9 +218,58 @@
     catch (error) { commandBox.replaceChildren(el('div', { textContent: `The command could not be read: ${error.message}` })); }
   }
 
+  /* ---------- the pipeline, hop by hop, and its stick figure ---------- */
+  const SVG = 'http://www.w3.org/2000/svg';
+  const shape = (tag, attributes, ...children) => {
+    const node = document.createElementNS(SVG, tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+    node.append(...children);
+    return node;
+  };
+  const BONES = [[0, 1], [0, 2], [1, 3], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10], [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16]];
+  // The detector row's own numbers. There is no picture behind them: nothing looked at one.
+  function stickFigure(row) {
+    const [x0, y0, x1, y1] = row.box_xyxy, joints = row.keypoints, pad = 12;
+    return el('div', {}, shape('svg', { viewBox: `${x0 - pad} ${y0 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`, height: 170, role: 'img', 'aria-label': 'Scripted joints and their box. There is no picture.', 'data-den-sim-figure': '1' },
+      shape('rect', { x: x0, y: y0, width: x1 - x0, height: y1 - y0, fill: 'none', stroke: '#e0526a', 'stroke-width': 1.5 }),
+      ...BONES.filter(([a, b]) => joints[a] && joints[b]).map(([a, b]) => shape('line', { x1: joints[a][0], y1: joints[a][1], x2: joints[b][0], y2: joints[b][1], stroke: '#e8e8e8', 'stroke-width': 2, 'stroke-linecap': 'round' })),
+      ...joints.filter(Boolean).map(joint => shape('circle', { cx: joint[0], cy: joint[1], r: 2.5, fill: '#7fb2ff' }))),
+      el('span', { className: 'note', textContent: 'The detector row\'s box and joints, from fake-scripted-1. There is no picture behind them.' }));
+  }
+  function showPipeline(pipeline) {
+    const key = `${pipeline.rows.length}:${pipeline.failed}`;
+    if (key === sim.pipelineShown) return;
+    sim.pipelineShown = key;
+    pipelineBox.hidden = !pipeline.rows.length && !pipeline.failed;
+    pipelineRows.replaceChildren(...pipeline.rows.flatMap(row => {
+      const line = el('li', { 'data-den-sim-pipeline-hop': row.hop, 'data-den-sim-status': row.status },
+        el('span', { className: 'pill', style: `background:${PILL[row.status]}`, textContent: row.status }), row.hop,
+        el('span', { className: 'note', textContent: row.ms === undefined ? row.summary : `${row.summary} ${fmt(row.ms / 1000)} s.` }));
+      return row.keypoints ? [line, el('li', {}, stickFigure(row))] : [line];
+    }));
+    if (pipeline.failed) pipelineRows.append(el('li', { 'data-den-sim-pipeline-failed': '1', textContent: `Stopped: ${pipeline.failed}` }));
+  }
+
   function followRun(status) {
     const feed = status.feed;
     if (!sim.running) return;
+    if (feed.phase === 'pipeline') {
+      message.textContent = `Running the pinned pipeline tools on a scripted scene: ${feed.pipeline.rows.length} hops so far. No inference runs.`;
+      return;
+    }
+    if (feed.phase === 'pipeline_failed') {
+      sim.running = false;
+      setFeedEnabled(true);
+      message.textContent = `The pipeline stopped, so the brain did not decide and all four spots stay off. ${feed.pipeline.failed}`;
+      return;
+    }
+    if (feed.summary && !sim.personShown) {
+      sim.personShown = true;
+      overlay()?.setPerson?.({ pos: feed.summary.person_m, sigma_m: .25 }); // Floor disc at the adapter's person A.
+      message.textContent = feed.scenario === 'not_reading'
+        ? 'The pipeline is done, and need did not call this reading. The real brain now judges it.'
+        : 'The pipeline is done, and need called this reading. The real brain waits for 3 s of reading before it lights a spot.';
+    }
     if (feed.phase === 'swinging' && !sim.swinging) {
       sim.swinging = true; sim.swingStart = performance.now();
       selectInHome(feed.swing.fixture_id);
@@ -231,8 +284,8 @@
         showCommand(feed.scenario);
         const swing = feed.swing, decided = feed.summary, modeled = 'Lighting is on: Home\'s modeled view, not measured.';
         message.textContent = feed.phase === 'holding'
-          ? `The beam is on person A's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. The brain's decision is real; the reader and the motion are scripted. Nothing was sent. ${modeled}`
-          : `The brain refused: ${decided.refusal}. All four spots stay off. The reader is scripted. Nothing was sent. ${modeled}`;
+          ? `The beam is on person A's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. The tools and the brain ran for real; the scene and the motion are scripted. Nothing was sent. ${modeled}`
+          : `The brain refused: ${decided.refusal}. All four spots stay off. The scene is scripted. Nothing was sent. ${modeled}`;
       }, 400);
     }
   }
@@ -243,10 +296,13 @@
     try { status = await (await fetch('/__sim/status', { cache: 'no-store' })).json(); } catch (_) { return; }
     sim.status = status;
     const room = status.room === 'real' ? 'YOUR SCAN' : 'AUTHORED ROOM';
-    strip.textContent = `SIMULATION · real brain, scripted reader, no inference ran · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label}${status.brain.invented_camera ? ' · INVENTED CAMERA' : ''}`;
+    strip.textContent = `SIMULATION · real tools, scripted scene, no inference ran · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA`;
     showBrain(status);
+    showPipeline(status.feed.pipeline);
     followRun(status);
-    if (hopRows.childElementCount !== status.hops.length) {
+    const hopsKey = JSON.stringify(status.hops);
+    if (hopsKey !== sim.hopsShown) {
+      sim.hopsShown = hopsKey;
       hopRows.replaceChildren(...status.hops.map(hop => el('li', { 'data-den-sim-hop': hop.name, 'data-den-sim-status': hop.status },
         el('span', { className: 'pill', style: `background:${PILL[hop.status]}`, textContent: hop.status }), hop.name, el('span', { className: 'note', textContent: hop.note }))));
     }
@@ -304,17 +360,14 @@
     if (!live || !fixtures.length) return;
     setFeedEnabled(false);
     commandBox.hidden = true;
-    sim.seen.clear(); sim.frames.length = 0; sim.longTasks = 0; sim.longestTaskMs = 0; sim.swinging = false; sim.running = true;
-    message.textContent = scenario === 'not_reading'
-      ? 'The real brain gets the same scripted joints, but the typed label says phone use.'
-      : 'The real brain gets scripted joints and a typed "reading" label. It waits for 3 s of reading before it lights a spot.';
+    sim.seen.clear(); sim.frames.length = 0; sim.longTasks = 0; sim.longestTaskMs = 0; sim.swinging = false; sim.personShown = false; sim.running = true;
+    message.textContent = 'Starting the pinned pipeline tools on a scripted scene. No inference runs.';
     try {
       const response = await fetch('/__sim/feed', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenario, fixtures: fixtures.map(d => ({ fixture_id: d.fixture_id, display_origin_m: d.display_origin_m,
           horizontal_world_reference: d.horizontal_world_reference, pan_deg: d.state.pan_deg, tilt_deg: d.state.tilt_deg })) }) });
       const result = await response.json();
       if (!result.ok) throw Error(result.reason || 'feed_refused');
-      live.setPerson?.({ pos: result.person_m, sigma_m: .25 }); // Floor disc for scripted person A.
     } catch (error) {
       sim.running = false;
       setFeedEnabled(true);

@@ -118,7 +118,7 @@ const pinned = sourceIsPinned();
 function startBrain() {
   try {
     // An authored room has no household data, so its geometry stays out of the private folder.
-    return prepareBrain({ registration, couch, floorCentre: floorCentre(), geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, notes: privateNotes, refs });
+    return prepareBrain({ registration, couch, floorCentre: floorCentre(), geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, outputRoot: OUT, notes: privateNotes, refs });
   } catch (error) {
     console.error(`The lighting brain could not run, so there is nothing to show. It needs python on the PATH.\n${error.message}`);
     return process.exit(1);
@@ -127,9 +127,33 @@ function startBrain() {
 const brain = startBrain();
 const context = { room, registration: { source: registration.source, label: registration.label, revision: registration.doc.revision },
   couch: { source: couch.source, label: couch.label, point: couch.point }, base: refs.base.sha.slice(0, 8), source_is_pinned: pinned,
-  pack_revision: binding.content_revision, private_notes: privateNotes,
-  brain: { invented_camera: brain.invented_camera, first_try_refused: brain.first_try_refused, seat_m: brain.seat_m, command: brain.command_status } };
-const feed = createFeed({ timelines: brain.timelines, couchLabel: couch.label });
+  pack_revision: binding.content_revision, private_notes: privateNotes, tools: refs.tools,
+  brain: { away_from_fixture: brain.away_from_fixture, first_try_refused: brain.first_try_refused, seat_m: brain.seat_m, command: brain.command_status } };
+const feed = createFeed({ emptyRow: brain.empty_row, couchLabel: couch.label });
+
+/* ---------- one click: the pipeline, then the brain, then the replay into Home ---------- */
+const SCENARIOS = ['reading_on_couch', 'not_reading'];
+const commands = {};
+let activeRun = null;
+function startScenario(body) {
+  if (!SCENARIOS.includes(body?.scenario) || !Array.isArray(body.fixtures)) return { ok: false, reason: 'scenario_unknown' };
+  if (activeRun) return { ok: false, reason: 'a_run_is_going' };
+  feed.begin(body.scenario);
+  const current = activeRun = brain.runScenario(body.scenario, row => feed.hop(row));
+  current.promise.then(result => {
+    if (activeRun !== current) return; // Reloaded while it ran: the page has moved on.
+    activeRun = null;
+    if (!result.ok) { feed.fail(result.reason); return; }
+    commands[body.scenario] = result.command;
+    context.brain.command = result.command_status;
+    feed.play(result.timeline, body.fixtures);
+  });
+  return { ok: true };
+}
+function cancelScenario() {
+  activeRun?.cancel();
+  activeRun = null;
+}
 
 /* ---------- static source, the same inventory as the Home browser suites ---------- */
 function staticSources(root) {
@@ -215,11 +239,12 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/__sim/feed' && req.method === 'POST') {
       if (req.headers.origin !== ORIGIN) return refuse(res, req.method, pathname, 403);
       const body = await readJson(req); counters.feed_posts++;
-      return send(res, 200, feed.run(body));
+      return send(res, 200, startScenario(body));
     }
     if (req.method !== 'GET') return refuse(res, req.method, pathname, 405);
     if (pathname === '/' && !url.search) { res.writeHead(302, { Location: '/?apartmentRedesign=1&worldZoom=off' }); return res.end(); }
     if (pathname === '/' || pathname === '/index.html') {
+      cancelScenario();
       feed.reset(); // A page load starts from an empty room, so every load can swing again.
       return send(res, 200, homePage(), { 'Content-Type': TYPES['.html'] });
     }
@@ -230,7 +255,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/__sim/command') {
       // A display, fetched once per run. Nothing on this page or harness can send it.
       const scenario = url.searchParams.get('scenario');
-      return Object.hasOwn(brain.commands, scenario) ? send(res, 200, brain.commands[scenario]) : refuse(res, req.method, pathname, 404);
+      return Object.hasOwn(commands, scenario) ? send(res, 200, commands[scenario]) : refuse(res, req.method, pathname, 404);
     }
     if (pathname === '/auth/status') return send(res, 200, { authenticated: true, username: 'den-sim' });
     if (pathname === '/api/perception-lab/v1/capabilities') return send(res, 200, LAB_CAPABILITIES, { 'X-Home-Lab-Access': 'read-only' });
@@ -265,15 +290,13 @@ server.on('error', error => {
 server.listen(PORT, HOST, () => {
   const scan = room === 'real' ? `real scan pack ${binding.content_revision}` : 'AUTHORED ROOM';
   const asciiBrain = text => text.replace(/\s*·\s*/g, ', ');
-  const reading = brain.timelines.reading_on_couch.summary;
   console.log([`Den simulation: ${ORIGIN}/`, `Room: ${scan} | Sockets: ${registration.label.replace(' · ', ', ')} | Couch: ${couch.label}`,
-    ...(brain.first_try_refused ? [`Brain, first try: ${asciiBrain(brain.first_try_refused.refusal)}`] : []),
-    `Brain${brain.invented_camera ? ', second try with an INVENTED CAMERA' : ''}: ${reading.lit ? 'lights a spot on the hand point' : asciiBrain(reading.refusal)}`,
-    `Fixture command: ${brain.command_status.packets ? `${brain.command_status.packets} packets on a fictional profile, shown and NOT SENT` : brain.command_status.failed || brain.command_status.ik_reason || 'none computed'}`,
+    ...(brain.first_try_refused ? [`Typed joints facing the room: ${asciiBrain(brain.first_try_refused.refusal)}. So the reader faces away from the nearest fixture.`] : []),
+    'Each click runs the pinned pipeline tools on a scripted scene, with an INVENTED CAMERA. No inference runs.',
     ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
-    `Run output: ${run}`, 'The brain is real, its reader is scripted, and nothing is sent. Press Ctrl+C to stop.'].join('\n'));
+    `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));
   fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: new Date().toISOString(), origin: ORIGIN }, null, 2) + '\n');
   // The pack catalog must resolve before the page asks for it.
   if (!readPackIndex(PACKS).packs.some(item => item.active && item.manifest.siteId === 'victoria')) console.error('No active Victoria pack in ' + PACKS);
 });
-for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { feed.dispose(); server.closeAllConnections(); server.close(() => process.exit()); });
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cancelScenario(); feed.dispose(); server.closeAllConnections(); server.close(() => process.exit()); });

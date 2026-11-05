@@ -4,13 +4,14 @@ Real compile_target on a FICTIONAL profile, with its pivot and basis taken from
 the fixture the brain chose. Then the real plan and wire codec, read by path
 because it is on no git ref, sealed with the contract's public test key for a
 fictional device. Then the literal Home Assistant POST with a placeholder ieee,
-the two CAN A4 frames, and decide v0's Hue form. Nothing here can send: there is
-no token, no route and no socket. Prints one JSON document to stdout.
+the two CAN A4 frames, and the Hue form of what decide v0 asked for in chain.py.
+Nothing here can send: there is no token, no route and no socket. Prints one JSON
+document to stdout.
 
-Reads JSON on stdin: {"scenario", "brain", "codec_tools", "codec_contracts",
-"decide_ref"}. "brain" is null when the brain lit nothing, or else {"fixture_id",
-"aim_origin_m", "horizontal_world_reference", "target_m", "level", "cct_k",
-"pan_deg", "tilt_deg"}.
+Reads JSON on stdin: {"scenario", "brain", "decide", "codec_tools",
+"codec_contracts"}. "brain" is null when the brain lit nothing, or else
+{"fixture_id", "aim_origin_m", "horizontal_world_reference", "target_m", "level",
+"cct_k", "pan_deg", "tilt_deg"}.
 """
 import hashlib
 import importlib.util
@@ -18,9 +19,7 @@ import itertools
 import json
 import math
 import struct
-import subprocess
 import sys
-import types
 from pathlib import Path
 
 sys.dont_write_bytecode = True  # The codec's folder is read only: nothing lands beside it.
@@ -48,7 +47,6 @@ PLACEHOLDER_IEEE = 'UNCOMMISSIONED'
 ZHA_ROUTE = '/api/services/zha/issue_zigbee_cluster_command'
 SPOT_CHANNEL, FULL_DUTY = 21, 4096
 ANGLE_TOLERANCE_DEG = .05
-DECIDE_T0 = 1793764800.0
 NOT_GENERATED = 'Clock exchange is not generated: the real host brackets four timestamps against a live device.'
 
 
@@ -159,22 +157,6 @@ def can_frames(ik, contracts):
     return result
 
 
-def load_decide(ref):
-    name = '%s:tools/den-core/decide.py' % ref
-    source = subprocess.run(['git', '-C', str(ROOT), 'show', name], capture_output=True, check=True).stdout
-    module = types.ModuleType('decide')
-    module.__file__ = name
-    exec(compile(source, name, 'exec'), module.__dict__)
-    return module, sha256(source), name
-
-
-def scripted_person(at, reading):
-    return {'schema_version': 'person_state/v1', 'state_id': 'SIMULATION-scripted@%.3f' % at, 'emitted_ts': at, 'track_id': 'room',
-            'focused_engagement': {'state': 'engaged' if reading else 'none', 'since_s': 0. if reading else None, 'kind': 'reading' if reading else None},
-            'field_support': {'focused_engagement': {'support_status': 'observed'}},
-            'sources': {'focused_engagement': [{'origin': 'SIMULATION-scripted'}]}, 'flags': []}
-
-
 def hue_form(scene_by_light):
     calls = []
     for entity, scene in scene_by_light.items():
@@ -185,30 +167,11 @@ def hue_form(scene_by_light):
     return calls
 
 
-def run_decide(ref, reading):
-    """Real decide v0 on a scripted room. It logs and sends nothing, and has no
-    den_lighting mode here, so without reading it has no scene to ask for."""
-    try:
-        module, source_sha, name = load_decide(ref)
-    except (OSError, subprocess.CalledProcessError) as error:
-        return dict(ok=False, reason='decide v0 could not be read at %s: %s' % (ref, type(error).__name__))
-    policy = module.make_policy()
-    records = []
-    for at, kind, data in ((DECIDE_T0, 'occupancy', {'value': 'on'}), (DECIDE_T0 + 1, 'person_state', scripted_person(DECIDE_T0 + 1, reading))):
-        records += policy.handle(dict(schema='den-event-1', t=at, seq=0, kind=kind, source='SIMULATION-scripted', data=data))
-    decisions = [row['data'] for row in records if row['kind'] == 'decision']
-    last = decisions[-1] if decisions else None
-    look = module.DEFAULT_CONFIG['looks'][module.LOOK]
-    return dict(ok=True, source=name, sha256=source_sha, decisions=len(decisions), why=last['why'] if last else 'No decision: it has no scene to ask for.',
-                actuator_domain=last['actuator_domain'] if last else None, requested_scene=last['requested_scene'] if last else None,
-                calls=hue_form(last['requested_scene']) if last else [], look_status=look['status'] if last else None)
-
-
 def main():
     request = json.load(sys.stdin)
-    brain = request['brain']
+    brain, decide = request['brain'], request['decide']
     out = dict(sent=False, send_path=None, scenario=request['scenario'], brain=brain, ik=None, spot=None, plan=None, wire=None, can=None,
-               decide=run_decide(request['decide_ref'], brain is not None), codec=dict(found=False, tools=request['codec_tools']))
+               decide={**decide, 'calls': hue_form(decide['requested_scene'] or {})}, codec=dict(found=False, tools=request['codec_tools']))
     tools = Path(request['codec_tools'])
     if (tools / 'c12_runtime_plan.py').is_file() and (tools / 'c12_runtime_wire.py').is_file():
         codec, plan_sha = load_by_path(tools, 'c12_runtime_plan')

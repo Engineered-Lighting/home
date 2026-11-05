@@ -5,7 +5,8 @@ ActivityLoop, BrainPublisher and Brain under a fake clock, writing one JSON
 timeline to stdout. Only the deep stack is fake: the joints and the activity
 label are typed in here, no camera or model runs, and no socket can open.
 
-Reads {"geometry", "scenario", "seat_m", "facing_xy"} as JSON on stdin.
+Reads {"geometry", "scenario", "seat_m", "facing_xy"} as JSON on stdin, and
+optionally {"person", "label"} from chain.py's adapter, in place of typed ones.
 """
 import dataclasses
 import json
@@ -93,7 +94,7 @@ def row(phase, brain, clock):
 
 def main():
     request = json.load(sys.stdin)
-    label = LABELS[request['scenario']]
+    label = request.get('label') or LABELS[request['scenario']]
     clock, deep, published = Clock(), Deep(), []
     brain = Brain(load_geometry(request['geometry']), Settings(timezone='UTC'), clock)
     rows = [row('empty', brain, clock)]
@@ -112,7 +113,7 @@ def main():
     brain.ingest('victoria', dict(schema='activity-lighting-events-1', events=[
         dict(type='occupancy', home='victoria', room='den', source=SCRIPTED + '/occupancy', observed_at=START,
              sent_at=START, ttl_s=90, present=True, people_count=1)]))
-    person = scripted_reader(request['seat_m'], request['facing_xy'])
+    person = request.get('person') or scripted_reader(request['seat_m'], request['facing_xy'])
     for number, offset in enumerate(OFFSETS, 1):
         clock.value = START + offset
         source = binding(clock.value, number)

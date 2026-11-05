@@ -1,0 +1,166 @@
+# den-register: rung 1, the camera in the room frame
+
+den-register places the den camera in the room frame from control points you
+measure with a tape, see in one frame of an R take, and click. It fits a rigid
+camera-to-room transform, checks it against two points it never saw, and on a
+pass writes the RoomModel's camera entry and a CalibrationRecord. Every later
+Observation's `transform_id` (`den-oak@<version>`) resolves to that entry. The
+method, with every number, is [REGISTER-V1.md](REGISTER-V1.md); the records
+follow `docs/architecture/live-v1/schemas.json`.
+
+| File | Does |
+|---|---|
+| `register.py` | The commands: `worksheet`, `click`, `fit`, `check-mount`, `resolve`. |
+| `page.html`, `serve.py` | The click page, served on 127.0.0.1 only. |
+| `rigid.py` | The rigid fit, its residuals and the leave-one-out bound. |
+| `scene.py` | Reads one R take frame: left image, depth plane, intrinsics. |
+| `worksheet.py`, `records.py` | Your worksheet; the RoomModel and CalibrationRecord files. |
+| `REGISTER-V1.md` | The method and its numbers, some still open. |
+| `test_den_register.py`, `synthetic.py` | Tests on synthetic scenes only. |
+
+It needs Python 3.12 and the standard library only. It never opens the camera
+or contacts the Jetson, LA or Home Assistant: it reads takes that R's
+`take.py` already saved on this PC.
+
+## Privacy rules
+
+- Your measurements, clicks and results live in one folder on this PC,
+  `C:\den-register`. They never go into git, OneDrive or the cloud;
+  `register.py` refuses a folder inside a git checkout or OneDrive.
+- The click page shows one frame of a take, from this PC only (127.0.0.1, with
+  a one-time token). Frames never leave the PC.
+- Tell the agent only the verdict line (`REGISTERED ...` or `REFUSED`) and the
+  reason names under it. Do not paste the worksheet, clicks or fit files.
+
+## Step 1, once: a folder for this branch
+
+As for R, keep your checkout at `C:\claude\home` as it is and add a worktree
+that holds `claude/rung-1-register`. In PowerShell 5.1:
+
+```powershell
+git -C C:\claude\home fetch origin claude/rung-1-register
+git -C C:\claude\home worktree add C:\claude\home\.claude\worktrees\rung-1 claude/rung-1-register
+Set-Location C:\claude\home\.claude\worktrees\rung-1
+```
+
+Run every command below from `C:\claude\home\.claude\worktrees\rung-1`. If
+`python` is not found, use `py -3.12` instead. If the agent says the branch has
+changed, run `git pull` there. This branch includes R's `tools\den-take`.
+
+## Step 2: the worksheet
+
+```powershell
+python -B tools\den-register\register.py worksheet C:\den-register
+notepad C:\den-register\worksheet.json
+```
+
+The room frame is the scan's: metres, `z` up from the floor, `x` along the
+room's long axis (4.572 m), origin at the scan's minimum corner. Write which
+wall is `x = 0` and which is `y = 0` under `references`.
+
+## Step 3: mark and measure
+
+1. Put six small tape crosses on flat surfaces the camera sees, spread across
+   the room: some on the floor, one or two on a table or counter top, one on a
+   wall. Not all on one line, and not on edges or corners, where depth jumps.
+2. Measure each cross's centre: `x` from the `x = 0` wall, `y` from the
+   `y = 0` wall, `z` from the floor, with a tape or a laser. Write it as
+   `"room_xyz_m": [x, y, z]` in metres, for example `[2.31, 1.07, 0.0]`.
+3. Keep four as `"role": "fit"` and two as `"role": "check"`. The checks are
+   never used by the fit, so pick two that are not next to a fit point.
+4. Optional: if you can find a cross in the scan viewer, write the position it
+   shows as `"scan_xyz_m"`. It must agree with your tape within 5 cm.
+5. `measured_by` is `A` or `B`. Save the file as UTF-8 (Notepad's default).
+
+## Step 4, R's go-ahead: a short take
+
+Under R's own go-ahead for a free take, record a short one with nobody in view
+during its activity part. Leave the crosses in place.
+
+```powershell
+python -B tools\den-take\take.py --script free --out C:\den-takes\reg-1
+```
+
+Do the start slate as usual, then step out of the camera's view. About 20
+seconds after "Begin.", press Enter, then do the end slate. Use a new folder
+name for each take.
+
+## Step 5: click each point
+
+```powershell
+python -B tools\den-register\register.py click C:\den-register --take C:\den-takes\reg-1
+```
+
+Your browser opens the page. Pick a point in the list, then click its cross on
+the left camera image. Each click shows the depth found there; "depth_missing"
+means too little depth around it, so click a little to the side or leave the
+point unclicked. The Brightness button helps in a dark room; the Colour view is
+for finding your way only. Every click is saved at once in
+`C:\den-register\clicks-reg-1.json`. Press Done when finished. Running the
+command again reopens the same frame with your clicks; add `--frame 40` to use
+another frame of the take (and click again).
+
+## Step 6: close the open slots
+
+`fit` refuses while any number in REGISTER-V1.md is `open`. Before your first
+fit, tell the agent which proposed values to accept (or other values). The
+agent commits them; then run `git pull`. Do this before you see any fit
+result.
+
+## Step 7: fit and read the verdict
+
+```powershell
+python -B tools\den-register\register.py fit C:\den-register --take C:\den-takes\reg-1
+```
+
+It prints `REGISTERED den-oak@<version>`, or `REFUSED` with each reason, then
+each point's residual or check error and where it puts the camera. Every run
+writes `fit-N.json`; a pass also adds a line to `room-model.jsonl` and to
+`calibration-records.jsonl`. The reasons:
+
+| Reason | What to do |
+|---|---|
+| `slots_open` | Step 6. |
+| `too_few_pairs`, `too_few_checks` | Click at least 3 fit points and 2 checks. |
+| `collinear` | Add a fit point away from the line the others are on. |
+| `depth_missing` | Click that point again, a little to the side, or clear it. |
+| `frame_depth_different_times` | Use another frame (`--frame`). |
+| `fit_residual_over_gate`, `check_over_gate` | Re-measure the named point, and check its click. |
+| `scan_disagrees` | The tape references and the scan disagree: check which walls are `x = 0` and `y = 0`. |
+| `camera_below_floor` | `x`, `y` or `z` runs the wrong way, or two are swapped. |
+| `clicks_stale` | Click again on this take. |
+| `mount_changed` | The camera moved after this take: record a new one. |
+| `already_registered` | Nothing new to register. |
+
+To look up a registration later:
+
+```powershell
+python -B tools\den-register\register.py resolve C:\den-register den-oak@2026-11-10.1
+```
+
+## Later: has the camera moved?
+
+A registration holds only while the camera stays put. After any later take:
+
+```powershell
+python -B tools\den-register\register.py check-mount C:\den-register --take C:\den-takes\2026-11-12-1
+```
+
+`MOUNT UNCHANGED` keeps the registration. `MOUNT CHANGED` invalidates it and
+lists what to re-check: the camera's mount, any mark on furniture that moved,
+then steps 4, 5 and 7 again. `MOUNT UNKNOWN` (too much of the view blocked)
+changes nothing; try a take with a clearer view.
+
+Exit codes: 0 = registered, unchanged or valid; 1 = refused, changed, unknown
+or invalidated, with the reason printed and saved in `fit-N.json` or
+`mount-N.json`; 2 = refused before anything was saved, with the reason
+printed.
+
+## Tests
+
+```powershell
+python -B -m unittest discover -s tools/den-register -v
+```
+
+They use synthetic scenes and a page on 127.0.0.1 only, with no camera and no
+network. They take a few seconds.

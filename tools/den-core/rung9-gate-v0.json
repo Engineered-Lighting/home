@@ -31,7 +31,7 @@
     "compensation_form": {"status": "open", "value": null, "proposed": "mode", "note": "compensation, pending: strict or mode, for P1 to P3"},
     "p3_fallback": {"status": "open", "value": null, "proposed": "P1", "note": "compensation, pending: P3 with an unknown changer falls back to P1 or P0"},
     "lambda_h": {"status": "open", "value": null, "proposed": 1.0, "note": "compensation parameter: P2's penalty weight"},
-    "footprint_threshold": {"status": "open", "value": null, "proposed": 0.05, "note": "compensation parameter: a surface is in a hold's footprint when the change moved its light by this share"},
+    "footprint_threshold": {"status": "open", "value": null, "proposed": 0.05, "note": "compensation parameter: a block is in a hold's footprint when the change moved its light by this share"},
     "footprint_membership": {"status": "open", "value": null, "proposed": "at_or_above", "note": "compensation parameter: at_or_above or above the threshold"},
     "local_completion": {"status": "open", "value": null, "proposed": "not-allowed", "note": "local-completion, pending: not-allowed or allowed"},
     "manual_vs_safety": {"status": "open", "value": null, "proposed": "S0", "note": "manual-vs-safety, pending: only S0 (manual wins, flagged) is built, the register's advice for the Hue path"},

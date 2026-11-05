@@ -8,7 +8,9 @@ What it adds to decide v0
 - The seed Look's glare limit binds free channels. A held light that alone breaks it goes in hard_conflicts, stays as
   set (manual-vs-safety S0, the only option built) and free channels may not raise their part of it.
 - The compensation options P0 to P3 and their strict and mode forms are all built, as named options. Which one the
-  coordinator should use is the owner's, so the hold fixtures that depend on it are not admitted as pass or fail.
+  coordinator should use is the owner's, so the hold fixtures that depend on it are not admitted as pass or fail. A
+  hold's footprint and bound work per block, the register's "points it moved", since a surface's mean can hide them;
+  a Decision writes the footprint as a mask over the model's blocks.
 
 What stays decide v0's: the rule (decide.plan), the triggers, the wire format and policy id 'decide'. decide.py itself
 is imported and unchanged, because check.py pins each policy's file hash: an edit there would make every existing
@@ -208,6 +210,7 @@ class Coordinator:
         self.applied = dict.fromkeys(LIGHTS)
         self.solved, self.pending, self.last_rule = None, None, None
         self.made = 0
+        self._memo = {}  # each hold's bound and what a channel's setting does against it, while holds and people stand still
 
     # What each event changes -----------------------------------------------------------------------------------------
 
@@ -274,83 +277,115 @@ class Coordinator:
                 before = self.refs[bulb]["pinned"]
             direction, footprint, whole = self._moved(bulb, before, hold["pinned"])
             self.refs[bulb] = {"since": hold["since"], "pinned": hold["pinned"], "direction": direction,
-                               "footprint": footprint, "whole": whole,
+                               "footprint": footprint, "mask": self.light.mask(footprint), "whole": whole,
                                "scene": {b: self._current(b) for b in LIGHTS if b != bulb}}
         return opened
 
-    def _part(self, channel, scene):
-        """One channel's part at every surface, a surface the model excluded counting as no light; None with no level."""
-        part = self.light.contribution(channel, scene)
-        return None if part is None else {s: value or 0.0 for s, value in part.items()}
-
     def _moved(self, bulb, before, after):
-        """('dim' | 'brighten' | 'unknown', footprint surfaces, {surface: light there before}). A surface is in the
-        footprint when the change moved its light by at least footprint_threshold of what was there; with no known
-        before, by the share the bulb gives."""
+        """('dim' | 'brighten' | 'unknown', the footprint's block indexes, the light at each block before). A block is in
+        the footprint when the change moved its light by at least footprint_threshold of what was there; with no known
+        before, by the share the bulb gives. With no level on the held bulb it is every block."""
         comp, light = self.config["compensation"], self.light
-        new, old = self._part(bulb, after), self._part(bulb, before)
+        new, old, size = light.row(bulb, after), light.row(bulb, before), len(light.points)
         if new is None:
-            return "unknown", sorted(light.surfaces), {}
-        rest = light.predict({b: self._current(b) for b in LIGHTS if b != bulb and self._current(b)})
+            return "unknown", list(range(size)), [0.0] * size
+        others = [light.row(b, self._current(b)) for b in LIGHTS if b != bulb and self._current(b)]
+        known = others and all(row is not None for row in others)
+        rest = [sum(column) for column in zip(*others)] if known else [0.0] * size  # as predict: unknown if any bulb is
         at_or_above = comp["footprint_membership"] == "at_or_above"
-        footprint, signs, whole = [], set(), {}
-        for surface in sorted(light.surfaces):
-            moved = new[surface] if old is None else abs(new[surface] - old[surface])
-            whole[surface] = (rest[surface] or 0.0) + (new[surface] if old is None else old[surface])
-            share = moved / whole[surface] if whole[surface] > EPS else 0.0
+        footprint, signs, whole = [], set(), [0.0] * size
+        for n in range(size):
+            moved = new[n] if old is None else abs(new[n] - old[n])
+            whole[n] = rest[n] + (new[n] if old is None else old[n])
+            share = moved / whole[n] if whole[n] > EPS else 0.0
             if share > comp["footprint_threshold"] or (at_or_above and share == comp["footprint_threshold"]):
-                footprint.append(surface)
-                if old is not None and new[surface] != old[surface]:
-                    signs.add(new[surface] > old[surface])
+                footprint.append(n)
+                if old is not None and new[n] != old[n]:
+                    signs.add(new[n] > old[n])
         direction = {frozenset({False}): "dim", frozenset({True}): "brighten"}.get(frozenset(signs), "unknown")
         return direction, footprint, whole
+
+    def _footprint(self, ref):
+        """What a Decision writes of a footprint. Every block of the grid fits, as a mask over the model's sample_points;
+        `surfaces` says which of today's task surfaces it touches."""
+        tasks = {surface_of(person, self.light) for person in self.people.values()}
+        return {"points": len(ref["footprint"]), "of": len(self.light.points), "mask": ref["mask"],
+                "surfaces": sorted(s for s in tasks if not self.light.members[s].isdisjoint(ref["footprint"]))}
 
     # The compensation options ----------------------------------------------------------------------------------------
 
     def _bound(self, hold_bulb):
-        """(option in force for this hold, the surfaces where free light may not move against the change)."""
+        """(option in force for this hold, the blocks where free light may not move against the change)."""
+        if hold_bulb in self._memo:
+            return self._memo[hold_bulb]
         comp, ref = self.config["compensation"], self.refs[hold_bulb]
-        option = comp["option"]
+        option, blocks = comp["option"], ref["footprint"]
         if option == "P3":
             changer = self.changers.get(hold_bulb)
             if changer is None:
                 option = comp["p3_fallback"]
             else:
-                own = surface_of(self.people.get(changer), self.light)
-                return "P3", [s for s in ref["footprint"] if s == own]
-        return option, [] if option == "P0" else ref["footprint"]
+                own = self.light.members[surface_of(self.people.get(changer), self.light)]
+                blocks = [n for n in blocks if n in own]
+        self._memo[hold_bulb] = option, [] if option == "P0" else blocks
+        return self._memo[hold_bulb]
 
     def _against(self, hold_bulb, channel, scene):
-        """How far a free channel's scene moves against the change at the bound surfaces: {surface: amount > 0}, measured
-        from the reference, which only ever moves with the person's change."""
-        _, surfaces = self._bound(hold_bulb)
-        ref = self.refs[hold_bulb]
-        new, old = self._part(channel, scene), self._part(channel, ref["scene"].get(channel))
-        if new is None or old is None:
+        """How far a free channel's scene moves against the change at the bound blocks: {block: amount > 0}, measured from
+        the reference, which only ever moves with the person's change."""
+        if scene is None:
             return {}
-        out = {}
-        for s in surfaces:
-            delta = new[s] - old[s]
-            if (ref["direction"] == "dim" and delta > EPS or ref["direction"] == "brighten" and delta < -EPS
-                    or ref["direction"] == "unknown" and abs(delta) > EPS):
-                out[s] = abs(delta)
-        return out
+        key = (hold_bulb, channel, scene["on"], scene.get("brightness"), scene.get("kelvin"), scene.get("aim"))
+        if key not in self._memo:
+            ref = self.refs[hold_bulb]
+            new, old = self.light.row(channel, scene), self.light.row(channel, ref["scene"].get(channel))
+            out = {}
+            if new is not None and old is not None:
+                direction = ref["direction"]
+                for n in self._bound(hold_bulb)[1]:
+                    delta = new[n] - old[n]
+                    if direction == "dim" and delta > EPS or direction == "brighten" and delta < -EPS or (
+                            direction == "unknown" and abs(delta) > EPS):
+                        out[n] = abs(delta)
+            self._memo[key] = out
+        return self._memo[key]
 
     def _breaks_bound(self, channel, scene):
         return any(self._bound(h)[0] in ("P1", "P3") and self._against(h, channel, scene) for h in self.refs)
 
+    def _against_at_surfaces(self, hold_bulb, channel, scene):
+        """_against, summed over each surface's blocks."""
+        if scene is None:
+            return {}
+        key = ("surfaces", hold_bulb, channel, scene["on"], scene.get("brightness"), scene.get("kelvin"), scene.get("aim"))
+        if key not in self._memo:
+            amounts = self._against(hold_bulb, channel, scene)
+            found = {name: sum(amounts.get(n, 0.0) for n in members) for name, members in self.light.members.items()} if amounts else {}
+            self._memo[key] = {name: amount for name, amount in found.items() if amount}
+        return self._memo[key]
+
+    def _light_at_surfaces(self, hold_bulb):
+        """The light that was at each surface's blocks in this hold's footprint."""
+        key = ("whole", hold_bulb)
+        if key not in self._memo:
+            ref = self.refs[hold_bulb]
+            footprint = set(ref["footprint"])
+            self._memo[key] = {name: sum(ref["whole"][n] for n in members if n in footprint)
+                               for name, members in self.light.members.items()}
+        return self._memo[key]
+
     def _penalty(self, free_scene):
-        """P2's soft penalty: lambda_h times the squared share of light moved against each hold at its footprint. Against
-        a squared shortfall, that leaves 1 / (1 + lambda_h) of a gap made up, the share P2's rule moves take too."""
+        """P2's soft penalty: lambda_h times the squared share of the light at each surface's footprint blocks that free
+        light moved against each hold. Against a squared shortfall, that makes up part of a gap, as P2's rule moves do."""
         total = 0.0
-        for hold, ref in self.refs.items():
+        for hold in self.refs:
             if self._bound(hold)[0] != "P2":
                 continue
-            moved = {}
+            moved, whole = {}, self._light_at_surfaces(hold)
             for channel, scene in free_scene.items():
-                for s, amount in self._against(hold, channel, scene).items():
-                    moved[s] = moved.get(s, 0.0) + amount
-            total += sum((amount / max(ref["whole"].get(s, 0.0), 1.0)) ** 2 for s, amount in moved.items())
+                for name, amount in self._against_at_surfaces(hold, channel, scene).items():
+                    moved[name] = moved.get(name, 0.0) + amount
+            total += sum((amount / max(whole[name], 1.0)) ** 2 for name, amount in moved.items())
         return self.config["compensation"]["lambda_h"] * total
 
     def _outside_bound(self, rule):
@@ -366,14 +401,15 @@ class Coordinator:
             for channel, scene in moved.items():
                 if channel not in ref["scene"]:
                     continue
-                new, old = self._part(channel, scene), self._part(channel, ref["scene"][channel])
+                new, old = self.light.row(channel, scene), self.light.row(channel, ref["scene"][channel])
                 if new is None or old is None:
                     ref["scene"][channel] = ref["scene"][channel] or scene
                     continue
-                deltas = [new[s] - old[s] for s in ref["footprint"]]
+                deltas = [new[n] - old[n] for n in ref["footprint"]]
                 if (ref["direction"] == "dim" and all(d <= EPS for d in deltas)
                         or ref["direction"] == "brighten" and all(d >= -EPS for d in deltas)):
                     ref["scene"][channel] = scene
+        self._memo = {}
 
     # Glare --------------------------------------------------------------------------------------------------------------
 
@@ -531,7 +567,7 @@ class Coordinator:
 
     def _hold_limited(self, requested, targets):
         """Target surfaces a hold's bound leaves under target: the candidate's own diagnostic, never a delivery miss."""
-        bound = {s: h for h in sorted(self.refs) for s in self._bound(h)[1]}
+        bound = {s: h for h in sorted(self.refs) for s in targets if not self.light.members[s].isdisjoint(self._bound(h)[1])}
         total = self.light.predict({b: s for b, s in requested.items() if self.light.contribution(b, s) is not None})
         return [{"point_id": s, "target": round(t, 3),
                  "reason": "%s held (%s): the bound keeps free light from making up for it" % (
@@ -597,7 +633,7 @@ class Coordinator:
             entry = copy.deepcopy(hold)
             if comp["option"] != "P0" and hold["entity_id"] in self.refs:  # the fields only P1 to P3 carry
                 ref = self.refs[hold["entity_id"]]
-                entry.update(direction=ref["direction"], footprint=ref["footprint"])
+                entry.update(direction=ref["direction"], footprint=self._footprint(ref))
                 if comp["option"] == "P3":
                     entry["changer_track"] = self.changers.get(hold["entity_id"])
             held.append(entry)
@@ -701,6 +737,7 @@ class Coordinator:
             out.append(self._finish(self.pending, self.pending["send_at"], False))
             self.pending = None
         trigger = self._observe(event)
+        self._memo = {}
         if trigger is None:
             return out
         plan = self._plan(t)

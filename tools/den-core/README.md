@@ -633,11 +633,15 @@ fallbacks. V8 also runs under local-completion allowed, and V63 follows den_ligh
 gaming option its expected results describe. `test_hold_fixtures.py` checks that each option does what its register
 entry and ladder rung 11's V63 text say. That tests the code and admits nothing.
 
-- A hold's direction and footprint come from what the person's change did to predicted light. Free light is measured
-  against a reference that only moves with the change, so a bound never lets a bulb back.
-- Under P1 and P3 a free bulb stays where it is rather than move against the change; P3 binds only at the changer's own
-  task surface, and falls back when the changer is unknown. Real corrections carry no changer yet, so they all fall back.
-- Under P2 a solve makes up `1 / (1 + lambda_h)` of a gap, and a rule's own move goes that share of the way.
+- A hold's direction and footprint come from what the person's change did to predicted light at each block: the
+  register's "points it moved", because a surface's mean can hide them. A dim reaching 12 blocks of a 144-block surface
+  barely moves the surface, but P1 binds free light at those 12. Free light is measured against a reference that only
+  moves with the change, so a bound never lets a bulb back.
+- Under P1 and P3 a free bulb stays where it is rather than move against the change; P3 binds only at the footprint's
+  blocks in the changer's own task surface, and falls back when the changer is unknown. Real corrections carry no changer
+  yet, so they all fall back.
+- Under P2 a solve pays `lambda_h` times the squared share of the light at each surface's footprint blocks that free light
+  moved against the hold, so it makes up part of a gap, and a rule's own move goes `1 / (1 + lambda_h)` of the way.
 - In the mode form, vacancy-off, the arrival after it and a game's moves sit outside the bound. A return to base because
   reading ended stays inside.
 
@@ -675,6 +679,9 @@ Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear 
 - `recipients[]`: `light_model`, and each target's `interval` (null until the model has an error score).
 - `predicted.eyes[]`: `support_status` and `excluded`. `predicted.daylight` says electric only.
 - `inputs`: `preference`, `compensation`, `coordinator`, `recipient_rule`, `light_state_status`.
+- `inputs.hold_set.held[].footprint`: the contracts name it and give it no type. Here it is
+  `{points, of, mask, surfaces}`: how many blocks of how many, the blocks as hex bits over the model's `sample_points`
+  (bit 0 the first; `LightModel.unmask` reads it), and which of the tracked people's surfaces it touches.
 
 ### Left for later
 

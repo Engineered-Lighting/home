@@ -174,6 +174,26 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(len(whole.surfaces["room"]), 12)
         self.assertGreater(mapped.predict({FL: scene(254)})["room"], whole.predict({FL: scene(254)})["room"])
 
+    def test_a_mask_is_the_same_length_for_any_blocks_and_reads_back(self):
+        points = self.light.points
+        self.assertEqual(self.light.mask([]), "000")
+        self.assertEqual(self.light.mask([0]), "001")
+        self.assertEqual(self.light.mask(range(12)), "fff")
+        self.assertEqual(self.light.unmask(self.light.mask([0, 5, 11])), [points[0], points[5], points[11]])
+        self.assertEqual(self.light.unmask("000"), [])
+
+    def test_a_row_is_one_channels_part_at_every_block_in_model_order(self):
+        row = self.light.row(FL, scene(254))
+        self.assertEqual(len(row), len(self.light.points))
+        self.assertAlmostEqual(row[self.light.points.index("counter-1/1")], 300.0 * fake_light._ripple(1))
+        self.assertEqual(self.light.row(FL, {"on": False, "brightness": None, "kelvin": None}), [0.0] * 12)
+        self.assertIsNone(self.light.row(FL, {"on": True, "brightness": None, "kelvin": 2700}))
+        self.assertIsNone(self.light.row(FL, None))
+        model = fake_light.build()
+        model["basis"][fake_light.channel_key(FL) + "@2700K"]["counter-1/0"] = None
+        excluded = light_adapter.LightModel(model).row(FL, scene(254))
+        self.assertEqual(excluded[model["sample_points"].index({"point_id": "counter-1/0", "kind": None, "xyz": None, "normal": None})], 0.0)
+
     def test_only_the_adapter_calls_the_fake(self):
         for path in HERE.glob("*.py"):
             if path.name in ("light_adapter.py", "fake_light.py") or path.name.startswith("test_"):
@@ -259,7 +279,7 @@ class DecisionRecordTest(unittest.TestCase):
         self.assertEqual(d["trigger"], "hold change")
         held = d["inputs"]["hold_set"]["held"][0]
         self.assertEqual(held["direction"], "dim")
-        self.assertIn("counter-1", held["footprint"])
+        self.assertIn("counter-1", held["footprint"]["surfaces"])
 
     def test_option_fields_only_under_their_option(self):
         p0 = policy(compensation={"option": "P0"})
@@ -611,6 +631,171 @@ class TimingTest(unittest.TestCase):
         [d] = feed(p, *touch(T0 + 30, FL, 10))  # the dim leaves a gap only the spot's near aim can fill
         self.assertEqual(d["requested_scene"][FR]["aim"], "near")
         self.assertEqual(d["applied_scene"][FR]["readback"]["aim"], "near")
+
+
+class BlockFootprintTest(unittest.TestCase):
+    """The register's P1 binds free light "at the points it moved". On rung 8's grid a point is a block, and a surface's mean
+    can hide a change at a few of its blocks: a dim reaching 12 of a 144-block surface once gave footprint [] and direction
+    unknown, so P1 chose P0's scene and free light rose at the very blocks the person had dimmed."""
+    CORNER = 12
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def model(self, reach=150.0):
+        """Rung 8's 576 blocks with 'desk' at the first 144 and 'bench' at the next 144. Front left reaches only the first
+        CORNER blocks of the desk, with `reach` lux at full; the other three reach every block."""
+        model = fake_light.build(filler=576 - 12, surfaces=False)
+        points = [p["point_id"] for p in model["sample_points"]]
+        for key, row in model["basis"].items():
+            own = key.startswith("den_front_left")
+            for n, point in enumerate(points):
+                row[point] = (reach if n < self.CORNER else 0.0) if own else 60.0
+        path = self.tmp / ("model-%s.json" % reach)
+        path.write_text(json.dumps(model), encoding="utf-8")
+        return {"source": "file", "path": str(path), "surfaces": {"desk": points[:144], "bench": points[144:288]}}
+
+    def touched(self, option, after=80, surface="desk", who="A", reach=150.0, form="mode", state="engaged", reader=None):
+        """(policy, the Decision of the touch): A at `surface` touches front left, with B reading at `reader` if given."""
+        p = policy(light_model=self.model(reach), compensation={"option": option, "form": form})
+        start(p)
+        feed(p, ps(T0 + 10, "A", state, surface))
+        if reader:
+            feed(p, ps(T0 + 12, "B", "engaged", reader))
+        out = feed(p, *touch(T0 + 30, FL, after, who))
+        return p, out[-1]
+
+    def free_at_corner(self, p, requested):
+        rows = [p.light.row(b, requested[b]) for b in (FR, RL, RR)]
+        return sum(sum(row[:self.CORNER]) for row in rows)
+
+    def test_p1_binds_at_the_blocks_a_dim_moved_though_the_surfaces_mean_hardly_moved(self):
+        p0, d0 = self.touched("P0")
+        p1, d1 = self.touched("P1")
+        look = {b: scene(200) for b in (FR, RL, RR)}
+        self.assertGreater(self.free_at_corner(p0, d0["requested_scene"]), self.free_at_corner(p0, look))  # free light rises
+        self.assertLessEqual(self.free_at_corner(p1, d1["requested_scene"]), self.free_at_corner(p1, look))  # P1's does not
+        self.assertNotEqual(d0["requested_scene"], d1["requested_scene"])
+        held = d1["inputs"]["hold_set"]["held"][0]
+        self.assertEqual(held["direction"], "dim")
+        self.assertEqual((held["footprint"]["points"], held["footprint"]["of"]), (self.CORNER, 576))
+        self.assertEqual(p1.light.unmask(held["footprint"]["mask"]), p1.light.points[:self.CORNER])
+        self.assertEqual(held["footprint"]["surfaces"], ["desk"])
+
+    def test_p1_binds_at_the_blocks_a_brighten_moved(self):
+        # Front left's blocks go up, so the solve would bring the free bulbs down if only the desk's mean counted.
+        p0, d0 = self.touched("P0", after=254, reach=900.0)
+        p1, d1 = self.touched("P1", after=254, reach=900.0)
+        look = {b: scene(200) for b in (FR, RL, RR)}
+        self.assertLess(self.free_at_corner(p0, d0["requested_scene"]), self.free_at_corner(p0, look))
+        self.assertGreaterEqual(self.free_at_corner(p1, d1["requested_scene"]), self.free_at_corner(p1, look))
+        self.assertEqual(d1["inputs"]["hold_set"]["held"][0]["direction"], "brighten")
+
+    def test_a_block_the_bulb_barely_reaches_is_outside_the_footprint(self):
+        spec = self.model()
+        model = json.loads(Path(spec["path"]).read_text(encoding="utf-8"))
+        for key, row in model["basis"].items():
+            if key.startswith("den_front_left"):
+                row[model["sample_points"][20]["point_id"]] = 0.5  # a stray: moves well under 5% of the light there
+        path = self.tmp / "stray.json"
+        path.write_text(json.dumps(model), encoding="utf-8")
+        p = policy(light_model={**spec, "path": str(path)}, compensation={"option": "P1", "form": "mode"})
+        start(p)
+        feed(p, ps(T0 + 10, "A", "engaged", "desk"))
+        [d] = feed(p, *touch(T0 + 30, FL, 80))
+        self.assertEqual(p.light.unmask(d["inputs"]["hold_set"]["held"][0]["footprint"]["mask"]), p.light.points[:self.CORNER])
+
+    def test_p2_makes_up_part_of_what_p0_makes_up(self):
+        # A corner strong enough that the solve wants more than one step at the desk, so the penalty has something to hold back.
+        look = {b: scene(200) for b in (FR, RL, RR)}
+        rises = {}
+        for option in ("P0", "P1", "P2"):
+            p, d = self.touched(option, reach=300.0)
+            rises[option] = self.free_at_corner(p, d["requested_scene"]) - self.free_at_corner(p, look)
+        self.assertEqual(rises["P1"], 0.0)
+        self.assertGreater(rises["P2"], rises["P1"])
+        self.assertLess(rises["P2"], rises["P0"])
+
+    def test_p3_binds_only_at_the_blocks_of_the_changers_own_surface(self):
+        # The dim moved light only at the desk's corner. A at the desk is bound there. A at the bench is not, so B reading at
+        # the desk gets it made up, as P1 would refuse.
+        mine = self.touched("P3", surface="desk")[1]
+        theirs = self.touched("P3", surface="bench", state="none", reader="desk")[1]
+        p1 = self.touched("P1", surface="bench", state="none", reader="desk")[1]
+        self.assertEqual(mine["inputs"]["hold_set"]["held"][0]["footprint"]["surfaces"], ["desk"])
+        self.assertEqual(theirs["inputs"]["hold_set"]["held"][0]["changer_track"], "A")
+        self.assertLessEqual(max(mine["requested_scene"][b]["brightness"] for b in (FR, RL, RR)), 200)
+        self.assertGreater(max(theirs["requested_scene"][b]["brightness"] for b in (FR, RL, RR)), 200)
+        self.assertLessEqual(max(p1["requested_scene"][b]["brightness"] for b in (FR, RL, RR)), 200)
+
+    def test_hold_limited_names_the_target_surface_never_its_blocks(self):
+        p, d = self.touched("P1", reach=900.0)
+        self.assertEqual([row["point_id"] for row in d["hold_limited"]], ["desk"])
+        self.assertIn(FL, d["hold_limited"][0]["reason"])
+        self.assertIn("dim", d["hold_limited"][0]["reason"])
+        p, d = self.touched("P1", reach=900.0, surface="bench")  # the bench is out of the footprint
+        self.assertEqual(d["hold_limited"], [])
+
+    def test_a_share_exactly_at_the_threshold_follows_the_membership_rule(self):
+        # Front left alone, from off to full, is 1 lx where a lone front right gives 20: a share of exactly 0.05.
+        model = fake_light.build(surfaces=False)
+        point = model["sample_points"][0]["point_id"]
+        for key, row in model["basis"].items():
+            for name in row:
+                row[name] = 0.0
+            row[point] = {"den_front_left": 1.0, "front_right": 20.0}.get(key.split(".")[0], 0.0)
+        path = self.tmp / "exact.json"
+        path.write_text(json.dumps(model), encoding="utf-8")
+        off = {"on": False, "brightness": None, "kelvin": None}
+        normal = {FL: off, FR: scene(254), RL: off, RR: off}
+        for membership, points in (("at_or_above", 1), ("above", 0)):
+            gate = {**GATE, "slots": {**SLOTS, "footprint_membership": membership}}
+            p = coordinator.make_policy({"gate": gate, "light_model": {"source": "file", "path": str(path)},
+                                         "compensation": {"option": "P1", "form": "mode"}})
+            for b in events.LIGHTS:
+                p.handle(ev(T0, "light_observed", {"entity_id": b, **normal[b], "context": "unknown"}))
+            p.handle(ev(T0, "mode", {**mode()["data"], "normal": normal}, "incumbent"))
+            p.handle(ev(T0 + 1, "occupancy", {"value": "on", "via": "t"}))
+            hold_mode = {**mode(2, [hold(FL, 254, T0 + 30)])["data"], "normal": normal}
+            [d] = feed(p, ev(T0 + 30, "mode", hold_mode, "incumbent"),
+                       ev(T0 + 30, "correction", {"correction_id": "c", "entity_id": FL, "after": scene(254), "source": "t"}))
+            self.assertEqual(d["inputs"]["hold_set"]["held"][0]["footprint"]["points"], points, membership)
+
+    def test_a_held_bulb_with_no_level_binds_every_block_either_way(self):
+        p = policy(light_model=self.model(), compensation={"option": "P1", "form": "mode"})
+        start(p)
+        feed(p, ps(T0 + 10, "A", "engaged", "desk"))
+        blank = {"entity_id": FL, "pinned": {"on": True, "brightness": None, "kelvin": None}, "since": T0 + 30, "lifetime": "x"}
+        [d] = feed(p, ev(T0 + 30, "mode", mode(2, [blank])["data"], "incumbent"),
+                   ev(T0 + 30, "correction", {"correction_id": "c", "entity_id": FL, "after": blank["pinned"], "source": "t"}))
+        held = d["inputs"]["hold_set"]["held"][0]
+        self.assertEqual((held["direction"], held["footprint"]["points"]), ("unknown", 576))
+        self.assertEqual(held["footprint"]["mask"], "f" * 144)
+        self.assertEqual([d["requested_scene"][b]["brightness"] for b in (FR, RL, RR)], [200, 200, 200])  # nothing may move
+
+    def test_every_block_in_every_hold_still_fits_the_line(self):
+        p = policy(light_model=self.model(), compensation={"option": "P3", "form": "strict"})
+        start(p)
+        feed(p, ps(T0 + 10, "A", "engaged", "desk"))
+        holds = []
+        for n, b in enumerate(events.LIGHTS):
+            holds.append({"entity_id": b, "pinned": {"on": True, "brightness": None, "kelvin": None}, "since": T0 + 30 + n, "lifetime": "x"})
+            for d in feed(p, ev(T0 + 30 + n, "mode", mode(2 + n, holds)["data"], "incumbent"),
+                          ev(T0 + 30 + n, "correction", {"correction_id": "c%d" % n, "entity_id": b, "after": holds[-1]["pinned"], "source": "t",
+                                                         "who": {"track_id": "A"}})):
+                events.validate(ev(T0 + 30, "decision", {**d, "actuation": "replay"}, "decide"))
+        self.assertEqual(len(d["inputs"]["hold_set"]["held"]), 4)
+        self.assertTrue(all(row["footprint"]["points"] == 576 for row in d["inputs"]["hold_set"]["held"]))
+
+    def test_it_replays_byte_for_byte(self):
+        items, _, _ = synthetic.evening(unclear_rate=0.0, invalid_rate=0.0, fail_rate=0.0, touch=True)
+        config = {"light_model": self.model(), "compensation": {"option": "P1", "form": "mode"}}
+        header, log = runner.run(runner.tagged(items, "synthetic"), runner.load_policies(["need", "incumbent", "coordinator"], {"coordinator": config}),
+                                 synthetic=True, sources=[])
+        path = self.tmp / "log.jsonl"
+        events.write(path, header, log)
+        self.assertTrue(check.check(path)["ok"])
 
 
 def full_grid(per=144, **params):

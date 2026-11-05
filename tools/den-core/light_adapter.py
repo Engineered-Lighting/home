@@ -68,6 +68,8 @@ class LightModel:
         self.points = [p["point_id"] for p in model["sample_points"]]
         self.keys = {c["entity_id"]: c["channel_key"] for c in model["channels"]}
         self.surfaces = {ROOM: self.points, **(surfaces or model.get("surfaces") or {})}  # 'room' unmapped: the whole view
+        index = {p: n for n, p in enumerate(self.points)}
+        self.members = {name: frozenset(index[p] for p in blocks if p in index) for name, blocks in self.surfaces.items()}
         self.error = model.get("error") or {}
         self.glare_table = model.get("glare")
         self.spots = model.get("spot_model") or {}
@@ -87,7 +89,8 @@ class LightModel:
                 setting["aim"] = aim
             answer = _predict({self.keys[entity_id]: setting}, self.model)["surfaces"]
             values = {p: answer[p] for p in self.points}
-            self._cache[tag] = (values, {name: self._mean(values, blocks) for name, blocks in self.surfaces.items()})
+            self._cache[tag] = (values, {name: self._mean(values, blocks) for name, blocks in self.surfaces.items()},
+                                [values[p] or 0.0 for p in self.points])
         return self._cache[tag][0]
 
     @staticmethod
@@ -104,6 +107,27 @@ class LightModel:
         if self._point_values(entity_id, scene) is None:
             return None
         return self._cache[(entity_id, scene["brightness"], scene.get("kelvin"), scene.get("aim"))][1]
+
+    def row(self, entity_id, scene):
+        """One channel's part at every block, in model order, a block the model excluded counting as no light; None when
+        the scene has no level."""
+        if scene is None or entity_id not in self.keys:
+            return None
+        if not scene["on"]:
+            return [0.0] * len(self.points)
+        if self._point_values(entity_id, scene) is None:
+            return None
+        return self._cache[(entity_id, scene["brightness"], scene.get("kelvin"), scene.get("aim"))][2]
+
+    def mask(self, indexes):
+        """Blocks written as hex bits over the model's sample_points, bit 0 the first: one length for any blocks, so a
+        record can name any of the grid's blocks and stay small."""
+        return "%0*x" % ((len(self.points) + 3) // 4, sum(1 << n for n in set(indexes)))
+
+    def unmask(self, mask):
+        """The point_ids of a mask."""
+        bits = int(mask, 16)
+        return [p for n, p in enumerate(self.points) if bits >> n & 1]
 
     def predict(self, scene):
         """{surface: Ê} for a whole scene {entity_id: Hue scene}. A value is None while any bulb has no level."""

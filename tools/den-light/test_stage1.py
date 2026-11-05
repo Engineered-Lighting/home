@@ -250,6 +250,22 @@ class ModelTests(unittest.TestCase):
         self.assertAlmostEqual(model.percentile([5.0], 90), 5.0)
         self.assertIsNone(model.percentile([], 50))
 
+    def test_score_reports_every_steps_snr_and_low_levels_read_lower(self):
+        den = synthetic.SyntheticDen(block_px=40, noise=1e-4)
+        m = method1()
+        r = readings_for(den, m)
+        scored = model.score(r, model.fit(r, r["temperatures"], m), m)
+        rows = scored["information_only"]["step_snr"]
+        self.assertEqual(len(rows), sum(1 for s in r["steps"] if s["kind"] != "all_off"))
+        e = guard.LIGHTS[0]
+        by_level = {row["level"]: row["median_snr"] for row in rows if row["kind"] == "dimming" and row["bulb"] == e}
+        self.assertEqual(sorted(by_level), m["dimming_levels"])
+        self.assertLess(by_level[1], by_level[224])
+
+    def test_the_schedule_refuses_too_few_near_full_holdouts(self):
+        with self.assertRaises(ValueError):
+            model.schedule(method1(near_full_holdouts=99), SNAPSHOT, RANGES, WARMEST)
+
     def test_the_floor_excludes_and_counts_and_only_median_and_p90_decide(self):
         den = synthetic.SyntheticDen(block_px=40, noise=1e-4)
         m = method1()
@@ -335,6 +351,7 @@ class ReductionTests(unittest.TestCase):
         bright = lambda step: step["kind"] == "holdout" and step["label"] == "all_full_middle"
         r, fitted, _ = self.run_model(flag=lambda step, p: bright(step) and p == 0)  # 1 of block 0's 34 pixels
         self.assertEqual(r["mask"]["masked_pixels"], 1)
+        self.assertEqual(r["mask"]["masked"], [0], "readings.json holds the session mask itself")
         self.assertAlmostEqual(r["mask"]["unmasked_share"][0], 33 / 34)
         self.assertLess(max(self.block_errors(r, fitted, 0)), 1e-9, "the mask removes the pixel from every step")
 
@@ -771,11 +788,27 @@ class ProbeEndToEndTests(unittest.TestCase):
         with self.assertRaises(model.Refused):
             model.run_session(rig.folder, {"parameters": params, "parameters_sha256": digest}, rig.m1)
         readings = json.loads((rig.folder / "readings.json").read_text())
+        noise, flagged = model.noise_and_flags(readings, rig.m1)
+        self.assertEqual(readings["block_noise"], noise, "each block's all-off noise")
+        self.assertEqual(readings["flagged"], [list(pair) for pair in sorted(flagged)], "the pairs brackets flagged")
         for name in ("light-model.json", "score.json"):
             (rig.folder / name).unlink()
         _, again = model.fit_and_score(rig.folder, readings, model.read_jsonl(rig.folder / "fixtures.jsonl"),
                                        rig.m1, digest)
         self.assertEqual(again["error"], scored["error"], "readings.json alone gives the same score")
+
+    def test_a_fit_refuses_open_slots_and_a_changed_method(self):
+        rig = Rig(self)
+        rig.run()
+        params, digest = synthetic.meter_norm_for(rig.m0)
+        norm = {"parameters": params, "parameters_sha256": digest}
+        for bad in (model.load_stage1(),  # its slots are open
+                    model.Method1(rig.m1.values, rig.m1.open, rig.m1.file_sha256, "another block")):
+            with self.assertRaises(model.Refused):
+                model.run_session(rig.folder, norm, bad)
+            self.assertFalse((rig.folder / "readings.json").exists())
+        with self.assertRaises(model.Refused):
+            model.fit_and_score(rig.folder, {}, [], model.load_stage1(), digest)
 
     def test_occupancy_mid_run_after_an_arrival_restores_a_snapshot_off_bulb_with_turn_on_only(self):
         rig = Rig(self)

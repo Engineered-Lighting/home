@@ -293,6 +293,11 @@ def check_schedule(steps, method1):
                 raise ValueError(f"step {step['index']} makes a dark run longer than {method1['dark_run_limit_s']} s")
         else:
             run = 0
+    enough = method1["near_full_share"] * len(guard.LIGHTS) * method1["full_level"]
+    near = sum(1 for step in steps if step["kind"] == "holdout"
+               and sum(s["brightness"] for s in step["scene"].values() if s["on"]) >= enough)
+    if near < method1["near_full_holdouts"]:
+        raise ValueError(f"{near} hold-outs near full combined output, fewer than {method1['near_full_holdouts']}")
     return True
 
 
@@ -347,7 +352,7 @@ def reduce_captures(captures, method1, owner):
                 spread.append(statistics.pstdev(column) if len(column) > 1 else 0.0)
         steps.append({**capture["step"], "t": capture["t"], "reading": reading, "spread": spread})
     return {"schema": SCHEMAS["readings"], "blocks": blocks, "mask": {"masked_pixels": sum(mask),
-            "pixels": pixels, "unmasked_share": share}, "steps": steps}
+            "masked": [p for p, m in enumerate(mask) if m], "pixels": pixels, "unmasked_share": share}, "steps": steps}
 
 
 def noise_and_flags(readings, method1):
@@ -525,6 +530,18 @@ def score(readings, fitted, method1):
         per_step.append({"index": step["index"], "label": step.get("label"), "pairs": len(step_errors),
                          "median_error": statistics.median(step_errors) if step_errors else None,
                          "median_snr": statistics.median(snr) if snr else None})
+    step_snr = []
+    for step in readings["steps"]:  # every lit step: levels 1 to 4 sit near the floor, and this shows how near
+        if step["kind"] == "all_off":
+            continue
+        ratios = []
+        for b in range(fitted["blocks"]):
+            v, d = step["reading"][b], day(b, step["t"])
+            if (b not in fitted["excluded"] and (step["index"], b) not in flagged
+                    and None not in (v, d, noise[b]) and noise[b] > 0):
+                ratios.append((v - d) / noise[b])
+        row = {key: step[key] for key in ("index", "kind", "label", "bulb", "level", "kelvin") if step.get(key) is not None}
+        step_snr.append({**row, "median_snr": statistics.median(ratios) if ratios else None})
     median, p90 = percentile(errors, 50), percentile(errors, 90)
     passes = (median is not None and median * 100 <= method1["gate_median_percent"]
               and p90 * 100 <= method1["gate_p90_percent"])
@@ -543,7 +560,7 @@ def score(readings, fitted, method1):
                                      "drift checks"),
             "information_only": {
                 "error_by_temperature_band": {k: (statistics.median(v) if v else None) for k, v in by_band.items()},
-                "steps": per_step, "shared_curve": fitted["shared_curve"],
+                "steps": per_step, "step_snr": step_snr, "shared_curve": fitted["shared_curve"],
                 "middle_temperature_error": middle_error(fitted, mid),
                 "drift": drift(readings, fitted),
                 "response_confirmation": confirmation(readings)}}
@@ -688,14 +705,16 @@ def write_new(path, value):
         out.write("\n")
 
 
-def run_session(folder, meter_norm, method1, *, scored=True):
+def run_session(folder, meter_norm, method1):
     """Reduce, fit, score and write readings.json, light-model.json and score.json for one session."""
     folder = Path(folder)
-    if scored:
-        method1.refuse_if_open("A scored light model")
+    method1.refuse_if_open("A scored light model")
     record = json.loads((folder / "session.json").read_text(encoding="utf-8"))
     if record.get("outcome") != "complete":
         raise Refused(f"the session's outcome is {record.get('outcome')}: v1 fits and scores only complete sessions")
+    if record.get("method_stage1_block_sha256") != method1.block_sha256:
+        raise Refused("METHOD-V1's Stage 1 block is not the one this session ran under; changing a number after "
+                      "the probes would be tuning on its hold-outs, which takes a new session")
     for name in ("readings.json", "light-model.json", "score.json"):
         if (folder / name).exists():
             raise Refused(f"{name} already exists")
@@ -705,15 +724,18 @@ def run_session(folder, meter_norm, method1, *, scored=True):
     fixtures = read_jsonl(folder / "fixtures.jsonl")
     captures = session_captures(folder, meter_norm["parameters"], method1)
     readings = reduce_captures(captures, method1, pixel_blocks(method1))
+    noise, flagged = noise_and_flags(readings, method1)
     readings.update(session=record["id"], meter_norm_sha256=meter_norm["parameters_sha256"],
                     method_sha256=method1.file_sha256, method_stage1_block_sha256=method1.block_sha256,
-                    temperatures=record["temperatures"], grid=grid(method1))
+                    temperatures=record["temperatures"], grid=grid(method1),
+                    block_noise=noise, flagged=[list(pair) for pair in sorted(flagged)])
     write_new(folder / "readings.json", readings)
     return fit_and_score(folder, readings, fixtures, method1, meter_norm["parameters_sha256"])
 
 
 def fit_and_score(folder, readings, fixtures, method1, meter_norm_sha256):
     """From readings.json alone (written or in memory): the fit, light-model.json and score.json."""
+    method1.refuse_if_open("A scored light model")
     folder = Path(folder)
     readings_sha256 = hashlib.sha256((folder / "readings.json").read_bytes()).hexdigest()
     fitted = fit(readings, readings["temperatures"], method1)

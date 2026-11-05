@@ -11,7 +11,7 @@ the method, with every number, is [METHOD-V1.md](METHOD-V1.md).
 | `METHOD-V1.md` | repo | meter-norm/v1, the sweep, the void reasons, the fit and the check. |
 | `oak-capture-meter.py` | Jetson | The installed camera server plus the metering hold, and nothing else. |
 | `meter.py` | PC | Reads bundles, decodes NV12, fits the inverse response, runs the check. |
-| `sweep.py` | PC | The install lines (`--prepare`, `--install-record`, `--rollback-check`) and the sweep (`--run`). |
+| `sweep.py` | PC | The install lines (`--prepare`, `--install-record`, `--rollback-check`), the sweep (`--run`) and `--recheck`. |
 | `test_den_light.py` | anywhere | Tests on synthetic data and fakes on 127.0.0.1 only. |
 
 It needs Python 3.12 and the standard library only. `sweep.py` talks only to
@@ -27,8 +27,8 @@ the camera, never to Home Assistant, and writes no lights.
   are deleted. The rest stay on this PC until you delete them, as your
   2026-11-02 answer allows for den footage on household computers. They never
   go to git, OneDrive or the cloud.
-- Agents read only `install.json` and each `response.json`. They never open
-  `frames\`.
+- Agents read only `install.json`, `rollback.json`, and each `response.json`
+  and `recheck-<n>.json`. They never open `frames\`.
 - The camera token stays in den-take's `C:\den-takes\private\camera-token.txt`.
   No code path prints, logs or writes it. If that file does not exist yet,
   make it with den-take's README step 2 (branch `claude/rung-r`).
@@ -157,12 +157,18 @@ It checks that ExecStart is the before line with only the script changed,
 that the drop-in is the only new one, that the meter file hashes the
 committed `oak-capture-meter.py`, that the pinned script still hashes
 `d052fc21…`, and that the camera answers unheld with the new keys. Then it
-writes `$S\install.json`. If it says **Refused**, roll back (below).
+writes `$S\install.json`. If it says **Refused**, roll back (below), with
+one exception:
 
-If it says "cannot reach a healthy camera", port 8090 is not reachable from
-this PC. Open a second PowerShell window, set `$J` there and run the tunnel,
-then in the first window set `$Cam = 'http://127.0.0.1:18090'` and run the
-`--install-record` line again. Close the tunnel window when done.
+- **"cannot reach the camera"** is a network problem, not a broken camera:
+  port 8090 is not reachable from this PC. Open a second PowerShell window,
+  set `$J` there and run the tunnel below, then in the first window set
+  `$Cam = 'http://127.0.0.1:18090'` and run the `--install-record` line
+  again. Close the tunnel window when done.
+- **"the camera answers but is unhealthy"** names the status it got (503 is
+  the usual one) and says to run the rollback now. The meter server is
+  running but not serving fresh frames: do not try the tunnel; run the
+  rollback (below) straight away and tell the agent.
 
 ```powershell
 ssh -N -L 18090:127.0.0.1:8090 $J
@@ -174,6 +180,19 @@ Den_lighting's arrival scene, at least one bulb on. If none is on, turn one
 on in the HA app; den_lighting keeps that as its normal scene until it is
 changed again, so set it back by hand afterwards if you want.
 
+**How much light a sweep needs.** The sweep steps up to twice the camera's
+own auto exposure, and the camera stops at 33 ms and ISO 1600. So the room
+must be bright enough that auto exposure sits at or below ISO 800 at 33 ms
+(or a shorter time at a higher ISO, as long as time × ISO is no more than
+that). As a rough guide only (the usual exposure arithmetic, not measured in
+the den): about 30 lux or more on the room's surfaces, which is more than a
+single bulb at a low level. `sweep.py` reads the camera's auto exposure
+before it holds anything. If the room is dimmer, it stops with **"too dark:
+…"**, holds nothing and writes nothing: turn on one more den bulb (front
+left, front right, rear left or rear right) at full in the HA app and run
+the same line again. A too-dark stop is not a void and does not count as a
+rerun.
+
 ### Step 6: the sweep (about a minute)
 
 ```powershell
@@ -181,50 +200,75 @@ python -B tools\den-light\sweep.py --run $S --camera $Cam
 ```
 
 When it says "Starting in 15 s", step out of the camera's view and stay out
-until it prints "Released". It waits for a still scene (up to 20 s), holds
-the camera, steps through 11 exposures and repeats the first, then releases,
-all inside about 100 s, so the lights stay on (den_lighting keeps them on for
-120 s after Frigate stops seeing you). It then fits for up to a minute;
-Ctrl+C is ignored until `response.json` is written.
+until it prints "Released". It waits for a still scene (up to 20 s), checks
+the light (step 5), holds the camera, steps through 11 exposures and repeats
+the first, then releases, all inside about 100 s, so the lights stay on
+(den_lighting keeps them on for 120 s after Frigate stops seeing you). It
+then fits for up to a minute. Ctrl+C before the release voids the sweep (it
+still releases the camera); from the release on, Ctrl+C is ignored until
+`response.json` is written, so pressing it again cannot lose the record.
 
-It prints PASS, FAIL or VOID and writes `$S\sweep-<n>\response.json`. A void
-(the scene moved, no still scene, a 503, the camera unreachable, a new camera
-session, the run too long, or Ctrl+C or an error before the repeat) is neither
-a pass nor a fail and deletes its frames; run the same line again, up to 3
-times the same evening. A later rerun needs approval 1 again.
+It prints PASS, FAIL, VOID or ERROR and writes `$S\sweep-<n>\response.json`.
+A void (the scene moved, no still scene, a 503, the camera unreachable, a new
+camera session, the run too long, or Ctrl+C or an error before the repeat) is
+neither a pass nor a fail and deletes its frames; if it says it could not
+delete some, delete the ones it names by hand. Run the same line again, up to
+3 times the same evening. A later rerun needs approval 1 again. ERROR means
+the data was complete but the fit stopped on an error: the frames are kept,
+and once the agent has fixed it, this recomputes the verdict from the saved
+folder without the camera (put the sweep's number in place of `<n>`):
+
+```powershell
+python -B tools\den-light\sweep.py --recheck "$S\sweep-<n>"
+```
+
+It writes `recheck-<n>.json` beside `response.json` and never changes
+`response.json`. It works on any pass or fail sweep too.
 
 Then tell the agent the folder name. It reads `install.json` and
 `response.json` only. On PASS the meter server may stay installed for Stage 1;
 unheld, it behaves as the installed server. On FAIL you choose RAW output (a
 bigger camera change, with its own approval) or stopping rung 8.
 
-Exit codes: 0 = pass (or a step that succeeded), 1 = fail or void,
-2 = refused (nothing was started or changed).
+Exit codes: 0 = pass (or a step that succeeded), 1 = fail, void or error,
+2 = refused (this command changed nothing; "too dark" is a refusal).
 
 ## Rollback
 
-On a no-go, or whenever you want the installed server back:
+On a no-go, on an unhealthy camera, before any pilot command (below), or
+whenever you want the installed server back:
 
 ```powershell
 ssh -t $J "sudo rm /etc/systemd/system/oak-den.service.d/zz-den-light-meter.conf && sudo systemctl daemon-reload && sudo systemctl restart oak-den.service"
 ```
+
+Wait about 15 s, then:
 
 ```powershell
 ssh $J "systemctl show oak-den.service -p FragmentPath -p DropInPaths -p ExecStart -p ActiveState; sha256sum ~/victoria-camera-pilot/pilot-20260926/capture.py" | Set-Content -Encoding utf8 "$S\rollback.txt"
 ```
 
 ```powershell
-python -B tools\den-light\sweep.py --rollback-check $S
+python -B tools\den-light\sweep.py --rollback-check $S --camera $Cam
 ```
 
-It checks that `oak-den.service` runs the pinned script with its before
-ExecStart and drop-ins, and that the script still hashes `d052fc21…`, then
-writes `$S\rollback.json`. The meter directory on the Jetson is then unused;
-you may delete it.
+It is the install's after-check, now expecting the before state. It checks
+that `oak-den.service` runs the pinned script with its before ExecStart and
+drop-ins and that the script still hashes `d052fc21…`. Then it asks the
+camera: `/health` must answer healthy, still from the same camera session
+about 30 s later (a unit that keeps crashing and restarting can still read
+`active` right after a restart), and a bundle must come without the meter
+keys. Only then does it write `$S\rollback.json`. It takes about a minute.
+If it says **Refused**, tell the agent. The meter directory on the Jetson is
+then unused; you may delete it.
 
-The pilot-release helper (`switch-pilot-release.sh`) is not part of this. While
-the drop-in exists it would override whatever release the helper switches to,
-so roll back first if you need it.
+**Pilot commands need the rollback first.** The camera pilot's own tools do
+not work while the den-light drop-in is installed: the local pilot tool's
+check, activate and rollback all refuse while `oak-den.service.d` holds
+anything besides the pilot's own `90-` file, and the pilot-release helper
+(`switch-pilot-release.sh`) would be overridden by the drop-in. So run the
+den-light rollback above, and see `--rollback-check` pass, before any pilot
+command.
 
 ## Tests
 
@@ -233,4 +277,4 @@ python -B -m unittest discover -s tools/den-light -v
 ```
 
 They use synthetic data and a fake camera on 127.0.0.1 only: no Jetson, no
-camera, no Home Assistant. They take about 30 seconds.
+camera, no Home Assistant. They take about a minute.

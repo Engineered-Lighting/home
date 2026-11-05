@@ -2,9 +2,12 @@
 
 Status: plan only. Nothing here is built or run yet. No host, camera or light
 has been touched to write it. Revised on 2026-11-04 after an independent
-review, on 2026-11-05 after a second check, and again on 2026-11-05 after a
+review, on 2026-11-05 after a second check, again on 2026-11-05 after a
 final check (the install no longer writes over the camera script that
-perception-lab pins).
+perception-lab pins), and on 2026-11-05 after two reviews of the pushed Stage
+0 (an unhealthy camera is told apart from an unreachable one, the rollback
+check asks the camera again, a dim den is refused before the hold, pilot
+commands wait for the rollback, and a second Ctrl+C cannot lose a record).
 
 The plan has two stages. **Stage 0** (about 3 build days, then about one
 minute of camera time) checks that the camera can meter light at all. **Stage
@@ -86,7 +89,7 @@ Windows PC with PowerShell 5.1 unless the table says otherwise.
 | `METHOD-V1.md`, Stage 0 part | repo | `meter-norm/v1` and the Stage 0 check in one fenced block the code reads, with the named statistics below. Committed before any sweep frame. Every output records its sha256, as rung R's CHECK-V1 does. |
 | `oak-capture-meter.py` | Jetson | The installed server plus the metering hold, and nothing else. Installed beside the pinned script, never over it. |
 | `meter.py` | PC | Pure: reads bundles (zipfile and a small .npy reader, as den-take does), decodes NV12, applies `meter-norm/v1`, fits the inverse response, runs the global check. |
-| `sweep.py` | PC | The Stage 0 runner: holds the camera through `POST /meter` with den-take's camera token, steps exposure, releases, writes `response.json`. `--prepare` checks the fixture-check lines and writes the drop-in; `--install-record` checks the after-check lines and the camera, then writes `install.json`; `--rollback-check` checks a rollback. Never calls HA; writes no lights. |
+| `sweep.py` | PC | The Stage 0 runner: holds the camera through `POST /meter` with den-take's camera token, steps exposure, releases, writes `response.json`. `--prepare` checks the fixture-check lines and writes the drop-in; `--install-record` checks the after-check lines and the camera, then writes `install.json`; `--rollback-check` checks the rollback lines and the camera; `--recheck` recomputes a saved sweep's verdict from its folder. Never calls HA; writes no lights. |
 | `README.md`, Stage 0 part | repo | The owner's PowerShell 5.1 lines for approval 1, the rollback, and the privacy rules. |
 | `test_den_light.py` | anywhere | All tests, synthetic data only. |
 
@@ -178,11 +181,22 @@ P% of it.
 **`sweep.py`** reads auto-exposure's pick (t, G) from a few auto frames, then
 holds and steps t·G from 1/16 to 2 times that pick in steps of about 1.41x
 (11 exposures). It changes time, not gain, unless time would pass the 30 fps
-frame time. It repeats the first exposure at the end; if the two disagree
-beyond the noise tolerance, the scene moved and the sweep is void (see Void
-sweeps). It releases on success, error and Ctrl+C. Ctrl+C or an error before
-the repeat's frames are in voids the sweep; after that the data is complete,
-so Ctrl+C waits until `response.json` is written. It writes to a new
+frame time. Before any hold it checks that the top step fits the camera
+(t·G at most the time limit times the ISO limit, over 2: with METHOD-V1's
+numbers, auto at or below ISO 800 at 33 ms). A dimmer den is refused with a
+plain "too dark: …" that says to turn on one more den bulb at full: nothing
+is held or written, and it is not a void, so it does not use up a rerun. It
+checks the camera's first auto frame the same way before the countdown. It
+repeats the first exposure at the end; if the two disagree beyond the noise
+tolerance, the scene moved and the sweep is void (see Void sweeps). It
+releases on success, error and Ctrl+C. Ctrl+C or an error before the
+repeat's frames are in voids the sweep. The hold phase ends at the release,
+on every path; from there Ctrl+C is ignored until `response.json` is written,
+so a second Ctrl+C during the release or a void's cleanup cannot lose the
+record or keep the frames. A void records whether `frames\` and
+`frames.jsonl` are really gone. An error after the data is complete (in the
+fit) is recorded as outcome error with the frames kept, and `--recheck`
+recomputes the verdict from the saved folder. It writes to a new
 `sweep-<n>\` folder in the Stage 0 folder (Run folders, above), and refuses to
 start unless that folder's `install.json` exists and its after hash equals
 `oak-capture-meter.py`'s committed sha256.
@@ -207,8 +221,13 @@ owner).
   unreachable camera, a new camera session, a run over the run limit, and
   interrupted or errored before the repeat, once by Ctrl+C and once by a
   refused `POST /meter`): each writes outcome void with that reason and
-  deletes the sweep's frames. Ctrl+C after the repeat does not void it. It
-  refuses without `install.json` or with a wrong after hash.
+  deletes the sweep's frames, and `frames_deleted` is false when a delete
+  fails. Ctrl+C after the repeat does not void it, and a second Ctrl+C during
+  the release or a void's cleanup keeps the record. A too-dark pick is
+  refused before any `POST /meter`. A 503 is reported as an unhealthy camera
+  (with the rollback advice once the drop-in is installed), a failed
+  connection as a network problem. It refuses without `install.json` or with
+  a wrong after hash. `--recheck` matches the saved verdict.
 - Run folders, one test each: a folder inside a git checkout, one inside
   OneDrive, a Stage 0 or sweep folder that already holds a sweep, and a PC
   low on disk each refuse and write nothing.
@@ -216,7 +235,9 @@ owner).
   runs anything but the pinned file, and writes a drop-in that keeps every
   flag; `--install-record` refuses changed flags, an extra drop-in, a changed
   pinned hash, a wrong meter hash or a held camera; `--rollback-check`
-  refuses anything but the before state.
+  refuses anything but the before state, an unhealthy or unreachable camera,
+  a camera that restarts within the wait, and bundles that still carry the
+  meter keys.
 - The camera server against a fake control queue: request checks, the token
   rule, renewal, expiry and release. Release and expiry send exactly auto
   exposure on, white balance AUTO and focus CONTINUOUS_VIDEO (or the installed
@@ -264,24 +285,40 @@ owner).
      `held: false` with the new keys. Then it writes the before and after
      hashes, both ExecStart lines, the paths and the drop-in to
      `stage0-<id>\install.json`. On any mismatch it writes nothing, and the
-     owner rolls back.
-   - The pilot-release helper (`switch-pilot-release.sh`, on the owner's PC
-     only, not in git) is not used. It passes `--af lock`, `--imu`,
-     `--npz-encoding` and `--check-config`, which the fixture's parser
-     rejects, and while the drop-in exists it would override whatever release
-     the helper switches to; roll back before using it.
+     owner rolls back. The camera part tells two failures apart: a request
+     that cannot connect is a network problem (den-take's ssh tunnel), while
+     a camera that answers unhealthy (a 503) is reported with its status and
+     told to roll back now, since the meter build is then the suspect.
+   - **Pilot commands wait for the rollback.** The pilot's own tools do not
+     work while the drop-in exists. The local pilot tool's `inspect()`
+     refuses its check, activate and rollback when `oak-den.service.d` holds
+     anything besides its own `90-` file. The pilot-release helper
+     (`switch-pilot-release.sh`, on the owner's PC only, not in git) passes
+     `--af lock`, `--imu`, `--npz-encoding` and `--check-config`, which the
+     fixture's parser rejects, and the drop-in would override whatever
+     release it switches to. So the owner runs the den-light rollback, and
+     sees `--rollback-check` pass, before any pilot command.
 
    Frigate's den feed drops briefly during the restart; nothing else should
-   change. Rollback (on a no-go, or whenever the owner asks): remove the
-   drop-in, `daemon-reload`, restart once more, then `sweep.py
-   --rollback-check` expects the before ExecStart and drop-ins and the pinned
-   hash. The meter directory is then inert and may be deleted. After a pass
+   change. Rollback (on a no-go, an unhealthy camera, before any pilot
+   command, or whenever the owner asks): remove the drop-in, `daemon-reload`,
+   restart once more, then the same after-check, now expecting the before
+   state. `sweep.py --rollback-check --camera` expects the before ExecStart
+   and drop-ins and the pinned hash, then waits past the restart: `/health`
+   must answer healthy and still name the same camera session about 30 s
+   later (a crash-looping `Restart=always` unit still reads `active` right
+   after a restart), and one bundle must come without the meter keys. Only
+   then does it write `rollback.json`. The meter directory is then inert and
+   may be deleted. After a pass
    the meter server may stay for Stage 1, which needs it; unheld, it behaves
    as the installed server.
 2. **Light the room** with den_lighting's arrival scene, at least one bulb on.
    The tool writes no lights. If no bulb is on, the owner turns one on in the
    HA app, and den_lighting keeps that as its normal scene until it is changed
    again (`policy.py` `manual()`); set it back by hand afterwards if wanted.
+   The room must be bright enough for auto exposure at or below ISO 800 at
+   33 ms (roughly 30 lux on its surfaces, an estimate, not a measurement);
+   the tool refuses a dimmer den as "too dark" before any hold.
 3. **The owner starts `sweep.py` and steps out of view.** It checks
    `install.json`, counts down about 15 s and waits for a still scene, up to
    the still-scene wait limit.
@@ -719,7 +756,9 @@ One-time:
    owner turns one on in the HA app, and den_lighting keeps that as its
    normal scene until it is changed again; set it back by hand afterwards if
    wanted. Covers up to 3 void reruns the same evening. Rollback: remove the
-   drop-in, `daemon-reload` and one more restart, then the rollback check.
+   drop-in, `daemon-reload` and one more restart, then the rollback check
+   (the after-check again, now expecting the before state and a healthy
+   camera without the meter keys).
 2. **A Home Assistant long-lived token on the PC** for `probe.py` (Stage 1),
    in `C:\den-light\private\`, never printed.
 

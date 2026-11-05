@@ -4,14 +4,15 @@
     python -B tools\\den-light\\sweep.py --prepare C:\\den-light\\stage0-<date> --date <yyyymmdd>
     python -B tools\\den-light\\sweep.py --install-record C:\\den-light\\stage0-<date> --camera http://<host>:8090
     python -B tools\\den-light\\sweep.py --run C:\\den-light\\stage0-<date> --camera http://<host>:8090
-    python -B tools\\den-light\\sweep.py --rollback-check C:\\den-light\\stage0-<date>
+    python -B tools\\den-light\\sweep.py --rollback-check C:\\den-light\\stage0-<date> --camera http://<host>:8090
 
 --prepare reads the fixture-check lines the owner saved (before.txt) and writes
 the systemd drop-in that points oak-den.service at the meter build with every
 flag kept. --install-record reads the after-check lines (after.txt), checks the
 camera, and writes install.json. --run holds the camera through POST /meter,
 steps exposure, releases, and writes the sweep's response.json.
---rollback-check reads rollback.txt. It talks only to the camera, never to
+--rollback-check reads rollback.txt, then waits past the restart and needs a
+healthy camera without the meter keys. It talks only to the camera, never to
 Home Assistant, and writes no lights. The token is never printed or written.
 """
 import argparse
@@ -50,11 +51,24 @@ SHA_LINE = re.compile(r"([0-9a-f]{64}) [ *](/\S+)")
 VOID_REASONS = ("repeat_mismatch", "still_scene_wait_over_limit", "camera_503", "camera_unreachable",
                 "new_camera_session", "run_over_limit", "interrupted_or_errored_before_repeat")
 SCHEMAS = {"prepare": "den-light-stage0-prepare-1", "install": "den-light-stage0-install-1",
-           "rollback": "den-light-stage0-rollback-1", "response": "den-light-stage0-response-1"}
+           "rollback": "den-light-stage0-rollback-2", "response": "den-light-stage0-response-1"}
+METER_KEYS = ("sensitivity_iso", "color_temperature_kelvin", "lens_position", "meter")
+INSTALL_HEALTH_WAIT_S = 30.0  # --install-record and --rollback-check wait this long for a first healthy /health
+ROLLBACK_SETTLE_S = 30.0      # then the rollback check waits this long and needs the same camera session:
+                              # a crash-looping Restart=always unit still reads active right after a restart
+ROLLBACK_ADVICE = "the meter drop-in is installed, so run the rollback now (README, Rollback)"
 
 
 class Refused(Exception):
     """Nothing was started or written."""
+
+
+class CameraUnreachable(Refused):
+    """No whole HTTP reply: a network problem (README step 4's ssh tunnel)."""
+
+
+class CameraUnhealthy(Refused):
+    """The camera answered, but not healthy."""
 
 
 class Void(Exception):
@@ -266,7 +280,8 @@ def load_prepare(stage0):
     return record
 
 
-def install_record(stage0, camera, token_file, method, *, health_wait_s=30.0):
+def install_record(stage0, camera, token_file, method, *, health_wait_s=None):
+    health_wait_s = INSTALL_HEALTH_WAIT_S if health_wait_s is None else health_wait_s
     stage0 = run_folder(stage0, token_file, may_hold_sweeps=False)
     if (stage0 / "install.json").exists():
         raise Refused("install.json already exists")
@@ -284,7 +299,7 @@ def install_record(stage0, camera, token_file, method, *, health_wait_s=30.0):
     local = meter.file_sha256(HERE / METER_FILE)
     if local != METER_SERVER_SHA256 or hashes.get(prep["meter_path"]) != METER_SERVER_SHA256:
         raise Refused("the installed meter file does not hash the committed oak-capture-meter.py; roll back")
-    seen = camera_ready(camera, health_wait_s=health_wait_s)
+    seen = camera_ready(camera, health_wait_s=health_wait_s, drop_in_installed=True)
     record = {"schema": SCHEMAS["install"], "before": prep["before"], "after": after,
               "pinned_path": prep["pinned_path"], "pinned_sha256_before": prep["pinned_sha256"],
               "pinned_sha256_after": hashes[prep["pinned_path"]], "meter_path": prep["meter_path"],
@@ -297,7 +312,11 @@ def install_record(stage0, camera, token_file, method, *, health_wait_s=30.0):
     return record
 
 
-def rollback_check(stage0, token_file):
+def rollback_check(stage0, camera, token_file, *, health_wait_s=None, settle_s=None,
+                   sleep=time.sleep, clock=time.monotonic):
+    """The install's after-check, now expecting the before state: the unit lines, then the camera."""
+    health_wait_s = INSTALL_HEALTH_WAIT_S if health_wait_s is None else health_wait_s
+    settle_s = ROLLBACK_SETTLE_S if settle_s is None else settle_s
     stage0 = run_folder(stage0, token_file, may_hold_sweeps=True)
     if (stage0 / "rollback.json").exists():
         raise Refused("rollback.json already exists")
@@ -309,8 +328,10 @@ def rollback_check(stage0, token_file):
         raise Refused("oak-den.service is not back to its before state")
     if hashes.get(prep["pinned_path"]) != FIXTURE_SHA256:
         raise Refused("the pinned script does not hash d052fc21...")
+    seen = camera_rolled_back(camera, health_wait_s=health_wait_s, settle_s=settle_s, sleep=sleep, clock=clock)
     record = {"schema": SCHEMAS["rollback"], "state": state, "pinned_sha256": hashes[prep["pinned_path"]],
-              "rollback_txt_sha256": meter.sha256_bytes(text.encode()), "written_pc_unix": time.time()}
+              "camera": seen, "rollback_txt_sha256": meter.sha256_bytes(text.encode()),
+              "written_pc_unix": time.time()}
     write_json(stage0 / "rollback.json", record)
     return record
 
@@ -372,37 +393,120 @@ class Camera:
         return status, reply if type(reply) is dict else {}
 
 
-def camera_ready(camera, *, health_wait_s=0.0, sleep=time.sleep, clock=time.monotonic):
-    """/health answers 200 and one bundle is unheld with the meter keys; else Refused."""
+def unreachable(camera, path, exc):
+    return CameraUnreachable(
+        f"cannot reach the camera at {camera.host}:{camera.port} ({path}: {type(exc).__name__}), a network "
+        "problem: port 8090 may not be reachable from this PC; README step 4 has the ssh tunnel")
+
+
+def unhealthy(path, status, body, drop_in_installed):
+    """The camera answered something other than 200."""
+    if status in (401, 403):
+        return CameraUnhealthy(f"the camera answers, but {path} answered {status}: it refused the camera "
+                               "token; check the token file")
+    notes = []
+    if isinstance(body.get("error"), str) and body["error"]:
+        notes.append("its error: " + body["error"][:200])
+    age = body.get("bundle_age_seconds")
+    if type(age) in (int, float) and age == age and abs(age) != float("inf"):
+        notes.append(f"last bundle {age:.0f} s old")
+    text = f"the camera answers but is unhealthy: {path} answered {status}"
+    text += f" ({'; '.join(notes)})" if notes else ""
+    return CameraUnhealthy(text + ("; " + ROLLBACK_ADVICE if drop_in_installed else ""))
+
+
+def health_once(camera):
+    """(status, body) of one GET /health; CameraUnreachable when there is no whole reply."""
+    try:
+        status, data = camera.get("/health")
+    except OSError as exc:
+        raise unreachable(camera, "/health", exc) from None
+    try:
+        body = json.loads(data) if data else {}
+    except ValueError:
+        body = {}
+    return status, body if type(body) is dict else {}
+
+
+def wait_healthy(camera, health_wait_s, drop_in_installed, sleep, clock):
+    """The body of the first /health that answers 200 within health_wait_s; else the last failure."""
     deadline = clock() + health_wait_s
     while True:
         try:
-            status, body = camera.get("/health")
-        except OSError:
-            status, body = None, b""
-        if status == 200:
-            break
+            status, body = health_once(camera)
+            if status == 200:
+                return body
+            failure = unhealthy("/health", status, body, drop_in_installed)
+        except CameraUnreachable as exc:
+            failure = exc
         if clock() >= deadline:
-            raise Refused("cannot reach a healthy camera (/health); see README for the ssh tunnel")
+            raise failure
         sleep(1.0)
+
+
+def get_bundle(camera, drop_in_installed):
+    """(metadata, report) of one /frame.npz bundle with exactly rgb, depth, left and right."""
+    advice = "; " + ROLLBACK_ADVICE if drop_in_installed else ""
     try:
         status, data = camera.get("/frame.npz")
-        if status != 200:
-            raise Refused(f"/frame.npz answered {status}")
+    except OSError as exc:
+        raise unreachable(camera, "/frame.npz", exc) from None
+    if status != 200:
+        raise unhealthy("/frame.npz", status, {}, drop_in_installed)
+    try:
         meta, _ = meter.read_bundle(data)
         report = meter.rgb_report(meta)
-    except OSError:
-        raise Refused("cannot reach the camera's /frame.npz") from None
     except meter.BundleError as exc:
-        raise Refused(f"unreadable bundle: {exc}") from None
+        raise Refused(f"unreadable bundle: {exc}{advice}") from None
     if set(meta.get("frames", {})) != {"rgb", "depth", "left", "right"}:
-        raise Refused("the bundle's frames are not exactly rgb, depth, left and right")
+        raise Refused("the bundle's frames are not exactly rgb, depth, left and right" + advice)
+    return meta, report
+
+
+def camera_ready(camera, *, health_wait_s=0.0, drop_in_installed=False, sleep=time.sleep, clock=time.monotonic):
+    """/health answers 200 and one bundle is unheld with the meter keys; else Refused.
+
+    A failed connection is CameraUnreachable (the tunnel advice); a camera that
+    answers unhealthy is CameraUnhealthy with its status, and says to roll back
+    when the meter drop-in is installed."""
+    wait_healthy(camera, health_wait_s, drop_in_installed, sleep, clock)
+    meta, report = get_bundle(camera, drop_in_installed)
     if not report["meter_keys"]:
-        raise Refused("the camera is not the meter build (no gain, white balance or meter keys)")
+        raise Refused("the camera is not the meter build (no gain, white balance or meter keys)"
+                      + ("; " + ROLLBACK_ADVICE if drop_in_installed else ""))
     if report["held"] is not False:
         raise Refused("the camera is held; wait 30 s for an earlier hold to expire, then try again")
-    return {"session": report["session"], "held": False, "iso": report["iso"],
+    return {"session": report["session"], "held": False, "iso": report["iso"], "exposure_us": report["exposure_us"],
             "kelvin": report["kelvin"], "lens_position": report["lens_position"]}
+
+
+def camera_rolled_back(camera, *, health_wait_s, settle_s, sleep=time.sleep, clock=time.monotonic):
+    """After the rollback: /health healthy, the same camera session settle_s later, one bundle without meter keys."""
+    after = "after the rollback; nothing more is changed: tell the agent"
+    first = wait_healthy(camera, health_wait_s, False, sleep, clock)
+    session = first.get("session")
+    if type(session) is not str or not session:
+        raise Refused("/health names no camera session " + after)
+    sleep(settle_s)
+    try:
+        status, second = health_once(camera)
+    except CameraUnreachable:  # it answered a moment ago, so this is the unit, not the network
+        raise Refused(f"the camera stopped answering {settle_s:g} s after it first answered healthy: "
+                      f"oak-den.service may be crash-looping while it reads active {after}") from None
+    if status != 200:
+        raise CameraUnhealthy(f"{unhealthy('/health', status, second, False)}, {settle_s:g} s after it first "
+                              f"answered healthy: oak-den.service may be restarting in a loop {after}")
+    meta, report = get_bundle(camera, False)
+    if second.get("session") != session or report["session"] != session:
+        raise Refused(f"the camera restarted within {settle_s:g} s (a new camera session): oak-den.service "
+                      f"may be crash-looping while it reads active {after}")
+    rgb = meta["frames"]["rgb"]
+    present = [key for key in METER_KEYS if type(rgb) is dict and key in rgb]
+    if present:
+        raise Refused("bundles still carry the meter keys (" + ", ".join(present) + "): the meter build is "
+                      "still running, so the rollback has not taken effect; check the drop-in is gone, then "
+                      "daemon-reload and restart again")
+    return {"session": session, "meter_keys": False, "settle_s": settle_s}
 
 
 # ---- the sweep ----------------------------------------------------------------------
@@ -654,7 +758,7 @@ def start_run(stage0, camera, token_file, method):
     if (install.get("schema") != SCHEMAS["install"] or install.get("meter_sha256") != METER_SERVER_SHA256
             or meter.file_sha256(HERE / METER_FILE) != METER_SERVER_SHA256):
         raise Refused("install.json's after hash is not oak-capture-meter.py's committed sha256")
-    camera_ready(camera)
+    camera_ready(camera, drop_in_installed=True)
     return stage0, new_sweep_folder(stage0)
 
 
@@ -675,12 +779,13 @@ def main(argv=None):
             print(f"Fixture check passed. Wrote {DROP_IN_NAME} for {record['meter_path']}.")
             print("Next: README step 3 (needs approval 1).")
             return 0
+        camera = Camera(args.camera, read_token(args.token_file))
         if args.rollback_check:
-            rollback_check(Path(args.rollback_check), args.token_file)
-            print("Rollback check passed: oak-den.service runs the pinned script as before. Wrote rollback.json.")
+            rollback_check(Path(args.rollback_check), camera, args.token_file)
+            print("Rollback check passed: oak-den.service runs the pinned script as before, and the camera "
+                  "stays healthy without the meter keys. Wrote rollback.json.")
             return 0
         method = meter.load_method()
-        camera = Camera(args.camera, read_token(args.token_file))
         if args.install_record:
             install_record(Path(args.install_record), camera, args.token_file, method)
             print("After-check passed: the meter build runs, unheld, and the pinned script is unchanged. "
@@ -688,7 +793,7 @@ def main(argv=None):
             return 0
         _, folder = start_run(Path(args.run), camera, args.token_file, method)
     except Refused as exc:
-        print(f"Refused: {exc}. Nothing was changed.", file=sys.stderr)
+        print(f"Refused: {exc}. This command changed nothing.", file=sys.stderr)
         return 2
     print(f"Sweep folder: {folder}")
     response = Sweep(camera, method, folder).run()

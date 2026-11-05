@@ -160,6 +160,10 @@ class FakeCamera:
         self.posts = 0
         self.flicker = False
         self.scale_after_posts = None  # (post count, scale): the scene changes
+        self.health = None          # (status, body) for /health: a camera that answers unhealthy
+        self.metered = True         # False: the installed server, whose bundles have no meter keys
+        self.restart_each_health = False  # a crash-looping unit: every /health is a new session
+        self.health_calls = 0
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self.handler())
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -185,9 +189,10 @@ class FakeCamera:
         rgb = render([e * scale for e in self.energy], (1.0, 0.9, 0.75), x, lambda i: self.curve, self.rng, 0.5)
         rgb_meta = {"sequence": self.sequence, "host_monotonic_timestamp_seconds": 100 + self.sequence / 5,
                     "device_timestamp_seconds": 50 + self.sequence / 5, "width": 640, "height": 360,
-                    "type": "Type.NV12", "exposure_duration_seconds": (a["exposure_us"] + 20) / 1e6,
-                    "sensitivity_iso": a["iso"], "color_temperature_kelvin": a["kelvin"],
-                    "lens_position": 120, "meter": {"held": self.held, "generation": self.generation}}
+                    "type": "Type.NV12", "exposure_duration_seconds": (a["exposure_us"] + 20) / 1e6}
+        if self.metered:
+            rgb_meta.update({"sensitivity_iso": a["iso"], "color_temperature_kelvin": a["kelvin"],
+                             "lens_position": 120, "meter": {"held": self.held, "generation": self.generation}})
         other = {"sequence": self.sequence, "host_monotonic_timestamp_seconds": 100 + self.sequence / 5,
                  "device_timestamp_seconds": 50 + self.sequence / 5, "width": 640, "height": 400}
         meta = {"schema": 1, "session": self.session, "captured_unix_ns": 1,
@@ -217,6 +222,12 @@ class FakeCamera:
                     if not self.authorised():
                         return self.reply(401, b"{}")
                     if self.path == "/health":
+                        fake.health_calls += 1
+                        if fake.restart_each_health:
+                            fake.session = f"session-{fake.health_calls}"
+                        if fake.health is not None:
+                            status, body = fake.health
+                            return self.reply(status, json.dumps(dict(body, session=fake.session)).encode())
                         return self.reply(200, json.dumps({"healthy": True, "session": fake.session}).encode())
                     if self.path != "/frame.npz":
                         return self.reply(404, b"{}")
@@ -791,7 +802,7 @@ def unit_lines(script=PINNED, flags=FLAGS, drop_ins="", active=None, hashes=None
     return "﻿" + "\r\n".join(lines) + "\r\n"  # as PowerShell 5.1's Set-Content -Encoding utf8 writes
 
 
-class InstallTests(unittest.TestCase):
+class InstallCase(unittest.TestCase):
     def setUp(self):
         self.fake = FakeCamera()
         self.addCleanup(self.fake.close)
@@ -810,6 +821,8 @@ class InstallTests(unittest.TestCase):
         values.update(changes)
         (stage0 / "after.txt").write_text(unit_lines(**values), encoding="utf-8")
 
+
+class InstallTests(InstallCase):
     def test_prepare_writes_a_drop_in_that_keeps_every_flag(self):
         with self.prepared() as (stage0, _):
             conf = (stage0 / sweep.DROP_IN_NAME).read_text()
@@ -874,16 +887,19 @@ class InstallTests(unittest.TestCase):
             self.assertFalse((stage0 / "install.json").exists())
 
     def test_rollback_check(self):
+        self.fake.metered = False  # the installed server again
+        check = lambda stage0, token: sweep.rollback_check(stage0, self.camera, token, health_wait_s=0, settle_s=0.01)
         with self.prepared() as (stage0, token):
             (stage0 / "rollback.txt").write_text(unit_lines(active="active"), encoding="utf-8")
-            sweep.rollback_check(stage0, token)
+            check(stage0, token)
             self.assertTrue((stage0 / "rollback.json").exists())
         for change in (dict(drop_ins=sweep.DROP_IN_PATH), dict(script=METER_PATH, hashes={
-                PINNED: sweep.FIXTURE_SHA256}), dict(hashes={PINNED: "d" * 64})):
+                PINNED: sweep.FIXTURE_SHA256}), dict(hashes={PINNED: "d" * 64}), dict(active="activating")):
             with self.prepared() as (stage0, token):
-                (stage0 / "rollback.txt").write_text(unit_lines(active="active", **change), encoding="utf-8")
+                (stage0 / "rollback.txt").write_text(unit_lines(**dict(dict(active="active"), **change)),
+                                                     encoding="utf-8")
                 with self.assertRaises(sweep.Refused):
-                    sweep.rollback_check(stage0, token)
+                    check(stage0, token)
                 self.assertFalse((stage0 / "rollback.json").exists())
 
 
@@ -1003,6 +1019,7 @@ class SweepTests(SweepCase):
             if step == 4:
                 raise KeyboardInterrupt
         self.fake.refuse_post_at, self.fake.requests = None, []
+        self.fake.last = None  # no replay of a bundle from the earlier sweep's hold
         self.run_sweep(hook=ctrl_c)
         self.assertTrue(self.released())
 
@@ -1083,6 +1100,159 @@ class SweepTests(SweepCase):
                 self.assertEqual(sweep.main(["--run", str(stage0), "--camera", "ftp://x",
                                              "--token-file", str(token)]), 2)
                 self.assertEqual(sweep.main(["--rollback-check", str(stage0), "--token-file", str(token)]), 2)
+
+
+# ---- review fixes: each test failed on the code before its fix ---------------------------------
+
+def closed_port():
+    """A 127.0.0.1 port with nothing listening: connections are refused."""
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+UNHEALTHY = (503, {"healthy": False, "bundle_age_seconds": 41.0, "error": "Starting camera"})
+
+
+class CameraReadyTests(InstallCase):
+    """Fix 1: a camera that answers unhealthy is not reported as a network problem."""
+
+    def test_an_unhealthy_answer_is_not_called_unreachable(self):
+        self.fake.health = UNHEALTHY
+        with self.assertRaises(sweep.Refused) as caught:
+            sweep.camera_ready(self.camera)
+        text = str(caught.exception)
+        self.assertNotIn("ssh tunnel", text)
+        self.assertNotIn("cannot reach", text)
+        self.assertIn("503", text)
+        self.assertIn("unhealthy", text)
+        self.assertIn("Starting camera", text, "the camera's own error is shown")
+
+    def test_a_failed_connection_gives_the_tunnel_advice(self):
+        camera = sweep.Camera(f"http://127.0.0.1:{closed_port()}", TOKEN)
+        with self.assertRaises(sweep.Refused) as caught:
+            sweep.camera_ready(camera, drop_in_installed=True)
+        text = str(caught.exception)
+        self.assertIn("ssh tunnel", text)
+        self.assertNotIn("rollback", text.lower())
+
+    def test_after_the_install_an_unhealthy_camera_says_roll_back_now(self):
+        self.fake.health = UNHEALTHY
+        with self.prepared() as (stage0, token):
+            self.after(stage0)
+            with self.assertRaises(sweep.Refused) as caught:
+                sweep.install_record(stage0, self.camera, token, meter.load_method(), health_wait_s=0)
+            self.assertFalse((stage0 / "install.json").exists())
+        text = str(caught.exception)
+        self.assertIn("503", text)
+        self.assertIn("run the rollback now", text)
+        self.assertNotIn("ssh tunnel", text)
+
+    def test_main_prints_the_rollback_advice_not_the_tunnel(self):
+        self.fake.health = UNHEALTHY
+        with self.prepared() as (stage0, token):
+            self.after(stage0)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), mock.patch.object(sweep, "INSTALL_HEALTH_WAIT_S", 0):
+                code = sweep.main(["--install-record", str(stage0), "--camera", self.fake.url,
+                                   "--token-file", str(token)])
+        self.assertEqual(code, 2)
+        self.assertIn("run the rollback now", err.getvalue())
+        self.assertNotIn("ssh tunnel", err.getvalue())
+
+    def test_a_sweep_start_on_an_unhealthy_meter_build_says_roll_back(self):
+        self.fake.health = UNHEALTHY
+        with stage0_folder() as (stage0, token):
+            with self.assertRaises(sweep.Refused) as caught:
+                sweep.start_run(stage0, self.camera, token, sweep_method())
+            self.assertEqual([p.name for p in stage0.iterdir()], ["install.json"])
+        self.assertIn("run the rollback now", str(caught.exception))
+
+
+class RollbackCheckTests(InstallCase):
+    """Fix 2: the rollback check asks the camera, after waiting past the restart."""
+
+    def rolled_back(self, stage0, **change):
+        (stage0 / "rollback.txt").write_text(unit_lines(active="active", **change), encoding="utf-8")
+
+    def check(self, stage0, token):
+        return sweep.rollback_check(stage0, self.camera, token, health_wait_s=0, settle_s=0.05)
+
+    def test_a_clean_rollback_passes_and_records_the_camera(self):
+        self.fake.metered = False  # the installed server again
+        with self.prepared() as (stage0, token):
+            self.rolled_back(stage0)
+            record = self.check(stage0, token)
+            on_disk = json.loads((stage0 / "rollback.json").read_text())
+        self.assertEqual(on_disk["camera"]["session"], "session-a")
+        self.assertFalse(record["camera"]["meter_keys"])
+        self.assertGreaterEqual(self.fake.health_calls, 2, "/health is read again after the wait")
+
+    def test_refuses_a_crash_looping_unit_that_still_reads_active(self):
+        self.fake.metered = False
+        self.fake.restart_each_health = True  # a new camera session at every look
+        with self.prepared() as (stage0, token):
+            self.rolled_back(stage0)
+            with self.assertRaises(sweep.Refused) as caught:
+                self.check(stage0, token)
+            self.assertFalse((stage0 / "rollback.json").exists())
+        self.assertIn("restarted", str(caught.exception))
+
+    def test_a_camera_that_stops_answering_during_the_wait_is_not_called_a_network_problem(self):
+        self.fake.metered = False
+        with self.prepared() as (stage0, token):
+            self.rolled_back(stage0)
+            with self.assertRaises(sweep.Refused) as caught:
+                sweep.rollback_check(stage0, self.camera, token, health_wait_s=0, settle_s=1,
+                                     sleep=lambda _: self.fake.close())  # the unit goes down in the wait
+            self.assertFalse((stage0 / "rollback.json").exists())
+        self.assertIn("stopped answering", str(caught.exception))
+        self.assertNotIn("ssh tunnel", str(caught.exception))
+
+    def test_refuses_a_camera_that_does_not_answer(self):
+        self.fake.metered = False
+        self.camera = sweep.Camera(f"http://127.0.0.1:{closed_port()}", TOKEN)
+        with self.prepared() as (stage0, token):
+            self.rolled_back(stage0)
+            with self.assertRaises(sweep.Refused):
+                self.check(stage0, token)
+            self.assertFalse((stage0 / "rollback.json").exists())
+
+    def test_refuses_an_unhealthy_camera(self):
+        self.fake.metered = False
+        self.fake.health = UNHEALTHY
+        with self.prepared() as (stage0, token):
+            self.rolled_back(stage0)
+            with self.assertRaises(sweep.Refused) as caught:
+                self.check(stage0, token)
+            self.assertFalse((stage0 / "rollback.json").exists())
+        self.assertIn("503", str(caught.exception))
+
+    def test_refuses_bundles_that_still_carry_meter_keys(self):
+        with self.prepared() as (stage0, token):  # the fake is still the meter build
+            self.rolled_back(stage0)
+            with self.assertRaises(sweep.Refused) as caught:
+                self.check(stage0, token)
+            self.assertFalse((stage0 / "rollback.json").exists())
+        self.assertIn("meter", str(caught.exception))
+
+    def test_the_rollback_check_waits_past_the_restart(self):
+        self.fake.metered = False
+        slept = []
+        with self.prepared() as (stage0, token):
+            self.rolled_back(stage0)
+            sweep.rollback_check(stage0, self.camera, token, health_wait_s=0, settle_s=7.0,
+                                 sleep=slept.append)
+        self.assertIn(7.0, slept)
+
+    def test_main_needs_the_camera_for_the_rollback_check(self):
+        self.fake.metered = False
+        with self.prepared() as (stage0, token):
+            self.rolled_back(stage0)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(sweep.main(["--rollback-check", str(stage0), "--token-file", str(token)]), 2)
+            self.assertFalse((stage0 / "rollback.json").exists())
 
 
 if __name__ == "__main__":

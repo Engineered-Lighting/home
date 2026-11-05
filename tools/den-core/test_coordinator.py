@@ -806,6 +806,7 @@ class BlockFootprintTest(unittest.TestCase):
         self.assertEqual(len(d["inputs"]["hold_set"]["held"]), 4)
         self.assertTrue(all(row["footprint"]["points"] == 576 for row in d["inputs"]["hold_set"]["held"]))
 
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
     def test_it_replays_byte_for_byte(self):
         items, _, _ = synthetic.evening(unclear_rate=0.0, invalid_rate=0.0, fail_rate=0.0, touch=True)
         config = {"light_model": self.model(), "compensation": {"option": "P1", "form": "mode"}}
@@ -1094,6 +1095,7 @@ class ManyTracksLineTest(unittest.TestCase):
         for name, (ok, text) in score.structural(log, coordinator.make_policy(policies[2].config).light, SLOTS).items():
             self.assertTrue(ok, (name, text))
 
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
     def test_a_report_with_every_track_logged_does_not_mention_it(self):
         header, log = hold_fixtures.run_case("V62", "P1-mode")
         path = self.tmp / "log.jsonl"

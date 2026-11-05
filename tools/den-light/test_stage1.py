@@ -393,7 +393,7 @@ class LightModelTests(unittest.TestCase):
             meter_norm_sha256="1" * 64, score_error=scored["error"])))
 
     def test_light_model_json_keeps_the_contract_field_names(self):
-        contract = json.loads((HERE.parent.parent / "docs/architecture/live-v1/schemas.json").read_text())
+        contract = json.loads((HERE.parent.parent / "docs/architecture/live-v1/schemas.json").read_text(encoding="utf-8"))
         record = next(r for r in contract["records"] if r["id"] == "light_model")
         names = set()
         for field in record["fields"]:

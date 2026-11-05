@@ -117,7 +117,7 @@ class FakeHA:
     def __init__(self, *, token, store=None, speed=1.0, occupancy="off", lights=None):
         self.policy, self.helpers = load_den_lighting()
         self.token, self.speed = token, speed
-        self.m0 = time.monotonic()
+        self.m0 = time.perf_counter()  # not time.monotonic(): it steps every 15.6 ms on Windows, and last_updated would tie
         self.lock = threading.RLock()
         self.controller = self.policy.Controller.restore((store or {}).get("data"))
         self.lights = {e: dict(on=False, brightness=None, kelvin=None, available=True) for e in guard.LIGHTS}
@@ -156,7 +156,7 @@ class FakeHA:
         self.server.server_close()
 
     def now(self):
-        return HA_EPOCH + (time.monotonic() - self.m0) * self.speed
+        return HA_EPOCH + (time.perf_counter() - self.m0) * self.speed
 
     # states
     def _set(self, entity_id, state, attributes, context):

@@ -1,0 +1,40 @@
+{
+  "gate": "rung9-gate-v0",
+  "about": "Rung 9's numbers. `fixed` come from the ladder or the owner's answers. Every `slots` entry is a number or choice the contracts leave open: status open, with a proposed value, and score.py refuses a scored run while any is open. To close one, set its status to closed and its value. A preview runs on the proposals and is never a gate.",
+  "fixed": {
+    "max_decision_ms": {"value": 100, "source": "ladder rung 9 (A9): each decision, aims included"},
+    "service_floor_lx": {"value": {"fine": 300, "casual": 200}, "source": "owner choice 9"},
+    "quiet_window_s": {"value": 120, "source": "owner choice 9"},
+    "area_share": {"value": 0.7, "source": "owner choice 8: of the visible patch, at the floor"},
+    "visible_share_min": {"value": 0.5, "source": "owner choice 8: of the patch, to be scored"},
+    "tau_r_cm": {"value": 5, "source": "owner choice 7: strict"}
+  },
+  "slots": {
+    "anticipation_floor": {"status": "open", "value": null, "proposed": 0.8, "note": "the candidate's anticipation rate must reach this, fixed before the run"},
+    "stability_floor": {"status": "open", "value": null, "proposed": 0.9, "note": "the candidate's stability rate must reach this, fixed before the run"},
+    "surrogate_definitions": {"status": "open", "value": null, "proposed": "need-raise-v0", "note": "the contracts name the two rates and say the incumbent scores 0 and 1, but give no formula; need-raise-v0 is in README.md"},
+    "anticipation_window_s": {"status": "open", "value": null, "proposed": 10, "note": "need-raise-v0: how soon after need moves into engaged the raise must come"},
+    "anticipation_rise_min": {"status": "open", "value": null, "proposed": 0.05, "note": "need-raise-v0: the smallest relative rise in predicted light at the person's surface that counts"},
+    "stability_dwell_s": {"status": "open", "value": null, "proposed": 120, "note": "need-raise-v0: a need-driven change followed by another sooner than this was unstable; 120 s is evening-ambience@2's min_dwell_s"},
+    "look_brightness": {"status": "open", "value": null, "proposed": 200, "note": "the seed Look's reference scene on each bulb, 0-255: the look's values are the owner's; below full so a free bulb has room to re-serve"},
+    "look_kelvin": {"status": "open", "value": null, "proposed": 2700, "note": "the seed Look's colour temperature, as in the schema's reading target"},
+    "look_fade_s": {"status": "open", "value": null, "proposed": 2, "note": "the seed Look's transitions.fade_s; 2 s is den_lighting's own fade"},
+    "look_weights": {"status": "open", "value": null, "proposed": {"shortfall": 1.0, "excess": 0.5, "change": 0.001}, "note": "the seed Look's weights: relative shortfall and excess at a target surface, and distance from the look's level"},
+    "solve_steps": {"status": "open", "value": null, "proposed": 9, "note": "evenly spaced brightness steps the solve tries per free bulb"},
+    "glare_limit": {"status": "open", "value": null, "proposed": 1.0, "note": "the seed Look's glare limit at eyes, in the light model's G units; no numeric limit exists yet"},
+    "glare_sd_k": {"status": "open", "value": null, "proposed": 2, "note": "G_hi = G + k x sd, the upper bound the limit is tested on"},
+    "exposed_fraction": {"status": "open", "value": null, "proposed": 0.1, "note": "recipients.exposed: an eye counts as exposed when G_hi is above this share of the limit"},
+    "s_serve": {"status": "open", "value": null, "proposed": 0.25, "note": "recipients.served: smallest task share; attribution-thresholds, deferred by the owner"},
+    "met_tolerance": {"status": "open", "value": null, "proposed": 0.05, "note": "a target counts as unmet, for hold_limited, when predicted light is this far under it"},
+    "compensation_option": {"status": "open", "value": null, "proposed": "P1", "note": "compensation, pending: P0, P1, P2 or P3; the register's advice for rung 9 replay is P1 mode, with P0 and P3 as counterfactual scenes"},
+    "compensation_form": {"status": "open", "value": null, "proposed": "mode", "note": "compensation, pending: strict or mode, for P1 to P3"},
+    "p3_fallback": {"status": "open", "value": null, "proposed": "P1", "note": "compensation, pending: P3 with an unknown changer falls back to P1 or P0"},
+    "lambda_h": {"status": "open", "value": null, "proposed": 1.0, "note": "compensation parameter: P2's penalty weight"},
+    "footprint_threshold": {"status": "open", "value": null, "proposed": 0.05, "note": "compensation parameter: a surface is in a hold's footprint when the change moved its light by this share"},
+    "footprint_membership": {"status": "open", "value": null, "proposed": "at_or_above", "note": "compensation parameter: at_or_above or above the threshold"},
+    "local_completion": {"status": "open", "value": null, "proposed": "not-allowed", "note": "local-completion, pending: not-allowed or allowed"},
+    "manual_vs_safety": {"status": "open", "value": null, "proposed": "S0", "note": "manual-vs-safety, pending: only S0 (manual wins, flagged) is built, the register's advice for the Hue path"},
+    "gaming": {"status": "open", "value": null, "proposed": "non-gaming-stratified", "note": "gaming, pending: non-gaming-stratified or complete-policy"},
+    "record_extensions": {"status": "open", "value": null, "proposed": "coordinator-ext/v1", "note": "the Decision keys the contracts do not name, listed in README.md"}
+  }
+}

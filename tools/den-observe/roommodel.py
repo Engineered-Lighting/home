@@ -1,0 +1,130 @@
+"""RoomModel camera entries for den-observe. Standard library only.
+
+An Observation's transform_id, `<camera_id>@<version>`, resolves to exactly
+one `RoomModel.cameras` entry (schemas.json). As room_context.py does, a
+missing or stale registration is refused, never guessed: see METHOD.md,
+"Registration". The entry's inner form is den-observe-camera-1 (METHOD.md,
+"Inputs"), a slot the contracts leave open.
+"""
+import json
+import math
+
+import camgeom as g
+import lift
+
+ROOM_FRAME = "z_up_metric_floor0"
+INTRINSICS_TOLERANCE_PX = 1.0  # depth_association.camera_model's intrinsics_tolerance_px
+
+
+class RegistrationRefused(Exception):
+    """No usable registration: nothing is written."""
+
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8-sig") as source:
+            model = json.load(source)
+    except (OSError, ValueError):
+        raise RegistrationRefused(f"no readable RoomModel at {path}") from None
+    return model
+
+
+def parse_transform_id(transform_id):
+    if not isinstance(transform_id, str) or transform_id.count("@") != 1:
+        raise RegistrationRefused(f"transform_id {transform_id!r} is not <camera_id>@<version>")
+    camera_id, version = transform_id.split("@")
+    if not camera_id or not version:
+        raise RegistrationRefused(f"transform_id {transform_id!r} is not <camera_id>@<version>")
+    return camera_id, version
+
+
+def _cameras(room_model):
+    if type(room_model) is not dict or type(room_model.get("cameras")) is not list:
+        raise RegistrationRefused("the RoomModel has no cameras list")
+    frame = room_model.get("frame")
+    name = frame.get("id") or frame.get("name") if isinstance(frame, dict) else frame
+    if frame is not None and name != ROOM_FRAME:
+        raise RegistrationRefused(f"the RoomModel frame is {name!r}, not {ROOM_FRAME}")
+    return [c for c in room_model["cameras"] if type(c) is dict]
+
+
+def resolve(room_model, transform_id):
+    """The one camera entry transform_id names; refused if none or several."""
+    camera_id, version = parse_transform_id(transform_id)
+    found = [c for c in _cameras(room_model) if c.get("camera_id") == camera_id and c.get("version") == version]
+    if not found:
+        raise RegistrationRefused(f"missing registration: no camera entry {transform_id}")
+    if len(found) > 1:
+        raise RegistrationRefused(f"{transform_id} names {len(found)} camera entries, not exactly one")
+    return found[0]
+
+
+def current_transform_id(room_model, camera_id):
+    """camera_id@<newest version>; versions are ISO dates, which sort in time order."""
+    versions = [c.get("version") for c in _cameras(room_model) if c.get("camera_id") == camera_id]
+    versions = [v for v in versions if isinstance(v, str) and v]
+    if not versions:
+        raise RegistrationRefused(f"missing registration: no camera entry for {camera_id}")
+    return f"{camera_id}@{max(versions)}"
+
+
+class Camera:
+    """A resolved, checked camera entry: its rig, its pose and its error bound."""
+
+    def __init__(self, room_model, transform_id, *, max_error_bound_m):
+        entry = resolve(room_model, transform_id)
+        self.camera_id, self.version = parse_transform_id(transform_id)
+        current = current_transform_id(room_model, self.camera_id)
+        if current != transform_id:
+            raise RegistrationRefused(f"stale registration: {transform_id} is superseded by {current}")
+        bound = entry.get("error_bound_m")
+        if type(bound) not in (int, float) or not math.isfinite(bound) or bound < 0:
+            raise RegistrationRefused(f"{transform_id} has no error_bound_m: the registration is not validated")
+        if bound > max_error_bound_m:
+            raise RegistrationRefused(f"{transform_id} error_bound_m {bound} m is above rung 1's "
+                                      f"{max_error_bound_m} m gate")
+        k, pose = entry.get("intrinsics"), entry.get("pose")
+        if type(k) is not dict or type(pose) is not dict:
+            raise RegistrationRefused(f"{transform_id} intrinsics and pose are not in den-observe-camera-1 form")
+        try:
+            extrinsics = k["rgb_from_rectified_left"]
+            self.rig = lift.Rig(left_k=k["rectified_left"], rgb_k=k["rgb"], rgb_distortion=k.get("rgb_distortion"),
+                                rgb_from_left=(extrinsics["rotation"], extrinsics["translation_m"]),
+                                rgb_size=k["rgb_size"], depth_size=k["depth_size"])
+            if pose.get("camera_frame") != "rectified_left":
+                raise ValueError("pose.camera_frame must be rectified_left")
+            self.room_from_left = g.from_matrix(pose.get("room_from_camera"), "room_from_camera")
+            baseline = k["stereo_baseline_m"]
+            if not g.finite(baseline) or not 0.01 <= baseline <= 1.0:
+                raise ValueError("stereo_baseline_m must be metres")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RegistrationRefused(f"{transform_id} camera entry is not usable: {exc}") from None
+        self.transform_id, self.error_bound_m, self.baseline_m = transform_id, float(bound), float(baseline)
+        self.f_left, self.f_rgb = self.rig.left_k[0], self.rig.rgb_k[0]
+        rgb_origin_left = g.apply(*self.rig.left_from_rgb, [0.0, 0.0, 0.0])
+        self.rgb_origin_room = g.apply(*self.room_from_left, rgb_origin_left)
+
+    def check_frame(self, intrinsics):
+        """A frame's own intrinsics, when it carries them, must match the entry's."""
+        if intrinsics is None:
+            return
+        for name, reference in (("rectified_left", self.rig.left_k), ("rgb", self.rig.rgb_k)):
+            try:
+                frame_k = g.intrinsics(intrinsics.get(name), name)
+            except ValueError:
+                raise RegistrationRefused(f"a frame's {name} intrinsics are unreadable") from None
+            if max(abs(a - b) for a, b in zip(frame_k, reference)) > INTRINSICS_TOLERANCE_PX:
+                raise RegistrationRefused(f"stale registration: a frame's {name} intrinsics differ from "
+                                          f"{self.transform_id} by more than {INTRINSICS_TOLERANCE_PX} px")
+
+    def to_room(self, point_left):
+        return g.apply(*self.room_from_left, point_left)
+
+    def rotate(self, cov_left):
+        return g.cov_rotate(self.room_from_left[0], cov_left)
+
+    def rgb_ray_room(self, u, v):
+        """(origin, unit direction) in the room frame of the RGB pixel's viewing ray."""
+        ray = self.rig.rgb_ray(u, v)
+        direction_left = g.mat_vec(self.rig.left_from_rgb[0], ray)
+        return self.rgb_origin_room, g.unit(g.mat_vec(self.room_from_left[0], direction_left))

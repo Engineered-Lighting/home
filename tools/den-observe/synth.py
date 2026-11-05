@@ -3,7 +3,8 @@
 Used by the tests and by `replay.py --demo`. It renders the rectified-left
 depth of a simple room (floor, back wall, a flat standing 'person' panel)
 seen from a known camera pose, writes R-format bundles with den-take's own
-writer, and gives the true 3D point and RGB pixel of every figure joint.
+writer, a check file with a slate offset, and a RoomModel whose camera entry
+is that pose, and gives the true 3D point and RGB pixel of every figure joint.
 Nothing here touches a camera, a network or real footage.
 
 Room frame: x, y on the floor, z up, metres, floor at z = 0.
@@ -29,6 +30,9 @@ RGB_K = {"fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 180.0}
 RGB_DISTORTION = [0.05, -0.02, 0.001, 0.0005, 0.0, 0.0, 0.0, 0.0]
 RGB_FROM_LEFT = ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [-0.0375, 0.0, 0.0])
 DEPTH_SIZE, RGB_SIZE = (640, 400), (640, 360)
+BASELINE_M = 0.075
+UNIX_OFFSET_S = 1.8e9 - 0.12  # the synthetic takes' true host-monotonic -> Unix offset
+ARRIVAL_S = 0.05              # bundles arrive this long after capture
 
 
 def camera_pose(position=(0.0, 0.0, 2.2), tilt_deg=20.0):
@@ -109,15 +113,20 @@ def npy(descr, shape, body):
     return b"\x93NUMPY\x01\x00" + struct.pack("<H", len(header)) + header.encode("latin-1") + body
 
 
-def metadata(session, seq, t_rgb, t_depth):
-    def plane(width, height, t):
-        return {"sequence": seq, "device_timestamp_seconds": t - 3000.0, "host_monotonic_timestamp_seconds": t,
-                "width": width, "height": height, "type": "Type.NV12", "exposure_duration_seconds": 0.008,
-                "transformation_valid": False}
+def metadata(session, seq, t_rgb, t_depth, intrinsics=None):
+    """Bundle metadata; intrinsics {"rgb": K, "depth": K} marks the frame's transformations valid."""
+    def plane(width, height, t, k=None):
+        out = {"sequence": seq, "device_timestamp_seconds": t - 3000.0, "host_monotonic_timestamp_seconds": t,
+               "width": width, "height": height, "type": "Type.NV12", "exposure_duration_seconds": 0.008,
+               "transformation_valid": k is not None}
+        if k is not None:
+            out["intrinsics"] = [[k["fx"], 0.0, k["cx"]], [0.0, k["fy"], k["cy"]], [0.0, 0.0, 1.0]]
+        return out
+    k = intrinsics or {}
     return {"schema": 1, "session": session, "captured_unix_ns": 1_800_000_000_000_000_000,
             "captured_unix_ns_semantics": "bundle_packaging_time_not_sensor_exposure",
             "depth_alignment": "rectified_left", "depth_units": "millimetres", "invalid_depth": 0,
-            "frames": {"rgb": plane(640, 360, t_rgb), "depth": plane(640, 400, t_depth),
+            "frames": {"rgb": plane(640, 360, t_rgb, k.get("rgb")), "depth": plane(640, 400, t_depth, k.get("depth")),
                        "left": plane(640, 400, t_depth), "right": plane(640, 400, t_depth)},
             "synchronization": {"method": "device_timestamp_group", "hardware_synchronized": False,
                                 "threshold_ms": 20, "measured_skew_ms": round((t_rgb - t_depth) * 1000, 3),
@@ -138,16 +147,18 @@ def bundle(meta, depth):
     return output.getvalue()
 
 
-def make_take(folder, frames, depth):
+def make_take(folder, frames, depth, *, intrinsics=None):
     """Write an R take: frames is [(t_rgb, t_depth)] host-monotonic seconds; depth is
-    one depth frame's bytes or a list with one per frame. Returns the folder."""
+    one depth frame's bytes or a list with one per frame; RGB sequence numbers
+    start at 1000. Returns the folder. It has no check file: see write_check."""
     folder = Path(folder)
     folder.mkdir(parents=True)
     session = "sess-" + uuid.uuid4().hex
     writer = take.TakeWriter(folder)
     for i, (t_rgb, t_depth) in enumerate(frames):
-        data = bundle(metadata(session, 1000 + i, t_rgb, t_depth), depth[i] if isinstance(depth, list) else depth)
-        writer.add(data, check.read_bundle(data)[0], t_rgb + 0.05, 1.8e9 + t_rgb)
+        meta = metadata(session, 1000 + i, t_rgb, t_depth, intrinsics)
+        data = bundle(meta, depth[i] if isinstance(depth, list) else depth)
+        writer.add(data, check.read_bundle(data)[0], t_rgb + ARRIVAL_S, UNIX_OFFSET_S + t_rgb + ARRIVAL_S)
     writer.close()
     take.write_json(folder / "take.json", {
         "schema": take.SCHEMA, "take": folder.name, "script": "free", "commissioning": False,
@@ -155,3 +166,40 @@ def make_take(folder, frames, depth):
         "slates": [], "complete": True, "stop_reason": None, "counts": {"kept": len(writer.index)},
         "sha256": {"frames.csv": check.file_sha256(folder / "frames.csv")}})
     return folder
+
+
+def write_check(folder, *, verdict="PASS", offset_s=UNIX_OFFSET_S, period_s=10):
+    """A check-N.json with the fields den-observe reads: verdict, the start slate's
+    offset c (camera minus phone, mod period) and the slate period."""
+    c = -(offset_s % period_s)
+    c = (c + period_s / 2) % period_s - period_s / 2  # wrap into [-period/2, period/2)
+    numbers = [int(p.stem.split("-")[1]) for p in Path(folder).glob("check-*.json")]
+    path = Path(folder) / f"check-{1 + max(numbers, default=0)}.json"
+    path.write_text(json.dumps({"schema": "den-take-check-1", "verdict": verdict,
+                                "method": {"tolerances": {"slate_period_s": period_s}},
+                                "reported_only": {"offset_c_mod_period_s": [round(c, 6), round(c, 6)]}}),
+                    encoding="utf-8")
+    return path
+
+
+def camera_entry(*, camera_id="den-oak", version="2026-11-12", error_bound_m=0.03, room_from_left=None,
+                 left_k=None):
+    rotation, translation = room_from_left or camera_pose()
+    matrix = [list(rotation[i]) + [translation[i]] for i in range(3)] + [[0, 0, 0, 1]]
+    return {"camera_id": camera_id, "version": version, "method": "synthetic", "error_bound_m": error_bound_m,
+            "intrinsics": {"source": "synthetic EEPROM", "rectified_left": dict(left_k or LEFT_K),
+                           "rgb": dict(RGB_K), "rgb_distortion": list(RGB_DISTORTION),
+                           "rgb_from_rectified_left": {"rotation": RGB_FROM_LEFT[0],
+                                                       "translation_m": RGB_FROM_LEFT[1]},
+                           "stereo_baseline_m": BASELINE_M, "depth_size": list(DEPTH_SIZE),
+                           "rgb_size": list(RGB_SIZE)},
+            "pose": {"camera_frame": "rectified_left", "room_from_camera": matrix},
+            "photometric": {"k_L": None, "unit": "(cd/m²)/nc", "normalisation_version": None,
+                            "calibration_id": None, "status": "uncalibrated"}}
+
+
+def room_model(cameras=None):
+    """A RoomModel with schemas.json's top-level fields and the given camera entries."""
+    return {"room_id": "den", "version": "den-synth-1", "frame": "z_up_metric_floor0", "surfaces": [],
+            "cameras": cameras if cameras is not None else [camera_entry()], "fixtures": [], "landmarks": [],
+            "provenance": {"cameras": {"method": "manual", "ts": None, "confidence": None}}}

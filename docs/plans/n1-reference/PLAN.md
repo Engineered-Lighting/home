@@ -1,7 +1,8 @@
 # N1 plan: the single-person reference
 
 Status: plan only. Nothing here is built or run. Written 2026-11-04, revised
-2026-11-05 (phone band, desk view, quiet spacing).
+2026-11-05 (phone band, desk view, quiet spacing; then the book's place, the
+stop cues and the script's `end_s`).
 
 ## Context
 
@@ -82,7 +83,7 @@ Status: plan only. Nothing here is built or run. Written 2026-11-04, revised
 | `tools/den-label/FREEZES.md` | repo | Append-only log of freeze lines: versions, hashes, counts. No content. |
 | `tools/den-label/test_den_label.py` | PC or cloud | Unit tests on synthetic takes only. |
 | `tools/den-label/test-page-browser.mjs` | cloud | One browser smoke test of the page on a synthetic take. |
-| `tools/den-take/take.py` (small change) | owner's PC | `--script` also takes a name from `tools/den-take/scripts/`, then speaks and logs its cues. |
+| `tools/den-take/take.py` (small change) | owner's PC | `--script` also takes a name from `tools/den-take/scripts/`, then speaks and logs its cues and starts the end slate at the script's `end_s`. |
 | `tools/den-take/scripts/hard-a.json`, `hard-b.json` | repo | The two staged scripts. |
 | `tools/den-take/test_den_take.py` (additions) | PC or cloud | Tests for staged scripts. R's `make_take` writes no `started_unix` and only `commission` or `free` as `script`, so it gains both as keyword parameters: `started_unix` defaults to a fixed base plus an offset per take, and `script` takes staged names. |
 | `changes/unreleased/den-label.md` | repo | The release note, added at build time. |
@@ -182,16 +183,41 @@ C:\den-takes\n1\
 - Hard cases are staged inside ordinary R takes. R's slates, check and cuts do
   not change.
 - **The `take.py` change.** `--script` takes `commission`, `free`, or the name
-  of a file in `tools/den-take/scripts/`. A script file (`den-take-script-1`)
-  lists blocks, each with `at_s` (seconds after "Begin"), `case` and `say`.
-  take.py speaks each block at its time with R's speech pattern and logs it in
-  `take.json` as a cue named `stage`. After the last block it goes to the end
-  slate. Enter still ends a take early. `take.json` records the script file's
-  sha256. check.py needs no change, because it finds `begin` and
-  `hold_phone_end` by name.
+  of a file in `tools/den-take/scripts/`. A script file (format
+  `den-take-script-1`) has a list of `blocks`, each with `at_s` (seconds after
+  "Begin"), `case` and `say`, and a top-level `end_s`: the seconds after
+  "Begin" at which the end slate starts.
+
+  ```json
+  {"format": "den-take-script-1", "end_s": 1500, "blocks": [
+    {"at_s": 3, "case": "idle_seated", "say": "Go to the desk. ..."},
+    {"at_s": 90, "case": "still_reader", "say": "Hold the book up ..."}]}
+  ```
+
+  - Times are at least 3 s apart (R's `say_gap_s`), so no two cues are spoken
+    over each other. The first block starts at least 3 s after "Begin", and
+    `end_s` at least 3 s after the last block and at most 28 minutes, R's cap
+    on the activity part.
+  - A block's `case` is the case it stages, or `lights_down` for the one
+    dimming block.
+  - take.py refuses a malformed or unknown script before it reads the camera.
+  - It speaks each block at its time with R's speech pattern and logs it in
+    `take.json` as a cue named `stage` with its case. At `end_s` it starts the
+    end slate. Enter still ends a take early. `take.json` records the script
+    file's sha256.
+  - check.py needs no change, because it finds `begin` and `hold_phone_end` by
+    name.
 - **Two scripts, `hard-a` and `hard-b`.** They have the same cases in a
   different order with different lengths, so no case sits at a fixed time
   after "Begin".
+- **Stops.** A block that follows a task starts its cue with that task's
+  stop: "Stop. Put the book down." after `still_reader`, "Stop. Put the phone
+  away." after `phone_at_counter`, and "Stop." after the others. The tables
+  below show a round's own cues. Where rounds join, the same rule starts the
+  first cue of rounds 2 to 5, the lights-down cue and the final cue, so every
+  `still_reader` in both scripts is followed by "Stop. Put the book down."
+  The stop words add no time: each task still has its 30 s with no task
+  before the next one.
 - **Spacing.** Two architecture numbers set the gaps. A7's estimator leaves an
   episode only after 20 s of observed negative. A13's late-off band, τ_off,
   is the 60 s after a labelled offset, and it isn't counted. An earlier draft
@@ -217,6 +243,12 @@ C:\den-takes\n1\
   hands out of view. So:
   - the desk cues use the posture that check found in view: chair pushed back
     from the desk, book held at chest height;
+  - the book's place, where it starts and where each "Put the book down"
+    leaves it, is an in-view surface within reach of the chair pushed back
+    that the owner names at approval 1, never the desk top. Every
+    `still_reader` pick-up and put-down is then in view. The lap would not do
+    as its place: the person stands up from the chair at every move to the
+    counter, so the book would be handled again inside a quiet block;
   - mail sorting and wiping move to a surface the commissioning take's frame
     shows in view: the counter if it is in view, which is where A13 stages
     both cases. The owner names the spot at approval 1, the same way as the
@@ -249,14 +281,22 @@ C:\den-takes\n1\
 | "Hold the book up at chest height and read it. Keep still." | `still_reader` (fine) | 35 s |
 
 - "Counter" in the cues means the spot named at approval 1.
-- A take plays 5 rounds. After round 3, the cue "Stop. Turn the den lights
-  down low now." leaves 20 s, and rounds 4 and 5 run in low light. After
-  round 5, "Stop. Hands still." leaves 30 s, so the last task ends on a
-  release inside the usable part. The activity part is 5 x 290 + 20 + 30 =
-  1,500 s, 25 minutes. With the slates and phone handling (about 1 to 2
-  minutes) the whole take is about 27 minutes. That is inside R's 28-minute
-  cap on the activity part and CHECK-V1's 30-minute slate separation, even
-  with two end-slate retries.
+- A take plays 5 rounds. Its first cue is spoken 3 s after "Begin", so the
+  two are not spoken over each other, and that first block is 3 s shorter.
+  Every other block starts at the time the tables give.
+- After round 3, a 20 s `lights_down` block, and rounds 4 and 5 run in low
+  light. Its cue is "Stop. Put the phone away. Turn the den lights down low
+  now." in `hard-a` and "Stop. Put the book down. Turn the den lights down low
+  now." in `hard-b`.
+- After round 5, a final 30 s block, so the last task ends on a release
+  inside the usable part: "Stop. Put the phone away. Hands still."
+  (`idle_standing`) in `hard-a`, "Stop. Put the book down. Hands still."
+  (`idle_seated`) in `hard-b`.
+- Then `end_s` = 5 x 290 + 20 + 30 = 1,500 s, 25 minutes, starts the end
+  slate. With the slates and phone handling (about 1 to 2 minutes) the whole
+  take is about 27 minutes. That is inside R's 28-minute cap on the activity
+  part and CHECK-V1's 30-minute slate separation, even with two end-slate
+  retries.
 - Each take gives 20 engagement episodes (10 fine and 10 casual) and about 21
   quiet spans, 5 of them long. That is about 3 minutes of scored quiet per
   take: the tail of each long block, and a whole first block. Every case
@@ -272,14 +312,16 @@ C:\den-takes\n1\
   - the phone block moves to right after the long `idle_standing` block in
     rounds 2 and 4, as "Use your phone at the counter." (25 s) and then
     "Stop. Put the phone away. Hands still." (30 s). Its seconds then lie
-    past τ_off, and the next onset still begins from none. In `hard-b` the
-    cue after the old phone slot becomes "Stop. Hands still.";
-  - each take grows by 110 s, to 1,610 s (about 27 minutes) of activity, or
-    about 28 to 29 minutes in all. That is still inside both limits. Casual
-    is again 10 per take (wiping and tidying), and the phone case appears in
+    past τ_off, and the next onset still begins from none. By the stop rule,
+    the cue after each `tidying` block starts with "Stop." alone;
+  - each take grows by 110 s, to an `end_s` of 1,610 s (about 27 minutes) of
+    activity, or about 28 to 29 minutes in all. That is still inside both
+    limits. Casual is again 10 per take (wiping and tidying), and the phone
+    case appears in
     normal and low light.
-- **Props**, before "Begin": the book on the desk, the stack of mail and a
-  cloth on the counter (or the named spot). The phone is the owner's own; keep
+- **Props**, before "Begin": the book in its place (the in-view surface named
+  at approval 1, never the desk top), the stack of mail and a cloth on the
+  counter (or the named spot). The phone is the owner's own; keep
   it in a pocket between its blocks. At the end slate, open the slate page
   again. R's slate retries cover a slow switch.
 - **The commissioning take's 3 minutes.** R's commissioning take has 180 s of
@@ -287,15 +329,18 @@ C:\den-takes\n1\
   for the counter check, the surface map and the desk-view check. The
   den-label README tells the owner to spend them like this, with nothing
   spoken and R's files unchanged:
-  - about 60 s sitting at the desk with the chair pushed back, holding the
-    mail and then the book at chest height;
+  - about 60 s sitting at the desk with the chair pushed back: holding the
+    mail at chest height, then picking the book up from the surface they mean
+    to name as its place (never the desk top), reading it at chest height and
+    putting it back there;
   - about 60 s wiping the counter (or, if the owner already knows the counter
     is out of view, the surface they would use instead);
   - about 60 s standing at the counter using the phone.
 
   One look at the commissioning take's contact sheet (check.py's
   `review\index.html`) then answers every in-view question: the counter, the
-  wiping surface, and the seated posture with the mail and the book.
+  wiping surface, the seated posture with the mail and the book, and the
+  book's pick-up from its place and its put-down.
 - **The cues are prompts, not labels.** Labels come from the video. If the
   owner does something else, the labels say what really happened.
 - `status` checks case coverage from the labels' case tags, never cue times.
@@ -592,13 +637,20 @@ All tests use synthetic takes made with R's own test helpers (`make_take`,
 
 `test_den_take.py` additions:
 
-- A script file parses. Bad files are refused: unknown keys, times not
-  increasing, or longer than 28 minutes.
-- With R's fake camera, a staged take speaks each cue at its time, logs it as a
-  `stage` cue with its case, records the script's sha256, and ends with the
-  end slate.
+- A script file parses. Bad files are refused before any camera read:
+  unknown or missing keys, a missing `end_s`, times not increasing or under
+  3 s apart, a first block under 3 s after "Begin", an `end_s` under 3 s after
+  the last block, or an `end_s` longer than 28 minutes. An unknown script name
+  is refused the same way.
+- With R's fake camera and a fake clock, a staged take speaks each cue at its
+  time, logs it as a `stage` cue with its case, records the script's sha256,
+  and starts the end slate at `end_s`.
 - check.py gives the same usable part and verdict with and without stage cues.
-- Enter ends a staged take early.
+- Enter ends a staged take early, and the take is still saved.
+- A test reads every file in `scripts/`: each obeys the two spacing rules
+  (every task starts after at least 30 s with no task; each round has one gap
+  of at least 90 s with no task), and its `end_s` is 1,500 s, 30 s after its
+  last block.
 
 `test-page-browser.mjs` (cloud only, with the preinstalled Chromium): opens the
 page on a synthetic take, draws a box, interpolates, audits, marks one
@@ -642,9 +694,11 @@ Steps marked **[go-ahead]** need the owner's yes. Nothing else does.
      casual block per round (`tidying`, see "Session staging"), settled at
      this same okay before any take, not more takes. `label.py status`
      already shows counts per split and band, so it gets no band flag;
-   - the spoken cue text, and the spot for mail sorting, wiping and the
-     phone: the counter if the contact sheet shows it in view, else another
-     in-view surface away from the desk that the owner names.
+   - the spoken cue text, the book's place (an in-view surface within reach
+     of the chair pushed back, never the desk top), and the spot for mail
+     sorting, wiping and the phone: the counter if the contact sheet shows it
+     in view, else another in-view surface away from the desk that the owner
+     names.
 2. **[go-ahead] The staged batch:** "8 staged takes, `hard-a` and `hard-b`,
    four each". R asks for a go-ahead per take or per named batch, because a
    camera fault during polling could briefly drop Frigate's den feed, which
@@ -673,7 +727,7 @@ Steps marked **[go-ahead]** need the owner's yes. Nothing else does.
 | R's format changes before its first real take | The tool breaks | N1 reads only the fields listed here. Tests use R's own helpers, and one reads a `take.json` written by `take.run`. |
 | Dimming mid-take | A few seconds of exposure change | The `low_light` span starts once the room is dim. |
 | Counter not in view | The mail, wiping and phone cases are lost | Moved to another in-view spot away from the desk, named by the owner at approval 1 from the commissioning contact sheet. |
-| Desk view: a posed check on 2026-11-02 found that with the chair pulled in, the hands and a book on the desk or held low are below the frame | Desk-top contacts unseen, onsets unlabellable | Desk cues use the posture found in view (chair pushed back, book at chest height). Mail and wiping move to the counter or the named in-view spot. The commissioning take's 3 minutes and one contact-sheet look check it before any staged take. No camera move. |
+| Desk view: a posed check on 2026-11-02 found that with the chair pulled in, the hands and a book on the desk or held low are below the frame | Desk-top contacts unseen, onsets unlabellable | Desk cues use the posture found in view (chair pushed back, book at chest height). The book's place is an in-view surface the owner names, never the desk top. Mail and wiping move to the counter or the named in-view spot. The commissioning take's 3 minutes, including the book's pick-up from its place, and one contact-sheet look check it before any staged take. No camera move. |
 | Phone band set to `none` at approval 1 | Casual falls to about 20 per split, under the gate | One `tidying` block per round replaces the phone block, and the phone moves past τ_off in rounds 2 and 4. Settled at the okay, before any take. |
 | Quiet blocks too close to tasks | No quiet second outside τ_off; onsets not from none | At least 30 s with no task before every task, and one 90 s quiet block per round whose tail is scored. The τ_off rule is in PROTOCOL-V1. |
 | Disk: C: is 97% full | 8 staged takes of about 27 minutes need about 45 to 85 GB | R's 35 GB floor refuses a take first. N1's own files are small. |
@@ -730,11 +784,13 @@ Waits for R's first real take (the commissioning take, once it passes):
 
 - The commissioning take itself, with its 3 unscripted minutes spent as
   "Session staging" says: seated at the desk pushed back with the mail and
-  the book, wiping the counter, and the phone at the counter.
+  the book (picked up from its place and put back), wiping the counter, and
+  the phone at the counter.
 - One look at its contact sheet: the check that the counter is in view, and
   next to it the in-view check for the desk posture (chair pushed back, book
-  at chest height) and for the surface used for mail and wiping. The owner
-  names the spot at approval 1.
+  at chest height), for the book's place with its pick-up and put-down, and
+  for the surface used for mail and wiping. The owner names the spot and the
+  book's place at approval 1.
 - A practice run of the page on the commissioning take (about 15 min of owner
   time, counted in the one-time owner time). Nothing from it is ever frozen,
   because it is not retained. This also checks page speed on real bundles.

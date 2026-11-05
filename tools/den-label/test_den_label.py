@@ -1140,6 +1140,35 @@ class ClipKindTests(Base):
         n1.check_labels(draft["intervals"], draft["spans"], PROTOCOL, ws.state("s1").segments(), t_of)
 
 
+class CaseCountTests(Base):
+    """status and the labels manifest count intervals per case, from the labels' case tags."""
+
+    def test_status_and_the_manifest_count_intervals_per_case(self):
+        for i, (name, script) in enumerate((("a1", "hard-a"), ("b1", "hard-b"))):
+            staged_take(self.takes, name, script, BASE_UNIX + i * DAY)
+        commissioning_take(self.takes)
+        ws = self.ws()
+        ws.scan()
+        self.surfaces_done(ws, "c1")
+        with mock.patch.object(n1, "now", return_value=BASE_UNIX + 2 * DAY):
+            for name in ("a1", "b1"):
+                self.boxes_done(ws, name)
+            self.labels_done(ws, "a1", intervals=[self.interval(ws, "a1", 40, 45, "fine", "still_reader"),
+                                                  self.interval(ws, "a1", 52, 56, "fine", "still_reader"),
+                                                  self.interval(ws, "a1", 60, 66, "casual", "wiping")],
+                             spans=[])
+            self.labels_done(ws, "b1")
+        text = "\n".join(ws.status())
+        self.assertIn("Split development: 2 sessions over 2 days; intervals fine 3, casual 2; cases "
+                      "sorting_mail 1, still_reader 2, wiping 2;", text)
+
+    def test_the_manifest_counts_intervals_per_case(self):
+        ws, _, _ = two_frozen(self)
+        manifest = json.loads((ws.root / "labels-v1" / "labels.json").read_bytes())
+        self.assertEqual(manifest["sessions"][0]["cases"], {"sorting_mail": 1, "wiping": 1})
+        self.assertEqual(manifest["counts"]["development"]["cases"], {"sorting_mail": 2, "wiping": 2})
+
+
 def two_frozen(test):
     """FreezeTests.build on two sessions, then both freezes. Returns the workspace and the two lines."""
     ws = FreezeTests.build(test, names=(("a1", "hard-a"), ("b1", "hard-b")))

@@ -737,6 +737,12 @@ def next_version(n1root, kind, freezes_text=""):
     return 1 + max(versions(n1root, kind) + logged, default=0)
 
 
+def add_counts(total, counts):
+    for name, k in counts.items():
+        total[name] = total.get(name, 0) + k
+    return total
+
+
 def utc_date(unix):
     return time.strftime("%Y-%m-%d", time.gmtime(unix))
 
@@ -923,13 +929,17 @@ class Workspace:
     # -- counts
     def label_counts(self, draft, t_of):
         bands = {band: sum(1 for x in draft["intervals"] if x["band"] == band) for band in BANDS}
+        cases = {}
+        for item in draft["intervals"]:
+            cases[item["case"]] = cases.get(item["case"], 0) + 1
         quiet = {}
         for span in draft["spans"]:
             if span["kind"] == "quiet":
                 quiet[span["case"]] = quiet.get(span["case"], 0) + 1
         past = quiet_seconds_past_tau(draft["intervals"], draft["spans"], self.protocol.settings["tau_off_s"],
                                       t_of)
-        return {"bands": bands, "quiet": quiet, "quiet_s_past_tau_off": {k: round(v, 3) for k, v in past.items()},
+        return {"bands": bands, "cases": cases, "quiet": quiet,
+                "quiet_s_past_tau_off": {k: round(v, 3) for k, v in past.items()},
                 "uncertain_s": round(uncertain_seconds(draft["spans"], t_of), 3)}
 
     def status(self):
@@ -937,8 +947,8 @@ class Workspace:
         lines = [f"N1 status. Protocol {self.protocol.file} {self.protocol.sha256[:12]}, phone band "
                  f"{self.protocol.phone_band}."]
         entries = self.entries()
-        per_split = {s: {"sessions": 0, "days": set(), "fine": 0, "casual": 0, "quiet": {}, "past": {},
-                         "uncertain_s": 0.0} for s in SPLITS}
+        per_split = {s: {"sessions": 0, "days": set(), "fine": 0, "casual": 0, "cases": {}, "quiet": {},
+                         "past": {}, "uncertain_s": 0.0} for s in SPLITS}
         rows, blocked = [], 0
         for entry in entries:
             take_id = entry["session"]
@@ -967,6 +977,7 @@ class Workspace:
                 split["fine"] += counts["bands"]["fine"]
                 split["casual"] += counts["bands"]["casual"]
                 split["uncertain_s"] += counts["uncertain_s"]
+                add_counts(split["cases"], counts["cases"])
                 for case, k in counts["quiet"].items():
                     split["quiet"][case] = split["quiet"].get(case, 0) + k
                 for case, s in counts["quiet_s_past_tau_off"].items():
@@ -978,8 +989,9 @@ class Workspace:
             s = per_split[name]
             quiet = ", ".join(f"{case} {k} ({s['past'].get(case, 0.0):.0f} s past {tau:g} s)"
                               for case, k in sorted(s["quiet"].items())) or "none"
+            cases = ", ".join(f"{case} {k}" for case, k in sorted(s["cases"].items())) or "none"
             lines.append(f"Split {name}: {s['sessions']} sessions over {len(s['days'])} days; intervals "
-                         f"fine {s['fine']}, casual {s['casual']}; quiet {quiet}; uncertain "
+                         f"fine {s['fine']}, casual {s['casual']}; cases {cases}; quiet {quiet}; uncertain "
                          f"{s['uncertain_s']:.1f} s.")
         try:
             take_id = self.remark_take()
@@ -1071,7 +1083,8 @@ class Workspace:
         fixture_raw = (fixture_dir / "fixture.json").read_bytes()
         fixture = json.loads(fixture_raw)
         files, sessions = {}, []
-        counts = {s: {"sessions": 0, "days": set(), "fine": 0, "casual": 0, "uncertain_s": 0.0} for s in SPLITS}
+        counts = {s: {"sessions": 0, "days": set(), "fine": 0, "casual": 0, "cases": {}, "uncertain_s": 0.0}
+                  for s in SPLITS}
         checks = {}
         for entry in entries:
             state, frames, usable, draft = self.ready_session(entry, "labels")
@@ -1093,9 +1106,10 @@ class Workspace:
             split["fine"] += c["bands"]["fine"]
             split["casual"] += c["bands"]["casual"]
             split["uncertain_s"] = round(split["uncertain_s"] + c["uncertain_s"], 3)
+            add_counts(split["cases"], c["cases"])
             sessions.append({"take": entry["session"], "split": entry["split"], "check": state.check,
                              "check_sha256": state.check_sha256, "file": name, "sha256": sha256_bytes(files[name]),
-                             "counts": c["bands"], "quiet": c["quiet"],
+                             "counts": c["bands"], "cases": c["cases"], "quiet": c["quiet"],
                              "quiet_s_past_tau_off": c["quiet_s_past_tau_off"], "uncertain_s": c["uncertain_s"]})
         if {s["take"]: s["check_sha256"] for s in fixture["sessions"]} != checks:
             raise Refused(f"fixture-v{fixture_versions[-1]} does not cover these sessions and checks; "

@@ -200,6 +200,7 @@ def run_click(work, take_dir, frame=None, *, m=None, out=sys.stdout, open_browse
         print("Depth while clicking uses proposed values for: " + ", ".join(m.describe_open()), file=out)
     done = serve.serve(session, open_browser=open_browser, ready=ready, out=out)
     print(f"Clicks saved to {session.path} ({len(session.clicks)} of {len(sheet['points'])} points).", file=out)
+    print(f"Next: python -B tools\\den-register\\register.py fit {work} --take {Path(take_dir)}", file=out)
     return 0 if done else 1
 
 

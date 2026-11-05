@@ -681,6 +681,23 @@ class PageTests(Base):
         self.assertEqual(register.read_clicks(register.clicks_path(self.scene.work, self.scene.take))["clicks"], {})
         self.assertEqual(self.request("POST", "/api/click", {"id": "p1", "u": u, "v": v})[0], 400)
 
+    def test_click_command_serves_until_done_and_says_what_is_next(self):
+        def press_done(url):
+            def run():
+                port = int(url.split(":")[2].split("/")[0])
+                token = url.split("?t=")[1]
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                connection.request("POST", "/api/done", body="{}", headers={
+                    "Host": f"127.0.0.1:{port}", "X-Reg-Token": token, "Content-Type": "application/json"})
+                connection.getresponse().read()
+            threading.Thread(target=run, daemon=True).start()
+        out = io.StringIO()
+        code = register.run_click(self.scene.work, self.scene.take, m=self.scene.m, out=out, open_browser=False,
+                                  ready=press_done)
+        self.assertEqual(code, 0)
+        self.assertIn("http://127.0.0.1:", out.getvalue())
+        self.assertIn("register.py fit", out.getvalue())
+
     def test_a_reopened_page_keeps_earlier_clicks(self):
         u, v, _ = self.scene.seen["p3"]
         self.request("POST", "/api/click", {"id": "p3", "u": u, "v": v})

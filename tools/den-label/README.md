@@ -49,17 +49,20 @@ R's commissioning take (`take.py --script commission`, R's README step 4) has
 3 minutes of free activity after "Begin.". Spend them like this, with nothing
 spoken:
 
-1. About 60 s at the desk with the **chair pushed back** from it, holding the
-   mail and then the book **at chest height**.
+1. About 60 s at the desk with the **chair pushed back** from it: hold the
+   mail **at chest height**, then pick the book up from the spot you mean to
+   name as its place (never the desk top), read it at chest height, and put it
+   back there.
 2. About 60 s wiping the **counter** with a cloth (if you already know the
    counter is out of view, wipe the surface you would use instead).
 3. About 60 s **standing at the counter using your phone**.
 
 Then scan check.py's contact sheet (`review\index.html`) once. It answers every
 in-view question: is the counter in view, is the wiping surface in view, are
-the seated body and the book in view with the chair pushed back? Tell the
-agent only yes or no for each, and which spot to use if the counter is out of
-view.
+the seated body and the book in view with the chair pushed back, and are the
+book's pick-up and put-down at its place in view? Tell the agent only yes or
+no for each, which spot to use if the counter is out of view, and the book's
+place.
 
 ## Step 3, needs a go-ahead: okay the protocol (approval 1)
 
@@ -73,7 +76,8 @@ any staged take. Decide:
   a no-need quiet case, and each round's phone block becomes a tidying block,
   so casual still gets enough episodes;
 - the spot for mail sorting, wiping and the phone (the counter if it is in
-  view);
+  view), and the book's place (an in-view surface within reach of the chair
+  pushed back, never the desk top);
 - the spoken cue text.
 
 The agent then edits PROTOCOL-V1.md (only before the first label) and pushes.

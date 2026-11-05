@@ -96,7 +96,7 @@ def cmd_run(args):
     if noise["count"]:
         _say(f"{noise['count']} counted point(s) have a change below the meter's noise "
              f"({noise['hits']} hit(s), {noise['misses']} miss(es)); "
-             f"without them the hit rate would be {noise['value_without']}: {noise['verdict_without']}")
+             f"without them the hit rate would be {noise['value_without']}: {noise['verdict_without']}; a pass needs both")
     wide = report["hits_beyond_level_tolerance"]
     if wide["count"]:
         _say(f"{wide['count']} hit(s) are beyond {values['tolerance']:.0%} of the level; if they had missed, "

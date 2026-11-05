@@ -1313,12 +1313,30 @@ class MeterNoise(unittest.TestCase):
                          {"count": 60, "hits": 60, "misses": 0, "value_without": 1.0, "verdict_without": "pass"})
         self.assertEqual(report["hits_beyond_level_tolerance"],
                          {"count": 60, "value_if_missed": 0.25, "verdict_if_missed": "fail"})
-        # with nothing else in the session, there is no other evidence, and the report says so
+
+    def test_a_session_of_nothing_but_changes_under_the_noise_cannot_pass(self):
+        decisions, frames, model = self.good_then_dims(40.0 / 25.0)
         only = [d for d in decisions if d["decision_id"] != "d-good"]
         report = score(only, frames[2:], model)[2]
-        self.assertEqual(report["hit_rate"]["verdict"], "pass")
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (60, 0, 1.0, "insufficient"))
         self.assertEqual(report["below_meter_noise"],
                          {"count": 60, "hits": 60, "misses": 0, "value_without": None, "verdict_without": "insufficient"})
+        # a far reading there can still fail it
+        decisions, frames, model = self.good_then_dims(5)
+        only = [d for d in decisions if d["decision_id"] != "d-good"]
+        hr = score(only, frames[2:], model)[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 60, "fail"))
+
+    def test_hits_under_the_noise_lift_no_failing_session(self):
+        # 16 of 20 where the meter can judge, 80% and a fail; 60 more hits it cannot tell from a stuck bulb make 95%
+        decisions, frames, model = self.good_then_dims(1)
+        frames[1] = syn.light_state(syn.T0 + 5, {f"p{i:02d}": 100.0 if i < 16 else 60.0 for i in range(20)})
+        report = score(decisions, frames, model)[2]
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (76, 4, 0.95, "fail"))
+        self.assertEqual((report["below_meter_noise"]["value_without"], report["below_meter_noise"]["verdict_without"]),
+                         (0.8, "fail"))
 
     def test_points_left_out_or_not_admitted_are_not_in_the_noise_count(self):
         model = syn.hue_model({"desk-1": {B0: 100.0, B1: 900.0}}, unit="lx", kelvins=(2700,))
@@ -1368,9 +1386,9 @@ class MeterNoise(unittest.TestCase):
             with Quiet() as q:
                 self.assertEqual(cli.main(argv), 0)
         out = q.buf.getvalue()
-        self.assertIn("hit rate 1.0 (1 of 1), gate 0.85: pass", out)
+        self.assertIn("hit rate 1.0 (1 of 1), gate 0.85: insufficient", out)
         self.assertIn("1 counted point(s) have a change below the meter's noise (1 hit(s), 0 miss(es)); "
-                      "without them the hit rate would be None: insufficient", out)
+                      "without them the hit rate would be None: insufficient; a pass needs both", out)
         self.assertNotIn("left out", out)
         out.encode("ascii")
 

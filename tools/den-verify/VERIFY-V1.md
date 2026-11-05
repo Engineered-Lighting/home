@@ -122,11 +122,12 @@ proposed bounds) and a change there is too (below about 15 to 20 lx), the meter
 cannot tell a bulb that moved from one that did not, but it can tell either from a
 bulb far off. Such a point still counts both ways, judged to the noise: a 40 to 25
 lx dim that reads 125 lx is a miss, and one that stayed at 40 lx is a hit the meter
-could not have told from a landing. The report and the console count these points,
-with their hits and misses and what the hit rate would be without them
-(`below_meter_noise`). A fault inside the noise cannot be seen: one bulb of four
-stuck on a 60 to 12 lx dim reads 12 lx high, and is a hit. Relative frames have no
-lux term, and none of this changes their result.
+could not have told from a landing. Those hits lift nothing, so the gate reads the
+rate without such points too (see "The gate"). The report and the console count
+them, with their hits and misses and that rate (`below_meter_noise`). A fault inside
+the noise on a larger change cannot be seen either: one bulb of four stuck on a 60
+to 12 lx dim reads 12 lx high, and is a hit. Relative frames have no lux term, and
+none of this changes their result.
 
 **Held and superseded channels.** The ladder says a held or superseded channel
 is excluded from misses. Here that means the channel, not the point: a person or
@@ -170,7 +171,9 @@ to count is `insufficient`, never a pass.
 **The gate.** A hit is a scored surface point (`within` or `outside`, basis
 `measured` or `fallback_patch`, not excluded, admitted) that is `within`. The
 hit rate is hits / (hits + misses). It passes at **≥ 85%**, compared exactly
-(17 of 20 passes). Orientation: higher is better. The report adds a two-sided
+(17 of 20 passes). Orientation: higher is better. Where some points have a change
+below the meter's noise, the rate on the others must pass too, and with no other
+point counted a rate that would pass reads `insufficient`. The report adds a two-sided
 95% interval from 10,000 session-bootstrap rounds (owner choice 6; a session is
 a local calendar day with at least one point counted, and the report gives how
 many days had none) and the margin `delta_hit_rate`, which the owner has not set.

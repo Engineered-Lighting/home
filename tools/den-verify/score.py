@@ -706,6 +706,10 @@ class Run:
         misses = sum(causes.values())
         surfaces_total = sum(status_counts.values())
         unver = status_counts["unverifiable"] + status_counts["prior_only"]
+        rate = self.hit_rate(counted_by_day)
+        # hits the meter could not tell from a bulb that never moved lift nothing: the rest must pass too
+        if rate["verdict"] != "fail":
+            rate["verdict"] = audible[1]
         report = {
             "tool": "den-verify", "rung": 10, "scored": self.scored,
             "model": {"version": self.model.version, "basis_unit": self.model.basis_unit,
@@ -713,7 +717,7 @@ class Run:
             "decisions": {"total": len(self.decs), "verified": len(rows_out),
                           "not_verified": not_verified, "not_admitted": not_admitted},
             "frames": frame_counts,
-            "hit_rate": self.hit_rate(counted_by_day),
+            "hit_rate": rate,
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
             "below_meter_noise": {**below_noise, "misses": below_noise["count"] - below_noise["hits"],

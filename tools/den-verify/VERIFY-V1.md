@@ -36,8 +36,8 @@ For each point at the verify frame:
   - `prior_only` when the estimate's `basis` is `prior`;
   - `unverifiable` when the surface is missing from the frame, its usable share
     (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's,
-    the prediction is not positive, or the point is a dim whose level misses but
-    whose change landed (see "The background"). Its `residual` is then null.
+    the prediction is not positive, or the point is a deep dim whose change
+    landed (see "The background"). Its `residual` is then null.
 
 A `fallback_patch` estimate is scored here, because a fallback patch is a
 verify aid. It never counts as delivered service: the gold share below treats
@@ -54,16 +54,16 @@ D(p) + Ê(p; state), and the background D comes from the slot `background`:
 
 Under `reference_frame` the prediction works out as the read frame's measurement
 plus the model's change, so its error grows with the change, not with the level
-left after it. On an off or a deep dim that error can exceed ±15% of what is
-left: with the model 5% off and every bulb landing as commanded, a 0.8 to 0.1
-dim reads −23% or +49%, depending on which way the model is off. So under
-`reference_frame`, a point whose predicted change is negative, whose level is
-outside the tolerance and whose increment (below) is `within` is `unverifiable`,
-neither a hit nor a miss, and the report and the console count these
-(`dim_points_unverifiable`). A bulb that did not dim misses the increment too
-and stays `outside`. A point that brightens or keeps its level, and every point
-under `zero`, keeps the plain level check. A run with nothing left to count is
-`insufficient`, never a pass.
+left after it. On a deep dim, where the predicted fall is larger than the
+predicted level (about 2:1 in a dark room), that error can exceed ±15% of what
+is left: with the model 5% off and every bulb landing as commanded, a 0.8 to 0.1
+dim reads −23% or +49%, depending on which way the model is off. The level check
+there proves neither a hit nor a miss. So under `reference_frame`, a deep dim
+whose increment (below) is `within` is `unverifiable`, and the report and the
+console count these (`dim_points_unverifiable`). If the increment misses, the
+bulb did not make the change, and the point is `outside`. Every other point, and
+every point under `zero`, keeps the plain level check. A run with nothing left to
+count is `insufficient`, never a pass.
 
 **Increments.** For each point, `measured_change` = Ê_after − Ê_before on the
 camera (verify frame minus the decision's read frame) and `predicted_change` =
@@ -256,7 +256,7 @@ bootstrap_rounds = 10000            # owner choice 6
 # Open: the contracts leave these to the owner
 settle_margin_s = open              # open, proposed 1; Hue landing after a fade (den_lighting's own readback window is 3)
 background = open                   # open, proposed "reference_frame"; or "zero"
-held_share_min = open               # open, proposed 0.15; share of a point's light from held or superseded channels; a smaller share cannot alone push an on-target point out of tolerance
+held_share_min = open               # open, proposed 0.15; held or superseded share of a point's light; below the tolerance they alone cannot push it out
 held_rule = open                    # open, proposed "far_misses_count"; or "exclude_both"; when a held-lit point is a miss
 uncertainty_rel = open              # open, proposed 0.03; per frame, a fraction of the estimate
 uncertainty_abs_lx = open           # open, proposed 10; anchored frames only, rung 7's meter tolerance once set

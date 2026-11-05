@@ -302,11 +302,12 @@ class Run:
                 row["increment"] = {"point_id": sid, "measured_change": None,
                                     "predicted_change": row["predicted_change"],
                                     "status": "unverifiable", "uncertainty": None}
-            # The read-frame prediction carries the model's error on the change, so a dim's level
-            # cannot be judged finer than its change: if the change landed, the level is no miss.
-            if (row["status"] == "outside" and m["background"] != "zero" and row["predicted_change"] < 0
-                    and row["increment"]["status"] == "within"):
-                row["status"], row["why"], row["dim_unresolved"] = "unverifiable", "a dim whose change landed", True
+            # The read-frame prediction carries the model's error on the change. Where the fall is larger than
+            # the level left, the level's tolerance is narrower than that error: it proves neither a hit nor
+            # a miss, and only a miss on the increment counts.
+            if (row["status"] in ("within", "outside") and m["background"] != "zero"
+                    and -row["predicted_change"] > predicted and row["increment"]["status"] == "within"):
+                row["status"], row["why"], row["dim_unresolved"] = "unverifiable", "a deep dim whose change landed", True
                 del row["residual"]
             # A held-lit point is never a hit; it is a miss only beyond what the held light could account for.
             row["excluded_held"] = (row["held_lit"] and row["status"] in ("within", "outside")

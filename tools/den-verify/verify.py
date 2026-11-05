@@ -93,7 +93,7 @@ def cmd_run(args):
     left, dims = report["excluded_held_or_superseded"], report["dim_points_unverifiable"]
     if left or dims:
         _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs, "
-             f"{dims} dim point(s) whose change landed")
+             f"{dims} deep dim point(s) whose change landed")
     _say(f"wrote {', '.join(names)} in {out}")
     return 0
 

@@ -307,6 +307,13 @@ class HeldPointsCount(unittest.TestCase):
         self.assertEqual(report["excluded_held_by_status"], {"within": 3, "outside": 0})
         self.assertIs(decisions[0]["verify"]["within_tolerance"], False)
 
+    def test_a_share_closed_at_zero_leaves_out_nothing_no_held_light_reaches(self):
+        t = syn.T0
+        for rule in ("far_misses_count", "exclude_both"):
+            hr = self.run_cases([self.case("d-1", t, False, self.landing(3))],
+                                {"held_share_min": 0, "held_rule": rule})[2]["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (3, 17, "fail"), rule)
+
     def lit_mostly_by_the_hold(self, values, overrides=None):
         """front_right, held at 0.5, gives 200 of 360 (56%) at each point."""
         model = syn.hue_model({n: {B0: 200.0, B1: 400.0} for n in values}, kelvins=(2700,))
@@ -551,7 +558,7 @@ class DimsAndOffs(unittest.TestCase):
         out = q.buf.getvalue()
         self.assertIn("gate 0.85: insufficient", out)
         self.assertIn("left out of the hit rate: 0 point(s) lit by held or superseded bulbs, "
-                      "6 dim point(s) whose change landed", out)
+                      "6 deep dim point(s) whose change landed", out)
 
     def test_a_bulb_that_did_not_dim_is_still_a_miss_and_fails_the_gate(self):
         t = syn.T0
@@ -595,11 +602,35 @@ class DimsAndOffs(unittest.TestCase):
         self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
         self.assertEqual(point(decisions[0], "desk-1")["residual"], 0.16)
 
-    def test_a_mild_dim_keeps_the_level_check(self):
-        d, f, model = self.one_point(0.8, 0.7, 280 * 0.8)
+    def test_a_deep_dim_that_landed_earns_no_hit_either(self):
+        # hits there with soft misses dropped would be the held bug again: the gate cannot be lifted
+        for measured in (40.0, 40 * 1.3):  # on target, and 30% high
+            d, f, model = self.one_point(0.8, 0.1, measured)
+            decisions, _, report = score(d, f, model)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable", measured)
+            hr = report["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"), measured)
+
+    def test_a_dim_of_two_to_one_keeps_the_level_check_though_its_increment_lands(self):
+        d, f, model = self.one_point(0.8, 0.4, 160 * 1.2)
         decisions, _, report = score(d, f, model)
+        self.assertEqual(decisions[0]["verify"]["increments"][0]["status"], "within")
         self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
         self.assertEqual(report["hit_rate"]["verdict"], "fail")
+        d, f, model = self.one_point(0.8, 0.4, 160 * 1.1)
+        decisions, _, report = score(d, f, model)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
+        self.assertEqual(report["hit_rate"]["verdict"], "pass")
+
+    def test_daylight_keeps_the_level_check_on_the_same_dim(self):
+        model = syn.hue_model({"desk-1": {B0: 400.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 400 * 0.8 + 500}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: 0.8}, {B0: {"level": 0.1, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        after = syn.light_state(t + 5, {"desk-1": 40.0 + 500}, anchored=False)
+        decisions, _, _ = score([dec], [ref, after], model)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
 
     def test_the_zero_background_keeps_the_level_check(self):
         d, f, model = self.one_point(0.8, 0.1, 40 * 1.25)

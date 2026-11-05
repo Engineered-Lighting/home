@@ -26,6 +26,7 @@ import check  # noqa: E402
 import coordinator  # noqa: E402
 import events  # noqa: E402
 import fake_light  # noqa: E402
+import hold_fixtures  # noqa: E402
 import incumbent  # noqa: E402
 import light_adapter  # noqa: E402
 import run  # noqa: E402
@@ -554,6 +555,52 @@ class TimingTest(unittest.TestCase):
         self.assertEqual(d["applied_scene"][FR]["readback"]["aim"], "near")
 
 
+def full_grid(per=144, **params):
+    """A config's light_model on rung 8's 32 x 18 = 576 blocks, with `per` of them in each of the fake's three surfaces."""
+    filler = ["other/%d" % n for n in range(576 - 12)]
+    surfaces = {name: blocks + filler[n * 140:n * 140 + per - len(blocks)]
+                for n, (name, blocks) in enumerate(sorted(fake_light.build()["surfaces"].items()))}
+    return {"source": "fake", "params": {"filler": len(filler), **params}, "surfaces": surfaces}
+
+
+def longest_decision(log):
+    return max(len(events.dumps(e)) for e in log if e["kind"] == "decision" and e["source"] == "decide")
+
+
+class FullGridLineTest(unittest.TestCase):
+    """events.py refuses a line over 16384 bytes, runner.run raises, and run.py writes no log, so a scored run has nothing
+    to score. A Decision on the full grid must fit, and every line here goes through what run.py's lines go through."""
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_every_hold_fixture_logs_on_the_full_grid_under_every_option(self):
+        for case in hold_fixtures.CASES:
+            for option in hold_fixtures.OPTIONS:
+                with self.subTest(case=case, option=option):
+                    header, log = hold_fixtures.run_case(case, option, light_model=full_grid())
+                    self.assertLess(longest_decision(log), events.MAX_LINE_BYTES)
+        logged = next(p for p in header["policies"] if p["module"] == "coordinator")["config"]
+        self.assertEqual(len(coordinator.make_policy(logged).light.points), 576)
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_a_decision_does_not_grow_with_the_blocks_in_a_surface(self):
+        for case in ("V62", "V64"):
+            small, large = (longest_decision(hold_fixtures.run_case(case, "P3-strict/P1", light_model=full_grid(per))[1])
+                            for per in (4, 144))
+            self.assertLess(abs(large - small), 100, case)  # the digits of a mean move a little; no block is listed
+
+    def test_two_people_two_holds_a_glare_table_and_a_spot_fit_on_the_full_grid(self):
+        # TimingTest's scenario, which calls handle directly, with every Decision validated as the runner validates it.
+        glare = {b: {"A": {"G": 0.3, "sd": 0.01}, "B": {"G": 0.3, "sd": 0.01}} for b in events.LIGHTS}
+        p = policy(light_model=full_grid(glare=glare, spot=TimingTest.AIMS), compensation={"option": "P3", "form": "strict"})
+        start(p)
+        made = 0
+        for item in TimingTest.scenario(self):
+            for out in p.handle(item):
+                events.validate(ev(item["t"], "decision", {**out["data"], "actuation": "replay"}, "decide"))
+                made += 1
+        self.assertGreaterEqual(made, 3)
+
+
 def evening_log(tmp, name="log.jsonl", configs=None, source="synthetic", actuation=None, **options):
     items, _, _ = synthetic.evening(unclear_rate=0.0, invalid_rate=0.0, fail_rate=0.0, **options)
     synthetic_run = source == "synthetic"
@@ -686,6 +733,23 @@ class RunFlagsTest(unittest.TestCase):
         self.assertEqual((logged["source"], logged["unit"], logged["surfaces"]),
                          ("file", "relative", {"desk": ["counter-1/0", "counter-1/1"]}))
         self.assertTrue(check.check(self.tmp / "out" / "log.jsonl")["ok"])
+
+    def test_a_run_on_the_full_grid_under_the_proposed_option_writes_its_log(self):
+        # The review's scenario as the owner meets it: on the cloud build this stopped with
+        # `run.py: decision line over 16384 bytes` and no log, from the decisions taken while a bulb was held.
+        model, surfaces = self.tmp / "light-model.json", self.tmp / "surfaces.json"
+        model.write_text(json.dumps(fake_light.build(filler=576 - 12, surfaces=False)), encoding="utf-8")
+        surfaces.write_text(json.dumps(full_grid()["surfaces"]), encoding="utf-8")
+        self.main("--synthetic", "evening", "--touch", "--policies", "need", "incumbent", "coordinator", "--light-model", str(model),
+                  "--surfaces", str(surfaces), "--compensation", "P1", "--compensation-form", "mode")
+        path = self.tmp / "out" / "log.jsonl"
+        _, log = events.read(path)
+        mine = [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+        held = [d["trigger"] for d in mine if d["inputs"]["hold_set"]["held"]]
+        self.assertIn("hold change", held)
+        self.assertIn("person_state change", held)
+        self.assertLess(longest_decision(log), events.MAX_LINE_BYTES)
+        self.assertTrue(check.check(path)["ok"])
 
     def test_refusals(self):
         for argv in (["--synthetic", "evening", "--actuation", "shadow"],

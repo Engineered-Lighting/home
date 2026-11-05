@@ -644,6 +644,17 @@ runner's order, `run.py`'s diff and `validate.py` read it as they read decide. `
 `--policies need incumbent decide` is byte-identical to before rung 9: `test_coordinator.py` pins the sha256 of the
 four synthetic evenings' whole logs, header included.
 
+### A Decision's size
+
+`events.validate` refuses a line over 16,384 bytes, and the run then stops with no log. A Decision speaks in surfaces and
+tracks, never in blocks, so rung 8's 576-block grid costs nothing: at 4 to 144 blocks per surface the longest line is about
+8.4 KB on the one `room` track and 9.8 KB with two people and holds, under every option. `test_coordinator.py` runs every
+hold fixture under every option on the full grid through `runner.run`, which validates each line.
+
+A line does grow with the rest: about 50 bytes per surface in the map, so about 180 surfaces reach the limit, and about
+1.6 KB per track the coordinator has seen, because it never forgets one, so about six tracks reach it. need v0 has one
+track, so that waits for per-person need (rungs 5 and 6).
+
 ### Keys the contracts do not name
 
 Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear only in the coordinator's Decisions:

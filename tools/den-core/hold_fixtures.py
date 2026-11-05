@@ -128,8 +128,9 @@ CASES = {
 }
 
 
-def run_case(case, option, local_completion="not-allowed", gaming=None, changer=True):
-    """(header, log) for one case under one named option. changer=False leaves the changer unknown, for P3's fallback."""
+def run_case(case, option, local_completion="not-allowed", gaming=None, changer=True, light_model=None):
+    """(header, log) for one case under one named option. changer=False leaves the changer unknown, for P3's fallback.
+    light_model replaces the fake's small default, in a config's form, so a test can run a case on the full grid."""
     spec = CASES[case]
     inputs = [(T0, "light_observed", {"entity_id": e, **scene(180), "context": "unknown"}) for e in events.LIGHTS]
     inputs += [_occupancy(1, "on")] + list(spec["inputs"])
@@ -138,6 +139,8 @@ def run_case(case, option, local_completion="not-allowed", gaming=None, changer=
               "compensation": {**OPTIONS[option], "status": "named option; not admitted"},
               "local_completion": local_completion, "gaming": gaming or spec.get("gaming", "non-gaming-stratified"),
               "send_latency_s": spec.get("send_latency_s", 0)}
+    if light_model:
+        config["light_model"] = light_model
     policies = [ScriptedNeed({"script": spec["script"]}), incumbent.make_policy(), coordinator.make_policy(config)]
     return runner.run(runner.tagged(sorted(inputs, key=lambda item: item[0]), "synthetic"), policies, synthetic=True, tail_s=10.0,
                       sources=[{"name": "hold-fixture:%s" % case, "params": {"option": option, "changer": changer}}])

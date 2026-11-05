@@ -56,11 +56,12 @@ class Scene:
 
     def __init__(self, test, *, points=None, fit=synthetic.FIT, checks=synthetic.CHECKS, offsets=None, holes=(),
                  meta=None, scan=None, sheet=None, m=None, background_mm=3500, name="take1", ended=None,
-                 frames=3):
+                 frames=3, pose=None, background=None):
         self.test, self.m = test, m or closed_method()
         self.tmp = Path(test.tmp.name)
         self.points = points or synthetic.POINTS
-        depth, left, self.seen = synthetic.render(self.points, holes=holes, background_mm=background_mm)
+        depth, left, self.seen = synthetic.render(self.points, holes=holes, background_mm=background_mm, pose=pose,
+                                                  background=background)
         data = synthetic.bundle(meta or synthetic.metadata(), depth, left)
         self.take = synthetic.write_take(self.tmp / name, [data] * frames)
         if ended is not None:
@@ -240,6 +241,18 @@ class SceneTests(Base):
             with self.assertRaises(Refused) as caught:
                 scene.frame_depth_skew(bundle, 0.067)
             self.assertEqual(caught.exception.reason, "frame_depth_different_times")
+
+    def test_the_depth_alarm_needs_over_half_of_the_cells_past_the_tolerance(self):
+        def signature(n, by):
+            cells = [3000.0 + (by if i < n else 0) for i in range(64)]
+            return {"grid": [8, 8], "shape": [400, 640], "cells": [cells[r * 8:r * 8 + 8] for r in range(8)]}
+        settings = {"tolerance_mm": 50, "tolerance_fraction": 0.03, "changed_fraction": 0.5, "minimum_cells": 16}
+        base = signature(0, 0)
+        for n, by, status in ((33, 91, "changed"), (32, 91, "no_large_change"), (64, 89, "no_large_change")):
+            with self.subTest(n=n, by=by):
+                self.assertEqual(scene.check_mount(base, signature(n, by), **settings)["status"], status)
+        self.assertEqual(scene.check_mount(base, {"grid": [8, 8], "shape": [400, 640],
+                                                  "cells": [[None] * 8] * 8}, **settings)["status"], "unknown")
 
     def test_intrinsics_missing(self):
         depth, left, _ = synthetic.render()
@@ -551,10 +564,10 @@ class MountTests(Base):
         code, report = register.run_check_mount(s.work, take, m=s.m, now=lambda: 1_800_002_000.0, out=out)
         return code, report, out.getvalue()
 
-    def test_an_unmoved_camera_keeps_its_registration(self):
+    def test_an_unmoved_camera_without_clicked_marks_is_not_confirmed_and_keeps_its_entry(self):
         s, fitted = self.registered()
         code, report, text = self.check(s, self.later_take(s, "later", 3500, 1_800_001_000.0))
-        self.assertEqual((code, report["result"]), (0, "unchanged"), text)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
         self.assertEqual(len(s.room_models()), 1)
 
     def test_a_moved_camera_invalidates_and_old_takes_cannot_be_reused(self):
@@ -579,10 +592,10 @@ class MountTests(Base):
         code, again, text = self.check(s, self.later_take(s, "later-2", 2800, 1_800_003_000.0))
         self.assertEqual((again["result"], again["reason"]), ("refused", "mount_changed"))
 
-    def test_a_blocked_view_is_unknown_and_changes_nothing(self):
+    def test_a_blocked_view_without_clicked_marks_confirms_nothing_and_changes_nothing(self):
         s, fitted = self.registered()
         code, report, text = self.check(s, self.later_take(s, "blocked", 0, 1_800_001_000.0))
-        self.assertEqual((code, report["result"]), (1, "unknown"), text)
+        self.assertEqual((code, report["result"], report["check"]["status"]), (1, "not_confirmed", "unknown"), text)
         self.assertEqual(len(s.room_models()), 1)
 
     def test_open_slots_refuse_a_mount_check(self):
@@ -590,6 +603,121 @@ class MountTests(Base):
         out = io.StringIO()
         code, report = register.run_check_mount(s.work, s.take, m=method.load(), out=out)
         self.assertEqual((code, report["reason"]), (1, "slots_open"))
+
+    # The review's knocks: each moves room points 5 to 40 cm while few depth cells change.
+    KNOCKS = {"yaw 5 deg": {"yaw_deg": 5.0}, "yaw 1 deg": {"yaw_deg": 1.0}, "pitch 1 deg": {"pitch_deg": 1.0},
+              "slide 8 cm": {"shift": (0.08 * math.cos(math.radians(40)), -0.08 * math.sin(math.radians(40)), 0.0)}}
+
+    def furnished(self):
+        s = Scene(self, ended=1_800_000_100.0, background=synthetic.room_depth())
+        s.click_all()
+        code, report = s.fit()
+        self.assertEqual(code, 0, s.out)
+        return s, report
+
+    def later_in_the_room(self, pose=None, name="later", ended=1_800_001_000.0):
+        return Scene(self, name=name, ended=ended, pose=pose, background=synthetic.room_depth(pose))
+
+    def test_a_small_knock_is_never_reported_as_still_holding(self):
+        for name, knock in self.KNOCKS.items():
+            with self.subTest(name):
+                self.tearDown()
+                self.setUp()
+                s, fitted = self.furnished()
+                later = self.later_in_the_room(synthetic.moved(**knock))
+                code, report, text = self.check(s, later.take)
+                self.assertEqual(code, 1, text)
+                self.assertNotIn("still holds", text)
+                self.assertNotIn("UNCHANGED", text)
+                self.assertIn("MOUNT NOT CONFIRMED", text)
+                self.assertIn("register.py click", text)
+                self.assertEqual(report["result"], "not_confirmed")
+                self.assertEqual(len(s.room_models()), 1, "nothing was checked, so nothing is invalidated")
+
+    def test_re_clicked_marks_catch_a_small_knock_and_invalidate(self):
+        for name, knock in self.KNOCKS.items():
+            with self.subTest(name):
+                self.tearDown()
+                self.setUp()
+                s, fitted = self.furnished()
+                later = self.later_in_the_room(synthetic.moved(**knock))
+                later.click_all()
+                code, report, text = self.check(s, later.take)
+                self.assertEqual((code, report["result"]), (1, "changed"), text)
+                self.assertIn("MOUNT CHANGED", text)
+                self.assertIn("from its measured position", text)
+                self.assertGreater(max(mark["error_m"] for mark in report["marks"]), 0.05)
+                out = io.StringIO()
+                self.assertEqual(register.main(["resolve", str(s.work), fitted["transform_id"]], out=out), 1)
+                self.assertIn("INVALIDATED", out.getvalue())
+
+    def test_re_clicked_marks_confirm_an_unmoved_camera(self):
+        s, fitted = self.furnished()
+        later = self.later_in_the_room()
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (0, "confirmed"), text)
+        self.assertIn("MOUNT CONFIRMED", text)
+        self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.01)
+        self.assertEqual(len(report["marks"]), 6)
+        self.assertEqual(len(s.room_models()), 1)
+        self.assertEqual(json.loads((s.work / "mount-1.json").read_text(encoding="utf-8"))["result"], "confirmed")
+
+    def test_too_few_marks_confirm_nothing(self):
+        s, fitted = self.furnished()
+        later = self.later_in_the_room()
+        later.click_all(["c1", "c2"])  # the ladder's counts apply here too: three plus two
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertIn("at least 3 fit marks and 2 check marks", text)
+        self.assertEqual(len(s.room_models()), 1)
+
+    def test_one_mark_past_the_gate_is_enough_and_the_gate_is_five_cm(self):
+        for offset, expected, code_wanted in ((0.049, "confirmed", 0), (0.051, "changed", 1)):
+            with self.subTest(offset=offset):
+                self.tearDown()
+                self.setUp()
+                s, fitted = self.furnished()
+                later = self.later_in_the_room()
+                later.click_all()
+                sheet = synthetic.worksheet(offsets={"c1": [0, 0, offset]})  # measured truth vs what the camera sees
+                (s.work / "worksheet.json").write_text(json.dumps(sheet), encoding="utf-8")
+                code, report, text = self.check(s, later.take)
+                self.assertEqual((code, report["result"]), (code_wanted, expected), text)
+
+    def test_the_registration_take_cannot_confirm_itself(self):
+        s, fitted = self.furnished()
+        code, report, text = self.check(s, s.take)
+        self.assertEqual((code, report["result"], report["reason"]), (1, "refused", "mount_take_not_later"), text)
+        self.assertNotIn("CONFIRMED", text)
+
+    def test_clicks_for_another_frame_or_a_click_without_depth_are_refused(self):
+        s, fitted = self.furnished()
+        later = self.later_in_the_room()
+        later.click_all()
+        path = register.clicks_path(s.work, later.take)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        wrong = json.loads(json.dumps(saved))
+        wrong["frame"]["sha256"] = "0" * 64
+        path.write_text(json.dumps(wrong), encoding="utf-8")
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["reason"]), (1, "clicks_stale"), text)
+        hole = Scene(self, name="hole", ended=1_800_001_000.0, holes=("c1",), background=synthetic.room_depth())
+        hole.click_all([pid for pid in hole.seen if pid != "c1"])
+        path = register.clicks_path(s.work, hole.take)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        saved["clicks"]["c1"] = {"u": hole.seen["c1"][0], "v": hole.seen["c1"][1]}
+        path.write_text(json.dumps(saved), encoding="utf-8")
+        code, report, text = self.check(s, hole.take)
+        self.assertEqual((code, report["reason"]), (1, "depth_missing"), text)
+        self.assertEqual(len(s.room_models()), 1)
+
+    def test_a_blocked_view_can_still_be_confirmed_by_the_marks(self):
+        s, fitted = self.registered()
+        later = Scene(self, name="blocked", background_mm=0, ended=1_800_001_000.0)
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"], report["check"]["status"]), (0, "confirmed", "unknown"), text)
 
 
 # ---- the working folder and the commands -----------------------------------------------------------------

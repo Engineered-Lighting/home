@@ -201,6 +201,8 @@ def run_click(work, take_dir, frame=None, *, m=None, out=sys.stdout, open_browse
     done = serve.serve(session, open_browser=open_browser, ready=ready, out=out)
     print(f"Clicks saved to {session.path} ({len(session.clicks)} of {len(sheet['points'])} points).", file=out)
     print(f"Next: python -B tools\\den-register\\register.py fit {work} --take {Path(take_dir)}", file=out)
+    print(f"Or, if this take re-checks a registration: python -B tools\\den-register\\register.py check-mount {work} "
+          f"--take {Path(take_dir)}", file=out)
     return 0 if done else 1
 
 
@@ -469,12 +471,50 @@ def run_fit(work, take_dir, frame=None, *, m=None, now=time.time, out=sys.stdout
 
 # ---- the mount check -----------------------------------------------------------------------
 
+def measure_marks(work, take_dir, row, bundle, sheet, entry, m):
+    """Each mark clicked on this frame, carried through the registered transform, against its tape position.
+
+    None when this take has no clicks. Clicks for another frame, for ids the
+    worksheet does not hold, or with too little depth under them are refused.
+    """
+    path = clicks_path(work, take_dir)
+    if not path.exists():
+        return None
+    clicks = read_clicks(path)
+    if clicks["frame"].get("sha256") != row["sha256"]:
+        raise Refused("clicks_stale", f"the clicks were saved for another frame than frame {row['n']}; click again")
+    by_id = {p["id"]: p for p in sheet["points"]}
+    unknown = sorted(set(clicks["clicks"]) - set(by_id))
+    if unknown:
+        raise Refused("clicks_stale", f"clicked ids {unknown} are not in the worksheet")
+    scene.frame_depth_skew(bundle, m["max_left_depth_skew_s"])
+    marks = []
+    for point in sheet["points"]:
+        c = clicks["clicks"].get(point["id"])
+        if c is None:
+            continue
+        try:
+            depth = scene.depth_at(bundle, c["u"], c["v"], window_px=m["depth_window_px"],
+                                   min_valid_fraction=m["min_depth_valid_fraction"])
+        except Refused as exc:
+            raise Refused(exc.reason, f"{point['id']}: {exc.detail}") from None
+        room = records.to_room(entry, scene.back_project(bundle["intrinsics"], c["u"], c["v"], depth["z_m"]))
+        marks.append({"id": point["id"], "role": point["role"],
+                      "error_m": records.rounded(math.dist(room, point["room_xyz_m"]))})
+    return marks
+
+
 def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=time.time, out=sys.stdout):
-    """Compare a later frame's depth with the registration's mount signature. 0 unchanged, 1 otherwise."""
+    """Has the camera moved since the registration? 0 confirmed, 1 otherwise (REGISTER-V1.md, "A moved camera").
+
+    A large depth change invalidates at once. Anything less proves nothing, so
+    only marks re-clicked on this later take, each within the gate, confirm.
+    """
     work = work_dir(work)
     m = m or method_file.load()
     report = {"schema": SCHEMA_MOUNT, "ts": round(now(), 3), "take": Path(take_dir).name,
               "method": {"file": m.file, "sha256": m.sha256}}
+    why_not = None
     try:
         if m.scored() is None:
             raise Refused("slots_open", "close these in REGISTER-V1.md before a mount check: "
@@ -483,9 +523,8 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
         if not room_models:
             raise Refused("transform_unknown", f"{ROOM_MODEL} holds no registration yet")
         latest = room_models[-1]
-        if camera_id is None:
-            sheet = worksheet_file.load(work / WORKSHEET, need_positions=False)
-            camera_id = sheet["camera_id"]
+        sheet = worksheet_file.load(work / WORKSHEET)
+        camera_id = camera_id or sheet["camera_id"]
         entry = records.camera_entry(latest, camera_id)
         if entry is None or type((entry.get("mount") or {}).get("signature")) is not dict:
             raise Refused("transform_unknown", f"the current RoomModel has no registered entry for {camera_id}")
@@ -493,41 +532,72 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
         report["transform_id"] = tid
         if entry.get("invalidated"):
             raise Refused("mount_changed", f"{tid} was invalidated already; register again")
-        take, row, _, bundle = scene.load_frame(take_dir, frame_number(take_dir, frame))
+        take, row, _, bundle = scene.load_frame(take_dir, frame_number(take_dir, frame, work))
         report["frame"] = row["n"]
+        if take["ended_unix"] <= (entry["mount"].get("take_ended_unix") or 0):
+            raise Refused("mount_take_not_later", f"{Path(take_dir).name} was not recorded after the take {tid} was "
+                                                  "registered from, so it says nothing about a later move")
         result = scene.check_mount(entry["mount"]["signature"], scene.mount_signature(bundle),
                                    tolerance_mm=m["mount_tolerance_mm"],
                                    tolerance_fraction=m["mount_tolerance_fraction"],
                                    changed_fraction=m["mount_changed_fraction"],
                                    minimum_cells=m["mount_min_cells"])
-        report.update(result=result["status"], check=result)
-        if result["status"] == "changed":
+        report["check"] = result
+        marks = None if result["status"] == "changed" else measure_marks(work, take_dir, row, bundle, sheet, entry, m)
+        over = [mark for mark in marks or [] if mark["error_m"] > m["gate_m"]]
+        if result["status"] == "changed" or over:
+            report["result"] = "changed"
             invalidated = {"ts": round(now(), 3), "reason": "mount_changed", "take": take.get("take"),
                            "take_ended_unix": take.get("ended_unix"), "frame": row["n"], "check": result,
                            "recheck": RECHECK}
+            if over:
+                invalidated["marks"] = marks
             records.append_jsonl(work / ROOM_MODEL, records.invalidated_revision(latest, camera_id, invalidated))
             report["recheck"] = RECHECK
+        elif marks is None:
+            report["result"] = "not_confirmed"
+            why_not = "no marks are clicked on this take yet"
+        else:
+            fits = sum(mark["role"] == "fit" for mark in marks)
+            checks = sum(mark["role"] == "check" for mark in marks)
+            if fits < m["min_fit_pairs"] or checks < m["min_checks"]:
+                report["result"] = "not_confirmed"
+                why_not = (f"{fits} fit and {checks} check marks are clicked on this take; at least "
+                           f"{m['min_fit_pairs']:g} fit marks and {m['min_checks']:g} check marks are needed")
+            else:
+                report["result"] = "confirmed"
+        if marks is not None:
+            report["marks"] = marks
     except Refused as exc:
         report.update(result="refused", reason=exc.reason, detail=exc.detail)
     path = next_numbered(work, "mount")
     write_json(path, report)
     status = report["result"]
-    if status == "unchanged":
-        print(f"MOUNT UNCHANGED: {report['transform_id']} still holds "
-              f"({report['check']['changed_cells']} of {report['check']['compared_cells']} cells moved).", file=out)
+    if status == "confirmed":
+        worst = max(report["marks"], key=lambda mark: mark["error_m"])
+        print(f"MOUNT CONFIRMED: {report['transform_id']} still holds: all {len(report['marks'])} marks clicked are "
+              f"within {_cm(m['gate_m'])} of their measured positions (worst {worst['id']}, "
+              f"{_cm(worst['error_m'])}).", file=out)
     elif status == "changed":
-        print(f"MOUNT CHANGED: {report['transform_id']} is invalidated "
-              f"({report['check']['changed_cells']} of {report['check']['compared_cells']} cells moved). "
-              "Re-check:", file=out)
+        over = [mark for mark in report.get("marks", []) if mark["error_m"] > m["gate_m"]]
+        if over:
+            detail = ", ".join(f"{mark['id']} is {_cm(mark['error_m'])}" for mark in over)
+            detail += f" from its measured position (gate {_cm(m['gate_m'])})"
+        else:
+            detail = f"{report['check']['changed_cells']} of {report['check']['compared_cells']} depth cells moved"
+        print(f"MOUNT CHANGED: {report['transform_id']} is invalidated: {detail}. Re-check:", file=out)
         for item in RECHECK:
             print(f"  - {item}", file=out)
-    elif status == "unknown":
-        print(f"MOUNT UNKNOWN: only {report['check']['compared_cells']} cells could be compared. Nothing changed; "
-              "check again with a clear view of the room.", file=out)
+    elif status == "not_confirmed":
+        print(f"MOUNT NOT CONFIRMED: {report['transform_id']} is neither confirmed nor invalidated: {why_not}. "
+              f"Depth alone cannot see a small turn or slide ({report['check']['changed_cells']} of "
+              f"{report['check']['compared_cells']} cells moved). Click the marks on this take, then run this again:",
+              file=out)
+        print(f"  python -B tools\\den-register\\register.py click {work} --take {Path(take_dir)}", file=out)
     else:
         print(f"REFUSED {report['reason']}: {report['detail']}", file=out)
     print(f"Wrote {path.name}", file=out)
-    return (0 if status == "unchanged" else 1), report
+    return (0 if status == "confirmed" else 1), report
 
 
 # ---- small commands ----------------------------------------------------------------------------

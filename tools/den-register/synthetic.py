@@ -41,6 +41,14 @@ def camera_pose():
     return rotation, [0.4, 0.3, 2.1]
 
 
+def moved(pose=None, yaw_deg=0.0, pitch_deg=0.0, shift=(0.0, 0.0, 0.0)):
+    """The pose after a small knock: a turn about the room's vertical, a pitch about the camera's x, a slide."""
+    rotation, translation = pose or camera_pose()
+    mul = lambda a, b: [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+    rotation = mul(mul(rotation_xyz(0, 0, math.radians(yaw_deg)), rotation), rotation_xyz(math.radians(pitch_deg), 0, 0))
+    return rotation, [translation[i] + shift[i] for i in range(3)]
+
+
 def to_camera(rotation, translation, room_point):
     d = [room_point[i] - translation[i] for i in range(3)]
     return [sum(rotation[j][i] * d[j] for j in range(3)) for i in range(3)]
@@ -80,21 +88,64 @@ def worksheet(points=None, fit=FIT, checks=CHECKS, offsets=None, camera_id="den-
             "measured_by": "A", "measured_on": "2026-11-05", "points": rows}
 
 
+# A fictional furnished room for the mount check: walls, floor, ceiling, a table and a sofa.
+ROOM_SIZE = (4.572, 3.759, 2.438)
+FURNITURE = (((1.5, 1.5, 0.0), (2.5, 2.3, 0.75)), ((3.6, 0.5, 0.0), (4.5, 2.5, 0.85)))
+
+
+def _room_hit(origin, ray):
+    best = math.inf
+    for i in range(3):
+        if ray[i] > 1e-12:
+            best = min(best, (ROOM_SIZE[i] - origin[i]) / ray[i])
+        elif ray[i] < -1e-12:
+            best = min(best, -origin[i] / ray[i])
+    for low, high in FURNITURE:
+        near, far = -math.inf, math.inf
+        for i in range(3):
+            if abs(ray[i]) < 1e-12:
+                if not low[i] <= origin[i] <= high[i]:
+                    near, far = 1.0, 0.0
+                    break
+                continue
+            a, b = (low[i] - origin[i]) / ray[i], (high[i] - origin[i]) / ray[i]
+            near, far = max(near, min(a, b)), min(far, max(a, b))
+        if 0 < near <= far:
+            best = min(best, near)
+    return best
+
+
+def room_depth(pose=None, step=4):
+    """Depth plane (mm, row-major) of the furnished room from this pose, one ray per step x step block."""
+    rotation, origin = pose or camera_pose()
+    depth = [0] * (W * H)
+    for v0 in range(0, H, step):
+        for u0 in range(0, W, step):
+            pixel = ((u0 - K[0][2]) / K[0][0], (v0 - K[1][2]) / K[1][1], 1.0)
+            ray = [sum(rotation[i][j] * pixel[j] for j in range(3)) for i in range(3)]  # pixel z is 1: s is depth
+            mm = min(65535, int(round(_room_hit(origin, ray) * 1000)))
+            right = min(u0 + step, W)
+            for v in range(v0, min(v0 + step, H)):
+                depth[v * W + u0:v * W + right] = [mm] * (right - u0)
+    return depth
+
+
 def npy(descr, shape, body):
     header = "{'descr': %r, 'fortran_order': False, 'shape': %s, }" % (descr, tuple(shape))
     header += " " * ((64 - (10 + len(header) + 1) % 64) % 64) + "\n"
     return b"\x93NUMPY\x01\x00" + struct.pack("<H", len(header)) + header.encode("latin-1") + body
 
 
-def render(points=None, background_mm=3500, holes=(), marker_px=6, pose=None):
+def render(points=None, background_mm=3500, holes=(), marker_px=6, pose=None, background=None):
     """(depth uint16 LE bytes, left uint8 bytes, {id: (u, v, z_m)}) for the synthetic room.
 
     Each control point is a flat disc of its own depth around its pixel;
-    holes is a list of ids whose disc has no depth (0).
+    holes is a list of ids whose disc has no depth (0). background is a depth
+    plane to draw them on (room_depth), else a flat wall at background_mm.
     """
     points = points or POINTS
     rotation, translation = pose or camera_pose()
-    depth = [background_mm] * (W * H)
+    depth = list(background) if background is not None else [background_mm] * (W * H)
     left = bytearray([70]) * (W * H)
     seen = {}
     for pid, room_point in points.items():

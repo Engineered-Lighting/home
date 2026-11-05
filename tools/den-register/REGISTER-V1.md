@@ -4,7 +4,9 @@ Written before any den run. It binds rung 1 of
 `docs/architecture/live-v1/ladder.json` ("Camera registration") to the records
 in `docs/architecture/live-v1/schemas.json` (`room_model`,
 `calibration_record`). A change to this file is a new method: commit it as
-REGISTER-V2 and register again.
+REGISTER-V2 and register again. Before any registration had run, the 2026-11-05
+review's fixes changed REGISTER-V1 in place: "A moved camera" below no longer
+lets a depth comparison confirm a registration.
 
 ## What is measured
 
@@ -82,14 +84,37 @@ CalibrationRecord to `calibration-records.jsonl`, both JSON Lines, UTF-8, LF.
 
 ## A moved camera
 
-A registration holds only while the camera stays where it was. The camera
-entry keeps a mount signature: the 8x8 grid of per-cell median depths of the
-registration frame. `check-mount` compares a later frame with it, as
-`spatial_validation.check_mount` does. `changed` appends a RoomModel revision
-whose entry carries `invalidated`, with what the owner must re-check; from then
-on that `transform_id` resolves as invalidated, and a fit from a take recorded
-before that check is refused. `unknown` (too few comparable cells, for example
-a person in front of the camera) invalidates nothing and confirms nothing.
+A registration holds only while the camera stays where it was. `check-mount`
+looks at a frame of a later take in two steps.
+
+1. **A coarse depth alarm.** The camera entry keeps a mount signature: the 8x8
+   grid of per-cell median depths of the registration frame. A later frame is
+   compared with it, as `spatial_validation.check_mount` does. `changed` (more
+   than `mount_changed_fraction` of the compared cells past their tolerance)
+   invalidates at once. Nothing else this step says counts as evidence: a 5°
+   turn or an 8 cm slide moves room points by 8 to 40 cm and changes under half
+   the cells, because a floor's depth does not change when a level camera turns
+   about the vertical. Depth noise limits how far the slots could tighten.
+2. **The marks, against the same gate.** Only this step can confirm. The owner
+   clicks the marks on that later frame with the `click` step. Each click and
+   the depth under it go through the registered transform to a room position,
+   compared with the worksheet's tape position:
+   - any mark more than `gate_m` away: `changed`;
+   - at least `min_fit_pairs` fit marks and `min_checks` check marks clicked,
+     all within `gate_m`: `confirmed`;
+   - fewer marks, or none: `not_confirmed`.
+
+`changed` appends a RoomModel revision whose entry carries `invalidated`, with
+what the owner must re-check; from then on that `transform_id` resolves as
+invalidated, and a fit from a take recorded before that check is refused.
+`not_confirmed` (including a person blocking the view, with no clicks)
+invalidates nothing and confirms nothing. A take not recorded after the
+registration's own take is refused (`mount_take_not_later`), so a registration
+never confirms itself.
+
+`confirmed` is a statement at the marks: a turn grows with range, so points
+farther from the camera than every mark can be further off than the gate. This
+is why the marks spread across the room, with some at its far end.
 
 ## The numbers
 

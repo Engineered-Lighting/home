@@ -62,7 +62,9 @@ wall is `x = 0` and which is `y = 0` under `references`.
 
 1. Put six small tape crosses on flat surfaces the camera sees, spread across
    the room: some on the floor, one or two on a table or counter top, one on a
-   wall. Not all on one line, and not on edges or corners, where depth jumps.
+   wall, and at least one at the far end from the camera. Not all on one line,
+   and not on edges or corners, where depth jumps. Leave them in place after the
+   fit: the mount check below clicks them again.
 2. Measure each cross's centre: `x` from the `x = 0` wall, `y` from the
    `y = 0` wall, `z` from the floor, with a tape or a laser. Write it as
    `"room_xyz_m": [x, y, z]` in metres, for example `[2.31, 1.07, 0.0]`.
@@ -140,19 +142,35 @@ python -B tools\den-register\register.py resolve C:\den-register den-oak@2026-11
 
 ## Later: has the camera moved?
 
-A registration holds only while the camera stays put. After any later take:
+A registration holds only while the camera stays put. Before you rely on it
+for a scored run, or after anything may have knocked the camera, record a new
+take with the room clear and the crosses in place (step 4), then:
 
 ```powershell
 python -B tools\den-register\register.py check-mount C:\den-register --take C:\den-takes\2026-11-12-1
+python -B tools\den-register\register.py click C:\den-register --take C:\den-takes\2026-11-12-1
+python -B tools\den-register\register.py check-mount C:\den-register --take C:\den-takes\2026-11-12-1
 ```
 
-`MOUNT UNCHANGED` keeps the registration. `MOUNT CHANGED` invalidates it and
-lists what to re-check: the camera's mount, any mark on furniture that moved,
-then steps 4, 5 and 7 again. `MOUNT UNKNOWN` (too much of the view blocked)
-changes nothing; try a take with a clearer view.
+The first check compares depth only, and can only catch a large move. If it
+finds none, it says `MOUNT NOT CONFIRMED`: depth cannot see a small turn or
+slide, even one that puts room positions 40 cm off. So click the crosses on the
+new take, all of them if you can (at least 3 fit points and 2 checks), and run
+the check again. It carries each click through the registration and compares it
+with your tape position:
 
-Exit codes: 0 = registered, unchanged or valid; 1 = refused, changed, unknown
-or invalidated, with the reason printed and saved in `fit-N.json` or
+| Line | Means | What to do |
+|---|---|---|
+| `MOUNT CONFIRMED` | Every clicked cross is within 5 cm. The registration holds. | Nothing. |
+| `MOUNT NOT CONFIRMED` | Too few crosses are clicked, or none. Nothing changed. | Click more, on a take with a clearer view if a person is in the way, and check again. |
+| `MOUNT CHANGED` | The depth moved a lot, or a cross is more than 5 cm off. The registration is now invalidated, for good. | The line lists what to re-check. A cross on furniture that moved: measure it again. Then steps 4, 5 and 7. |
+| `mount_take_not_later` | That take is not newer than the registration's own. | Record a new take. |
+
+If a single cross is off because you misclicked it, it still invalidates; a new
+take and fit put that right.
+
+Exit codes: 0 = registered, confirmed or valid; 1 = refused, changed, not
+confirmed or invalidated, with the reason printed and saved in `fit-N.json` or
 `mount-N.json`; 2 = refused before anything was saved, with the reason
 printed.
 

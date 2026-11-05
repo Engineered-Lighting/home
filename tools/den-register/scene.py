@@ -217,7 +217,11 @@ def mount_signature(bundle, grid=(8, 8)):
 
 
 def check_mount(signature, current, *, tolerance_mm, tolerance_fraction, changed_fraction, minimum_cells):
-    """'unchanged', 'changed' or 'unknown' (too few comparable cells), as in spatial_validation."""
+    """'changed', 'no_large_change' or 'unknown' (too few comparable cells), as in spatial_validation.
+
+    A coarse alarm only. A turn or slide that moves room points by 5 to 40 cm can
+    leave most cells' depth alone, so 'no_large_change' never says the camera stayed.
+    """
     if current["shape"] != signature.get("shape") or current["grid"] != signature.get("grid"):
         return {"status": "changed", "reason": "depth_shape_changed", "compared_cells": 0, "changed_cells": 0}
     compared = changed = 0
@@ -230,5 +234,5 @@ def check_mount(signature, current, *, tolerance_mm, tolerance_fraction, changed
     if compared < minimum_cells:
         status = "unknown"
     else:
-        status = "changed" if changed > changed_fraction * compared else "unchanged"
+        status = "changed" if changed > changed_fraction * compared else "no_large_change"
     return {"status": status, "compared_cells": compared, "changed_cells": changed}

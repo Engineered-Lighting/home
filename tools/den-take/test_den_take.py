@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import http.client
 import io
+import itertools
 import json
 import math
 import random
@@ -151,15 +152,27 @@ def judge(attempts, m=M):
 
 # ---- a synthetic take folder, written with take.py's own writer ----
 
+MAKE_TAKE_BASE_UNIX = 1_793_016_000.0  # a fixed recording time, 2026-10-26 12:00 UTC
+_TAKE_ORDER = itertools.count()  # each make_take() take starts an hour after the one before
+
+
 def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, freeze=None,
               backwards_at=None, session_change_at=None, drop=None, repeat_at=None, host_bump=None,
               device_drift_ppm=20, seq_repeat_at=None, rejected_start=False, complete=True,
-              method_sha=None, commissioning=True):
+              method_sha=None, commissioning=True, script=None, started_unix=None):
     """Fault times are (anchor, seconds after it); anchors: begin, hold_end, slate_end.
 
     host_bump=(anchor, seconds, height) ramps t_host up by height at 0.015 s per second,
     holds it 10 s and ramps it back down. seq_repeat_at gives one frame its
-    predecessor's rgb_seq. device_drift_ppm sets t_device's straight-line drift."""
+    predecessor's rgb_seq. device_drift_ppm sets t_device's straight-line drift.
+    script is take.json's script name: commission or free by default, as commissioning
+    says, or a staged script from tools/den-take/scripts, whose stage cues inside the
+    activity part are logged as take.py logs them. started_unix defaults to a fixed
+    base plus an hour per take made."""
+    script = script or ("commission" if commissioning else "free")
+    staged = take.load_script(script, take.Settings(slate_s=M["slate_length_s"]))
+    if started_unix is None:
+        started_unix = MAKE_TAKE_BASE_UNIX + 3600.0 * next(_TAKE_ORDER)
     folder = Path(root) / f"take-{uuid.uuid4().hex[:8]}"
     folder.mkdir()
     slate, cues, slates, shown, anchors = M["slate_length_s"], [], [], [], {}
@@ -184,6 +197,10 @@ def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, 
     t += 10.1
     cue("begin", t)
     anchors["begin"] = t
+    for block in (staged or {}).get("blocks", []):
+        if block["at_s"] < activity:
+            cues.append(dict(cue="stage", text=block["say"], pc_mono_s=t + block["at_s"],
+                             pc_unix=1.8e9 + t + block["at_s"], case=block["case"], at_s=block["at_s"]))
     t += activity
     cue("hold_phone_end", t)
     anchors["hold_end"] = t
@@ -238,8 +255,9 @@ def make_take(root, *, c=3.2137, activity=30.0, step_both=None, step_host=None, 
     writer.close()
     after = sessions[1] if session_change_at else sessions[0]
     take.write_json(folder / "take.json", {
-        "schema": take.SCHEMA, "take": folder.name, "script": "commission" if commissioning else "free",
-        "commissioning": commissioning,
+        "schema": take.SCHEMA, "take": folder.name, "script": script,
+        "script_file": staged and {"file": staged["file"], "sha256": staged["sha256"]},
+        "commissioning": commissioning, "started_unix": started_unix,
         "method": {"file": check.METHOD_FILE,
                    "sha256": method_sha or check.file_sha256(check.HERE / check.METHOD_FILE)},
         "cues": cues, "slates": slates,
@@ -1295,6 +1313,38 @@ class StagedScriptTests(Workspace):
         with mock.patch.object(take, "SCRIPTS", HERE / "scripts"):
             lf = take.load_script("hard-b", settings)
         self.assertEqual((crlf["blocks"], crlf["end_s"]), (lf["blocks"], lf["end_s"]))
+
+
+class StagedCheckTests(unittest.TestCase):
+    def test_check_gives_the_same_verdict_on_a_staged_take_as_on_a_plain_one(self):
+        root = Path(tempfile.mkdtemp(prefix="den-take-staged-"))
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        staged = make_take(root, activity=35.0, commissioning=False, script="hard-b")
+        record = json.loads((staged / "take.json").read_text(encoding="utf-8"))
+        self.assertEqual((record["script"], record["script_file"]["file"]), ("hard-b", "scripts/hard-b.json"))
+        self.assertIsInstance(record["started_unix"], float)
+        self.assertEqual([(c["at_s"], c["case"]) for c in record["cues"] if c["cue"] == "stage"],
+                         [(3, "idle_standing"), (30, "wiping")])
+        plain = root / "plain"
+        shutil.copytree(staged, plain)
+        record["cues"] = [c for c in record["cues"] if c["cue"] != "stage"]
+        record["script"], record["script_file"] = "free", None
+        take.write_json(plain / "take.json", record)
+        for typed in ("none", "00:20"):
+            reports = [run_check(folder, typed=typed)[1] for folder in (staged, plain)]
+            self.assertEqual(reports[0]["verdict"], "PASS")
+            for key in ("verdict", "retained", "failures", "rules", "cuts", "cut_seconds", "usable"):
+                self.assertEqual(reports[0][key], reports[1][key], key)
+
+    def test_make_take_writes_its_script_and_started_unix(self):
+        root = Path(tempfile.mkdtemp(prefix="den-take-fields-"))
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        records = [json.loads((make_take(root, **kw) / "take.json").read_text(encoding="utf-8")) for kw in
+                   ({}, {"commissioning": False}, {"commissioning": False, "script": "hard-a", "started_unix": 7.5})]
+        self.assertEqual([r["script"] for r in records], ["commission", "free", "hard-a"])
+        self.assertEqual([r["script_file"] is None for r in records], [True, True, False])
+        self.assertEqual(records[1]["started_unix"] - records[0]["started_unix"], 3600.0)
+        self.assertEqual(records[2]["started_unix"], 7.5)
 
 
 class ScriptFileTests(unittest.TestCase):

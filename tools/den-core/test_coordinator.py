@@ -34,6 +34,7 @@ import runner  # noqa: E402
 import score  # noqa: E402
 import synthetic  # noqa: E402
 import test_live_inputs  # noqa: E402
+import test_score  # noqa: E402
 from hold_fixtures import T0, SLOTS, person_state, scene  # noqa: E402
 
 FL, FR, RL, RR = events.LIGHTS
@@ -480,8 +481,11 @@ class StandInTest(unittest.TestCase):
         self.assertEqual(events.sha256_json(coordinator.make_policy(p.config).config), events.sha256_json(p.config))
 
     def test_the_default_config_reads_the_gate_file(self):
-        p = coordinator.make_policy()
-        gate = coordinator.load_gate()
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        with mock.patch.object(coordinator, "GATE_FILE", test_score.all_open(tmp)):
+            p = coordinator.make_policy()
+            gate = coordinator.load_gate()
         self.assertEqual(p.config["gate"]["sha256"], events.sha256_json(gate))
         self.assertEqual(p.config["gate"]["open"], sorted(gate["slots"]))
         self.assertEqual(p.config["compensation"]["option"], gate["slots"]["compensation_option"]["proposed"])
@@ -768,8 +772,9 @@ class RunFlagsTest(unittest.TestCase):
         return "\n".join(str(call.args[0]) for call in printed.call_args_list)
 
     def test_a_coordinator_run_says_what_it_stood_on(self):
-        text = self.main("--synthetic", "evening", "--policies", "need", "incumbent", "coordinator", "--compensation", "P3",
-                         "--compensation-form", "strict")
+        with mock.patch.object(coordinator, "GATE_FILE", test_score.all_open(self.tmp)):
+            text = self.main("--synthetic", "evening", "--policies", "need", "incumbent", "coordinator", "--compensation", "P3",
+                             "--compensation-form", "strict")
         self.assertIn("light model lm-fake-rung8-plan-1 (fake: plumbing only, never a gate)", text)
         self.assertIn("compensation P3-strict/P1 (pending: named option, not a choice)", text)
         self.assertIn("open slot(s) at their proposals", text)

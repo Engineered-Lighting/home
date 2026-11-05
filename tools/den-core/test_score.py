@@ -4,6 +4,7 @@ The scored path needs what no real run has yet: closed slots and rung 8's own pr
 the gate file in a temp folder and stand a model file behind a patched BACKEND, which proves the plumbing and nothing else.
 """
 import copy
+import io
 import json
 import shutil
 import sys
@@ -51,6 +52,16 @@ def closed_gate(tmp, **overrides):
     return path
 
 
+def all_open(tmp):
+    """A copy of the gate file with every slot open, as it ships, for a test of what an open gate does."""
+    gate = coordinator.load_gate()
+    for slot in gate["slots"].values():
+        slot.update(status="open", value=None)
+    path = Path(tmp) / "all-open-gate.json"
+    path.write_text(json.dumps(gate), encoding="utf-8")
+    return path
+
+
 def real_model(tmp, **params):
     """A model file that does not call itself fake. Only a test, with BACKEND patched, can treat it as rung 8's."""
     model = fake_light.build(**params)
@@ -94,6 +105,12 @@ class Base(unittest.TestCase):
 
 
 class RefusalTest(Base):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(coordinator, "GATE_FILE", all_open(self.tmp))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def synthetic_log(self):
         items, _, _ = synthetic.evening(unclear_rate=0.0, invalid_rate=0.0, fail_rate=0.0)
         header, log = runner.run(runner.tagged(items, "synthetic"), runner.load_policies(["need", "incumbent", "coordinator"]),
@@ -417,6 +434,29 @@ class SurrogateTest(Base):
             if e["kind"] == "occupancy":
                 e["data"]["value"] = "off"
         self.assertEqual(score.Timeline(header, log).episodes, [])
+
+
+class ClosingTheGateFileTest(Base):
+    """The owner closes slots in the gate file, as README says to. A test of what an open gate does runs on its own copy, so
+    that step never turns the suite red. These are the tests that read the gate file; closing it once turned each one red."""
+    READ_THE_GATE = ("test_coordinator.ReplayTest.test_validate_reads_a_coordinator_log_with_a_solved_look",
+                     "test_coordinator.RunFlagsTest.test_a_coordinator_run_says_what_it_stood_on",
+                     "test_coordinator.StandInTest.test_the_default_config_reads_the_gate_file",
+                     "test_score.RefusalTest.test_a_closed_slot_with_no_value_is_refused",
+                     "test_score.RefusalTest.test_refuses_an_open_slot_a_synthetic_log_and_a_fake_model",
+                     "test_score.RefusalTest.test_slots_lists_every_open_slot_with_its_proposal")
+
+    def test_closing_every_slot_turns_no_test_red(self):
+        gate = coordinator.load_gate()
+        for name, slot in gate["slots"].items():
+            slot.update(status="closed", value={"room": ["r00c00"]} if name == "surface_map" else slot["proposed"])
+        path = self.tmp / "closed.json"
+        path.write_text(json.dumps(gate), encoding="utf-8")
+        suite = unittest.defaultTestLoader.loadTestsFromNames(self.READ_THE_GATE)
+        with mock.patch.object(coordinator, "GATE_FILE", path):
+            result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+        self.assertEqual(result.testsRun, len(self.READ_THE_GATE))
+        self.assertEqual([str(test) for test, _ in result.failures + result.errors], [])
 
 
 class ServiceTest(Base):

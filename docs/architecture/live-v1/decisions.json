@@ -1,0 +1,374 @@
+{
+  "about": "The single register of owner decisions that this revision leaves open. Every entry is pending: nothing here is selected, and no operating default is implied. A recommendation is advice only. Sheets, records and notes link here with a dashed Pending tag. Sources: review/claude-architecture-feedback-response.md and review/claude-architecture-feedback-followup.md.",
+  "groups": [
+    { "id": "control", "name": "Holds, execution and safety" },
+    { "id": "evidence", "name": "Evidence age and geometry" },
+    { "id": "evaluation", "name": "Evaluation, references and gates" },
+    { "id": "light", "name": "Photometry, colour and comfort" },
+    { "id": "data", "name": "Data, labels and learning permissions" },
+    { "id": "hardware", "name": "Physical capabilities and qualification" }
+  ],
+  "decisions": [
+    {
+      "id": "compensation", "group": "control", "status": "pending",
+      "title": "Compensation by other lights while a hold is open",
+      "question": "When a person holds one light, may other lights change to make up for it, and how?",
+      "options": [
+        { "id": "P0", "label": "Pin only", "effect": "Free light re-serves everyone, the changer's own region included, so the change can be partly or fully offset there." },
+        { "id": "P1", "label": "Direction-aware footprint bound", "effect": "Free light may not move against the person's change at the points it moved. Others in the footprint can stay hold-limited for the hold's lifetime." },
+        { "id": "P2", "label": "Soft penalty", "effect": "A penalty with weight λ_h discourages compensation; partial, with no guarantee either way." },
+        { "id": "P3", "label": "Changer-aware bound", "effect": "P1's bound only at the changer's own task points; others may be re-served. Needs a reliable changer identity." }
+      ],
+      "sub_choices": ["P1, P2 and P3 each take a strict or mode form: in mode form, den_lighting's mode transitions (vacancy-off, arrival, game entry, game-time vacancy and return, game exit) sit outside the bound.", "P3's fallback for an unknown or uncertain changer: P1 or P0."],
+      "parameters": ["λ_h (P2)", "footprint threshold", "membership rule for shares near the threshold"],
+      "recommendation": { "option": "P1", "note": "For rung-9 replay only: P1 in mode form, with P0 and P3 scored as counterfactual scenes on the same evenings. Choose the canary's option from that report. Advice, not a selection." },
+      "blocks": "The coordinator's hold-aware solve beyond pinning (A9 K16), the expected results of the rung-9 hold fixtures, and any canary.",
+      "affects": ["A9 K16 and the solve", "A11 hold text", "A4 walkthrough", "A13 service (hold_limited)", "Decision.inputs.hold_set.held[] (direction, footprint, changer_track)", "Decision.hold_limited", "A10", "A1 overview", "Simple view", "rungs 9 and 11"]
+    },
+    {
+      "id": "manual-vs-safety", "group": "control", "status": "pending",
+      "title": "A person's held light against a hard comfort constraint",
+      "question": "When light a person holds breaks a hard glare or body-envelope constraint, which wins?",
+      "options": [
+        { "id": "S0", "label": "Manual wins, flagged", "effect": "The held light stays as set; the hard conflict is logged; it never triggers rollback." },
+        { "id": "S1", "label": "Hard constraint wins", "effect": "K17 dims or switches off the held light (or fades a beam out, keeping its aim), logs a safety override and gives notice." },
+        { "id": "S2", "label": "Owner-approved exceptions", "effect": "As S0 inside a pre-approved exception (fixture × look × whose envelope), as S1 outside." }
+      ],
+      "sub_choices": ["S1a restores the person's setting when the conflict clears; S1b keeps it limited until the hold ends.", "Decided separately for today's Hue path and before any gimbal admission (E9)."],
+      "parameters": ["override deadline", "S2 exception list", "notice channel"],
+      "recommendation": { "option": null, "note": "S0 with the conflict log on today's Hue path; S1 with S2 exceptions before E9. Advice, not a selection." },
+      "blocks": "Rollback semantics for held-light conflicts, the safety-override path in K17 and A11, and engineered-fixture admission.",
+      "affects": ["A9 K16, K17", "A11 override_contested branch", "A13 and rung-11 rollback", "Decision.hard_conflicts, safety_override"]
+    },
+    {
+      "id": "moving-spot", "group": "control", "status": "pending",
+      "title": "A person's change to a spot that is moving",
+      "question": "If a person changes an engineered spot mid-move, does the move stop or finish dark?",
+      "options": [
+        { "id": "M1", "label": "Stop", "effect": "Stop within the fixture's declared stop bound." },
+        { "id": "M2", "label": "Finish dark", "effect": "Let a move already sent finish dark, if the change names no aim and the end aim still clears the envelope checks; otherwise stop." }
+      ],
+      "parameters": [],
+      "recommendation": { "option": null, "note": "M1 when the change names an aim, M2 otherwise. Advice, not a selection." },
+      "blocks": "The engineered-fixture execution sequence (A9 K17, aim while dark). No effect on today's Hue bulbs, which have no aim.",
+      "affects": ["A9 K17", "Fixture.gimbal", "cases V9b, V9d"]
+    },
+    {
+      "id": "unset-hold-fields", "group": "control", "status": "pending",
+      "title": "Fields a person's change did not set",
+      "question": "When a hold is taken during a system fade, where do the fields the person did not set come from?",
+      "options": [
+        { "id": "L1", "label": "Current actual state", "effect": "As den_lighting does today." },
+        { "id": "L2", "label": "State before the system fade", "effect": "Restores what the light was before the fade began." }
+      ],
+      "parameters": [],
+      "recommendation": { "option": "L1", "note": "For parity with den_lighting. Advice, not a selection." },
+      "blocks": "The exact held value in a mid-fade change (cases V9d, V9e).",
+      "affects": ["A9 K17", "A11 hold", "Correction.hold"]
+    },
+    {
+      "id": "mid-execution", "group": "control", "status": "pending",
+      "title": "Corrections made while a decision is still being carried out",
+      "question": "Does a change during an unfinished step teach anything?",
+      "options": [
+        { "id": "judge", "label": "Judge against the decision's intent", "effect": "Run the attribution order against the requested scene and recipients." },
+        { "id": "abstain", "label": "Abstain", "effect": "AR11 with reason mid_execution; nothing learned. The comfort test is never skipped." }
+      ],
+      "parameters": [],
+      "recommendation": { "option": "abstain", "note": "Advice, not a selection." },
+      "blocks": "Attribution of corrections made during a running decision (A11).",
+      "affects": ["A11 attribution", "A4 failure rows", "Correction (A3)", "rung 9", "case V9h"]
+    },
+    {
+      "id": "unknown-aim-on", "group": "control", "status": "pending",
+      "title": "A person's \"on\" for a spot whose aim is unknown",
+      "question": "When a stopped spot's aim is unknown and a person turns it on, what happens?",
+      "options": [
+        { "id": "apply", "label": "Apply at once, flagged", "effect": "Lights at an unknown aim; its prediction and verify are unknown." },
+        { "id": "apply-after-move", "label": "Apply after a dark move", "effect": "Moves dark to the last read-back aim, then lights." },
+        { "id": "refuse", "label": "Refuse and say why", "effect": "The spot stays off." }
+      ],
+      "parameters": [],
+      "recommendation": { "option": null, "note": "No recommendation." },
+      "blocks": "The engineered-fixture command path after a stop without position readback (case V9k).",
+      "affects": ["A9 K17", "Fixture.gimbal"]
+    },
+    {
+      "id": "local-completion", "group": "control", "status": "pending",
+      "title": "Completing a step on the Pi after a change elsewhere",
+      "question": "May K17 run the fresh hold and envelope checks itself, on the Pi, to complete a remaining step?",
+      "options": [
+        { "id": "allowed", "label": "Allowed, with a local checker", "effect": "K17 holds the new hold's footprint, basis rows and current person states, and completes a step that passes." },
+        { "id": "not-allowed", "label": "Not allowed", "effect": "Every step that needs fresh checks waits for K16's re-solve." }
+      ],
+      "parameters": [],
+      "recommendation": { "option": "not-allowed", "note": "Until a local checker exists. Advice, not a selection. Either way a check that cannot run fails closed." },
+      "blocks": "Completing a step after an unrelated revision change without a K16 re-solve (cases V8, V9f, V9g).",
+      "affects": ["A9 K17", "A2", "A4 failure rows", "Decision (A3)", "rungs 9 and 11"]
+    },
+    {
+      "id": "resolve-deadline", "group": "control", "status": "pending",
+      "title": "How long K17 waits for a fresh plan",
+      "question": "After a decision is superseded or cut short, how long may K16's re-solve take before the current state is kept?",
+      "options": [
+        { "id": "set-D", "label": "Set a deadline D", "effect": "A fresh plan arriving within D is sent under the step check; otherwise kept_current is logged." }
+      ],
+      "parameters": ["D (seconds)"],
+      "recommendation": { "option": null, "note": "No value proposed." },
+      "blocks": "The kept_current outcome's timing.",
+      "affects": ["A9 K17", "Decision.status"]
+    },
+    {
+      "id": "tau-keep", "group": "evidence", "status": "pending",
+      "title": "Keeping a beam whose envelope check fails only through age growth",
+      "question": "May a current narrow beam be kept for a time after its conservative envelope check fails only because evidence aged?",
+      "options": [
+        { "id": "exception", "label": "Admit a τ_keep exception", "effect": "Keep the beam for τ_keep from its first failure, logged as hard_conflicts[{constraint: envelope_age}]; counts for rollback unless exempted. Never for a coasting or ambiguous track." },
+        { "id": "none", "label": "No exception", "effect": "The hard constraint applies as written: the beam fades out at its first failure." }
+      ],
+      "parameters": ["τ_keep (seconds)"],
+      "recommendation": { "option": null, "note": "No recommendation. Under exception, a free beam whose conservative envelope check fails only through age growth is kept for at most τ_keep from its first failure, logged as hard_conflicts envelope_age; under none it fades out at its first failure. Which applies is the owner's decision." },
+      "blocks": "Any kept-beam behaviour under stale geometry (cases V33, V34).",
+      "affects": ["A9 body envelope", "A4 walkthrough and failure rows", "A7 (B's beam in the walkthrough)", "A10 look selector", "A13 rollback and evening (B's beam)", "Track (A3)", "K5 tracker (models)"]
+    },
+    {
+      "id": "freshness", "group": "evidence", "status": "pending",
+      "title": "How fresh support reaches the coordinator",
+      "question": "Does K16 refresh person evidence before committing or keeping a narrow beam?",
+      "options": [
+        { "id": "FR0", "label": "No refresh", "effect": "Use the latest record; sound but wide (a head can be about 7 s old at settle with 10 s heartbeats)." },
+        { "id": "FR1", "label": "Refresh before commit", "effect": "Get a current record, or short-cadence support, before committing or keeping a narrow beam near a person." },
+        { "id": "FR2", "label": "Monitored bound", "effect": "A reaction-based bound for observed or deadband-confirmed fields only, given declared emission, gap, liveness and reaction guarantees. Held fields never get it." }
+      ],
+      "parameters": ["T_chk", "T_react", "P", "ε", "g_f", "T_emit,f"],
+      "recommendation": { "option": "FR1", "note": "Advice, not a selection. FR2 is also a safety-margin choice (see manual-vs-safety)." },
+      "blocks": "The effective age term for a beam near a person; whether F2's spot survives in case V33.",
+      "affects": ["A9 body envelope", "A7 freshness", "A4 walkthrough", "A13 evening (B's beam)", "PersonState.field_support"]
+    },
+    {
+      "id": "envelope-parameters", "group": "evidence", "status": "pending",
+      "title": "Body-envelope seeds, margins and references",
+      "question": "What sizes, speeds, deadbands and margins does body-envelope/v1 use, and how are they validated?",
+      "options": [
+        { "id": "set", "label": "Set and pre-register values", "effect": "Values are fixed before any containment test and validated against independent head and shoulder references." }
+      ],
+      "parameters": ["r_h", "shoulder sizes", "r_hp", "k", "v_H", "v_pos or the Track motion model", "ω_θ", "Δθ disc limit", "d_H", "d_θ", "R_cap", "containment goals"],
+      "recommendation": { "option": null, "note": "No values proposed. Only the working region's 0.10 m deadband exists today." },
+      "blocks": "Whether any narrow beam near a person is feasible; the walkthrough aim's survival.",
+      "affects": ["A9 body envelope", "A7", "rung 6"]
+    },
+    {
+      "id": "delivered-statistic", "group": "evaluation", "status": "pending",
+      "title": "How delivered service is scored over the evaluation region",
+      "question": "Area share above the floor, or the mean over the region?",
+      "options": [
+        { "id": "area-share", "label": "Area share", "effect": "The share of valid pixels in R_eval at or above F(c) must reach a_min." },
+        { "id": "mean", "label": "Mean", "effect": "The mean over valid pixels of R_eval must reach F(c); can pass a bright spot on part of the patch." }
+      ],
+      "parameters": ["a_min", "v_min"],
+      "recommendation": { "option": null, "note": "No recommendation." },
+      "blocks": "Delivered-service outcomes under partial overlap (case V54).",
+      "affects": ["A13 service outcomes", "EvalRecord.end_to_end"]
+    },
+    {
+      "id": "reference-geometry", "group": "evaluation", "status": "pending",
+      "title": "Missing or uncertain reference geometry",
+      "question": "How are need seconds without a usable owner mark treated, and how precise must a mark be?",
+      "options": [
+        { "id": "strict", "label": "Strict", "effect": "Those seconds are unknown for every outcome." },
+        { "id": "bounded", "label": "Bounded", "effect": "As strict, plus a never-gated missed (bounded) column where the whole gold surface is below F(c)." }
+      ],
+      "parameters": ["τ_R (cm)"],
+      "recommendation": { "option": "strict", "note": "Advice, not a selection." },
+      "blocks": "Service claims on unmarked or uncertain intervals (cases V55, V56).",
+      "affects": ["A13 service outcomes", "EvalRecord.coverage"]
+    },
+    {
+      "id": "service-floors", "group": "evaluation", "status": "pending",
+      "title": "Adequacy floors and the quiet window",
+      "question": "What light is enough for each demand class, and how long must it stand uncorrected?",
+      "options": [ { "id": "set", "label": "Set and pre-register", "effect": "Floors and window fixed before held-out scoring." } ],
+      "parameters": ["F(c) per demand class", "W"],
+      "recommendation": { "option": null, "note": "A9's guidance values (for example 500 lx for fine work) are seeds marked Target · validate, not chosen floors. Predicted service is reported in its own column and never gated; that is agreed design, not a parameter." },
+      "blocks": "Every served, missed and TTGL outcome.",
+      "affects": ["A13 service outcomes", "rung 11"]
+    },
+    {
+      "id": "promotion-margins", "group": "evaluation", "status": "pending",
+      "title": "Promotion margins and the interval convention",
+      "question": "What margin δ does each metric get, and is the interval two-sided 95%?",
+      "options": [
+        { "id": "two-sided-95", "label": "Two-sided 95% interval", "effect": "One-sided error 2.5% per metric; matches EvalRecord.intervals." },
+        { "id": "one-sided-95", "label": "One-sided 95% interval", "effect": "More power on small gold sets; needs a second interval in the record." }
+      ],
+      "parameters": ["δ per metric (absolute, in the metric's unit)", "bootstrap replicate count"],
+      "recommendation": { "option": "two-sided-95", "note": "Advice, not a selection. No δ is set." },
+      "blocks": "Every non-inferiority and superiority gate (A13 Gate 1, A8, rungs).",
+      "affects": ["A13 Gate 1", "A8 student gate", "A14 completion rule", "EvalRecord.intervals[].delta"]
+    },
+    {
+      "id": "demand-gates", "group": "evaluation", "status": "pending",
+      "title": "Demand bands, competence floors and sample gates",
+      "question": "Where do the demand bands start, and what competence and coverage must a demand estimate show?",
+      "options": [ { "id": "set", "label": "Set and pre-register", "effect": "Cut points, floors and per-band sample gates fixed on development data before held-out scoring." } ],
+      "parameters": ["band cut points on visual_demand.level", "ρ_fine", "ρ_ff", "κ_b", "n_b", "k sessions", "d days", "detection grace", "ECE bin count"],
+      "recommendation": { "option": null, "note": "Tie the fine cut to the task look's trigger (cooking@1 at 0.6) is a candidate. Advice, not a selection. Counting an abstention or a stale answer as a miss is agreed design (F08), not part of this decision." },
+      "blocks": "Demand competence at rung 6 and N2, and the A8 student gate.",
+      "affects": ["A13 demand row", "A8", "rung 6", "N2"]
+    },
+    {
+      "id": "onset-protocol", "group": "evaluation", "status": "pending",
+      "title": "The onset definition and the entry dwell",
+      "question": "What is the gold onset, which system state is timed, and what entry dwell does K7 use?",
+      "options": [ { "id": "set", "label": "Fix before labelling", "effect": "The protocol states the onset, the timed state and T_enter before any label is made." } ],
+      "parameters": ["gold onset definition", "timed system state", "T_enter", "the ≤ 3 s median target (Target · validate)"],
+      "recommendation": { "option": null, "note": "Today A7's 5 s entry dwell cannot meet a 3 s first-contact target. Do not shorten the dwell or move labels to make the example pass." },
+      "blocks": "The onset gate at rung 6 and in the early need test (N2).",
+      "affects": ["A7 engagement", "A13 onset row and timeline", "rung 6", "N2"]
+    },
+    {
+      "id": "need-test-order", "group": "evaluation", "status": "pending",
+      "title": "When the early need test runs",
+      "question": "Does the one-person need test (N1, N2) run before the tracker is built, and on which retained sessions?",
+      "options": [
+        { "id": "first", "label": "Before the tracker", "effect": "N1 and N2 run on retained one-person sessions before rungs 1–5 start; a not-feasible verdict reshapes the perception track early." },
+        { "id": "alongside", "label": "Alongside the perception rungs", "effect": "Rungs 1–5 proceed while N1 and N2 are labelled and scored; their verdict arrives later." },
+        { "id": "after-bundles", "label": "After rung 5", "effect": "The need test runs on real bundles only, with real timing; nothing is learned about the premise before the tracker exists." }
+      ],
+      "parameters": ["which retained sessions", "blind-labelling protocol for N1"],
+      "recommendation": { "option": "first", "note": "Advice, not a selection: it tests the riskiest premise cheaply. The light track keeps its value whatever it finds." },
+      "blocks": "Where N1 and N2 sit on the ladder, and whether rungs 1–5 wait for their verdict.",
+      "affects": ["A14 build order and ladder", "N1", "N2", "rungs 1–6"]
+    },
+    {
+      "id": "attribution-thresholds", "group": "evaluation", "status": "pending",
+      "title": "Recipient and attribution thresholds",
+      "question": "What share makes a person a recipient, what change counts as affecting a target, and what precision admits each learning path?",
+      "options": [ { "id": "set", "label": "Set and pre-register", "effect": "Fixed before E1 is scored." } ],
+      "parameters": ["s_serve", "s_aff", "per-path precision lower bounds", "forced-update bound", "κ reported floor"],
+      "recommendation": { "option": null, "note": "No values proposed." },
+      "blocks": "whose_light classification and every attribution learning path (A11, rung 12).",
+      "affects": ["A11", "Decision.recipients", "Correction.affected", "rung 12"]
+    },
+    {
+      "id": "gaming", "group": "evaluation", "status": "pending",
+      "title": "Game time: ownership and comparison strata",
+      "question": "Does the coordinator ever own game time, and how is the first canary stratified?",
+      "options": [
+        { "id": "non-gaming-stratified", "label": "Non-gaming strata with handback", "effect": "den_lighting owns the bulbs during games in both arms; game time leaves the comparison." },
+        { "id": "complete-policy", "label": "Complete policy", "effect": "The candidate reproduces gaming as an externally signalled mode, with the game-exit snapshot restore." }
+      ],
+      "parameters": ["washout after game exit", "washout after block switch"],
+      "recommendation": { "option": "non-gaming-stratified", "note": "For the first canary. A complete-policy comparison is needed before any permanent handover. Advice, not a selection." },
+      "blocks": "The rung-11 canary design and any claim about game time.",
+      "affects": ["A13 incumbent", "rung 11", "EvalRecord (A3)"]
+    },
+    {
+      "id": "hold-lifetime", "group": "control", "status": "pending",
+      "title": "Changing the hold lifetime",
+      "question": "Should a hold end with the person's episode instead of den_lighting's vacancy and game rules?",
+      "options": [
+        { "id": "keep", "label": "Keep den_lighting's lifetime", "effect": "Outside a game, until 120 s after the later of vacancy start and the latest touch; during a game, the game's end (game-time vacancy turns held bulbs off without ending the hold); or resume_automatic." },
+        { "id": "episode", "label": "Episode-based end", "effect": "End with the served episode once engagement offset and tracking are qualified." }
+      ],
+      "parameters": [],
+      "recommendation": { "option": "keep", "note": "This revision describes den_lighting's lifetime as today's rule; a change is the owner's. Advice, not a selection." },
+      "blocks": "Any change to how long a manual setting lasts.",
+      "affects": ["A11 hold", "A4", "A9 K16", "A13 evening", "Correction (A3)", "rung 11", "Simple view step 8"]
+    },
+    {
+      "id": "normal-scene", "group": "control", "status": "pending",
+      "title": "Manual levels becoming the normal scene",
+      "question": "Under the coordinator, does a manual level keep becoming the bulb's normal and arrival level, as den_lighting does outside a game?",
+      "options": [
+        { "id": "keep", "label": "Keep den_lighting's behaviour", "effect": "A non-gaming manual write becomes that bulb's normal." },
+        { "id": "stop", "label": "Stop", "effect": "Arrival levels come from the look and preferences only." }
+      ],
+      "parameters": [],
+      "recommendation": { "option": null, "note": "No recommendation." },
+      "blocks": "Arrival behaviour under the coordinator, and whether a pre-game held value returns as normal.",
+      "affects": ["A9 K16 hold panel", "rung 11 block reset"]
+    },
+    {
+      "id": "comfort-policy", "group": "light", "status": "pending",
+      "title": "Comfort learning, reports and glare-model validation",
+      "question": "How near the glare limit counts, how comfort limits tighten, whether people can report glare, and whether the glare model is validated under supervision?",
+      "options": [ { "id": "set", "label": "Set and pre-register", "effect": "Margin, step and repeat count fixed on development data; reports and validation chosen explicitly." } ],
+      "parameters": ["margin m", "head-pose widening", "tightening step", "repeat count N", "explicit glare report channel (app, voice, none)", "supervised glare-model validation", "where comfort_limits live", "glare-report rollback bound"],
+      "recommendation": { "option": null, "note": "Comfort limits only ever tighten from corrections; loosening needs supervised validation or the owner. That rule is part of the agreed design, not this choice." },
+      "blocks": "AR10's plausibility test and every comfort-limit update (A11, rung 12).",
+      "affects": ["A11 AR10", "A9 glare", "Preference.comfort_limits", "A13 rollback"]
+    },
+    {
+      "id": "photometry-commissioning", "group": "light", "status": "pending",
+      "title": "Absolute light commissioning",
+      "question": "Is the grey-card and lux-meter pass acceptable, with which meter, what held-out tolerance, and one scale or one per illuminant class?",
+      "options": [
+        { "id": "card-and-meter", "label": "Card and meter pass", "effect": "k_L from a grey card and a meter reading; held-out checks in lux." },
+        { "id": "meter-only", "label": "Meter-only per-surface factors", "effect": "Avoids the card; cannot give reflectance for bounce or unmetered surfaces." },
+        { "id": "other-sensor", "label": "A separately approved sensor", "effect": "If camera photometry fails." }
+      ],
+      "parameters": ["meter class", "held-out tolerance (lx)", "k_L per illuminant class or single"],
+      "recommendation": { "option": null, "note": "No recommendation. The round trip and independent held-out absolute checks are both required by the agreed design." },
+      "blocks": "Any absolute lux claim (rung 7).",
+      "affects": ["A12", "A9 K11", "rung 7", "E8"]
+    },
+    {
+      "id": "colour-guardrails", "group": "light", "status": "pending",
+      "title": "Colour guardrails in mired",
+      "question": "At which base CCT is today's kelvin guardrail translated, and do overlay looks get a colour guardrail?",
+      "options": [
+        { "id": "translate-2700", "label": "Translate at 2700 K", "effect": "[-300, +200] K becomes [−25.5, +46.3] mired." },
+        { "id": "translate-2400", "label": "Translate at 2400 K", "effect": "[-300, +200] K becomes [−32.1, +59.5] mired." },
+        { "id": "designer-review", "label": "Designer review (E11)", "effect": "New relative ranges set by design review." }
+      ],
+      "parameters": ["overlay colour guardrails"],
+      "recommendation": { "option": null, "note": "Translating at 2700 K preserves today's numbers at the look's base; any choice changes the old guardrail's meaning elsewhere, so it is the owner's." },
+      "blocks": "Applying a learned colour offset (A10, A11).",
+      "affects": ["A10 guardrails", "A11 colour learning", "Look.guardrails", "Preference.offsets"]
+    },
+    {
+      "id": "recording-retention", "group": "data", "status": "pending",
+      "title": "Recording and retention",
+      "question": "Which den sessions may be recorded and kept, who may appear, and are metering frames kept for gold sessions?",
+      "options": [ { "id": "set", "label": "Decide explicitly", "effect": "Recording scope, retention, deletion and blurring stated before any session is kept." } ],
+      "parameters": ["who may appear (guests)", "retention and deletion", "blurring in retained data", "metering frames or per-pixel maps for gold sessions"],
+      "recommendation": { "option": null, "note": "No recommendation. Without retained frames, delivered service at R_eval is unknown." },
+      "blocks": "The early need test (N1), delivered service at R_eval, and guest scoring.",
+      "affects": ["A14 N1", "A13 service", "LightState retention"]
+    },
+    {
+      "id": "labelling", "group": "data", "status": "pending",
+      "title": "Labelling and adjudication",
+      "question": "Who labels, how disputes are settled, and is the worked patch marked on every need interval or a sample?",
+      "options": [
+        { "id": "owner", "label": "The owner alone", "effect": "Cheapest; no agreement measure." },
+        { "id": "two-blind", "label": "Two blind reviewers and an adjudicator", "effect": "Agreement can be reported." }
+      ],
+      "parameters": ["owner time budget", "every interval or a sample (a sample narrows the service claim)", "canary marking protocol and second blind pass"],
+      "recommendation": { "option": null, "note": "No recommendation." },
+      "blocks": "The gold set, R_eval coverage and canary service comparison.",
+      "affects": ["A13 gold protocol", "rung 4", "N1"]
+    },
+    {
+      "id": "learning-permissions", "group": "data", "status": "pending",
+      "title": "Later learning permissions",
+      "question": "May corrections ever train need or perception, may shared corrections update a household key, may device signals score, and is any appearance or identity allowed if geometry tracking fails?",
+      "options": [ { "id": "decide", "label": "Decide each explicitly", "effect": "Each permission is granted or refused on its own." } ],
+      "parameters": ["corrections training need or perception", "shared corrections updating the changer's household key", "device signals (PC input) as scoring references", "session appearance or identity", "data use of crops, bundles and embeddings"],
+      "recommendation": { "option": null, "note": "No approval is assumed for any of these." },
+      "blocks": "Rung 12's unblocks, the student, any identity branch.",
+      "affects": ["A11", "A8", "A6 re-ID crops", "A5 session appearance", "A13", "A14", "E1", "E2", "rung 3", "rung 12", "later rungs"]
+    },
+    {
+      "id": "fixture-capabilities", "group": "hardware", "status": "pending",
+      "title": "Physical capabilities and their qualification",
+      "question": "Which engineered-fixture capabilities must be measured before any physical output, and is Hue mid-transition behaviour qualified?",
+      "options": [ { "id": "set", "label": "Name the required measurements", "effect": "Inside the separate owner approval for physical output." } ],
+      "parameters": ["move rate and settle", "stop bound and overrun", "position readback", "fade pre-emption", "dark interlock", "link-loss behaviour", "Hue landing on a command sent mid-transition"],
+      "recommendation": { "option": null, "note": "All capabilities are unknown until commissioned. A9's 90°/s and 0.3 s settle are assumptions." },
+      "blocks": "Any engineered physical output, E9, and gimbal admission.",
+      "affects": ["A9 K17", "Fixture.gimbal", "E9"]
+    }
+  ]
+}

@@ -302,6 +302,12 @@ class Run:
                 row["increment"] = {"point_id": sid, "measured_change": None,
                                     "predicted_change": row["predicted_change"],
                                     "status": "unverifiable", "uncertainty": None}
+            # The read-frame prediction carries the model's error on the change, so a dim's level
+            # cannot be judged finer than its change: if the change landed, the level is no miss.
+            if (row["status"] == "outside" and m["background"] != "zero" and row["predicted_change"] < 0
+                    and row["increment"]["status"] == "within"):
+                row["status"], row["why"], row["dim_unresolved"] = "unverifiable", "a dim whose change landed", True
+                del row["residual"]
             # A held-lit point is never a hit; it is a miss only beyond what the held light could account for.
             row["excluded_held"] = (row["held_lit"] and row["status"] in ("within", "outside")
                                     and (m["held_rule"] == "exclude_both"
@@ -541,7 +547,7 @@ class Run:
         status_counts = {"within": 0, "outside": 0, "unverifiable": 0, "prior_only": 0}
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
-        excluded_held = fallback_scored = eyes_total = 0
+        excluded_held = fallback_scored = eyes_total = dims_unverifiable = 0
         excluded_by_status = {"within": 0, "outside": 0}
         not_admitted, not_verified = [], []
         spill_counts, inc_counts = {}, {}
@@ -572,6 +578,7 @@ class Run:
             for p in verify["points"]:
                 status_counts[p["status"]] += 1
                 per_point.setdefault(p["point_id"], {k: 0 for k in status_counts})[p["status"]] += 1
+                dims_unverifiable += "dim_unresolved" in rows.get(p["point_id"], {})
             eyes_total += len(verify["not_verified"])
             for s in verify["spill"]:
                 spill_counts[s["status"]] = spill_counts.get(s["status"], 0) + 1
@@ -631,6 +638,7 @@ class Run:
             "hit_rate": self.hit_rate(counted_by_day),
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
+            "dim_points_unverifiable": dims_unverifiable,
             "fallback_patch_points_scored": fallback_scored,
             "misses_explained": {
                 **causes, "misses": misses,

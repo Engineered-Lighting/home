@@ -36,7 +36,8 @@ For each point at the verify frame:
   - `prior_only` when the estimate's `basis` is `prior`;
   - `unverifiable` when the surface is missing from the frame, its usable share
     (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's,
-    or the prediction is not positive.
+    the prediction is not positive, or the point is a dim whose level misses but
+    whose change landed (see "The background"). Its `residual` is then null.
 
 A `fallback_patch` estimate is scored here, because a fallback patch is a
 verify aid. It never counts as delivered service: the gold share below treats
@@ -50,6 +51,19 @@ D(p) + Ê(p; state), and the background D comes from the slot `background`:
   frame the decision read (`Decision.inputs.light_state`) with the state it read
   (`Decision.inputs.actuator_state`);
 - `zero`: D(p) = 0, for runs after dark.
+
+Under `reference_frame` the prediction works out as the read frame's measurement
+plus the model's change, so its error grows with the change, not with the level
+left after it. On an off or a deep dim that error can exceed ±15% of what is
+left: with the model 5% off and every bulb landing as commanded, a 0.8 to 0.1
+dim reads −23% or +49%, depending on which way the model is off. So under
+`reference_frame`, a point whose predicted change is negative, whose level is
+outside the tolerance and whose increment (below) is `within` is `unverifiable`,
+neither a hit nor a miss, and the report and the console count these
+(`dim_points_unverifiable`). A bulb that did not dim misses the increment too
+and stays `outside`. A point that brightens or keeps its level, and every point
+under `zero`, keeps the plain level check. A run with nothing left to count is
+`insufficient`, never a pass.
 
 **Increments.** For each point, `measured_change` = Ê_after − Ê_before on the
 camera (verify frame minus the decision's read frame) and `predicted_change` =

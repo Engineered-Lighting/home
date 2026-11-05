@@ -488,6 +488,129 @@ class DaylightAndDrift(unittest.TestCase):
         self.assertFalse(rows["d-drift"]["occupied"])
 
 
+class DimsAndOffs(unittest.TestCase):
+    """Under the read-frame background, the model's error at a brighter before state is not a miss."""
+
+    names = [f"p{i}" for i in range(6)]
+    # the model is 5% off, high at p1, p3, p5 and low at p0, p2, p4: every bulb lands as commanded
+    err = {n: 1.05 if i % 2 == 0 else 0.95 for i, n in enumerate(names)}
+
+    def setUp(self):
+        self.model = syn.hue_model({n: {B0: 300.0, B1: 100.0} for n in self.names}, kelvins=(2700,))
+
+    def truth(self, levels, floor=0.0):
+        return {n: max(floor, self.err[n] * (300 * levels.get(B0, 0) + 100 * levels.get(B1, 0))) for n in self.names}
+
+    def case(self, did, t, before, commanded, landed=None):
+        ref = syn.light_state(t, self.truth(before), anchored=False, ident=f"ls-{did}")
+        applied = {b: {"level": lv, "steps": send(t + 0.5)} for b, lv in commanded.items()}
+        dec = syn.hue_decision(did, t + 0.5, before, applied, f"ls-{did}",
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)})
+        after = syn.light_state(t + 5, self.truth(landed if landed is not None else {**before, **commanded}, 0.5),
+                                anchored=False)
+        return [dec], [ref, after]
+
+    def run_cases(self, cases, overrides=None):
+        decisions = [d for c in cases for d in c[0]]
+        frames = [f for c in cases for f in c[1]]
+        return score(decisions, frames, self.model, overrides=overrides)
+
+    def ons(self):
+        return [self.case(f"d-on{i}", syn.T0 + 100 * i, {B0: 0.3, B1: 0.5}, {B0: 0.8}) for i in range(3)]
+
+    def test_a_perfect_off_and_a_deep_dim_do_not_fail_a_passing_session(self):
+        t = syn.T0
+        off = self.case("d-off", t + 400, {B0: 0.8, B1: 0.5}, {B0: 0.0, B1: 0.0})
+        dim = self.case("d-dim", t + 500, {B0: 0.8, B1: 0.5}, {B0: 0.1, B1: 0.1})
+        decisions, states, report = self.run_cases(self.ons() + [off, dim])
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (18, 0, 1.0, "pass"))
+        self.assertEqual(report["misses_explained"]["misses"], 0)
+        for did in ("d-off", "d-dim"):
+            v = by_id(decisions, "decision_id", did)["verify"]
+            # the same whichever way the model is off, and no residual to be read as a miss
+            self.assertEqual({p["status"] for p in v["points"]}, {"unverifiable"}, did)
+            self.assertEqual({p["residual"] for p in v["points"]}, {None}, did)
+            self.assertIsNone(v["within_tolerance"], did)
+            self.assertIsNone(v["explanation"], did)
+            self.assertEqual({i["status"] for i in v["increments"] if i["measured_change"] is not None},
+                             {"within"}, did)
+        self.assertEqual(report["points"]["unverifiable"], 12)
+        self.assertEqual(report["dim_points_unverifiable"], 9)  # d-off's other three predict nothing at all
+        for s in states:
+            if s["ts"] in (t + 405, t + 505):  # the frames that verify d-off and d-dim
+                self.assertEqual(s["residual"], [])
+
+    def test_the_owner_is_told_on_the_console(self):
+        t = syn.T0
+        d, f = self.case("d-dim", t, {B0: 0.8, B1: 0.5}, {B0: 0.1, B1: 0.1})
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = write_case(tmp, d, f, self.model)
+            with Quiet() as q:
+                self.assertEqual(cli.main(argv), 0)
+        out = q.buf.getvalue()
+        self.assertIn("gate 0.85: insufficient", out)
+        self.assertIn("left out of the hit rate: 0 point(s) lit by held or superseded bulbs, "
+                      "6 dim point(s) whose change landed", out)
+
+    def test_a_bulb_that_did_not_dim_is_still_a_miss_and_fails_the_gate(self):
+        t = syn.T0
+        stuck = {B0: 0.8, B1: 0.5}
+        dim = self.case("d-dim", t + 500, stuck, {B0: 0.1, B1: 0.1}, landed=stuck)
+        decisions, _, report = self.run_cases(self.ons() + [dim])
+        self.assertEqual({p["status"] for p in by_id(decisions, "decision_id", "d-dim")["verify"]["points"]},
+                         {"outside"})
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (18, 6, 0.75, "fail"))
+
+    def test_a_bulb_that_stayed_on_after_an_off_is_still_a_miss(self):
+        t = syn.T0
+        stuck = {B0: 0.8, B1: 0.5}
+        off = self.case("d-off", t, stuck, {B0: 0.0, B1: 0.0}, landed=stuck)
+        decisions, _, report = self.run_cases([off])
+        d = by_id(decisions, "decision_id", "d-off")
+        for n in ("p0", "p2", "p4"):
+            self.assertEqual(point(d, n)["status"], "outside")
+        self.assertEqual(report["hit_rate"]["verdict"], "fail")
+
+    def test_a_dim_that_landed_short_of_the_change_is_still_a_miss(self):
+        t = syn.T0
+        # commanded to 0.1 and 0.1, landed at 0.3 and 0.1: the change is about a fifth short
+        dim = self.case("d-dim", t, {B0: 0.8, B1: 0.5}, {B0: 0.1, B1: 0.1}, landed={B0: 0.3, B1: 0.1})
+        decisions, _, _ = self.run_cases([dim])
+        self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"outside"})
+
+    def one_point(self, before, after, measured):
+        model = syn.hue_model({"desk-1": {B0: 400.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 400 * before}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: before}, {B0: {"level": after, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        return [dec], [ref, syn.light_state(t + 5, {"desk-1": measured}, anchored=False)], model
+
+    def test_a_bright_up_keeps_the_level_check_though_its_increment_lands(self):
+        d, f, model = self.one_point(0.0, 0.8, 320 * 1.16)
+        decisions, _, _ = score(d, f, model)
+        self.assertEqual(decisions[0]["verify"]["increments"][0]["status"], "within")
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
+        self.assertEqual(point(decisions[0], "desk-1")["residual"], 0.16)
+
+    def test_a_mild_dim_keeps_the_level_check(self):
+        d, f, model = self.one_point(0.8, 0.7, 280 * 0.8)
+        decisions, _, report = score(d, f, model)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
+        self.assertEqual(report["hit_rate"]["verdict"], "fail")
+
+    def test_the_zero_background_keeps_the_level_check(self):
+        d, f, model = self.one_point(0.8, 0.1, 40 * 1.25)
+        decisions, _, _ = score(d, f, model)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable")
+        decisions, _, report = score(d, f, model, overrides={"background": "zero"})
+        self.assertEqual(decisions[0]["verify"]["increments"][0]["status"], "within")
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
+        self.assertEqual(report["dim_points_unverifiable"], 0)
+
+
 class HitRateBoundary(unittest.TestCase):
     """Tolerance is inclusive at 15%; the gate passes at exactly 85%."""
 

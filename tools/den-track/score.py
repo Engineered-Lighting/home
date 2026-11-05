@@ -128,7 +128,7 @@ def score_session(takes, scoring):
             row['interval'] = crossing['interval']
             row['contact_ambiguous_share'] = contact_ambiguous_share(links, crossing['interval'])
             row['face_visible_share'] = faces[row['id']]
-            if crossing['type'] in RUNG5_CROSSING_TYPES and row['admitted']:
+            if crossing['type'] in RUNG5_CROSSING_TYPES and row['mapping']:
                 crossing_lines.append({'crossing_id': '%s/%s' % (take['name'], row['id']),
                                        'track_ids': sorted(set(row['mapping'].values())),
                                        'interval': crossing['interval']})

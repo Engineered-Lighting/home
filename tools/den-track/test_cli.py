@@ -158,6 +158,16 @@ class PracticeRunTest(Base):
         self.assertEqual(len(crossings), 1, "rung 5's gate could never meet a crossing that names no track")
         self.assertEqual(len(crossings[0]['track_ids']), 2)
 
+    def test_a_crossing_excluded_from_the_gate_still_reaches_rung_5_if_it_names_a_track(self):
+        """E2 cannot count it, and rung 5 can still catch a track that stayed confident through the contact."""
+        take = self.make_take('near_pass', edit_observations=reject_person('B'))
+        cli(*self.score_args([take]))
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['crossings'], 0)
+        crossings = records.read_jsonl(self.path('score', 'crossings.jsonl'))
+        self.assertEqual(len(crossings), 1)
+        self.assertEqual(len(crossings[0]['track_ids']), 1)
+
     def test_a_single_person_occlusion_is_not_a_crossing_for_rung_5(self):
         take = self.make_take('armchair_occlusion')
         cli(*self.score_args([take]))

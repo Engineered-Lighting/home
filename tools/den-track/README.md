@@ -122,8 +122,9 @@ How the command line behaves:
   crossing gives the owner's mark.
 - **`crossings.jsonl`.** `score` also writes the crossings as rung 5's gate reads them,
   `{crossing_id, track_ids, interval}`, for its "`association_safe` false through
-  every annotated crossing" check. A one-person occlusion, a door swap or an excluded
-  crossing is not included.
+  every annotated crossing" check. A one-person occlusion, a door swap or a crossing no
+  track was on is not included. A crossing E2 excludes is still included if it names a
+  track: rung 5 can still catch that track staying confident through the contact.
 
 ## The staged crossings session, later
 

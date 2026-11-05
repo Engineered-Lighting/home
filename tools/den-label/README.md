@@ -194,8 +194,11 @@ anything, and drafts under the current protocol stay where they are.
 
 ## Step 6: the re-mark, the freezes and a copy
 
-At least 3 days after its label pass, re-mark the second development session
-from scratch (label.py picks it; your first labels stay hidden):
+At least 3 days after the last edit of its label pass, re-mark the second
+development session from scratch (label.py picks it; your first labels stay
+hidden). Close that session's label page first: once the re-mark starts, its
+first label pass is locked, and the agreement is computed from it as it was
+then:
 
 ```powershell
 python -B tools\den-label\label.py remark

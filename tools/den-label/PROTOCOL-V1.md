@@ -138,8 +138,10 @@ box before the session can be frozen.
 
 - The re-marked session is the second development session in recording order
   (normally the first `hard-b`). The owner re-marks it from scratch in label
-  mode at least `remark_days` days after its label pass was marked end to end,
-  with the first labels hidden.
+  mode at least `remark_days` days after the last edit of its label pass
+  (which must be marked end to end), with the first labels hidden.
+- When the re-mark starts, that session's first label pass is locked. The
+  agreement is computed from the first pass as it was then.
 - Two intervals match if their overlap in `t_s` is at least half of each one's
   length, paired greedily by the largest overlap. n1.py reports matches, and
   band and case agreement over matches. It reports onset and offset

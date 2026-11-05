@@ -104,17 +104,19 @@ class Pass:
         self.path = ws.surfaces_path() if mode == "surfaces" else ws.draft_path(kind, take_id, practice)
         self.draft = ws.load_draft(self.path)
         if mode == "labels" and not practice:
+            self.check_unlocked()
             boxes = ws.load_draft(ws.draft_path("boxes", take_id))
             if boxes is None or not n1.audited_all(boxes["audited"], self.usable):
                 raise n1.Refused(f"{take_id}'s label pass opens only after its box audit is complete")
         if mode == "remark":
             first = ws.load_draft(ws.draft_path("labels", take_id))
-            done = first and first["actor"]["end_to_end"]
             days = ws.protocol.settings["remark_days"]
-            if not done:
+            if not (first and first["actor"]["end_to_end"]):
                 raise n1.Refused(f"{take_id}'s label pass is not marked end to end yet")
-            if n1.now() < done + days * 86400:
-                raise n1.Refused(f"the re-mark of {take_id} waits {days:g} days after its label pass")
+            last_edit = first["actor"]["saved_unix"] or first["actor"]["end_to_end"]
+            if n1.now() < last_edit + days * 86400:
+                raise n1.Refused(f"the re-mark of {take_id} waits {days:g} days after the last edit of its "
+                                 f"label pass, which was on {n1.local_date(last_edit)}")
         if self.draft is None:
             self.draft = self.new_draft()
             n1.write_json(self.path, self.draft)  # a label draft on disk locks the session's boxes
@@ -132,11 +134,17 @@ class Pass:
         return dict(common, schema="den-n1-labels-draft-1", split=self.split,
                     actor=new_actor("label" if self.mode == "labels" else "remark"), intervals=[], spans=[])
 
+    def check_unlocked(self):
+        """A session's first label pass is locked once its re-mark starts: no state, frames or saves."""
+        if self.mode == "labels" and not self.practice and self.ws.remark_started(self.take):
+            raise n1.Refused(f"the label pass of {self.take} is locked: its re-mark has started")
+
     def boxes_locked(self):
         return (self.mode == "boxes" and not self.practice
                 and self.ws.draft_path("labels", self.take).exists())
 
     def page_state(self):
+        self.check_unlocked()
         state = {"mode": self.mode, "take": self.take, "practice": self.practice,
                  "frames": [[f["n"], f["t"]] for f in self.usable], "segments": self.segments,
                  "lists": self.ws.protocol.lists(), "pause_s": self.ws.protocol.settings["pause_s"]}
@@ -156,6 +164,7 @@ class Pass:
     def frame(self, n):
         if self.stopped.is_set():
             raise n1.Refused("this pass has ended")
+        self.check_unlocked()
         frame = self.by_n.get(n)
         return None if frame is None else n1.read_nv12(self.state.folder, frame)
 
@@ -172,7 +181,8 @@ class Pass:
             return reply
 
     def save_checked(self, body):
-        """Check one save and write it."""
+        """Check one save and write it. An unchanged save writes nothing, so it is not an edit."""
+        self.check_unlocked()
         if type(body) is not dict:
             raise n1.Refused("a save is a JSON object")
         now_state = n1.take_state(self.state.folder, allow_commissioning=self.allow_commissioning)
@@ -201,6 +211,8 @@ class Pass:
             draft["reference"] = {"take": self.take, "n": n,
                                   "frame_sha256": n1.sha256_bytes(n1.read_nv12(self.state.folder,
                                                                                self.by_n[n]))}
+        if draft == self.draft:
+            return {"ok": True, "saved_unix": draft["actor"]["saved_unix"]}
         draft["actor"]["saved_unix"] = n1.now()
         n1.write_json(self.path, draft)
         self.draft = draft

@@ -1201,6 +1201,77 @@ class FreezeLogTests(Base):
         self.assertFalse((ws.root / "fixture-v1").exists())
 
 
+class RemarkBlindTests(Base):
+    """Item 5: the wait counts from the first pass's last edit, which the re-mark then locks."""
+
+    def setUp(self):
+        super().setUp()
+        for i, (name, script) in enumerate((("a1", "hard-a"), ("b1", "hard-b"), ("a2", "hard-a"),
+                                            ("b2", "hard-b"))):
+            staged_take(self.takes, name, script, BASE_UNIX + i * 1000)
+        self.w = self.ws()
+        self.w.scan()
+        self.boxes_done(self.w, "b1")
+        with mock.patch.object(n1, "now", return_value=BASE_UNIX + 10 * DAY):
+            self.first = self.labels_done(self.w, "b1")  # E pressed on day 10; the pass stays open
+
+    def at(self, day):
+        return mock.patch.object(n1, "now", return_value=BASE_UNIX + day * DAY)
+
+    def test_the_wait_counts_from_the_first_passs_last_edit(self):
+        with self.at(12):
+            self.first.save({"intervals": [self.interval(self.w, "b1", 40, 49)], "spans": [], "end_to_end": True})
+        with self.at(13.1):
+            with self.assertRaisesRegex(n1.Refused, "waits 3 days"):
+                label.Pass(self.w, "remark", out=io.StringIO())
+        with self.at(15.1):
+            label.Pass(self.w, "remark", out=io.StringIO())
+
+    def test_an_unchanged_save_is_not_an_edit(self):
+        draft = self.w.load_draft(self.w.draft_path("labels", "b1"))
+        with self.at(12):
+            self.first.save({"intervals": draft["intervals"], "spans": draft["spans"], "end_to_end": True})
+        with self.at(13.1):
+            label.Pass(self.w, "remark", out=io.StringIO())
+
+    def test_the_first_pass_locks_when_the_remark_starts(self):
+        server = Server(self.first)
+        self.addCleanup(server.close)
+        with self.at(13.1):
+            label.Pass(self.w, "remark", out=io.StringIO())
+            with self.assertRaisesRegex(n1.Refused, "locked.*re-mark"):
+                self.first.save({"intervals": [self.interval(self.w, "b1", 40, 49)], "spans": [],
+                                 "end_to_end": True})
+            with self.assertRaisesRegex(n1.Refused, "locked.*re-mark"):
+                label.Pass(self.w, "labels", "b1", out=io.StringIO())
+            self.assertEqual(server.request("GET", f"/api/frame/{self.first.usable[0]['n']}")[0], 410)
+            self.assertEqual(server.request("GET", "/api/state")[0], 410)
+
+    def test_agreement_comes_from_the_locked_first_pass(self):
+        commissioning_take(self.takes)
+        self.surfaces_done(self.w, "c1")
+        with self.at(11):
+            for name in ("a1", "a2", "b2"):
+                self.boxes_done(self.w, name)
+                self.labels_done(self.w, name)
+        locked = self.w.load_draft(self.w.draft_path("labels", "b1"))
+        with self.at(13.1):
+            remark = label.Pass(self.w, "remark", out=io.StringIO())
+            remark.save({"intervals": [self.interval(self.w, "b1", 40.5, 50.2)], "spans": [], "end_to_end": True})
+        path = self.w.draft_path("labels", "b1")
+        edited = dict(locked, intervals=locked["intervals"][:1])
+        edited["actor"] = dict(locked["actor"], saved_unix=BASE_UNIX + 13.2 * DAY)  # saved after the lock
+        n1.write_json(path, edited)
+        with self.at(14):
+            self.w.freeze_fixture()
+            with self.assertRaisesRegex(n1.Refused, "first pass of b1 was saved after its re-mark started"):
+                self.w.freeze_labels()
+            n1.write_json(path, locked)
+            self.w.freeze_labels()
+        remark_json = json.loads((self.w.root / "labels-v1" / "remark.json").read_bytes())
+        self.assertEqual(remark_json["agreement"], n1.agreement(locked["intervals"], remark.draft["intervals"]))
+
+
 def browser_fixture(folder):
     """For test-page-browser.mjs: two synthetic takes, then the passes the browser plays, in order.
 

@@ -892,8 +892,12 @@ class Workspace:
                 draft["intervals"], draft["spans"], clipped = clip_items(draft["intervals"], draft["spans"],
                                                                          segments, t_of)
                 changes += [f"{take_id} {kind}: {line}" for line in clipped]
-                draft["actor"]["end_to_end"] = None
-                changes.append(f"{take_id} {kind}: the end-to-end mark is cleared; look again and re-confirm it")
+                if kind == "labels" and self.remark_started(take_id):
+                    changes.append(f"{take_id} labels: locked by its re-mark, so its end-to-end mark stands")
+                else:
+                    draft["actor"]["end_to_end"] = None
+                    changes.append(f"{take_id} {kind}: the end-to-end mark is cleared; look again and "
+                                   "re-confirm it")
             changes.append(f"{take_id} {kind}: now tied to {state.check} ({state.check_sha256[:12]})")
             draft["check"], draft["check_sha256"] = state.check, state.check_sha256
             write_json(path, draft)
@@ -904,6 +908,10 @@ class Workspace:
         for entry in self.entries():
             changes += self.sync(entry["session"])
         return changes
+
+    def remark_started(self, take_id):
+        """The re-mark's draft exists: from then on the take's first label pass is locked."""
+        return self.draft_path("remark", take_id).exists()
 
     def remark_take(self):
         development = sorted((e for e in self.entries() if e["split"] == "development"),
@@ -1103,6 +1111,9 @@ class Workspace:
         remark["intervals"], remark["spans"] = self.recheck(remark_id, "remark", remark, state, t_of)
         first = self.load_draft(self.draft_path("labels", remark_id))
         first["intervals"], first["spans"] = self.recheck(remark_id, "labels", first, state, t_of)
+        if first["actor"]["saved_unix"] and first["actor"]["saved_unix"] > remark["actor"]["started_unix"]:
+            raise Refused(f"the first pass of {remark_id} was saved after its re-mark started; the agreement "
+                          "is computed from the first pass as it was locked")
         files["remark.json"] = canonical({
             "schema": "den-n1-remark-1", "take": remark_id, "check": state.check,
             "check_sha256": state.check_sha256, "protocol_sha256": self.protocol.sha256, "actor": remark["actor"],

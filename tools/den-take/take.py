@@ -3,6 +3,11 @@
 
     python -B tools\\den-take\\take.py --script commission --out C:\\den-takes\\c1
     python -B tools\\den-take\\take.py --script free --out C:\\den-takes\\<date>-<n>
+    python -B tools\\den-take\\take.py --script hard-a --out C:\\den-takes\\<date>-<n>
+
+A staged script (a file in tools\\den-take\\scripts, format den-take-script-1)
+speaks each of its blocks at its time after "Begin." and starts the end slate
+at its end_s; Enter still ends the take early.
 
 A polling thread reads /frame.npz from the installed camera every 0.2 s with
 the bearer token from a private file, saves each new bundle unchanged and adds
@@ -15,7 +20,9 @@ import csv
 import hashlib
 import http.client
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,7 +35,12 @@ from urllib.parse import urlsplit
 import check
 
 HERE = Path(__file__).resolve().parent
+SCRIPTS = HERE / "scripts"
 SCHEMA = "den-take-1"
+SCRIPT_FORMAT = "den-take-script-1"
+FIXED_SCRIPTS = ("commission", "free")
+SCRIPT_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+CASE_NAME = re.compile(r"[a-z][a-z_]{0,31}")
 DEFAULT_CAMERA = "http://192.168.1.168:8090"
 DEFAULT_TOKEN_FILE = r"C:\den-takes\private\camera-token.txt"
 MIN_FREE_BYTES = 35 * 1024 ** 3  # 35 GB as Windows shows it
@@ -38,6 +50,7 @@ CSV_FIELDS = ("n", "file", "rgb_seq", "t_s", "t_host_s", "t_device_s", "exposure
 SPEECH = ("Add-Type -AssemblyName System.Speech; "
           "(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak($env:DEN_TAKE_SAY)")
 clock = time.perf_counter  # PC monotonic clock for cues and receipts
+sleep = time.sleep  # the cue loop's wait, so tests can drive it with a fake clock
 
 
 @dataclass(frozen=True)
@@ -60,6 +73,68 @@ class Refused(Exception):
 
 class Stopped(Exception):
     pass
+
+
+def number(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def load_script(name, settings):
+    """None for commission and free; else the checked script file. Called before any camera read.
+
+    A den-take-script-1 file is {"format", "end_s", "blocks": [{"at_s", "case", "say"}, ...]}: each
+    block is spoken at_s seconds after "Begin.", and the end slate starts end_s seconds after it.
+    Cues are at least say_gap_s apart, the first at least say_gap_s after "Begin.", and end_s is at
+    least say_gap_s after the last cue and at most free_max_s (R's cap on the activity part)."""
+    if name in FIXED_SCRIPTS:
+        return None
+    known = ", ".join(sorted(p.stem for p in SCRIPTS.glob("*.json"))) or "none"
+    if type(name) is not str or not SCRIPT_NAME.fullmatch(name):
+        raise Refused(f"--script must be commission, free or a script in tools\\den-take\\scripts ({known}); "
+                      "nothing recorded")
+    path = SCRIPTS / f"{name}.json"
+    if not path.is_file():
+        raise Refused(f"no script {name!r} in tools\\den-take\\scripts (there: {known}); nothing recorded")
+    raw = path.read_bytes()
+
+    def bad(why):
+        return Refused(f"scripts\\{name}.json: {why}; nothing recorded")
+
+    def refuse_constant(_):
+        raise ValueError("non-finite number")
+    try:
+        data = json.loads(raw.decode("utf-8"), parse_constant=refuse_constant)
+    except (UnicodeDecodeError, ValueError):
+        raise bad("not valid JSON") from None
+    if type(data) is not dict or set(data) != {"format", "end_s", "blocks"}:
+        raise bad("the file needs exactly format, end_s and blocks")
+    if data["format"] != SCRIPT_FORMAT:
+        raise bad(f"format must be {SCRIPT_FORMAT}")
+    if type(data["blocks"]) is not list or not data["blocks"]:
+        raise bad("blocks must be a list of one or more blocks")
+    gap, previous, after = settings.say_gap_s, 0.0, '"Begin."'
+    for i, block in enumerate(data["blocks"], 1):
+        if type(block) is not dict or set(block) != {"at_s", "case", "say"}:
+            raise bad(f"block {i} needs exactly at_s, case and say")
+        if not number(block["at_s"]):
+            raise bad(f"block {i}: at_s must be a number of seconds")
+        if block["at_s"] < previous + gap:
+            raise bad(f"block {i} starts {block['at_s']:g} s after \"Begin.\", under {gap:g} s after {after}; "
+                      "times must increase, at least the speech gap apart")
+        if type(block["case"]) is not str or not CASE_NAME.fullmatch(block["case"]):
+            raise bad(f"block {i}: case must be a lower-case name such as idle_seated")
+        say_text = block["say"]
+        if type(say_text) is not str or not say_text.strip() or len(say_text) > 300 \
+                or not all(32 <= ord(ch) < 127 for ch in say_text):
+            raise bad(f"block {i}: say must be one line of plain text")
+        previous, after = block["at_s"], f"block {i}"
+    end = data["end_s"]
+    if not number(end) or end < previous + gap:
+        raise bad(f"end_s must be a number at least {gap:g} s after the last block")
+    if end > settings.free_max_s:
+        raise bad(f"end_s {end:g} s is longer than the {settings.free_max_s / 60:g}-minute activity cap")
+    return {"name": name, "file": f"scripts/{name}.json", "sha256": hashlib.sha256(raw).hexdigest(),
+            "blocks": data["blocks"], "end_s": end}
 
 
 def say_argv():
@@ -328,13 +403,26 @@ class Script:
         return entry["pc_mono_s"]
 
     def pause(self, seconds, until=None):
-        end = clock() + seconds
-        while clock() < end and not (until and until()):
+        """Wait, or less when until() says so; returns True then. Raises Stopped if the poller stopped."""
+        end, early = clock() + seconds, False
+        while clock() < end:
+            if until and until():
+                early = True
+                break
             if self.poller.done.is_set():
                 raise Stopped()
-            time.sleep(min(0.1, max(0.0, end - clock())))
+            sleep(min(0.1, max(0.0, end - clock())))
         if self.poller.done.is_set():
             raise Stopped()
+        return early
+
+    def play(self, staged, begin, enter):
+        """Speak each block at "Begin." + at_s, then wait for end_s. Enter ends it at once."""
+        for block in staged["blocks"]:
+            if self.pause(begin + block["at_s"] - clock(), until=enter):
+                return
+            self.cue("stage", block["say"], case=block["case"], at_s=block["at_s"])
+        self.pause(begin + staged["end_s"] - clock(), until=enter)
 
     def slate(self, which):
         self.cue(f"hold_phone_{which}", "Hold the phone to the camera.")
@@ -353,20 +441,25 @@ class Script:
                 self.pause(self.settings.say_gap_s)
         return False
 
-    def run(self, script, enter):
+    def run(self, script, enter, staged=None):
         if not self.slate("start"):
             self.take["stop_reason"] = "start_slate_unreadable"
             self.cue("stopped", "Unreadable three times. Take stopped.")
             return
         self.cue("phone_away", "Slate OK. Put the phone away.")
         self.pause(self.settings.away_s)
-        self.cue("begin", "Begin.")
+        begin = self.cue("begin", "Begin.")
         if script == "commission":
             self.pause(self.settings.commission_activity_s)
-        else:
+        elif staged is None:
             clear_typed_input()
             print("Press Enter to end the take.", flush=True)
             self.pause(self.settings.free_max_s, until=enter)
+        else:
+            clear_typed_input()
+            print(f"Script {staged['name']}: the end slate starts after {staged['end_s'] / 60:g} minutes. "
+                  "Press Enter to end the take early.", flush=True)
+            self.play(staged, begin, enter)
         ok = self.slate("end")
         self.cue("done", "Slate OK. Done." if ok else "End slate unreadable. Done.")
 
@@ -382,6 +475,7 @@ def write_json(path, data):
 def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None):
     m = m or check.load_method()
     settings = settings or Settings(slate_s=m["slate_length_s"])
+    staged = load_script(args.script, settings)  # a bad or unknown script is refused before the camera
     folder = run_dir(args.out, args.token_file)
     camera = Camera(args.camera, read_token(args.token_file))
     before = camera.health()
@@ -403,6 +497,7 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
     folder.mkdir(parents=True, exist_ok=True)
     writer = TakeWriter(folder)
     take = {"schema": SCHEMA, "take": folder.name, "script": args.script,
+            "script_file": None if staged is None else {"file": staged["file"], "sha256": staged["sha256"]},
             "commissioning": args.script == "commission", "camera": f"http://{camera.host}:{camera.port}",
             "pc_clock": "time.perf_counter", "started_unix": time.time(), "ended_unix": None,
             "disk_free_bytes_at_start": free_bytes(folder), "settings": asdict(settings),
@@ -414,7 +509,7 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
     poller.start()
     script = Script(take, poller, writer, settings, m, say, peek)
     try:
-        script.run(args.script, enter)
+        script.run(args.script, enter, staged)
     except Stopped:
         take["stop_reason"] = poller.stop_reason or "poller_stopped"
         script.cue("stopped", "Take stopped.")
@@ -453,7 +548,8 @@ def run(args, *, say=say, peek=peek, enter=enter_pressed, settings=None, m=None)
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Record one den take (rung R).")
-    parser.add_argument("--script", choices=("commission", "free"), required=True)
+    parser.add_argument("--script", required=True,
+                        help="commission, free, or a staged script in tools\\den-take\\scripts, e.g. hard-a")
     parser.add_argument("--out", required=True, help=r"new absolute folder, e.g. C:\den-takes\c1")
     parser.add_argument("--camera", default=DEFAULT_CAMERA, help="default %(default)s")
     parser.add_argument("--token-file", default=DEFAULT_TOKEN_FILE, help="default %(default)s")

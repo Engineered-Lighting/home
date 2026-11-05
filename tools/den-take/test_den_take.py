@@ -7,6 +7,7 @@ every HTTP connection is checked to be loopback.
 """
 import contextlib
 import dataclasses
+import hashlib
 import hmac
 import http.client
 import io
@@ -1138,6 +1139,210 @@ class CutTests(unittest.TestCase):
     def test_span_prompt_reads_console_answer(self):
         console = Console("01:99\n01:10-01:20\n")
         self.assertEqual(check.ask_spans(stdin=console, stdout=io.StringIO()), "01:10-01:20")
+
+
+# ---- staged scripts (N1): --script hard-a and hard-b ----
+
+QUICK = {"format": "den-take-script-1", "end_s": 1.2, "blocks": [
+    {"at_s": 0.3, "case": "idle_seated", "say": "Sit."}, {"at_s": 0.6, "case": "still_reader", "say": "Read."}]}
+TASK_CASES = {"still_reader", "sorting_mail", "wiping", "phone_at_counter", "tidying", "other"}
+QUIET_CASES = {"idle_seated", "idle_standing", "lights_down"}
+
+
+class FakeClock:
+    """take.clock and take.sleep for the cue loop: sleeping moves the clock, nothing waits."""
+
+    def __init__(self, t=500.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.t += max(0.0, seconds)
+
+
+class StagedScriptTests(Workspace):
+    def scripts(self, files):
+        """A scripts folder for this test only, in place of tools/den-take/scripts."""
+        folder = self.tmp / "scripts"
+        folder.mkdir(exist_ok=True)
+        for name, data in files.items():
+            text = data if isinstance(data, str) else json.dumps(data)
+            (folder / f"{name}.json").write_text(text, encoding="utf-8", newline="\n")
+        patch = mock.patch.object(take, "SCRIPTS", folder)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return folder
+
+    def play(self, name, enter=lambda t: False):
+        """Script.run with the real settings on a fake clock: a 25-minute script in a moment."""
+        fake, spoken, record = FakeClock(), [], {"cues": [], "slates": []}
+        settings = take.Settings(slate_s=M["slate_length_s"])
+        staged = take.load_script(name, settings)
+        poller = types.SimpleNamespace(done=threading.Event())
+        writer = types.SimpleNamespace(window=lambda start, end: [])
+        with mock.patch.object(take, "clock", fake), mock.patch.object(take, "sleep", fake.sleep), \
+                contextlib.redirect_stdout(io.StringIO()):
+            script = take.Script(record, poller, writer, settings, M, lambda text: spoken.append((fake(), text)),
+                                 readable_peek)
+            script.run(name, lambda: enter(fake()), staged)
+        cues = record["cues"]
+        begin = next(c["pc_mono_s"] for c in cues if c["cue"] == "begin")
+        return staged, cues, spoken, begin
+
+    def test_each_cue_is_spoken_and_logged_at_its_time_on_a_fake_clock(self):
+        for name in ("hard-a", "hard-b"):
+            staged, cues, spoken, begin = self.play(name)
+            stages = [c for c in cues if c["cue"] == "stage"]
+            self.assertEqual([(c["at_s"], c["case"], c["text"]) for c in stages],
+                             [(b["at_s"], b["case"], b["say"]) for b in staged["blocks"]], name)
+            for c in stages:
+                self.assertAlmostEqual(c["pc_mono_s"] - begin, c["at_s"], places=6)
+            said = [(round(t - begin, 6), text) for t, text in spoken if t >= begin]
+            self.assertEqual(said[1:len(stages) + 1], [(float(b["at_s"]), b["say"]) for b in staged["blocks"]])
+            hold = next(c for c in cues if c["cue"] == "hold_phone_end")
+            self.assertAlmostEqual(hold["pc_mono_s"] - begin, staged["end_s"], places=6)
+            self.assertEqual([c["cue"] for c in cues][-3:], ["hold_phone_end", "slate_end", "done"])
+
+    def test_enter_ends_a_staged_script_early_on_a_fake_clock(self):
+        begin_at = []
+
+        def enter(t):
+            begin_at.append(t)
+            return t >= begin_at[0] + 100
+        staged, cues, spoken, begin = self.play("hard-a", enter)
+        stages = [c for c in cues if c["cue"] == "stage"]
+        self.assertEqual([c["at_s"] for c in stages], [3, 90])
+        hold = next(c for c in cues if c["cue"] == "hold_phone_end")
+        self.assertLess(hold["pc_mono_s"] - begin, 101)
+
+    def test_a_staged_take_speaks_logs_and_records_its_script(self):
+        folder = self.scripts({"quick": QUICK})
+        camera, spoken = self.camera(), []
+        code, record, _ = self.run_take(self.args(camera, script="quick"), say=spoken.append, enter=lambda: False)
+        self.assertEqual((code, record["complete"], record["commissioning"], record["script"]),
+                         (0, True, False, "quick"))
+        self.assertEqual(record["script_file"], {"file": "scripts/quick.json",
+                                                 "sha256": hashlib.sha256((folder / "quick.json").read_bytes())
+                                                 .hexdigest()})
+        self.assertEqual([c["cue"] for c in record["cues"]],
+                         ["hold_phone_start", "slate_start", "phone_away", "begin", "stage", "stage",
+                          "hold_phone_end", "slate_end", "done"])
+        cue = {c["cue"]: c for c in record["cues"]}
+        stages = [c for c in record["cues"] if c["cue"] == "stage"]
+        self.assertEqual([(c["case"], c["text"], c["at_s"]) for c in stages],
+                         [("idle_seated", "Sit.", 0.3), ("still_reader", "Read.", 0.6)])
+        for c in stages:
+            self.assertAlmostEqual(c["pc_mono_s"] - cue["begin"]["pc_mono_s"], c["at_s"], delta=0.15)
+        self.assertAlmostEqual(cue["hold_phone_end"]["pc_mono_s"] - cue["begin"]["pc_mono_s"], 1.2, delta=0.15)
+        at = [spoken.index(text) for text in ("Begin.", "Sit.", "Read.")]
+        self.assertEqual(at, sorted(at))
+        self.assertEqual(spoken[at[-1] + 1], "Hold the phone to the camera.")  # the end slate, at end_s
+
+    def test_enter_ends_a_staged_take_early_and_it_is_still_saved(self):
+        camera, spoken = self.camera(), []
+        started = time.monotonic()
+
+        def enter():  # Enter, just after the first of hard-a's cues (3 s after "Begin.")
+            return any(text.startswith("Go to the desk") for text in spoken)
+        code, record, _ = self.run_take(self.args(camera, script="hard-a"), say=spoken.append, enter=enter)
+        self.assertEqual((code, record["complete"], record["script"]), (0, True, "hard-a"))
+        self.assertEqual(record["script_file"]["sha256"], check.file_sha256(HERE / "scripts" / "hard-a.json"))
+        cue = {c["cue"]: c["pc_mono_s"] for c in record["cues"]}
+        self.assertEqual([c["at_s"] for c in record["cues"] if c["cue"] == "stage"], [3])
+        self.assertLess(cue["hold_phone_end"] - cue["begin"], 6)  # Enter, not the 1,500 s end_s
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertTrue((Path(self.args(camera).out) / "frames.csv").exists())
+
+    def test_a_malformed_or_unknown_script_is_refused_before_any_camera_read(self):
+        first, second = QUICK["blocks"]
+        bad = {
+            "unknown-key": dict(QUICK, note="x"), "no-end": {k: v for k, v in QUICK.items() if k != "end_s"},
+            "no-blocks": dict(QUICK, blocks=[]), "wrong-format": dict(QUICK, format="den-take-script-0"),
+            "block-key": dict(QUICK, blocks=[dict(first, cue="x")]),
+            "block-missing": dict(QUICK, blocks=[{"at_s": 0.3, "say": "Sit."}]),
+            "not-increasing": dict(QUICK, blocks=[second, first]),
+            "too-close": dict(QUICK, blocks=[first, dict(second, at_s=0.35)]),
+            "first-too-soon": dict(QUICK, blocks=[dict(first, at_s=0.05)]),
+            "end-too-soon": dict(QUICK, end_s=0.65), "too-long": dict(QUICK, end_s=28 * 60 + 1),
+            "bool-time": dict(QUICK, blocks=[dict(first, at_s=True)]), "text-time": dict(QUICK, end_s="1.2"),
+            "nan": json.dumps(QUICK).replace("1.2", "NaN"), "bad-case": dict(QUICK, blocks=[dict(first, case="Idle")]),
+            "empty-say": dict(QUICK, blocks=[dict(first, say=" ")]), "not-json": "{",
+            "two-lines": dict(QUICK, blocks=[dict(first, say="Sit.\nNow.")]),
+        }
+        self.scripts(bad)
+        camera = self.camera()
+        for name in list(bad) + ["missing", "../scripts/quick", "Hard-A", ""]:
+            args = self.args(camera, script=name, name=f"t-{len(name)}-{abs(hash(name))}")
+            with self.subTest(name), self.assertRaisesRegex(take.Refused, "nothing recorded"):
+                take.run(args, say=lambda text: None, peek=readable_peek, settings=FAST)
+            self.assertFalse(Path(args.out).exists(), name)
+        self.assertEqual(camera.requests, [])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = take.main(["--script", "nope", "--out", str(self.tmp / "takes" / "t9"),
+                              "--camera", camera.url, "--token-file", str(self.token_file)])
+        self.assertEqual(code, 2)
+        self.assertIn("Refused: no script 'nope'", err.getvalue())
+        self.assertEqual(camera.requests, [])
+
+    def test_files_read_the_same_with_crlf(self):
+        text = (HERE / "scripts" / "hard-b.json").read_text(encoding="utf-8")
+        self.scripts({"crlf": text.replace("\n", "\r\n")})
+        settings = take.Settings(slate_s=M["slate_length_s"])
+        crlf = take.load_script("crlf", settings)
+        with mock.patch.object(take, "SCRIPTS", HERE / "scripts"):
+            lf = take.load_script("hard-b", settings)
+        self.assertEqual((crlf["blocks"], crlf["end_s"]), (lf["blocks"], lf["end_s"]))
+
+
+class ScriptFileTests(unittest.TestCase):
+    """Every file in scripts/ obeys the N1 plan's spacing rules, its stop rule and its end_s."""
+
+    def files(self):
+        settings = take.Settings(slate_s=M["slate_length_s"])
+        names = sorted(p.stem for p in (HERE / "scripts").glob("*.json"))
+        self.assertEqual(names, ["hard-a", "hard-b"])
+        return {name: take.load_script(name, settings) for name in names}
+
+    def test_two_spacing_rules_and_end_s(self):
+        for name, staged in self.files().items():
+            blocks = staged["blocks"]
+            self.assertTrue({b["case"] for b in blocks} <= TASK_CASES | QUIET_CASES, name)
+            starts = [b["at_s"] for b in blocks] + [staged["end_s"]]
+            tasks = [(i, b) for i, b in enumerate(blocks) if b["case"] in TASK_CASES]
+            gaps, last_end = [], 0  # "Begin." counts as the end of a task
+            for i, block in tasks:
+                gaps.append(block["at_s"] - last_end)
+                last_end = starts[i + 1]
+            self.assertTrue(all(gap >= 30 for gap in gaps), (name, gaps))  # rule 1: 30 s with no task first
+            rounds = [gaps[k:k + 4] for k in range(0, len(gaps), 4)]
+            self.assertEqual(len(rounds), 5, name)
+            self.assertEqual([sum(gap >= 90 for gap in r) for r in rounds], [1] * 5, (name, gaps))  # rule 2
+            self.assertEqual(staged["end_s"], 1500, name)
+            self.assertEqual(staged["end_s"] - blocks[-1]["at_s"], 30, name)  # the final "Hands still."
+            self.assertEqual(blocks[0]["at_s"], 3, name)  # spoken 3 s after "Begin."
+            dim = [b for b in blocks if b["case"] == "lights_down"]
+            self.assertEqual([(b["at_s"], starts[blocks.index(b) + 1] - b["at_s"]) for b in dim], [(870, 20)], name)
+
+    def test_cases_and_the_stop_rule(self):
+        files = self.files()
+        orders = {}
+        for name, staged in files.items():
+            blocks = staged["blocks"]
+            counts = {case: sum(b["case"] == case for b in blocks) for case in TASK_CASES}
+            self.assertEqual(counts, {"still_reader": 5, "sorting_mail": 5, "wiping": 5, "phone_at_counter": 5,
+                                      "tidying": 0, "other": 0}, name)
+            self.assertEqual(sum(b["case"] in ("idle_seated", "idle_standing") for b in blocks), 21, name)
+            for before, block in zip(blocks, blocks[1:]):
+                if before["case"] in TASK_CASES:
+                    stop = {"still_reader": "Stop. Put the book down.",
+                            "phone_at_counter": "Stop. Put the phone away."}.get(before["case"], "Stop.")
+                    self.assertTrue(block["say"].startswith(stop + " "), (name, block))
+                    self.assertIn(block["case"], QUIET_CASES, (name, block))
+            orders[name] = [b["case"] for b in blocks if b["case"] in TASK_CASES][:4]
+        self.assertNotEqual(orders["hard-a"], orders["hard-b"])
 
 
 class MethodTests(unittest.TestCase):

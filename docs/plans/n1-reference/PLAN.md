@@ -1,6 +1,7 @@
 # N1 plan: the single-person reference
 
-Status: plan only. Nothing here is built or run. Written 2026-11-04.
+Status: plan only. Nothing here is built or run. Written 2026-11-04, revised
+2026-11-05 (phone band, desk view, quiet spacing).
 
 ## Context
 
@@ -73,7 +74,7 @@ Status: plan only. Nothing here is built or run. Written 2026-11-04.
 
 | File | Runs on | Does |
 |---|---|---|
-| `tools/den-label/PROTOCOL-V1.md` | repo | The annotation protocol (the gate). Committed first, before any label. Its sha256 goes into every draft, both manifests and every freeze line. |
+| `tools/den-label/PROTOCOL-V1.md` | repo | The annotation protocol (the gate). Committed first, before any label. Its sha256 goes into every draft, both manifests and every freeze line. Its one fenced block holds the few settings n1.py reads: the phone band, the pause and the re-mark wait. |
 | `tools/den-label/label.py` | owner's PC | The one command: `sessions`, `surfaces`, `boxes`, `labels`, `remark`, `status`, `freeze`, `verify`. Runs the 127.0.0.1 page server. |
 | `tools/den-label/n1.py` | PC (imported) | Formats, the split rule, box interpolation and padding, label checks, re-mark agreement, canonical hashing, freezing. |
 | `tools/den-label/page.html` | owner's browser | One page with three modes: surfaces, boxes, labels (the re-mark uses label mode). Draws NV12 frames on a canvas. Keyboard-driven. Autosaves to the server. |
@@ -133,7 +134,8 @@ C:\den-takes\n1\
 ### The labels (`den-n1-labels-1`)
 
 - `sessions\<take>.json`, one per session:
-  - `take`, `check_sha256`, `split`, `protocol_sha256`.
+  - `take`, `check` (the check file's name), `check_sha256`, `split`,
+    `protocol_sha256`.
   - `actor`: `labeller: "owner"`, `pass: "label"`, start and save times, the
     `end_to_end` time (null until the owner marks it), tool sha256s.
   - `intervals`. Each one has `onset_n`, `onset_t_s`, `onset_kind`
@@ -142,13 +144,16 @@ C:\den-takes\n1\
     `casual`), `case`, `sure` (`onset`, `offset`, `band`: true or false) and
     `by: "owner"`.
   - `spans`. Each one has `kind` (`quiet`, `uncertain` or `low_light`), a
-    `case` for quiet spans (`idle_seated` or `idle_standing`), `start_n`,
-    `end_n` and `by: "owner"`.
-- `remark.json`: the re-marked take and its check sha256, the second marks in
-  the same format with `pass: "remark"`, and the agreement figures.
+    `case` for quiet spans (`idle_seated` or `idle_standing`, and
+    `phone_at_counter` if the owner sets the phone band to `none`),
+    `start_n`, `end_n` and `by: "owner"`.
+- `remark.json`: the re-marked take, its check file name and check sha256, the
+  second marks in the same format with `pass: "remark"`, and the agreement
+  figures.
 - `labels.json`, the manifest, holds: schema, version, freeze time, protocol
-  sha256, `split.json` and re-mark sha256s, per session (take, split, file
-  sha256), and interval counts by band and `uncertain_s` per session and split.
+  sha256, `split.json` and re-mark sha256s, per session (take, split, check
+  file name, `check_sha256`, file sha256), and interval counts by band and
+  `uncertain_s` per session and split.
 - **Labels hash** = sha256 of `labels.json`.
 
 ### Versions, hashes and the EvalRecord
@@ -187,29 +192,110 @@ C:\den-takes\n1\
 - **Two scripts, `hard-a` and `hard-b`.** They have the same cases in a
   different order with different lengths, so no case sits at a fixed time
   after "Begin".
-- One round of `hard-a` (about 3.5 minutes):
+- **Spacing.** Two architecture numbers set the gaps. A7's estimator leaves an
+  episode only after 20 s of observed negative. A13's late-off band, τ_off,
+  is the 60 s after a labelled offset, and it isn't counted. An earlier draft
+  started each 15 s quiet block within 15 to 30 s of a task's end, so no quiet
+  second fell outside τ_off and none could test "no engagement". Its
+  `still_reader` also started while the mail episode was still `ending`, so
+  that onset did not begin from none. The scripts now follow two rules:
+  - every task starts after at least 30 s with no task (A7's 20 s plus a 10 s
+    margin for a slow stop or start), so its onset begins from none;
+  - each round has one long quiet block of 90 s. When it follows a task, its
+    first 60 s are the late-off band and its last 30 s or so are scored
+    quiet.
+- **How quiet seconds are scored given τ_off** (in PROTOCOL-V1, so N2 follows
+  it): a quiet second tests "no engagement" only if it is more than τ_off
+  (60 s) after the latest labelled offset before it. Quiet seconds inside the
+  band are labelled the same way but are not scored as quiet. The 30 s gaps
+  therefore serve only the next onset. The scored quiet is the tail of each
+  long block, plus any block before a take's first task.
+- **Desk view (known risk).** A posed check on 2026-11-02 found that with the
+  chair pulled in to the desk, the hands and a book lying on the desk or held
+  low are below the camera's frame. As an earlier draft staged them, "Sort the
+  mail", "Wipe the desk" and "Sit at the desk. Hands still" probably had the
+  hands out of view. So:
+  - the desk cues use the posture that check found in view: chair pushed back
+    from the desk, book held at chest height;
+  - mail sorting and wiping move to a surface the commissioning take's frame
+    shows in view: the counter if it is in view, which is where A13 stages
+    both cases. The owner names the spot at approval 1, the same way as the
+    counter fallback;
+  - the camera does not move.
+- One round of `hard-a` (290 s):
 
 | Spoken cue | Case | Block |
 |---|---|---|
-| "Sit at the desk. Hands still." | `idle_seated` (quiet) | 15 s |
-| "Sort the mail." | `sorting_mail` (fine) | 40 s |
-| "Stop. Hands still." | `idle_seated` (quiet) | 15 s |
-| "Read the book. Keep still." | `still_reader` (fine) | 45 s |
-| "Stop. Stand up and wait." | `idle_standing` (quiet) | 15 s |
-| "Wipe the desk." | `wiping` (casual) | 30 s |
-| "Stop. Go to the counter." | walking | 15 s |
-| "Use your phone at the counter." | `phone_at_counter` (casual) | 35 s |
+| "Go to the desk. Sit with the chair pushed back. Hands still." | `idle_seated` (quiet) | 90 s in rounds 1, 3 and 5; 30 s in rounds 2 and 4 |
+| "Hold the book up at chest height and read it. Keep still." | `still_reader` (fine) | 30 s |
+| "Stop. Put the book down. Go to the counter and wait." | `idle_standing` (quiet) | 90 s in rounds 2 and 4; 30 s in rounds 1, 3 and 5 |
+| "Sort the mail on the counter." | `sorting_mail` (fine) | 30 s |
+| "Stop. Hands still." | `idle_standing` (quiet) | 30 s |
+| "Wipe the counter." | `wiping` (casual) | 25 s |
+| "Stop. Hands still." | `idle_standing` (quiet) | 30 s |
+| "Use your phone at the counter." | `phone_at_counter` (casual) | 25 s |
 
-- A take plays 5 rounds. After round 3, the cue "Turn the den lights down low
-  now." leaves 20 s, and rounds 4 and 5 run in low light. The activity part is
-  about 18 minutes. The whole take is about 21 minutes, inside R's 28-minute
-  cap.
-- Each take gives about 20 engagement episodes (about 10 fine and 10 casual)
-  and about 15 quiet spans. Every case appears in normal light and in low
-  light.
-- **Props**, on the desk before "Begin": a stack of mail, a book, a cloth. The
-  phone is the owner's own. After the last phone block, open the slate page
-  again for the end slate. R's slate retries cover a slow switch.
+- One round of `hard-b` (290 s):
+
+| Spoken cue | Case | Block |
+|---|---|---|
+| "Go to the counter. Stand and wait. Hands still." | `idle_standing` (quiet) | 90 s in rounds 2 and 4; 30 s in rounds 1, 3 and 5 |
+| "Wipe the counter." | `wiping` (casual) | 30 s |
+| "Stop. Hands still." | `idle_standing` (quiet) | 30 s |
+| "Use your phone at the counter." | `phone_at_counter` (casual) | 20 s |
+| "Stop. Put the phone away. Hands still." | `idle_standing` (quiet) | 30 s |
+| "Sort the mail on the counter." | `sorting_mail` (fine) | 25 s |
+| "Stop. Go to the desk. Sit with the chair pushed back. Hands still." | `idle_seated` (quiet) | 90 s in rounds 1, 3 and 5; 30 s in rounds 2 and 4 |
+| "Hold the book up at chest height and read it. Keep still." | `still_reader` (fine) | 35 s |
+
+- "Counter" in the cues means the spot named at approval 1.
+- A take plays 5 rounds. After round 3, the cue "Stop. Turn the den lights
+  down low now." leaves 20 s, and rounds 4 and 5 run in low light. After
+  round 5, "Stop. Hands still." leaves 30 s, so the last task ends on a
+  release inside the usable part. The activity part is 5 x 290 + 20 + 30 =
+  1,500 s, 25 minutes. With the slates and phone handling (about 1 to 2
+  minutes) the whole take is about 27 minutes. That is inside R's 28-minute
+  cap on the activity part and CHECK-V1's 30-minute slate separation, even
+  with two end-slate retries.
+- Each take gives 20 engagement episodes (10 fine and 10 casual) and about 21
+  quiet spans, 5 of them long. That is about 3 minutes of scored quiet per
+  take: the tail of each long block, and a whole first block. Every case
+  appears in normal light and in low light: `idle_seated` is long in rounds 1,
+  3 and 5, and `idle_standing` in rounds 2 and 4.
+- **If the phone band is `none`** (approval 1): `phone_at_counter` becomes a
+  no-need shortcut case, a quiet-span case like `idle_seated`. Casual would
+  then be wiping only: about 5 per take and about 20 per split, under N2's
+  30-per-band gate. The remedy is one more casual block per round, not more
+  takes, settled at that same okay before any take:
+  - each round's phone block becomes `tidying` (casual), "Tidy the things on
+    the counter.", with the same slot and length;
+  - the phone block moves to right after the long `idle_standing` block in
+    rounds 2 and 4, as "Use your phone at the counter." (25 s) and then
+    "Stop. Put the phone away. Hands still." (30 s). Its seconds then lie
+    past τ_off, and the next onset still begins from none. In `hard-b` the
+    cue after the old phone slot becomes "Stop. Hands still.";
+  - each take grows by 110 s, to 1,610 s (about 27 minutes) of activity, or
+    about 28 to 29 minutes in all. That is still inside both limits. Casual
+    is again 10 per take (wiping and tidying), and the phone case appears in
+    normal and low light.
+- **Props**, before "Begin": the book on the desk, the stack of mail and a
+  cloth on the counter (or the named spot). The phone is the owner's own; keep
+  it in a pocket between its blocks. At the end slate, open the slate page
+  again. R's slate retries cover a slow switch.
+- **The commissioning take's 3 minutes.** R's commissioning take has 180 s of
+  unscripted activity (`take.py`'s `commission_activity_s`). N1 relies on it
+  for the counter check, the surface map and the desk-view check. The
+  den-label README tells the owner to spend them like this, with nothing
+  spoken and R's files unchanged:
+  - about 60 s sitting at the desk with the chair pushed back, holding the
+    mail and then the book at chest height;
+  - about 60 s wiping the counter (or, if the owner already knows the counter
+    is out of view, the surface they would use instead);
+  - about 60 s standing at the counter using the phone.
+
+  One look at the commissioning take's contact sheet (check.py's
+  `review\index.html`) then answers every in-view question: the counter, the
+  wiping surface, and the seated posture with the mail and the book.
 - **The cues are prompts, not labels.** Labels come from the video. If the
   owner does something else, the labels say what really happened.
 - `status` checks case coverage from the labels' case tags, never cue times.
@@ -219,9 +305,9 @@ C:\den-takes\n1\
   needs at least 30 episodes per band from at least 3 sessions over at least 2
   days. With the scripts alternating, seven takes is the fewest that gives 3
   held-out sessions under the split rule.
-- If the counter is not in the camera's view, the phone case moves to another
-  in-view spot away from the desk. The owner names it when okaying the cue
-  text.
+- If the counter is not in the camera's view, the mail, wiping and phone
+  cases move to another in-view spot away from the desk. The owner names it
+  when okaying the cue text, from the commissioning take's contact sheet.
 - Lights down: the owner dims the den lights by hand, the usual way. If they
   come back up, the owner marks `low_light` only where the room is dim.
 
@@ -248,7 +334,7 @@ C:\den-takes\n1\
   view. They pick its type and type its height in cm, measured once with a
   tape. Lap and handheld start with default heights the owner can change.
 
-### Fixture pass: boxes (about 15 to 25 minutes per staged take)
+### Fixture pass: boxes (about 20 to 30 minutes per staged take)
 
 - `label.py boxes <take>` opens the page on the take's usable frames only. No
   slates, no cut frames.
@@ -296,9 +382,16 @@ C:\den-takes\n1\
     too) to the new usable segments. It drops the parts inside cuts and splits
     a straddling interval into one piece per remaining segment, each cut-side
     end set to `carried`. Spans split the same way. It drops empty pieces,
-    and any interval piece too short to keep its onset before its offset. For
-    example, an interval at 65 to 75 s against a new [69, 71) cut becomes 65
-    to 69 s (offset `carried`) and 71 to 75 s (onset `carried`);
+    and any interval piece too short to keep its onset before its offset.
+    Ends are frames. For example, take an interval from the frame at about
+    65 s to the frame at about 75 s, and a new cut [69, 71). The cut is
+    half-open in `t_s`, as check.py's `usable_segments` makes it, so the
+    segment before it holds frames with `t_s` < 69 and the one after it
+    starts at the first frame with `t_s` >= 71. The interval becomes two
+    pieces. The first keeps its onset, and its offset (`carried`) is the
+    earlier segment's `last_n`, the last frame with `t_s` < 69. The second
+    piece's onset (`carried`) is the next segment's `first_n`, and it keeps
+    its offset;
   - drops the boxes inside the new cuts: cut frames get no fixture row. The
     keyframes stay as they are in `work\`, so no box outside a cut changes and
     the audit still holds. These cut-driven drops are the one change to boxes
@@ -341,19 +434,29 @@ It is committed before the first label, and the owner okays it first.
    - `fine`: needs small detail at hand distance. Reading print, mail,
      writing, fine handwork.
    - `casual`: needs to see, but not small detail. Wiping, tidying, handling
-     things without reading them, using a phone (its screen lights itself).
+     things without reading them, and by default using a phone (its screen
+     lights itself).
    - `none`: every usable second outside intervals and uncertain spans.
+
+   The phone's band is the one setting the okay chooses (`casual` or `none`,
+   see approval 1). It sits in the protocol's fenced block. Under `none`, phone
+   use is not an interval: it is a quiet span with case `phone_at_counter`.
 
    On N2's `visual_demand` scale the cut points are the seed demand gates:
    fine at 0.6 or more, casual from 0.4 to under 0.6, none under 0.4. The owner
    labels bands, never numbers. If demand clearly changes within one task, set
    `sure.band` false.
 8. **Cases.** Each interval has one case: `sorting_mail`, `still_reader`,
-   `wiping`, `phone_at_counter`, or `other`. The first four are the shortcut
-   cases, where a cheap cue (motion, posture or place) points the wrong way.
-   Quiet spans have `idle_seated` or `idle_standing`: a person is present and
-   not engaged, and the right answer is no engagement. `low_light` spans mark
-   time with the room dim.
+   `wiping`, `phone_at_counter` (under the `casual` phone band), `tidying`, or
+   `other`. The first four are the shortcut cases, where a cheap cue (motion,
+   posture or place) points the wrong way. Quiet spans have `idle_seated` or
+   `idle_standing`, and under the `none` phone band `phone_at_counter`, which
+   stays a shortcut case as a no-need span: a person is present and not
+   engaged, and the right answer is no engagement.
+   `low_light` spans mark time with the room dim. A quiet second tests "no
+   engagement" only if it is more than τ_off (60 s, A13's late-off band) after
+   the latest labelled offset before it. Earlier quiet seconds are labelled
+   the same way, and N2 does not score them as quiet.
 9. **Uncertainty.** Never guess. If unsure of a boundary or a band, set that
    `sure` flag to false; it is left out of that measure only. If unsure
    whether the person is engaged at all, mark an `uncertain` span. It is left
@@ -367,7 +470,7 @@ It is committed before the first label, and the owner okays it first.
     freeze line is on `origin`.
 12. **Split and re-mark.** The rules in those two sections, fixed now.
 
-### Label pass (about 20 to 30 minutes per staged take)
+### Label pass (about 25 to 35 minutes per staged take)
 
 - `label.py labels <take>` opens the page in label mode. It shows the usable
   frames only, with no boxes.
@@ -383,7 +486,7 @@ It is committed before the first label, and the owner okays it first.
 - The server checks every save: each interval inside one usable segment, onset
   before offset, no overlaps, bands and cases from the fixed lists.
 
-### Re-mark (once, one session, about 25 minutes)
+### Re-mark (once, one session, about 30 minutes)
 
 - The re-mark is the second development session in recording order (normally
   the first `hard-b`). The owner re-marks it from scratch in label mode at
@@ -425,7 +528,11 @@ All tests use synthetic takes made with R's own test helpers (`make_take`,
   takes are not registered. A later PASS check makes a session retained.
 - **No cue data.** The `take.json` reader returns only `script` and
   `started_unix`. A `take.json` from `take.run` with R's `FakeCamera` and a
-  staged script feeds this reader, so a rename in take.py fails a test.
+  staged script feeds this reader, so a rename in take.py fails a test. Until
+  the `take.py` change lands (approval 3), that test runs `take.run` with
+  `free`, and den-label's own test helpers build any staged-script fixture
+  (a staged `script` name and a `started_unix`) without touching
+  `tools/den-take/`.
 - **Split.** Per-script alternation in recording order. Stable when sessions
   are added. Never reassigns. Refuses an edited `split.json`.
 - **Second person: the union test.** With 60 s of activity, check-1 typed
@@ -437,14 +544,24 @@ All tests use synthetic takes made with R's own test helpers (`make_take`,
 - **Second person: no earlier spans.** With check-1 typed `none`, label.py
   prints `(no earlier spans)`, never `none`, and a check-2 typed `01:10` is
   accepted.
-- **Second person: clipping.** An interval at 65 to 75 s, labelled under a
-  check without a cut there, becomes 65 to 69 s (offset `carried`) and 71 to
-  75 s (onset `carried`) when a check with a new [69, 71) cut is accepted. A
-  span is split the same way, and a piece too short to keep an onset before
-  its offset is dropped. Each change is printed. Boxes outside the cut are
+- **Second person: clipping.** An interval from the frame at about 65 s to the
+  frame at about 75 s, labelled under a check without a cut there, is split
+  when a check with a new [69, 71) cut (typed `01:10`) is accepted. The first
+  piece keeps its onset and ends at the earlier segment's `last_n`, the last
+  frame with `t_s` < 69 (offset `carried`). The second starts at the next
+  segment's `first_n`, the first frame with `t_s` >= 71 (onset `carried`),
+  and keeps its offset. No piece holds a frame with 69 <= `t_s` < 71. A span
+  is split the same way, and a piece too short to keep an onset before its
+  offset is dropped. Each change is printed. Boxes outside the cut are
   unchanged, and no fixture row is written for a cut frame. The `end_to_end`
   mark is cleared. Every draft of the session then names the accepted check's
-  sha256, and `freeze` refuses a draft still naming a superseded check.
+  file and sha256, and `freeze` refuses a draft still naming a superseded
+  check.
+- **Second person: the page key.** In each pass, the page's second-person key
+  ends the pass: the server saves the draft, stops serving frames, and
+  label.py prints the union of the earlier cuts as typed spans (for example
+  `00:40-00:45`), or `(no earlier spans)` when every earlier check typed
+  `none`.
 - **Frame server.** Serves only usable-segment frames of the named take
   (slate and cut frames get 404). Returns raw NV12 of 345,600 bytes. Binds
   127.0.0.1 only. Refuses a wrong token or Host header. Sends no CORS header.
@@ -469,7 +586,8 @@ All tests use synthetic takes made with R's own test helpers (`make_take`,
   made under another protocol sha256 are refused. The two hashes are
   independent: changing a label leaves the fixture hash alone, and the
   reverse.
-- **Status.** Counts per split and band, and days per split. No times.
+- **Status.** Counts per split and band, quiet spans per case with their
+  seconds past τ_off, and days per split. No times.
 - **Folders.** Refuses an N1 folder inside a git checkout or OneDrive.
 
 `test_den_take.py` additions:
@@ -511,10 +629,22 @@ interval, and checks the drafts the server saved.
 
 Steps marked **[go-ahead]** need the owner's yes. Nothing else does.
 
-1. **[go-ahead] Okay PROTOCOL-V1** before the first label (about 10 minutes):
-   the definitions, the phone-is-casual default, the starting pad, and the
-   spoken cue text (including where the phone case happens if the counter is
-   not in view). This is the gate's "fixed before labelling".
+1. **[go-ahead] Okay PROTOCOL-V1** before the first label and before any
+   staged take (about 10 minutes), after the look at the commissioning take's
+   contact sheet. This is the gate's "fixed before labelling". It covers:
+   - the definitions and the starting pad;
+   - **the phone-is-casual default.** It differs from the architecture: A13
+     scores "on a phone at the counter" as no need, and A7's example gives a
+     self-lit screen a visual demand of 0.2, under the 0.4 casual cut. If the
+     owner picks `none`, `phone_at_counter` becomes a no-need shortcut case,
+     a span case like quiet. Casual is then wiping only: about 5 per take and
+     about 20 per split, under the 30-per-band gate. The remedy is one more
+     casual block per round (`tidying`, see "Session staging"), settled at
+     this same okay before any take, not more takes. `label.py status`
+     already shows counts per split and band, so it gets no band flag;
+   - the spoken cue text, and the spot for mail sorting, wiping and the
+     phone: the counter if the contact sheet shows it in view, else another
+     in-view surface away from the desk that the owner names.
 2. **[go-ahead] The staged batch:** "8 staged takes, `hard-a` and `hard-b`,
    four each". R asks for a go-ahead per take or per named batch, because a
    camera fault during polling could briefly drop Frigate's den feed, which
@@ -532,7 +662,7 @@ Steps marked **[go-ahead]** need the owner's yes. Nothing else does.
 
 | Risk | Effect | What N1 does |
 |---|---|---|
-| Owner time | About 9 to 12 hours in all | Short staged takes, a keyboard page, autosave, stop any time. Label the first two takes fully before recording the rest. Stop rule: if boxes and audit on the first `hard-a` and `hard-b` each take more than about 35 min (planned 15 to 25), simplify the box workflow before recording the other six, for example by holding the box until the next keyframe instead of straight lines, or by folding the audit into the drawing pass. |
+| Owner time | About 11.5 to 14.5 hours in all | Short staged takes, a keyboard page, autosave, stop any time. Label the first two takes fully before recording the rest. Stop rule: if boxes and audit on the first `hard-a` and `hard-b` each take more than about 40 min (planned 20 to 30), simplify the box workflow before recording the other six, for example by holding the box until the next keyframe instead of straight lines, or by folding the audit into the drawing pass. |
 | Small or hidden contacts (phone at the counter, hands behind the body) at 640x360 | Unsure onsets | `sure` flags and uncertain spans, counted and reported. Never guessed. |
 | About 4 frames a second | Onsets quantised to 0.2 to 0.27 s | Stated in the protocol. Small against the 3 s target. |
 | A box that encodes the onset | The fixture leaks the answer | Body-only tight box, fixed pad, no activity keyframes, field whitelist, boxes locked before labels. |
@@ -542,48 +672,53 @@ Steps marked **[go-ahead]** need the owner's yes. Nothing else does.
 | One labeller | No inter-labeller figure | Reported as single-labeller, with the self re-mark. |
 | R's format changes before its first real take | The tool breaks | N1 reads only the fields listed here. Tests use R's own helpers, and one reads a `take.json` written by `take.run`. |
 | Dimming mid-take | A few seconds of exposure change | The `low_light` span starts once the room is dim. |
-| Counter not in view | The phone case is lost | Moved to another in-view spot, named by the owner. |
-| Disk: C: is 97% full | 8 staged takes need about 40 to 70 GB | R's 35 GB floor refuses a take first. N1's own files are small. |
+| Counter not in view | The mail, wiping and phone cases are lost | Moved to another in-view spot away from the desk, named by the owner at approval 1 from the commissioning contact sheet. |
+| Desk view: a posed check on 2026-11-02 found that with the chair pulled in, the hands and a book on the desk or held low are below the frame | Desk-top contacts unseen, onsets unlabellable | Desk cues use the posture found in view (chair pushed back, book at chest height). Mail and wiping move to the counter or the named in-view spot. The commissioning take's 3 minutes and one contact-sheet look check it before any staged take. No camera move. |
+| Phone band set to `none` at approval 1 | Casual falls to about 20 per split, under the gate | One `tidying` block per round replaces the phone block, and the phone moves past τ_off in rounds 2 and 4. Settled at the okay, before any take. |
+| Quiet blocks too close to tasks | No quiet second outside τ_off; onsets not from none | At least 30 s with no task before every task, and one 90 s quiet block per round whose tail is scored. The τ_off rule is in PROTOCOL-V1. |
+| Disk: C: is 97% full | 8 staged takes of about 27 minutes need about 45 to 85 GB | R's 35 GB floor refuses a take first. N1's own files are small. |
 | N1 output only on the PC | Lost with the disk | README suggests a copy to another household computer or a USB drive after each freeze. |
 
 ## Owner time per take
 
-| Step | Staged take (about 21 min) |
+| Step | Staged take (about 27 min) |
 |---|---|
-| Record (R) | 21 min |
-| R's check and second-person scan | 4 to 5 min |
-| Boxes and audit | 15 to 25 min |
-| Labels | 20 to 30 min |
-| **Total** | **about 60 to 81 min (1 to 1.35 hours)** |
+| Record (R) | 27 min |
+| R's check and second-person scan (about 1,600 thumbnails) | 5 to 6 min |
+| Boxes and audit | 20 to 30 min |
+| Labels | 25 to 35 min |
+| **Total** | **about 77 to 98 min (1.3 to 1.6 hours)** |
 
-One-time, about 70 min: read and okay the protocol (10 min), the practice run
-of the page on the commissioning take (15 min), the surface map (15 min), the
-re-mark of one session (25 min), and the freezes (5 min).
+One-time, about 80 min: the in-view look at the commissioning take's contact
+sheet (5 min), read and okay the protocol (10 min), the practice run of the
+page on the commissioning take (15 min), the surface map (15 min), the re-mark
+of one session (30 min), and the freezes (5 min).
 
-All of N1: 8 staged takes at about 60 to 81 min each is 8 to 10.8 hours. With
-the one-time 70 min, that is about 9 to 12 hours, over about 2 weeks of
-evenings.
+All of N1: 8 staged takes at about 77 to 98 min each is 10.3 to 13.1 hours.
+With the one-time 80 min, that is about 11.5 to 14.5 hours, over about 2 to 3
+weeks of evenings. A `none` phone band adds about 2 minutes per take.
 
 ## Effort
 
 | Piece | Size | Agent time |
 |---|---|---|
 | PROTOCOL-V1.md | about 150 lines | 0.5 day |
-| `take.py` staged scripts, two script files, `make_take` parameters, tests | about 70 lines plus 180 test lines | 0.5 day |
-| `n1.py` | about 400 lines | 1 day |
-| `label.py` | about 300 lines | 0.5 day |
+| `take.py` staged scripts, two script files, `make_take` parameters, tests | about 160 lines plus 180 test lines | 0.5 day |
+| `n1.py` (adds the protocol block, the phone band, check names in the manifests, frame-exact clipping) | about 600 lines | 1.25 days |
+| `label.py` (adds the second-person key's stop and the union print, quiet past τ_off in `status`) | about 450 lines | 1 day |
 | `page.html` | about 550 lines | 1.5 days |
-| Tests and the browser smoke test | about 800 lines | 1 day |
+| Tests and the browser smoke test (adds the page-key, phone-band and frame-exact clipping tests) | about 1,200 lines | 1.5 days |
 | README, FREEZES.md, release note | about 150 lines | 0.25 day |
-| **Total** | **about 2,500 lines** | **about 5 agent-days, in 2 or 3 sessions** |
+| **Total** | **about 3,440 lines** | **about 6.5 agent-days, in about 3 sessions** |
 
-That is close to R's size (about 2,200 lines).
+That is about 1.3 times R's size (about 2,700 lines).
 
 ## What can be built before R's first real take, and what waits for it
 
 Before R's first real take (no camera, no real frames):
 
-- PROTOCOL-V1.md, committed first, then the owner's okay.
+- PROTOCOL-V1.md, committed first. The owner's okay comes after the
+  commissioning take's contact-sheet look (below), and before any staged take.
 - `n1.py`, `label.py`, `page.html`, and all tests, on R's synthetic takes.
 - The staged scripts and the `take.py` change, tested with R's fake camera.
   This waits only for R's branch to land on `main`, not for a real take.
@@ -593,11 +728,17 @@ Before R's first real take (no camera, no real frames):
 
 Waits for R's first real take (the commissioning take, once it passes):
 
+- The commissioning take itself, with its 3 unscripted minutes spent as
+  "Session staging" says: seated at the desk pushed back with the mail and
+  the book, wiping the counter, and the phone at the counter.
+- One look at its contact sheet: the check that the counter is in view, and
+  next to it the in-view check for the desk posture (chair pushed back, book
+  at chest height) and for the surface used for mail and wiping. The owner
+  names the spot at approval 1.
 - A practice run of the page on the commissioning take (about 15 min of owner
-  time, counted under "Owner time per take"). Nothing from it is ever frozen,
+  time, counted in the one-time owner time). Nothing from it is ever frozen,
   because it is not retained. This also checks page speed on real bundles.
-- The surface map, which needs a real frame, and the check that the counter is
-  in view.
+- The surface map, which needs a real frame.
 - A first look at the pad on real frames.
 
 Waits for retained staged takes (R's commissioning PASS, then go-ahead 2):

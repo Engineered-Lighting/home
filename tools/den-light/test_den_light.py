@@ -13,6 +13,7 @@ import json
 import math
 import os
 import random
+import shutil
 import signal
 import struct
 import tempfile
@@ -972,9 +973,12 @@ class ExposurePlanTests(unittest.TestCase):
         self.assertEqual([p["exposure_us"] for p in plan[9:11]], [33000, 33000])
         self.assertEqual([p["iso"] for p in plan[9:11]], [round(100 * 2 ** 0.5 * 30000 / 33000),
                                                           round(100 * 2 * 30000 / 33000)])
-        with self.assertRaises(sweep.Void) as caught:
+        with self.assertRaises(sweep.OutOfRange) as caught:
             sweep.exposure_plan(33000, 1200, method)
-        self.assertEqual(caught.exception.reason, "interrupted_or_errored_before_repeat")
+        self.assertTrue(caught.exception.dark)
+        with self.assertRaises(sweep.OutOfRange) as caught:
+            sweep.exposure_plan(5, 100, method)
+        self.assertFalse(caught.exception.dark)
 
 
 class SweepTests(SweepCase):
@@ -1253,6 +1257,140 @@ class RollbackCheckTests(InstallCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(sweep.main(["--rollback-check", str(stage0), "--token-file", str(token)]), 2)
             self.assertFalse((stage0 / "rollback.json").exists())
+
+
+class TooDarkTests(SweepCase):
+    """Fix 4: a dim den is refused before the hold, not voided."""
+
+    def test_the_rule_follows_the_camera_limits(self):
+        method = sweep_method()
+        self.assertIsNone(sweep.pick_problem(33000, 800, method), "ISO 800 at 33 ms just fits")
+        problem = sweep.pick_problem(33000, 801, method)
+        self.assertTrue(problem.startswith("too dark: "), problem)
+        self.assertIn("Turn on one more den bulb", problem)
+        self.assertIsNone(sweep.pick_problem(8000, 100, method))
+
+    def test_start_refuses_a_dark_den_and_writes_nothing(self):
+        self.fake.auto = self.fake.applied = {"exposure_us": 33000, "iso": 1000, "kelvin": 3000}
+        with stage0_folder() as (stage0, token):
+            camera = sweep.Camera(self.fake.url, TOKEN)
+            with self.assertRaises(sweep.Refused) as caught:
+                sweep.start_run(stage0, camera, token, sweep_method())
+            self.assertEqual([p.name for p in stage0.iterdir()], ["install.json"])
+        self.assertTrue(str(caught.exception).startswith("too dark: "), str(caught.exception))
+        self.assertFalse([p for m, p, _ in self.fake.requests if m == "POST"], "no hold was taken")
+
+    def test_a_den_that_darkens_after_the_start_is_refused_before_the_hold(self):
+        with stage0_folder() as (stage0, token):
+            camera = sweep.Camera(self.fake.url, TOKEN)
+            _, folder = sweep.start_run(stage0, camera, token, sweep_method())
+            self.fake.auto = self.fake.applied = {"exposure_us": 33000, "iso": 1200, "kelvin": 3000}
+            with self.assertRaises(sweep.Refused) as caught:
+                sweep.Sweep(camera, sweep_method(), folder, say=quiet).run()
+            self.assertEqual([p.name for p in stage0.iterdir()], ["install.json"], "the empty sweep folder is removed")
+        self.assertTrue(str(caught.exception).startswith("too dark: "))
+        self.assertFalse([p for m, p, _ in self.fake.requests if m == "POST"], "no hold was taken")
+
+
+class SecondCtrlCTests(SweepCase):
+    """Fix 5: a second Ctrl+C during the release or the cleanup keeps the record and deletes the frames."""
+
+    def guarded(self, **kwargs):
+        try:
+            return self.run_sweep(**kwargs)
+        except KeyboardInterrupt:
+            self.fail("a Ctrl+C escaped the sweep before response.json was written")
+
+    def test_second_ctrl_c_during_the_release(self):
+        class CtrlCInRelease(sweep.Sweep):
+            def do_release(self):
+                signal.raise_signal(signal.SIGINT)
+                return super().do_release()
+
+        def ctrl_c(step, n):
+            if step == 3:
+                signal.raise_signal(signal.SIGINT)
+        result = self.guarded(hook=ctrl_c, cls=CtrlCInRelease)
+        self.assertVoid(result, "interrupted_or_errored_before_repeat")
+        self.assertTrue(self.released())
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+
+    def test_ctrl_c_during_the_release_after_an_error(self):
+        class CtrlCInRelease(sweep.Sweep):
+            def do_release(self):
+                signal.raise_signal(signal.SIGINT)
+                return super().do_release()
+        self.fake.refuse_post_at = 4
+        result = self.guarded(cls=CtrlCInRelease)
+        self.assertVoid(result, "interrupted_or_errored_before_repeat")
+        self.assertIn("POST /meter was refused", result[0]["detail"])
+        self.assertTrue(self.released())
+
+    def test_second_ctrl_c_during_the_void_cleanup(self):
+        real = shutil.rmtree
+
+        def interrupted_rmtree(path, *args, **kwargs):
+            if Path(path).name == "frames":  # the sweep's cleanup, not the test's temporary folder
+                signal.raise_signal(signal.SIGINT)
+            return real(path, *args, **kwargs)
+
+        def ctrl_c(step, n):
+            if step == 2:
+                signal.raise_signal(signal.SIGINT)
+        with mock.patch.object(sweep.shutil, "rmtree", interrupted_rmtree):
+            result = self.guarded(hook=ctrl_c)
+        self.assertVoid(result, "interrupted_or_errored_before_repeat")
+
+    def test_an_error_after_the_data_is_complete_is_recorded_and_keeps_the_frames(self):
+        with mock.patch.object(sweep.meter, "check", side_effect=RuntimeError("fit crashed")):
+            response, files, frames = self.run_sweep()
+        self.assertEqual(response["outcome"], "error")
+        self.assertIn("fit crashed", response["detail"])
+        self.assertEqual(files, ["frames", "frames.jsonl", "response.json"], "the data is kept")
+        self.assertEqual(len(frames), 24)
+        self.assertTrue(self.released())
+
+
+class FramesDeletedTests(SweepCase):
+    """Fix 6: frames_deleted says whether frames\\ and frames.jsonl are really gone."""
+
+    def test_a_failed_rmtree_is_not_reported_as_deleted(self):
+        self.fake.refuse_post_at = 4
+        with mock.patch.object(sweep.shutil, "rmtree", lambda *a, **k: None):
+            response, files, frames = self.run_sweep()
+        self.assertEqual(response["outcome"], "void")
+        self.assertFalse(response["frames_deleted"])
+        self.assertIn("frames", response["frames_left"])
+        self.assertIn("frames", files)
+
+    def test_a_failed_unlink_is_recorded_not_raised(self):
+        self.fake.refuse_post_at = 4
+        real = Path.unlink
+
+        def locked(path, *args, **kwargs):
+            if path.name == "frames.jsonl":
+                raise PermissionError("in use")
+            return real(path, *args, **kwargs)
+        with mock.patch.object(Path, "unlink", locked):
+            response, files, frames = self.run_sweep()
+        self.assertEqual(response["outcome"], "void")
+        self.assertFalse(response["frames_deleted"])
+        self.assertEqual(response["frames_left"], ["frames.jsonl"])
+        self.assertIsNone(frames, "frames\\ itself went")
+
+
+class MeterRangeTests(unittest.TestCase):
+    def test_method_numbers_fit_the_servers_hard_coded_ranges(self):
+        """oak-capture-meter.py's METER_RANGES are hard-coded; raising a METHOD limit needs a rebuild."""
+        m = meter.load_method()
+        self.assertEqual(SRV.METER_RANGES, {"exposure_us": (1, 33000), "iso": (100, 1600),
+                                            "white_balance_kelvin": (1000, 12000)})
+        self.assertLessEqual(m["max_exposure_us"], SRV.METER_RANGES["exposure_us"][1])
+        self.assertLessEqual(m["iso_max"], SRV.METER_RANGES["iso"][1])
+        low, high = SRV.METER_RANGES["white_balance_kelvin"]
+        self.assertTrue(low <= m["white_balance_kelvin"] <= high)
+        text = (HERE / meter.METHOD_FILE).read_text(encoding="utf-8")
+        self.assertIn("METER_RANGES", text, "METHOD-V1 says the server's ranges are hard-coded")
 
 
 if __name__ == "__main__":

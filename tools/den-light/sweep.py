@@ -57,6 +57,7 @@ INSTALL_HEALTH_WAIT_S = 30.0  # --install-record and --rollback-check wait this 
 ROLLBACK_SETTLE_S = 30.0      # then the rollback check waits this long and needs the same camera session:
                               # a crash-looping Restart=always unit still reads active right after a restart
 ROLLBACK_ADVICE = "the meter drop-in is installed, so run the rollback now (README, Rollback)"
+DEN_BULBS = "front left, front right, rear left or rear right"
 
 
 class Refused(Exception):
@@ -511,6 +512,14 @@ def camera_rolled_back(camera, *, health_wait_s, settle_s, sleep=time.sleep, clo
 
 # ---- the sweep ----------------------------------------------------------------------
 
+class OutOfRange(ValueError):
+    """A step of the plan is outside the camera's range: the room is too dark (or too bright)."""
+
+    def __init__(self, step, exposure_us, iso, dark):
+        super().__init__(f"step {step} needs {exposure_us} us at ISO {iso}, outside the camera's range")
+        self.step, self.exposure_us, self.iso, self.dark = step, exposure_us, iso, dark
+
+
 def exposure_plan(t_pick_us, iso_pick, method):
     """The held settings of every step, the repeat last (METHOD-V1, The sweep, step 5)."""
     low, high, n = method["step_ratio_low"], method["step_ratio_high"], method["step_count"]
@@ -523,10 +532,29 @@ def exposure_plan(t_pick_us, iso_pick, method):
             t = method["max_exposure_us"]
         t = round(t)
         if t < 1 or iso > method["iso_max"]:
-            raise Void("interrupted_or_errored_before_repeat",
-                       f"step {k + 1} needs {t} us at ISO {iso}, outside the camera's range")
+            raise OutOfRange(k + 1, t, iso, dark=iso > method["iso_max"])
         steps.append({"exposure_us": t, "iso": iso, "white_balance_kelvin": method["white_balance_kelvin"]})
     return steps + [dict(steps[0])]
+
+
+def pick_problem(t_pick_us, iso_pick, method):
+    """None when auto's pick gives a plan inside the camera's range, else a plain 'too dark: ...' line.
+
+    Checked before any hold (METHOD-V1, The sweep, steps 1 and 4): a dim den is
+    refused, not voided, so it does not use up a rerun."""
+    try:
+        exposure_plan(t_pick_us, iso_pick, method)
+        return None
+    except OutOfRange as exc:
+        max_ms = method["max_exposure_us"] / 1000
+        if not exc.dark:
+            return (f"too bright: auto exposure is at {t_pick_us:.0f} us, so the shortest step would be under "
+                    "1 us; dim the den lights a little, then run the same line again")
+        need = method["iso_max"] / method["step_ratio_high"]
+        return (f"too dark: auto exposure is at {t_pick_us / 1000:.1f} ms and ISO {iso_pick}, so the sweep's "
+                f"brightest step would need ISO {exc.iso}, above the camera's {method['iso_max']}. A sweep needs "
+                f"auto exposure at or below ISO {need:.0f} at {max_ms:g} ms. Turn on one more den bulb ({DEN_BULBS}) "
+                "at full in the HA app, then run the same line again")
 
 
 class Sweep:
@@ -550,9 +578,31 @@ class Sweep:
         self.on_frame = None     # tests: called with (step index or None, frame number)
         self.jsonl = None
         self.release = None
+        self.collecting = False  # Ctrl+C voids only while the frames are being collected
+        self.interrupted = False
+        self.ctrl_c_ignored = 0
+
+    # Ctrl+C: the handler never raises, so no Ctrl+C can cut the release, the
+    # cleanup or the writing of response.json short. While collecting it marks the
+    # sweep, which voids at the next check; afterwards it is only counted.
+    def on_ctrl_c(self, signum, frame):
+        if self.collecting:
+            self.interrupted = True
+        else:
+            self.ctrl_c_ignored += 1
+
+    def trap_ctrl_c(self):
+        if threading.current_thread() is not threading.main_thread():
+            return None
+        return signal.signal(signal.SIGINT, self.on_ctrl_c)
+
+    def check_interrupt(self):
+        if self.interrupted:
+            raise Void("interrupted_or_errored_before_repeat", "Ctrl+C before the repeat")
 
     # camera calls
     def check_run_limit(self):
+        self.check_interrupt()
         if self.clock() - self.t0 > self.method["run_limit_s"]:
             raise Void("run_over_limit", f"more than {self.method['run_limit_s']} s since the countdown")
 
@@ -619,6 +669,7 @@ class Sweep:
         self.say(f"Starting in {left:g} s: step out of the camera's view now.")
         end = self.t0 + left
         while self.clock() < end:
+            self.check_interrupt()
             self.sleep(min(1.0, end - self.clock()))
 
     def wait_still(self):
@@ -667,49 +718,91 @@ class Sweep:
         self.kept.append({"hold": hold, "generation": generation, "frames": keep})
 
     def do_release(self):
+        """POST /meter/release once anything was posted. Never raises."""
         if not self.posted:
             return None
         self.current = None
         try:
             status, reply = self.camera.post("/meter/release", {})
-        except OSError as exc:
+        except Exception as exc:
             return {"released": False, "error": type(exc).__name__}
         return {"released": status == 200 and reply.get("held") is False, "status": status}
 
+    def close_jsonl(self):
+        try:
+            if self.jsonl is not None and not self.jsonl.closed:
+                self.jsonl.close()
+        except OSError:
+            pass
+
+    def delete_frames(self):
+        """Delete a void sweep's frames; report what is really gone."""
+        self.close_jsonl()
+        shutil.rmtree(self.folder / "frames", ignore_errors=True)
+        try:
+            (self.folder / "frames.jsonl").unlink(missing_ok=True)
+        except OSError:
+            pass
+        left = [name for name in ("frames", "frames.jsonl") if (self.folder / name).exists()]
+        return {"frames_deleted": not left, "frames_left": left}
+
+    def remove_empty_folder(self):
+        """A refusal before any hold: the new sweep folder holds nothing yet, so it goes."""
+        self.close_jsonl()
+        try:
+            jsonl = self.folder / "frames.jsonl"
+            if jsonl.exists() and jsonl.stat().st_size == 0:
+                jsonl.unlink()
+            (self.folder / "frames").rmdir()   # fails, and keeps it, unless empty
+            self.folder.rmdir()
+        except OSError:
+            pass
+
+    def collect(self, response):
+        """Countdown, still scene, auto's pick, then every hold: the data, the repeat last."""
+        self.countdown()
+        window = self.wait_still()
+        exposures = [r["exposure_us"] for r in window]
+        isos = [r["iso"] for r in window]
+        if None in exposures or None in isos:
+            raise Void("interrupted_or_errored_before_repeat", "an auto frame reported no exposure or ISO")
+        t_pick, iso_pick = statistics.median(exposures), round(statistics.median(isos))
+        response["auto_pick"] = {"exposure_us": t_pick, "iso": iso_pick, "frames": len(window)}
+        problem = pick_problem(t_pick, iso_pick, self.method)
+        if problem:
+            raise Refused(problem)  # before any POST /meter: no hold, no void
+        plan = exposure_plan(t_pick, iso_pick, self.method)
+        self.say(f"Holding: {len(plan)} exposures.")
+        for index, hold in enumerate(plan, 1):
+            self.hold_step(index, hold)
+        self.check_interrupt()
+
     def run(self):
-        """The whole sweep; returns the response (already written to response.json)."""
+        """The whole sweep; returns the response (already written to response.json).
+
+        Raises Refused, with the new sweep folder removed, when the room is too
+        dark (or bright) for the plan; nothing was held then."""
         response = {"schema": SCHEMAS["response"], "outcome": None, "void_reason": None, "detail": None,
                     "method_file": meter.METHOD_FILE, "method_sha256": self.method.file_sha256,
                     "method_stage0_block_sha256": self.method.block_sha256, "code_sha256": code_sha256(),
                     "started_pc_unix": time.time()}
         self.t0 = self.clock()
         self.jsonl = open(self.folder / "frames.jsonl", "x", encoding="utf-8", newline="\n")
-        previous = None
+        self.collecting = True
+        previous = self.trap_ctrl_c()
         try:
             try:
-                self.countdown()
-                window = self.wait_still()
-                exposures = [r["exposure_us"] for r in window]
-                isos = [r["iso"] for r in window]
-                if None in exposures or None in isos:
-                    raise Void("interrupted_or_errored_before_repeat", "an auto frame reported no exposure or ISO")
-                t_pick, iso_pick = statistics.median(exposures), round(statistics.median(isos))
-                response["auto_pick"] = {"exposure_us": t_pick, "iso": iso_pick, "frames": len(window)}
-                plan = exposure_plan(t_pick, iso_pick, self.method)
-                self.say(f"Holding: {len(plan)} exposures.")
-                for index, hold in enumerate(plan, 1):
-                    self.hold_step(index, hold)
+                self.collect(response)
                 self.complete = True
             except KeyboardInterrupt:
                 raise Void("interrupted_or_errored_before_repeat", "Ctrl+C before the repeat") from None
-            except Void:
+            except (Void, Refused):
                 raise
             except Exception as exc:
                 raise Void("interrupted_or_errored_before_repeat",
                            f"error before the repeat: {type(exc).__name__}: {exc}") from None
             finally:
-                if self.complete and threading.current_thread() is threading.main_thread():
-                    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)  # the data is complete
+                self.collecting = False  # from here, on every path, Ctrl+C waits for response.json
                 self.release = self.do_release()
             response["release"] = self.release
             if self.clock() - self.t0 > self.method["run_limit_s"]:
@@ -718,32 +811,42 @@ class Sweep:
             if not meter.agree(self.means(first["nv12"]), self.means(repeat["nv12"]),
                                self.method["noise_tolerance_codes"]):
                 raise Void("repeat_mismatch", "the repeat disagrees with the first exposure: the scene moved")
-            self.say("Released. Fitting the response (under a minute)...")
-            result = meter.check(self.kept, self.method)
-            response.update(outcome=result["verdict"], check={k: v for k, v in result.items() if k != "curves"})
-            if result["curves"]:
-                parameters, digest = meter.meter_norm_parameters(self.method, result["curves"])
-                response["meter_norm"] = {"version": meter.METER_NORM_VERSION, "parameters": parameters,
-                                          "parameters_sha256": digest}
             response["frames_kept"] = sum(len(step["frames"]) for step in self.kept)
+            self.say("Released. Fitting the response (under a minute)...")
+            response.update(verdict_fields(meter.check(self.kept, self.method), self.method))
+        except Refused:
+            self.remove_empty_folder()
+            raise
         except Void as void:
             response.update(outcome="void", void_reason=void.reason, detail=void.detail)
             response.setdefault("release", self.release)
-            self.jsonl.close()
-            shutil.rmtree(self.folder / "frames", ignore_errors=True)
-            (self.folder / "frames.jsonl").unlink(missing_ok=True)
-            response["frames_deleted"] = True
+            response.update(self.delete_frames())
+        except Exception as exc:  # after the data is complete: keep the frames
+            response.update(outcome="error", detail=f"{type(exc).__name__}: {exc}")
+            response.setdefault("release", self.release)
         finally:
-            if not self.jsonl.closed:
-                self.jsonl.close()
-            response.update(camera_session=self.session, steps=[
-                {"step": i, **s["hold"], "generation": s["generation"], "frames": [f["n"] for f in s["frames"]]}
-                for i, s in enumerate(self.kept, 1)], elapsed_s=self.clock() - self.t0)
-            if response["outcome"] is not None:
-                write_json(self.folder / "response.json", response)
-            if previous is not None:
-                signal.signal(signal.SIGINT, previous)
+            self.close_jsonl()
+            try:
+                if response["outcome"] is not None:
+                    response.update(camera_session=self.session, steps=[
+                        {"step": i, **s["hold"], "generation": s["generation"],
+                         "frames": [f["n"] for f in s["frames"]]} for i, s in enumerate(self.kept, 1)],
+                        elapsed_s=self.clock() - self.t0, ctrl_c_ignored=self.ctrl_c_ignored)
+                    write_json(self.folder / "response.json", response)
+            finally:
+                if previous is not None:
+                    signal.signal(signal.SIGINT, previous)
         return response
+
+
+def verdict_fields(result, method):
+    """The response fields from meter.check's result: outcome, check and meter_norm."""
+    fields = {"outcome": result["verdict"], "check": {k: v for k, v in result.items() if k != "curves"}}
+    if result["curves"]:
+        parameters, digest = meter.meter_norm_parameters(method, result["curves"])
+        fields["meter_norm"] = {"version": meter.METER_NORM_VERSION, "parameters": parameters,
+                                "parameters_sha256": digest}
+    return fields
 
 
 def start_run(stage0, camera, token_file, method):
@@ -758,7 +861,11 @@ def start_run(stage0, camera, token_file, method):
     if (install.get("schema") != SCHEMAS["install"] or install.get("meter_sha256") != METER_SERVER_SHA256
             or meter.file_sha256(HERE / METER_FILE) != METER_SERVER_SHA256):
         raise Refused("install.json's after hash is not oak-capture-meter.py's committed sha256")
-    camera_ready(camera, drop_in_installed=True)
+    seen = camera_ready(camera, drop_in_installed=True)
+    if seen["exposure_us"] is not None and seen["iso"] is not None:
+        problem = pick_problem(seen["exposure_us"], seen["iso"], method)
+        if problem:
+            raise Refused(problem)
     return stage0, new_sweep_folder(stage0)
 
 
@@ -792,13 +899,17 @@ def main(argv=None):
                   "Wrote install.json.")
             return 0
         _, folder = start_run(Path(args.run), camera, args.token_file, method)
+        print(f"Sweep folder: {folder}")
+        response = Sweep(camera, method, folder).run()
     except Refused as exc:
         print(f"Refused: {exc}. This command changed nothing.", file=sys.stderr)
         return 2
-    print(f"Sweep folder: {folder}")
-    response = Sweep(camera, method, folder).run()
     if response["outcome"] == "void":
-        print(f"VOID ({response['void_reason']}): {response['detail']}. The frames were deleted.")
+        gone = ("The frames were deleted." if response["frames_deleted"] else
+                "Could not delete " + " and ".join(response["frames_left"]) + f" in {folder}: delete them by hand.")
+        print(f"VOID ({response['void_reason']}): {response['detail']}. {gone}")
+    elif response["outcome"] == "error":
+        print(f"ERROR after the data was complete: {response['detail']}. The frames are kept: tell the agent.")
     else:
         print(f"{response['outcome'].upper()}: " + (", ".join(response["check"]["reasons"]) or "every check passed"))
     print(f"Wrote {folder / 'response.json'}")

@@ -58,6 +58,18 @@ FAR_AND_NEAR = {"far": synthetic.in_view(0.7, 0.0, 5.2), "n1": synthetic.in_view
 CLUSTER = {"a": synthetic.in_view(0.4, 0.3, 3.0), "b": synthetic.in_view(-0.4, 0.3, 3.2),
            "c": synthetic.in_view(0.4, -0.3, 2.8), "d": synthetic.in_view(-0.4, -0.3, 3.0),
            "e": synthetic.in_view(0.0, 0.35, 3.0), "f": synthetic.in_view(0.1, -0.35, 3.2)}
+# Every mark on one table 1.8 m away, the only surface with depth in near_table_plane.
+NEAR_TABLE = {"a": synthetic.in_view(-0.8, 0.1, 1.8), "b": synthetic.in_view(0.8, 0.1, 1.8),
+              "c": synthetic.in_view(0.0, 0.6, 1.8), "d": synthetic.in_view(-0.7, 0.7, 1.8),
+              "e": synthetic.in_view(0.7, 0.6, 1.8), "f": synthetic.in_view(0.2, 0.3, 1.8)}
+
+
+def near_table_plane():
+    """A depth plane with depth on a table 1.8 m away only: 40 of the 64 cells."""
+    plane = [0] * (synthetic.W * synthetic.H)
+    for y in range(150, synthetic.H):
+        plane[y * synthetic.W:(y + 1) * synthetic.W] = [1800] * synthetic.W
+    return plane
 
 
 class Scene:
@@ -286,11 +298,12 @@ class SceneTests(Base):
         signature = {"grid": [8, 8], "shape": [400, 640], "cells": cells}
         k = {"fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 200.0}
         points = scene.view_points(signature, k, reach_m=6.0)
-        self.assertEqual(len(points), 9)
+        self.assertEqual(len(points), 1 + 64 * 4, "the camera, and the corners of every cell, depth or none")
         self.assertEqual(points[0], [0.0, 0.0, 0.0], "the camera itself bounds the volume")
         self.assertIn(scene.back_project(k, 0, 0, 2.0), points)
         self.assertIn(scene.back_project(k, 80, 50, 2.0), points)
         self.assertIn(scene.back_project(k, 640, 400, 6.0), points, "a window's 9 m counts as the reach")
+        self.assertIn(scene.back_project(k, 160, 50, 6.0), points, "a cell with no depth counts as the reach")
         self.assertEqual(max(point[2] for point in points), 6.0)
 
     def test_intrinsics_missing(self):
@@ -1050,6 +1063,82 @@ class MountTests(Base):
             later.click_all()
             far[reach] = self.check(s, later.take)[1]["view_movement_m"]
         self.assertLess(far[1.0], far[6.0])
+
+    def holed_registration(self, points, fit, checks, plane, pose, later_plane, clicked=None, holes=()):
+        """A registration from a frame that has depth only where plane does, and a later take from this pose."""
+        s = Scene(self, points=points, fit=fit, checks=checks, holes=holes, ended=1_800_000_100.0, background=plane)
+        s.click_all(clicked)
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        later = Scene(self, points=points, fit=fit, checks=checks, holes=holes, name="later", ended=1_800_001_000.0,
+                      pose=pose, background=later_plane)
+        later.click_all(clicked)
+        return s, later
+
+    def largest_real_error(self, pose):
+        """How far the old registration is off anywhere in the real, furnished room the camera looks at."""
+        worst, plane = 0.0, synthetic.room_depth()
+        for v in range(0, synthetic.H, 16):
+            for u in range(0, synthetic.W, 16):
+                seen = scene.back_project({"fx": 450.0, "fy": 450.0, "cx": 320.0, "cy": 200.0}, u, v,
+                                          plane[v * synthetic.W + u] / 1000)
+                worst = max(worst, math.dist(synthetic.to_camera(*pose, synthetic.in_view(*seen)), seen))
+        return worst
+
+    def test_a_frame_with_depth_only_on_a_near_surface_cannot_confirm_a_turn(self):
+        # The 2026-11-05 verifier's case: every mark on a table 1.8 m away, no depth anywhere else in the frame, and
+        # a turn that puts the far floor 8 to 10 cm off while the marks and the table move under 5 cm.
+        plane = near_table_plane()
+        for yaw in (1.0, 1.25):
+            with self.subTest(yaw=yaw):
+                self.tearDown()
+                self.setUp()
+                s, later = self.holed_registration(NEAR_TABLE, ("a", "b", "c", "d"), ("e", "f"), plane,
+                                                   synthetic.moved(yaw_deg=yaw), plane)
+                code, report, text = self.check(s, later.take)
+                self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.05, "every mark is within the gate")
+                self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+                self.assertGreater(report["view_movement_m"], 0.05)
+                self.assertEqual(len(s.room_models()), 1)
+
+    def test_leaving_a_far_cross_with_no_depth_out_of_the_fit_cannot_confirm_a_turn(self):
+        # README step 5 lets the owner leave a point with no depth unclicked. A far end too dark for depth then
+        # has no mark and no cell to show a turn.
+        points = {"a": synthetic.in_view(-0.9, 0.2, 1.8), "b": synthetic.in_view(0.9, 0.2, 1.9),
+                  "c": synthetic.in_view(0.0, 0.8, 2.3), "d": synthetic.in_view(-0.8, 0.8, 2.5),
+                  "e": synthetic.in_view(0.8, 0.7, 2.4), "f": synthetic.in_view(0.1, 0.2, 2.7),
+                  "far": synthetic.in_view(0.7, 0.0, 5.2)}
+
+        def lit(pose=None):
+            return [mm if mm <= 2900 else 0 for mm in synthetic.room_depth(pose)]
+
+        pose = synthetic.moved(yaw_deg=0.75)
+        s, later = self.holed_registration(points, ("a", "b", "c", "d", "far"), ("e", "f"), lit(), pose, lit(pose),
+                                           clicked=["a", "b", "c", "d", "e", "f"], holes=("far",))
+        self.assertEqual([mark["id"] for mark in s.room_models()[0]["cameras"][0]["mount"]["marks"]],
+                         ["a", "b", "c", "d", "e", "f"])
+        code, report, text = self.check(s, later.take)
+        self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.05)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertNotIn("still holds", text)
+
+    def test_the_movement_reported_covers_what_a_frame_with_holes_did_not_measure(self):
+        plane = near_table_plane()
+        for yaw in (0.2, 0.4, 0.75):
+            with self.subTest(yaw=yaw):
+                self.tearDown()
+                self.setUp()
+                pose = synthetic.moved(yaw_deg=yaw)
+                s, later = self.holed_registration(NEAR_TABLE, ("a", "b", "c", "d"), ("e", "f"), plane, pose, plane)
+                report = self.check(s, later.take)[1]
+                self.assertGreaterEqual(report["view_movement_m"], 0.9 * self.largest_real_error(pose))
+
+    def test_an_unmoved_camera_with_holes_in_its_view_is_still_confirmed(self):
+        plane = near_table_plane()
+        s, later = self.holed_registration(NEAR_TABLE, ("a", "b", "c", "d"), ("e", "f"), plane, None, plane)
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (0, "confirmed"), text)
+        self.assertLess(report["view_movement_m"], 0.05)
 
     def test_a_registration_frame_with_too_little_depth_cannot_say_what_the_view_holds(self):
         s = Scene(self, ended=1_800_000_100.0, background_mm=0)

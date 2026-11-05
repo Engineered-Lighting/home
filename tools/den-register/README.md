@@ -112,9 +112,12 @@ python -B tools\den-register\register.py click C:\den-register --take C:\den-tak
 
 Your browser opens the page. Pick a point in the list, then click its cross on
 the left camera image. Each click shows the depth found there; "depth_missing"
-means too little depth around it, so click a little to the side or leave the
-point unclicked. The Brightness button helps in a dark room; the Colour view is
-for finding your way only. Every click is saved at once in
+means too little depth around it, so click a little to the side. If that does
+not help, you can leave the point unclicked, but keep a cross at the far end: a
+turn shows most there, and a dark end of the room with no cross on it is hard to
+confirm later, because the mount check has to count it as far away. More light
+helps. The Brightness button helps in a dark room; the Colour view is for
+finding your way only. Every click is saved at once in
 `C:\den-register\clicks-reg-1.json`. Press Done when finished. Running the
 command again reopens the same frame with your clicks; add `--frame 40` to use
 another frame of the take (and click again).
@@ -183,7 +186,7 @@ movement would carry anything else in view:
 
 | Line | Means | What to do |
 |---|---|---|
-| `MOUNT CONFIRMED` | Every cross is within 5 cm, and so is everything in view. The registration holds. | Nothing. |
+| `MOUNT CONFIRMED` | Every cross is within 5 cm, and so is everything in view. Any part of the view the registration frame had no depth for counts as 6 m away. The registration holds. | Nothing. |
 | `MOUNT NOT CONFIRMED` | A cross is not clicked, or the crosses are within 5 cm but show a movement that puts something else in view further off. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same, the camera moved: steps 4, 5 and 7. |
 | `MOUNT CHANGED` | The depth moved a lot, or a cross is more than 5 cm off. The registration is now invalidated, for good. | The line lists what to re-check. A cross on furniture that moved: measure it again. Then steps 4, 5 and 7. |
 | `mount_take_not_later` | That take is not newer than the registration's own. | Record a new take. |

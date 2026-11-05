@@ -240,16 +240,17 @@ def view_points(signature, k, reach_m):
     How far a rigid motion moves a point is a convex function of the point, so its
     largest value over everything the camera saw between itself and those surfaces
     is at one of these. reach_m keeps a window or a doorway from counting as room.
+    A cell with no depth counts at reach_m: the camera looked that way, and a dark
+    far floor has no depth while it is still room.
     """
     rows, cols = signature["grid"]
     height, width = signature["shape"]
     points = [[0.0, 0.0, 0.0]]
     for r, row in enumerate(signature["cells"]):
         for c, millimetres in enumerate(row):
-            if millimetres is not None:
-                z = min(millimetres / 1000, reach_m)
-                points += [back_project(k, u, v, z) for v in (r * height // rows, (r + 1) * height // rows)
-                           for u in (c * width // cols, (c + 1) * width // cols)]
+            z = reach_m if millimetres is None else min(millimetres / 1000, reach_m)
+            points += [back_project(k, u, v, z) for v in (r * height // rows, (r + 1) * height // rows)
+                       for u in (c * width // cols, (c + 1) * width // cols)]
     return points
 
 

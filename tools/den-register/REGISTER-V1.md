@@ -129,11 +129,13 @@ looks at a frame of a later take in three steps.
    positions on the two frames (the entry keeps the first as `mount.marks`) give
    the rigid motion they show together, and `view_movement_m` is the farthest
    that motion carries anything in view: the marks, the camera, and the corners
-   of each signature cell at its depth, capped at `mount_view_reach_m`. How far a
-   rigid motion moves a point is convex in the point, so nothing between the
-   camera and those surfaces moves further. At most `gate_m`: `confirmed`. Over
-   it: `not_confirmed`. So is a registration frame with under `mount_min_cells`
-   cells of depth, which cannot say what the view holds.
+   of each signature cell at its depth, capped at `mount_view_reach_m`. A cell
+   with no depth counts at `mount_view_reach_m`: a dark far floor or a bare wall
+   has no depth and is still room. How far a rigid motion moves a point is convex
+   in the point, so nothing between the camera and those surfaces moves further.
+   At most `gate_m`: `confirmed`. Over it: `not_confirmed`. So is a registration
+   frame with under `mount_min_cells` cells of depth, which cannot say what the
+   view holds.
 
 `changed` appends a RoomModel revision whose entry carries `invalidated`, with
 what the owner must re-check; from then on that `transform_id` resolves as

@@ -14,23 +14,27 @@ lists it in the run file; `replay.py --scored` refuses while any slot is open.
 - **An R take** (`den-take-1`): per frame, the RGB and depth host-monotonic
   times and the rectified-left depth plane, from the same bundle.
 - **A RoomModel camera entry**, which `transform_id` (`<camera_id>@<version>`)
-  resolves to. Its inner form, `den-observe-camera-1`, is not in the
-  contracts (slot `camera_entry_form`): `intrinsics` holds `source`,
-  `rectified_left` and `rgb` ({fx, fy, cx, cy} or 3x3), `rgb_distortion`
-  (8 terms), `rgb_from_rectified_left` {rotation, translation_m},
-  `stereo_baseline_m`, `depth_size` and `rgb_size`; `pose` holds
+  resolves to, from rung 1's `room-model.jsonl`: JSON Lines, one RoomModel
+  revision per line, the last line the current room. A line that does not read
+  refuses the run. The contracts say `intrinsics` names its source, the EEPROM
+  values today, and give no inner form; `den-observe-camera-1` (slot
+  `camera_entry_form`) is the one den-register writes and this tool reads:
+  `intrinsics` holds `source`, `rectified_left` and `rgb` ({fx, fy, cx, cy} or
+  3x3), `rgb_distortion` (8 terms), `rgb_from_rectified_left` {rotation,
+  translation_m}, `stereo_baseline_m`, `depth_size` and `rgb_size`; `pose` holds
   `camera_frame: "rectified_left"` and `room_from_camera`, a 4x4 metre matrix
-  into the room frame (z up, floor at z = 0).
+  into the room frame (z up, floor at z = 0). Other keys in the entry are not read.
 
 ## Registration: refused, never guessed
 
 Following `room_context.py`, the run is refused (nothing is written) when the
 camera entry is missing, ambiguous (two entries for one `transform_id`), has no
-rigid 4x4 pose or numeric intrinsics, has `error_bound_m` null (today's state:
-unvalidated) or above `max_error_bound_m` (rung 1's gate), or is **stale**:
-superseded by a later version for the same camera (versions are ISO dates), or
-contradicted by a frame whose own intrinsics differ from the entry's by more
-than 1 px (`depth_association.camera_model`'s `frame_intrinsics_changed`).
+rigid 4x4 pose or numeric intrinsics, has `error_bound_m` null (unvalidated) or
+above `max_error_bound_m` (rung 1's gate), carries `invalidated` (rung 1's mount
+check found the camera moved), or is **stale**: not the newest entry for its
+camera in the current revision, or contradicted by a frame whose own intrinsics
+differ from the entry's by more than 1 px (`depth_association.camera_model`'s
+`frame_intrinsics_changed`).
 Because a bad registration refuses the run, den-observe never writes the null
 `room_position` and `joints_room` the schema reserves for an invalidated
 transform.

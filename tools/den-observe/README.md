@@ -10,13 +10,14 @@ including the slots the contracts leave open.
 |---|---|
 | `replay.py` | Replays an R take with detector rows or the fake detector; `--demo` runs on synthetic data. |
 | `observe.py` | The writer: one detector row and its take frame give Observations. |
-| `roommodel.py` | Resolves `transform_id` to one RoomModel camera entry; refuses a missing or stale registration. |
+| `roommodel.py` | Reads rung 1's `room-model.jsonl`, resolves `transform_id` to one camera entry, and refuses a missing, stale or invalidated registration. |
 | `detections.py` | The `den-detections-1` row format, and the adapter from perception-lab's results. |
 | `fake_detector.py` | A scripted stand-in for YOLO26s + RTMPose-m. It never looks at pixels. |
 | `takes.py` | Reads an R take's depth plane, frame times and clock (through den-take's reader). |
 | `lift.py`, `camgeom.py` | Depth lifting and camera math, following perception-lab without numpy. |
 | `method.py` | Reads METHOD.md's block and refuses a scored run while a slot is open. |
 | `synth.py` | Synthetic rooms, takes and camera entries with known geometry, for the tests and the demo. |
+| `testdata/` | A copy of the file den-register writes on synthetic data, and the script that makes it. |
 
 It needs Python 3.12 and the standard library only: nothing to install, no
 numpy. It reads files on this PC and never contacts a camera, the Jetson, LA,
@@ -61,17 +62,20 @@ python -B -m unittest discover -s tools\den-observe -v
 ```
 
 The tests use synthetic data only; the one network guard allows 127.0.0.1
-and nothing connects. They take about 6 seconds.
+and nothing connects. They take about 15 seconds. When `tools\den-register` is
+in the same checkout (or `$env:DEN_REGISTER_DIR` names it), they also run rung
+1's own synthetic fit and read what it writes; otherwise those tests are skipped
+and the copy in `testdata` stands in for it.
 
-## A real take, once rung 1 has written a camera entry
+## A real take, once rung 1 has registered the camera
 
-Today this refuses: the den's camera entry has `error_bound_m` null (no
-validated registration). Once rung 1 writes one, with its pose and
-intrinsics in METHOD.md's `den-observe-camera-1` form, the plumbing run with
-the fake detector is:
+Rung 1 (`tools\den-register`) writes `C:\den-register\room-model.jsonl`, one
+revision per line. den-observe reads its last line, which holds the camera's
+current registration. It refuses the run if rung 1's mount check has invalidated
+that registration: register again. The plumbing run with the fake detector is:
 
 ```powershell
-python -B tools\den-observe\replay.py --take C:\den-takes\2026-11-10-1 --room-model C:\den-takes\room-model.json --fake --out C:\den-takes\2026-11-10-1\observe-1
+python -B tools\den-observe\replay.py --take C:\den-takes\2026-11-10-1 --room-model C:\den-register\room-model.jsonl --fake --out C:\den-takes\2026-11-10-1\observe-1
 ```
 
 The fake detector's boxes are not where anyone is; this checks the path, not

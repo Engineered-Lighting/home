@@ -312,10 +312,29 @@ out = predict.predict({"den_front_left.white": {"level": 0.5, "cct_k": 2700}}, m
 - `surfaces` holds every sample point (one per block, ids `r<row>c<col>`, in
   `light-model.json`'s order) plus the `unit` key, the shape of
   Decision.predicted.surfaces. A point the fit excluded is None.
+  That holds in every scene, an all-off one included: None means nothing is
+  known there, 0 means no electric light.
 - The value is the electric light Ê = Σ g_c(u_c)·B_c(p, k_c). Pass
   `daylight={point_id: D}` to add daylight; rung 8 does not model it.
 - `predict.prepare(model)` reads the file once; pass its result instead of
   the dict when calling many times. One call takes a few milliseconds.
+
+## The probe log: send and settle times
+
+Each clean step adds one `step` line to `probes.jsonl`. Times are seconds:
+
+| Field | Meaning |
+|---|---|
+| `sent_pc` | PC wall clock (Unix time) just before the step's first write |
+| `send_s` | from then until HA had answered the step's last write |
+| `settle_s` | from then until the first received frame that already agrees with the step's settled frames: when the camera saw the light land, within one frame |
+| `capture_s` | from then until the step's last frame was in |
+
+The same line holds `index`, `step_kind`, `scene`, and `label`, `ratio`, `bulb`,
+`level` and `kelvin` where they apply. A step that changes no light (the first
+basis step after the confirm captures), or changes it within Stage 0's noise
+tolerance (the lowest dimming levels), reads as landing on its first frame, so
+size a settle margin from the steps that change a lot, such as `basis`.
 
 ## Before the session: the open slots
 
@@ -336,7 +355,8 @@ or change each one; the slots close in one commit before any probe:
 | `near_full_share` | 0.75 | what counts as near full combined output |
 | `schedule_seed` | 20261110 | the hold-outs' random seed |
 | `frames_per_capture` | 3 | settled frames per step |
-| `settle_limit_s` | 5 | how long a step may take to settle |
+| `step_dwell_s` | 1 | frames count only from this long after a step's send; HA shows a Hue bulb's target before it lands |
+| `settle_limit_s` | 5 | how long a step may take to settle, from its send |
 | `bracket_tolerance_multiple` | 5 | brackets that disagree by more flag a block |
 | `hold_check_wait_s` | 5 | wait before the restored-hold check |
 | `resume_check_s` | 30 | bulbs must read off this long after the resume |
@@ -413,19 +433,24 @@ $H = '<ha-ssh-user>@<ha-host>'
    It waits up to 10 minutes for the den to read empty for 2 minutes with
    all four bulbs off, pauses den_lighting, and steps the bulbs. Keep the den
    empty until it prints its outcome (about 12 minutes). Ctrl+C before the
-   pause stops it; after the pause, Ctrl+C aborts and restores.
+   pause stops it; after the pause, Ctrl+C aborts and restores. A session
+   that stopped before the pause used up its folder name, so set `$P` to a new
+   name (add `-2`) before you start again.
 
-3. **Read the outcome.** "complete" means every bulb was restored and
-   den_lighting resumed. "aborted" names the reason (someone came in, a bulb
-   changed that the tool did not change, the camera, HA lost, Ctrl+C). A bulb
+3. **Read the outcome.** "complete" means the data is complete and the bulbs
+   were restored and den_lighting resumed; any line above it names what was
+   not. "aborted" names the reason (someone came in, a bulb changed that the
+   tool did not change, the camera, HA lost or refusing a write, Ctrl+C). A bulb
    someone changed is never written again; the tool prints, for example,
    "light.X was not restored: its normal now carries the probe's level and
    temperature. Set it once by hand in the HA app." If occupancy reads
    unknown at the end, it asks you to walk through the den once and checks
-   the bulbs go off about 2 minutes later.
+   the bulbs go off about 2 minutes later. "den_lighting did not read back as
+   resumed" means tell the agent.
 
-4. **If it stopped part-way** (HA lost, the window closed, a game started),
-   finish it once HA answers (after the game, for a game):
+4. **If it stopped part-way** ("stopped", or an abort that says so: HA lost,
+   the window closed, a game started), finish it once HA answers (after the
+   game, for a game). It is safe to run again if it stops again:
 
    ```powershell
    python -B tools\den-light\probe.py --recover $P --ha $HA --camera $Cam
@@ -439,9 +464,11 @@ $H = '<ha-ssh-user>@<ha-host>'
 
    It prints PASS or FAIL with the median and p90, and writes
    `readings.json`, `light-model.json` and `score.json` in `$P`. Tell the
-   agent the folder name.
+   agent the folder name. It refuses if METHOD-V1's Stage 1 block has changed
+   since the session: changing a number after the probes would be tuning on
+   its hold-outs, which takes a new session.
 
-Exit codes as in Stage 0: 0 = complete or pass, 1 = aborted or fail,
+Exit codes as in Stage 0: 0 = complete or pass, 1 = aborted, stopped or fail,
 2 = refused (nothing was changed).
 
 ## Stage 1 privacy rules

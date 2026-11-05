@@ -203,14 +203,22 @@ def track_name(number):
     return 'trk-%d' % number
 
 
-def run_tracker(observations, params, floor=None, exits=()):
-    """All `track` lines for these observations, plus the left-out counts."""
+def run_tracker(observations, params, floor=None, exits=(), time_field=None):
+    """All `track` lines for these observations, plus the left-out counts.
+
+    With a time_field (METHOD.md's slot), every line also carries its frame's capture time under that name.
+    """
     frames, counts = frames_from_observations(observations, params)
     core = tracker_core.TrackerCore(params, exits=exits, floor=floor)
     lines = []
     for frame in frames:
         for track, state in core.step(frame['t'], frame['detections']):
-            lines.append(track_record(track, state))
+            line = track_record(track, state)
+            if time_field:
+                if time_field in line:
+                    raise RecordError('record.time_field %r is already a Track field' % time_field)
+                line[time_field] = frame['t']
+            lines.append(line)
     counts['frames'] = len(frames)
     counts['tracks'] = core.next_id - 1
     counts['track_lines'] = len(lines)

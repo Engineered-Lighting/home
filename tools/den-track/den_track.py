@@ -99,7 +99,8 @@ def cmd_track(args):
     check_out_folder(args.out, (TRACKS_FILE, TRACK_RUN_FILE))
     observations = records.read_jsonl(args.observations)
     floor, exits = real_room(method)
-    lines, counts = records.run_tracker(observations, method.tracker, floor=floor, exits=exits)
+    lines, counts = records.run_tracker(observations, method.tracker, floor=floor, exits=exits,
+                                        time_field=method.time_field)
     tracks_path = os.path.join(args.out, TRACKS_FILE)
     records.write_jsonl(tracks_path, lines)
     write_json(os.path.join(args.out, TRACK_RUN_FILE), {

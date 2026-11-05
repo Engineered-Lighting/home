@@ -106,6 +106,14 @@ variance across its own length, in degrees.
 the detection, its status is confident and `sd_deg` is at most `heading_max_sd_deg`:
 never on a prediction, an emission or evidence whose owner is in doubt.
 
+## Time on a track line
+
+`schemas.json` gives Track no time, and rung 3's scorer needs none: a link takes its time
+from the Observation it lists. With `record.time_field` null, lines hold only the schema's
+fields. With a name, every line also carries its frame's capture time under it, the
+coasting and ended lines too. A line exists only at a frame: the tool invents no frames
+for a gap, since the tracker measures being unseen in seconds and its results were tuned so.
+
 ## What rung 3 leaves empty
 
 `head_pose` is null, `posture` is `{"value": "unknown", "score": null}` and
@@ -171,6 +179,9 @@ folder, so an earlier one stays.
   "version": 1,
   "freeze": {
     "frozen_on": {"open": true, "proposed": "the date of the freeze", "why": "Closing this is the freeze: the owner writes the date once the other slots are closed and any pilot take is done. After that, any change to this block changes its fingerprint, and a scored run refuses tracks made under another one."}
+  },
+  "record": {
+    "time_field": {"open": true, "proposed": null, "why": "schemas.json gives Track no time, so a coasting or ended line lists no observation to date it, and rung 5 dates it at the line before. null keeps to the schema. A name (\"as_of\" is rung 5's suggestion) puts the frame's capture time on every line under it, and rung 5 and K7 must then read the same name. Decide before the freeze: this changes the block's fingerprint, and tracks of a take already scored cannot be made again under another one."}
   },
   "room": {
     "floor_m": {"open": true, "proposed": [0.0, 0.0, 4.572, 3.759], "why": "[x0, y0, x1, y1] of the floor in the room frame. RoomModel's surfaces have no agreed geometry form yet. Proposed from note R10's tape measures and the frame's definition (origin at the minimum corner, x along the long axis). The owner checks it against the frame rung 1 registers to."},

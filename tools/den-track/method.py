@@ -109,6 +109,14 @@ class Method:
         return self.values['scoring']
 
     @property
+    def time_field(self):
+        """The name of a time key on every track line, or None to keep to schemas.json."""
+        name = self.values['record']['time_field']
+        if name is not None and not (isinstance(name, str) and name):
+            raise MethodError('record.time_field must be null or a name, got %r' % (name,))
+        return name
+
+    @property
     def room(self):
         return self.values['room']
 

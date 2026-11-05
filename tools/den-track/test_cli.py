@@ -153,6 +153,37 @@ class PracticeRunTest(Base):
         cli(*self.score_args([take]))
         self.assertEqual(records.read_jsonl(self.path('score', 'crossings.jsonl')), [])
 
+    def test_track_lines_have_no_time_key_until_the_owner_names_one(self):
+        take = self.make_take()
+        for line in records.read_jsonl(take[1]):
+            self.assertNotIn('as_of', line)
+            self.assertNotIn('capture_ts', line)
+
+    def test_once_named_every_track_line_carries_its_frame_time_ended_ones_too(self):
+        def name_it(block):
+            block['record']['time_field'] = 'as_of'
+        meth = self.closed_method('METHOD-named.md', name_it)
+        take = self.make_take('armchair_occlusion', meth=meth)
+        lines = records.read_jsonl(take[1])
+        by_id = {o['obs_id']: o['capture_ts'] for o in records.read_jsonl(take[0])}
+        for line in lines:
+            self.assertIsInstance(line['as_of'], float)
+            for oid in line['last_obs_ids']:
+                self.assertEqual(line['as_of'], by_id[oid])
+        self.assertTrue([l for l in lines if not l['last_obs_ids']], 'a line with no observation now has a time')
+
+    def test_a_time_field_that_is_not_a_new_name_is_refused(self):
+        for n, bad in enumerate(('state', 7, '')):
+            def name_it(block, bad=bad):
+                block['record']['time_field'] = bad
+            meth = self.closed_method('METHOD-bad-%d.md' % n, name_it)
+            code, text = cli('--method', meth, 'synth', '--scene', 'near_pass', '--out', self.path('t%d' % n))
+            self.assertEqual(code, 0, text)
+            code, text = cli('--method', meth, 'track', '--observations', self.path('t%d' % n, 'observations.jsonl'),
+                             '--out', self.path('t%d' % n, 'track'))
+            self.assertEqual(code, 2, text)
+            self.assertIn('time_field', text)
+
     def test_practice_writes_nothing_and_never_calls_itself_a_score(self):
         before = set(os.listdir(HERE))
         code, text = cli('practice', '--seeds', '1', '--scene', 'near_pass')
@@ -649,6 +680,11 @@ class MethodFileTest(Base):
                 f.write(text)
             with self.assertRaises(method.MethodError):
                 method.read_block(p)
+
+    def test_the_time_field_is_an_open_slot_that_keeps_to_the_schema_as_proposed(self):
+        m = method.Method()
+        self.assertIn('record.time_field', [name for name, _ in m.open])
+        self.assertIsNone(m.time_field)
 
     def test_the_plan_is_an_open_slot_with_the_readmes_script_as_its_proposal(self):
         m = method.Method()

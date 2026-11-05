@@ -109,7 +109,8 @@ How the command line behaves:
 ## Records
 
 - **`track/v1`.** The field names are exactly those of `schemas.json` Track, plus
-  `version`. One line per live track per frame, and one last line with `state` `ended`.
+  `version`, and the slot `record.time_field` if you name one. One line per live track per
+  frame, and one last line with `state` `ended`.
   The tracker's confidence is `association.status` and `association.hypotheses`.
   METHOD.md says what each field holds and which stay empty.
 - **Inputs.** `observation` lines with the schema's fields. Other keys are ignored,
@@ -205,6 +206,7 @@ the value.
 | Slot | Proposed | What decides it |
 |---|---|---|
 | `freeze.frozen_on` | the date of the freeze | Closing it freezes the method |
+| `record.time_field` | `null`, no time on a line | Owner question 2 below |
 | `room.floor_m` | `[0, 0, 4.572, 3.759]` | Note R10's tape measures; check against rung 1's frame |
 | `room.exits_m` | `[]`, known to be wrong | The door's position in the room frame |
 | `tracker.max_coast_s` | 6.0 s | How long someone can stay hidden and come back as themselves |
@@ -223,7 +225,9 @@ the value.
    the reading you want?
 2. **Track has no time of its own** (rung 5 asks too). A coasting or ended line lists no
    observation, so rung 5 dates it at the line before. Rung 3's scorer needs no time on
-   the line, so none was added. Should Track gain an `as_of`?
+   the line, so none is written. Should Track gain an `as_of`? Answer in the slot
+   `record.time_field`, before the freeze: `null` keeps to the schema, and a name puts the
+   frame's capture time on every line, which rung 5 must then read.
 3. **What the gate counts.** The contracts do not spell out three things, which are read
    here as: IDF1 pooled over padded crossings, with whole-take IDF1 reported beside it; a
    silent swap outside any crossing also fails; flagged switches and ambiguous share are

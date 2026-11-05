@@ -1102,6 +1102,10 @@ class MountTests(Base):
                    "too few marks": lambda e: e["mount"].update(marks=e["mount"]["marks"][:4]),
                    "a mark with no position": lambda e: e["mount"]["marks"][0].pop("camera_xyz_m"),
                    "no signature": lambda e: e["mount"].pop("signature"),
+                   "text in a depth cell": lambda e: e["mount"]["signature"]["cells"][0].__setitem__(0, "far"),
+                   "no grid": lambda e: e["mount"]["signature"].pop("grid"),
+                   "no depth intrinsics": lambda e: e["intrinsics"].pop("rectified_left"),
+                   "intrinsics in words": lambda e: e.update(intrinsics="EEPROM (nominal)"),
                    "no mount": lambda e: e.pop("mount")}
         for name, change in changes.items():
             with self.subTest(name):

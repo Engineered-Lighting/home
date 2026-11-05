@@ -514,13 +514,22 @@ def measure_marks(work, take_dir, row, bundle, sheet, entry, m):
 
 def mount_record(entry, tid, m):
     """The entry's mount record, checked, or transform_unknown: an entry without one cannot be mount-checked."""
-    mount = entry.get("mount") if type(entry.get("mount")) is dict else {}
-    marks, signature = mount.get("marks"), mount.get("signature")
-    good = (scene._finite(mount.get("take_ended_unix")) and type(signature) is dict and type(marks) is list
+    def section(holder, name):
+        return holder.get(name) if type(holder.get(name)) is dict else {}
+
+    mount, marks = section(entry, "mount"), section(entry, "mount").get("marks")
+    signature, k = section(mount, "signature"), section(section(entry, "intrinsics"), "rectified_left")
+    cells = signature.get("cells")
+    good = (scene._finite(mount.get("take_ended_unix")) and type(marks) is list
             and len(marks) >= m["min_fit_pairs"] + m["min_checks"]
             and all(type(mark) is dict and type(mark.get("id")) is str and type(mark.get("camera_xyz_m")) is list
                     and len(mark["camera_xyz_m"]) == 3 and all(scene._finite(v) for v in mark["camera_xyz_m"])
-                    for mark in marks))
+                    for mark in marks)
+            and all(type(signature.get(name)) is list and len(signature[name]) == 2
+                    and all(type(v) is int and v > 0 for v in signature[name]) for name in ("grid", "shape"))
+            and type(cells) is list and all(type(row) is list and all(v is None or scene._finite(v) for v in row)
+                                            for row in cells)
+            and all(scene._finite(k.get(name)) for name in ("fx", "fy", "cx", "cy")))
     if not good:
         raise Refused("transform_unknown", f"{tid} has no usable mount record: register again")
     return mount

@@ -40,9 +40,9 @@ def face_visible(obs, score_min):
 def take_links(observations, track_lines, truth):
     """Links for one take, plus what was left out and why.
 
-    A rejected Observation cannot be tracked, and one with no position cannot
-    unless it joined its partner, so neither is scored. An unlabelled one is left
-    out and counted; a scored run refuses any.
+    A rejected Observation cannot be tracked, and neither can one with no
+    position, so neither is scored. An unlabelled one is left out and counted; a
+    scored run refuses any.
     """
     by_id = {o['obs_id']: o for o in observations}
     listed = _listed(track_lines, by_id)

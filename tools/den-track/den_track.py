@@ -268,9 +268,9 @@ def cmd_score(args):
 
 # -- synth and practice --------------------------------------------------------
 
-def scene_take(scene, seed, noise, fps, with_boxes):
+def scene_take(scene, seed, noise, fps):
     data = synth.scenario(scene, seed=seed, noise=noise, fps=fps)
-    observations, frames, crossings = synth.to_records(data, with_boxes=with_boxes)
+    observations, frames, crossings = synth.to_records(data)
     truth = truth_mod.Truth('%s-%d' % (scene, seed), ['A', 'B'], {oid: p for _, row in frames for oid, p in row.items()},
                             {oid: ts for ts, row in frames for oid in row}, crossings)
     return observations, truth, frames, crossings
@@ -284,21 +284,21 @@ def synth_room():
 
 def cmd_synth(args):
     check_out_folder(args.out, ('observations.jsonl', 'truth.jsonl'))
-    observations, truth, frames, crossings = scene_take(args.scene, args.seed, args.noise, args.fps, args.with_boxes)
+    observations, truth, frames, crossings = scene_take(args.scene, args.seed, args.noise, args.fps)
     records.write_jsonl(os.path.join(args.out, 'observations.jsonl'), observations)
     truth_mod.write(os.path.join(args.out, 'truth.jsonl'), truth.take, truth.people, frames, crossings)
     print('wrote %d synthetic observations and their truth to %s' % (len(observations), args.out))
     return EXIT_OK
 
 
-def practice_rows(method, scenes, seeds, noise, fps, with_boxes=False):
+def practice_rows(method, scenes, seeds, noise, fps):
     """Per scene: every seed tracked and scored. No file is read or written."""
     floor, exits = synth_room()
     rows = []
     for scene in scenes:
         takes, tracks = [], 0
         for seed in seeds:
-            observations, truth, _, _ = scene_take(scene, seed, noise, fps, with_boxes)
+            observations, truth, _, _ = scene_take(scene, seed, noise, fps)
             lines, counts = records.run_tracker(observations, method.tracker, floor=floor, exits=exits)
             tracks += counts['tracks']
             takes.append({'name': truth.take, 'observations': observations, 'tracks': lines, 'truth': truth})
@@ -326,7 +326,7 @@ def cmd_practice(args):
             raise Refused(str(e))
     scenes = args.scene or sorted(synth.SCENES)
     seeds = range(args.first_seed, args.first_seed + args.seeds)
-    rows = practice_rows(method, scenes, seeds, args.noise, args.fps, args.with_boxes)
+    rows = practice_rows(method, scenes, seeds, args.noise, args.fps)
     print('%-26s %5s %8s %7s %7s %8s %8s %7s %7s' % ('scene', 'runs', 'switches', 'silent', 'IDF1', 'contact', 'outside', 'tracks', 'face'))
     silent = 0
     for r in rows:
@@ -373,7 +373,6 @@ def parser():
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--noise', default='typical', choices=sorted(synth.NOISE))
     p.add_argument('--fps', type=float, default=4.0)
-    p.add_argument('--with-boxes', action='store_true', help='a person_box beside each keypoints')
     p.add_argument('--out', required=True)
     p.set_defaults(fn=cmd_synth)
 
@@ -383,7 +382,6 @@ def parser():
     p.add_argument('--first-seed', type=int, default=0)
     p.add_argument('--noise', default='typical', choices=sorted(synth.NOISE))
     p.add_argument('--fps', type=float, default=4.0)
-    p.add_argument('--with-boxes', action='store_true')
     p.add_argument('--set', action='append', metavar='SECTION.NAME=JSON', help='try another value, for tuning')
     p.set_defaults(fn=cmd_practice)
 

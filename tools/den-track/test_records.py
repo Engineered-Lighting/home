@@ -6,6 +6,7 @@ import unittest
 
 import method
 import records
+import score
 import synth
 import truth
 
@@ -36,7 +37,7 @@ def obs(oid, ts, x=1.0, y=2.0, kind='keypoints', box=(100, 100, 200, 400), **ext
 class SchemaTest(unittest.TestCase):
     def setUp(self):
         data = synth.scenario('clean_crossing', seed=0, noise='typical')
-        self.observations, _, _ = synth.to_records(data, with_boxes=True)
+        self.observations, _, _ = synth.to_records(data)
         self.lines, _ = records.run_tracker(self.observations, params())
 
     def test_track_lines_use_exactly_the_schema_field_names_plus_version(self):
@@ -141,49 +142,110 @@ class ObservationSeamTest(unittest.TestCase):
             records.run_tracker([obs('a', None)], params())
 
 
-class TwoObservationsOfOnePersonTest(unittest.TestCase):
-    def test_box_and_keypoints_are_one_update_and_both_are_listed(self):
-        frames = []
-        for k in range(3):
-            frames.append(obs('k%d' % k, k * 0.25, kind='keypoints'))
-            frames.append(obs('b%d' % k, k * 0.25, x=1.05, kind='person_box'))
-        lines, counts = records.run_tracker(frames, params())
-        self.assertEqual(counts['tracks'], 1)
-        self.assertEqual(lines[-1]['last_obs_ids'], ['b2', 'k2'])
+def rung2_obs(ms, index, kind, box, xy, t):
+    """A line as rung 2's observe.py writes it: one per detector box, keypoints when the box got a pose, else person_box."""
+    rec = {'obs_id': 'o-den-oak-%d-%d' % (ms, index),
+           'source': {'sensor_id': 'den-oak', 'model': 'rtmpose-m' if kind == 'keypoints' else 'yolo26s', 'model_version': None},
+           'kind': kind, 'capture_ts': t, 'transform_id': 'den-oak@synthetic', 'depth_ts': t, 'image_box': list(box),
+           'score': 0.8 if kind == 'keypoints' else 0.45,
+           'room_position': {'x': xy[0], 'y': xy[1], 'z': 1.1, 'cov': [[0.01, 0, 0], [0, 0.02, 0], [0, 0, 0.003]]},
+           'visibility': 'visible' if kind == 'keypoints' else 'partial', 'validity': 'valid',
+           'freshness': {'status': 'fresh', 'depth': 'used'}}
+    if kind == 'keypoints':
+        rec.update(keypoints=[[None, None, None]] * 17, joint_set='coco17',
+                   joints_room=[{'j': j, 'xyz': None, 'cov': None, 'status': 'unsupported', 'lift': 'none'} for j in range(17)])
+    return rec
 
-    def test_the_keypoints_torso_point_is_the_measurement(self):
-        rows = [obs('k', 0.0, x=1.0, kind='keypoints'), obs('b', 0.0, x=3.0, kind='person_box')]
-        frames, _ = records.frames_from_observations(rows, params())
-        self.assertEqual(frames[0]['detections'][0]['xy'], (1.0, 2.0))
 
-    def test_a_box_with_no_position_still_joins_its_keypoints(self):
+class OneObservationOneDetectionTest(unittest.TestCase):
+    """Rung 2 writes one Observation per detector box, so two in a frame are two detections, however much they overlap."""
+    FPS, T0 = 4.0, 1793066600.0
+
+    def crossing(self):
+        """A walks behind B. While A is behind, A's box gets no pose and sits inside B's box, at IoU >= 0.5."""
+        rows, labels, stamps, behind = [], {}, {}, []
+        for k in range(int(8 * self.FPS)):
+            t = round(self.T0 + k / self.FPS, 4)
+            ms = int(round(t * 1000))
+            xa = -2.0 + 0.5 * k / self.FPS
+            front = rung2_obs(ms, 0, 'keypoints', (860, 200, 1060, 900), (0.0, 2.0), t)
+            if abs(xa) < 0.35:
+                rear = rung2_obs(ms, 1, 'person_box', (880, 240, 1040, 860), (xa, 2.6), t)
+                behind.append(t)
+            else:
+                u = 960 + 600 * xa / 2.6
+                rear = rung2_obs(ms, 1, 'keypoints', (u - 58, 260, u + 58, 830), (xa, 2.6), t)
+            for rec, person in ((front, 'B'), (rear, 'A')):
+                rows.append(rec)
+                labels[rec['obs_id']] = person
+                stamps[rec['obs_id']] = t
+        self.assertEqual(len(behind), 5)
+        crossings = [{'crossing_id': 'c1', 'type': 'crossing', 'interval': [self.T0 + 3.0, self.T0 + 5.0]}]
+        return rows, labels, truth.Truth('t', ['A', 'B'], labels, stamps, crossings), behind
+
+    def test_a_box_only_person_behind_another_is_never_on_the_other_track(self):
+        rows, labels, _, _ = self.crossing()
+        lines, _ = records.run_tracker(rows, params())
+        both = [l for l in lines if len({labels[o] for o in l['last_obs_ids']}) > 1]
+        self.assertEqual(both, [], 'a track line lists both people')
+
+    def test_a_box_only_person_keeps_their_own_track_and_is_not_left_coasting(self):
+        rows, labels, _, behind = self.crossing()
+        lines, counts = records.run_tracker(rows, params())
+        self.assertEqual(counts['tracks'], 2)
+        on_track = {}
+        for line in lines:
+            for oid in line['last_obs_ids']:
+                on_track.setdefault(line['track_id'], set()).add(labels[oid])
+        self.assertEqual(sorted(sorted(v) for v in on_track.values()), [['A'], ['B']])
+        listed = {o for l in lines for o in l['last_obs_ids']}
+        self.assertEqual({r['obs_id'] for r in rows if r['capture_ts'] in behind} - listed, set(),
+                         'every observation behind the other person is on a track')
+
+    def test_the_crossing_scores_no_phantom_switch(self):
+        rows, _, labelled, _ = self.crossing()
+        lines, _ = records.run_tracker(rows, params())
+        report = score.score_session([{'name': 't', 'observations': rows, 'tracks': lines, 'truth': labelled}],
+                                     method.Method().scoring)
+        window = report['windows'][0]
+        self.assertEqual((window['switches'], window['silent_swaps']), (0, 0))
+        self.assertEqual(report['pooled']['idf1'], 1.0)
+
+    def test_two_people_seated_with_overlapping_boxes_keep_two_live_tracks(self):
+        rows = []
+        for k in range(40):
+            t = round(self.T0 + k / self.FPS, 4)
+            ms = int(round(t * 1000))
+            rows.append(rung2_obs(ms, 0, 'keypoints', (860, 200, 1060, 900), (0.0, 2.0), t))
+            rows.append(rung2_obs(ms, 1, 'person_box', (880, 240, 1040, 860), (0.2, 2.6), t))
+        lines, counts = records.run_tracker(rows, params())
+        self.assertEqual(counts['tracks'], 2)
+        self.assertEqual({l['state'] for l in lines[-6:]}, {'confirmed'})
+        self.assertEqual(max(len(l['last_obs_ids']) for l in lines), 1)
+
+    def test_every_person_observation_with_a_position_is_its_own_detection(self):
+        rows = [obs('k', 0.0, x=1.0, kind='keypoints'), obs('b', 0.0, x=1.05, kind='person_box')]
+        frames, counts = records.frames_from_observations(rows, params())
+        self.assertEqual(sorted(d['obs_ids'] for d in frames[0]['detections']), [['b'], ['k']])
+        self.assertEqual(counts['no_position'], 0)
+
+    def test_a_box_with_no_position_is_left_out_beside_keypoints(self):
         box = obs('b', 0.0, kind='person_box')
         del box['room_position']
         lines, counts = records.run_tracker([obs('k', 0.0), box], params())
-        self.assertEqual(lines[0]['last_obs_ids'], ['b', 'k'])
-        self.assertEqual(counts['no_position'], 0)
+        self.assertEqual(lines[0]['last_obs_ids'], ['k'])
+        self.assertEqual(counts['no_position'], 1)
 
-    def test_two_people_side_by_side_pair_with_their_own_box(self):
-        rows = [obs('ka', 0.0, x=1.0, box=(100, 100, 200, 400)), obs('kb', 0.0, x=2.0, box=(150, 100, 250, 400)),
-                obs('ba', 0.0, x=1.0, kind='person_box', box=(102, 100, 200, 400)),
-                obs('bb', 0.0, x=2.0, kind='person_box', box=(150, 100, 252, 400))]
-        frames, _ = records.frames_from_observations(rows, params())
-        pairs = sorted(d['obs_ids'] for d in frames[0]['detections'])
-        self.assertEqual(pairs, [['ba', 'ka'], ['bb', 'kb']])
-
-    def test_boxes_that_do_not_overlap_are_two_people(self):
-        rows = [obs('k', 0.0, x=1.0, box=(100, 100, 200, 400)), obs('b', 0.0, x=4.0, kind='person_box', box=(800, 100, 900, 400))]
-        frames, _ = records.frames_from_observations(rows, params())
-        self.assertEqual(len(frames[0]['detections']), 2)
-
-    def test_the_tracker_does_as_well_with_both_kinds(self):
-        data = synth.scenario('close_crossing', seed=2, noise='typical')
-        one, _, _ = synth.to_records(data, with_boxes=False)
-        both, _, _ = synth.to_records(data, with_boxes=True)
-        lines_one, counts_one = records.run_tracker(one, params())
-        lines_both, counts_both = records.run_tracker(both, params())
-        self.assertEqual(counts_one['tracks'], counts_both['tracks'])
-        self.assertEqual([l['position'] for l in lines_one], [l['position'] for l in lines_both])
+    def test_a_duplicate_box_of_one_person_never_hides_the_person_and_reads_as_doubt(self):
+        rows = []
+        for k in range(16):
+            rows.append(obs('k%02d' % k, k * 0.25, kind='keypoints'))
+            rows.append(obs('b%02d' % k, k * 0.25, x=1.05, kind='person_box'))
+        lines, counts = records.run_tracker(rows, params())
+        self.assertEqual(max(len(l['last_obs_ids']) for l in lines), 1)
+        self.assertEqual(counts['no_position'] + counts['rejected'], 0)
+        self.assertEqual({l['association']['status'] for l in lines[-2:]}, {'ambiguous'},
+                         'two tracks in reach of each other are never confident')
 
 
 class FileFormatTest(unittest.TestCase):
@@ -224,6 +286,9 @@ class FileFormatTest(unittest.TestCase):
             f.write('[1, 2]\n')
         with self.assertRaisesRegex(records.RecordError, 'line 1'):
             records.read_jsonl(p)
+
+    def test_the_tool_has_no_merge_setting_left(self):
+        self.assertNotIn('merge_iou', method.read_block()['tracker'])
 
     def test_truth_written_and_read_back(self):
         p = self.path('truth.jsonl')

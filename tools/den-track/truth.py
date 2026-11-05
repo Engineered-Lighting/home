@@ -8,8 +8,8 @@ frames and crossings, in any order:
     {"kind": "crossing", "crossing_id": "c01", "type": "crossing", "interval": [1793066608.0, 1793066611.5]}
 
 - A frame's `labels` give, per observation at that capture time, the true person
-  or null for "not a person". One person may have two observations in a frame
-  (a person_box and a keypoints).
+  or null for "not a person". Rung 2 writes one observation per detector box, so a
+  person normally has one; a duplicate box of one person gets the same letter.
 - A person is one capital letter. People are A and B, never names.
 - A crossing's `interval` is the owner's mark of the contact: from when two
   people come within arm's reach, or one goes out of sight, until they are apart

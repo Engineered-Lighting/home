@@ -25,13 +25,13 @@ Per frame, meaning one `capture_ts` on one `source.sensor_id`:
   Everything else is left out and counted. `depth_point`, `radar_point`,
   `face_match` and `appearance_vec` have no writer today, and the last two wait
   for the owner's decision on learning permissions.
-- **One person, one detection**: a `keypoints` and a `person_box` in one frame
-  whose `image_box`es overlap by at least `merge_iou` are the same person. They
-  update the track once and are both listed in `last_obs_ids`.
+- **One Observation, one detection**: rung 2 writes one per detector box, `keypoints`
+  when the box got a pose, else `person_box`. So two in one frame are two detections,
+  however much their `image_box`es overlap: often one person behind another. Nothing
+  is merged, and a track line lists one Observation.
 - **Measurement**: the floor projection of `room_position`: x, y and the top-left
   2x2 of `cov`, times `obs_cov_scale`. For keypoints that is the torso reference
-  point, as `schemas.json` says. An Observation with no usable position is left
-  out unless it joined a partner.
+  point, as `schemas.json` says. An Observation with no usable position is left out.
 - **The clock**: any Observation makes a frame, even an object box. A frame with
   no Observation at all does not exist, so being unseen is measured in seconds.
 
@@ -194,7 +194,6 @@ folder, so an earlier one stays.
     "risk_floor": 0.02,
     "ambiguous_below": 0.98,
     "heading_max_sd_deg": 30.0,
-    "merge_iou": 0.5,
     "obs_cov_scale": 1.0,
     "max_hypotheses": 20000,
     "max_coast_s": {"open": true, "proposed": 6.0, "why": "How long an unseen person keeps their track. Synthetic scenes barely move between 3 and 12 s, and longer only adds ambiguous time, so the den decides: how long can someone stay hidden behind the armchair and come back as themselves? A pilot take can show it."},
@@ -222,7 +221,7 @@ folder, so an earlier one stays.
 | `accel_sigma`, `ambiguous_below`, `risk_floor`, `p_detect_unseen`, `hidden_reach_mps`, `clutter_density`, `birth_density`, `confirm_hits`, `confirm_window` | tuned below: these are the values that moved the results |
 | `p_detect`, `exit_coast_s`, `coast_velocity_tau_s`, `new_track_speed_sigma`, `robust_d2` | swept below, and the results barely moved |
 | `unseen_after_s` | about 1.5 frames at R6's 4.6-4.9 Hz |
-| `coasting_after_s`, `tentative_max_gap_s`, `floor_margin_m`, `exit_radius_m`, `exit_birth_weight`, `heading_max_sd_deg`, `merge_iou`, `max_hypotheses` | judgement, not tuned; `obs_cov_scale` stays 1 until a pilot says otherwise |
+| `coasting_after_s`, `tentative_max_gap_s`, `floor_margin_m`, `exit_radius_m`, `exit_birth_weight`, `heading_max_sd_deg`, `max_hypotheses` | judgement, not tuned; `obs_cov_scale` stays 1 until a pilot says otherwise |
 
 ## How the values were tuned
 
@@ -236,25 +235,26 @@ with `--set tracker.<name>=<value>` to try a value.
 - **Seeds 1000-1099** were looked at to diagnose silent swaps, which led to the reach
   rule and the door's radius, so they count as tuning too.
 - **Seeds 2000-2199** were run once, after the numbers stopped moving (1,600 runs at
-  each noise):
+  each noise). They and the conditions below were run again when the reader stopped
+  merging overlapping boxes, with no value changed, and these are the results of that
+  run. The difference is small: a false box used to vanish into a real person's keypoints.
 
 | Noise | Silent swaps | Flagged switches | IDF1 by scene, lowest to highest | Lowest scene |
 |---|---|---|---|---|
 | clean | 0 | 177 | 0.954 to 1.000 | `near_pass` |
-| typical | 2 | 376 | 0.914 to 0.987 | `crossing_behind_armchair` |
-| noisy | 8 | 525 | 0.860 to 0.977 | `near_pass` |
+| typical | 3 | 376 | 0.914 to 0.987 | `crossing_behind_armchair` |
+| noisy | 8 | 529 | 0.858 to 0.977 | `near_pass` |
 
 **Other conditions**, seeds 3000-3099 at typical noise, 800 runs each:
 
 | Condition | Silent swaps | Flagged switches | IDF1 | Lowest scene |
 |---|---|---|---|---|
-| 2 frames a second | 5 | 339 | 0.902 | `near_pass` 0.660 |
-| 4.75 frames a second (R6) | 0 | 150 | 0.971 | `touching_crossing` 0.942 |
-| 8 frames a second | 1 | 181 | 0.972 | `crossing_behind_armchair` 0.939 |
-| 15 frames a second | 1 | 216 | 0.969 | `crossing_behind_armchair` 0.941 |
+| 2 frames a second | 5 | 340 | 0.901 | `near_pass` 0.659 |
+| 4.75 frames a second (R6) | 1 | 149 | 0.971 | `touching_crossing` 0.938 |
+| 8 frames a second | 1 | 182 | 0.972 | `crossing_behind_armchair` 0.938 |
+| 15 frames a second | 1 | 215 | 0.969 | `crossing_behind_armchair` 0.942 |
 | Observations' covariance half too small | 2 | 193 | 0.937 | `near_pass` 0.879 |
 | Observations' covariance twice too big | 1 | 161 | 0.962 | `crossing_behind_armchair` 0.900 |
-| `person_box` beside each `keypoints` | 0 | 159 | 0.965 | `crossing_behind_armchair` 0.926 |
 
 None of this is a score. It says the method works on the scenes it was written for.
 
@@ -267,6 +267,10 @@ None of this is a score. It says the method works on the scenes it was written f
 - **A person the tracker never confirmed.** Someone already hidden when the take starts,
   stepping out where a seen person just vanished, gives no rival to doubt. `hidden_reach_mps`
   covers people it has tracked, not people it has not.
+- **A duplicate box of one person.** If the detector's own overlap filter lets one
+  through, it is a second detection: a tentative track beside the real one, and both read
+  `ambiguous` while it lasts. That costs time, not identity, and no one's observation is
+  listed on someone else's track.
 - **Noisy depth along the line of sight.** Stereo error grows with the square of the
   range, and a crossing along the camera's view leans on it. In the noisy profile,
   `near_pass`, `touching_crossing` and `crossing_behind_armchair` fall below 0.9.

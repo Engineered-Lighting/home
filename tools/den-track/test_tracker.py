@@ -33,9 +33,9 @@ def walk(core, t0, dt, positions):
     return out
 
 
-def run_scene(name, seed=0, noise='typical', fps=4.0, with_boxes=False):
+def run_scene(name, seed=0, noise='typical', fps=4.0):
     data = synth.scenario(name, seed=seed, noise=noise, fps=fps)
-    observations, frames, crossings = synth.to_records(data, with_boxes=with_boxes)
+    observations, frames, crossings = synth.to_records(data)
     x0, x1 = synth.ROOM['x']
     y0, y1 = synth.ROOM['y']
     lines, counts = records.run_tracker(observations, params(), floor=[x0, y0, x1, y1], exits=[list(synth.DOOR)])

@@ -226,12 +226,12 @@ def _keypoints(box, xy, facing):
              face if j < 5 else 0.8] for j in range(17)]
 
 
-def to_records(scene, with_boxes=False):
+def to_records(scene):
     """A scene as Observation lines and truth frames, from schemas.json's fields.
 
-    Returns (observations, truth_frames, crossings). Each person gets a keypoints
-    Observation, as rung 2 writes; with_boxes adds their person_box too. A false
-    person is only a person_box. Nothing here is real.
+    Returns (observations, truth_frames, crossings). Each person gets one keypoints
+    Observation, as rung 2 writes. A false person is only a person_box. Nothing here
+    is real.
     """
     observations, frames = [], []
     unsure = 0.2 if scene['noise'] == 'noisy' else 0.0
@@ -248,16 +248,13 @@ def to_records(scene, with_boxes=False):
                     'transform_id': 'den-oak@synthetic', 'score': 0.86, 'visibility': 'visible', 'validity': 'valid',
                     'depth_ts': frame['t']}
             if o['pid'] is None:
-                recs = [dict(base, obs_id=o['id'] + '-b', kind='person_box')]
+                rec = dict(base, obs_id=o['id'] + '-b', kind='person_box')
             else:
-                recs = [dict(base, obs_id=o['id'] + '-k', kind='keypoints', joint_set='coco17',
-                             keypoints=_keypoints(box, xy, o['facing']),
-                             joints_room=_joints(xy, o['facing'], rng, unsure=unsure))]
-                if with_boxes:
-                    recs.append(dict(base, obs_id=o['id'] + '-b', kind='person_box'))
-            for rec in recs:
-                observations.append(rec)
-                labels[rec['obs_id']] = o['pid']
+                rec = dict(base, obs_id=o['id'] + '-k', kind='keypoints', joint_set='coco17',
+                           keypoints=_keypoints(box, xy, o['facing']),
+                           joints_room=_joints(xy, o['facing'], rng, unsure=unsure))
+            observations.append(rec)
+            labels[rec['obs_id']] = o['pid']
         frames.append((frame['t'], labels))
     crossings = [{'crossing_id': e['id'], 'type': e['kind'], 'interval': [e['start'], e['end']]}
                  for e in scene['events']]

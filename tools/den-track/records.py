@@ -6,7 +6,7 @@ UTF-8, LF; reading takes CRLF and a BOM too. Other keys on an Observation
 
 What the tracker uses from an Observation: `obs_id`, `capture_ts`, `source.sensor_id`,
 `kind` (person_box and keypoints are evidence of a person), `validity`,
-`image_box`, `room_position` (projected to the floor) and `joints_room`.
+`room_position` (projected to the floor) and `joints_room`.
 """
 import json
 import math
@@ -117,37 +117,15 @@ def body_heading(obs):
     return math.degrees(math.atan2(fx, fy)) % 360.0, math.degrees(math.sqrt(max(across, 0.0)) / length)
 
 
-def iou(a, b):
-    ix = min(a[2], b[2]) - max(a[0], b[0])
-    iy = min(a[3], b[3]) - max(a[1], b[1])
-    if ix <= 0 or iy <= 0:
-        return 0.0
-    inter = ix * iy
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / union if union > 0 else 0.0
-
-
-def _pair_box_with_pose(group, min_iou):
-    """One person's person_box and keypoints in a frame share a box: pair them, best overlap first."""
-    boxes = [o for o in group if o['kind'] == 'person_box' and o.get('image_box')]
-    poses = [o for o in group if o['kind'] == 'keypoints' and o.get('image_box')]
-    pairs = sorted(((-iou(b['image_box'], k['image_box']), b['obs_id'], k['obs_id']) for b in boxes for k in poses))
-    used, partner = set(), {}
-    for neg, b, k in pairs:
-        if -neg >= min_iou and b not in used and k not in used:
-            used.update((b, k))
-            partner[b], partner[k] = k, b
-    return partner
-
-
 def frames_from_observations(observations, params):
     """Valid person evidence as tracker frames, oldest first, with what was left out.
 
     Returns (frames, counts). A frame is one capture time on one sensor, and any
-    Observation there makes a frame, even one with nobody in it. Each detection
-    is one person: a keypoints Observation with its person_box if both exist,
-    measured at the keypoints' torso point. A valid Observation with no usable
-    position still joins its partner's update, and is otherwise left out.
+    Observation there makes a frame, even one with nobody in it. Each Observation
+    is one detection, whatever its box overlaps: rung 2 writes one per detector
+    box (keypoints when the box got a pose, else person_box), so two overlapping
+    ones are two people, one behind the other. A valid Observation with no usable
+    position is left out.
     """
     counts = {'observations': 0, 'not_person': 0, 'rejected': 0, 'no_position': 0}
     by_frame = {}
@@ -170,25 +148,14 @@ def frames_from_observations(observations, params):
             by_frame[(ts, sensor)].append(obs)
     frames = []
     for (ts, sensor) in sorted(by_frame):
-        group = sorted(by_frame[(ts, sensor)], key=lambda o: o['obs_id'])
-        partner = _pair_box_with_pose(group, params['merge_iou'])
         detections = []
-        for obs in group:
-            mate = partner.get(obs['obs_id'])
-            members = [obs] + [o for o in group if o['obs_id'] == mate]
-            if mate is not None and obs['kind'] != 'keypoints':
-                continue        # the keypoints half of the pair speaks for both
-            where = None
-            for member in members:      # the keypoints' torso point first
-                where = floor_measurement(member, params['obs_cov_scale'])
-                if where is not None:
-                    break
+        for obs in sorted(by_frame[(ts, sensor)], key=lambda o: o['obs_id']):
+            where = floor_measurement(obs, params['obs_cov_scale'])
             if where is None:
-                counts['no_position'] += len(members)
+                counts['no_position'] += 1
                 continue
             detections.append({'id': obs['obs_id'], 'xy': where[0], 'R': where[1],
-                               'obs_ids': sorted(m['obs_id'] for m in members),
-                               'heading': body_heading(obs)})
+                               'obs_ids': [obs['obs_id']], 'heading': body_heading(obs)})
         frames.append({'t': ts, 'sensor': sensor, 'detections': detections})
     return frames, counts
 

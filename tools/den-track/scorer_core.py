@@ -15,16 +15,20 @@ UNSURE = '?'
 
 def id_counts(links):
     """IDTP, IDFP, IDFN over links, with the best one-to-one mapping of
-    people to tracks (Ristani et al. 2016, at observation level)."""
+    people to tracks (Ristani et al. 2016, at observation level).
+
+    A person is one instance per frame, so a second box of one person adds no truth:
+    a track that took it claims someone who is not there, a false positive and no more.
+    """
     people = sorted({l[2] for l in links if l[2] is not None})
     tracks = sorted({l[3] for l in links if l[3] is not None})
     co = {}
-    for _, _, person, track, _ in links:
+    for time, _, person, track, _ in links:
         if person is not None and track is not None:
-            co[(person, track)] = co.get((person, track), 0) + 1
-    weights = [[co.get((p, t), 0) for t in tracks] for p in people]
+            co.setdefault((person, track), set()).add(time)
+    weights = [[len(co.get((p, t), ())) for t in tracks] for p in people]
     idtp, pairs = best_matching(weights)
-    n_truth = sum(1 for l in links if l[2] is not None)
+    n_truth = len({(l[0], l[2]) for l in links if l[2] is not None})
     n_pred = sum(1 for l in links if l[3] is not None)
     mapping = {people[i]: tracks[j] for i, j in pairs}
     return {'idtp': idtp, 'idfp': n_pred - idtp, 'idfn': n_truth - idtp, 'mapping': mapping}

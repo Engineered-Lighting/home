@@ -291,9 +291,14 @@ None of this is a score. It says the method works on the scenes it was written f
   stepping out where a seen person just vanished, gives no rival to doubt. `hidden_reach_mps`
   covers people it has tracked, not people it has not.
 - **A duplicate box of one person.** If the detector's own overlap filter lets one
-  through, it is a second detection: a tentative track beside the real one, and both read
-  `ambiguous` while it lasts. That costs narrow-beam time and some IDF1, and no one's
-  observation is listed on someone else's track.
+  through, it is a second detection and starts a tentative track, which reads `ambiguous`
+  on every line while a confirmed track is in reach. It casts no doubt on the person beside
+  it. Before it fades it can take the other person's next detection and be confirmed on it,
+  so that person is listed on a third track for a while: a flagged switch and lost IDF1,
+  never a silent swap. How often the real detector does this is unknown, and a pilot take
+  shows it. The tool does not merge two boxes that overlap and agree on the floor: rung 2
+  places a box-only person at the median depth in their box, which for someone behind
+  another person is often the front person's depth, so those two would agree too.
 - **Noisy depth along the line of sight.** Stereo error grows with the square of the
   range, and a crossing along the camera's view leans on it. In the noisy profile,
   `near_pass`, `touching_crossing` and `crossing_behind_armchair` fall below 0.9.

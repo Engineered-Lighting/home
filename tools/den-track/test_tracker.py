@@ -170,6 +170,83 @@ class CrossingTest(unittest.TestCase):
         self.assertEqual(lines[-1][1][1].confidence, 1.0)
 
 
+def with_duplicates(scene, seed, rate, noise='typical'):
+    """A scene where a share of the keypoints observations get a box-only near-duplicate: 4 px and about 4 cm off."""
+    data = synth.scenario(scene, seed=seed, noise=noise)
+    observations, frames, crossings = synth.to_records(data)
+    rng = random.Random('%s/%s/%s' % (scene, seed, rate))
+    extra, rows = [], []
+    for ts, labels in frames:
+        labels = dict(labels)
+        for rec in [o for o in observations if o['capture_ts'] == ts and o['kind'] == 'keypoints']:
+            if rng.random() < rate:
+                dup = {k: v for k, v in rec.items() if k not in ('keypoints', 'joints_room', 'joint_set')}
+                dup.update(obs_id=rec['obs_id'] + '-dup', kind='person_box', image_box=[v + 4 for v in rec['image_box']])
+                dup['room_position'] = dict(rec['room_position'], x=round(rec['room_position']['x'] + rng.gauss(0, 0.04), 5),
+                                            y=round(rec['room_position']['y'] + rng.gauss(0, 0.04), 5))
+                extra.append(dup)
+                labels[dup['obs_id']] = labels[rec['obs_id']]
+        rows.append((ts, labels))
+    t = truth.Truth('%s-%d' % (scene, seed), ['A', 'B'], {oid: p for _, row in rows for oid, p in row.items()},
+                    {oid: ts for ts, row in rows for oid in row}, crossings)
+    x0, x1 = synth.ROOM['x']
+    y0, y1 = synth.ROOM['y']
+    lines, _ = records.run_tracker(observations + extra, params(), floor=[x0, y0, x1, y1], exits=[list(synth.DOOR)])
+    links, _ = score.take_links(observations + extra, lines, t)
+    return lines, links
+
+
+class DuplicateBoxTest(unittest.TestCase):
+    """A near-duplicate box of one person is a second detection. It may cost IDF1, and it must never read as a silent swap."""
+
+    def test_a_track_born_beside_a_person_doubts_itself_on_every_line(self):
+        core = tracker_core.TrackerCore(params())
+        for k in range(4):
+            core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
+        lines = []
+        for k, frame in enumerate(([(0.0, 0.0), (0.05, 0.0)], [(0.0, 0.0), (0.05, 0.0)], [(0.0, 0.0), (0.05, 0.0)])):
+            rows = core.step(101.0 + k * 0.25, [det('b%d-%d' % (k, i), x, y) for i, (x, y) in enumerate(frame)])
+            lines.append({tr.id: (state, tr.ambiguous, tr.near[:]) for tr, state in rows})
+        self.assertEqual([line[2][0] for line in lines], ['tentative', 'confirmed', 'confirmed'])
+        self.assertEqual([line[2][1] for line in lines], [True, True, True], 'it took a detection beside a person, so it is not sure')
+
+    def test_a_tentative_track_casts_no_doubt_on_the_person_beside_it(self):
+        core = tracker_core.TrackerCore(params())
+        for k in range(4):
+            core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
+        rows = core.step(101.0, [det('a4', 0.0, 0.0), det('phantom', 0.05, 0.0)])
+        by_id = {tr.id: tr for tr, _ in rows}
+        self.assertEqual((by_id[1].near, by_id[2].near), ([], [1]), 'a phantom is not someone within reach of a person')
+        self.assertTrue(by_id[2].ambiguous)
+
+    def test_a_person_far_from_anyone_starts_a_track_with_no_doubt(self):
+        core = tracker_core.TrackerCore(params())
+        for k in range(4):
+            core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
+        rows = core.step(101.0, [det('a4', 0.0, 0.0), det('far', 4.0, 0.0)])
+        self.assertFalse({tr.id: tr for tr, _ in rows}[2].ambiguous)
+
+    def test_the_takes_where_one_duplicate_read_as_a_silent_swap(self):
+        """Seen on 5% of observations: a track born from A's duplicate took B's detection on a line that read confident."""
+        for scene, seed in (('close_crossing', 2017), ('close_crossing', 2019), ('entry_exit', 2001), ('entry_exit', 2008),
+                            ('entry_exit', 2037), ('entry_exit', 2039), ('near_pass', 2017), ('near_pass', 2047),
+                            ('touching_crossing', 2020)):
+            with self.subTest(scene=scene, seed=seed):
+                _, links = with_duplicates(scene, seed, 0.05)
+                self.assertEqual([s for s in scorer_core.switches(links) if s['silent']], [])
+
+    def test_a_duplicate_on_a_fifth_of_observations_reads_as_no_silent_swap(self):
+        for scene in sorted(synth.SCENES):
+            for seed in (2009, 2012, 2019, 2023, 2033):
+                with self.subTest(scene=scene, seed=seed):
+                    _, links = with_duplicates(scene, seed, 0.20)
+                    self.assertEqual([s for s in scorer_core.switches(links) if s['silent']], [])
+
+    def test_a_track_line_still_lists_one_observation(self):
+        lines, _ = with_duplicates('close_crossing', 2017, 0.20)
+        self.assertEqual(max(len(l['last_obs_ids']) for l in lines), 1)
+
+
 class OcclusionTest(unittest.TestCase):
     def test_re_acquisition_keeps_the_track_after_the_armchair(self):
         kept = 0

@@ -208,7 +208,7 @@ class TrackerCore:
             else:
                 self._take(tr, dets[j], t)
 
-        for tr in confirmed:
+        for tr in self.tracks:      # a tentative track doubts itself beside a person; it never casts doubt on one
             tr.near = [o.id for o in confirmed if o is not tr and self._within_reach(tr, o, t)]
             if tr.near:
                 tr.last_doubt = t
@@ -231,6 +231,9 @@ class TrackerCore:
             if j not in taken:
                 x, P = kalman.initial(det['xy'], det['R'], p['new_track_speed_sigma'])
                 born = Track(self.next_id, x, P, t, det['obs_ids'])
+                born.near = [o.id for o in confirmed if o not in ended and self._within_reach(born, o, t)]
+                if born.near:
+                    born.ambiguous, born.last_doubt = True, t
                 self._accept_heading(born, det, t)
                 self.tracks.append(born)
                 self.next_id += 1

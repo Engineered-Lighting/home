@@ -15,7 +15,8 @@ frames and crossings, in any order:
   the observations labelled, so the labels are known to belong to them.
 - A frame's `labels` give, per observation at that capture time, the true person
   or null for "not a person". Rung 2 writes one observation per detector box, so a
-  person normally has one; a duplicate box of one person gets the same letter.
+  person normally has one; a duplicate box of one person gets the same letter, and the
+  scorer counts that person once in the frame.
 - `?` is a label too: "cannot tell". The observation is left out of the score and
   counted, and its track line's status still counts for a switch across it. See METHOD.md.
 - A person is one capital letter. People are A and B, never names.

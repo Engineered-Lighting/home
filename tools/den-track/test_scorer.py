@@ -71,6 +71,23 @@ class IdF1Test(unittest.TestCase):
     def test_nothing(self):
         self.assertIsNone(scorer_core.idf1(scorer_core.id_counts([])))
 
+    def test_a_second_box_of_one_person_in_a_frame_is_a_false_positive_not_also_a_miss(self):
+        """A person is one instance per frame. The box the track did not take claims someone who is not there."""
+        links = [(float(k), 'a%d' % k, 'A', 1, True) for k in range(10)] + [(5.0, 'dup', 'A', 2, False)]
+        c = scorer_core.id_counts(links)
+        self.assertEqual((c['idtp'], c['idfp'], c['idfn']), (10, 1, 0))
+        self.assertEqual(c['mapping'], {'A': 1})
+
+    def test_a_second_box_nobody_tracked_costs_nothing(self):
+        links = [(float(k), 'a%d' % k, 'A', 1, True) for k in range(10)] + [(5.0, 'dup', 'A', None, False)]
+        c = scorer_core.id_counts(links)
+        self.assertEqual((c['idtp'], c['idfp'], c['idfn']), (10, 0, 0))
+
+    def test_a_person_seen_twice_in_a_frame_on_no_track_is_one_miss(self):
+        links = [(0.0, 'a', 'A', None, False), (0.0, 'b', 'A', None, False)]
+        c = scorer_core.id_counts(links)
+        self.assertEqual((c['idtp'], c['idfp'], c['idfn']), (0, 0, 1))
+
 
 class SwitchTest(unittest.TestCase):
     def test_swap_is_silent_only_when_the_record_reported_confidence(self):

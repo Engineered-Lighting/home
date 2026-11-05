@@ -75,7 +75,10 @@ record, and `identity.confidence` belongs to the identity layer.
   `ambiguous_below`, or another confirmed track is within reach. Reach is
   `crossing_radius_m`, plus `hidden_reach_mps` times the seconds either has been
   unseen. Geometry can be sure of a crossing and the status is still ambiguous:
-  rung 5's gate wants `association_safe` false through every annotated crossing.
+  rung 5's gate wants `association_safe` false through every annotated crossing. A
+  tentative track within reach of a confirmed one reads `ambiguous` too, from its first
+  line, so the line that confirms it cannot claim confidence. It is not someone within
+  reach of that confirmed track: a phantom still casts no doubt on a person.
 - **`association.hypotheses`**, while ambiguous: `{"hypothesis": "kept", "p": ...}`,
   then `swapped:<track_id>` per rival and `newcomer`. They sum to 1. Empty while
   confident, as in the schema's example.
@@ -140,7 +143,9 @@ person. A link joins an observation's person to the track that listed it in
   `window_pad_s` on each side so the window holds frames before and after. Switches
   are found over the whole take and counted in the window they fall in.
 - **IDF1**: with each window's own best one-to-one mapping (Ristani et al. 2016, at
-  observation level). The gate's number sums the windows' counts. Whole-take IDF1,
+  observation level). A person is one instance per frame, so a second box of one person
+  that a track took is a false positive and not also a miss. The gate's number sums the
+  windows' counts. Whole-take IDF1,
   one mapping per take, is reported beside it and is harsher: a flagged swap costs
   everything after it.
 - **Which crossings count**: a marked crossing is a trial only if it shows what its kind
@@ -179,21 +184,34 @@ person. A link joins an observation's person to the track that listed it in
   for E2's "how often a face is even visible".
 
 A scored run also refuses tracks made under another method or another version of the
-code, changed files, unlabelled observations, fewer than `min_crossings` admitted
-crossings, admitted crossings of any kind short of `crossings_plan`, or crossings that
-overlap once padded. More than the plan is allowed, and the report shows the counts.
+code, changed files, unlabelled observations, one observation in two takes, fewer than
+`min_crossings` admitted crossings, admitted crossings of any kind short of
+`crossings_plan`, or crossings that overlap once padded. More than the plan is allowed,
+and the report shows the counts.
 It also refuses a truth file that does not name a labeller, say the labels were made
 blind to system output (`blind`, self-declared, so this catches only an honest no), and
 name the observations it labels (`observations_sha256`), and takes with more than one
 labeller. The report says what the truth files say.
 
-**A take is scored once.** Any `score`, practice or scored, shows results, so it notes
-what it looked at in `truth.score-runs.jsonl` beside the take's truth file: the method's
-and the code's fingerprints and the hashes of the observations, tracks and truth. A scored
-run refuses a take noted under anything different, so a retune, of the numbers or the code,
-cannot be tried on takes that have been looked at, and neither can new labels. Replaying
-with nothing changed is allowed, and gives the same report. Each report goes to a new
-folder, so an earlier one stays.
+**A take is scored once.** Any `score`, practice or scored, shows results, so it uses the
+takes it looked at. It notes them, together, as hashes: the method's and the code's
+fingerprints and, per take, a `take_id` over its frames (sensor and `capture_ts`) and the
+hashes of its observations, tracks and truth. The note goes beside each take's observations
+(`observations.score-runs.jsonl`), which travels with the take's folder, and in this Windows
+user's record (`%LOCALAPPDATA%\den-track\score-runs.jsonl`), which stays when files are
+copied, moved or deleted.
+
+A scored run that names a take in any note must be that same look: the same takes, with
+nothing changed. So a retune, of the numbers or the code, cannot be tried on takes that have
+been looked at, new labels cannot be tried, and a take cannot be dropped or added once results
+are known. Replaying a scored run is allowed, and gives the same report. Each report goes
+to a new folder, so an earlier one stays. A refused run shows no result and uses no take.
+
+Three things get past it. Deleting both notes by hand, which nothing can stop. A take looked
+at alone and then left out of the session: nothing ties it to the others, and the plan
+catches it only if a kind falls short, so run `score` only on a complete session. And rung
+2 run again on the footage if its frames come out different: one with nobody seen is no
+frame, so that is a new take to this tool.
 
 ## The block
 

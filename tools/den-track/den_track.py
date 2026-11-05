@@ -142,9 +142,9 @@ def ledger_path():
 
 
 def take_id(observations):
-    """The take itself, by the detections in it, so a re-saved or copied file is the same take."""
-    ids = sorted(str(obs.get('obs_id')) for obs in observations)
-    return 'sha256:' + hashlib.sha256('\n'.join(ids).encode('utf-8')).hexdigest()
+    """The take itself, by its frames, so a copied or re-saved file, or the footage observed again, is the same take."""
+    frames = sorted({'%s %r' % ((obs.get('source') or {}).get('sensor_id'), obs.get('capture_ts')) for obs in observations})
+    return 'sha256:' + hashlib.sha256('\n'.join(frames).encode('utf-8')).hexdigest()
 
 
 def take_stamp(take):

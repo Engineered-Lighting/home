@@ -44,7 +44,8 @@ git -C C:\claude\home worktree add C:\claude\home\.claude\worktrees\rung-3 claud
 Set-Location C:\claude\home\.claude\worktrees\rung-3
 ```
 
-The tests take about 10 seconds, and connect to nothing:
+The tests take about 20 seconds, connect to nothing, and keep their record of scored
+takes in a temp folder:
 
 ```powershell
 python -B -m unittest discover -s tools\den-track -v
@@ -66,10 +67,15 @@ python -B tools\den-track\den_track.py practice
 | `outside` | the same share outside every crossing: high means it doubts everything |
 | `tracks`, `face` | tracks per run; the stand-in for how often a face is visible |
 
-To walk the whole path on one synthetic scene:
+To walk the whole path on one synthetic scene, with the record of what was scored (see
+"Folders", below) kept in the same folder, so the walk leaves nothing behind:
 
 ```powershell
 $Out = "$env:TEMP\den-track"
+```
+
+```powershell
+$env:DEN_TRACK_LEDGER = "$Out\record.jsonl"
 ```
 
 ```powershell
@@ -90,6 +96,10 @@ Delete the folder afterwards:
 Remove-Item -Recurse -Force $Out
 ```
 
+```powershell
+Remove-Item Env:\DEN_TRACK_LEDGER
+```
+
 To list the open slots:
 
 ```powershell
@@ -103,9 +113,12 @@ How the command line behaves:
   PowerShell 5.1's `>` would write UTF-16, which the tool refuses to read. Files with
   CRLF or a BOM read the same.
 - **Folders.** `--out` is refused inside a git checkout or OneDrive, and nothing is
-  overwritten: a new run needs a new folder. `score` also adds to `truth.score-runs.jsonl`
-  beside each truth file: hashes only, the record of what has been scored. Keep it with
-  the take.
+  overwritten: a new run needs a new folder.
+- **The record of what has been scored.** `score` adds a line of hashes to
+  `observations.score-runs.jsonl` beside each take's observations, and to
+  `%LOCALAPPDATA%\den-track\score-runs.jsonl` for this Windows user. Keep both: a scored
+  run reads them to refuse takes already used (METHOD.md). `DEN_TRACK_LEDGER` names another
+  file in place of the second, for tests and the walk above, and not for a real session.
 
 ## Records
 
@@ -140,10 +153,11 @@ detector needs to run at about 4 frames a second or better (METHOD.md, note R6).
 must have written a camera entry, or rung 2 refuses, and rung 4's labeller must exist.
 
 **2. A pilot, if you want one.** Record a take or two, and compare the slots' proposed
-values with what you see: how long someone stays hidden, and how much of the time the
-tracker is in doubt. Pilot takes are never scored, and the tool holds to that: once a
-take has gone through `score`, even without `--scored`, a scored run under other numbers
-or code refuses it. Then close `freeze.frozen_on`, which freezes the method.
+values with what you see: how long someone stays hidden, how much of the time the tracker
+is in doubt, and whether the detector ever gives one person two boxes (METHOD.md says what
+that costs). Pilot takes are never scored, and the tool holds to that: once a take has gone
+through `score`, even without `--scored`, a scored run refuses it unless it names the same
+takes with nothing changed. Then close `freeze.frozen_on`, which freezes the method.
 
 **3. Record.** R takes with this script. Leave at least 6 s between crossings, so their
 padded windows do not overlap. Any number of crossings per take works; tracks restart
@@ -179,7 +193,8 @@ scored run refuses a file without them:
 python -B tools\den-track\den_track.py hash --observations C:\den-takes\crossings-1\take-01\observe-1\observations.jsonl
 ```
 
-**6. Track and score.** Once per take:
+**6. Track and score.** Run `score` only once the session is complete: a look at part of
+it uses those takes. Track once per take:
 
 ```powershell
 python -B tools\den-track\den_track.py track --observations C:\den-takes\crossings-1\take-01\observe-1\observations.jsonl --out C:\den-takes\crossings-1\take-01\track-1
@@ -198,12 +213,12 @@ listed as excluded, with why, and does not count: for most kinds, both people se
 both sides of the mark and in the window, and near each other in it. A detector that
 stalled on someone for good, a mistyped time or a take cut short ends up there. A scored
 run refuses when too few are left. An agent may read `score.json`, `track-run.json` and
-`truth.score-runs.jsonl`, which hold counts, ids and hashes, but not `observations.jsonl`,
+`observations.score-runs.jsonl`, which hold counts, ids and hashes, but not `observations.jsonl`,
 `tracks.jsonl`, `truth.jsonl` or any frame. If geometry alone misses the gate, the ladder's
 next step is session appearance as its own rung, after the owner's decision on learning
 permissions. A take that has been scored is used. A re-score after any change to the numbers,
-the code or the labels needs fresh takes, and a scored run refuses the old ones. Replaying
-with nothing changed gives the same report.
+the code or the labels needs fresh takes, and so does dropping or adding a take once results
+are known: a scored run refuses them. Replaying with nothing changed gives the same report.
 
 ## Open slots
 

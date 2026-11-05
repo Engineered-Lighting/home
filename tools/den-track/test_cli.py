@@ -889,6 +889,22 @@ class FreshTakesTest(Base):
             records.write_jsonl(truth_path, lines)
         self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
 
+    def test_observing_the_same_footage_again_is_not_a_fresh_take(self):
+        """Rung 2 run again: other boxes and other obs_ids on the same frames, labelled again."""
+        takes = self.takes()
+        self.score_once(takes)
+        for obs, _, truth_path in takes:
+            rename = {row['obs_id']: row['obs_id'] + '-again' for row in records.read_jsonl(obs)}
+            rows = [dict(row, obs_id=rename[row['obs_id']], score=0.5) for row in records.read_jsonl(obs)]
+            records.write_jsonl(obs, rows)
+            lines = records.read_jsonl(truth_path)
+            lines[0]['observations_sha256'] = den_track.text_sha256(obs)
+            for line in lines:
+                if line['kind'] == 'frame':
+                    line['labels'] = {rename[o]: p for o, p in line['labels'].items()}
+            records.write_jsonl(truth_path, lines)
+        self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
+
     def failing_session(self):
         """Three takes, one with a silent swap: the gate fails."""
         takes = self.takes(first=0) + self.takes(first=2)[:1]

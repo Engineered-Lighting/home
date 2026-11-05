@@ -1,15 +1,17 @@
-"""E2 scorer: IDF1, switches and the one-sided bound on known cases."""
+"""E2 scorer: IDF1, switches, the one-sided bound and ground truth, on known cases."""
 import itertools
 import random
 import unittest
 
+import score
 import scorer_core
+import truth
 from scorer_math import best_matching, upper_bound
 
 
-def links_from(rows, conf=1.0):
+def links_from(rows, confident=True):
     """rows: [(person, track), ...] one per frame, frame k at time k."""
-    return [(float(k), 'o%d' % k, p, t, conf if t is not None else None) for k, (p, t) in enumerate(rows)]
+    return [(float(k), 'o%d' % k, p, t, confident if t is not None else False) for k, (p, t) in enumerate(rows)]
 
 
 class BoundTest(unittest.TestCase):
@@ -71,33 +73,27 @@ class IdF1Test(unittest.TestCase):
 
 
 class SwitchTest(unittest.TestCase):
-    def test_swap_is_silent_only_when_confident(self):
+    def test_swap_is_silent_only_when_the_record_reported_confidence(self):
         rows = [('A', 1), ('B', 2)] * 3 + [('B', 1), ('A', 2)] * 3
-        loud = links_from(rows, conf=0.4)
-        quiet = links_from(rows, conf=0.99)
-        self.assertEqual([s['silent'] for s in scorer_core.switches(loud, 0.9)], [False, False])
-        self.assertEqual([s['silent'] for s in scorer_core.switches(quiet, 0.9)], [True, True])
-
-    def test_threshold_is_inclusive(self):
-        rows = [('A', 1)] * 2 + [('B', 1)]
-        self.assertTrue(scorer_core.switches(links_from(rows, conf=0.9), 0.9)[0]['silent'])
+        self.assertEqual([s['silent'] for s in scorer_core.switches(links_from(rows, False))], [False, False])
+        self.assertEqual([s['silent'] for s in scorer_core.switches(links_from(rows, True))], [True, True])
 
     def test_false_observation_is_not_a_switch(self):
         rows = [('A', 1), (None, 1), ('A', 1)]
-        self.assertEqual(scorer_core.switches(links_from(rows), 0.9), [])
+        self.assertEqual(scorer_core.switches(links_from(rows)), [])
 
     def test_fragment_is_not_a_switch(self):
         rows = [('A', 1)] * 3 + [('A', 2)] * 3
-        self.assertEqual(scorer_core.switches(links_from(rows), 0.9), [])
+        self.assertEqual(scorer_core.switches(links_from(rows)), [])
 
 
 class WindowTest(unittest.TestCase):
     def test_per_window_and_pooled(self):
         rows = [('A', 1), ('B', 2)] * 5 + [('A', 1), ('B', 2)] * 5 + [('B', 1), ('A', 2)] * 5
-        links = links_from(rows, conf=0.99)
+        links = links_from(rows)
         windows = [{'id': 'c1', 'kind': 'crossing', 'start': 0, 'end': 9},
                    {'id': 'c2', 'kind': 'crossing', 'start': 15, 'end': 29}]
-        res = scorer_core.score_windows(links, windows, 0.9, 0.9)
+        res = scorer_core.score_windows(links, windows, 0.9)
         w1, w2 = res['windows']
         self.assertEqual((w1['silent_swaps'], w1['idf1']), (0, 1.0))
         self.assertEqual(w2['silent_swaps'], 2)
@@ -106,17 +102,129 @@ class WindowTest(unittest.TestCase):
         self.assertFalse(res['gate']['passed'])
 
     def test_switch_before_window_is_known_to_window(self):
-        rows = [('A', 1)] * 5 + [('B', 1)] * 5
-        links = links_from(rows, conf=0.99)
-        res = scorer_core.score_windows(links, [{'id': 'w', 'start': 4.5, 'end': 9}], 0.9, 0.9)
+        links = links_from([('A', 1)] * 5 + [('B', 1)] * 5)
+        res = scorer_core.score_windows(links, [{'id': 'w', 'start': 4.5, 'end': 9}], 0.9)
         self.assertEqual(res['windows'][0]['silent_swaps'], 1)
 
-    def test_gate_passes(self):
+    def test_gate_passes_with_the_closed_form_bound(self):
         links = links_from([('A', 1), ('B', 2)] * 10)
         windows = [{'id': 'c%d' % k, 'start': 2 * k, 'end': 2 * k + 1} for k in range(10)]
-        res = scorer_core.score_windows(links, windows, 0.9, 0.9)
+        res = scorer_core.score_windows(links, windows, 0.9)
         self.assertTrue(res['gate']['passed'])
         self.assertAlmostEqual(res['silent_swap_rate_upper_95'], 1 - 0.05 ** (1 / 10))
+
+    def test_a_flagged_swap_is_not_silent_but_still_costs_idf1(self):
+        rows = [('A', 1), ('B', 2)] * 5 + [('B', 1), ('A', 2)] * 5
+        res = scorer_core.score_windows(links_from(rows, False), [{'id': 'w', 'start': 0, 'end': 19}], 0.9)
+        self.assertEqual(res['silent_swaps'], 0)
+        self.assertEqual(res['flagged_switches'], 2)
+        self.assertTrue(res['gate']['silent_swaps_zero'])
+        self.assertFalse(res['gate']['idf1_met'])
+
+    def test_a_silent_swap_outside_every_crossing_fails_the_gate(self):
+        rows = [('A', 1), ('B', 2)] * 10 + [('B', 1), ('A', 2)] * 10
+        res = scorer_core.score_windows(links_from(rows), [{'id': 'w', 'start': 0, 'end': 9}], 0.9)
+        self.assertEqual(res['crossings_with_silent_swap'], 0)
+        self.assertEqual(res['silent_swaps_outside_crossings'], 2)
+        self.assertFalse(res['gate']['silent_swaps_zero'])
+        self.assertFalse(res['gate']['passed'])
+
+    def test_ambiguity_is_reported_so_a_tracker_cannot_pass_by_doubting_everything(self):
+        links = links_from([('A', 1), ('B', 2)] * 10, confident=False)
+        res = scorer_core.score_windows(links, [{'id': 'w', 'start': 0, 'end': 9}], 0.9)
+        self.assertEqual(res['windows'][0]['ambiguous_share'], 1.0)
+        self.assertEqual(res['ambiguous_share_outside_crossings'], 1.0)
+
+    def test_no_crossings_never_passes(self):
+        res = scorer_core.score_windows(links_from([('A', 1)] * 3), [], 0.9)
+        self.assertFalse(res['gate']['passed'])
+        self.assertIsNone(res['silent_swap_rate_upper_95'])
+
+
+def good_truth_lines():
+    return [
+        {'version': truth.VERSION, 'kind': 'header', 'take': 't1', 'people': ['A', 'B']},
+        {'kind': 'frame', 'capture_ts': 10.0, 'labels': {'o1': 'A', 'o2': None}},
+        {'kind': 'crossing', 'crossing_id': 'c1', 'type': 'crossing', 'interval': [9.0, 11.0]},
+    ]
+
+
+class TruthFormatTest(unittest.TestCase):
+    def test_reads_labels_and_crossings(self):
+        t = truth.parse(good_truth_lines())
+        self.assertEqual(t.labels, {'o1': 'A', 'o2': None})
+        self.assertEqual(t.frame_ts['o1'], 10.0)
+        self.assertEqual(t.crossings[0]['interval'], [9.0, 11.0])
+
+    def test_refuses(self):
+        def broken(change):
+            lines = good_truth_lines()
+            change(lines)
+            return lines
+
+        cases = {
+            'no header': lambda l: l.pop(0),
+            'old version': lambda l: l[0].update(version='den-track-truth/0'),
+            'a name instead of a letter': lambda l: l[0].update(people=['Alice', 'B']),
+            'two letters': lambda l: l[0].update(people=['AB']),
+            'a person not in the header': lambda l: l[1]['labels'].update(o1='C'),
+            'a label twice': lambda l: l.append({'kind': 'frame', 'capture_ts': 11.0, 'labels': {'o1': 'A'}}),
+            'a crossing id twice': lambda l: l.append(dict(l[2])),
+            'an unknown crossing type': lambda l: l[2].update(type='dance'),
+            'a backward interval': lambda l: l[2].update(interval=[11.0, 9.0]),
+            'an unknown line': lambda l: l.append({'kind': 'note'}),
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(truth.TruthError):
+                    truth.parse(broken(change))
+
+
+class TakeLinksTest(unittest.TestCase):
+    OBS = [{'obs_id': 'o1', 'capture_ts': 10.0, 'kind': 'keypoints', 'validity': 'valid',
+            'room_position': {'x': 1.0, 'y': 1.0, 'z': 1.0, 'cov': [[0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01]]}},
+           {'obs_id': 'o2', 'capture_ts': 10.0, 'kind': 'person_box', 'validity': 'rejected:too_small'},
+           {'obs_id': 'o3', 'capture_ts': 10.0, 'kind': 'object_box', 'validity': 'valid'},
+           {'obs_id': 'o4', 'capture_ts': 10.0, 'kind': 'person_box', 'validity': 'valid'}]
+
+    def lines(self, ids=('o1',), status='confident', track='t1'):
+        return [{'track_id': track, 'association': {'status': status}, 'last_obs_ids': list(ids)}]
+
+    def test_links_carry_status_and_rejected_is_left_out(self):
+        t = truth.parse([good_truth_lines()[0], {'kind': 'frame', 'capture_ts': 10.0, 'labels': {'o1': 'A'}}])
+        links, left = score.take_links(self.OBS, self.lines(status='ambiguous'), t)
+        self.assertEqual(links, [(10.0, 'o1', 'A', 't1', False)])
+        self.assertEqual(left, {'rejected': 1, 'no_position': 1, 'unlabelled': 0})
+
+    def test_unlabelled_is_counted(self):
+        t = truth.parse([good_truth_lines()[0]])
+        _, left = score.take_links(self.OBS, self.lines(), t)
+        self.assertEqual(left['unlabelled'], 1)
+
+    def test_refuses_a_label_for_nothing_and_a_wrong_frame(self):
+        for frame in ({'kind': 'frame', 'capture_ts': 10.0, 'labels': {'nope': 'A'}},
+                      {'kind': 'frame', 'capture_ts': 11.0, 'labels': {'o1': 'A'}}):
+            t = truth.parse([good_truth_lines()[0], frame])
+            with self.assertRaises(score.ScoreError):
+                score.take_links(self.OBS, self.lines(), t)
+
+    def test_refuses_a_track_listing_an_unknown_observation_or_two_tracks_on_one(self):
+        t = truth.parse([good_truth_lines()[0]])
+        with self.assertRaises(score.ScoreError):
+            score.take_links(self.OBS, self.lines(ids=('nope',)), t)
+        with self.assertRaises(score.ScoreError):
+            score.take_links(self.OBS, self.lines() + self.lines(track='t2'), t)
+
+
+class FaceTest(unittest.TestCase):
+    def test_needs_nose_and_both_eyes(self):
+        good = [[0, 0, 0.9]] * 3 + [[0, 0, 0.1]] * 14
+        low = [[0, 0, 0.9], [0, 0, 0.1], [0, 0, 0.9]] + [[0, 0, 0.9]] * 14
+        missing = [[None, None, None]] * 17
+        self.assertTrue(score.face_visible({'keypoints': good}, 0.4))
+        self.assertFalse(score.face_visible({'keypoints': low}, 0.4))
+        self.assertFalse(score.face_visible({'keypoints': missing}, 0.4))
+        self.assertFalse(score.face_visible({}, 0.4))
 
 
 if __name__ == '__main__':

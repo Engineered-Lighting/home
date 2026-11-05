@@ -33,6 +33,10 @@ class Method:
     def __init__(self, values, open_slots, sha256, file=METHOD_FILE):
         self.values, self.open, self.sha256, self.file = values, open_slots, sha256, file
 
+    def __getitem__(self, name):
+        """A closed value; an open slot raises KeyError, so a scored step cannot read it."""
+        return self.values[name]
+
     def get(self, name):
         """The closed value, or the proposed one for an open slot (clicks only)."""
         return self.values[name] if name in self.values else self.open[name]

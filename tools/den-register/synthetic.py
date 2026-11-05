@@ -60,21 +60,24 @@ POINTS = {
 FIT, CHECKS = ("p1", "p2", "p3", "p4"), ("c1", "c2")
 
 
-def worksheet(points=None, fit=FIT, checks=CHECKS, offsets=None, camera_id="oak-den"):
-    """An owner worksheet for the synthetic room; offsets add metres to measured points."""
+def worksheet(points=None, fit=FIT, checks=CHECKS, offsets=None, camera_id="den-oak", scan=None):
+    """An owner worksheet for the synthetic room; offsets add metres to measured points.
+
+    scan maps ids to the position the owner read in the scan viewer, if any.
+    """
     points = points or POINTS
-    offsets = offsets or {}
+    offsets, scan = offsets or {}, scan or {}
     rows = []
     for pid in list(fit) + list(checks):
         xyz = [points[pid][i] + offsets.get(pid, [0, 0, 0])[i] for i in range(3)]
         rows.append({"id": pid, "role": "fit" if pid in fit else "check", "label": f"synthetic mark {pid}",
                      "room_xyz_m": [round(v, 6) for v in xyz],
-                     "measured_from": {"x": "west wall", "y": "south wall", "z": "floor"},
-                     "method": "tape"})
-    return {"schema": "den-register-worksheet-1", "camera_id": camera_id, "room_frame": {
-        "origin": "floor at the south-west corner", "x": "east along the south wall",
-        "y": "north along the west wall", "z": "up"}, "measured_by": "A", "measured_on": "2026-11-05",
-        "points": rows}
+                     "measured_from": {"x": "wall at x = 0", "y": "wall at y = 0", "z": "floor"},
+                     "measured_with": "tape", "scan_xyz_m": scan.get(pid)})
+    return {"schema": "den-register-worksheet-1", "room_id": "den", "camera_id": camera_id,
+            "frame": "z_up_metric_floor0",
+            "references": {"x": "the synthetic wall at x = 0", "y": "the synthetic wall at y = 0", "z": "the floor"},
+            "measured_by": "A", "measured_on": "2026-11-05", "points": rows}
 
 
 def npy(descr, shape, body):

@@ -30,6 +30,10 @@
     #den-sim-panel button[data-den-sim-feed] { width: 100%; background: #b00020; border-color: #e0526a; margin-bottom: 5px; }
     #den-sim-panel button[data-den-sim-feed="not_reading"] { background: #222; border-color: #e0526a; }
     #den-sim-panel [data-den-sim-second-try], #den-sim-panel [data-den-sim-notes] { margin: 5px 0; padding: 5px 6px; border-left: 3px solid #a86a00; background: rgba(168,106,0,.18); }
+    #den-sim-panel [data-den-sim-command] { margin: 6px 0; padding-top: 6px; border-top: 1px solid #555; }
+    #den-sim-panel [data-den-sim-not-sent] { background: #b00020; color: #fff; font: 700 12px/20px system-ui, sans-serif; text-align: center; border-radius: 4px; margin-bottom: 5px; }
+    #den-sim-panel pre { margin: 4px 0; padding: 5px; max-height: 220px; overflow: auto; background: #000; border: 1px solid #333; border-radius: 4px;
+      font: 10.5px/1.35 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     #den-sim-panel button:disabled { opacity: .55; cursor: default; }
     #den-sim-panel .row { display: flex; gap: 5px; }
     #den-sim-panel .row button { flex: 1; font-weight: 500; }
@@ -68,7 +72,8 @@
   const hopRows = el('ul', { 'data-den-sim-hops': '1' });
   // Open when there is room for it: the list is the point of the page, not a footnote.
   const hops = el('details', { open: innerHeight >= 800 }, el('summary', { textContent: 'What is real here' }), hopRows);
-  const body = el('div', { 'data-den-sim-body': '1' }, brainBox, readback, candidates, proof, hops);
+  const commandBox = el('div', { 'data-den-sim-command': '1', hidden: true });
+  const body = el('div', { 'data-den-sim-body': '1' }, brainBox, readback, commandBox, candidates, proof, hops);
   const panel = el('aside', { id: 'den-sim-panel', 'aria-label': 'Den simulation' }, ...feedButtons, el('div', { className: 'row' }, resetButton, hideButton), message, inputNotes, secondTry, body);
   document.body.append(strip, panel);
 
@@ -159,6 +164,56 @@
     if (!landed) values.agree.textContent = '–';
     showCandidates(decided ? decided.candidates : [], decided?.candidates.length ? '' : 'The brain only compares fixtures once reading has held for 3 s.');
   }
+  /* ---------- the exact command: text only, with nothing that could send it ---------- */
+  const block = (summary, name, text, open = false) => el('details', { open }, el('summary', { textContent: summary }), el('pre', { 'data-den-sim-pre': name, textContent: text }));
+  const rows = pairs => el('dl', {}, ...pairs.flatMap(([label, text]) => [el('dt', { textContent: label }), el('dd', { textContent: text })]));
+  const post = row => `POST ${row.route}\n${JSON.stringify(row.body)}`;
+  const shortSha = text => text ? text.slice(0, 16) : 'unknown';
+  function hueBlock(decide) {
+    if (!decide?.ok) return el('div', { className: 'note', textContent: decide?.reason || 'decide v0 did not run.' });
+    const text = decide.calls.length ? decide.calls.map(post).join('\n') : decide.why;
+    const label = decide.calls.length ? `Hue form from decide v0 (${decide.calls.length} calls, logged only)` : 'Hue form from decide v0: none';
+    const note = decide.calls.length ? `${decide.why} ${decide.look_status}. decide outputs on, brightness and kelvin; the light.turn_on shape is this page's. Source ${decide.source}.` : decide.why;
+    return block(label, 'hue', `${text}\n\n${note}`);
+  }
+  function renderCommand(command) {
+    const badge = el('div', { 'data-den-sim-not-sent': '1', textContent: 'NOT SENT · nothing here can send it' });
+    if (command.failed) return commandBox.replaceChildren(badge, el('div', { textContent: command.failed }));
+    if (!command.brain) return commandBox.replaceChildren(badge, el('div', { textContent: 'No fixture command: the brain refused, so nothing was compiled.' }), hueBlock(command.decide));
+    const ik = command.ik;
+    if (!ik.ok) return commandBox.replaceChildren(badge, el('div', { textContent: `No fixture command: compile_target refused (${ik.reason}).` }), hueBlock(command.decide));
+    const [pan, tilt] = ik.fixture_angles_deg, [homePan, homeTilt] = ik.home_angles_deg, spot = command.spot;
+    const listed = [['Profile', `${ik.profile_id}, FICTIONAL: zero, direction, ratio and limits are invented`],
+      ['Fixture angles', `pan ${fmt(pan)}°, tilt ${fmt(tilt)}° from straight down`],
+      ['Home\'s angles', `pan ${fmt(homePan)}°, tilt ${fmt(homeTilt)}° from level: ${ik.agrees_with_home ? 'the same aim' : 'THESE DISAGREE'}`],
+      ['Motor target', `${ik.target_centideg.join(', ')} centideg at ${ik.speed_deg_s.join(', ')} deg/s`],
+      ['Spot', `raw duty ${spot.raw_duty} of ${spot.full_duty}, a test value with no colour claim. The brain asked for ${fmt(spot.brain_level, 2)} at ${spot.brain_cct_k} K, and semantic CCT refuses: ${spot.semantic_refusal}.`]];
+    const parts = [badge];
+    if (!command.wire) {
+      parts.push(rows(listed), el('div', { textContent: `The codec was not found at ${command.codec.tools}, so no packets exist.` }));
+    } else {
+      const { counts, packets } = command.wire, aim = command.plan.aim, last = packets.at(-1);
+      listed.push(['Packets', `${counts.total}: ${counts.session_open} session open, ${counts.plan_prepare} plan prepare, ${counts.plan_commit} commit. Sealed with the contract's public test key for a fictional device.`],
+        ['Aim in the bytes', `plan offset ${aim.offset}, carried by packets ${aim.packets.join(' and ')}`]);
+      parts.push(rows(listed), block(`Literal POST, packet ${last.n} of ${counts.total}: commit`, 'post', post(last), true),
+        block(`The aim's POSTs, packets ${aim.packets.join(' and ')}`, 'aim', aim.packets.map(number => post(packets[number - 1])).join('\n')),
+        block(`All ${counts.total} POSTs, in order`, 'all', packets.map(row => `${row.n} ${row.stage}\n${post(row)}`).join('\n')));
+    }
+    const can = command.can;
+    parts.push(block('The two CAN A4 frames', 'can', `${can.frames.map(frame => `${frame.id_hex} ${frame.axis}  ${frame.data_hex}`).join('\n')}\n\nEncoded here from the contract's byte fields: the firmware's encoder did not run. `
+      + `Contract oracle: ${can.oracle_ok === true ? 'matches' : can.oracle_ok === false ? 'DOES NOT MATCH' : 'not available'}. Motor allowlist entries: ${can.allowlist_entries ?? 'unknown'}.`), hueBlock(command.decide));
+    if (command.wire) {
+      parts.push(block('Where these bytes came from', 'sources', `Codec, by path: ${command.codec.tools}\nc12_runtime_plan.py ${shortSha(command.codec.c12_runtime_plan_sha256)}\nc12_runtime_wire.py ${shortSha(command.codec.c12_runtime_wire_sha256)}\n`
+        + `Older than the release origin/main pins. Device ${command.wire.device_id} and ieee ${command.wire.ieee} are placeholders.\n${command.wire.time_exchange}\nPlan (${command.plan.bytes} bytes, ${command.plan.status}):\n${command.plan.hex}`));
+    }
+    return commandBox.replaceChildren(...parts);
+  }
+  async function showCommand(scenario) {
+    commandBox.hidden = false;
+    try { renderCommand(await (await fetch(`/__sim/command?scenario=${encodeURIComponent(scenario)}`, { cache: 'no-store' })).json()); }
+    catch (error) { commandBox.replaceChildren(el('div', { textContent: `The command could not be read: ${error.message}` })); }
+  }
+
   function followRun(status) {
     const feed = status.feed;
     if (!sim.running) return;
@@ -173,6 +228,7 @@
         sim.swinging = false;
         setToolbar('Lighting', true);
         setFeedEnabled(true);
+        showCommand(feed.scenario);
         const swing = feed.swing, decided = feed.summary, modeled = 'Lighting is on: Home\'s modeled view, not measured.';
         message.textContent = feed.phase === 'holding'
           ? `The beam is on person A's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. The brain's decision is real; the reader and the motion are scripted. Nothing was sent. ${modeled}`
@@ -247,6 +303,7 @@
     const live = overlay(), fixtures = fixtureDescriptors();
     if (!live || !fixtures.length) return;
     setFeedEnabled(false);
+    commandBox.hidden = true;
     sim.seen.clear(); sim.frames.length = 0; sim.longTasks = 0; sim.longestTaskMs = 0; sim.swinging = false; sim.running = true;
     message.textContent = scenario === 'not_reading'
       ? 'The real brain gets the same scripted joints, but the typed label says phone use.'

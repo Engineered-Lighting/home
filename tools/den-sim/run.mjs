@@ -118,7 +118,7 @@ const pinned = sourceIsPinned();
 function startBrain() {
   try {
     // An authored room has no household data, so its geometry stays out of the private folder.
-    return prepareBrain({ registration, couch, floorCentre: floorCentre(), geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, notes: privateNotes });
+    return prepareBrain({ registration, couch, floorCentre: floorCentre(), geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, notes: privateNotes, refs });
   } catch (error) {
     console.error(`The lighting brain could not run, so there is nothing to show. It needs python on the PATH.\n${error.message}`);
     return process.exit(1);
@@ -128,7 +128,7 @@ const brain = startBrain();
 const context = { room, registration: { source: registration.source, label: registration.label, revision: registration.doc.revision },
   couch: { source: couch.source, label: couch.label, point: couch.point }, base: refs.base.sha.slice(0, 8), source_is_pinned: pinned,
   pack_revision: binding.content_revision, private_notes: privateNotes,
-  brain: { invented_camera: brain.invented_camera, first_try_refused: brain.first_try_refused, seat_m: brain.seat_m } };
+  brain: { invented_camera: brain.invented_camera, first_try_refused: brain.first_try_refused, seat_m: brain.seat_m, command: brain.command_status } };
 const feed = createFeed({ timelines: brain.timelines, couchLabel: couch.label });
 
 /* ---------- static source, the same inventory as the Home browser suites ---------- */
@@ -227,6 +227,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/__sim/status') {
       return send(res, 200, { ...context, hops: hopList(context), feed: feed.readback(), counters, refused: [...refused.values()], run });
     }
+    if (pathname === '/__sim/command') {
+      // A display, fetched once per run. Nothing on this page or harness can send it.
+      const scenario = url.searchParams.get('scenario');
+      return Object.hasOwn(brain.commands, scenario) ? send(res, 200, brain.commands[scenario]) : refuse(res, req.method, pathname, 404);
+    }
     if (pathname === '/auth/status') return send(res, 200, { authenticated: true, username: 'den-sim' });
     if (pathname === '/api/perception-lab/v1/capabilities') return send(res, 200, LAB_CAPABILITIES, { 'X-Home-Lab-Access': 'read-only' });
     if (pathname === BRAIN_BASE + '/state') return send(res, 200, feed.current());
@@ -264,6 +269,7 @@ server.listen(PORT, HOST, () => {
   console.log([`Den simulation: ${ORIGIN}/`, `Room: ${scan} | Sockets: ${registration.label.replace(' · ', ', ')} | Couch: ${couch.label}`,
     ...(brain.first_try_refused ? [`Brain, first try: ${asciiBrain(brain.first_try_refused.refusal)}`] : []),
     `Brain${brain.invented_camera ? ', second try with an INVENTED CAMERA' : ''}: ${reading.lit ? 'lights a spot on the hand point' : asciiBrain(reading.refusal)}`,
+    `Fixture command: ${brain.command_status.packets ? `${brain.command_status.packets} packets on a fictional profile, shown and NOT SENT` : brain.command_status.failed || brain.command_status.ik_reason || 'none computed'}`,
     ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
     `Run output: ${run}`, 'The brain is real, its reader is scripted, and nothing is sent. Press Ctrl+C to stop.'].join('\n'));
   fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: new Date().toISOString(), origin: ORIGIN }, null, 2) + '\n');

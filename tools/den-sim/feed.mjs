@@ -146,6 +146,8 @@ export function hopList({ room, registration, couch, source_is_pinned, pack_revi
   const S = 'SCRIPTED', M = 'MISSING', A = 'ADAPTER', R = 'REAL';
   const notRun = 'Did not run. Only the script says this.';
   const secondTry = brain.invented_camera ? ' This is a second try on a geometry copy with an INVENTED CAMERA, because the first try refused.' : '';
+  const command = brain.command;
+  const noCommand = command.failed || command.ik_reason || 'The brain lit nothing, so nothing was compiled.';
   return [
     { name: 'Input image', status: S, note: 'No picture is read. The scene is declared.' },
     { name: 'Frames', status: S, note: notRun },
@@ -157,7 +159,8 @@ export function hopList({ room, registration, couch, source_is_pinned, pack_revi
     { name: 'Bundle to Qwen', status: M, note: 'Not built.' },
     { name: 'Qwen reply', status: S, note: 'The activity label is typed into brain_run.py. No model ran.' },
     { name: 'Room-level need', status: S, note: notRun },
-    { name: 'decide v0', status: S, note: notRun },
+    { name: 'decide v0', status: command.decide_ok ? R : M,
+      note: command.decide_ok ? `Real decide v0 from ${command.decide_source}, on a scripted person state. Log only: four Hue levels, no aim. Nothing reconciles it with the brain.` : command.decide_reason || noCommand },
     { name: 'Person to aim', status: S, note: 'Joints are typed into brain_run.py. No pipeline track feeds the brain.' },
     { name: 'Activity loop and publisher', status: R, note: 'Real code under a fake clock. Its deep stack is fake, and its events never leave its process.' },
     { name: 'Couch', status: couch.source === 'sofa_mark' ? R : S,
@@ -170,10 +173,14 @@ export function hopList({ room, registration, couch, source_is_pinned, pack_revi
     { name: 'Scan', status: room === 'real' ? R : S, note: room === 'real' ? `Your pack ${pack_revision}, read-only.` : 'AUTHORED ROOM, no household data.' },
     { name: 'Sockets', status: registration.source === 'export' ? R : S,
       note: registration.source === 'export' ? 'Your registration revision 3.' : 'AUTHORED SOCKETS. Their 4x4 m walls do not fit your scan.' },
-    { name: 'Inverse kinematics to motor units', status: M, note: 'Not in this stage. Would use a fictional profile.' },
-    { name: 'Plan and packets', status: M, note: 'Not in this stage. Nothing is encoded.' },
-    { name: 'Home Assistant/ZHA envelope', status: M, note: 'No commissioned device and no sender here.' },
-    { name: 'CAN A4 frames', status: M, note: 'Not in this stage. The motor allowlist is empty.' },
+    { name: 'Inverse kinematics to motor units', status: command.ik_ok ? R : M,
+      note: command.ik_ok ? 'Real compile_target on a FICTIONAL profile: zero, direction, ratio and limits are invented, and its pivot and basis are the virtual fixture\'s.' : noCommand },
+    { name: 'Plan and packets', status: command.packets ? R : M,
+      note: command.packets ? 'Real codec with its public test key, a fictional context and a raw spot duty. This codec is older than the release origin/main pins. Bytes are shown, never sent.'
+        : command.lit && !command.codec_found ? 'The codec was not found at its path, so nothing is encoded.' : noCommand },
+    { name: 'Home Assistant/ZHA envelope', status: M, note: 'No path exists: no commissioned device and no sender here. Display only: the fields match origin/main\'s list, and the ieee is the placeholder UNCOMMISSIONED.' },
+    { name: 'CAN A4 frames', status: command.ik_ok ? A : M,
+      note: command.ik_ok ? `Encoded here from the contract's byte fields${command.can_oracle_ok ? ', matching its literal oracle on this run' : ', and its oracle could not be checked'}. The firmware's encoder did not run. The motor allowlist has ${command.allowlist_entries ?? 'unknown'} entries.` : noCommand },
     { name: 'Aim verification', status: M, note: 'Waits for a gimbal. This only shows Home agrees with the brain.' },
   ];
 }

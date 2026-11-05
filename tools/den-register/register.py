@@ -640,7 +640,7 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
         tid = records.transform_id(camera_id, entry.get("version"))
         report["transform_id"] = tid
         mount = mount_record(entry, tid, m)
-        if entry.get("invalidated"):
+        if records.resolve(room_models, tid)["invalidated"]:
             raise Refused("mount_changed", f"{tid} was invalidated already; register again")
         take, row, _, bundle = scene.load_frame(take_dir, frame_number(take_dir, frame, work))
         report["frame"] = row["n"]

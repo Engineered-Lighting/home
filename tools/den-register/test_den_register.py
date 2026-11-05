@@ -1361,6 +1361,25 @@ class MountTests(Base):
         self.assertNotIn("CONFIRMED", text)
         self.assertEqual(len(s.room_models()), 1)
 
+    def test_an_invalidation_on_any_line_of_the_file_still_counts(self):
+        # Two overlapping check-mount runs each append to the line they read, so a confirmation can land after an
+        # invalidation and hide it from anything that reads the last line alone.
+        s, fitted = self.furnished()
+        later = self.later_in_the_room()
+        later.click_all()
+        self.assertEqual(self.check(s, later.take)[0], 0)
+        knocked = self.later_in_the_room(synthetic.moved(yaw_deg=5.0), name="knocked", ended=1_800_001_500.0)
+        knocked.click_all()
+        self.assertEqual(self.check(s, knocked.take)[1]["result"], "changed")
+        path = s.work / "room-model.jsonl"
+        first, confirmed, invalidated = path.read_text(encoding="utf-8").splitlines()
+        path.write_text(f"{first}\n{invalidated}\n{confirmed}\n", encoding="utf-8", newline="\n")
+        newer = self.later_in_the_room(name="newer", ended=1_800_001_800.0)
+        newer.click_all()
+        code, report, text = self.check(s, newer.take)
+        self.assertEqual((code, report["result"], report["reason"]), (1, "refused", "mount_changed"), text)
+        self.assertEqual(len(s.room_models()), 3)
+
     def test_a_take_from_a_clock_running_ahead_cannot_vouch_for_anything(self):
         # The 2026-11-05 verifier's case: a check take 30 days past this PC's clock would vouch for every take
         # recorded up to then, with a knock possibly in between.

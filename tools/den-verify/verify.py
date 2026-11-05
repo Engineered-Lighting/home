@@ -90,9 +90,10 @@ def cmd_run(args):
     _say(f"decisions verified {report['decisions']['verified']} of {report['decisions']['total']}; "
          f"hit rate {hr['value']} ({hr['hits']} of {hr['hits'] + hr['misses']}), "
          f"gate {hr['gate']}: {hr['verdict']}{' (preview)' if args.preview else ''}")
-    left = report["excluded_held_or_superseded"]
-    if left:
-        _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs")
+    left, noise = report["excluded_held_or_superseded"], report["below_meter_noise"]
+    if left or noise:
+        _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs, "
+             f"{noise} point(s) whose change is below the meter's noise")
     wide = report["hits_beyond_level_tolerance"]
     if wide["count"]:
         _say(f"{wide['count']} hit(s) are beyond {values['tolerance']:.0%} of the level; if they had missed, "

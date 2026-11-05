@@ -37,8 +37,9 @@ For each point at the verify frame:
   - `outside` otherwise;
   - `prior_only` when the estimate's `basis` is `prior`;
   - `unverifiable` when the surface is missing from the frame, its usable share
-    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's, or
-    nothing is lit there and nothing changed. Its `residual` is then null.
+    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's,
+    nothing is lit there and nothing changed, or a change there is below the
+    meter's noise (see "Measurement uncertainty"). Its `residual` is then null.
 
 A `fallback_patch` estimate is scored here, because a fallback patch is a
 verify aid. It never counts as delivered service: the gold share below treats
@@ -59,11 +60,12 @@ changed, at that bulb's brighter level, and that error does not shrink with the
 level left. With the model 5% off and every bulb landing as commanded, a 0.8 to
 0.1 dim reads −23% or +49%, and a crossfade of two bulbs with no net change reads
 −18% with each bulb 10% off. So under `reference_frame` a point is judged to the
-wider of `tolerance` × predicted and `change_allowance` × the brighter level of
-every bulb that changed, summed. A bulb that did not change adds nothing: its
-error is in both frames and cancels. For a bright-up the first is the wider, so
-the ladder's ±15% stands exactly; on a dim or an off the second is, and the
-record gives that point's `level_bound`.
+widest of `tolerance` × predicted, `change_allowance` × the brighter level of
+every bulb that changed, summed, and the meter's noise (see "Measurement
+uncertainty"). A bulb that did not change adds nothing: its error is in both
+frames and cancels. For a bright-up the first is the widest, so the ladder's ±15%
+stands exactly; on a dim or an off the second usually is, and the record gives
+that point's `level_bound`.
 
 Every point is then a hit or a miss, whichever way the model is off. The rule
 looks at no reading, so it cannot keep hits and drop misses. What it costs:
@@ -73,9 +75,10 @@ looks at no reading, so it cannot keep hits and drop misses. What it costs:
   (its increment still reads `outside`). One stuck on a deeper dim, on an off or
   on any bright-up is a miss. A model more than 15% off at a bulb's brighter level
   is a miss.
-- `change_allowance` = 0 is the ladder's literal level check, with the false misses
-  above. `zero` needs no allowance and is sharper after dark, because it reads the
-  model's own level: there only an off, with no level to take a share of, uses it.
+- `change_allowance` = 0, with the meter's bounds at 0, is the ladder's literal
+  level check, with the false misses above. `zero` needs no allowance and is
+  sharper after dark, because it reads the model's own level: there only an off,
+  with no level to take a share of, uses it.
 
 The report and the console give how many hits are beyond ±15% of the level and
 what the hit rate would be if they had missed (`hits_beyond_level_tolerance`).
@@ -102,6 +105,17 @@ reported and never gated.
 uncertainty, computed only from bounds fixed before the run:
 u(E) = `uncertainty_rel`·|E| + `uncertainty_abs_lx` (the lux term only when
 anchored). An increment's is u(after) + u(before).
+
+A level check carries it too, as the meter's noise: √(u(predicted)² + u(read
+frame)²) under `reference_frame` and u(predicted) under `zero`, taken at the
+prediction, not the reading. A reading inside that noise is not a miss. Where the
+tolerance on the level is narrower than the noise (below about 83 lx at the
+proposed bounds) and a change there is too (below about 15 lx), the meter cannot
+tell a bulb that moved from one that did not, so the point is `unverifiable`,
+whatever it reads, and the report and the console count these
+(`below_meter_noise`). A fault inside the noise cannot be seen: one bulb of four
+stuck on a 60 to 12 lx dim reads 12 lx high, and is a hit. Relative frames have no
+lux term, and none of this changes their result.
 
 **Held and superseded channels.** Let H be a point's predicted light from
 channels whose applied status is `held` or `superseded`, or that a later hold
@@ -226,7 +240,8 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   {decision_id, hold_set_revision}, flags[]}`, with `residual` = measured −
   predicted in `unit`, and `flags` from `held`, `occupied`, `outside`,
   `daylight`, `shadow`, `drift`, `unexplained`, `fallback_patch`,
-  `wide_tolerance` (`within` only by the wider bound).
+  `wide_tolerance` (`within` only by the wider bound), `below_noise` (the point
+  is `unverifiable` for that reason; its residual is still given here).
 - `spill[]` and `increments[]` entries add `uncertainty`, in the block's `unit`.
 - `points[]` entries add `level_bound`, in the block's `unit`, only where the
   point is judged to more than `tolerance` × predicted.

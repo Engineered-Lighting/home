@@ -282,14 +282,18 @@ class Run:
             else:
                 row["held_share"] = 0.0
             row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
-            brightest = sum(max(parts[c][sid], parts_before[c][sid] if c in parts_before else 0.0) for c in parts
-                            if parts[c][sid] != (parts_before[c][sid] if c in parts_before else 0.0))
+            brightest = own = 0.0
+            for c in parts:
+                now, was = parts[c][sid], parts_before[c][sid] if c in parts_before else 0.0
+                if now != was:
+                    brightest += max(now, was)
+                    own += abs(now - was) if c not in held else 0.0
             if measured is None:
                 row["status"] = "prior_only" if why == "prior_only" else "unverifiable"
             elif predicted is None:
                 row["status"], row["why"] = "unverifiable", rwhy
             else:
-                self.judge_level(row, measured, predicted, brightest)
+                self.judge_level(row, measured, predicted, ref_val, brightest, own, frame.unit)
             # increments: measured change against the model's own change
             if measured is not None and ref_val is not None:
                 mc = measured - ref_val
@@ -309,28 +313,36 @@ class Run:
             out[sid] = row
         return out, revision
 
-    def judge_level(self, row, measured, predicted, brightest):
+    def judge_level(self, row, measured, predicted, ref_val, brightest, own, unit):
         """within or outside, to the ladder's tolerance or what the prediction itself inherits if that is wider.
 
-        Nothing here but the status depends on the reading.
+        Whether a point counts, and its bound, come from predictions alone: a reading can only choose
+        between hit and miss, never leave a point out.
         """
         m = self.m
         # the read frame's D hides the model's error at the state it read, and the changed bulbs carry theirs;
         # with D taken as zero only an off, with no level to take a share of, needs the same allowance
+        noise = self.u(max(predicted, 0.0), unit)
         inherited = 0.0
         if m["background"] != "zero" or predicted <= 0:
             inherited = float(Fraction(str(m["change_allowance"])) * Fraction(brightest))
-        if predicted <= 0 and inherited <= 0:
+        if m["background"] != "zero":
+            noise = math.hypot(noise, self.u(ref_val, unit))
+        wide = max(inherited, noise)
+        if predicted <= 0 and not (brightest and wide):
             row["status"], row["why"] = "unverifiable", "prediction not positive"
             return
         level_tolerance = m["tolerance"] * max(predicted, 0.0)
         row["error"] = measured - predicted
         if predicted > 0:
             row["residual"] = row["error"] / predicted
+        if level_tolerance < noise and 0 < own <= noise:
+            row["status"], row["why"], row["below_noise"] = "unverifiable", "a change below the meter's noise", True
+            return
         ladder = predicted > 0 and within(measured, predicted, m["tolerance"])
-        row["status"] = "within" if ladder or within(measured, predicted, 0, inherited) else "outside"
-        row["level_bound"] = max(level_tolerance, inherited)
-        row["widened"] = inherited > level_tolerance
+        row["status"] = "within" if ladder or within(measured, predicted, 0, wide) else "outside"
+        row["level_bound"] = max(level_tolerance, wide)
+        row["widened"] = wide > level_tolerance
         row["wide_hit"] = row["status"] == "within" and not ladder
 
     def explain(self, d, frame, row):
@@ -393,8 +405,9 @@ class Run:
                                "camera_estimate": None, "residual": None})
                 continue
             kind = kinds.get(p) or self.model.kind(p)
-            points.append({"point_id": p, "kind": kind, "status": row["status"],
-                           "camera_estimate": row["measured"], "residual": _r(row.get("residual"), 4)})
+            judged = row["status"] in ("within", "outside")
+            points.append({"point_id": p, "kind": kind, "status": row["status"], "camera_estimate": row["measured"],
+                           "residual": _r(row.get("residual"), 4) if judged else None})
             if row.get("widened"):
                 points[-1]["level_bound"] = _r(row["level_bound"], 3)
             inc = dict(row["increment"])
@@ -479,6 +492,8 @@ class Run:
                 flags.append("fallback_patch")
             if row.get("wide_hit"):
                 flags.append("wide_tolerance")
+            if row.get("below_noise"):
+                flags.append("below_noise")
             if row["status"] == "outside":
                 flags.append("outside")
                 cause = self.explain(d, frame, row)["cause"]
@@ -571,7 +586,7 @@ class Run:
         status_counts = {"within": 0, "outside": 0, "unverifiable": 0, "prior_only": 0}
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
-        excluded_held = fallback_scored = eyes_total = 0
+        excluded_held = fallback_scored = eyes_total = below_noise = 0
         wide_by_day = {}
         excluded_by_status = {"within": 0, "outside": 0}
         not_admitted, not_verified = [], []
@@ -603,6 +618,7 @@ class Run:
             for p in verify["points"]:
                 status_counts[p["status"]] += 1
                 per_point.setdefault(p["point_id"], {k: 0 for k in status_counts})[p["status"]] += 1
+                below_noise += "below_noise" in rows.get(p["point_id"], {})
             eyes_total += len(verify["not_verified"])
             for s in verify["spill"]:
                 spill_counts[s["status"]] = spill_counts.get(s["status"], 0) + 1
@@ -668,6 +684,7 @@ class Run:
             "hit_rate": hit_rate,
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
+            "below_meter_noise": below_noise,
             "hits_beyond_level_tolerance": {"count": sum(wide_by_day.values()), "value_if_missed": strict["value"],
                                             "verdict_if_missed": strict["verdict"]},
             "fallback_patch_points_scored": fallback_scored,

@@ -794,6 +794,83 @@ class DimsAndOffs(unittest.TestCase):
         self.assertEqual(point(d, "p0")["status"], "outside")
 
 
+class MeterNoise(unittest.TestCase):
+    """The level check carries the fixed measurement bound; a change under it cannot be judged."""
+
+    def case(self, before, after, measured, anchored=True, overrides=None, basis=100.0):
+        model = syn.hue_model({"desk-1": {B0: basis}}, unit="lx" if anchored else "relative", kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": basis * before}, anchored=anchored, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: before}, {B0: {"level": after, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        return score([dec], [ref, syn.light_state(t + 5, {"desk-1": measured}, anchored=anchored)], model,
+                     overrides=overrides)
+
+    def test_a_reading_inside_the_meters_noise_is_not_a_miss_in_low_light(self):
+        # 60 to 40 lx at 3% + 10 lx a frame: the two frames together give about 16.3 lx
+        for high, status in ((5.0, "within"), (8.0, "within"), (16.0, "within"), (17.0, "outside"), (-17.0, "outside")):
+            decisions, _, report = self.case(0.6, 0.4, 40.0 + high)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], status, high)
+            self.assertEqual(point(decisions[0], "desk-1")["level_bound"], 16.269, high)
+        self.assertEqual(report["hit_rate"]["verdict"], "fail")
+
+    def test_the_noise_is_the_owners_and_only_anchored_frames_carry_a_lux_term(self):
+        decisions, _, _ = self.case(0.4, 0.25, 33.0, overrides={"uncertainty_abs_lx": 0})
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
+        decisions, _, _ = self.case(0.4, 0.25, 33.0, anchored=False)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
+
+    def test_a_bright_anchored_level_keeps_the_ladders_tolerance_exactly(self):
+        for reading, status in ((500 * 1.151, "outside"), (500 * 1.149, "within")):
+            decisions, _, report = self.case(0.5, 1.0, reading, basis=500.0)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], status)
+            self.assertNotIn("level_bound", point(decisions[0], "desk-1"))
+            self.assertEqual(report["hits_beyond_level_tolerance"]["count"], 0)
+
+    def test_a_change_under_the_noise_cannot_be_judged_whatever_it_reads(self):
+        # a 10 to 1 lx fall or a 40 to 25 lx one: the meter cannot tell them from a bulb that never moved
+        for before, after in ((0.1, 0.01), (0.4, 0.25)):
+            for reading in (0.0, 1.0, 5.0, 10.0, 25.0, 30.0, 33.0, 100.0, 1000.0):
+                decisions, states, report = self.case(before, after, reading)
+                p = point(decisions[0], "desk-1")
+                self.assertEqual((p["status"], p["residual"]), ("unverifiable", None), reading)
+                hr = report["hit_rate"]
+                self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"), reading)
+                self.assertEqual(report["below_meter_noise"], 1, reading)
+                self.assertIn("below_noise", residual(states, syn.T0 + 5, "desk-1")["flags"], reading)
+
+    def test_a_change_past_the_noise_counts_both_ways(self):
+        for reading, status in ((20.0, "outside"), (2.0, "within")):  # a 20 to 2 lx fall, stuck or landed
+            decisions, _, report = self.case(0.2, 0.02, reading)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], status, reading)
+            self.assertEqual(report["below_meter_noise"], 0, reading)
+
+    def test_where_nothing_moved_a_low_level_still_counts_both_ways(self):
+        model = syn.hue_model({"desk-1": {B1: 100.0}}, unit="lx", kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 30.0}, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: 0.2, B1: 0.3}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        for reading, status in ((30.0, "within"), (40.0, "within"), (100.0, "outside")):
+            decisions, _, report = score([dec], [ref, syn.light_state(t + 5, {"desk-1": reading})], model)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], status, reading)
+            self.assertEqual(report["below_meter_noise"], 0, reading)
+
+    def test_the_owner_is_told_on_the_console(self):
+        model = syn.hue_model({"desk-1": {B0: 100.0}}, unit="lx", kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 10.0}, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: 0.1}, {B0: {"level": 0.01, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = write_case(tmp, [dec], [ref, syn.light_state(t + 5, {"desk-1": 1.0})], model)
+            with Quiet() as q:
+                self.assertEqual(cli.main(argv), 0)
+        out = q.buf.getvalue()
+        self.assertIn("gate 0.85: insufficient", out)
+        self.assertIn("1 point(s) whose change is below the meter's noise", out)
+
+
 class HitRateBoundary(unittest.TestCase):
     """Tolerance is inclusive at 15%; the gate passes at exactly 85%."""
 

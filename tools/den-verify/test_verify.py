@@ -369,7 +369,7 @@ class HeldPointsCount(unittest.TestCase):
         self.assertIn("held", r["flags"])
         self.assertNotIn("drift", r["flags"])
 
-    def test_the_share_decides_nothing_where_the_decisions_own_change_shows(self):
+    def test_the_share_decides_nothing_where_the_free_bulbs_show(self):
         t = syn.T0
         for share in (0, 0.01, 0.05, 0.15, 0.5):
             self.assertEqual(self.hit_rate([self.case("d-1", t, True, self.landing(3))], {"held_share_min": share}),
@@ -377,12 +377,12 @@ class HeldPointsCount(unittest.TestCase):
 
     def test_a_share_closed_at_zero_leaves_out_nothing_no_held_light_reaches(self):
         t = syn.T0
-        for rule in ("own_change_counts", "exclude_both"):
+        for rule in ("free_bulbs_count", "exclude_both"):
             self.assertEqual(self.hit_rate([self.case("d-1", t, False, self.landing(3))],
                                             {"held_share_min": 0, "held_rule": rule}), (3, 17, 0.15, "fail"), rule)
 
     def lit_mostly_by_the_hold(self, values, overrides=None, full=(100.0, 900.0)):
-        """B0 goes 0.2 -> 0.8 for a change of 60; B1, held at full, gives 900 of 980 (92%)."""
+        """B0 goes 0.2 -> 0.8, 80 at its brighter; B1, held at full, gives 900 of 980 (92%)."""
         model = syn.hue_model({n: {B0: full[0], B1: full[1]} for n in values}, kelvins=(2700,))
         t = syn.T0
         ref = syn.light_state(t, {n: full[0] * 0.2 + full[1] for n in values}, anchored=False, ident="ls-ref")
@@ -393,7 +393,7 @@ class HeldPointsCount(unittest.TestCase):
                                                                   "pinned": {"level_pct": 100, "cct_k": 2700}}]})
         return [dec], [ref, syn.light_state(t + 5, values, anchored=False)], model
 
-    def test_a_point_whose_own_change_cannot_show_is_left_out_whatever_it_reads(self):
+    def test_a_point_whose_free_bulbs_cannot_show_is_left_out_whatever_it_reads(self):
         d, f, model = self.lit_mostly_by_the_hold({"a": 980.0, "b": 980.0 * 0.7, "c": 980.0 * 0.1, "d": 980.0 * 2})
         decisions, _, report = score(d, f, model)
         hr = report["hit_rate"]
@@ -405,8 +405,8 @@ class HeldPointsCount(unittest.TestCase):
         self.assertEqual({e["cause"] for e in v["explanation"]}, {"held"})
         self.assertIsNone(v["within_tolerance"])
 
-    def test_a_point_lit_mostly_by_a_hold_counts_where_the_change_shows(self):
-        # B0's change of 120 is past the 15% of 360 here, though B1 gives 56% of the light
+    def test_a_point_lit_mostly_by_a_hold_counts_where_the_free_bulb_shows(self):
+        # B0's 160 is past the 15% of 360 here, though B1 gives 56% of the light
         for reading, status in ((360.0, "within"), (360.0 * 0.7, "outside"), (360.0 * 1.3, "outside")):
             d, f, model = self.lit_mostly_by_the_hold({"a": reading}, full=(200.0, 200.0))
             decisions, _, report = score(d, f, model)
@@ -428,6 +428,64 @@ class HeldPointsCount(unittest.TestCase):
                                hold_set={"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
                                                                   "pinned": {"level_pct": 0, "cct_k": 2700}}]})
         return score([dec], [ref, syn.light_state(t + 5, {n: 300 * 0.8 for n in pts}, anchored=False)], model)
+
+    def steady_beside_a_hold(self, held, reading, b3=150.0, level_after=0.5):
+        """This decision only nudges B1. B0, free and unchanged, gives 300 of 500 at the point; B3 gives 150."""
+        model = syn.hue_model({"pt": {B0: 300.0, B1: 100.0, B3: b3}}, kelvins=(2700,))
+        t = syn.T0
+        before = {B0: 1.0, B1: 0.5, B3: 0.5}
+        ref = syn.light_state(t, {"pt": 300 + 50 + b3 * 0.5}, anchored=False, ident="ls-r")
+        applied = {B1: {"level": 0.6, "steps": send(t + 0.5)},
+                   B3: {"status": "held" if held else "sent", "level": level_after}}
+        hold_set = {"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                             "pinned": {"level_pct": level_after * 100, "cct_k": 2700}}]}
+        dec = syn.hue_decision("d", t + 0.5, before, applied, "ls-r", targets={"A": {"surface_id": "pt"}},
+                               hold_set=hold_set if held else None)
+        return score([dec], [ref, syn.light_state(t + 5, {"pt": reading}, anchored=False)], model)
+
+    def test_a_free_bulb_that_was_not_asked_to_move_still_answers_beside_a_hold(self):
+        # B0 died: 300 of 435 is gone. This decision barely moved anything here, but B0 is not anyone else's
+        for reading, status in ((435.0, "within"), (135.0, "outside")):
+            for held in (False, True):
+                decisions, _, report = self.steady_beside_a_hold(held, reading)
+                self.assertEqual(point(decisions[0], "pt")["status"], status, (reading, held))
+                hr = report["hit_rate"]
+                self.assertEqual(hr["hits"] + hr["misses"], 1, (reading, held))
+                self.assertEqual(report["excluded_held_or_superseded"], 0, (reading, held))
+
+    def test_a_held_bulb_nudged_inside_the_bound_counts_like_a_steady_one(self):
+        decisions, _, report = self.steady_beside_a_hold(True, 135.0, level_after=0.52)
+        self.assertEqual(point(decisions[0], "pt")["status"], "outside")
+        self.assertEqual(report["hit_rate"]["misses"], 1)
+
+    def test_the_share_is_compared_inclusively(self):
+        # B1, held at full, gives exactly 25%; B0 is too little to show there
+        model = syn.hue_model({"pt": {B0: 30.0, B1: 100.0, B2: 270.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"pt": 400.0}, anchored=False, ident="ls-r")
+        dec = syn.hue_decision("d", t + 0.5, {B0: 1.0, B1: 1.0, B2: 1.0},
+                               {B0: {"level": 1.0, "steps": send(t + 0.5)}, B1: {"status": "held", "level": 1.0},
+                                B2: {"status": "superseded", "level": 1.0}}, "ls-r",
+                               targets={"A": {"surface_id": "pt"}})
+        after = syn.light_state(t + 5, {"pt": 400.0}, anchored=False)
+        left = {0.925: 1, 0.93: 0}  # 370 of 400 is held or superseded
+        for share, out in left.items():
+            report = score([dec], [ref, after], model, overrides={"held_share_min": share})[2]
+            self.assertEqual(report["excluded_held_or_superseded"], out, share)
+
+    def test_a_hold_on_a_room_going_dark_does_not_divide_by_nothing(self):
+        model = syn.hue_model({"pt": {B0: 300.0, B3: 300.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"pt": 480.0}, anchored=False, ident="ls-r")
+        dec = syn.hue_decision("d", t + 0.5, {B0: 0.8, B3: 0.8},
+                               {B0: {"level": 0.0, "steps": send(t + 0.5)}, B3: {"status": "held", "level": 0.0}}, "ls-r",
+                               targets={"A": {"surface_id": "pt"}},
+                               hold_set={"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                                                  "pinned": {"level_pct": 0, "cct_k": 2700}}]})
+        for reading, status in ((0.5, "within"), (240.0, "outside")):
+            decisions, _, report = score([dec], [ref, syn.light_state(t + 5, {"pt": reading}, anchored=False)], model)
+            self.assertEqual(point(decisions[0], "pt")["status"], status, reading)
+            self.assertEqual(report["hit_rate"]["hits"] + report["hit_rate"]["misses"], 1, reading)
 
     def test_a_channel_held_off_is_still_held(self):
         # it gives no light after, but the whole error is its own; this decision changed nothing here
@@ -486,13 +544,13 @@ class HeldPointsCount(unittest.TestCase):
     def test_the_rule_is_the_owners_and_only_a_named_one_is_read(self):
         text = method.lf_text(HERE / "VERIFY-V1.md")
         m = method.parse(text)
-        self.assertEqual(m.open["held_rule"], "own_change_counts")
+        self.assertEqual(m.open["held_rule"], "free_bulbs_count")
         self.assertEqual(m.open["held_share_min"], 0.05)
         self.assertIsNone(m.scored())
         with self.assertRaises(ValueError):
-            method.parse(text.replace('proposed "own_change_counts"', 'proposed "hits_kept"'))
+            method.parse(text.replace('proposed "free_bulbs_count"', 'proposed "hits_kept"'))
         with self.assertRaises(ValueError):
-            method.parse(text.replace('proposed "own_change_counts"', 'proposed "far_misses_count"'))
+            method.parse(text.replace('proposed "free_bulbs_count"', 'proposed "far_misses_count"'))
 
     def test_the_owner_is_told_on_the_console(self):
         d, f, model = self.lit_mostly_by_the_hold({"a": 980.0, "b": 980.0 * 0.7})
@@ -539,7 +597,7 @@ class WhatCountsIgnoresTheReading(unittest.TestCase):
             after = syn.light_state(syn.T0 + 5, {"pt": centre * factor}, anchored=anchored, ident="ls-a")
             _, _, report = Run(m, LightModel(model), [dec], [ref, after], clock=Clock(syn.UTC_OFFSET_S)).run()
             hr = report["hit_rate"]
-            seen.add((hr["hits"] + hr["misses"], report["excluded_held_or_superseded"], report["below_meter_noise"]))
+            seen.add((hr["hits"] + hr["misses"], report["excluded_held_or_superseded"], report["below_meter_noise"]["count"]))
         return seen
 
     def test_no_reading_changes_whether_a_point_counts(self):
@@ -567,10 +625,11 @@ class WhatCountsIgnoresTheReading(unittest.TestCase):
                 after = syn.light_state(syn.T0 + 5, {"pt": centre * factor}, anchored=False, ident="ls-a")
                 run = lambda d: Run(m, LightModel(model), [d], [ref, after], clock=Clock(syn.UTC_OFFSET_S)).run()[2]
                 with_hold, without = run(held_dec), run(free_dec)
-                if with_hold["excluded_held_or_superseded"]:
-                    continue
-                compared += 1
                 self.assertEqual(with_hold["points"], without["points"], (i, factor))
+                if not with_hold["excluded_held_or_superseded"]:
+                    compared += 1
+                    self.assertEqual(with_hold["hit_rate"]["hits"], without["hit_rate"]["hits"], (i, factor))
+                    self.assertEqual(with_hold["hit_rate"]["misses"], without["hit_rate"]["misses"], (i, factor))
         self.assertGreater(compared, 300)
 
 
@@ -922,6 +981,10 @@ class DimsAndOffs(unittest.TestCase):
         decisions, _, report = score([dec], [ref, syn.light_state(t + 5, {"desk-1": 5.0}, anchored=False)], model)
         self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable")
         self.assertEqual(report["hit_rate"]["verdict"], "insufficient")
+        lux = syn.hue_model({"desk-1": {B0: 400.0}}, unit="lx", kelvins=(2700,))
+        ref = syn.light_state(t, {"desk-1": 0.0}, ident="ls-ref")
+        decisions, _, report = score([dec], [ref, syn.light_state(t + 5, {"desk-1": 5.0})], lux)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable")
 
     def test_the_allowance_is_the_owners_and_zero_is_the_ladders_level_check(self):
         m = method.load()
@@ -980,6 +1043,14 @@ class DimsAndOffs(unittest.TestCase):
             hr = report["hit_rate"]
             self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (18, 6, 0.75, "fail"), anchored)
 
+    def test_a_stuck_bulb_reads_the_same_on_the_way_up_and_on_the_way_down(self):
+        # one of four stuck between 100% and 50%, then between 100% and 30%: the same fault, the same result
+        for low, reads_up, reads_down, status in ((0.5, 175.0, 125.0, "within"), (0.3, 165.0, 95.0, "outside")):
+            d, _ = self.room(low, 1.0, 200.0 * low, reads_up)
+            self.assertEqual(point(d, "p0")["status"], status, ("up", low))
+            d, _ = self.room(1.0, low, 200.0, reads_down)
+            self.assertEqual(point(d, "p0")["status"], status, ("down", low))
+
     def test_what_the_allowance_costs_is_what_the_note_says(self):
         # one bulb of four stuck on a 2:1 dim reads 125 for 100: a hit at 15% of the 200 that changed,
         # its increment still outside; a narrower allowance catches it
@@ -1032,14 +1103,37 @@ class MeterNoise(unittest.TestCase):
                 self.assertEqual((p["status"], p["residual"]), ("unverifiable", None), reading)
                 hr = report["hit_rate"]
                 self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"), reading)
-                self.assertEqual(report["below_meter_noise"], 1, reading)
+                self.assertEqual(report["below_meter_noise"]["count"], 1, reading)
                 self.assertIn("below_noise", residual(states, syn.T0 + 5, "desk-1")["flags"], reading)
+
+    def test_a_far_reading_at_such_a_point_is_said_though_it_is_not_a_miss(self):
+        # the bulb went to full instead of 1 lx: neither moved nor stuck explains it, and the owner must see it
+        for reading, far in ((1.0, 0), (10.0, 0), (100.0, 1)):
+            _, _, report = self.case(0.1, 0.01, reading)
+            self.assertEqual(report["below_meter_noise"], {"count": 1, "read_beyond_noise": far}, reading)
+            self.assertEqual(report["hit_rate"]["verdict"], "insufficient", reading)
+        with tempfile.TemporaryDirectory() as tmp:
+            model = syn.hue_model({"desk-1": {B0: 100.0}}, unit="lx", kelvins=(2700,))
+            t = syn.T0
+            ref = syn.light_state(t, {"desk-1": 10.0}, ident="ls-ref")
+            dec = syn.hue_decision("d-1", t + 0.5, {B0: 0.1}, {B0: {"level": 0.01, "steps": send(t + 0.5)}}, "ls-ref",
+                                   targets={"A": {"surface_id": "desk-1"}})
+            argv = write_case(tmp, [dec], [ref, syn.light_state(t + 5, {"desk-1": 100.0})], model)
+            with Quiet() as q:
+                self.assertEqual(cli.main(argv), 0)
+        self.assertIn("1 of them read beyond that noise", q.buf.getvalue())
+
+    def test_a_fault_inside_the_noise_cannot_be_seen(self):
+        # as if one bulb of four were stuck on a 60 to 12 lx dim: 12 lx high, inside 15.7 lx of noise
+        decisions, _, report = self.case(0.6, 0.12, 24.0)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
+        self.assertEqual(report["hits_beyond_level_tolerance"]["count"], 1)
 
     def test_a_change_past_the_noise_counts_both_ways(self):
         for reading, status in ((20.0, "outside"), (2.0, "within")):  # a 20 to 2 lx fall, stuck or landed
             decisions, _, report = self.case(0.2, 0.02, reading)
             self.assertEqual(point(decisions[0], "desk-1")["status"], status, reading)
-            self.assertEqual(report["below_meter_noise"], 0, reading)
+            self.assertEqual(report["below_meter_noise"]["count"], 0, reading)
 
     def test_where_nothing_moved_a_low_level_still_counts_both_ways(self):
         model = syn.hue_model({"desk-1": {B1: 100.0}}, unit="lx", kelvins=(2700,))
@@ -1050,7 +1144,7 @@ class MeterNoise(unittest.TestCase):
         for reading, status in ((30.0, "within"), (40.0, "within"), (100.0, "outside")):
             decisions, _, report = score([dec], [ref, syn.light_state(t + 5, {"desk-1": reading})], model)
             self.assertEqual(point(decisions[0], "desk-1")["status"], status, reading)
-            self.assertEqual(report["below_meter_noise"], 0, reading)
+            self.assertEqual(report["below_meter_noise"]["count"], 0, reading)
 
     def test_the_owner_is_told_on_the_console(self):
         model = syn.hue_model({"desk-1": {B0: 100.0}}, unit="lx", kelvins=(2700,))

@@ -48,7 +48,7 @@ when the records' clock strings are not in this PC's time zone. Run folders
 stay on the PC: no records, frames or reports go into git.
 
 The console gives the verdict, then how many points were left out of the hit
-rate (lit by held or superseded bulbs where the decision's own change could not
+rate (lit by held or superseded bulbs where the decision's own bulbs could not
 show, or with a change below the meter's noise) and how many hits are beyond 15%
 of the level, on dims and offs, with the hit rate if those had missed.
 `VERIFY-V1.md` gives each rule. Which points count never depends on what they

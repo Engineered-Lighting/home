@@ -277,15 +277,19 @@ class Run:
             row.update(measured=measured, why=why, predicted=predicted, ref_value=ref_val,
                        predicted_change=after[sid] - before[sid])
             # each channel at its brighter level: one held off gives no light now, and is still why a point moved
-            brightest = own = others = 0.0
+            brightest = own = free = held_light = held_moved = 0.0
             for c in parts:
                 now, was = parts[c][sid], parts_before[c][sid] if c in parts_before else 0.0
-                others += max(now, was) if c in held else 0.0
+                if c in held:
+                    held_light += max(now, was)
+                    held_moved += abs(now - was)
+                else:
+                    free += max(now, was)
+                    own += abs(now - was)
                 if now != was:
                     brightest += max(now, was)
-                    own += abs(now - was) if c not in held else 0.0
-            row["held_share"] = others / max(predicted, others) if others > 0 and predicted is not None else 0.0
-            row["held_lit"] = others > 0 and row["held_share"] >= m["held_share_min"]
+            row["held_share"] = held_light / max(predicted, held_light) if held_light > 0 and predicted is not None else 0.0
+            row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
             if measured is None:
                 row["status"] = "prior_only" if why == "prior_only" else "unverifiable"
             elif predicted is None:
@@ -304,9 +308,11 @@ class Run:
                 row["increment"] = {"point_id": sid, "measured_change": None,
                                     "predicted_change": row["predicted_change"],
                                     "status": "unverifiable", "uncertainty": None}
-            # Out both ways where this decision's own change could not show; the reading plays no part.
-            row["excluded_held"] = (row["held_lit"] and row["status"] in ("within", "outside")
-                                    and (m["held_rule"] == "exclude_both" or own <= row["level_bound"]))
+            # Out both ways where this decision's bulbs could not show; the reading plays no part.
+            row["excluded_held"] = False
+            if row["held_lit"] and row["status"] in ("within", "outside"):
+                answers_for = own if held_moved > row["level_bound"] else free
+                row["excluded_held"] = m["held_rule"] == "exclude_both" or answers_for <= row["level_bound"]
             out[sid] = row
         return out, revision
 
@@ -334,7 +340,8 @@ class Run:
         if predicted > 0:
             row["residual"] = row["error"] / predicted
         if level_tolerance < noise and 0 < own <= noise:
-            row["status"], row["why"], row["below_noise"] = "unverifiable", "a change below the meter's noise", True
+            row["status"], row["why"] = "unverifiable", "a change below the meter's noise"
+            row["below_noise"] = "beyond" if abs(row["error"]) > noise else "inside"
             return
         ladder = predicted > 0 and within(measured, predicted, m["tolerance"])
         row["status"] = "within" if ladder or within(measured, predicted, 0, wide) else "outside"
@@ -545,15 +552,20 @@ class Run:
 
     # -- the whole run --------------------------------------------------------
 
+    def rate_and_verdict(self, hits, n):
+        gate = Fraction(str(self.m["hit_rate_min"]))
+        return (_r(hits / n, 4) if n else None,
+                "insufficient" if not n else "pass" if Fraction(hits, n) >= gate else "fail")
+
     def hit_rate(self, counted_by_day):
         m = self.m
         hits = sum(h for h, _ in counted_by_day.values())
         n = sum(k for _, k in counted_by_day.values())
-        gate = Fraction(str(m["hit_rate_min"]))
-        out = {"hits": hits, "misses": n - hits, "value": _r(hits / n, 4) if n else None,
+        value, verdict = Run.rate_and_verdict(self, hits, n)
+        out = {"hits": hits, "misses": n - hits, "value": value,
                "gate": m["hit_rate_min"], "orientation": "higher is better",
                "delta": m["delta_hit_rate"], "delta_status": "promotion-margins: no delta set by the owner",
-               "verdict": ("insufficient" if not n else "pass" if Fraction(hits, n) >= gate else "fail")}
+               "verdict": verdict}
         # A day with nothing counted is no evidence: it must not narrow the interval.
         sessions = [day for day in counted_by_day.values() if day[1]]
         out["sessions"] = len(sessions)
@@ -583,7 +595,8 @@ class Run:
         status_counts = {"within": 0, "outside": 0, "unverifiable": 0, "prior_only": 0}
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
-        excluded_held = fallback_scored = eyes_total = below_noise = 0
+        excluded_held = fallback_scored = eyes_total = 0
+        below_noise = {"count": 0, "read_beyond_noise": 0}
         wide_by_day = {}
         excluded_by_status = {"within": 0, "outside": 0}
         not_admitted, not_verified = [], []
@@ -615,7 +628,9 @@ class Run:
             for p in verify["points"]:
                 status_counts[p["status"]] += 1
                 per_point.setdefault(p["point_id"], {k: 0 for k in status_counts})[p["status"]] += 1
-                below_noise += "below_noise" in rows.get(p["point_id"], {})
+                reading = rows.get(p["point_id"], {}).get("below_noise")
+                below_noise["count"] += reading is not None
+                below_noise["read_beyond_noise"] += reading == "beyond"
             eyes_total += len(verify["not_verified"])
             for s in verify["spill"]:
                 spill_counts[s["status"]] = spill_counts.get(s["status"], 0) + 1
@@ -664,10 +679,9 @@ class Run:
                 frame_counts["residual_written"] += 1
             states_out.append(rec)
 
-        hit_rate = self.hit_rate(counted_by_day)
-        narrow = {day: (h - w, k) for day, (h, k), w in
-                  ((day, v, wide_by_day.get(day, 0)) for day, v in counted_by_day.items())}
-        strict = self.hit_rate(narrow)
+        wide_hits = sum(wide_by_day.values())
+        narrow = self.rate_and_verdict(sum(h for h, _ in counted_by_day.values()) - wide_hits,
+                                       sum(k for _, k in counted_by_day.values()))
         misses = sum(causes.values())
         surfaces_total = sum(status_counts.values())
         unver = status_counts["unverifiable"] + status_counts["prior_only"]
@@ -678,12 +692,12 @@ class Run:
             "decisions": {"total": len(self.decs), "verified": len(rows_out),
                           "not_verified": not_verified, "not_admitted": not_admitted},
             "frames": frame_counts,
-            "hit_rate": hit_rate,
+            "hit_rate": self.hit_rate(counted_by_day),
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
             "below_meter_noise": below_noise,
-            "hits_beyond_level_tolerance": {"count": sum(wide_by_day.values()), "value_if_missed": strict["value"],
-                                            "verdict_if_missed": strict["verdict"]},
+            "hits_beyond_level_tolerance": {"count": wide_hits, "value_if_missed": narrow[0],
+                                            "verdict_if_missed": narrow[1]},
             "fallback_patch_points_scored": fallback_scored,
             "misses_explained": {
                 **causes, "misses": misses,

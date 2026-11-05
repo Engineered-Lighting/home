@@ -22,7 +22,7 @@ NUMBERS = ("tolerance", "hit_rate_min", "fade_s_den_lighting", "fade_s_den_light
            "spill_allowance_lx", "daylight_change_min", "shadow_radius_m", "max_frame_gap_s",
            "delta_hit_rate")
 CHOICES = {"background": ("reference_frame", "zero"),
-           "held_rule": ("own_change_counts", "exclude_both"),
+           "held_rule": ("free_bulbs_count", "exclude_both"),
            "spill_band_top": ("target_lx",),
            "record_extensions": ("verify-ext/v1",)}
 KEYS = NUMBERS + tuple(CHOICES)

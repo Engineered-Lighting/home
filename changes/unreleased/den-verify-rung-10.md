@@ -10,12 +10,13 @@ prediction for the state the bulbs actually reached (±15%, hit rate at least
 85%), writes `Decision.verify` and the `LightState` residual, and reports which
 misses daylight, a shadow or drift explain. A held or superseded bulb's own light
 cannot make a miss, and a free bulb's fault still shows beside it: such a point
-counts both ways unless the decision's own change could not show there. Dims and
+counts both ways unless the decision's own bulbs could not show there. Dims and
 offs are judged to the wider of 15% of the level and an allowance on the bulbs
 that changed, and every level check carries the meter's noise, so a perfect dim is
 a hit and a bulb that stayed on is a miss. A fault inside those bounds cannot be
 seen: at the proposed allowance, one bulb of four stuck on a dim shallower than
-about 2.5:1 reads as a hit, and the report gives what the hit rate would be without
-such hits. Which points count never depends on what they read. It reads records
+about 2.5:1 reads as a hit, the same line as going up, and the report gives what
+the hit rate would be without such hits. A change below the meter's noise counts
+neither way. Which points count never depends on what they read. It reads records
 already on disk, opens no network connection, and refuses a scored run until the
 owner closes its open slots in `VERIFY-V1.md`.

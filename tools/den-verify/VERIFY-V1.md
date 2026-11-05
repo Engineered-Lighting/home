@@ -72,10 +72,11 @@ Every point is then a hit or a miss, whichever way the model is off. The rule
 looks at no reading, so it cannot keep hits and drop misses. What it costs:
 
 - A fault smaller than the allowance reads as a hit. At the proposed 0.15, one
-  bulb of four stuck on a dim shallower than about 2.5:1 is a hit on the level
-  (its increment still reads `outside`). One stuck on a deeper dim, on an off or
-  on any bright-up is a miss. A model more than 15% off at a bulb's brighter level
-  is a miss.
+  bulb of four stuck on a dim shallower than about 2.5:1 is a hit on the level (its
+  increment may still read `outside`), and one stuck on a deeper dim or an off is a
+  miss. That is the line the ladder's ±15% draws on the same bulbs going up, so a
+  stuck bulb reads the same both ways. A model more than 15% off at a bulb's
+  brighter level is a miss; rung 8's gate is a median of 8% and a p90 of 19%.
 - `change_allowance` = 0, with the meter's bounds at 0, is the ladder's literal
   level check, with the false misses above. `zero` needs no allowance and is
   sharper after dark, because it reads the model's own level: there only an off,
@@ -110,13 +111,14 @@ anchored). An increment's is u(after) + u(before).
 A level check carries it too, as the meter's noise: √(u(predicted)² + u(read
 frame)²) under `reference_frame` and u(predicted) under `zero`, taken at the
 prediction, not the reading. A reading inside that noise is not a miss. Where the
-tolerance on the level is narrower than the noise (below about 83 lx at the
-proposed bounds) and a change there is too (below about 15 lx), the meter cannot
-tell a bulb that moved from one that did not, so the point is `unverifiable`,
-whatever it reads, and the report and the console count these
-(`below_meter_noise`). A fault inside the noise cannot be seen: one bulb of four
-stuck on a 60 to 12 lx dim reads 12 lx high, and is a hit. Relative frames have no
-lux term, and none of this changes their result.
+tolerance on the level is narrower than the noise (below about 130 lx at the
+proposed bounds) and a change there is too (below about 15 to 20 lx), the meter
+cannot tell a bulb that moved from one that did not, so the point is
+`unverifiable`, whatever it reads. The report and the console count these, and how
+many read beyond the noise (`below_meter_noise`), since such a reading fits neither
+and is not counted as a miss. A fault inside the noise cannot be seen: one bulb of
+four stuck on a 60 to 12 lx dim reads 12 lx high, and is a hit. Relative frames
+have no lux term, and none of this changes their result.
 
 **Held and superseded channels.** The ladder says a held or superseded channel
 is excluded from misses. Here that means the channel, not the point: a person or
@@ -125,8 +127,8 @@ fault must still show beside it. The prediction pins these channels where they
 are. Under `reference_frame` one that stayed put is in both frames, so its light
 and the model's error on it cancel; one that moved since the read frame adds its
 brighter level to the allowance above, like any bulb that changed. Under `zero`
-its error stays in the point's error, like every channel's, and the ±15% covers
-it.
+its error stays in the point's error, like every channel's, so a model far off on
+a held bulb can still make a miss there.
 
 Let H be a point's light from channels whose applied status is `held` or
 `superseded`, or that a hold pinned, each at its brighter level between the read
@@ -134,13 +136,15 @@ frame's state and the verify frame's, so a bulb held off still counts as held. A
 point with H below `held_share_min` of its predicted light counts like any other.
 At or above it, the slot `held_rule` says:
 
-- `own_change_counts` (proposed): the point counts, hit or miss, unless this
-  decision's own change there, the summed change of its free bulbs, is inside the
-  point's bound. A free bulb failing outright could not show there, so the point
-  is left out both ways. With one bulb of four held at 17% of the light, a stuck
-  free bulb reads 21% low and is a miss, and one point in A's shadow costs one
-  point of twenty, as they do with no hold. A bulb A turned off by hand, on a
-  decision that changed nothing at that point, leaves the point out.
+- `free_bulbs_count` (proposed): the point counts, hit or miss, unless what this
+  decision answers for there is inside the point's bound, so that its free bulbs
+  failing outright could not show. That is the free bulbs' light, or, when a held
+  channel moved past the bound since the read frame, only their own change, since
+  the rest of the error may be that channel's. Such a point is left out both ways.
+  With one bulb of four held at 17% of the light, a stuck free bulb reads 21% low
+  and is a miss, and one point in A's shadow costs one point of twenty, as they do
+  with no hold. A bulb A turned off by hand, on a decision that changed nothing at
+  that point, leaves the point out.
 - `exclude_both`: every such point is left out both ways. This is simpler and is
   the plainer reading of the ladder's words, but during a hold a free bulb's fault
   goes uncounted: one free decision at 20 of 20 and one held decision with two free
@@ -306,7 +310,7 @@ settle_margin_s = open              # open, proposed 1; Hue landing after a fade
 background = open                   # open, proposed "reference_frame"; or "zero"
 change_allowance = open             # open, proposed 0.15; the read-frame prediction's share of each changed bulb's brighter level (rung 8's gate: median 8%, p90 19%); 0 is the ladder's literal level check
 held_share_min = open               # open, proposed 0.05; held or superseded share of a point's light, from which held_rule applies
-held_rule = open                    # open, proposed "own_change_counts"; or "exclude_both"; which held-lit points count
+held_rule = open                    # open, proposed "free_bulbs_count"; or "exclude_both"; which held-lit points count
 uncertainty_rel = open              # open, proposed 0.03; per frame, a fraction of the estimate
 uncertainty_abs_lx = open           # open, proposed 10; anchored frames only, rung 7's meter tolerance once set
 spill_band_top = open               # open, proposed "target_lx"; T_hi is Decision.targets[track].lx

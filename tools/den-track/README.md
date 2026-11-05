@@ -218,7 +218,7 @@ run refuses when too few are left. An agent may read `score.json`, `track-run.js
 next step is session appearance as its own rung, after the owner's decision on learning
 permissions. A take that has been scored is used. A re-score after any change to the numbers,
 the code or the labels needs fresh takes, and so does dropping or adding a take once results
-are known: a scored run refuses them. Replaying with nothing changed gives the same report.
+are known: a scored run refuses them. Replaying with nothing changed gives the same numbers.
 
 ## Open slots
 

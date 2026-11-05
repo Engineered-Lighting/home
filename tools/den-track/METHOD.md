@@ -204,7 +204,7 @@ copied, moved or deleted.
 A scored run that names a take in any note must be that same look: the same takes, with
 nothing changed. So a retune, of the numbers or the code, cannot be tried on takes that have
 been looked at, new labels cannot be tried, and a take cannot be dropped or added once results
-are known. Replaying a scored run is allowed, and gives the same report. Each report goes
+are known. Replaying a scored run is allowed, and gives the same numbers. Each report goes
 to a new folder, so an earlier one stays, and a scored run on fresh takes lists the earlier
 scored runs the record holds and whether they passed (`earlier_scored_runs`), so a pass after
 a failure says so. A refused run shows no result and uses no take.

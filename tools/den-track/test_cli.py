@@ -1023,7 +1023,7 @@ class FreshTakesTest(Base):
         fresh = [self.make_take(seed=seed, meth=self.meth) for seed in (200, 201)]
         code, text = cli(*self.score_args(fresh, 'score-2', scored=True, meth=self.meth))
         self.assertEqual(code, 0, text)
-        self.assertIn('1 earlier scored run', text)
+        self.assertIn('1 other scored run', text)
         self.assertIn('1 failed', text)
         with open(self.path('score-2', 'score.json'), encoding='utf-8') as f:
             earlier = json.load(f)['earlier_scored_runs']
@@ -1048,7 +1048,7 @@ class FreshTakesTest(Base):
         self.score_once(takes)
         code, text = cli(*self.score_args(takes, 'score-2', scored=True, meth=self.meth))
         self.assertEqual(code, 0, text)
-        self.assertNotIn('earlier scored run', text)
+        self.assertNotIn('other scored run', text)
         self.assertNotIn('other take', text)
         with open(self.path('score-2', 'score.json'), encoding='utf-8') as f:
             report = json.load(f)

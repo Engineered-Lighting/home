@@ -392,7 +392,7 @@ def cmd_score(args):
              report['labelling']['takes']))
     gate = report['gate']
     if earlier:
-        print('this record holds %d earlier scored run(s), on other takes, under other numbers or code: %d failed'
+        print('this record holds %d other scored run(s): %d failed'
               % (len(earlier), sum(1 for run in earlier if run['passed'] is not True)))
     if others:
         print('this record holds looks at %d other take(s) that this run does not name: a pilot, or one left out after a look'

@@ -126,6 +126,7 @@ class FakeHA:
         for e, value in (lights or {}).items():
             self.lights[e].update(value)
         self.states, self.history, self.logbook, self.calls = {}, [], [], []
+        self.history_queries = []
         self._own, self._external, self._provisional = {}, {}, {}
         self.pending = []          # delayed light reports: [due, entity, context]
         self.report_delay = {}     # entity -> HA seconds before its next report lands
@@ -475,6 +476,7 @@ class FakeHA:
                         state = fake.states.get(path[len("/api/states/"):])
                         return self.reply(200, state) if state else self.reply(404, {"message": "Entity not found."})
                     if path.startswith("/api/history/period/"):
+                        fake.history_queries.append(query)
                         start = from_iso(path[len("/api/history/period/"):])
                         ids = query.get("filter_entity_id", [""])[0].split(",")
                         end = from_iso(query["end_time"][0]) if "end_time" in query else None

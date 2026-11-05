@@ -98,7 +98,9 @@ class HA:
         return self.request("POST", f"/api/services/{domain}/{service}", data) or []
 
     def history(self, start_iso, entity_ids):
-        return self.request("GET", f"/api/history/period/{quote(start_iso)}?filter_entity_id=" + ",".join(entity_ids))
+        # significant_changes_only=0: the sensor's occupancy is an attribute, and HA drops attribute changes by default
+        return self.request("GET", f"/api/history/period/{quote(start_iso)}?significant_changes_only=0"
+                                   "&filter_entity_id=" + ",".join(entity_ids))
 
     def logbook(self, start_iso):
         return self.request("GET", f"/api/logbook/{quote(start_iso)}")
@@ -148,6 +150,11 @@ class ProbeLog:
     def __init__(self, path, wall):
         self.path, self.wall = Path(path), wall
         self.out = open(self.path, "a", encoding="utf-8", newline="\n")
+        if self.path.stat().st_size:  # after a kill mid-write, the next line must not join the torn one
+            with open(self.path, "rb") as existing:
+                existing.seek(-1, os.SEEK_END)
+                if existing.read(1) != b"\n":
+                    self.out.write("\n")
 
     def write(self, kind, **fields):
         line = {"log": guard.PROBE_CHANGE, "kind": kind, "pc": self.wall(), **fields}
@@ -165,14 +172,7 @@ class ProbeLog:
 
 
 def read_log(path):
-    lines = []
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
-        if raw.strip():
-            try:
-                lines.append(json.loads(raw))
-            except ValueError:
-                break  # a torn last line after a kill
-    return lines
+    return model.read_jsonl(path)
 
 
 def write_session(folder, record):
@@ -492,7 +492,10 @@ class Session:
         fixtures = fixture_records(by_id)
         ranges = {f["channels"][0]["entity_id"]: tuple(f["channels"][0]["cct_range_k"]) for f in fixtures}
         warmest = {e: ranges[e][0] for e in guard.LIGHTS}
-        plan = model.schedule(self.m1, self.snapshot, ranges, warmest)
+        try:
+            plan = model.schedule(self.m1, self.snapshot, ranges, warmest)
+        except ValueError as exc:
+            raise sweep.Refused(f"no valid schedule from METHOD-V1's numbers ({exc})") from None
         (self.folder / "frames").mkdir(parents=True, exist_ok=False)
         with open(self.folder / "fixtures.jsonl", "x", encoding="utf-8", newline="\n") as out:
             for f in fixtures:
@@ -549,10 +552,7 @@ class Session:
         self.owner = guard.Owner({e: guard.scene_of_state(by_id[e]) for e in guard.LIGHTS})
         self.log.write("phase", phase="pause")
         self.save_record(phase="paused", outcome="paused")
-        try:
-            self.ha.call("switch", "turn_off", {"entity_id": self.switch})
-        except HAUnreachable as exc:
-            raise Abort(f"Home Assistant unreachable ({exc})", ha_lost=True) from None
+        self.control_call("switch", "turn_off", {"entity_id": self.switch})
         by_id = self.read()
         if ((by_id.get(self.sensor) or {}).get("attributes") or {}).get("automatic") is not False:
             raise Abort("automatic did not read false after the pause")
@@ -646,11 +646,30 @@ class Session:
         except HAUnreachable as exc:
             raise Abort(f"Home Assistant unreachable ({exc})", ha_lost=True) from None
 
+    def control_call(self, domain, service, data):
+        """A switch or resume call, logged like a probe write: every HA call has its intent line."""
+        e = data.get("entity_id")
+        self.log.write("intent", entity_id=e, service=f"{domain}.{service}", data=data, change="non-human", control=True)
+        states = self.ha_call(domain, service, data)
+        context = next(((s.get("context") or {}).get("id") for s in states), None)
+        self.log.write("sent", entity_id=e, context_id=context, own=True, control=True)
+
     def wait_state(self, e, test, limit=None):
         deadline = self.clock() + (limit if limit is not None else self.m1["settle_limit_s"])
         while True:
             by_id = self.read()
             if test(guard.scene_of_state(by_id.get(e))):
+                return True
+            if self.clock() > deadline:
+                return False
+            self.sleep(min(0.2, self.m1["poll_s"]))
+
+    def back_while_empty(self, e):
+        """A bulb that only went unavailable reports on or off again, with both occupancy signals off."""
+        deadline = self.clock() + self.m1["unavailable_wait_s"]
+        while True:
+            by_id = self.read()
+            if guard.scene_of_state(by_id.get(e)) is not None and guard.occupancy_reason(by_id, self.sensor) is None:
                 return True
             if self.clock() > deadline:
                 return False
@@ -667,9 +686,9 @@ class Session:
 
     def resume(self, restored):
         self.log.write("phase", phase="resume", bulbs=list(restored))
-        self.ha_call("switch", "turn_on", {"entity_id": self.switch})
+        self.control_call("switch", "turn_on", {"entity_id": self.switch})
         if restored:
-            self.ha_call("den_lighting", "resume_automatic", {"entity_id": list(restored)})
+            self.control_call("den_lighting", "resume_automatic", {"entity_id": list(restored)})
         deadline = self.clock() + self.m1["resume_check_s"]
         while True:
             by_id = self.read()
@@ -678,11 +697,7 @@ class Session:
             off = all((guard.scene_of_state(by_id.get(e)) or {}).get("on") is False for e in restored)
             check = {"automatic": attributes.get("automatic"), "holds_left": sorted(set(holds) & set(restored)),
                      "bulbs_off": off, "occupancy": attributes.get("occupancy")}
-            if attributes.get("occupancy") != "off":
-                return check
-            if check["automatic"] is True and not check["holds_left"] and off:
-                return check
-            if self.clock() > deadline:
+            if not guard.resume_problems(check) or self.clock() > deadline:
                 return check
             self.sleep(min(0.5, self.m1["poll_s"]))
 
@@ -730,7 +745,7 @@ class Session:
         restored, failed = self.restore(bulbs, arrival=arrival) if bulbs else ([], [])
         waiting = [e for e in self.owner.tools() if e in self.owner.unavailable]
         for e in waiting:  # back on or off while the room is empty: restore it too
-            if self.wait_state(e, lambda s: s is not None, self.m1["unavailable_wait_s"]):
+            if self.back_while_empty(e):
                 ok, bad = self.restore([e], arrival=arrival)
                 restored += ok
                 failed += bad
@@ -812,6 +827,9 @@ class Session:
         walk = self.record.get("walk_through")
         if walk:
             lines.append(walk["outcome"])
+        problems = guard.resume_problems(self.record.get("resume") or {"automatic": True})
+        if problems:
+            lines.append("den_lighting did not read back as resumed: " + "; ".join(problems) + ". Tell the agent.")
         return lines or ["Every bulb was restored and den_lighting resumed."]
 
     # --recover --------------------------------------------------------------------------------
@@ -821,6 +839,10 @@ class Session:
             self.record = json.loads((self.folder / "session.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise sweep.Refused("no readable session.json in the folder") from None
+        if self.record.get("phase") == "start":  # stopped during the wait: nothing was paused or written
+            self.save_record(phase="done", outcome="refused", abort_reason="stopped before the pause")
+            raise sweep.Refused("the session stopped before the pause, so there is nothing to recover; "
+                                "start a new session with a new id")
         if self.record.get("phase") == "done":
             walk = self.record.get("walk_through") or {}
             if walk.get("outcome") != "bulbs left lit, occupancy unknown":
@@ -910,6 +932,8 @@ def rebuild_owner(lines, record):
     pending = {}
     for line in lines:
         kind, e = line.get("kind"), line.get("entity_id")
+        if line.get("control"):  # the switch and resume calls: no bulb's state follows from them
+            continue
         if kind == "intent":
             data = line["data"]
             target = (guard.scene(True, data.get("brightness"), data.get("color_temp_kelvin"))

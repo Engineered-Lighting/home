@@ -605,7 +605,14 @@ def confirmation(readings):
 # ---- a session folder: reduce, fit, score, write -------------------------------------------
 
 def read_jsonl(path):
-    return [json.loads(raw) for raw in Path(path).read_text(encoding="utf-8").splitlines() if raw.strip()]
+    """The lines of a JSON Lines file. A line torn by a kill mid-write costs only itself."""
+    lines = []
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        try:
+            lines.append(json.loads(raw))
+        except ValueError:
+            pass
+    return lines
 
 
 def session_captures(folder, parameters, method1):

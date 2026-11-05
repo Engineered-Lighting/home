@@ -530,12 +530,17 @@ class GuardTests(unittest.TestCase):
         good = json.dumps(store_for())
         self.assertEqual(guard.read_store(good)["light.front_right"], SNAPSHOT["light.front_right"])
         hold = {"light.front_right": {"scene": {"on": True, "brightness": 1, "kelvin": 3000}, "since": 1.0}}
-        bad_normal = dict(SNAPSHOT, **{"light.den_rear_left": {"on": True, "brightness": None, "kelvin": 2500}})
-        for text in (json.dumps(store_for(holds=hold)), json.dumps(store_for(gaming=True)),
-                     json.dumps(store_for(snapshot=bad_normal)), json.dumps(store_for(version=2)),
-                     json.dumps(store_for(enabled=False)), "not json"):
-            with self.assertRaises(guard.Refused):
+        null_normal = dict(SNAPSHOT, **{"light.den_rear_left": {"on": True, "brightness": None, "kelvin": 2500}})
+        mid_game = store_for()
+        mid_game["data"]["snapshot"] = {"light.front_right": {"on": True, "brightness": 9, "kelvin": 3000}}
+        for text, why in ((json.dumps(store_for(holds=hold)), "holds"), (json.dumps(store_for(gaming=True)), "game"),
+                          (json.dumps(mid_game), "holds or a game snapshot"),
+                          (json.dumps(store_for(null_normal)), "null or bad brightness"),
+                          (json.dumps(store_for(version=2)), "store version"),
+                          (json.dumps(store_for(enabled=False)), "automatic off"), ("not json", "not JSON")):
+            with self.assertRaises(guard.Refused) as caught:
                 guard.read_store(text)
+            self.assertIn(why, str(caught.exception))
 
     def test_each_start_failure_is_named(self):
         switch, sensor = guard.find_entities(list(states(self.ha).values()))
@@ -762,11 +767,14 @@ class ProbeEndToEndTests(unittest.TestCase):
         log = rig.log()
         phases = [l["phase"] for l in log if l["kind"] == "phase"]
         self.assertEqual(phases, ["start", "wait", "pause", "probe", "probe_done", "restore", "resume", "done"])
-        for intent, sent in zip([l for l in log if l["kind"] == "intent"], [l for l in log if l["kind"] == "sent"]):
+        intents, sents = [l for l in log if l["kind"] == "intent"], [l for l in log if l["kind"] == "sent"]
+        self.assertEqual([i["service"] for i in intents], [f"{d}.{s}" for d, s in calls], "an intent line per HA call")
+        for intent, sent in zip(intents, sents):
             self.assertEqual(intent["entity_id"], sent["entity_id"])
             self.assertLess(log.index(intent), log.index(sent), "the intent line is flushed before the call")
             self.assertEqual(intent["change"], "non-human")
-            self.assertTrue(sent["context_id"])
+            if not intent.get("control"):
+                self.assertTrue(sent["context_id"])
         self.assertTrue(all(l["log"] == guard.PROBE_CHANGE for l in log))
         restore_right = [l["service"] for l in log if l["kind"] == "intent" and l.get("restore")
                          and l["entity_id"] == "light.front_right"]
@@ -821,8 +829,8 @@ class ProbeEndToEndTests(unittest.TestCase):
         self.assertEqual(outcome, "aborted")
         log = rig.log()
         abort_at = next(i for i, l in enumerate(log) if l["kind"] == "guard")
-        self.assertFalse([l for l in log[abort_at:] if l["kind"] == "intent" and not l.get("restore")],
-                         "no probe write after the abort")
+        self.assertFalse([l for l in log[abort_at:] if l["kind"] == "intent"
+                          and not l.get("restore") and not l.get("control")], "no probe write after the abort")
         right = [l["service"] for l in log[abort_at:] if l["kind"] == "intent" and l["entity_id"] == "light.front_right"]
         self.assertEqual(right, ["light.turn_on"])
         normal = rig.normal()
@@ -1161,6 +1169,97 @@ class ProbeEndToEndTests(unittest.TestCase):
         outcome, lines = rig.session().recover()
         rig.assert_normal_is_snapshot(self)
         self.assertEqual(rig.holds(), {})
+
+    def recovered_writes(self, rig, e):
+        log = rig.log()
+        at = max(i for i, l in enumerate(log) if l["kind"] == "phase" and l["phase"] == "recover")
+        return [l["service"] for l in log[at:] if l["kind"] == "intent" and l["entity_id"] == e]
+
+    def test_recover_after_a_direct_arrival_turns_a_snapshot_off_bulb_on_only(self):
+        rig = Rig(self)
+        rig.run(at_step(10, lambda s: setattr(rig.ha, "down", True)))
+        rig.ha.set_occupancy("on")  # straight from off, long after vacancy began, while HA was out of reach
+        rig.ha.down = False
+        outcome, lines = rig.session().recover()
+        self.assertEqual(self.recovered_writes(rig, "light.front_right"), ["light.turn_on"])
+        self.assertIs(json.loads((rig.folder / "session.json").read_text())["restore"]["arrival"], True)
+        self.assertEqual(rig.holds(), {})
+        self.assertEqual(rig.ha.history_queries[-1].get("significant_changes_only"), ["0"],
+                         "the sensor's occupancy is an attribute: HA drops those changes by default")
+
+    def test_recover_after_an_arrival_through_unknown_restores_on_then_off(self):
+        rig = Rig(self)
+        rig.run(at_step(10, lambda s: setattr(rig.ha, "down", True)))
+        rig.ha.set_occupancy("unknown")
+        time.sleep(0.05)
+        rig.ha.set_occupancy("on")
+        rig.ha.down = False
+        outcome, lines = rig.session().recover()
+        self.assertEqual(self.recovered_writes(rig, "light.front_right"), ["light.turn_on", "light.turn_off"])
+        self.assertIs(json.loads((rig.folder / "session.json").read_text())["restore"]["arrival"], False)
+        rig.assert_normal_is_snapshot(self)
+        self.assertEqual(rig.holds(), {})
+
+    def test_recover_before_the_pause_refuses_and_writes_nothing(self):
+        rig = Rig(self)
+
+        class Killed(BaseException):
+            pass
+
+        def die():
+            raise Killed()
+        s = rig.session()
+        s.wait_for_vacancy = die
+        with self.assertRaises(Killed):
+            rig.run(session=s)
+        with self.assertRaises(sweep.Refused):
+            rig.session().recover()
+        self.assertEqual(rig.rest_calls(), [], "nothing was paused, so nothing is restored")
+        self.assertEqual(json.loads((rig.folder / "session.json").read_text())["outcome"], "refused")
+
+    def test_a_torn_log_line_costs_only_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "probes.jsonl"
+            path.write_text('{"a": 1}\n{"torn', encoding="utf-8")  # a kill mid-write, with no line end
+            log = probe.ProbeLog(path, time.time)
+            log.write("phase", phase="recover")
+            log.close()
+            lines = probe.read_log(path)
+            self.assertEqual(lines[0], {"a": 1})
+            self.assertEqual(lines[1]["phase"], "recover")
+            self.assertEqual(len(model.read_jsonl(path)), 2)
+
+    def test_a_bulb_back_while_the_room_is_occupied_is_not_written(self):
+        rig = Rig(self, m1=method1(unavailable_wait_s=0.5))
+        e = "light.den_rear_right"
+
+        def drop(s):
+            rig.ha.set_available(e, False)
+            rig.ha.set_occupancy("on")
+            threading.Timer(0.1, rig.ha.set_available, args=(e, True)).start()
+        outcome, lines, s = rig.run(at_step(8, drop))
+        self.assertEqual(outcome, "aborted")
+        log = rig.log()
+        abort_at = next(i for i, l in enumerate(log) if l["kind"] == "guard")
+        self.assertFalse([l for l in log[abort_at:] if l["kind"] == "intent" and l["entity_id"] == e])
+        self.assertEqual([u[0] for u in json.loads((rig.folder / "session.json").read_text())["unrestored"]], [e])
+
+    def test_the_result_line_says_when_den_lighting_did_not_resume_cleanly(self):
+        rig = Rig(self)
+        s = rig.session()
+        clean = {"automatic": True, "holds_left": [], "bulbs_off": True, "occupancy": "off"}
+        s.record = {"resume": clean}
+        self.assertEqual(s.result_lines([]), ["Every bulb was restored and den_lighting resumed."])
+        for change, word in (({"automatic": False}, "automatic"), ({"holds_left": ["light.front_right"]}, "holds"),
+                             ({"bulbs_off": False}, "lit")):
+            s.record = {"resume": {**clean, **change}}
+            lines = s.result_lines([])
+            self.assertEqual(len(lines), 1)
+            self.assertIn(word, lines[0])
+            self.assertIn("did not read back", lines[0])
+        s.record = {"resume": {**clean, "bulbs_off": False, "occupancy": "on"}}
+        self.assertEqual(s.result_lines([]), ["Every bulb was restored and den_lighting resumed."],
+                         "with someone home, den_lighting keeps them on")
 
     def test_a_game_mid_run_leaves_den_lighting_paused_and_asks_for_recover(self):
         rig = Rig(self)

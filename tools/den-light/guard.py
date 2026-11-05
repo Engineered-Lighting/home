@@ -304,6 +304,18 @@ def resume_plan(restored):
     return [{"do": "switch_on"}, {"do": "resume", "entity_ids": list(restored)}]
 
 
+def resume_problems(check):
+    """What resume()'s read-back says is wrong: automatic, holds, and (in an empty den) bulbs still lit."""
+    problems = []
+    if check.get("automatic") is not True:
+        problems.append("automatic is not back on")
+    if check.get("holds_left"):
+        problems.append("holds are left on " + ", ".join(check["holds_left"]))
+    if check.get("occupancy") == "off" and not check.get("bulbs_off"):
+        problems.append("restored bulbs are still lit in an empty den")
+    return problems
+
+
 def unrestored_line(e, last_probe):
     level = "" if not last_probe else f" ({last_probe})"
     return (f"{e} was not restored: its normal now carries the probe's level and temperature{level}. "

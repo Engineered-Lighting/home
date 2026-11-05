@@ -293,6 +293,7 @@ def structural(log, light, slots):
                     broken += 1
                 elif not (step["checks"]["revision_current"] or step["checks"]["fresh_check"]) or not step["checks"]["not_held"]:
                     unchecked += 1
+        unlogged += d["inputs"].get("over_limit_not_logged", 0)  # it left the line, so the rows below can't show it
         conflicts = {(c["held_channel"], c["track"]) for c in d["hard_conflicts"]}
         for row in d["predicted"]["eyes"]:
             if row["excluded"] and row["channel"] not in held:

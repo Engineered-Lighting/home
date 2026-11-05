@@ -667,9 +667,11 @@ through `runner.run`, which validates each line.
 A line does grow with the tracks: about 1.5 KB each, or 3.3 KB in the worst shape the contracts allow, with a glare table
 and every bulb held. The coordinator never forgets a track, because an id is never reused and a PersonState says nothing
 when its track ends, so a long evening on rungs 5 and 6 would pass the limit. When a Decision would not fit, the rows of
-the tracks longest unheard from go, readers last, and `inputs.tracks_not_logged` counts them. They go whole, from every
-list, so `predicted.eyes` still reproduces, and they stay in the plan: a track left off the line is still kept under the
-glare limit. `score.py` says when this happened. need v0 has one track, so it never does today.
+the tracks longest unheard from go, then readers, and last any track a light is over the glare limit at.
+`inputs.tracks_not_logged` counts them. They go whole, from every list, so `predicted.eyes` still reproduces, and they stay
+in the plan: a track left off the line is still kept under the glare limit. `score.py` says when this happened. If so many
+tracks are over the limit that a row saying so has to go too, `inputs.over_limit_not_logged` counts it and **hard
+constraints** fails, because the log can no longer show every conflict. need v0 has one track, so none of this happens today.
 
 ### Keys the contracts do not name
 
@@ -688,6 +690,8 @@ Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear 
   `{points, of, mask, surfaces}`: how many blocks of how many, the blocks as hex bits over the model's `sample_points`
   (bit 0 the first; `LightModel.unmask` reads it), and which of the tracked people's surfaces it touches.
 - `inputs.tracks_not_logged`: only on a Decision that left a track's rows out to fit its line.
+- `inputs.over_limit_not_logged`: only when rows that put a light over the glare limit at an eye left the line with their
+  track. Any at all fails **hard constraints**.
 
 ### Left for later
 

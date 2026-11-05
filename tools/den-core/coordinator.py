@@ -742,12 +742,14 @@ class Coordinator:
     def _fitted(self, record, result, tasks):
         """events.validate refuses a line over its limit and the run then stops with no log, and a track is never forgotten:
         its id is never reused and a PersonState says nothing when it ends. So when a Decision would not fit, the rows of the
-        tracks longest unheard from go, readers last, and inputs.tracks_not_logged counts them. They stay in the plan: this
-        only decides what the line says. The last track always stays."""
+        tracks longest unheard from go, then readers, and last a track a light is over the glare limit at, which is what the
+        gate most needs to read. inputs.tracks_not_logged counts them. They stay in the plan: this only decides what the line
+        says. The last track always stays."""
         most = len(self.people) - 1
         if most < 1 or len(events.dumps(record)) <= LINE_ROOM:
             return record
-        order = sorted(self.people, key=lambda track: decide.reading(self.people[track]))  # oldest first, readers after
+        over = {track for _, track in _over_limit(record)}
+        order = sorted(self.people, key=lambda track: (track in over, decide.reading(self.people[track])))  # oldest first
         fewest = 1
         while fewest < most:  # the fewest to leave out, by halves, since tracks can run to hundreds in an evening
             middle = (fewest + most) // 2
@@ -758,7 +760,8 @@ class Coordinator:
         return self._without(record, order[:fewest], result, tasks)
 
     def _without(self, record, tracks, result, tasks):
-        """The Decision with every row of these tracks gone, from every list, so predicted.eyes still reproduces."""
+        """The Decision with every row of these tracks gone, from every list, so predicted.eyes still reproduces. A row over
+        the glare limit that goes with them is counted, so the gate cannot read a clean line as a clean evening."""
         gone, inputs = set(tracks), record["inputs"]
         stay = {track: surface for track, surface in tasks.items() if track not in gone}
         here = set(stay.values())
@@ -769,6 +772,9 @@ class Coordinator:
                "inputs": {**inputs, "person_state": [s for s in inputs["person_state"] if s.split("@")[0] not in gone],
                           "field_support": {s: v for s, v in inputs["field_support"].items() if s.split("@")[0] not in gone},
                           "hold_set": {**inputs["hold_set"], "held": held}, "tracks_not_logged": len(gone)}}
+        lost = sum(track in gone for _, track in _over_limit(record))
+        if lost:
+            out["inputs"]["over_limit_not_logged"] = lost
         if "hold_limited" in record:
             out["hold_limited"] = [row for row in record["hold_limited"] if row["point_id"] in here]
         self._rows(out, result, stay)
@@ -799,6 +805,12 @@ class Coordinator:
         else:
             out.append(self._finish(plan, t, False))
         return out
+
+
+def _over_limit(record):
+    """{(channel, track)} a Decision says is over the glare limit: its conflicts and its excluded eye rows."""
+    return ({(row["held_channel"], row["track"]) for row in record["hard_conflicts"]}
+            | {(row["channel"], row["track_id"]) for row in record["predicted"]["eyes"] if row["excluded"]})
 
 
 def option_name(comp):

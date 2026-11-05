@@ -614,6 +614,14 @@ class StructuralTest(Base):
         decision["predicted"]["eyes"][0]["excluded"] = True
         self.assertFalse(score.structural(log, policy.light, policy.slots)["hard constraints"][0])
 
+    def test_a_row_over_the_limit_that_left_the_line_fails(self):
+        _, log, policy = self.decided()
+        decision = next(e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide")
+        decision["inputs"]["over_limit_not_logged"] = 3
+        ok, text = score.structural(log, policy.light, policy.slots)["hard constraints"]
+        self.assertFalse(ok)
+        self.assertIn("3 conflict(s) not logged", text)
+
 
 if __name__ == "__main__":
     unittest.main()

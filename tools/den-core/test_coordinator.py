@@ -1053,6 +1053,98 @@ class ManyTracksLineTest(unittest.TestCase):
         self.assertNotIn("T0", self.tracks(d))
         self.assertLessEqual(1.5 * d["requested_scene"][FR]["brightness"] / 254 + 0.2, 1.0)
 
+    def glare_at(self, bulb, *tracks):
+        return {"light_model": {"source": "fake", "params": {"glare": {bulb: {track: {"G": 3.0, "sd": 0.01} for track in tracks}}}}}
+
+    def test_a_track_a_held_light_is_over_the_limit_at_stays_on_the_line(self):
+        # T0 is the oldest and never reads, so it would be the first off the line, and its conflict with it.
+        p, _ = self.seen(30, reading=[29], config=self.glare_at(FL, "T0"))
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 240, "T29")))
+        self.assertGreater(d["inputs"]["tracks_not_logged"], 0)
+        self.assertIn("T0", self.tracks(d))
+        self.assertEqual([(row["held_channel"], row["track"]) for row in d["hard_conflicts"]], [(FL, "T0")])
+        self.assertNotIn("over_limit_not_logged", d["inputs"])
+
+    def test_over_the_limit_means_a_conflict_or_an_excluded_row(self):
+        # They differ at the edge: predicted.eyes rounds G_hi to six places and a conflict does not.
+        record = {"hard_conflicts": [{"held_channel": FL, "track": "A"}],
+                  "predicted": {"eyes": [{"channel": FR, "track_id": "B", "excluded": True}, {"channel": RL, "track_id": "C", "excluded": False}]}}
+        self.assertEqual(coordinator._over_limit(record), {(FL, "A"), (FR, "B")})
+
+    def test_a_track_in_conflict_outlasts_a_reader(self):
+        p, _ = self.seen(30, reading=range(1, 30), config=self.glare_at(FL, "T0"))
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 240, "T29")))
+        self.assertGreater(d["inputs"]["tracks_not_logged"], 0)
+        self.assertNotIn("T1", self.tracks(d))  # the reader longest unheard from
+        self.assertIn("T0", self.tracks(d))
+
+    def test_conflicts_that_cannot_all_fit_are_counted(self):
+        names = ["T%d" % k for k in range(30)]
+        p, _ = self.seen(30, reading=[29], config=self.glare_at(FL, *names))
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 240, "T29")))
+        self.assertEqual({row["track"] for row in d["hard_conflicts"]}, set(self.tracks(d)))
+        self.assertEqual(d["inputs"]["over_limit_not_logged"], 30 - len(d["hard_conflicts"]))
+        self.assertGreater(d["inputs"]["over_limit_not_logged"], 0)
+
+    def superseded_with(self, config):
+        """Two plans inside the send latency, so the first's steps never go out and a free channel stays where it was, over the
+        limit at an eye, however the plan capped it. The Decision that says so was planned with all 30 tracks."""
+        p = policy(compensation={"option": "P1", "form": "mode"}, send_latency_s=30, **config)
+        start(p)
+        for k in range(30):
+            feed(p, ev(T0 + 2 + k * 0.1, "person_state", self.full_state(T0 + 2 + k * 0.1, "T%d" % k, "counter-1", "none"), "need"))
+        feed(p, ev(T0 + 10, "person_state", self.full_state(T0 + 10, "T29", "counter-1"), "need"))
+        [d] = self.valid(feed(p, ev(T0 + 11, "person_state", self.full_state(T0 + 11, "T28", "armchair-book"), "need")))
+        self.assertEqual(d["status"], "superseded")
+        return d
+
+    def test_a_free_channel_over_the_limit_keeps_its_track_on_the_line(self):
+        d = self.superseded_with(self.glare_at(FR, "T0"))
+        self.assertGreater(d["inputs"]["tracks_not_logged"], 0)
+        self.assertIn("T0", self.tracks(d))
+        self.assertEqual([(r["channel"], r["track_id"]) for r in d["predicted"]["eyes"] if r["excluded"]], [(FR, "T0")])
+
+    def test_free_channel_rows_that_cannot_all_fit_are_counted(self):
+        d = self.superseded_with(self.glare_at(FR, *("T%d" % k for k in range(30))))
+        shown = sum(r["excluded"] for r in d["predicted"]["eyes"])
+        self.assertGreater(shown, 0)
+        self.assertEqual(d["inputs"]["over_limit_not_logged"], 30 - shown)
+
+    def scored(self, glare):
+        """Rung 9's gate, closed, on 30 tracks with a touch that puts front left over the limit. Plumbing, behind a patched BACKEND."""
+        names = ["T%d" % k for k in range(30)]
+        script = [[T0 + 2 + k, name, "none", "counter-1"] for k, name in enumerate(names[:-1])] + [[T0 + 300, names[-1], "engaged", "counter-1"]]
+        inputs = [(T0, "light_observed", {"entity_id": e, **scene(180), "context": "unknown"}) for e in events.LIGHTS]
+        inputs += [(T0 + 1, "occupancy", {"value": "on", "via": "t"}), (T0 + 600, "occupancy", {"value": "on", "via": "t"})]
+        inputs += [(T0 + 450, "correction", {"correction_id": "c1", "entity_id": FL, "after": scene(240), "source": "t"})]
+        gate = test_score.closed_gate(self.tmp)
+        config = {"gate": coordinator.gate_config(coordinator.load_gate(gate)),
+                  "light_model": {"source": "file", "path": str(test_score.real_model(self.tmp, surfaces=False, glare=glare(names)))}}
+        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"), mock.patch.object(coordinator, "GATE_FILE", gate):
+            header, log = runner.run(runner.tagged(sorted(inputs, key=lambda row: row[0]), "poll_log"),
+                                     [hold_fixtures.ScriptedNeed({"script": script}), incumbent.make_policy(), coordinator.make_policy(config)],
+                                     tail_s=10.0, sources=[{"name": "test"}])
+            path = self.tmp / "log.jsonl"
+            events.write(path, header, log)
+            lines, code = score.report(path, gate_path=gate)
+        return "\n".join(lines), code, [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_a_scored_run_with_tracks_left_off_still_logs_the_conflict(self):
+        text, code, decisions = self.scored(lambda names: {FL: {"T0": {"G": 3.0, "sd": 0.01}}})
+        touched = next(d for d in decisions if d["inputs"]["hold_set"]["held"])
+        self.assertGreater(touched["inputs"]["tracks_not_logged"], 0)
+        self.assertEqual([row["track"] for row in touched["hard_conflicts"]], ["T0"])
+        self.assertRegex(text, r"hard constraints: OK \(free channels hold the glare limit; [1-9]\d* conflict\(s\) logged\)")
+        self.assertEqual(code, 0, text)
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_a_scored_run_that_could_not_log_every_conflict_fails(self):
+        text, code, decisions = self.scored(lambda names: {FL: {name: {"G": 3.0, "sd": 0.01} for name in names}})
+        self.assertTrue(any(d["inputs"].get("over_limit_not_logged") for d in decisions))
+        self.assertRegex(text, r"hard constraints: FAIL \(0 free channel row\(s\) over the glare limit, [1-9]\d* conflict\(s\) not logged\)")
+        self.assertEqual(code, 1, text)
+
     def test_the_worst_shape_a_contract_record_allows_fits(self):
         names = ["track-%06d" % k for k in range(12)]
         surfaces = {"a-surface-with-a-thirty-char-%d" % n: ["other/%d" % (n * 10 + m) for m in range(10)] for n in range(8)}

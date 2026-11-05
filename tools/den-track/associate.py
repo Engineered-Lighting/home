@@ -1,22 +1,21 @@
-"""Joint association of tracks to one frame's observations.
+"""Joint association of tracks to one frame's detections.
 
-Every joint hypothesis (each observation goes to at most one track, each track
-takes at most one observation, only inside the gate) is weighed as
+Every joint hypothesis (each detection goes to at most one track, each track
+takes at most one detection, only inside the gate) is weighed as
 
     product over taken pairs   of  link[t][o]   (P_D times the Gaussian)
     product over missed tracks of  miss[t]      (1 - P_D)
-    product over free obs      of  free[o]      (birth or clutter density)
+    product over free dets     of  free[o]      (birth or clutter density)
 
-The best hypothesis is used; each track's marginal is the share of total
-weight held by hypotheses that agree with the best one for that track. With
-few people every hypothesis is enumerated, cluster by cluster; a cluster too
-big to enumerate falls back to the best hypothesis with marginals of 0, which
-reads as fully ambiguous.
+The best hypothesis is used. A track's rivals are the share of total weight
+held by hypotheses that would move an identity, named by who it would move to.
+With few people every hypothesis is enumerated, cluster by cluster; a cluster
+too big to enumerate falls back to a greedy pick that reads as fully ambiguous.
 """
 
 
 def clusters(n_tracks, n_obs, link):
-    """Connected groups of tracks and observations joined by gated links."""
+    """Connected groups of tracks and detections joined by gated links."""
     parent = list(range(n_tracks + n_obs))
 
     def find(a):
@@ -42,7 +41,7 @@ def clusters(n_tracks, n_obs, link):
 
 
 def _enumerate(tracks, obs, link, miss, free, limit):
-    """All hypotheses of one cluster as (weight, {track: obs or None})."""
+    """All hypotheses of one cluster as (weight, {track: det or None})."""
     out = []
 
     def walk(k, used, weight, chosen):
@@ -70,22 +69,34 @@ def _enumerate(tracks, obs, link, miss, free, limit):
     return out
 
 
-def associate(link, miss, free, coasting=None, limit=20000):
-    """Returns (choice, marginal, risk).
+def _rival(t, mine, best, h):
+    """Who the identity would move to under hypothesis h: a track, or None for a newcomer."""
+    if mine is not None:
+        for s, o in best.items():
+            if s != t and o == mine:
+                return s
+    if best[t] is not None:
+        for s, o in h.items():
+            if s != t and o == best[t]:
+                return s
+    return None
 
-    choice[t]   : the observation index track t takes, or None (missed);
-    marginal[t] : the probability that choice[t] is right, given the model;
-    risk[t]     : the probability that track t's person is not where the best
-                  hypothesis puts it in a way that can move an identity: t
-                  takes an observation the best gives another track, t's
-                  observation goes to another track, or (only when t is
-                  `coasting`, unseen since before this frame) t's observation
-                  is really a newcomer's. Two tracks that may have swapped
-                  both carry the risk, the unseen one too.
+
+def associate(link, miss, free, coasting=None, limit=20000):
+    """Returns (choice, rivals).
+
+    choice[t] : the detection index track t takes, or None (missed);
+    rivals[t] : {other track or None: probability}, the ways track t's person
+                may not be where the best hypothesis puts it in a way that can
+                move an identity: t takes a detection the best gives another
+                track or a newcomer, t's detection goes to another track, or
+                (only when t is `coasting`, unseen since before this frame)
+                t's detection is really a newcomer's. Two tracks that may have
+                swapped both carry the risk, the unseen one too.
     """
     n_tracks, n_obs = len(link), len(free)
     coasting = coasting or [False] * n_tracks
-    choice, marginal, risk = [None] * n_tracks, [1.0] * n_tracks, [0.0] * n_tracks
+    choice, rivals = [None] * n_tracks, [{} for _ in range(n_tracks)]
     for tracks, obs in clusters(n_tracks, n_obs, link):
         if not tracks:
             continue
@@ -93,7 +104,7 @@ def associate(link, miss, free, coasting=None, limit=20000):
         if len(hyps) > limit:
             best = _greedy(tracks, obs, link)
             for t in tracks:
-                choice[t], marginal[t], risk[t] = best.get(t), 0.0, 1.0
+                choice[t], rivals[t] = best.get(t), {None: 1.0}
             continue
         total = sum(w for w, _ in hyps)
         best_w, best = hyps[0]
@@ -104,22 +115,21 @@ def associate(link, miss, free, coasting=None, limit=20000):
         for t in tracks:
             choice[t] = best[t]
             if total <= 0:
-                marginal[t], risk[t] = 0.0, 1.0
+                rivals[t] = {None: 1.0}
                 continue
-            agree = moved = 0.0
+            moved = {}
             for w, h in hyps:
                 mine = h[t]
                 if mine == best[t]:
-                    agree += w
-                elif best[t] is None and mine not in given:
-                    pass            # t may have been seen where the best saw a newcomer: no identity moves
-                elif mine is None and not coasting[t] and best[t] not in h.values():
-                    pass            # a newcomer exactly where a track in view is seen: treated as noise
-                else:
-                    moved += w
-            marginal[t] = agree / total
-            risk[t] = moved / total
-    return choice, marginal, risk
+                    continue
+                if best[t] is None and mine not in given:
+                    continue    # t may have been seen where the best saw a newcomer: no identity moves
+                if mine is None and not coasting[t] and best[t] not in h.values():
+                    continue    # a newcomer exactly where a track in view is seen: treated as noise
+                who = _rival(t, mine, best, h)
+                moved[who] = moved.get(who, 0.0) + w / total
+            rivals[t] = moved
+    return choice, rivals
 
 
 def _greedy(tracks, obs, link):

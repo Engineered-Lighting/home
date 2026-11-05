@@ -105,7 +105,7 @@ CalibrationRecord to `calibration-records.jsonl`, both JSON Lines, UTF-8, LF.
 ## A moved camera
 
 A registration holds only while the camera stays where it was. `check-mount`
-looks at a frame of a later take in two steps.
+looks at a frame of a later take in three steps.
 
 1. **A coarse depth alarm.** The camera entry keeps a mount signature: the 8x8
    grid of per-cell median depths of the registration frame. A later frame is
@@ -115,7 +115,7 @@ looks at a frame of a later take in two steps.
    turn or an 8 cm slide moves room points by 8 to 40 cm and changes under half
    the cells, because a floor's depth does not change when a level camera turns
    about the vertical. Depth noise limits how far the slots could tighten.
-2. **The marks, against the same gate.** Only this step can confirm. The owner
+2. **The marks, against the same gate.** Depth alone never confirms. The owner
    clicks every mark on that later frame with the `click` step. Each click and
    the depth under it go through the registered transform to a room position,
    compared with the worksheet's tape position:

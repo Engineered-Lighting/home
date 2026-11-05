@@ -379,10 +379,15 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
         calls, slowest, fixed["max_decision_ms"]))
     for name, (ok, text) in structural(log, light, slots).items():
         gate_line(name, ok, text)
-    left_out = sum("tracks_not_logged" in e["data"]["inputs"] for e in log if e["kind"] == "decision" and e["source"] == "decide")
+    decisions = [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+    left_out = sum("tracks_not_logged" in d["inputs"] for d in decisions)
     if left_out:
         lines.append("tracks not logged: %d decision(s) left out the rows of the tracks longest unheard from, to fit the line; "
                      "they still planned for them" % left_out)
+    narrowed = [d["predicted"]["surfaces_not_logged"] for d in decisions if "surfaces_not_logged" in d["predicted"]]
+    if narrowed:
+        lines.append("surfaces not logged: %d decision(s) left out up to %d of the map's %d surfaces, those nobody is at, to fit "
+                     "the line; rung 10 can verify only what a Decision lists" % (len(narrowed), max(narrowed), len(light.surfaces)))
 
     timeline = Timeline(header, log)
     rate, hits, episodes, unknown = anticipation(timeline, light, slots)

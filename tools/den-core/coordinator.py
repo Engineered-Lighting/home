@@ -723,46 +723,66 @@ class Coordinator:
         tasks = {track: surface_of(p, self.light) for track, p in sorted(self.people.items())}
         if self.config["compensation"]["option"] != "P0":
             record["hold_limited"] = plan["hold_limited"]
-        self._rows(record, result, tasks)
+        whole = {s: None if v is None else round(v, 3) for s, v in self.light.predict(result).items()}
+        self._rows(record, result, tasks, {**whole, "unit": self.light.unit})
         return {"kind": "decision", "data": copy.deepcopy(self._fitted(record, result, tasks))}
 
-    def _rows(self, record, result, tasks):
-        """What a Decision says per track about the actual resulting state."""
+    def _rows(self, record, result, tasks, surfaces):
+        """What a Decision says per track about the actual resulting state, beside the surfaces it lists."""
         rows = eye_rows(record["inputs"], result, self.light, self.slots)
         record["recipients"] = recipients_of(result, tasks, rows, self.light, self.slots)
-        at = sorted({light_adapter.ROOM, *tasks.values()})  # a map can be wide; any other surface follows from the scene
         record["predicted"] = {
-            "surfaces": {**{s: None if v is None else round(v, 3) for s, v in self.light.predict(result, at).items()},
-                         "unit": self.light.unit},
+            "surfaces": surfaces,
             "eyes": rows,
             "eyes_note": ("predictions only; no camera verifies eyes" if self.light.glare_table else
                           "no numbers: rung 8 writes glare null, and no glare model or numeric limit exists yet"),
             "daylight": "excluded: rung 8 does not model it"}
 
     def _fitted(self, record, result, tasks):
-        """events.validate refuses a line over its limit and the run then stops with no log, and a track is never forgotten:
-        its id is never reused and a PersonState says nothing when it ends. So when a Decision would not fit, the rows of the
-        tracks longest unheard from go, then readers, and last a track a light is over the glare limit at, which is what the
-        gate most needs to read. inputs.tracks_not_logged counts them. They stay in the plan: this only decides what the line
-        says. The last track always stays."""
-        most = len(self.people) - 1
-        if most < 1 or len(events.dumps(record)) <= LINE_ROOM:
+        """events.validate refuses a line over its limit and the run then stops with no log. A wide map or a long evening can
+        get there: a track is never forgotten, since its id is never reused and a PersonState says nothing when it ends. So
+        when a Decision would not fit, surfaces nobody is at go first, and predicted.surfaces_not_logged counts them. If that
+        is not enough, the rows of the tracks longest unheard from go, then readers, and last a track a light is over the
+        glare limit at, which is what the gate most needs to read. inputs.tracks_not_logged counts those. They stay in the
+        plan: this only decides what the line says. The last track always stays."""
+        if len(events.dumps(record)) <= LINE_ROOM:
             return record
-        over = {track for _, track in _over_limit(record)}
-        order = sorted(self.people, key=lambda track: (track in over, decide.reading(self.people[track])))  # oldest first
-        fewest = 1
-        while fewest < most:  # the fewest to leave out, by halves, since tracks can run to hundreds in an evening
-            middle = (fewest + most) // 2
-            if len(events.dumps(self._without(record, order[:middle], result, tasks))) <= LINE_ROOM:
-                most = middle
-            else:
-                fewest = middle + 1
-        return self._without(record, order[:fewest], result, tasks)
+        out = self._without(record, [], result, tasks)
+        most = len(self.people) - 1
+        if most >= 1 and len(events.dumps(out)) > LINE_ROOM:
+            over = {track for _, track in _over_limit(record)}
+            order = sorted(self.people, key=lambda track: (track in over, decide.reading(self.people[track])))  # oldest first
+            fewest = 1
+            while fewest < most:  # the fewest to leave out, by halves, since tracks can run to hundreds in an evening
+                middle = (fewest + most) // 2
+                if len(events.dumps(self._without(record, order[:middle], result, tasks))) <= LINE_ROOM:
+                    most = middle
+                else:
+                    fewest = middle + 1
+            out = self._without(record, order[:fewest], result, tasks)
+        return self._surfaces_that_fit(out, record["predicted"]["surfaces"])
+
+    @staticmethod
+    def _surfaces_that_fit(record, whole):
+        """The rest of the map back on a line with room, by name, as far as it goes, because rung 10 verifies what a
+        Decision lists. By name, since the log's header sorts the map and a replay must keep the same ones."""
+        predicted = record["predicted"]
+        listed, spare = predicted["surfaces"], LINE_ROOM - len(events.dumps(record))
+        for name in sorted(set(whole) - set(listed)):
+            spare -= len(events.dumps({name: whole[name]})) - 1  # its key, its value and a comma
+            if spare < 0:
+                break
+            listed[name] = whole[name]
+        predicted["surfaces_not_logged"] = len(whole) - len(listed)
+        if not predicted["surfaces_not_logged"]:
+            del predicted["surfaces_not_logged"]
+        return record
 
     def _without(self, record, tracks, result, tasks):
-        """The Decision with every row of these tracks gone, from every list, so predicted.eyes still reproduces. A row over
-        the glare limit that goes with them is counted, so the gate cannot read a clean line as a clean evening."""
-        gone, inputs = set(tracks), record["inputs"]
+        """The Decision with every row of these tracks gone, from every list, so predicted.eyes still reproduces, and of the
+        map only 'room' and the surfaces of the tracks that stay. The count takes its place on the line from here on. A row
+        over the glare limit that goes with them is counted, so the gate cannot read a clean line as a clean evening."""
+        gone, inputs, whole = set(tracks), record["inputs"], record["predicted"]["surfaces"]
         stay = {track: surface for track, surface in tasks.items() if track not in gone}
         here = set(stay.values())
         held = [{**h, "footprint": {**h["footprint"], "surfaces": [s for s in h["footprint"]["surfaces"] if s in here]}}
@@ -771,13 +791,17 @@ class Coordinator:
                "hard_conflicts": [row for row in record["hard_conflicts"] if row["track"] not in gone],
                "inputs": {**inputs, "person_state": [s for s in inputs["person_state"] if s.split("@")[0] not in gone],
                           "field_support": {s: v for s, v in inputs["field_support"].items() if s.split("@")[0] not in gone},
-                          "hold_set": {**inputs["hold_set"], "held": held}, "tracks_not_logged": len(gone)}}
+                          "hold_set": {**inputs["hold_set"], "held": held}}}
+        if gone:
+            out["inputs"]["tracks_not_logged"] = len(gone)
         lost = sum(track in gone for _, track in _over_limit(record))
         if lost:
             out["inputs"]["over_limit_not_logged"] = lost
         if "hold_limited" in record:
             out["hold_limited"] = [row for row in record["hold_limited"] if row["point_id"] in here]
-        self._rows(out, result, stay)
+        listed = {name: whole[name] for name in {light_adapter.ROOM, "unit", *here}}
+        self._rows(out, result, stay, listed)
+        out["predicted"]["surfaces_not_logged"] = len(whole) - len(listed)
         return out
 
     def handle(self, event):

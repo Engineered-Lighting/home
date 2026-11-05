@@ -902,22 +902,63 @@ class WideMapLineTest(unittest.TestCase):
         start(p)
         for d in self.every_bulb_held(p, "block-counter-1/0"):
             events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
-        self.assertEqual(sorted(d["predicted"]["surfaces"]), ["block-counter-1/0", "room", "unit"])
+        self.assertLessEqual({"block-counter-1/0", "room", "unit"}, set(d["predicted"]["surfaces"]))
+        self.assertGreater(d["predicted"]["surfaces_not_logged"], 0)
 
-    def test_predicted_is_room_and_each_tracked_persons_surface(self):
+    def test_a_decision_lists_the_whole_map_while_it_fits(self):
+        # rung 10 takes its verify points from these keys, so a surface nobody is at can only be missed if it is listed.
+        whole = ["armchair-book", "counter-1", "room", "unit", "wall-west"]
         p = policy()
-        self.assertEqual(sorted(start(p)[0]["predicted"]["surfaces"]), ["room", "unit"])  # nobody tracked yet
-        feed(p, ps(T0 + 4, "B", "none", "armchair-book"))
+        self.assertEqual(sorted(start(p)[0]["predicted"]["surfaces"]), whole)  # nobody tracked yet
         [d] = feed(p, ps(T0 + 5, "A", "engaged", "counter-1"))
-        self.assertEqual(sorted(d["predicted"]["surfaces"]), ["armchair-book", "counter-1", "room", "unit"])
-        self.assertEqual(d["predicted"]["surfaces"]["counter-1"], round(p.light.predict(d["requested_scene"])["counter-1"], 3))
+        self.assertEqual(sorted(d["predicted"]["surfaces"]), whole)
+        self.assertNotIn("surfaces_not_logged", d["predicted"])
+        at = p.light.predict(d["requested_scene"])
+        self.assertEqual(d["predicted"]["surfaces"], {**{s: round(at[s], 3) for s in at}, "unit": "lx"})
 
-    def test_a_surface_a_person_is_not_at_is_still_scored_from_the_scene(self):
-        p = policy()
+    def test_an_ordinary_map_is_listed_whole_with_every_bulb_held(self):
+        for count, width in ((180, 10), (60, 30)):  # the sizes that once broke the line
+            with self.subTest(count=count, width=width):
+                spec = self.wide(count, width)
+                p = policy(light_model=spec, compensation={"option": "P1", "form": "strict"})
+                start(p)
+                d = self.every_bulb_held(p, next(iter(spec["surfaces"])))[-1]
+                events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
+                self.assertEqual(set(d["predicted"]["surfaces"]) - {"unit"}, set(spec["surfaces"]))
+                self.assertNotIn("surfaces_not_logged", d["predicted"])
+
+    def test_a_map_too_wide_keeps_each_tracked_surface_and_counts_the_rest(self):
+        spec = self.wide(576, 30)
+        names = sorted(spec["surfaces"])
+        target = names[-1]  # the last by name, so only being someone's surface can keep it
+        p = policy(light_model=spec, compensation={"option": "P1", "form": "strict"})
         start(p)
-        [d] = feed(p, ps(T0 + 5, "A", "engaged", "counter-1"))
-        self.assertNotIn("wall-west", d["predicted"]["surfaces"])
-        self.assertIsNotNone(p.light.predict(d["requested_scene"])["wall-west"])
+        d = self.every_bulb_held(p, target)[-1]
+        events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
+        self.assertNotIn("tracks_not_logged", d["inputs"])  # surfaces nobody is at go before any track
+        listed = set(d["predicted"]["surfaces"]) - {"unit"}
+        self.assertLessEqual({"room", target}, listed)
+        others = [name for name in names if name not in ("room", target)]
+        kept = sorted(listed - {"room", target})
+        self.assertEqual(kept, others[:len(kept)])
+        self.assertEqual(d["predicted"]["surfaces_not_logged"], len(others) - len(kept))
+        self.assertGreater(len(kept), 100)
+        self.assertLessEqual(len(events.dumps(d)), coordinator.LINE_ROOM)
+        self.assertLess(coordinator.LINE_ROOM - len(events.dumps(d)), 50)  # one more would not have fit
+        result = {b: e["readback"] for b, e in d["applied_scene"].items()}
+        at = p.light.predict(result)
+        for name in listed:
+            self.assertEqual(d["predicted"]["surfaces"][name], round(at[name], 3))
+
+    def test_a_lone_track_or_none_on_a_map_too_wide_fits(self):
+        spec = self.wide(576, 30)
+        p = policy(light_model=spec)
+        out = start(p) + feed(p, ps(T0 + 5, "A", "engaged", "room"))
+        self.assertTrue(out)
+        for d in out:
+            events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
+            self.assertGreater(d["predicted"]["surfaces_not_logged"], 0)
+            self.assertNotIn("tracks_not_logged", d["inputs"])
 
     def test_a_wide_map_stays_under_100_ms(self):
         def rounds():
@@ -1004,15 +1045,45 @@ class ManyTracksLineTest(unittest.TestCase):
         result = {b: e["readback"] for b, e in d["applied_scene"].items()}
         self.assertEqual(coordinator.eye_rows(d["inputs"], result, p.light, SLOTS), d["predicted"]["eyes"])
 
-    def test_a_surface_only_a_left_out_track_was_at_leaves_the_line_too(self):
+    def test_a_surface_only_a_left_out_track_was_at_leaves_the_tracks_lists(self):
         # The oldest readers are at the armchair and the newest at the counter, so only the armchair's readers go.
         p, _ = self.seen(30, reading=range(30), where=lambda k: "armchair-book" if k < 15 else "counter-1")
         [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T29")))
         self.assertEqual({row["surface_id"] for row in d["targets"].values()}, {"counter-1"})
         self.assertEqual([row["point_id"] for row in d["hold_limited"]], ["counter-1"])
         self.assertEqual(d["inputs"]["hold_set"]["held"][0]["footprint"]["surfaces"], ["counter-1"])
-        self.assertEqual(sorted(d["predicted"]["surfaces"]), ["counter-1", "room", "unit"])
+        self.assertLessEqual({"counter-1", "room", "unit"}, set(d["predicted"]["surfaces"]))
         self.assertLess(d["predicted"]["surfaces"]["counter-1"], d["targets"]["T29"]["value"])
+
+    def wide_map_seen(self, near, far):
+        """30 tracks on a map too wide for the line. The oldest are at `far`, the newest at `near`."""
+        blocks = ["other/%d" % n for n in range(576 - 12)]
+        surfaces = {"a-surface-with-a-thirty-char-%03d" % n: [blocks[n % len(blocks)]] for n in range(576)}
+        surfaces.update({near: blocks[:4], far: blocks[4:8]})
+        spec = {"source": "fake", "params": {"filler": len(blocks)}, "surfaces": surfaces}
+        p, _ = self.seen(30, reading=range(30), config={"light_model": spec}, where=lambda k: far if k < 15 else near)
+        return p, surfaces
+
+    def test_what_room_the_tracks_leave_goes_back_to_the_map(self):
+        p, surfaces = self.wide_map_seen("a-near", "z-far")
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T29")))
+        self.assertGreater(d["inputs"]["tracks_not_logged"], 0)
+        listed = set(d["predicted"]["surfaces"]) - {"unit"}
+        self.assertEqual(len(listed) + d["predicted"]["surfaces_not_logged"], len(surfaces) + 1)  # 'room' as well
+        self.assertLess(coordinator.LINE_ROOM - len(events.dumps(d)), 50)  # the line is full, not cut short at the tracks
+
+    def test_a_left_out_tracks_surface_is_owed_no_place_on_a_full_line(self):
+        p, _ = self.wide_map_seen("a-near", "z-far")  # z-far sorts last, so only a track there could have kept it
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T29")))
+        self.assertIn("a-near", d["predicted"]["surfaces"])
+        self.assertIn("room", d["predicted"]["surfaces"])  # after every a-surface by name, so it stays by rule
+        self.assertNotIn("z-far", d["predicted"]["surfaces"])
+        self.assertEqual({row["surface_id"] for row in d["targets"].values()}, {"a-near"})
+
+    def test_a_map_that_fits_again_once_tracks_are_gone_has_no_count(self):
+        p, out = self.seen(50, reading=[49])
+        self.assertTrue(any("tracks_not_logged" in d["inputs"] for d in out))
+        self.assertFalse(any("surfaces_not_logged" in d["predicted"] for d in out if "tracks_not_logged" in d["inputs"]))
 
     def test_as_few_tracks_as_will_do_are_left_out_and_never_the_last(self):
         p, _ = self.seen(30, reading=[29])
@@ -1192,7 +1263,9 @@ class ManyTracksLineTest(unittest.TestCase):
         header, log = hold_fixtures.run_case("V62", "P1-mode")
         path = self.tmp / "log.jsonl"
         events.write(path, header, log)
-        self.assertNotIn("tracks not logged", "\n".join(score.report(path, preview=True)[0]))
+        text = "\n".join(score.report(path, preview=True)[0])
+        self.assertNotIn("tracks not logged", text)
+        self.assertNotIn("surfaces not logged", text)
 
 
 def evening_log(tmp, name="log.jsonl", configs=None, source="synthetic", actuation=None, **options):
@@ -1211,6 +1284,28 @@ class ReplayTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
+
+    def test_every_decision_of_an_evening_lists_the_whole_map(self):
+        # With the map cut to the tracked surfaces, rung 10 read 7 of 7 hits where the same frames, on the whole map, read
+        # 21 of 28 and failed: it could not see that the light had missed counter-1, where nobody is.
+        _, _, log = evening_log(self.tmp, touch=True)
+        mine = [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+        self.assertTrue(mine)
+        for d in mine:
+            self.assertEqual(sorted(d["predicted"]["surfaces"]), ["armchair-book", "counter-1", "room", "unit", "wall-west"])
+
+    def test_a_map_too_wide_for_the_line_replays_and_the_report_says_so(self):
+        # The header's JSON sorts the map's keys, so what stays on a line must not hang on the order the map came in.
+        spec = WideMapLineTest.wide(None, 576, 30)
+        spec["surfaces"] = dict(reversed(list(spec["surfaces"].items())))
+        path, _, log = evening_log(self.tmp, configs={"coordinator": {"light_model": spec}}, touch=True)
+        self.assertTrue(check.check(path)["ok"])
+        mine = [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+        self.assertTrue(all(d["predicted"]["surfaces_not_logged"] > 0 for d in mine))
+        lines, code = score.report(path, preview=True)
+        self.assertEqual(code, 0, "\n".join(lines))
+        self.assertIn("surfaces not logged: %d decision(s) left out up to %d of the map's %d surfaces, those nobody is at"
+                      % (len(mine), max(d["predicted"]["surfaces_not_logged"] for d in mine), 577), "\n".join(lines))
 
     def test_a_run_replays_byte_for_byte_under_each_actuation(self):
         for name, source, actuation in (("a.jsonl", "synthetic", None), ("b.jsonl", "fact_log", "shadow"), ("c.jsonl", "fact_log", None)):

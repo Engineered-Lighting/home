@@ -657,12 +657,17 @@ four synthetic evenings' whole logs, header included.
 
 ### A Decision's size
 
-`events.validate` refuses a line over 16,384 bytes, and the run then stops with no log. A Decision never lists blocks, and
-of the map it lists only `room` and each tracked person's surface, as the schema's example does: any other surface
-follows from the scene. So neither rung 8's 576 blocks nor the map's width costs anything: with every bulb held, a map of
-576 surfaces with 30-character names logs the same line as a map of 40. A hold's footprint is the same length for any
-blocks (144 hex digits on the grid). `test_coordinator.py` runs every hold fixture under every option on the full grid
-through `runner.run`, which validates each line.
+`events.validate` refuses a line over 16,384 bytes, and the run then stops with no log. A Decision never lists blocks, so
+rung 8's 576 blocks cost nothing: a hold's footprint is the same length for any blocks (144 hex digits on the grid).
+`test_coordinator.py` runs every hold fixture under every option on the full grid through `runner.run`, which validates
+each line.
+
+`predicted.surfaces` lists the whole map, because rung 10 takes its verify points from those keys: a surface nobody is at
+can only be scored as a miss if it is listed. That costs about 40 bytes a surface with a 30-character name, so with every
+bulb held and one reader, about 400 surfaces with 10-character names or about 200 with 30 fit whole, and each more track
+takes some of that room. On a wider map `room` and each tracked person's surface stay, the rest go on by name for as long
+as they fit, and `predicted.surfaces_not_logged` counts the ones that did not. Surfaces go before any track does. `score.py`
+says when this happened, and rung 10 can verify only what a Decision lists.
 
 A line does grow with the tracks: about 1.5 KB each, or 3.3 KB in the worst shape the contracts allow, with a glare table
 and every bulb held. The coordinator never forgets a track, because an id is never reused and a PersonState says nothing
@@ -672,6 +677,9 @@ the tracks longest unheard from go, then readers, and last any track a light is 
 in the plan: a track left off the line is still kept under the glare limit. `score.py` says when this happened. If so many
 tracks are over the limit that a row saying so has to go too, `inputs.over_limit_not_logged` counts it and **hard
 constraints** fails, because the log can no longer show every conflict. need v0 has one track, so none of this happens today.
+
+The last track always stays, so one line can still break: a lone track whose id runs to a couple of hundred characters, in
+that worst shape. Contract ids are far shorter.
 
 ### Keys the contracts do not name
 
@@ -689,6 +697,7 @@ Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear 
 - `inputs.hold_set.held[].footprint`: the contracts name it and give it no type. Here it is
   `{points, of, mask, surfaces}`: how many blocks of how many, the blocks as hex bits over the model's `sample_points`
   (bit 0 the first; `LightModel.unmask` reads it), and which of the tracked people's surfaces it touches.
+- `predicted.surfaces_not_logged`: only on a Decision that left surfaces of the map out to fit its line.
 - `inputs.tracks_not_logged`: only on a Decision that left a track's rows out to fit its line.
 - `inputs.over_limit_not_logged`: only when rows that put a light over the glare limit at an eye left the line with their
   track. Any at all fails **hard constraints**.

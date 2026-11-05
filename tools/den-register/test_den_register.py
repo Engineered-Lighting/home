@@ -65,14 +65,17 @@ class Scene:
 
     def __init__(self, test, *, points=None, fit=synthetic.FIT, checks=synthetic.CHECKS, offsets=None, holes=(),
                  meta=None, scan=None, sheet=None, m=None, background_mm=3500, name="take1", ended=None,
-                 frames=3, pose=None, background=None):
+                 frames=3, pose=None, background=None, distinct_frames=False):
         self.test, self.m = test, m or closed_method()
         self.tmp = Path(test.tmp.name)
         self.points = points or synthetic.POINTS
         depth, left, self.seen = synthetic.render(self.points, holes=holes, background_mm=background_mm, pose=pose,
                                                   background=background)
         data = synthetic.bundle(meta or synthetic.metadata(), depth, left)
-        self.take = synthetic.write_take(self.tmp / name, [data] * frames)
+        bundles = [data] * frames
+        if distinct_frames:
+            bundles = [synthetic.bundle(synthetic.metadata(seq=100 + n), depth, left) for n in range(frames)]
+        self.take = synthetic.write_take(self.tmp / name, bundles)
         if ended is not None:
             path = self.take / "take.json"
             take = json.loads(path.read_text(encoding="utf-8"))
@@ -449,6 +452,66 @@ class FitTests(Base):
         with self.assertRaises(Refused) as caught:
             rig.eeprom_geometry(metres)
         self.assertEqual(caught.exception.reason, "camera_calibration_invalid")
+
+    @staticmethod
+    def extrinsics(rotation, translation_m, target):
+        return {"rotationMatrix": rotation, "toCameraSocket": target,
+                "translation": dict(zip("xyz", (v * 100 for v in translation_m)))}
+
+    def assert_same_mapping(self, got, by_hand):
+        """got carries each rectified-left point where a step-by-step walk of the chain puts it."""
+        rotation, translation = got["rotation"], got["translation_m"]
+        for point in ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.3, -0.7, 2.5]):
+            for value, wanted in zip(rigid.apply(rotation, translation, point), by_hand(point)):
+                self.assertAlmostEqual(value, wanted, places=9)
+
+    A = synthetic.rotation_xyz(0.1, -0.2, 0.3)
+    B = synthetic.rotation_xyz(-0.25, 0.15, 0.05)
+    RECTIFY = synthetic.rotation_xyz(0.02, 0.03, -0.01)
+    T_A, T_B = [-0.075, 0.002, 0.001], [0.0375, -0.004, 0.003]
+
+    def unrectified(self, point):
+        return [sum(self.RECTIFY[j][i] * point[j] for j in range(3)) for i in range(3)]
+
+    def test_the_eeprom_chain_applies_its_steps_in_order(self):
+        # left into right into RGB, each step a rotation that does not commute with the next.
+        got = rig.eeprom_geometry({
+            "stereoRectificationData": {"leftCameraSocket": 1, "rightCameraSocket": 2,
+                                        "rectifiedRotationLeft": self.RECTIFY},
+            "cameraData": [[0, {"extrinsics": {"toCameraSocket": -1}}],
+                           [1, {"extrinsics": self.extrinsics(self.A, self.T_A, 2)}],
+                           [2, {"extrinsics": self.extrinsics(self.B, self.T_B, 0)}]]})
+
+        def by_hand(point):
+            return rigid.apply(self.B, self.T_B, rigid.apply(self.A, self.T_A, self.unrectified(point)))
+        self.assert_same_mapping(got["rgb_from_rectified_left"], by_hand)
+        self.assertAlmostEqual(got["stereo_baseline_m"], math.dist(self.T_A, [0, 0, 0]), places=12)
+
+    def test_the_eeprom_chain_walks_an_edge_backwards_through_its_inverse(self):
+        # RGB into left, and right into left: reaching RGB and right from left walks both edges backwards.
+        got = rig.eeprom_geometry({
+            "stereoRectificationData": {"leftCameraSocket": 1, "rightCameraSocket": 2,
+                                        "rectifiedRotationLeft": self.RECTIFY},
+            "cameraData": [[0, {"extrinsics": self.extrinsics(self.A, self.T_B, 1)}],
+                           [1, {"extrinsics": {"toCameraSocket": -1}}],
+                           [2, {"extrinsics": self.extrinsics(self.B, self.T_A, 1)}]]})
+
+        def by_hand(point):
+            left = self.unrectified(point)
+            return [sum(self.A[j][i] * (left[j] - self.T_B[j]) for j in range(3)) for i in range(3)]
+        self.assert_same_mapping(got["rgb_from_rectified_left"], by_hand)
+        self.assertAlmostEqual(got["stereo_baseline_m"], math.dist(self.T_A, [0, 0, 0]), places=12)
+
+    def test_the_stereo_baseline_is_measured_in_the_right_camera_s_frame_through_the_chain(self):
+        # Left and right both reach RGB, so left to right crosses a forward edge, then a backward one.
+        got = rig.eeprom_geometry({
+            "stereoRectificationData": {"leftCameraSocket": 1, "rightCameraSocket": 2,
+                                        "rectifiedRotationLeft": self.RECTIFY},
+            "cameraData": [[0, {"extrinsics": {"toCameraSocket": -1}}],
+                           [1, {"extrinsics": self.extrinsics(self.A, self.T_A, 0)}],
+                           [2, {"extrinsics": self.extrinsics(self.B, self.T_B, 0)}]]})
+        apart = [self.T_A[i] - self.T_B[i] for i in range(3)]  # the left camera's origin, from RGB's frame's view
+        self.assertAlmostEqual(got["stereo_baseline_m"], math.dist(apart, [0, 0, 0]), places=12)
 
     def test_three_fit_pairs_pass_without_a_leave_one_out_bound(self):
         s = Scene(self, fit=("p1", "p2", "p3"), checks=("c1", "c2"))
@@ -837,6 +900,7 @@ class MountTests(Base):
         confirmed = second["cameras"][0]["confirmed"]
         self.assertEqual((confirmed["take"], confirmed["take_ended_unix"]), ("later", 1_800_001_000.0))
         self.assertEqual(confirmed["view_movement_m"], report["view_movement_m"])
+        self.assertEqual(confirmed["worst_mark_m"], max(mark["error_m"] for mark in report["marks"]))
         self.assertEqual(second["version"], "den-v2")
         self.assertEqual(second["cameras"][0]["version"], first["cameras"][0]["version"], "the same registration")
         found = records.resolve(s.room_models(), fitted["transform_id"])
@@ -858,6 +922,7 @@ class MountTests(Base):
         newer.click_all()
         self.assertEqual(self.check(s, newer.take)[0], 0)
         self.assertEqual(s.room_models()[-1]["cameras"][0]["confirmed"]["take"], "newer")
+        self.assertEqual(records.resolve(s.room_models(), fitted["transform_id"])["confirmed"]["take"], "newer")
 
     def test_a_new_registration_starts_unconfirmed(self):
         s, fitted = self.furnished()
@@ -1055,6 +1120,63 @@ class MountTests(Base):
         s.click_all(["p1"], shift={"p1": (0.4, 0)})
         code, report = s.fit()
         self.assertEqual((code, reasons(report)), (1, ["mount_changed"]), s.out)
+
+    def test_clicks_with_ids_the_worksheet_does_not_hold_are_stale(self):
+        s, fitted = self.furnished()
+        later = self.later_in_the_room()
+        later.click_all()
+        path = register.clicks_path(s.work, later.take)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        saved["clicks"]["zz"] = {"u": 10, "v": 10}
+        path.write_text(json.dumps(saved), encoding="utf-8")
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["reason"]), (1, "clicks_stale"), text)
+        self.assertIn("zz", report["detail"])
+
+    def test_a_left_image_and_depth_from_different_stereo_frames_cannot_confirm(self):
+        s, fitted = self.furnished()
+        later = Scene(self, name="later", ended=1_800_001_000.0, background=synthetic.room_depth(),
+                      meta=synthetic.metadata(depth_seq=101, depth_t=50.2))
+        take, frames = scene.read_take(later.take)
+        row = frames[scene.default_frame(take, frames) - 1]
+        clicks = {"schema": register.SCHEMA_CLICKS, "take": "later",
+                  "frame": {"n": row["n"], "file": row["file"], "sha256": row["sha256"]},
+                  "clicks": {pid: {"u": u, "v": v} for pid, (u, v, _) in later.seen.items()}}
+        register.clicks_path(s.work, later.take).write_text(json.dumps(clicks), encoding="utf-8")
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["reason"]), (1, "frame_depth_different_times"), text)
+
+    def test_the_check_reads_the_frame_the_clicks_were_saved_for(self):
+        s, fitted = self.furnished()
+        later = Scene(self, name="later", ended=1_800_001_000.0, background=synthetic.room_depth(), distinct_frames=True)
+        sheet = worksheet.load(later.work / "worksheet.json", need_positions=False)
+        self.assertEqual(register.frame_number(later.take, None), 2, "the default is another frame")
+        session = register.ClickSession(later.work, later.take, 1, sheet, later.m)
+        for pid, (u, v, _) in later.seen.items():
+            session.click({"id": pid, "u": round(u, 1), "v": round(v, 1)})
+        session.done()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"], report["frame"]), (0, "confirmed", 1), text)
+
+    def test_the_alarm_decides_before_the_marks_are_read(self):
+        s, fitted = self.registered()
+        later = self.later_take(s, "later", 2800, 1_800_001_000.0)
+        register.clicks_path(s.work, later).write_text(json.dumps(
+            {"schema": register.SCHEMA_CLICKS, "take": "later", "frame": {"n": 2, "sha256": "0" * 64}, "clicks": {}}),
+            encoding="utf-8")
+        code, report, text = self.check(s, later)
+        self.assertEqual((code, report["result"]), (1, "changed"), text)
+
+    def test_a_person_filling_the_view_trips_the_alarm_as_the_method_says(self):
+        s, fitted = self.furnished()
+        plane = synthetic.room_depth()
+        for y in range(400):
+            plane[y * 640:y * 640 + 384] = [1200] * 384
+        later = Scene(self, name="person", ended=1_800_001_000.0, background=plane)
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "changed"), text)
+        self.assertIn("depth cells moved", text)
+        self.assertIn("filling over half of\nthe frame trips the alarm", METHOD_TEXT)
 
     def test_the_registration_take_cannot_confirm_itself(self):
         s, fitted = self.furnished()

@@ -292,6 +292,9 @@ def evaluate(sheet, clicks, take, row, bundle, intrinsics, m, room_models, calib
             refuse("fit_residual_over_gate", f"{p['id']}: residual {_cm(residual)} (gate {_cm(gate)})")
     for p, loo in zip(fit_pairs, result["loo_m"] or []):
         p["loo_m"] = loo
+        if loo > gate:
+            refuse("leave_one_out_over_gate", f"{p['id']}: the other fit points put it {_cm(loo)} off (gate "
+                                              f"{_cm(gate)}); rung 2 refuses a registration whose bound is over the gate")
     for p in check_pairs:
         p["predicted_room_xyz_m"] = rigid.apply(rotation, translation, p["camera_xyz_m"])
         p["error_m"] = math.dist(p["predicted_room_xyz_m"], p["room_xyz_m"])

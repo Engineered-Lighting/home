@@ -8,7 +8,8 @@ REGISTER-V2 and register again. Before any registration had run, the 2026-11-05
 review's fixes changed REGISTER-V1 in place: "A moved camera" below no longer
 lets a depth comparison confirm a registration, needs every mark and the whole
 view to agree before it confirms, and writes a confirmation where rung 2 reads
-it; the camera entry now holds the geometry rung 2 needs.
+it; the camera entry now holds the geometry rung 2 needs; and a leave-one-out
+error over the gate is refused, because rung 2 refuses the bound it would write.
 
 ## What is measured
 
@@ -44,11 +45,14 @@ within 5 cm**. A registration is accepted only if all of these hold:
 4. Every fit point's residual is at most `gate_m` (`fit_residual_over_gate`).
 5. Every check point, carried through the fitted transform, lands within
    `gate_m` of its measured position (`check_over_gate`).
+6. With four or more fit points, each one's leave-one-out error is at most
+   `gate_m` (`leave_one_out_over_gate`). With three, two remain and cannot fix a
+   rotation, so it is not computed rather than guessed.
 
-Reported, not gated: the RMS residual, the leave-one-out error of each fit
-point when there are four or more (with three, two remain and cannot fix a
-rotation, so it is not computed rather than guessed), and `error_bound_m`, the
-largest of the fit residuals, the check errors and the leave-one-out errors.
+`error_bound_m` is the largest of the fit residuals, the check errors and the
+leave-one-out errors, so a registration's bound is never over the gate. Rung 2
+refuses one that is, and this refuses it here, where a point can be re-measured.
+Reported, not gated: the RMS residual.
 
 Refused before any fit, each with its name: open slots in the block below
 (`slots_open`), a worksheet that does not read (`worksheet_invalid`), a take

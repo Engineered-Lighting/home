@@ -492,6 +492,21 @@ class FitTests(Base):
         self.assertEqual(results[0.056][0], "refused")
         self.assertGreater(results[0.056][1], 0.05)
 
+    def test_a_leave_one_out_error_over_the_gate_is_refused_here_not_at_rung_2(self):
+        # Every residual and check is within 5 cm. The bound written would not be, and rung 2 refuses that.
+        tape = {"p1": [-0.001, 0.003, 0.009], "p2": [-0.01, -0.005, -0.024], "p3": [-0.006, -0.026, -0.017],
+                "p4": [0.013, -0.026, 0.01]}
+        s = Scene(self, offsets=tape)
+        s.click_all()
+        code, report = s.fit()
+        self.assertEqual((code, set(reasons(report))), (1, {"leave_one_out_over_gate"}), s.out)
+        self.assertLess(report["fit"]["max_m"], 0.05)
+        self.assertLess(max(p.get("error_m", 0) for p in report["pairs"]), 0.05)
+        self.assertGreater(report["fit"]["loo_max_m"], 0.05)
+        self.assertGreater(report["fit"]["error_bound_m"], 0.05)
+        self.assertFalse((s.work / "room-model.jsonl").exists())
+        self.assertFalse((s.work / "calibration-records.jsonl").exists())
+
     def test_a_bad_fit_point_is_refused(self):
         s = Scene(self, offsets={"p3": [0.25, 0, 0]})
         s.click_all()

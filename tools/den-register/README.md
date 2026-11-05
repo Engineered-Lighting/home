@@ -147,6 +147,7 @@ writes `fit-N.json`; a pass also adds a line to `room-model.jsonl` and to
 | `depth_missing` | Click that point again, a little to the side, or clear it. |
 | `frame_depth_different_times` | Use another frame (`--frame`). |
 | `fit_residual_over_gate`, `check_over_gate` | Re-measure the named point, and check its click. |
+| `leave_one_out_over_gate` | Re-measure the named point and the others. A fit point away from the rest helps too: the fit is leaning on this one. |
 | `scan_disagrees` | The tape references and the scan disagree: check which walls are `x = 0` and `y = 0`. |
 | `camera_below_floor` | `x`, `y` or `z` runs the wrong way, or two are swapped. |
 | `clicks_stale` | Click again on this take. |
